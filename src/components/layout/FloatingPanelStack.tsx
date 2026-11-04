@@ -115,7 +115,6 @@ type DropTarget = {
 
 const PANEL_MARGIN = 6;
 const PANEL_GAP = 6;
-
 const DEFAULT_PANEL_WIDTH = 320;
 const DEFAULT_PANEL_HEIGHT = 150;
 const MIN_DOCK_WIDTH = 200;
@@ -334,10 +333,6 @@ function FloatingPanelItem({
         left: docked ? undefined : position?.x ?? 0,
         top: docked ? undefined : position?.y ?? 0,
         width: panelWidth,
-        // A docked panel is right-aligned in its dock, so a panel wider than the
-        // dock's content box would have its left edge clipped by the dock's
-        // `overflow-x: hidden`. Cap it instead; the panel reflows and stays whole.
-        maxWidth: docked ? '100%' : undefined,
         flex: docked ? '0 0 auto' : undefined,
         zIndex: isDragging ? 100 : 20 + index,
         cursor: isDragging ? 'grabbing' : 'default',
@@ -445,41 +440,14 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
     .filter((id) => placementFor(id).dock === 'float')
     .sort((a, b) => placementFor(a).order - placementFor(b).order), [panelIds, placementFor]);
 
-  // The gutter the docks reserve for a scrollbar. Measured from the dock itself
-  // because `scrollbar-gutter: stable` reserves it whether or not it scrolls,
-  // and its width differs per platform.
-  const leftDockRef = React.useRef<HTMLDivElement | null>(null);
-  const rightDockRef = React.useRef<HTMLDivElement | null>(null);
-  const [dockGutter, setDockGutter] = React.useState(0);
-
   const dockWidth = React.useCallback((side: 'left' | 'right', ids: string[]) => {
     const stored = side === 'left' ? layout.docks.leftWidth : layout.docks.rightWidth;
-    // The dock reserves a stable scrollbar gutter, so the content box is the
-    // dock width minus that gutter; add it back or the panels lose it.
-    const content = ids.reduce((max, id) => Math.max(max, getPanelWidth(id)), 0)
-      + PANEL_MARGIN * 2
-      + dockGutter;
-    // A stored width from an older layout can be narrower than the panels it
-    // now holds; the dock clips its children horizontally, so it must never be
-    // narrower than the widest panel.
-    return clamp(Math.max(stored ?? content, content), MIN_DOCK_WIDTH, MAX_DOCK_WIDTH);
-  }, [dockGutter, getPanelWidth, layout.docks]);
+    const content = ids.reduce((max, id) => Math.max(max, getPanelWidth(id)), 0) + PANEL_MARGIN * 2;
+    return clamp(stored ?? content, MIN_DOCK_WIDTH, MAX_DOCK_WIDTH);
+  }, [getPanelWidth, layout.docks]);
 
   const leftWidth = dockWidth('left', leftPanels);
   const rightWidth = dockWidth('right', rightPanels);
-
-  React.useLayoutEffect(() => {
-    const measure = () => {
-      const left = leftDockRef.current;
-      const right = rightDockRef.current;
-      const next = Math.max(
-        left ? left.offsetWidth - left.clientWidth : 0,
-        right ? right.offsetWidth - right.clientWidth : 0,
-      );
-      setDockGutter((previous) => (previous === next ? previous : next));
-    };
-    measure();
-  }, [panelIdsSignature, leftWidth, rightWidth, viewportSize.height]);
 
   React.useLayoutEffect(() => {
     const element = containerRef.current;
@@ -848,7 +816,6 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
         style={{ left: 0 }}
       >
         <div
-          ref={leftDockRef}
           data-dock="left"
           className="absolute top-0 bottom-0 flex flex-col pointer-events-none"
           style={{
@@ -859,7 +826,6 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
             alignItems: 'flex-start',
             overflowY: drag ? 'visible' : 'auto',
             overflowX: drag ? 'visible' : 'hidden',
-            scrollbarGutter: 'stable',
           }}
         >
           {leftPanels.map((panelId, index) => renderPanel(panelId, index, true))}
@@ -874,7 +840,6 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
         </div>
 
         <div
-          ref={rightDockRef}
           data-dock="right"
           className="absolute top-0 bottom-0 flex flex-col pointer-events-none"
           style={{
@@ -885,7 +850,6 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
             alignItems: 'flex-end',
             overflowY: drag ? 'visible' : 'auto',
             overflowX: drag ? 'visible' : 'hidden',
-            scrollbarGutter: 'stable',
           }}
         >
           {rightPanels.map((panelId, index) => renderPanel(panelId, index, true))}
