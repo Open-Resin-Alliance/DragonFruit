@@ -403,6 +403,10 @@ lift distance after transforms, and an absent field means it keeps the bottom it
 was saved at. Written only when true, so a scene that never used Auto-Lift keeps
 its bytes.
 
+`MODL[i].liftRestoreMm` is the bottom auto-lift returns the model to when it is
+turned off, written only while `autoLift` is true. A model that was pre-lifted on
+import therefore comes back to its imported height rather than the plate.
+
 Detection (no version number is written for the authoring revision): a `MODL`
 entry carrying `autoLift` is 3.7; a payload without it is read exactly as before.
 The revision is additive, so the authoring revision a reader reports for a binary

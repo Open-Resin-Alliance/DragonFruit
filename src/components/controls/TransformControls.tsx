@@ -288,7 +288,7 @@ export function TransformControls({
                 <button
                   type="button"
                   onClick={() => onAutoLiftChange(!autoLift)}
-                  title={t`On, the selected models are lifted to this distance and keep it through moves, rotations and scaling. Off, they rest on the plate.`}
+                  title={t`On, the selected models are lifted to this distance and keep it through moves, rotations and scaling. Off, they return to the height they were lifted from; Drop puts them on the plate.`}
                   className="h-7 min-w-[64px] rounded-md border px-2 text-[10px] font-semibold uppercase tracking-wide transition-colors"
                   style={autoLift
                     ? {

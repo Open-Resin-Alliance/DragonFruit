@@ -90,7 +90,7 @@ import {
   dispatchDeleteModelAction,
   resolveModelActionTargetIds,
 } from '@/features/scene/modelActionTargets';
-import { alignModelToLift, buildLiftDropUpdates, getModelLowestWorldZ, isModelAutoLifted, PLATE_CLEARANCE_MM } from '@/features/scene/selectionLiftDrop';
+import { alignModelToLift, buildLiftDropUpdates, buildLiftModeUpdates, getModelLowestWorldZ, isModelAutoLifted, PLATE_CLEARANCE_MM } from '@/features/scene/selectionLiftDrop';
 import { dropOverlaySupportedFormats, dropOverlayUnsupportedFormats } from '@/features/scene/sceneImportMessages';
 import {
   buildCenterSelectionUpdates,
@@ -9475,14 +9475,22 @@ export default function Home() {
     scene.view3dSettings.widthMm,
   ]);
 
-  const placeSelectedModelsAtWorldZ = React.useCallback((targetLowestWorldZ: number, autoLift: boolean) => {
+  const placeSelectedModelsAtWorldZ = React.useCallback((
+    targetLowestWorldZ: number,
+    autoLift: boolean,
+    liftRestoreMm?: number | null,
+  ) => {
     const targetIds = resolveModelActionTargetIds({
       modelIds: scene.models.map((model) => model.id),
       selectedModelIds: scene.selectedModelIds,
       activeModelId: scene.activeModelId,
     });
     const updates = buildLiftDropUpdates(scene.models, targetIds, targetLowestWorldZ)
-      .map((update) => ({ ...update, autoLift }));
+      .map((update) => ({
+        ...update,
+        autoLift,
+        ...(liftRestoreMm !== undefined ? { liftRestoreMm } : {}),
+      }));
     if (updates.length === 0) return;
 
     invalidatePendingTransformHistory();
@@ -9504,11 +9512,17 @@ export default function Home() {
   }, [invalidatePendingTransformHistory, scene, suppressTransformPersistenceCycles, transformMgr.transformHook]);
 
   const handleLiftSelectedModels = React.useCallback(() => {
-    placeSelectedModelsAtWorldZ(transformMgr.liftDistance, true);
-  }, [placeSelectedModelsAtWorldZ, transformMgr.liftDistance]);
+    // Remember where each model was, so turning auto-lift off returns it there.
+    applySelectionPositionUpdates(buildLiftModeUpdates(
+      scene.models,
+      getSelectionTargetIds(),
+      true,
+      transformMgr.liftDistance,
+    ));
+  }, [applySelectionPositionUpdates, getSelectionTargetIds, scene.models, transformMgr.liftDistance]);
 
   const handleDropSelectedModels = React.useCallback(() => {
-    placeSelectedModelsAtWorldZ(PLATE_CLEARANCE_MM, false);
+    placeSelectedModelsAtWorldZ(PLATE_CLEARANCE_MM, false, null);
   }, [placeSelectedModelsAtWorldZ]);
 
   /** A manual Z drag sets the height itself; the live snap stands down for that gesture. */
@@ -9533,11 +9547,13 @@ export default function Home() {
   }, [getSelectionTargetIds, scene.models]);
 
   const handleAutoLiftChange = React.useCallback((enabled: boolean) => {
-    placeSelectedModelsAtWorldZ(
-      enabled ? transformMgr.liftDistance : PLATE_CLEARANCE_MM,
+    applySelectionPositionUpdates(buildLiftModeUpdates(
+      scene.models,
+      getSelectionTargetIds(),
       enabled,
-    );
-  }, [placeSelectedModelsAtWorldZ, transformMgr.liftDistance]);
+      transformMgr.liftDistance,
+    ));
+  }, [applySelectionPositionUpdates, getSelectionTargetIds, scene.models, transformMgr.liftDistance]);
 
   /** Whether the bed a model stands on refuses edits. */
   const isModelPlateLocked = React.useCallback((modelId: string) => {

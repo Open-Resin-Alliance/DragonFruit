@@ -22,8 +22,9 @@ Quick actions:
 
 - **Lift** seats the selection's lowest point at the **Distance (mm)**.
 - **Drop** seats it on the plate.
-- The **Auto** toggle is the same pair: on lifts the selection to the distance,
-  off drops it to the plate.
+- The **Auto** toggle is the mode: on lifts the selection to the distance and
+  remembers the height it came from; off returns it there. Use **Drop** when the
+  plate is the destination.
 
 The height belongs to each model, not to the tool. A model lifted for supports
 keeps its gap through moves, rotations and scaling; a model dropped on the plate

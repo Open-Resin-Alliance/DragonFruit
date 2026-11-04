@@ -23,3 +23,23 @@ test('a scene that never used auto-lift writes no autoLift key', async () => {
 
   assert.equal('autoLift' in entries[0], false);
 });
+
+test('the auto-lift restore height round-trips with the mode', async () => {
+  const input = testInput([testModel('lifted', { autoLift: true, liftRestoreMm: 5 })]);
+
+  const parsed = await parseVoxlBinaryV2(await serializeVoxlDocumentV2(input, new Map()));
+  const model = parsed.document.models[0];
+
+  assert.equal(model.autoLift, true);
+  assert.equal(model.liftRestoreMm, 5);
+});
+
+test('a manual model writes no restore height', async () => {
+  const bytes = await serializeVoxlDocumentV2(
+    testInput([testModel('manual', { liftRestoreMm: 5 })]),
+    new Map(),
+  );
+  const entries = JSON.parse(readVoxlChunkText(bytes, 'MODL')) as Record<string, unknown>[];
+
+  assert.equal('liftRestoreMm' in entries[0], false);
+});

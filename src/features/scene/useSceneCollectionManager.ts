@@ -1403,6 +1403,8 @@ export interface LoadedModel {
    * this flag existed restores to.
    */
   autoLift?: boolean;
+  /** The bottom auto-lift returns this model to when it is turned off. */
+  liftRestoreMm?: number;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
   /**
@@ -3959,7 +3961,7 @@ export function useSceneCollectionManager(options?: {
   }, [pushSceneSnapshotHistory]);
 
   const updateModelTransforms = useCallback((
-    updates: Array<{ id: string; transform: ModelTransform; autoLift?: boolean }>,
+    updates: Array<{ id: string; transform: ModelTransform; autoLift?: boolean; liftRestoreMm?: number | null }>,
     options?: {
       pushHistory?: boolean;
       /**
@@ -4007,9 +4009,11 @@ export function useSceneCollectionManager(options?: {
 
     const updateMap = new Map<string, ModelTransform>();
     const autoLiftMap = new Map<string, boolean>();
+    const liftRestoreMap = new Map<string, number | null>();
     updates.forEach((entry) => {
       updateMap.set(entry.id, entry.transform);
       if (entry.autoLift !== undefined) autoLiftMap.set(entry.id, entry.autoLift);
+      if (entry.liftRestoreMm !== undefined) liftRestoreMap.set(entry.id, entry.liftRestoreMm);
     });
 
     updates.forEach((entry) => {
@@ -4068,8 +4072,11 @@ export function useSceneCollectionManager(options?: {
       if (!currentModel) return;
       const nextAutoLift = autoLiftMap.get(id);
       const autoLiftChanged = nextAutoLift !== undefined && currentModel.autoLift !== nextAutoLift;
+      const nextRestore = liftRestoreMap.get(id);
+      const restoreChanged = nextRestore !== undefined
+        && (currentModel.liftRestoreMm ?? null) !== nextRestore;
       if (transformsEqual(currentModel.transform, nextTransform)) {
-        if (autoLiftChanged) updated = true;
+        if (autoLiftChanged || restoreChanged) updated = true;
         return;
       }
       const before = currentModel.transform;
@@ -4103,11 +4110,15 @@ export function useSceneCollectionManager(options?: {
     const nextModels = currentModels.map((m) => {
       const nextTransform = updateMap.get(m.id);
       const nextAutoLift = autoLiftMap.get(m.id);
-      if (!nextTransform && nextAutoLift === undefined) return m;
+      const nextRestore = liftRestoreMap.get(m.id);
+      if (!nextTransform && nextAutoLift === undefined && nextRestore === undefined) return m;
       const nextModel = {
         ...m,
         ...(nextTransform ? { transform: nextTransform } : {}),
         ...(nextAutoLift !== undefined ? { autoLift: nextAutoLift } : {}),
+        ...(nextRestore !== undefined
+          ? { liftRestoreMm: nextRestore === null ? undefined : nextRestore }
+          : {}),
       };
       // Membership follows the model, folded into the same update so a drag does
       // not cost a second render.
@@ -4790,9 +4801,15 @@ export function useSceneCollectionManager(options?: {
   const setModelsAutoLift = useCallback((ids: readonly string[], autoLift: boolean) => {
     const idSet = new Set(ids);
     const currentModels = modelsRef.current;
-    const nextModels = currentModels.map((model) => (
-      idSet.has(model.id) && model.autoLift !== autoLift ? { ...model, autoLift } : model
-    ));
+    const nextModels = currentModels.map((model) => {
+      if (!idSet.has(model.id)) return model;
+      if (model.autoLift === autoLift && (autoLift || model.liftRestoreMm === undefined)) return model;
+      return {
+        ...model,
+        autoLift,
+        ...(autoLift ? {} : { liftRestoreMm: undefined }),
+      };
+    });
     if (nextModels.every((model, index) => model === currentModels[index])) return;
     modelsRef.current = nextModels;
     setModels(nextModels);
@@ -5039,6 +5056,7 @@ export function useSceneCollectionManager(options?: {
       color: source.color,
       polygonCount: modelTriCount,
       autoLift: source.autoLift,
+      liftRestoreMm: source.liftRestoreMm,
       isSupportGeometry: false,
     };
 
@@ -5059,6 +5077,7 @@ export function useSceneCollectionManager(options?: {
       color: source.color,
       polygonCount: supportTriCount,
       autoLift: source.autoLift,
+      liftRestoreMm: source.liftRestoreMm,
       isSupportGeometry: true,
     };
 
@@ -5262,6 +5281,7 @@ export function useSceneCollectionManager(options?: {
         color: modelModel.color,
         polygonCount: modelTriangleCount + supportTriangleCount,
         autoLift: modelModel.autoLift,
+        liftRestoreMm: modelModel.liftRestoreMm,
         isSupportGeometry: undefined,
       };
 
@@ -7300,6 +7320,7 @@ export function useSceneCollectionManager(options?: {
             polygonCount,
             meshModifiers: undefined,
             autoLift: model.autoLift === true,
+            liftRestoreMm: typeof model.liftRestoreMm === 'number' ? model.liftRestoreMm : undefined,
             isSupportGeometry: model.isSupportGeometry,
             linkGroupId: model.linkGroupId,
             // A project saved before models carried a material still has to name one

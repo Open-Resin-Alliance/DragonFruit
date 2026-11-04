@@ -14,6 +14,8 @@ export type LiftDropModel = {
   transform: ModelTransform;
   /** The model tracks the scene's lift distance after transforms. */
   autoLift?: boolean;
+  /** The bottom to return to when auto-lift is turned off. */
+  liftRestoreMm?: number;
 };
 
 export function getModelLowestWorldZ(model: LiftDropModel): number {
@@ -75,6 +77,53 @@ export function alignModelToLift(
     rotation: candidate.rotation.clone(),
     scale: candidate.scale.clone(),
   };
+}
+
+export type LiftModeUpdate = {
+  id: string;
+  transform: ModelTransform;
+  autoLift: boolean;
+  /** `null` clears a stored restore height; absent leaves it alone. */
+  liftRestoreMm?: number | null;
+};
+
+/**
+ * Turns auto-lift on or off for a selection. Enabling remembers the bottom each
+ * model was placed at, so disabling returns it there instead of dropping it on
+ * the plate. A model that has no remembered bottom falls back to the plate.
+ */
+export function buildLiftModeUpdates(
+  models: readonly LiftDropModel[],
+  targetIds: readonly string[],
+  enabled: boolean,
+  liftDistance: number,
+): LiftModeUpdate[] {
+  const targetIdSet = new Set(targetIds);
+
+  return models
+    .filter((model) => targetIdSet.has(model.id))
+    .map((model) => {
+      const currentBottom = getModelLowestWorldZ(model);
+      const restore = enabled
+        ? (model.autoLift ? model.liftRestoreMm : currentBottom)
+        : (model.liftRestoreMm ?? PLATE_CLEARANCE_MM);
+      const target = enabled ? liftDistance : (restore ?? PLATE_CLEARANCE_MM);
+      const position = model.transform.position.clone();
+      position.z += target - currentBottom;
+
+      return {
+        id: model.id,
+        transform: {
+          position,
+          rotation: model.transform.rotation.clone(),
+          scale: model.transform.scale.clone(),
+        },
+        autoLift: enabled,
+        ...(enabled
+          ? (restore !== undefined ? { liftRestoreMm: restore } : {})
+          : { liftRestoreMm: null }),
+      };
+    });
 }
 
 export function buildLiftDropUpdates(

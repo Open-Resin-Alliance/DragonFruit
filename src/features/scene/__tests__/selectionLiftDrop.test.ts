@@ -7,6 +7,7 @@ import {
   buildLiftDropUpdates,
   getModelLowestWorldZ,
   alignModelToLift,
+  buildLiftModeUpdates,
   isModelAutoLifted,
   PLATE_CLEARANCE_MM,
   preserveModelBottom,
@@ -178,6 +179,28 @@ test('An auto-lifted model is seated at the lift distance, a manual one keeps it
 
   assert.ok(Math.abs(renderedBottom(auto, autoNext) - 5) < 1e-6);
   assert.ok(Math.abs(renderedBottom(manual, manualNext) - manualBottom) < 1e-6);
+});
+
+test('Turning auto-lift off returns the model to the height it was lifted from', () => {
+  const source = model('mesh', new THREE.BoxGeometry(4, 6, 8), new THREE.Vector3(0, 0, 9));
+  assert.ok(Math.abs(renderedBottom(source) - 5) < 1e-6);
+
+  const [on] = buildLiftModeUpdates([source], [source.id], true, 10);
+  assert.equal(on.autoLift, true);
+  assert.equal(on.liftRestoreMm, 5);
+  assert.ok(Math.abs(renderedBottom(source, on.transform) - 10) < 1e-6);
+
+  const lifted = { ...source, autoLift: true, liftRestoreMm: on.liftRestoreMm, transform: on.transform };
+  const [off] = buildLiftModeUpdates([lifted], [lifted.id], false, 10);
+  assert.equal(off.autoLift, false);
+  assert.equal(off.liftRestoreMm, null);
+  assert.ok(Math.abs(renderedBottom(lifted, off.transform) - 5) < 1e-6);
+});
+
+test('A model with no remembered height still drops to the plate when auto-lift is turned off', () => {
+  const source = { ...model('mesh', new THREE.BoxGeometry(4, 6, 8), new THREE.Vector3(0, 0, 15)), autoLift: true };
+  const [off] = buildLiftModeUpdates([source], [source.id], false, 10);
+  assert.ok(Math.abs(renderedBottom(source, off.transform) - PLATE_CLEARANCE_MM) < 1e-6);
 });
 
 test('A drop seats the model on the plate and clears the auto-lift mode', () => {

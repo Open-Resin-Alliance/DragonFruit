@@ -707,6 +707,11 @@ async function prepareVoxlDocumentV2(
       },
       // Written only when true, so a scene that never used Auto-Lift keeps its bytes.
       ...(m.autoLift === true ? { autoLift: true } : {}),
+      // Only meaningful while auto-lift is on; a manual model's restore height is
+      // its current transform.
+      ...(m.autoLift === true && typeof m.liftRestoreMm === 'number'
+        ? { liftRestoreMm: m.liftRestoreMm }
+        : {}),
       meshModifiers: strippedModifiersByModel.get(i) ?? m.meshModifiers,
       mesh: meshRef,
       isSupportGeometry: m.isSupportGeometry,

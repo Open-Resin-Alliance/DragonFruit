@@ -92,6 +92,8 @@ export type VoxlModelEntry = {
    * it keeps the stored transform, which is where the model was saved.
    */
   autoLift?: boolean;
+  /** The bottom auto-lift returns the model to when it is turned off. */
+  liftRestoreMm?: number;
   mesh: VoxlMeshRef;
   meshModifiers?: ModelMeshModifiers;
   isSupportGeometry?: boolean;
@@ -226,6 +228,8 @@ export type VoxlModelRuntimeLike = {
   };
   /** See `VoxlModelEntry.autoLift`. */
   autoLift?: boolean;
+  /** See `VoxlModelEntry.liftRestoreMm`. */
+  liftRestoreMm?: number;
   mesh?: VoxlMeshRef;
   meshModifiers?: ModelMeshModifiers;
   /** See `VoxlModelEntry.plateId`. */
