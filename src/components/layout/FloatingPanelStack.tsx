@@ -903,7 +903,13 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
             style={{ right: 0, width: 6 }}
             onPointerDown={(event) => {
               event.preventDefault();
-              setDockResize({ side: 'left', startX: event.clientX, startWidth: leftWidth });
+              // Read the rendered width: a closure captured before the last
+              // commit would start the drag from a stale value and jump.
+              setDockResize({
+                side: 'left',
+                startX: event.clientX,
+                startWidth: event.currentTarget.parentElement?.getBoundingClientRect().width ?? leftWidth,
+              });
             }}
           />
         </div>
@@ -927,7 +933,11 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
             style={{ left: 0, width: 6 }}
             onPointerDown={(event) => {
               event.preventDefault();
-              setDockResize({ side: 'right', startX: event.clientX, startWidth: rightWidth });
+              setDockResize({
+                side: 'right',
+                startX: event.clientX,
+                startWidth: event.currentTarget.parentElement?.getBoundingClientRect().width ?? rightWidth,
+              });
             }}
           />
         </div>
