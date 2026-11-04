@@ -340,7 +340,7 @@ import {
   setPrinterReachabilityMap,
   subscribeToPrinterReachability,
 } from '@/features/network/printerReachabilityStore';
-import { resolveTankMaterialProfiles } from '@/features/profiles/tankMaterials';
+import { matchSceneMaterialsToTanks, resolveTankMaterialProfiles } from '@/features/profiles/tankMaterials';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import { sliceProfileFingerprint } from '@/features/printing/slicedPlates';
 import { useSlicedPlatePreviewLoading, useSlicedPlates } from '@/features/printing/useSlicedPlates';
@@ -941,8 +941,12 @@ export default function Home() {
     previousName: string;
     newPrinterId: string;
     newName: string;
+    mode: 'reassign' | 'tankMatch';
     rows: Array<{ id: string; name: string; color?: string }>;
     options: SceneMaterialReassignOption[];
+    tankRows?: Array<{ id: string; name: string; color?: string; tankNumber: number }>;
+    tankMaterials?: string[];
+    canAssignTanks?: boolean;
   };
   const materialReassignPreviousRef = React.useRef<{ id: string; name: string; materialMode?: string } | null>(null);
   const [materialReassignPrompt, setMaterialReassignPrompt] = React.useState<MaterialReassignPrompt | null>(null);
@@ -1006,24 +1010,63 @@ export default function Home() {
     const newMaterials = getMaterialProfilesForPrinter(current.id, profileState);
     const resolvedOnNewPrinter = new Set(newMaterials.map((material) => material.id));
     const unresolved = [...sceneMaterialIds].filter((id) => !resolvedOnNewPrinter.has(id));
-    if (unresolved.length === 0) return;
-
     const assignedTankMaterials = (current.tankMaterials ?? [])
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
-    const options = assignedTankMaterials
-      .map((id) => newMaterials.find((material) => material.id === id))
-      .filter((material): material is NonNullable<typeof material> => Boolean(material))
-      .map((material) => ({
-        id: material.id,
-        name: resolveCompositeMaterialLabel(material) ?? material.name,
-        ...(material.color ? { color: material.color } : {}),
-      }));
-    const rows = unresolved.map((id) => {
-      const material = profileState.materialProfiles.find((entry) => entry.id === id);
+
+    if (unresolved.length > 0) {
+      const options = assignedTankMaterials
+        .map((id) => newMaterials.find((material) => material.id === id))
+        .filter((material): material is NonNullable<typeof material> => Boolean(material))
+        .map((material) => ({
+          id: material.id,
+          name: resolveCompositeMaterialLabel(material) ?? material.name,
+          ...(material.color ? { color: material.color } : {}),
+        }));
+      const rows = unresolved.map((id) => {
+        const material = profileState.materialProfiles.find((entry) => entry.id === id);
+        return {
+          id,
+          name: resolveCompositeMaterialLabel(material) ?? material?.name ?? 'Unknown material',
+          ...(material?.color ? { color: material.color } : {}),
+        };
+      });
+      setMaterialReassignPrompt({
+        previous,
+        previousName: previous.name,
+        newPrinterId: current.id,
+        newName: current.name,
+        mode: 'reassign',
+        rows,
+        options,
+      });
+      return;
+    }
+
+    const unassignedSceneMaterials = [...sceneMaterialIds]
+      .filter((id) => !assignedTankMaterials.includes(id));
+    if (unassignedSceneMaterials.length === 0) return;
+
+    const tankCount = Math.max(0, current.tankCount ?? current.tankMaterials?.length ?? 0);
+    if (tankCount === 0) return;
+    const targetTanks = Array.from(
+      { length: tankCount },
+      (_, index) => current.tankMaterials?.[index] ?? '',
+    );
+    const previousPrinter = profileState.printerProfiles.find((printer) => printer.id === previous.id);
+    const { tankMaterials, assignments } = matchSceneMaterialsToTanks(
+      unassignedSceneMaterials,
+      previousPrinter?.tankMaterials ?? [],
+      targetTanks,
+    );
+    if (assignments.length === 0) return;
+    const tankRows = assignments.map((assignment) => {
+      const material = newMaterials.find((entry) => entry.id === assignment.materialId)
+        ?? profileState.materialProfiles.find((entry) => entry.id === assignment.materialId);
       return {
-        id,
+        id: assignment.materialId,
         name: resolveCompositeMaterialLabel(material) ?? material?.name ?? 'Unknown material',
         ...(material?.color ? { color: material.color } : {}),
+        tankNumber: assignment.tankIndex + 1,
       };
     });
     setMaterialReassignPrompt({
@@ -1031,8 +1074,12 @@ export default function Home() {
       previousName: previous.name,
       newPrinterId: current.id,
       newName: current.name,
-      rows,
-      options,
+      mode: 'tankMatch',
+      rows: [],
+      options: [],
+      tankRows,
+      tankMaterials,
+      canAssignTanks: assignments.length === unassignedSceneMaterials.length,
     });
   }, [activePrinterProfile, profileState, scene.models, sceneUsesMultiTankMaterials]);
 
@@ -1047,6 +1094,13 @@ export default function Home() {
     scene.reassignSceneMaterials(new Map(), true);
     setMaterialReassignPrompt(null);
   }, [scene.reassignSceneMaterials]);
+
+  const assignSceneMaterialsToMatchingTanks = React.useCallback(() => {
+    const prompt = materialReassignPrompt;
+    if (!prompt?.tankMaterials) return;
+    updatePrinterProfile(prompt.newPrinterId, { tankMaterials: prompt.tankMaterials });
+    setMaterialReassignPrompt(null);
+  }, [materialReassignPrompt]);
 
   const dismissMaterialReassignment = React.useCallback(() => {
     setMaterialReassignPrompt(null);
@@ -11649,11 +11703,15 @@ export default function Home() {
         open={Boolean(materialReassignPrompt)}
         previousPrinterName={materialReassignPrompt?.previousName ?? ''}
         newPrinterName={materialReassignPrompt?.newName ?? ''}
+        mode={materialReassignPrompt?.mode ?? 'reassign'}
         canReassign={(materialReassignPrompt?.options.length ?? 0) > 0}
         rows={materialReassignPrompt?.rows ?? []}
         options={materialReassignPrompt?.options ?? []}
+        tankRows={materialReassignPrompt?.tankRows ?? []}
+        canAssignTanks={materialReassignPrompt?.canAssignTanks ?? false}
         onApply={applyMaterialReassignment}
         onUnassign={unassignSceneMaterialsForPrinter}
+        onAssignTanks={assignSceneMaterialsToMatchingTanks}
         onKeepPrevious={keepPreviousPrinterForMaterials}
         onDismiss={dismissMaterialReassignment}
       />

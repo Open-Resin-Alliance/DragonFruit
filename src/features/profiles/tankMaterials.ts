@@ -25,3 +25,35 @@ export function resolveTankMaterialProfiles(
   }
   return resolved;
 }
+
+export type TankMaterialMatch = {
+  materialId: string;
+  tankIndex: number;
+};
+
+/**
+ * Place scene materials into the target printer's tanks, preferring the tank a
+ * material occupied on the previous printer and falling back to the first free
+ * tank. Materials already held by the target are left alone.
+ */
+export function matchSceneMaterialsToTanks(
+  sceneMaterialIds: readonly string[],
+  previousTankMaterials: readonly (string | undefined)[],
+  targetTankMaterials: readonly string[],
+): { tankMaterials: string[]; assignments: TankMaterialMatch[] } {
+  const tankMaterials = [...targetTankMaterials];
+  const assignments: TankMaterialMatch[] = [];
+  for (const materialId of sceneMaterialIds) {
+    if (!materialId || tankMaterials.includes(materialId)) continue;
+    const preferredIndex = previousTankMaterials.indexOf(materialId);
+    const tankIndex = preferredIndex >= 0
+      && preferredIndex < tankMaterials.length
+      && !tankMaterials[preferredIndex]
+      ? preferredIndex
+      : tankMaterials.findIndex((material) => !material);
+    if (tankIndex < 0) continue;
+    tankMaterials[tankIndex] = materialId;
+    assignments.push({ materialId, tankIndex });
+  }
+  return { tankMaterials, assignments };
+}

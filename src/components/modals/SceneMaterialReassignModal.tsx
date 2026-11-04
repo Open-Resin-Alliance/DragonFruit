@@ -20,15 +20,21 @@ export type SceneMaterialReassignRow = {
   color?: string;
 };
 
+type SceneMaterialTankRow = SceneMaterialReassignRow & { tankNumber: number };
+
 type SceneMaterialReassignModalProps = {
   open: boolean;
   previousPrinterName: string;
   newPrinterName: string;
+  mode?: 'reassign' | 'tankMatch';
   canReassign: boolean;
   rows: SceneMaterialReassignRow[];
   options: SceneMaterialReassignOption[];
+  tankRows?: SceneMaterialTankRow[];
+  canAssignTanks?: boolean;
   onApply: (mapping: Map<string, SceneMaterialReassignOption>) => void;
   onUnassign: () => void;
+  onAssignTanks?: () => void;
   onKeepPrevious: () => void;
   onDismiss: () => void;
 };
@@ -42,15 +48,20 @@ export function SceneMaterialReassignModal({
   open,
   previousPrinterName,
   newPrinterName,
+  mode = 'reassign',
   canReassign,
   rows,
   options,
+  tankRows = [],
+  canAssignTanks = false,
   onApply,
   onUnassign,
+  onAssignTanks,
   onKeepPrevious,
   onDismiss,
 }: SceneMaterialReassignModalProps) {
   const { _ } = useLingui();
+  const isTankMatch = mode === 'tankMatch';
   const [mapping, setMapping] = React.useState<Record<string, string>>(() => (
     Object.fromEntries(rows.map((row) => [row.id, options[0]?.id ?? '']))
   ));
@@ -72,9 +83,11 @@ export function SceneMaterialReassignModal({
   return (
     <StructuredDialogModal
       open={open}
-      ariaLabel={_(msg`Reassign scene materials`)}
-      title={_(msg`Reassign scene materials`)}
-      subtitle={_(msg`The new printer has different material profiles`)}
+      ariaLabel={_(isTankMatch ? msg`Assign scene materials to tanks` : msg`Reassign scene materials`)}
+      title={_(isTankMatch ? msg`Assign scene materials to tanks` : msg`Reassign scene materials`)}
+      subtitle={_(isTankMatch
+        ? msg`The new printer shares these materials but its tanks are not assigned`
+        : msg`The new printer has different material profiles`)}
       icon={<Palette className="h-4 w-4" />}
       iconTone="warning"
       zIndexClassName="z-[130]"
@@ -95,19 +108,64 @@ export function SceneMaterialReassignModal({
               <Trans>Reassign materials</Trans>
             </Button>
           )}
+          {isTankMatch && canAssignTanks && (
+            <Button variant="tinted-accent" onClick={() => onAssignTanks?.()}>
+              <Trans>Assign to matching tanks</Trans>
+            </Button>
+          )}
         </>
       }
     >
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        <Trans>
-          This scene names materials from{' '}
-          <strong style={{ color: 'var(--text-strong)' }}>{previousPrinterName}</strong>. Choose
-          which materials on <strong style={{ color: 'var(--text-strong)' }}>{newPrinterName}</strong>{' '}
-          the scene should use.
-        </Trans>
+        {isTankMatch ? (
+          <Trans>
+            These scene materials are available on{' '}
+            <strong style={{ color: 'var(--text-strong)' }}>{newPrinterName}</strong>, but its tanks
+            are not assigned to them. Assign each material to the tank it occupied on{' '}
+            <strong style={{ color: 'var(--text-strong)' }}>{previousPrinterName}</strong>, or keep
+            the previous printer.
+          </Trans>
+        ) : (
+          <Trans>
+            This scene names materials from{' '}
+            <strong style={{ color: 'var(--text-strong)' }}>{previousPrinterName}</strong>. Choose
+            which materials on <strong style={{ color: 'var(--text-strong)' }}>{newPrinterName}</strong>{' '}
+            the scene should use.
+          </Trans>
+        )}
       </p>
 
-      {canReassign ? (
+      {isTankMatch ? (
+        <div className="overflow-hidden rounded-md border" style={{ borderColor: 'var(--border-subtle)' }}>
+          <table className="w-full border-collapse text-left text-xs">
+            <thead style={{ background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
+              <tr>
+                <th scope="col" className="p-2 font-medium"><Trans>Scene material</Trans></th>
+                <th scope="col" className="p-2 font-medium"><Trans>Tank</Trans></th>
+              </tr>
+            </thead>
+            <tbody>
+              {tankRows.map((row) => (
+                <tr key={row.id} className="border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <th scope="row" className="p-2 font-normal">
+                    <span className="inline-flex items-center gap-1.5">
+                      {row.color && (
+                        <span
+                          className="h-3 w-3 rounded-[3px]"
+                          style={{ background: row.color, boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.3)' }}
+                          aria-hidden="true"
+                        />
+                      )}
+                      {row.name}
+                    </span>
+                  </th>
+                  <td className="p-2"><Trans>Tank {row.tankNumber}</Trans></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : canReassign ? (
         <div className="overflow-hidden rounded-md border" style={{ borderColor: 'var(--border-subtle)' }}>
           <table className="w-full border-collapse text-left text-xs">
             <thead style={{ background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
