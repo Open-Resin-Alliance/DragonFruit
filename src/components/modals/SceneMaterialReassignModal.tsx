@@ -30,6 +30,7 @@ type SceneMaterialReassignModalProps = {
   onApply: (mapping: Map<string, SceneMaterialReassignOption>) => void;
   onUnassign: () => void;
   onKeepPrevious: () => void;
+  onDismiss: () => void;
 };
 
 /**
@@ -47,6 +48,7 @@ export function SceneMaterialReassignModal({
   onApply,
   onUnassign,
   onKeepPrevious,
+  onDismiss,
 }: SceneMaterialReassignModalProps) {
   const { _ } = useLingui();
   const [mapping, setMapping] = React.useState<Record<string, string>>(() => (
@@ -78,8 +80,8 @@ export function SceneMaterialReassignModal({
       zIndexClassName="z-[130]"
       maxWidthClassName="max-w-xl"
       closeAriaLabel={_(msg`Close material reassignment`)}
-      onClose={onKeepPrevious}
-      onBackdropClick={onKeepPrevious}
+      onClose={onDismiss}
+      onBackdropClick={onDismiss}
       actions={
         <>
           <Button variant="secondary" onClick={onKeepPrevious}>

@@ -1048,6 +1048,10 @@ export default function Home() {
     setMaterialReassignPrompt(null);
   }, [scene.reassignSceneMaterials]);
 
+  const dismissMaterialReassignment = React.useCallback(() => {
+    setMaterialReassignPrompt(null);
+  }, []);
+
   const keepPreviousPrinterForMaterials = React.useCallback(() => {
     const prompt = materialReassignPrompt;
     if (!prompt) return;
@@ -11651,6 +11655,7 @@ export default function Home() {
         onApply={applyMaterialReassignment}
         onUnassign={unassignSceneMaterialsForPrinter}
         onKeepPrevious={keepPreviousPrinterForMaterials}
+        onDismiss={dismissMaterialReassignment}
       />
 
       <ModifierModals
