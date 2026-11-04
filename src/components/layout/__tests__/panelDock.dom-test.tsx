@@ -44,6 +44,13 @@ test('a panel dragged to the left dock stays there across a remount', async () =
   const header = panel.querySelector('[data-panel-drag-handle="true"]');
   assert.ok(header, 'the panel has a drag handle');
 
+  // jsdom has no layout, so give the panel the rect it would have on screen.
+  // The drop test measures how much of the dragged panel overlaps the dock.
+  panel.getBoundingClientRect = () => ({
+    x: 400, y: 100, left: 400, top: 100, width: 320, height: 200, right: 720, bottom: 300,
+    toJSON: () => ({}),
+  }) as DOMRect;
+
   await act(async () => {
     header.dispatchEvent(pointer('pointerdown', 400, 120));
   });
