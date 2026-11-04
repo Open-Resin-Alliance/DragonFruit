@@ -1006,10 +1006,10 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
     network: sanitizePrinterNetworkSettings((preset as any).network),
 }));
 
-function sanitizeTankMaterials(value: unknown, tankCount: number | undefined, knownMaterialIds: ReadonlySet<string>): string[] | undefined {
+function sanitizeTankMaterials(value: unknown, tankCount: number | undefined, availableMaterialIds: ReadonlySet<string>): string[] | undefined {
     if (!Array.isArray(value) || !tankCount) return undefined;
     const entries = value.slice(0, tankCount).map((entry) => (
-        typeof entry === 'string' && knownMaterialIds.has(entry) ? entry : ''
+        typeof entry === 'string' && availableMaterialIds.has(entry) ? entry : ''
     ));
     while (entries.length < tankCount) entries.push('');
     return entries.some((entry) => entry.length > 0) ? entries : undefined;
@@ -1164,13 +1164,32 @@ function notify(): void {
 
 function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): ProfileStoreState {
     const fallback = createDefaultState();
-    // Tank assignments reference material profiles by id; an id whose material is
-    // gone is cleared rather than left dangling.
-    const knownMaterialIds = new Set(
-        (Array.isArray(input?.materialProfiles) ? input!.materialProfiles : [])
-            .map((profile) => (typeof profile?.id === 'string' ? profile.id : ''))
-            .filter((id) => id.length > 0),
-    );
+    // Tank assignments reference material profiles by id. A tank may only hold a
+    // material this printer owns or one explicitly shared with it, so a stale id
+    // from a deleted or unshared profile is cleared rather than left dangling.
+    const materialAvailability = new Map<string, { ownerPrinterId: string; compatiblePrinterIds: Set<string> }>();
+    for (const material of Array.isArray(input?.materialProfiles) ? input!.materialProfiles : []) {
+        if (typeof material?.id !== 'string' || material.id.length === 0) continue;
+        const ownerPrinterId = typeof material.printerProfileId === 'string' ? material.printerProfileId : '';
+        const compatible = (material as any).compatiblePrinterProfileIds;
+        materialAvailability.set(material.id, {
+            ownerPrinterId,
+            compatiblePrinterIds: new Set(
+                Array.isArray(compatible)
+                    ? compatible.filter((id): id is string => typeof id === 'string' && id.length > 0)
+                    : [],
+            ),
+        });
+    }
+    const availableMaterialIdsForPrinter = (printerId: string): Set<string> => {
+        const available = new Set<string>();
+        for (const [materialId, availability] of materialAvailability) {
+            if (availability.ownerPrinterId === printerId || availability.compatiblePrinterIds.has(printerId)) {
+                available.add(materialId);
+            }
+        }
+        return available;
+    };
 
     const printerProfiles = Array.isArray(input?.printerProfiles)
         ? input!.printerProfiles
@@ -1207,6 +1226,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                 const resolvedTankCount = sanitizeTankCount((profile as any).tankCount)
                     ?? sanitizeTankCount((matchedPreset as any)?.tankCount)
                     ?? (resolvedMaterialMode === 'multiTank' ? 2 : undefined);
+                const availableTankMaterialIds = availableMaterialIdsForPrinter(profile.id);
                 const networkSupport = resolveNetworkSupport(profile);
                 const networkProfileState = networkSupport
                     ? deriveNetworkProfileState(profile, networkSupport)
@@ -1244,7 +1264,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         ? 'circle'
                         : 'rectangle',
                     tankMaterials: resolvedMaterialMode === 'multiTank'
-                        ? sanitizeTankMaterials((profile as any).tankMaterials, resolvedTankCount, knownMaterialIds)
+                        ? sanitizeTankMaterials((profile as any).tankMaterials, resolvedTankCount, availableTankMaterialIds)
                         : undefined,
                     notes: sanitizePrinterNotes((profile as any).notes),
                     officialPresetId,

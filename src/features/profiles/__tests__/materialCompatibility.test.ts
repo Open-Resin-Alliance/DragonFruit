@@ -5,8 +5,10 @@ import {
   addMaterialProfile,
   addPrinterProfile,
   getMaterialProfilesForPrinter,
+  getProfileStoreSnapshot,
   removePrinterProfile,
   updateMaterialProfile,
+  updatePrinterProfile,
 } from '../profileStore';
 
 const printer = (name: string) => addPrinterProfile({
@@ -41,6 +43,41 @@ test('removing a printer drops it from compatibility lists', () => {
 
     assert.equal(getMaterialProfilesForPrinter(owner).find((material) => material.id === materialId)?.compatiblePrinterProfileIds, undefined);
   } finally {
+    removePrinterProfile(owner);
+  }
+});
+
+const multiTankPrinter = (name: string) => {
+  const id = addPrinterProfile({
+    name,
+    manufacturer: 'Test',
+    buildVolumeMm: { width: 100, depth: 100, height: 100 },
+    display: { resolutionX: 640, resolutionY: 480, outputFormat: '.zip' },
+  });
+  updatePrinterProfile(id, { materialMode: 'multiTank', tankCount: 2 });
+  return id;
+};
+
+const tankMaterialsOf = (printerId: string) => (
+  getProfileStoreSnapshot().printerProfiles.find((profile) => profile.id === printerId)?.tankMaterials ?? []
+);
+
+test('a tank drops a material the printer can no longer use', () => {
+  const target = multiTankPrinter('Tank target');
+  const owner = multiTankPrinter('Material owner');
+  try {
+    const materialId = addMaterialProfile(owner, { name: 'V3 Blue', brand: 'ELEGOO' });
+    updatePrinterProfile(target, { tankMaterials: [materialId, ''] });
+    assert.deepEqual(tankMaterialsOf(target), []);
+
+    updateMaterialProfile(materialId, { compatiblePrinterProfileIds: [target] });
+    updatePrinterProfile(target, { tankMaterials: [materialId, ''] });
+    assert.deepEqual(tankMaterialsOf(target), [materialId, '']);
+
+    updateMaterialProfile(materialId, { compatiblePrinterProfileIds: [] });
+    assert.deepEqual(tankMaterialsOf(target), []);
+  } finally {
+    removePrinterProfile(target);
     removePrinterProfile(owner);
   }
 });

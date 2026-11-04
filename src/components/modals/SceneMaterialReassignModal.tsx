@@ -37,7 +37,6 @@ type SceneMaterialReassignModalProps = {
   onUnassign: () => void;
   onAssignTanks?: () => void;
   onKeepPrevious: () => void;
-  onDismiss: () => void;
 };
 
 /**
@@ -59,7 +58,6 @@ export function SceneMaterialReassignModal({
   onUnassign,
   onAssignTanks,
   onKeepPrevious,
-  onDismiss,
 }: SceneMaterialReassignModalProps) {
   const { _ } = useLingui();
   const isTankMatch = mode === 'tankMatch';
@@ -96,8 +94,8 @@ export function SceneMaterialReassignModal({
       zIndexClassName="z-[130]"
       maxWidthClassName="max-w-xl"
       closeAriaLabel={_(msg`Close material reassignment`)}
-      onClose={onDismiss}
-      onBackdropClick={onDismiss}
+      onClose={onKeepPrevious}
+      onBackdropClick={onKeepPrevious}
       actions={
         <>
           <Button variant="secondary" onClick={onKeepPrevious}>
