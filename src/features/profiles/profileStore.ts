@@ -380,7 +380,25 @@ export type MaterialProfile = {
     minimumAaAlphaPercent: number;
     antiAliasingSettings: MaterialAntiAliasingSettings;
     localSettingsByOutput?: Record<string, LocalMaterialSettingsMap>;
+    /** Other printers this profile is shared with. The owner remains `printerProfileId`. */
+    compatiblePrinterProfileIds?: string[];
 };
+
+function sanitizeCompatiblePrinterIds(value: unknown, ownerPrinterId?: string): string[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const owner = ownerPrinterId?.trim();
+    const ids = Array.from(new Set(value
+        .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== owner)));
+    return ids.length > 0 ? ids : undefined;
+}
+
+/** Whether a material profile is the owner's or explicitly shared with a printer. */
+export function materialProfileIsAvailableForPrinter(profile: MaterialProfile, printerId: string): boolean {
+    return profile.printerProfileId === printerId
+        || (profile.compatiblePrinterProfileIds?.includes(printerId) ?? false);
+}
 
 function sanitizeMaterialColor(value: unknown): string | undefined {
     if (typeof value !== 'string') return undefined;
@@ -1350,6 +1368,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((profile as any).minimumAaAlphaPercent, 35),
                         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((profile as any).antiAliasingSettings),
                         localSettingsByOutput: sanitizeLocalSettingsByOutput((profile as any).localSettingsByOutput),
+                        compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds((profile as any).compatiblePrinterProfileIds),
                     };
                 })
                 .filter((profile): profile is MaterialProfile => profile !== null)
@@ -2005,6 +2024,7 @@ export function addMaterialProfile(
         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(partial?.minimumAaAlphaPercent, 35),
         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(partial?.antiAliasingSettings),
         localSettingsByOutput: sanitizeLocalSettingsByOutput(partial?.localSettingsByOutput),
+        compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds(partial?.compatiblePrinterProfileIds, printerProfileId),
     };
 
     setState(ensureActiveMaterialForActivePrinter({
@@ -2372,6 +2392,9 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
             antiAliasingSettings: updates.antiAliasingSettings !== undefined
                 ? sanitizeMaterialAntiAliasingSettings(updates.antiAliasingSettings)
                 : profile.antiAliasingSettings,
+            compatiblePrinterProfileIds: updates.compatiblePrinterProfileIds !== undefined
+                ? sanitizeCompatiblePrinterIds(updates.compatiblePrinterProfileIds, profile.printerProfileId)
+                : profile.compatiblePrinterProfileIds,
         };
     });
 
@@ -2416,7 +2439,16 @@ export function removePrinterProfile(id: string): void {
     if (!state.printerProfiles.some((profile) => profile.id === id)) return;
 
     const printerProfiles = state.printerProfiles.filter((profile) => profile.id !== id);
-    const materialProfiles = state.materialProfiles.filter((profile) => profile.printerProfileId !== id);
+    const materialProfiles = state.materialProfiles
+        .filter((profile) => profile.printerProfileId !== id)
+        .map((profile) => {
+            const shared = profile.compatiblePrinterProfileIds?.filter((printerId) => printerId !== id);
+            if (!profile.compatiblePrinterProfileIds?.includes(id)) return profile;
+            return {
+                ...profile,
+                compatiblePrinterProfileIds: shared && shared.length > 0 ? shared : undefined,
+            };
+        });
     const activePrinterProfileId =
         state.activePrinterProfileId === id
             ? printerProfiles[0]?.id ?? ''
@@ -2651,6 +2683,7 @@ export function importPrinterBundle(payload: unknown): string {
             minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(material.minimumAaAlphaPercent, 35),
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(material.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
+            compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds(material.compatiblePrinterProfileIds),
         }));
 
     const sourceTankMaterials = Array.isArray(sourcePrinter.tankMaterials)
@@ -2928,12 +2961,12 @@ export function getActiveMaterialProfile(stateOverride?: ProfileStoreState): Mat
 
     const materialProfile = (
         snapshot.materialProfiles.find(
-            (profile) => profile.id === mappedActiveMaterialId && profile.printerProfileId === activePrinterId,
+            (profile) => profile.id === mappedActiveMaterialId && materialProfileIsAvailableForPrinter(profile, activePrinterId),
         )
         ?? snapshot.materialProfiles.find(
-            (profile) => profile.id === snapshot.activeMaterialProfileId && profile.printerProfileId === activePrinterId,
+            (profile) => profile.id === snapshot.activeMaterialProfileId && materialProfileIsAvailableForPrinter(profile, activePrinterId),
         )
-        ?? snapshot.materialProfiles.find((profile) => profile.printerProfileId === activePrinterId)
+        ?? snapshot.materialProfiles.find((profile) => materialProfileIsAvailableForPrinter(profile, activePrinterId))
         ?? snapshot.materialProfiles[0]
         ?? null
     );
@@ -3033,6 +3066,7 @@ export function importSceneMaterials(printerProfileId: string, materials: unknow
             minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(source.minimumAaAlphaPercent, 35),
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(source.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(source.localSettingsByOutput),
+            compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds(source.compatiblePrinterProfileIds),
             locked: source.locked === true,
         };
         changed = true;
@@ -3053,7 +3087,7 @@ export function getMaterialProfilesForPrinter(printerProfileId: string, stateOve
     const snapshot = stateOverride ?? state;
     const printerProfile = snapshot.printerProfiles.find((entry) => entry.id === printerProfileId) ?? null;
     return snapshot.materialProfiles
-        .filter((profile) => profile.printerProfileId === printerProfileId)
+        .filter((profile) => materialProfileIsAvailableForPrinter(profile, printerProfileId))
         .map((profile) => resolveMaterialProfileWithLocalSettings(profile, printerProfile));
 }
 

@@ -1,11 +1,13 @@
 'use client';
 
 import React from 'react';
-import { CarFront, ChevronDown, ChevronUp, CircleHelp, Snail } from 'lucide-react';
+import { CarFront, ChevronDown, ChevronUp, CircleHelp, Link2, Snail } from 'lucide-react';
 import { Button, ColorSwatchInput } from '@/components/atoms';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { Trans } from '@lingui/react/macro';
 import {
     DEFAULT_CUSTOM_CURVE,
     DEFAULT_SAVED_CURVES,
@@ -819,13 +821,29 @@ export function LabeledMaterialColorSelect({ value, onChange }: { value?: string
 type MaterialProfileIdentitySectionProps = {
     draft: MaterialDraft;
     onChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
+    /** All printers available for sharing; omitted in contexts without a store. */
+    printerProfiles?: Array<{ id: string; name: string }>;
+    ownerPrinterId?: string;
 };
 
-export function MaterialProfileIdentitySection({ draft, onChange }: MaterialProfileIdentitySectionProps) {
+export function MaterialProfileIdentitySection({
+    draft,
+    onChange,
+    printerProfiles,
+    ownerPrinterId,
+}: MaterialProfileIdentitySectionProps) {
+    const [compatibleMachinesOpen, setCompatibleMachinesOpen] = React.useState(false);
+    const compatibleIds = draft.compatiblePrinterProfileIds ?? [];
+    const orderedPrinterProfiles = React.useMemo(() => (
+        [...(printerProfiles ?? [])].sort((left, right) => (
+            left.id === ownerPrinterId ? -1 : right.id === ownerPrinterId ? 1 : 0
+        ))
+    ), [ownerPrinterId, printerProfiles]);
+    const canShare = orderedPrinterProfiles.some((printer) => printer.id !== ownerPrinterId) && Boolean(ownerPrinterId);
     return (
         <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
             <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Material Profile</div>
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                 <LabeledInput
                     label="Manufacturer"
                     value={draft.brand}
@@ -836,10 +854,28 @@ export function MaterialProfileIdentitySection({ draft, onChange }: MaterialProf
                     value={draft.name}
                     onChange={(value) => onChange((prev) => ({ ...prev, name: value }))}
                 />
+            </div>
+            <div className="mt-2 grid grid-cols-1 items-end gap-2 md:grid-cols-2">
                 <LabeledMaterialColorSelect
                     value={draft.color}
                     onChange={(color) => onChange((prev) => ({ ...prev, color: color || undefined }))}
                 />
+                {canShare && (
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        size="auto"
+                        onClick={() => setCompatibleMachinesOpen(true)}
+                        className="!h-9 w-full !px-2.5 !py-0 text-sm inline-flex items-center justify-between gap-2 rounded-md"
+                        style={{ color: 'var(--text-strong)' }}
+                    >
+                        <span className="inline-flex items-center gap-1.5">
+                            <Link2 className="w-3.5 h-3.5" />
+                            <Trans>Compatible Machines</Trans>
+                        </span>
+                        <span style={{ color: 'var(--text-muted)' }}>{compatibleIds.length}</span>
+                    </Button>
+                )}
             </div>
 
             <div className="mt-2 grid grid-cols-2 gap-2">
@@ -866,6 +902,52 @@ export function MaterialProfileIdentitySection({ draft, onChange }: MaterialProf
                     onChange={(value) => onChange((prev) => ({ ...prev, bottleCapacityMl: value }))}
                 />
             </div>
+
+            <StructuredDialogModal
+                open={compatibleMachinesOpen}
+                ariaLabel="Compatible Machines"
+                title={<Trans>Compatible Machines</Trans>}
+                subtitle={<Trans>Share this material profile with other printers</Trans>}
+                icon={<Link2 className="h-4 w-4" />}
+                iconTone="accent"
+                zIndexClassName="z-[120]"
+                maxWidthClassName="max-w-md"
+                closeAriaLabel="Close compatible machines"
+                onClose={() => setCompatibleMachinesOpen(false)}
+                actions={<Button variant="secondary" onClick={() => setCompatibleMachinesOpen(false)}><Trans>Done</Trans></Button>}
+            >
+                <div className="space-y-1.5">
+                    {orderedPrinterProfiles.map((printer) => {
+                        const isOwner = printer.id === ownerPrinterId;
+                        const checked = isOwner || compatibleIds.includes(printer.id);
+                        return (
+                            <label
+                                key={printer.id}
+                                className="flex items-center gap-2 rounded-md border px-2.5 py-2 text-sm"
+                                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                            >
+                                <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    disabled={isOwner}
+                                    style={{ accentColor: 'var(--accent)' }}
+                                    onChange={() => {
+                                        if (isOwner) return;
+                                        onChange((prev) => {
+                                            const next = new Set(prev.compatiblePrinterProfileIds ?? []);
+                                            if (next.has(printer.id)) next.delete(printer.id);
+                                            else next.add(printer.id);
+                                            return { ...prev, compatiblePrinterProfileIds: [...next] };
+                                        });
+                                    }}
+                                />
+                                <span className="flex-1">{printer.name}</span>
+                                {isOwner && <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Owner</span>}
+                            </label>
+                        );
+                    })}
+                </div>
+            </StructuredDialogModal>
         </div>
     );
 }
@@ -875,12 +957,19 @@ export function MaterialProfileIdentitySection({ draft, onChange }: MaterialProf
 type MaterialProfileFormSectionsProps = {
     draft: MaterialDraft;
     onChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
+    printerProfiles?: Array<{ id: string; name: string }>;
+    ownerPrinterId?: string;
 };
 
-export function MaterialProfileFormSections({ draft, onChange }: MaterialProfileFormSectionsProps) {
+export function MaterialProfileFormSections({ draft, onChange, printerProfiles, ownerPrinterId }: MaterialProfileFormSectionsProps) {
     return (
         <>
-            <MaterialProfileIdentitySection draft={draft} onChange={onChange} />
+            <MaterialProfileIdentitySection
+                draft={draft}
+                onChange={onChange}
+                printerProfiles={printerProfiles}
+                ownerPrinterId={ownerPrinterId}
+            />
 
             <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                 <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Print Settings</div>
@@ -2786,6 +2875,8 @@ type ReplacementMaterialEditorShellProps = {
     adapter: ReturnType<typeof getProfileLocalMaterialSettingsAdapter> | null;
     localSettingsByOutput: LocalSettingsByOutputDraft;
     onLocalSettingsByOutputChange: React.Dispatch<React.SetStateAction<LocalSettingsByOutputDraft>>;
+    printerProfiles?: Array<{ id: string; name: string }>;
+    ownerPrinterId?: string;
 };
 
 export function ReplacementMaterialEditorShell({
@@ -2802,6 +2893,8 @@ export function ReplacementMaterialEditorShell({
     adapter,
     localSettingsByOutput,
     onLocalSettingsByOutputChange,
+    printerProfiles,
+    ownerPrinterId,
 }: ReplacementMaterialEditorShellProps) {
     const measureRootRef = React.useRef<HTMLDivElement | null>(null);
     const [minBodyHeight, setMinBodyHeight] = React.useState<number | null>(null);
@@ -2810,7 +2903,12 @@ export function ReplacementMaterialEditorShell({
         if (tabId === 'meta') {
             return (
                 <>
-                    <MaterialProfileIdentitySection draft={draft} onChange={onDraftChange} />
+                    <MaterialProfileIdentitySection
+                        draft={draft}
+                        onChange={onDraftChange}
+                        printerProfiles={printerProfiles}
+                        ownerPrinterId={ownerPrinterId}
+                    />
                     <PluginLocalMaterialSettingsMetaTab
                         outputFormat={outputFormat}
                         settingsMode={settingsMode}
