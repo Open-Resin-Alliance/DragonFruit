@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import type { ModelTransform } from '@/hooks/useModelTransform';
-import { computeLowestZ } from '@/utils/geometry';
+import { meshSurfaceLowestZ } from '@/utils/meshSurfaceLowestZ';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 export type LiftDropModel = {
@@ -29,7 +29,7 @@ export function getModelLowestWorldZ(model: LiftDropModel): number {
   ));
   matrix.multiply(new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z));
 
-  return computeLowestZ(geometry, matrix);
+  return meshSurfaceLowestZ(geometry, matrix);
 }
 
 /** Keeps the mesh's current bottom height while its scale and centre change. */

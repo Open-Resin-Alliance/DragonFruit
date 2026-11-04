@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { useModelTransform } from '@/hooks/useModelTransform';
-import { computeLowestZ, computeBoundsZ } from '@/utils/geometry';
+import { meshSurfaceHighestZ, meshSurfaceLowestZ } from '@/utils/meshSurfaceLowestZ';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { DEFAULT_LIFT_DISTANCE_MM } from './liftDefaults';
@@ -93,7 +93,7 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     const finalMatrix = buildTransformMatrix(candidate);
     if (!finalMatrix) return null;
 
-    return computeLowestZ(geom.geometry, finalMatrix);
+    return meshSurfaceLowestZ(geom.geometry, finalMatrix);
   }, [buildTransformMatrix, geom]);
 
   const alignTransformToAutoLift = useCallback((candidate: {
@@ -206,8 +206,7 @@ export function useTransformManager({ geom }: TransformManagerProps) {
 
     const finalMatrix = posMatrix.multiply(rotScaleMatrix).multiply(offsetMatrix);
     
-    const { max } = computeBoundsZ(geom.geometry, finalMatrix);
-    return { min: 0, max };
+    return { min: 0, max: meshSurfaceHighestZ(geom.geometry, finalMatrix) };
   }, [
     geom,
     isTransforming,
