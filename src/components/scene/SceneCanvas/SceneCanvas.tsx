@@ -193,7 +193,7 @@ import {
   isBoundsOutsideVolume,
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
-import { computeLowestZ, countTriangles } from '@/utils/geometry';
+import { countTriangles } from '@/utils/geometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { Toast } from '@/components/atoms';
 import { getCenteredPositionSource, type CenteredPositionSource } from '@/utils/modelBounds';
@@ -209,7 +209,7 @@ import { applyScaleFactor } from '@/components/gizmo/scale/applyScaleFactor';
 import { createWheelDeviceClassifier, type WheelDevice } from '@/components/scene/SceneCanvas/wheelDeviceClassifier';
 import { getSelectionGizmoCenter } from '@/features/scene/selectionPosition';
 import { rotateSelectionFromActive, type SelectionRotationMode } from '@/features/scene/selectionTransform';
-import { preserveModelBottom } from '@/features/scene/selectionLiftDrop';
+import { alignModelToLift, preserveModelBottom } from '@/features/scene/selectionLiftDrop';
 import { DEFAULT_LIFT_DISTANCE_MM } from '@/features/transform/liftDefaults';
 import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 import {
@@ -570,9 +570,7 @@ export function SceneCanvas({
   uniformScaling = true,
   localTransformSpace = false,
   selectionRotationMode = 'group',
-  autoLift = false,
   liftDistance = DEFAULT_LIFT_DISTANCE_MM,
-  autoSnapEnabled = true,
   onTransformChange,
   onTransformStart,
   isModelPlateLocked,
@@ -740,9 +738,7 @@ export function SceneCanvas({
   localTransformSpace?: boolean;
   /** How the gizmo turns a multi-model selection: as one block, or each model in place. */
   selectionRotationMode?: SelectionRotationMode;
-  autoLift?: boolean;
   liftDistance?: number;
-  autoSnapEnabled?: boolean;
   onTransformChange?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
   /** Whether a model's bed refuses edits, so a drag never starts on one. */
   isModelPlateLocked?: (modelId: string) => boolean;
@@ -1120,38 +1116,8 @@ export function SceneCanvas({
 
   const alignLiveTransformToLift = React.useCallback((model: LoadedModel | null | undefined, candidate: ModelTransform | null) => {
     if (!model || !candidate) return candidate;
-    if (!autoSnapEnabled) return candidate;
-
-    const geometry = model.geometry?.geometry;
-    if (!geometry) return candidate;
-
-    const bbox = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position') as THREE.BufferAttribute);
-    const center = bbox.getCenter(new THREE.Vector3());
-
-    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-    const rotScaleMatrix = new THREE.Matrix4();
-    rotScaleMatrix.compose(
-      new THREE.Vector3(0, 0, 0),
-      quaternionFromGlobalEuler(candidate.rotation),
-      candidate.scale,
-    );
-
-    const posMatrix = new THREE.Matrix4().makeTranslation(candidate.position.x, candidate.position.y, candidate.position.z);
-    const finalMatrix = posMatrix.multiply(rotScaleMatrix).multiply(offsetMatrix);
-    const lowestWorldZ = computeLowestZ(geometry, finalMatrix);
-    const targetZ = autoLift ? liftDistance : 0.001;
-    const offset = targetZ - lowestWorldZ;
-
-    if (!Number.isFinite(offset) || Math.abs(offset) <= 1e-5) {
-      return candidate;
-    }
-
-    return {
-      position: candidate.position.clone().add(new THREE.Vector3(0, 0, offset)),
-      rotation: candidate.rotation.clone(),
-      scale: candidate.scale.clone(),
-    };
-  }, [autoLift, autoSnapEnabled, liftDistance]);
+    return alignModelToLift(model, candidate, liftDistance);
+  }, [liftDistance]);
 
   /**
    * The models standing on another bed, which are scenery: drawn dimmed, and answering no
@@ -6869,6 +6835,7 @@ export function SceneCanvas({
                     : (transform ?? model.transform));
                 const shouldApplyLiveLiftAlignment =
                   (isGizmoDragging || isGizmoRetargeting || isPostGizmoInteractionGuardActive)
+                  && !isActiveGizmoZMove
                   && (activeGizmoDragDescriptor?.operation
                     ?? (isPostGizmoInteractionGuardActive ? lastEndedGizmoOperationRef.current : null)) !== 'scale';
                 const activeTransformForRender = isActive

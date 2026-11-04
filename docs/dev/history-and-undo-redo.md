@@ -169,7 +169,7 @@ that the gesture may move, including linked peers; models omitted from
 #### Bottom-anchored scaling
 
 Panel scaling, scale reset, and gizmo scaling preserve each mesh's lowest
-world-space Z, rather than its centre Z or the current Auto-Lift target. Use
+world-space Z, rather than its centre Z or a global lift target. Use
 `preserveModelBottom` from `src/features/scene/selectionLiftDrop.ts` with the
 model's transform from the start of the edit and the next candidate transform:
 

@@ -3,7 +3,6 @@ import * as THREE from 'three';
 import { eulerFromGlobalEuler } from '@/utils/rotation';
 
 const EPSILON = 1e-5;
-const PLATFORM_SNAP_CLEARANCE_MM = 0.001;
 
 const approxEqual = (a: number, b: number) => Math.abs(a - b) <= EPSILON;
 
@@ -27,10 +26,6 @@ export interface UseModelTransformReturn {
   resetScale: () => void;
   centerXY: () => void;
   setPlatformZ: (modelBBox: THREE.Box3) => void;
-  autoSnapEnabled: boolean;
-  setAutoSnapEnabled: (enabled: boolean) => void;
-  snapToLift: (currentLowestWorldZ: number, liftDistance: number) => void;
-  snapToPlatform: (currentLowestWorldZ: number) => void;
 }
 
 export function useModelTransform(initialPosition?: THREE.Vector3): UseModelTransformReturn {
@@ -38,7 +33,6 @@ export function useModelTransform(initialPosition?: THREE.Vector3): UseModelTran
   const [position, setPositionState] = useState<THREE.Vector3>(initialPosition || new THREE.Vector3(0, 0, 0));
   const [rotation, setRotationState] = useState<THREE.Euler>(eulerFromGlobalEuler({ x: 0, y: 0, z: 0 }));
   const [scale, setScaleState] = useState<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
-  const [autoSnapEnabled, setAutoSnapEnabled] = useState<boolean>(true); // Auto-snap enabled by default
 
   const setPosition = useCallback((x: number, y: number, z: number) => {
     setPositionState(prev => {
@@ -89,46 +83,6 @@ export function useModelTransform(initialPosition?: THREE.Vector3): UseModelTran
     setPositionState(prev => new THREE.Vector3(prev.x, prev.y, -bottomZ));
   }, []);
 
-  const snapToLift = useCallback((currentLowestWorldZ: number, liftDistance: number) => {
-    // Current lowest point is at currentLowestWorldZ
-    // We want it at liftDistance
-    // So adjust position by the difference
-    const offset = liftDistance - currentLowestWorldZ;
-
-    if (Math.abs(offset) <= EPSILON) {
-      return;
-    }
-
-    setPositionState(prev => {
-      const newZ = prev.z + offset;
-      if (approxEqual(prev.z, newZ)) {
-        return prev;
-      }
-      return new THREE.Vector3(prev.x, prev.y, newZ);
-    });
-    setAutoSnapEnabled(true); // Re-enable auto-snap
-  }, []);
-
-  const snapToPlatform = useCallback((currentLowestWorldZ: number) => {
-    // Current lowest point is at currentLowestWorldZ
-    // We want it slightly above 0 to avoid micro-clipping from floating-point drift
-    // So adjust position by the difference
-    const offset = PLATFORM_SNAP_CLEARANCE_MM - currentLowestWorldZ;
-
-    if (Math.abs(offset) <= EPSILON) {
-      return;
-    }
-
-    setPositionState(prev => {
-      const newZ = prev.z + offset;
-      if (approxEqual(prev.z, newZ)) {
-        return prev;
-      }
-      return new THREE.Vector3(prev.x, prev.y, newZ);
-    });
-    setAutoSnapEnabled(true); // Re-enable auto-snap
-  }, []);
-
   return {
     mode,
     setMode,
@@ -141,9 +95,5 @@ export function useModelTransform(initialPosition?: THREE.Vector3): UseModelTran
     resetScale,
     centerXY,
     setPlatformZ,
-    autoSnapEnabled,
-    setAutoSnapEnabled,
-    snapToLift,
-    snapToPlatform,
   };
 }

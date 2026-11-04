@@ -41,7 +41,7 @@ type Mounted = { scene: Scene; hollowing: Hollowing };
 
 function Probe({ onRender }: { onRender: (mounted: Mounted) => void }) {
   const scene = useSceneCollectionManager();
-  const transformMgr = useTransformManager({ geom: scene.geom });
+  const transformMgr = useTransformManager({ geom: scene.geom, activeModel: scene.activeModel ?? null });
   const noop = () => {};
   const deps = useRef<HollowingManagerDeps>({
     showOperationError: (message) => assert.fail(message),
