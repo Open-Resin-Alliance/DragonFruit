@@ -1,5 +1,6 @@
 import React from 'react';
 import * as THREE from 'three';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
 import { useSyncExternalStore } from 'react';
 import type { ThreeEvent } from '@react-three/fiber';
 import { useThree } from '@react-three/fiber';
@@ -34,8 +35,6 @@ import {
 
 interface SupportProxyMeshLayerProps {
   mode?: 'prepare' | 'analysis' | 'support' | 'export' | 'printing';
-  clipLower?: number | null;
-  clipUpper?: number | null;
   supportColorsByModelId?: Record<string, string>;
   activeModelId?: string | null;
   selectedModelIds?: string[];
@@ -397,8 +396,6 @@ function ProxyTileCuller({ sphere, children }: { sphere: THREE.Sphere | null; ch
 
 export function SupportProxyMeshLayer({
   mode,
-  clipLower,
-  clipUpper,
   activeModelId = null,
   selectedModelIds = [],
   marqueeCandidateModelIds = EMPTY_MARQUEE_CANDIDATES,
@@ -451,12 +448,9 @@ export function SupportProxyMeshLayer({
     return true;
   }, [excludedModelIdSet, excludeModelId, modelFilterId]);
 
-  const clippingPlanes = React.useMemo(() => {
-    const planes: THREE.Plane[] = [];
-    if (clipLower != null) planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-    if (clipUpper != null) planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-    return planes.length > 0 ? planes : null;
-  }, [clipLower, clipUpper]);
+  // The scene's two shared planes: stable identity and length, so a scrub moves
+  // their constants without recompiling a material.
+  const clippingPlanes = getSceneClipPlanes();
 
   const outOfBoundsMaterial = React.useMemo(() => {
     if (!showOutOfBoundsOverlay || !outOfBoundsMin || !outOfBoundsMax) return null;

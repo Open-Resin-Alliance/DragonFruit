@@ -22,17 +22,27 @@ let gateOpen = true;
 let rawLower: number | null = null;
 let rawUpper: number | null = null;
 let clip: SceneClip = { lower: null, upper: null };
-const planes: THREE.Plane[] = [];
 const listeners = new Set<() => void>();
+
+/**
+ * Far enough outside any build volume that a parked plane cuts nothing.
+ * Parked rather than removed: three.js recompiles every material whose
+ * clipping-plane count changes, so the count has to stay at two.
+ */
+const CLIP_FAR_MM = 1e6;
+
+const lowerPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), CLIP_FAR_MM);
+const upperPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), CLIP_FAR_MM);
+/** Stable identity: materials keep this array and see only the constants move. */
+const planes: THREE.Plane[] = [lowerPlane, upperPlane];
 
 function recompute(): void {
   const lower = gateOpen ? rawLower : null;
   const upper = gateOpen ? rawUpper : null;
   if (lower === clip.lower && upper === clip.upper) return;
   clip = { lower, upper };
-  planes.length = 0;
-  if (lower != null) planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -lower));
-  if (upper != null) planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), upper));
+  lowerPlane.constant = lower == null ? CLIP_FAR_MM : -lower;
+  upperPlane.constant = upper == null ? CLIP_FAR_MM : upper;
   for (const listener of listeners) listener();
 }
 
@@ -56,7 +66,10 @@ export function getSceneClip(): SceneClip {
   return clip;
 }
 
-/** The stable array. Its contents change on a scrub; its identity does not. */
+/**
+ * The two planes, always both present. Their constants move with the slider;
+ * the array identity and its length never change, so no material recompiles.
+ */
 export function getSceneClipPlanes(): THREE.Plane[] {
   return planes;
 }

@@ -2,6 +2,7 @@
 
 import React, { useEffect } from 'react';
 import * as THREE from 'three';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
 import { MODEL_EDGE_OVERLAY_ENABLED } from '@/hooks/useStlGeometry';
 import { useFrame, useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
@@ -647,24 +648,9 @@ function StlMeshComponent({
     } as THREE.Mesh['raycast'],
   );
 
-  // Build clipping planes directly from current props so clipping never lags
-  // by one frame when layer slider updates.
-  const planes = React.useMemo(() => {
-    const next: THREE.Plane[] = [];
-
-    if (clipLower != null) {
-      // Clip below clipLower in world space
-      // Normal points up (0,0,1), hide points where world Z < clipLower
-      next.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-    }
-    if (clipUpper != null) {
-      // Clip above clipUpper in world space
-      // Normal points down (0,0,-1), hide points where world Z > clipUpper
-      next.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-    }
-
-    return next;
-  }, [clipLower, clipUpper]);
+  // The scene's two shared planes, updated in place by the clip store. The
+  // identity and length never change, so a scrub never recompiles a material.
+  const planes = getSceneClipPlanes();
 
   React.useEffect(() => {
     if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {

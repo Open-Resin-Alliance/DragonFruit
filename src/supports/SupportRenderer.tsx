@@ -10,6 +10,7 @@ import { subscribe, getSnapshot,
   type SupportState,
 } from './state';
 import { noteActivity } from '@/utils/debug/heartbeatContext';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
 import {
     buildSupportPlacementPreviewBatch,
     resolvePlacementPreviewMaterial,
@@ -121,8 +122,6 @@ interface SupportRendererProps {
     mode?: SupportMode;
     navigationLodActive?: boolean;
     hidePlateContactPrimitives?: boolean;
-    clipLower?: number | null;
-    clipUpper?: number | null;
     supportColorsByModelId?: Record<string, string>;
     /**
      * Models on another bed. Their supports are drawn dimmed and answer no pointer, the
@@ -635,7 +634,7 @@ function getSnapshotWithoutHover(): SupportState {
     return next;
 }
 
-export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], marqueeCandidateModelIds = EMPTY_SUPPORT_ID_LIST, hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 100000, placementPreviews = EMPTY_PLACEMENT_PREVIEWS, interiorView = false, cavityGeometryByModelId, modelWorldInverseById, pointerSceneryModelIds }, ref) => {
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, activeModelId = null, selectedModelIds = [], marqueeCandidateModelIds = EMPTY_SUPPORT_ID_LIST, hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 100000, placementPreviews = EMPTY_PLACEMENT_PREVIEWS, interiorView = false, cavityGeometryByModelId, modelWorldInverseById, pointerSceneryModelIds }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const stableState = useSyncExternalStore(subscribe, getSnapshotWithoutHover);
     noteActivity('support-mode:renderer');
@@ -1362,22 +1361,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const groupRef = React.useRef<THREE.Group>(null);
     useImperativeHandle(ref, () => groupRef.current!);
 
-    // Derive clipping planes synchronously so a freshly mounted renderer
-    // (e.g. after support refresh key changes) is clipped correctly on its
-    // very first render, without waiting for a post-commit effect.
-    const clippingPlanes = useMemo(() => {
-        const planes: THREE.Plane[] = [];
-
-        if (clipLower != null) {
-            planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-        }
-
-        if (clipUpper != null) {
-            planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-        }
-
-        return planes;
-    }, [clipLower, clipUpper]);
+    // The scene's two clip planes, shared and stable. Their constants move with
+    // the slider; the array identity and length never change, so a scrub never
+    // recompiles a support material and a plane parking outside the scene does
+    // not change the shader either.
+    const clippingPlanes = getSceneClipPlanes();
 
     const resolveBaseColor = useMemo(() => {
         const baseHex = '#9a9a9a';
@@ -3645,7 +3633,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const root = groupRef.current;
         if (!root) return;
 
-        const nextClippingPlanes = clippingPlanes.length > 0 ? clippingPlanes : null;
+        const nextClippingPlanes = clippingPlanes;
 
         const applyMaterialClipping = (material: THREE.Material) => {
             const clipMaterial = material as THREE.Material & { clippingPlanes?: THREE.Plane[] | null };
@@ -3922,7 +3910,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     index={jointSlotIndex}
                     hoveredSupportId={hoveredSupportJointSet?.supportId ?? null}
                     marqueeSupportIds={additionalMarqueeHoveredSupportIds}
-                    clippingPlanes={clippingPlanes.length > 0 ? clippingPlanes : null}
+                    clippingPlanes={clippingPlanes}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     onJointClick={isPointerInteractable ? handleSceneBatchedJointClick : undefined}
@@ -3992,7 +3980,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     index={rootSlotIndex}
                     hoveredSupportId={isInteractable ? hoveredSupportIdForVisual : null}
                     marqueeSupportIds={additionalMarqueeHoveredSupportIds}
-                    clippingPlanes={clippingPlanes.length > 0 ? clippingPlanes : null}
+                    clippingPlanes={clippingPlanes}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     renderOrder={ghostRenderOrder}
@@ -4026,7 +4014,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     index={coneSlotIndex}
                     hoveredSupportId={hoveredSupportConeSet?.supportId ?? null}
                     marqueeSupportIds={additionalMarqueeHoveredSupportIds}
-                    clippingPlanes={clippingPlanes.length > 0 ? clippingPlanes : null}
+                    clippingPlanes={clippingPlanes}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     renderOrder={ghostRenderOrder}
@@ -4312,7 +4300,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     index={shaftSlotIndex}
                     hoveredSupportId={hoveredSupportShaftSet?.supportId ?? null}
                     marqueeSupportIds={additionalMarqueeHoveredSupportIds}
-                    clippingPlanes={clippingPlanes.length > 0 ? clippingPlanes : null}
+                    clippingPlanes={clippingPlanes}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     radialSegments={sceneBatchedShaftRadialSegments}

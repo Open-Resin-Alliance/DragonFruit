@@ -6725,7 +6725,10 @@ export function SceneCanvas({
           plateArrangeDisabledTitle={plateArrangeDisabledTitle}
           onArrangePlate={onArrangePlate}
         />
-        <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null || !!organicCutKeyGizmo} />
+        {/* Always on: the clip planes are always present (parked outside the
+            scene when a bound is open), and flipping the renderer's local
+            clipping would recompile every material that carries them. */}
+        <EnableLocalClipping enabled />
         <CameraProvider cameraRef={cameraRef} />
         <CameraProjectionController mode={cameraProjectionMode} perspectiveFov={perspectiveFov} sceneRadius={orthoSceneRadiusMm} />
         <OrthoFrustumSync
@@ -6882,8 +6885,6 @@ export function SceneCanvas({
                     <StlMesh
                       modelId={model.id}
                       geometry={model.geometry.geometry}
-                      clipLower={clipLower}
-                      clipUpper={clipUpper}
                       meshColor={modelMeshColor} // Use model color, dimmed on a bed you are not working on
                       nonManifold={modelIsNonManifold} // Red checkerboard overlay when the model fails the manifold status check
                       meshRef={meshGroupRefCallback}
@@ -6977,8 +6978,6 @@ export function SceneCanvas({
                             hideRaftPrimitives={hideRaftPrimitives}
                             hideSupports={PREPARE_MERGED_SUPPORTS && prepareMergedSupports.entries.has(model.id)}
                             hidePlateContactPrimitives={hidePlateContactPrimitives}
-                            clipLower={clipLower}
-                            clipUpper={clipUpper}
                             supportColorsByModelId={supportColorsByModelId}
                             hoverTintColor={supportHoverTintColor}
                             hoverTintStrength={hoverTintStrength}
@@ -7010,8 +7009,6 @@ export function SceneCanvas({
                       {PREPARE_MERGED_SUPPORTS && mode === 'prepare' && perfLayerEnabled('mergedMesh') && (
                         <PrepareMergedSupportMesh
                           entry={prepareMergedSupports.entries.get(model.id) ?? null}
-                          clipLower={clipLower}
-                          clipUpper={clipUpper}
                           selectedModelIds={selectedModelIds}
                           marqueeCandidateModelIds={marqueeCandidateModelIds}
                           hoverModelId={supportHoverModelId}
@@ -7036,8 +7033,6 @@ export function SceneCanvas({
                           regions={overhangIslands}
                           toppleCoverage={toppleCoverage !== false}
                           dragTotalMm3={dragTotalMm3}
-                          clipLower={clipLower}
-                          clipUpper={clipUpper}
                         />
                       )}
                       <SupportBlockerOverlay
@@ -7079,8 +7074,6 @@ export function SceneCanvas({
                         navigationLodActive
                         hideRaftPrimitives={hideRaftPrimitives}
                         hidePlateContactPrimitives={hidePlateContactPrimitives}
-                        clipLower={clipLower}
-                        clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
                         hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
@@ -7163,8 +7156,6 @@ export function SceneCanvas({
                         navigationLodActive
                         hideRaftPrimitives={hideRaftPrimitives}
                         hidePlateContactPrimitives={hidePlateContactPrimitives}
-                        clipLower={clipLower}
-                        clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
                         hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
@@ -7201,8 +7192,6 @@ export function SceneCanvas({
                         navigationLodActive
                         hideRaftPrimitives={hideRaftPrimitives}
                         hidePlateContactPrimitives={hidePlateContactPrimitives}
-                        clipLower={clipLower}
-                        clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
                         hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
@@ -7330,8 +7319,6 @@ export function SceneCanvas({
                   hideRaftPrimitives={hideRaftPrimitives}
                   hideRaftPrimitivesForInactiveModels={mode === 'support' && !!activeModelId}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
                   supportColorsByModelId={supportColorsByModelId}
                   hoverTintColor={supportHoverTintColor}
                   hoverTintStrength={hoverTintStrength}
@@ -7457,8 +7444,6 @@ export function SceneCanvas({
                   supportExcludeModelIds={prepareMergedSupportProxyExcludeModelIds}
                   hideRaftPrimitives={hideRaftPrimitives}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
                   supportColorsByModelId={supportColorsByModelId}
                   hoverTintColor={supportHoverTintColor}
                   hoverTintStrength={hoverTintStrength}
@@ -7502,8 +7487,6 @@ export function SceneCanvas({
                         navigationLodActive={navigationLodActive}
                         hideRaftPrimitives={hideRaftPrimitives}
                         hidePlateContactPrimitives={hidePlateContactPrimitives}
-                        clipLower={clipLower}
-                        clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
                         hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
@@ -8077,8 +8060,6 @@ export function SceneCanvas({
                   opacity={overlayOpacity ?? 0.5}
                   transform={transform}
                   selectedIslandId={overlaySelectedIslandId}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
                 />
               )}
 
@@ -8090,8 +8071,6 @@ export function SceneCanvas({
                 <IslandInstancesOverlay
                   instances={islandInstances}
                   selectedIslandId={overlaySelectedIslandId}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
                   opacity={overlayOpacity ?? 0.9}
                 />
               )}
@@ -8107,8 +8086,6 @@ export function SceneCanvas({
                 showTerritory={voxelShowTerritory}
                 transform={transform}
                 zOffset={scanBBox?.min.z ?? 0}
-                clipLower={clipLower}
-                clipUpper={clipUpper}
               />
 
               {scanResults && (
