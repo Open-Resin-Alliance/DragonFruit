@@ -100,9 +100,11 @@ export function SceneMaterialReassignModal({
           <Button variant="secondary" onClick={onKeepPrevious}>
             <Trans>Keep {previousPrinterName}</Trans>
           </Button>
-          <Button variant="secondary" onClick={onUnassign}>
-            <Trans>Unassign scene materials</Trans>
-          </Button>
+          {!(isTankMatch && canAssignTanks) && (
+            <Button variant="secondary" onClick={onUnassign}>
+              <Trans>Unassign scene materials</Trans>
+            </Button>
+          )}
           {canReassign && (
             <Button variant="tinted-accent" onClick={handleApply}>
               <Trans>Reassign materials</Trans>
