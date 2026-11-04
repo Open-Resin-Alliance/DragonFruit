@@ -3049,35 +3049,6 @@ export function importSceneMaterials(printerProfileId: string, materials: unknow
     return remap;
 }
 
-/**
- * Copy every material profile from one printer to another. The copies are new
- * local profiles (fresh ids, unlocked, no official template link), so editing
- * them cannot change the source printer or its official baseline.
- */
-export function copyMaterialProfilesToPrinter(sourcePrinterId: string, targetPrinterId: string): number {
-    ensureHydrated();
-    if (sourcePrinterId === targetPrinterId) return 0;
-    if (!state.printerProfiles.some((profile) => profile.id === targetPrinterId)) return 0;
-
-    const copies = state.materialProfiles
-        .filter((profile) => profile.printerProfileId === sourcePrinterId)
-        .map((profile): MaterialProfile => ({
-            ...profile,
-            id: createId('material'),
-            printerProfileId: targetPrinterId,
-            officialTemplateId: undefined,
-            officialTemplateVersion: undefined,
-            locked: false,
-        }));
-    if (copies.length === 0) return 0;
-
-    setState(ensureActiveMaterialForActivePrinter({
-        ...state,
-        materialProfiles: [...state.materialProfiles, ...copies],
-    }));
-    return copies.length;
-}
-
 export function getMaterialProfilesForPrinter(printerProfileId: string, stateOverride?: ProfileStoreState): MaterialProfile[] {
     const snapshot = stateOverride ?? state;
     const printerProfile = snapshot.printerProfiles.find((entry) => entry.id === printerProfileId) ?? null;

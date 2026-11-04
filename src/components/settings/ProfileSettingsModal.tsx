@@ -24,7 +24,6 @@ import {
   DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
   addMaterialProfile,
   addPrinterProfileFromPreset,
-  copyMaterialProfilesToPrinter,
   disconnectPrinterNetworkDevice,
   duplicatePrinterProfileAsCustom,
   getActivePrinterProfile,
@@ -375,8 +374,6 @@ export function ProfileSettingsModal({
   const [selectedManufacturer, setSelectedManufacturer] = React.useState<string | null>(null);
   const [selectedResinFamily, setSelectedResinFamily] = React.useState<MaterialProfile['resinFamily'] | null>(null);
   const [isCreateMaterialOpen, setIsCreateMaterialOpen] = React.useState(false);
-  const [copyMaterialsDialogOpen, setCopyMaterialsDialogOpen] = React.useState(false);
-  const [copyMaterialsTargetId, setCopyMaterialsTargetId] = React.useState('');
   const [showMaterialPresetPicker, setShowMaterialPresetPicker] = React.useState(false);
   const [showMaterialLibraryExplainer, setShowMaterialLibraryExplainer] = React.useState(false);
   const [dontShowMaterialLibraryExplainerAgain, setDontShowMaterialLibraryExplainerAgain] = React.useState(false);
@@ -930,11 +927,6 @@ export function ProfileSettingsModal({
     if (!selectedPrinter) return [];
     return getMaterialProfilesForPrinter(selectedPrinter.id, profileState);
   }, [profileState, selectedPrinter]);
-
-  const materialCopyTargets = React.useMemo(
-    () => profileState.printerProfiles.filter((printer) => printer.id !== selectedPrinter?.id),
-    [profileState.printerProfiles, selectedPrinter?.id],
-  );
 
   /** The material in each tank, in tank order; null where the tank is unassigned. */
   const tankAssignedMaterials = React.useMemo(() => {
@@ -4629,20 +4621,6 @@ export function ProfileSettingsModal({
                         <Plus className="w-3.5 h-3.5" />
                         New
                       </Button>
-                      <Button
-                        type="button"
-                        onClick={() => {
-                          setCopyMaterialsTargetId(materialCopyTargets[0]?.id ?? '');
-                          setCopyMaterialsDialogOpen(true);
-                        }}
-                        disabled={printerMaterials.length === 0 || materialCopyTargets.length === 0}
-                        title={materialCopyTargets.length === 0 ? _(msg`Add another printer profile first`) : undefined}
-                        variant="secondary" size="auto" className="!h-8 !px-2.5 !py-0 text-sm inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                        style={{ color: 'var(--text-strong)' }}
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        <Trans>Copy to..</Trans>
-                      </Button>
                     </>
                   )}
                 </div>
@@ -6662,56 +6640,6 @@ export function ProfileSettingsModal({
             No tank has a material assigned yet, so a Multi-Tank print would not know which
             resin it is holding. Assign at least one tank, or close anyway.
           </p>
-        </StructuredDialogModal>
-
-        <StructuredDialogModal
-          open={copyMaterialsDialogOpen}
-          ariaLabel={_(msg`Copy material profiles`)}
-          title={_(msg`Copy material profiles`)}
-          subtitle={selectedPrinter?.name}
-          icon={<Copy className="h-4 w-4" />}
-          iconTone="accent"
-          zIndexClassName="z-[100]"
-          maxWidthClassName="max-w-md"
-          closeAriaLabel={_(msg`Close copy materials`)}
-          onClose={() => setCopyMaterialsDialogOpen(false)}
-          actions={(
-            <>
-              <Button variant="secondary" onClick={() => setCopyMaterialsDialogOpen(false)}>
-                <Trans>Cancel</Trans>
-              </Button>
-              <Button
-                variant="tinted-accent"
-                disabled={!copyMaterialsTargetId}
-                onClick={() => {
-                  if (!selectedPrinter || !copyMaterialsTargetId) return;
-                  copyMaterialProfilesToPrinter(selectedPrinter.id, copyMaterialsTargetId);
-                  setCopyMaterialsDialogOpen(false);
-                }}
-              >
-                <Trans>Copy profiles</Trans>
-              </Button>
-            </>
-          )}
-        >
-          <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-            <Trans>
-              Copy every material profile from this printer to another printer profile. The copies
-              are independent and can be edited without changing the source.
-            </Trans>
-          </p>
-          <label className="mt-3 block space-y-1">
-            <span className="ui-label font-medium"><Trans>Copy to printer</Trans></span>
-            <select
-              className="ui-input h-[36px] w-full px-2.5 text-sm"
-              value={copyMaterialsTargetId}
-              onChange={(event) => setCopyMaterialsTargetId(event.target.value)}
-            >
-              {materialCopyTargets.map((printer) => (
-                <option key={printer.id} value={printer.id}>{printer.name}</option>
-              ))}
-            </select>
-          </label>
         </StructuredDialogModal>
 
         <StructuredDialogModal
