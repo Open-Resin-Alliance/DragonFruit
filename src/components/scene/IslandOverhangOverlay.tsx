@@ -293,7 +293,13 @@ export function IslandOverhangOverlay({
   if (built.meshes.length === 0 && !built.toppleGeometry && !built.mutedGeometry) return null;
 
   return (
-    <group position={[-centerOffset.x, -centerOffset.y, -centerOffset.z]}>
+    <group
+      position={[-centerOffset.x, -centerOffset.y, -centerOffset.z]}
+      // The overhang scan is an overlay on the model, not part of its solid.
+      // Feeding it to the cross-section stencil painted the cap over the
+      // cut-away region wherever an overhang was scanned.
+      userData={{ noStencil: true }}
+    >
       {built.meshes.map((b) => (
         <mesh key={b.id} geometry={b.geometry} renderOrder={1001} raycast={() => null}>
           <primitive object={formationMaterial} attach="material" />

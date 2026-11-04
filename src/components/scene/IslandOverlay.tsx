@@ -181,7 +181,9 @@ export function IslandOverlay({
   }
 
   return (
-    <group>
+    // Scan markers are annotations, not model solid: the cross-section cap
+    // must not take its stencil from them.
+    <group userData={{ noStencil: true }}>
       {/* 1. Render utility markers (negative IDs for center/seed points) */}
       {utilityMarkers.map((marker) => {
         if (!marker.geometry) return null;

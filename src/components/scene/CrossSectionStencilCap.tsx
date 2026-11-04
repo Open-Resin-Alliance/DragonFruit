@@ -339,6 +339,22 @@ function meshContributesToStencil(mesh: THREE.Mesh): boolean {
   return materialContributesToStencil(material);
 }
 
+/**
+ * Whether the object sits under a group excluded from the cap stencil.
+ *
+ * Scan overlays (the island overhang volume) are painted on top of the model
+ * but are not part of its solid; feeding them to the stencil made the cap cover
+ * the region the cross-section was cutting away.
+ */
+function isNoStencilSubtree(node: THREE.Object3D): boolean {
+  let current: THREE.Object3D | null = node;
+  while (current) {
+    if (current.userData?.noStencil === true) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
 function composeTransformMatrix(transform: ModelTransform): THREE.Matrix4 {
   return new THREE.Matrix4().compose(
     transform.position,
@@ -610,6 +626,7 @@ function collectStaticStencilEntries(
 
     sourceObject.updateWorldMatrix(true, true);
     sourceObject.traverse((node) => {
+      if (isNoStencilSubtree(node)) return;
       const mesh = node as THREE.Mesh;
       if (!mesh?.isMesh) return;
       if (!meshContributesToStencil(mesh)) return;
