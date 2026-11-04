@@ -705,6 +705,8 @@ async function prepareVoxlDocumentV2(
         rotation: { x: m.transform.rotation.x, y: m.transform.rotation.y, z: m.transform.rotation.z },
         scale: { x: m.transform.scale.x, y: m.transform.scale.y, z: m.transform.scale.z },
       },
+      // Written only when true, so a scene that never used Auto-Lift keeps its bytes.
+      ...(m.autoLift === true ? { autoLift: true } : {}),
       meshModifiers: strippedModifiersByModel.get(i) ?? m.meshModifiers,
       mesh: meshRef,
       isSupportGeometry: m.isSupportGeometry,
