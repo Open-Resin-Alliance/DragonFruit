@@ -31,11 +31,12 @@ container generation.
 | 3.3      | `MODL.classification`                                                                     | `2` or `3`        |
 | 3.4      | `SCNE.plates` (plate ids and names) and `META.printer`                                     | `2` or `3`        |
 | 3.5      | Multi-material scenes: `MODL` body assignments, the `BODY` and `MATP` chunks | `2` or `3` |
-| 3.6      | Printer bundle keeps its multi-tank state (`materialMode`, `tankCount`, `tankMaterials`) and `allowMultiPlate`/`plateShape`; bundle materials keep their colour — current writer target | `2` or `3` |
+| 3.6      | Printer bundle keeps its multi-tank state (`materialMode`, `tankCount`, `tankMaterials`) and `allowMultiPlate`/`plateShape`; bundle materials keep their colour | `2` or `3` |
+| 3.7      | `MODL.autoLift` (per-model lift mode) — current writer target                              | `2` or `3` |
 
 Dedup (3.0) is the only reader-breaking change since V1, so a current writer
 emits `version 2` for a scene with no shared MESH chunks and `version 3` when
-dedup fired. Readers must support both binary floors. Writers should emit 3.6
+dedup fired. Readers must support both binary floors. Writers should emit 3.7
 semantics.
 
 V1 was only ever written by pre-release builds — the first release already wrote
@@ -335,7 +336,7 @@ revision, which stays `3.1` or `2.1`.
 Backward compatibility: the field is optional and unknown JSON keys are ignored, so a 3.3 file
 opens in an older reader with no loss beyond the classifier having to run again.
 
-### Revision 3.4 (current)
+### Revision 3.4
 
 Revision 3.4 is additive over the container and does **not** raise the floor
 (`version` stays `2`, or `3` when dedup also fired).
@@ -392,6 +393,29 @@ opens in an older reader. It sees every model as belonging to one plate, which i
 would have been before plates existed, and it ignores the printer. Nothing is dropped; the plate
 split is simply not shown.
 
+### Revision 3.7 (current)
+
+Revision 3.7 is additive over the container and does **not** raise the floor
+(`version` stays `2`, or `3` when dedup also fired).
+
+`MODL[i].autoLift` is the model's lift mode: `true` means it tracks the scene's
+lift distance after transforms, and an absent field means it keeps the bottom it
+was saved at. Written only when true, so a scene that never used Auto-Lift keeps
+its bytes.
+
+`MODL[i].liftRestoreMm` is the bottom auto-lift returns the model to when it is
+turned off, written only while `autoLift` is true. A model that was pre-lifted on
+import therefore comes back to its imported height rather than the plate.
+
+Detection (no version number is written for the authoring revision): a `MODL`
+entry carrying `autoLift` is 3.7; a payload without it is read exactly as before.
+The revision is additive, so the authoring revision a reader reports for a binary
+file stays `3.1`, or `2.1` when the file carries no modifier-snapshot chunks.
+
+Backward compatibility: the field is optional and unknown JSON keys are ignored,
+so a 3.7 file opens in an older reader, which restores the stored transform,
+which is where the model was saved.
+
 ## Supports and extensions
 
 Supports payloads are DragonFruitImportFormat-compatible. Common arrays include:
@@ -413,7 +437,7 @@ Unknown extension keys should be ignored.
 
 ## Implementation notes
 
-- The current writer (`src/features/scene/voxl/codec-v2.ts`) emits 3.6 semantics: raw mesh bytes into `MESH` chunks with per-chunk zlib and no base64, which makes files roughly 60-65% smaller than the old JSON container for typical scenes and faster to write and read. It stamps the container floor `2`, or `3` when dedup shared a MESH chunk.
+- The current writer (`src/features/scene/voxl/codec-v2.ts`) emits 3.7 semantics: raw mesh bytes into `MESH` chunks with per-chunk zlib and no base64, which makes files roughly 60-65% smaller than the old JSON container for typical scenes and faster to write and read. It stamps the container floor `2`, or `3` when dedup shared a MESH chunk.
 - The binary reader hands callers pre-decoded mesh bytes through `ParsedVoxlResult.meshBytes`.
 - A V1 file is refused by `VoxlObsoleteVersionError` (`src/features/scene/voxl/codec.ts`) rather than parsed; the app turns that into the "unsupported version" modal. Detection is `detectObsoleteVoxlVersion`.
 

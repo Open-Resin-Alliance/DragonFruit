@@ -53,6 +53,8 @@ export type PreparePanelStackProps = {
   ensurePendingTransformHistoryForActiveModel: (operation: 'move' | 'rotate' | 'scale') => void;
   requestDestructiveTransformSupportDeletion: (operationLabel: string) => boolean;
   handleRotationComplete: () => void;
+  /** Whether every selected model stands clear of the plate. */
+  autoLift: boolean;
   handleAutoLiftChange: (enabled: boolean) => void;
   selectionPositionOrigin: React.ComponentProps<typeof TransformControls>['position'];
   handlePositionSelectedModels: (x: number, y: number, z: number) => void;
@@ -108,6 +110,7 @@ export function PreparePanelStack({
   ensurePendingTransformHistoryForActiveModel,
   requestDestructiveTransformSupportDeletion,
   handleRotationComplete,
+  autoLift,
   handleAutoLiftChange,
   selectionPositionOrigin,
   handlePositionSelectedModels,
@@ -262,7 +265,7 @@ export function PreparePanelStack({
           localSpace={localTransformSpace}
           onLocalSpaceChange={setLocalTransformSpace}
           modelBBox={scene.geom.bbox}
-          autoLift={transformMgr.autoLift}
+          autoLift={autoLift}
           onAutoLiftChange={handleAutoLiftChange}
           liftDistance={transformMgr.liftDistance}
           onLiftDistanceChange={transformMgr.setLiftDistance}

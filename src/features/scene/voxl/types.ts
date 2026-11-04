@@ -86,6 +86,14 @@ export type VoxlModelEntry = {
    */
   plateId?: string;
   transform: VoxlModelTransform;
+  /**
+   * The model tracks the scene's lift distance after transforms. Written only
+   * when true, so an ordinary scene's bytes are unchanged; a reader that ignores
+   * it keeps the stored transform, which is where the model was saved.
+   */
+  autoLift?: boolean;
+  /** The bottom auto-lift returns the model to when it is turned off. */
+  liftRestoreMm?: number;
   mesh: VoxlMeshRef;
   meshModifiers?: ModelMeshModifiers;
   isSupportGeometry?: boolean;
@@ -218,6 +226,10 @@ export type VoxlModelRuntimeLike = {
     rotation: { x: number; y: number; z: number };
     scale: { x: number; y: number; z: number };
   };
+  /** See `VoxlModelEntry.autoLift`. */
+  autoLift?: boolean;
+  /** See `VoxlModelEntry.liftRestoreMm`. */
+  liftRestoreMm?: number;
   mesh?: VoxlMeshRef;
   meshModifiers?: ModelMeshModifiers;
   /** See `VoxlModelEntry.plateId`. */

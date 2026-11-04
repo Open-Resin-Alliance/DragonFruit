@@ -544,7 +544,7 @@ test('the panel’s preset row is the selector and the Auto-Lift toggle, one to 
   assert.ok(toggle(on).includes('background:color-mix'), 'on takes the accent fill instead');
   assert.ok(!off.includes('line-through'), 'the label must not be crossed out');
   assert.ok(
-    off.includes('Hold the model clear of the plate'),
+    off.includes('Lift the selected models to this distance'),
     'the toggle must say what lifting the model does for a run',
   );
 

@@ -57,7 +57,7 @@ type Mounted = { scene: Scene; holePunch: HolePunch };
 
 function Probe({ onRender }: { onRender: (mounted: Mounted) => void }) {
   const scene = useSceneCollectionManager();
-  const transformMgr = useTransformManager({ geom: scene.geom });
+  const transformMgr = useTransformManager({ geom: scene.geom, activeModel: scene.activeModel ?? null });
   const [hollowingState, setHollowingState] = useState(DEFAULT_HOLLOWING);
   const [isShellOpenFaceSelected, setIsShellOpenFaceSelected] = useState(true);
   const [hollowingDraftEnabled, setHollowingDraftEnabled] = useState(false);

@@ -1397,8 +1397,14 @@ export interface LoadedModel {
    *  models for each entry — instant, no reprocessing needed. */
   splitBodies?: GeometryWithBounds[];
   meshModifiers?: ModelMeshModifiers;
-  ignoreAutoLift?: boolean;
-  manualZMoveOverride?: boolean;
+  /**
+   * The model follows the scene's lift distance after transforms. Off means the
+   * model keeps the bottom it was placed at, which is what a project saved before
+   * this flag existed restores to.
+   */
+  autoLift?: boolean;
+  /** The bottom auto-lift returns this model to when it is turned off. */
+  liftRestoreMm?: number;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
   /**
@@ -1441,7 +1447,6 @@ import { getImportDefaultsRaftPatch, getSavedImportDefaultsSettings } from '@/fe
 import { readNativeFileSize } from '@/utils/pluginNetworkBridge';
 import { perfMark, perfMeasure } from '@/utils/perfProbe';
 import { clonePlainData } from '@/utils/plainDataClone';
-import { DEFAULT_LIFT_DISTANCE_MM } from '@/features/transform/liftDefaults';
 
 type ImportProgressState = {
   active: boolean;
@@ -3281,17 +3286,9 @@ export function useSceneCollectionManager(options?: {
     }
     trackRecentOpenedFiles(files, 'mesh', { sourcePaths: meshSourcePaths, fileSizes: meshFileSizes });
 
-    // Read auto-lift settings from storage (mirroring useTransformManager logic)
-    let autoLift = false;
-    let liftDistance = DEFAULT_LIFT_DISTANCE_MM;
     let preferredMeshColor = DEFAULT_MESH_COLOR;
     if (typeof window !== 'undefined') {
       try {
-        const savedLift = window.localStorage.getItem('autoLift');
-        if (savedLift) autoLift = JSON.parse(savedLift);
-        const savedDist = window.localStorage.getItem('liftDistance');
-        if (savedDist) liftDistance = parseFloat(savedDist);
-
         const savedAppearance = readMeshAppearanceFromLocalStorage();
         if (savedAppearance?.meshColor) preferredMeshColor = savedAppearance.meshColor;
       } catch { }
@@ -3457,8 +3454,7 @@ export function useSceneCollectionManager(options?: {
 
             const bbox = merged.bbox;
             const center = merged.center;
-            const heightOffset = center.z - bbox.min.z;
-            const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
+            const initialZ = center.z - bbox.min.z;
 
             const model: LoadedModel = {
               id: uuidv4(),
@@ -3516,8 +3512,7 @@ export function useSceneCollectionManager(options?: {
             const geom = await loadMeshGeometry(url, file.name, loadOptions);
             const bbox = geom.bbox;
             const center = geom.center;
-            const heightOffset = center.z - bbox.min.z;
-            const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
+            const initialZ = center.z - bbox.min.z;
 
             const model: LoadedModel = {
               id: uuidv4(),
@@ -3966,7 +3961,7 @@ export function useSceneCollectionManager(options?: {
   }, [pushSceneSnapshotHistory]);
 
   const updateModelTransforms = useCallback((
-    updates: Array<{ id: string; transform: ModelTransform }>,
+    updates: Array<{ id: string; transform: ModelTransform; autoLift?: boolean; liftRestoreMm?: number | null }>,
     options?: {
       pushHistory?: boolean;
       /**
@@ -4013,7 +4008,13 @@ export function useSceneCollectionManager(options?: {
     const currentSelectedModelIds = selectedModelIdsRef.current;
 
     const updateMap = new Map<string, ModelTransform>();
-    updates.forEach((entry) => updateMap.set(entry.id, entry.transform));
+    const autoLiftMap = new Map<string, boolean>();
+    const liftRestoreMap = new Map<string, number | null>();
+    updates.forEach((entry) => {
+      updateMap.set(entry.id, entry.transform);
+      if (entry.autoLift !== undefined) autoLiftMap.set(entry.id, entry.autoLift);
+      if (entry.liftRestoreMm !== undefined) liftRestoreMap.set(entry.id, entry.liftRestoreMm);
+    });
 
     updates.forEach((entry) => {
       const model = currentModels.find((m) => m.id === entry.id);
@@ -4069,7 +4070,15 @@ export function useSceneCollectionManager(options?: {
     updateMap.forEach((nextTransform, id) => {
       const currentModel = currentModels.find((model) => model.id === id);
       if (!currentModel) return;
-      if (transformsEqual(currentModel.transform, nextTransform)) return;
+      const nextAutoLift = autoLiftMap.get(id);
+      const autoLiftChanged = nextAutoLift !== undefined && currentModel.autoLift !== nextAutoLift;
+      const nextRestore = liftRestoreMap.get(id);
+      const restoreChanged = nextRestore !== undefined
+        && (currentModel.liftRestoreMm ?? null) !== nextRestore;
+      if (transformsEqual(currentModel.transform, nextTransform)) {
+        if (autoLiftChanged || restoreChanged) updated = true;
+        return;
+      }
       const before = currentModel.transform;
       if (Math.abs(before.rotation.x - nextTransform.rotation.x) > 1e-8
         || Math.abs(before.rotation.y - nextTransform.rotation.y) > 1e-8
@@ -4100,10 +4109,20 @@ export function useSceneCollectionManager(options?: {
 
     const nextModels = currentModels.map((m) => {
       const nextTransform = updateMap.get(m.id);
-      if (!nextTransform) return m;
+      const nextAutoLift = autoLiftMap.get(m.id);
+      const nextRestore = liftRestoreMap.get(m.id);
+      if (!nextTransform && nextAutoLift === undefined && nextRestore === undefined) return m;
+      const nextModel = {
+        ...m,
+        ...(nextTransform ? { transform: nextTransform } : {}),
+        ...(nextAutoLift !== undefined ? { autoLift: nextAutoLift } : {}),
+        ...(nextRestore !== undefined
+          ? { liftRestoreMm: nextRestore === null ? undefined : nextRestore }
+          : {}),
+      };
       // Membership follows the model, folded into the same update so a drag does
       // not cost a second render.
-      return withPlateMembership({ ...m, transform: nextTransform }, plateFramesRef.current);
+      return withPlateMembership(nextModel, plateFramesRef.current);
     });
 
     // Follow the moved set when it lands wholly on one plate, which is a drag of one or a
@@ -4778,16 +4797,22 @@ export function useSceneCollectionManager(options?: {
     )));
   }, []);
 
-  const setModelManualZMoveOverride = useCallback((id: string, manualZMoveOverride: boolean) => {
-    setModels(prev => prev.map((model) => (
-      model.id === id
-        ? (
-            model.manualZMoveOverride === manualZMoveOverride
-              ? model
-              : { ...model, manualZMoveOverride }
-          )
-        : model
-    )));
+  /** Sets the auto-lift mode without moving anything; the transform is the geometry. */
+  const setModelsAutoLift = useCallback((ids: readonly string[], autoLift: boolean) => {
+    const idSet = new Set(ids);
+    const currentModels = modelsRef.current;
+    const nextModels = currentModels.map((model) => {
+      if (!idSet.has(model.id)) return model;
+      if (model.autoLift === autoLift && (autoLift || model.liftRestoreMm === undefined)) return model;
+      return {
+        ...model,
+        autoLift,
+        ...(autoLift ? {} : { liftRestoreMm: undefined }),
+      };
+    });
+    if (nextModels.every((model, index) => model === currentModels[index])) return;
+    modelsRef.current = nextModels;
+    setModels(nextModels);
   }, []);
 
   const renameModel = useCallback((id: string, name: string) => {
@@ -5030,8 +5055,8 @@ export function useSceneCollectionManager(options?: {
       visible: source.visible,
       color: source.color,
       polygonCount: modelTriCount,
-      ignoreAutoLift: source.ignoreAutoLift,
-      manualZMoveOverride: source.manualZMoveOverride,
+      autoLift: source.autoLift,
+      liftRestoreMm: source.liftRestoreMm,
       isSupportGeometry: false,
     };
 
@@ -5051,8 +5076,8 @@ export function useSceneCollectionManager(options?: {
       visible: source.visible,
       color: source.color,
       polygonCount: supportTriCount,
-      ignoreAutoLift: source.ignoreAutoLift,
-      manualZMoveOverride: source.manualZMoveOverride,
+      autoLift: source.autoLift,
+      liftRestoreMm: source.liftRestoreMm,
       isSupportGeometry: true,
     };
 
@@ -5255,8 +5280,8 @@ export function useSceneCollectionManager(options?: {
         visible: modelModel.visible,
         color: modelModel.color,
         polygonCount: modelTriangleCount + supportTriangleCount,
-        ignoreAutoLift: modelModel.ignoreAutoLift,
-        manualZMoveOverride: modelModel.manualZMoveOverride,
+        autoLift: modelModel.autoLift,
+        liftRestoreMm: modelModel.liftRestoreMm,
         isSupportGeometry: undefined,
       };
 
@@ -6635,9 +6660,7 @@ export function useSceneCollectionManager(options?: {
           visible: true,
           color: '#a3a3a3',
           polygonCount: countTriangles(processed.geometry),
-          ignoreAutoLift: true,
           meshModifiers: undefined,
-          manualZMoveOverride: true,
         };
 
         // Store meshModifiers externally so model objects stay lightweight
@@ -7286,8 +7309,8 @@ export function useSceneCollectionManager(options?: {
             color,
             polygonCount,
             meshModifiers: undefined,
-            ignoreAutoLift: true,
-            manualZMoveOverride: true,
+            autoLift: model.autoLift === true,
+            liftRestoreMm: typeof model.liftRestoreMm === 'number' ? model.liftRestoreMm : undefined,
             isSupportGeometry: model.isSupportGeometry,
             linkGroupId: model.linkGroupId,
             // A project saved before models carried a material still has to name one
@@ -9004,7 +9027,6 @@ export function useSceneCollectionManager(options?: {
     addModelFromGeometry,
     splitModelIntoParts,
     finalizeModelGeometryPostProcessing,
-    setModelManualZMoveOverride,
     setModelVisibility,
     toggleSupportDesignation,
     setModelMaterialProfile,
@@ -9012,6 +9034,7 @@ export function useSceneCollectionManager(options?: {
     linkModels,
     unlinkModels,
     setModelMeshModifiers,
+    setModelsAutoLift,
     getModelMeshModifiers: useCallback((id: string) => getStoredMeshModifiers(id), []),
     renameModel,
     groupModels,
