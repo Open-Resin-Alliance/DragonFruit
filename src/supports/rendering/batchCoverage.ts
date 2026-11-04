@@ -15,6 +15,12 @@ export const BATCHED_PASSES: readonly BatchedPass[] = ['shaft', 'cone', 'root'];
  * flags answer for the full view, where its own renderer draws whatever it does
  * not batch; a simple view has no renderer left to draw it, so there the pass
  * takes whatever the type has.
+ *
+ * An inline root is the exception in the full view too: it has no `Roots` row,
+ * so the root pass is the only renderer that can draw it once the detail
+ * renderer is skipped for an unselected support. The stump is the one such
+ * type, and batching its frustum is what keeps a forest of them off the
+ * per-support mesh path.
  */
 export function batchesInView(
     pass: BatchedPass,
@@ -27,6 +33,6 @@ export function batchesInView(
         case 'cone':
             return descriptor.batchesContactCones || (simpleRender && descriptor.upper.kind === 'cone');
         case 'root':
-            return descriptor.ownsRoot || (simpleRender && descriptor.lower.kind === 'inlineRoot');
+            return descriptor.ownsRoot || descriptor.lower.kind === 'inlineRoot';
     }
 }

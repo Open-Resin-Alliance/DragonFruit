@@ -258,6 +258,7 @@ import { useSceneCollectionManager, getSceneSnapshotRegistryBytes } from '@/feat
 import { useSupportHistoryHandlers } from '@/supports/history/useSupportHistoryHandlers';
 import { useNativeSpaceMouseLifecycle } from '@/components/scene/camera/useNativeSpaceMouseLifecycle';
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
+import { setSceneClipGate } from '@/features/slicing/sceneClipStore';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 // Islands PoC (Support-tab unified islands panel). Tab-agnostic + modular — see
@@ -1523,7 +1524,6 @@ export default function Home() {
     setIsPrintingLayerScrubbing,
     printingPngLoadedUrl,
     setPrintingPngLoadedUrl,
-    isSceneLayerScrubbing,
     setIsSceneLayerScrubbing,
     isPrintingPreviewSettled,
     setIsPrintingPreviewSettled,
@@ -8237,19 +8237,16 @@ export default function Home() {
 
   const isTransitioningOutOfPrinting = scene.mode !== 'printing' && previousSceneModeRef.current === 'printing';
 
-  const sceneClipLower = React.useMemo(() => {
-    if (isTemporarilyDisablingCrossSectionForThumbnail) return null;
-    if (!isCrossSectionEnabled) return null;
-    if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
-    return slicing.clipLower;
-  }, [isCrossSectionEnabled, isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipLower]);
-
-  const sceneClipUpper = React.useMemo(() => {
-    if (isTemporarilyDisablingCrossSectionForThumbnail) return null;
-    if (!isCrossSectionEnabled) return null;
-    if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
-    return slicing.clipUpper;
-  }, [isCrossSectionEnabled, isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipUpper]);
+  // The scene reads the clip from its own store, so a slider drag does not
+  // re-render this page. The switch below is the only thing that gates it.
+  React.useEffect(() => {
+    setSceneClipGate(
+      !isTemporarilyDisablingCrossSectionForThumbnail
+      && isCrossSectionEnabled
+      && scene.mode !== 'printing'
+      && !isTransitioningOutOfPrinting,
+    );
+  }, [isCrossSectionEnabled, isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode]);
 
   const effectiveHoverTintStrengthForScene = React.useMemo(() => {
     return scene.mode === 'printing' ? 0 : scene.hoverTintStrength;
@@ -10842,8 +10839,14 @@ export default function Home() {
             layerIndex={slicing.layerIndex}
             maxLayers={slicing.numLayers}
             onLayerIndexChange={slicing.setLayerIndex}
-            onScrubStart={handleSceneLayerScrubStart}
-            onScrubEnd={handleSceneLayerScrubEnd}
+            onScrubStart={() => {
+              handleSceneLayerScrubStart();
+              slicing.beginScrub();
+            }}
+            onScrubEnd={() => {
+              handleSceneLayerScrubEnd();
+              slicing.endScrub();
+            }}
             currentHeightMm={slicing.currentHeightMm}
             maxHeightMm={slicing.heightMm}
             lowerLayerIndex={slicing.lowerLayerIndex}
@@ -10926,8 +10929,6 @@ export default function Home() {
             activeModelId={sceneCanvasActiveModelId}
             visualActiveModelId={sceneCanvasVisualActiveModelId}
             selectedModelIds={sceneCanvasSelectedModelIds}
-            clipLower={sceneClipLower}
-            clipUpper={sceneClipUpper}
             meshColor={scene.meshColor}
             meshVisible={scene.meshVisible}
             shaderType={effectiveShaderType}
@@ -11156,7 +11157,6 @@ export default function Home() {
             supportRenderRefreshNonce={supportRenderRefreshNonce}
             gizmoResetNonce={gizmoResetNonce}
             historyTransformResyncToken={historyTransformResyncTick}
-            isLayerScrubbing={scene.mode === 'printing' ? isPrintingLayerScrubbing : isSceneLayerScrubbing}
             arrangeArrayPreviewItems={arrangeArrayPreviewItems}
             hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}

@@ -2,6 +2,7 @@
 
 import React from 'react';
 import * as THREE from 'three';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
 import { supportAnswersPointer, SCENERY_DIM } from '@/features/scene/plates/plateInteractivity';
 import { useSyncExternalStore } from 'react';
 import { subscribe, getSnapshot } from '@/supports/state';
@@ -20,8 +21,6 @@ import { noteActivity } from '@/utils/debug/heartbeatContext';
  * - Generates chamfered base mesh and renders it at Z=0 when enabled
  */
 interface RaftRendererProps {
-  clipLower?: number | null;
-  clipUpper?: number | null;
   passive?: boolean;
   colorized?: boolean;
   /** Models on another bed: their raft dims and answers no pointer, like the model itself. */
@@ -44,8 +43,6 @@ interface RaftRendererProps {
 const EMPTY_PLATE_CLEARANCE_TARGETS: readonly PlateFootprintSource[] = Object.freeze([]);
 
 export default function RaftRenderer({
-  clipLower = null,
-  clipUpper = null,
   passive = false,
   colorized = true,
   pointerSceneryModelIds,
@@ -129,24 +126,9 @@ export default function RaftRenderer({
     setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
   }, [immediatePrepareActiveModelId, passive, selectedModelIds]);
 
-  // Initialize clipping planes once (update in-place to avoid recreation)
-  const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
-
-  React.useEffect(() => {
-    const planes: THREE.Plane[] = [];
-
-    if (clipLower != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-    }
-
-    if (clipUpper != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-    }
-
-    clippingPlanesRef.current = planes;
-  }, [clipLower, clipUpper]);
-
-  const clippingPlanes = clippingPlanesRef.current;
+  // The scene's two shared planes: stable identity and length, so a scrub moves
+  // their constants without recompiling a material.
+  const clippingPlanes = getSceneClipPlanes();
 
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const excludedModelIdSet = React.useMemo(() => new Set(excludeModelIds.filter((id): id is string => Boolean(id))), [excludeModelIds]);

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Eye,
   EyeOff,
@@ -31,7 +31,7 @@ import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import type { ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
-import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
+import { useFloatingPanelCollapse, useFloatingPanelDockResize } from '@/components/layout/FloatingPanelStack';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import type { UnitFormat } from '@/utils/unitFormatting';
@@ -255,37 +255,19 @@ export function ModelManagerPanel({
   const [renamingModelSuffix, setRenamingModelSuffix] = useState('');
   const [contextMenu, setContextMenu] = useState<PanelContextMenuState | null>(null);
 
-  const cardRef = useRef<HTMLDivElement | null>(null);
-  const resizeDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const beginDockResize = useFloatingPanelDockResize();
 
-  const getParentPanel = (el: HTMLElement): HTMLElement | null =>
-    el.closest('.absolute.pointer-events-auto') as HTMLElement | null;
-
+  // The panel's edge handle resizes the dock it sits in; the dock owns the
+  // width, so writing the panel's own style here would be undone by the next
+  // render.
   const handleResizePointerDown = React.useCallback((e: React.PointerEvent) => {
+    const dock = (e.currentTarget as HTMLElement).closest('[data-dock]');
+    const side = dock?.getAttribute('data-dock');
+    if (!beginDockResize || (side !== 'left' && side !== 'right')) return;
     e.preventDefault();
     e.stopPropagation();
-    const handle = e.currentTarget as HTMLElement;
-    const parent = getParentPanel(handle);
-    if (!parent) return;
-    const rect = parent.getBoundingClientRect();
-    resizeDragRef.current = { startX: e.clientX, startWidth: rect.width };
-    handle.setPointerCapture(e.pointerId);
-  }, []);
-
-  const handleResizePointerMove = React.useCallback((e: React.PointerEvent) => {
-    const drag = resizeDragRef.current;
-    if (!drag) return;
-    const handle = e.currentTarget as HTMLElement;
-    const parent = getParentPanel(handle);
-    if (!parent) return;
-    const dx = e.clientX - drag.startX;
-    const newWidth = Math.max(280, Math.min(600, drag.startWidth + dx));
-    parent.style.width = `${newWidth}px`;
-  }, []);
-
-  const handleResizePointerUp = React.useCallback((e: React.PointerEvent) => {
-    resizeDragRef.current = null;
-  }, []);
+    beginDockResize(side, e.clientX);
+  }, [beginDockResize]);
 
   const selectedSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const selectedBodySet = useMemo(() => new Set(selectedBodyKeys), [selectedBodyKeys]);
@@ -1144,9 +1126,6 @@ export function ModelManagerPanel({
           background: 'transparent',
         }}
         onPointerDown={handleResizePointerDown}
-        onPointerMove={handleResizePointerMove}
-        onPointerUp={handleResizePointerUp}
-        onPointerCancel={handleResizePointerUp}
       >
         <div
           className="absolute right-0 top-0 bottom-0 w-[3px] rounded-full transition-colors"

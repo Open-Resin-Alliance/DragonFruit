@@ -87,6 +87,25 @@ Kickstands live on `SupportState` like every other type: read
 `getOwnedPrimitives(typeId, collection)`, which reads that type's declared
 edges rather than filtering by hand.
 
+## The scene clip store
+
+`src/features/slicing/sceneClipStore.ts` holds the cross-section clip
+(`clipLower` / `clipUpper`) and is deliberately written from an event handler,
+not an effect:
+
+- `useSlicingManager` publishes the clip from `setLayerIndex` /
+  `setLowerLayerIndex`, so a slider drag moves the cross-section without a React
+  render. While the thumb is held the committed `layerIndex` is deferred to the
+  release; `LayerSlider` keeps its own live value in state and draws that.
+- `SceneCanvas` subscribes with `useSyncExternalStore` and threads the values to
+  the models, the cap and the supports as before.
+- `setSceneClipGate(open)` is the page's cross-section switch: closed publishes
+  `null` / `null` whatever the slider says. `page.tsx` drives it from
+  `isCrossSectionEnabled`, the thumbnail suppression and the workspace mode.
+
+The plane array it exposes (`getSceneClipPlanes`) keeps its identity, so a
+material that holds it sees new constants without being rebuilt.
+
 ## Preferences module pattern
 
 Settings that persist to `localStorage` use a fixed contract, repeated in ~13

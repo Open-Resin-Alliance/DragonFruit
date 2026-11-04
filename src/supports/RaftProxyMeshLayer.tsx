@@ -1,5 +1,6 @@
 import React from 'react';
 import * as THREE from 'three';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
 import { useSyncExternalStore } from 'react';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { usePicking } from '@/components/picking';
@@ -23,8 +24,6 @@ import { raftBandTopMm } from './Rafts/Crenelated/geometry/computeRaftFootprint'
 import type { PolygonWithHoles } from './Rafts/Crenelated/geometry/polygonSet2d';
 
 interface RaftProxyMeshLayerProps {
-  clipLower?: number | null;
-  clipUpper?: number | null;
   activeModelId?: string | null;
   selectedModelIds?: string[];
   hoverModelId?: string | null;
@@ -253,8 +252,6 @@ function dimForScenery(color: string, scenery: boolean): string {
 }
 
 export function RaftProxyMeshLayer({
-  clipLower,
-  clipUpper,
   activeModelId = null,
   selectedModelIds = [],
   hoverModelId = null,
@@ -291,12 +288,9 @@ export function RaftProxyMeshLayer({
     [excludeModelIds],
   );
 
-  const clippingPlanes = React.useMemo(() => {
-    const planes: THREE.Plane[] = [];
-    if (clipLower != null) planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-    if (clipUpper != null) planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-    return planes.length > 0 ? planes : null;
-  }, [clipLower, clipUpper]);
+  // The scene's two shared planes: stable identity and length, so a scrub moves
+  // their constants without recompiling a material.
+  const clippingPlanes = getSceneClipPlanes();
 
   const effectiveHoverModelId = passive ? null : hoverModelId;
   const marqueeCandidateModelIdSet = React.useMemo(

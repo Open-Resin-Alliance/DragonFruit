@@ -35,8 +35,6 @@ export type ModelAttachedSupportLayerProps = {
    * merged mesh draws the supports where this layer's proxy would have.
    */
   hideSupports?: boolean;
-  clipLower?: number | null;
-  clipUpper?: number | null;
   supportColorsByModelId?: Record<string, string>;
   hoverTintColor?: string;
   hoverTintStrength?: number;
@@ -96,8 +94,6 @@ export function ModelAttachedSupportLayer({
   hideRaftPrimitivesForInactiveModels = false,
   hidePlateContactPrimitives = false,
   hideSupports = false,
-  clipLower,
-  clipUpper,
   supportColorsByModelId,
   hoverTintColor,
   hoverTintStrength,
@@ -174,11 +170,12 @@ export function ModelAttachedSupportLayer({
 
   return (
     <>
-      {!hideRaftPrimitivesEffective && !interiorView && useUltraLazySupports && (
+      {/* Hidden, not unmounted: crossing the plate with the camera used to
+          rebuild the raft geometry on both sides of the crossing. */}
+      <group visible={!hideRaftPrimitivesEffective && !interiorView}>
+      {useUltraLazySupports && (
         <RaftProxyMeshLayer
           modelFilterId={hideRaftPrimitivesForInactiveModels && activeModelId ? activeModelId : modelFilterId}
-          clipLower={clipLower}
-          clipUpper={clipUpper}
           activeModelId={activeModelId}
           selectedModelIds={selectedModelIds}
           marqueeCandidateModelIds={marqueeCandidateModelIds}
@@ -199,11 +196,9 @@ export function ModelAttachedSupportLayer({
         />
       )}
 
-      {!hideRaftPrimitivesEffective && !interiorView && !useUltraLazySupports && perfLayerEnabled('rafts') && (
+      {!useUltraLazySupports && perfLayerEnabled('rafts') && (
         <>
           <RaftRenderer
-            clipLower={clipLower}
-            clipUpper={clipUpper}
             colorized={raftColorized}
             hoverized={raftHoverized}
             ghostOpacity={ghostOpacity}
@@ -220,8 +215,6 @@ export function ModelAttachedSupportLayer({
             plateClearanceTargets={plateClearanceTargets}
           />
           <LineRaftRenderer
-            clipLower={clipLower}
-            clipUpper={clipUpper}
             colorized={raftColorized}
             hoverized={raftHoverized}
             ghostOpacity={ghostOpacity}
@@ -239,13 +232,12 @@ export function ModelAttachedSupportLayer({
           />
         </>
       )}
+      </group>
 
       <group ref={supportRendererRef ?? undefined}>
         {useProxy && !hideSupports && perfLayerEnabled('proxy') ? (
           <SupportProxyMeshLayer
             mode={mode}
-            clipLower={clipLower}
-            clipUpper={clipUpper}
             supportColorsByModelId={supportColorsByModelId}
             activeModelId={activeModelId}
             selectedModelIds={selectedModelIds}
@@ -278,8 +270,6 @@ export function ModelAttachedSupportLayer({
             mode={mode}
             navigationLodActive={navigationLodActive}
             hidePlateContactPrimitives={hidePlateContactPrimitives}
-            clipLower={clipLower}
-            clipUpper={clipUpper}
             supportColorsByModelId={supportColorsByModelId}
             hoverTintColor={hoverTintColor}
             hoverTintStrength={hoverTintStrength}
