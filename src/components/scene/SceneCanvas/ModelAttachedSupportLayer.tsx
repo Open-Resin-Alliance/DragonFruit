@@ -170,7 +170,10 @@ export function ModelAttachedSupportLayer({
 
   return (
     <>
-      {!hideRaftPrimitivesEffective && !interiorView && useUltraLazySupports && (
+      {/* Hidden, not unmounted: crossing the plate with the camera used to
+          rebuild the raft geometry on both sides of the crossing. */}
+      <group visible={!hideRaftPrimitivesEffective && !interiorView}>
+      {useUltraLazySupports && (
         <RaftProxyMeshLayer
           modelFilterId={hideRaftPrimitivesForInactiveModels && activeModelId ? activeModelId : modelFilterId}
           activeModelId={activeModelId}
@@ -193,7 +196,7 @@ export function ModelAttachedSupportLayer({
         />
       )}
 
-      {!hideRaftPrimitivesEffective && !interiorView && !useUltraLazySupports && perfLayerEnabled('rafts') && (
+      {!useUltraLazySupports && perfLayerEnabled('rafts') && (
         <>
           <RaftRenderer
             colorized={raftColorized}
@@ -229,6 +232,7 @@ export function ModelAttachedSupportLayer({
           />
         </>
       )}
+      </group>
 
       <group ref={supportRendererRef ?? undefined}>
         {useProxy && !hideSupports && perfLayerEnabled('proxy') ? (

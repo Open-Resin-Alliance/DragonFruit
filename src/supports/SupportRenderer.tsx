@@ -2673,10 +2673,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         inlineRoot: SupportEndpoint | null,
         fallbackShaftDiameter: (entity: T) => number,
     ) => {
-        if (hidePlateContactPrimitivesEffective) {
-            return [] as Array<{ color: string; roots: InstancedRoot[] }>;
-        }
-
         const grouped = new Map<string, { color: string; roots: InstancedRoot[] }>();
 
         for (const entity of list) {
@@ -3989,7 +3985,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ) : Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
-                <group key={`scene-${typeId}-root-batch:${group.color}`}>
+                // Hidden rather than dropped: rebuilding the root batches when
+                // the camera crosses the plate cost a full support rebuild.
+                <group key={`scene-${typeId}-root-batch:${group.color}`} visible={!hidePlateContactPrimitivesEffective}>
                     <InstancedRootsGroup
                         roots={group.roots}
                         diskOnly={simpleRender}
