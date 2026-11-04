@@ -180,6 +180,18 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
     }
   }, [camera, lockedDragPosition, resolveCurrentPosition, scaleFactor, targetObject]);
 
+  // The root group is React-controlled (`position`/`scale` props) while the
+  // frame loop drives it imperatively. A re-render, which orbit and zoom cause,
+  // reapplies the last rendered props for a frame; restore the live values
+  // after render and before paint so the gizmo cannot jump.
+  React.useLayoutEffect(() => {
+    const root = gizmoRootRef.current;
+    if (!root) return;
+    const position = lockedDragPosition ?? lastPositionRef.current;
+    root.position.set(position[0], position[1], position[2]);
+    root.scale.setScalar(lastScaleRef.current);
+  });
+
   React.useEffect(() => {
     return () => {
       setRetargetingActive(false);
