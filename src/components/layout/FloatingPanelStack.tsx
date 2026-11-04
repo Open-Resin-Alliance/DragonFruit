@@ -53,6 +53,7 @@ type FloatingPanelItemProps = {
   index: number;
   position: PanelPosition | null;
   panelWidth: number;
+  hidden: boolean;
   docked: boolean;
   isDragging: boolean;
   dragOffset: PanelPosition | null;
@@ -127,6 +128,9 @@ type DropTarget = {
   /** Where the panel would land in the dock, and how tall that slot is. */
   slotTop: number;
   height: number;
+  /** The dock's box in container coordinates, measured when the target was set. */
+  dockLeft: number;
+  dockWidth: number;
 };
 
 const PANEL_MARGIN = 6;
@@ -216,8 +220,11 @@ function isPanelHeaderDragHandleTarget(target: EventTarget | null) {
   return Boolean(target.closest('[data-panel-drag-handle="true"]'));
 }
 
-function flattenPanelChildren(children: React.ReactNode, prefix = 'panel'): Array<{ id: string; node: React.ReactNode }> {
-  const entries: Array<{ id: string; node: React.ReactNode }> = [];
+function flattenPanelChildren(
+  children: React.ReactNode,
+  prefix = 'panel',
+): Array<{ id: string; node: React.ReactNode; hidden: boolean }> {
+  const entries: Array<{ id: string; node: React.ReactNode; hidden: boolean }> = [];
 
   React.Children.forEach(children, (child, index) => {
     if (child == null) return;
@@ -230,7 +237,11 @@ function flattenPanelChildren(children: React.ReactNode, prefix = 'panel'): Arra
     }
 
     const id = React.isValidElement(child) && child.key != null ? String(child.key) : fallbackId;
-    entries.push({ id, node: child });
+    // A tool hides the panels it is not using with `display: none` on the
+    // wrapper. They must leave the dock's flow too, or their gap pushes every
+    // panel below them down.
+    const style = React.isValidElement<{ style?: React.CSSProperties }>(child) ? child.props.style : undefined;
+    entries.push({ id, node: child, hidden: style?.display === 'none' });
   });
 
   return entries;
@@ -325,6 +336,7 @@ function FloatingPanelItem({
   index,
   position,
   panelWidth,
+  hidden,
   docked,
   isDragging,
   dragOffset,
@@ -349,6 +361,7 @@ function FloatingPanelItem({
       data-panel-id={id}
       className="pointer-events-auto"
       style={{
+        display: hidden ? 'none' : undefined,
         position: docked ? 'relative' : 'absolute',
         left: docked ? undefined : position?.x ?? 0,
         top: docked ? undefined : position?.y ?? 0,
@@ -418,6 +431,10 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
   const [persistLayout, setPersistLayout] = React.useState<boolean>(() => isFloatingLayoutPersistenceEnabled());
 
   const panelEntries = React.useMemo(() => flattenPanelChildren(children), [children]);
+  const hiddenPanelIds = React.useMemo(
+    () => new Set(panelEntries.filter((entry) => entry.hidden).map((entry) => entry.id)),
+    [panelEntries],
+  );
   const panelIds = React.useMemo(() => panelEntries.map((entry) => entry.id), [panelEntries]);
   const panelIdsSignature = React.useMemo(() => panelIds.join('\u001f'), [panelIds]);
   const panelIdsRef = React.useRef(panelIds);
@@ -685,6 +702,14 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
       const leftOverlap = Math.min(panelRight, leftDockRight) - Math.max(panelLeft, 0);
       const rightOverlap = Math.min(panelRight, window.innerWidth) - Math.max(panelLeft, rightDockLeft);
       const containerTop = containerRect?.top ?? 0;
+      const containerLeft = containerRect?.left ?? 0;
+      const dockBox = (side: 'left' | 'right') => {
+        const rect = containerRef.current?.querySelector(`[data-dock="${side}"]`)?.getBoundingClientRect();
+        return {
+          dockLeft: rect ? rect.left - containerLeft : 0,
+          dockWidth: rect ? rect.width : 0,
+        };
+      };
       if (leftOverlap > draggedWidth / 2) {
         const index = dockIndexAt('left', event.clientY, drag.id);
         setDropTarget({
@@ -693,6 +718,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
           y: event.clientY - containerTop,
           slotTop: dockSlotTop('left', index, drag.id, containerTop),
           height: getPanelSize(drag.id).height,
+          ...dockBox('left'),
         });
       } else if (rightOverlap > draggedWidth / 2) {
         const index = dockIndexAt('right', event.clientY, drag.id);
@@ -702,6 +728,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
           y: event.clientY - containerTop,
           slotTop: dockSlotTop('right', index, drag.id, containerTop),
           height: getPanelSize(drag.id).height,
+          ...dockBox('right'),
         });
       } else {
         setDropTarget(null);
@@ -886,6 +913,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
         index={index}
         position={position}
         panelWidth={getPanelWidth(panelId)}
+        hidden={hiddenPanelIds.has(panelId)}
         docked={docked}
         isDragging={isDragging}
         dragOffset={dragOffset}
@@ -966,10 +994,8 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
         {floatingPanels.map((panelId, index) => renderPanel(panelId, index, false))}
 
         {dropTarget ? (() => {
-          const dockLeft = dropTarget.dock === 'left'
-            ? leftInsetPx
-            : viewportSize.width - rightInsetPx - rightWidth;
-          const dockWidthPx = dropTarget.dock === 'left' ? leftWidth : rightWidth;
+          const dockLeft = dropTarget.dockLeft;
+          const dockWidthPx = dropTarget.dockWidth;
           return (
             <>
               {/* The panel's shape where it will land, as the floating layout
