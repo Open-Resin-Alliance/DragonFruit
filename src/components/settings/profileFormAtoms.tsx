@@ -6,6 +6,7 @@ import { Button, ColorSwatchInput } from '@/components/atoms';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { Trans } from '@lingui/react/macro';
 import {
@@ -821,8 +822,10 @@ export function LabeledMaterialColorSelect({ value, onChange }: { value?: string
 type MaterialProfileIdentitySectionProps = {
     draft: MaterialDraft;
     onChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
-    /** All printers available for sharing; omitted in contexts without a store. */
+    /** All printers; omitted in contexts without a store. */
     printerProfiles?: Array<{ id: string; name: string }>;
+    /** Printers whose material settings and output format match the owner. */
+    shareablePrinterIds?: string[];
     ownerPrinterId?: string;
 };
 
@@ -830,6 +833,7 @@ export function MaterialProfileIdentitySection({
     draft,
     onChange,
     printerProfiles,
+    shareablePrinterIds,
     ownerPrinterId,
 }: MaterialProfileIdentitySectionProps) {
     const [compatibleMachinesOpen, setCompatibleMachinesOpen] = React.useState(false);
@@ -839,7 +843,10 @@ export function MaterialProfileIdentitySection({
             left.id === ownerPrinterId ? -1 : right.id === ownerPrinterId ? 1 : 0
         ))
     ), [ownerPrinterId, printerProfiles]);
-    const canShare = orderedPrinterProfiles.some((printer) => printer.id !== ownerPrinterId) && Boolean(ownerPrinterId);
+    const isShareable = (printerId: string) => !shareablePrinterIds || shareablePrinterIds.includes(printerId);
+    const shareableCompatibleIds = compatibleIds.filter(isShareable);
+    const hasCompatiblePeer = orderedPrinterProfiles.some((printer) => printer.id !== ownerPrinterId && isShareable(printer.id));
+    const canShare = Boolean(ownerPrinterId) && orderedPrinterProfiles.length > 0;
     return (
         <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
             <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Material Profile</div>
@@ -861,20 +868,28 @@ export function MaterialProfileIdentitySection({
                     onChange={(color) => onChange((prev) => ({ ...prev, color: color || undefined }))}
                 />
                 {canShare && (
-                    <Button
-                        type="button"
-                        variant="secondary"
-                        size="auto"
-                        onClick={() => setCompatibleMachinesOpen(true)}
-                        className="!h-9 w-full !px-2.5 !py-0 text-sm inline-flex items-center justify-between gap-2 rounded-md"
-                        style={{ color: 'var(--text-strong)' }}
+                    <Tooltip
+                        wrapperClassName="w-full"
+                        content={hasCompatiblePeer ? undefined : (
+                            <Trans>No other printer uses the same material settings and file format</Trans>
+                        )}
                     >
-                        <span className="inline-flex items-center gap-1.5">
-                            <Link2 className="w-3.5 h-3.5" />
-                            <Trans>Compatible Machines</Trans>
-                        </span>
-                        <span style={{ color: 'var(--text-muted)' }}>{compatibleIds.length}</span>
-                    </Button>
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="auto"
+                            onClick={() => setCompatibleMachinesOpen(true)}
+                            disabled={!hasCompatiblePeer}
+                            className="!h-9 w-full !px-2.5 !py-0 text-sm inline-flex items-center justify-between gap-2 rounded-md disabled:opacity-45"
+                            style={{ color: 'var(--text-strong)' }}
+                        >
+                            <span className="inline-flex items-center gap-1.5">
+                                <Link2 className="w-3.5 h-3.5" />
+                                <Trans>Compatible Machines</Trans>
+                            </span>
+                            <span style={{ color: 'var(--text-muted)' }}>{shareableCompatibleIds.length}</span>
+                        </Button>
+                    </Tooltip>
                 )}
             </div>
 
@@ -919,31 +934,40 @@ export function MaterialProfileIdentitySection({
                 <div className="space-y-1.5">
                     {orderedPrinterProfiles.map((printer) => {
                         const isOwner = printer.id === ownerPrinterId;
-                        const checked = isOwner || compatibleIds.includes(printer.id);
+                        const blocked = !isShareable(printer.id);
+                        const checked = isOwner || (!blocked && shareableCompatibleIds.includes(printer.id));
                         return (
-                            <label
-                                key={printer.id}
-                                className="flex items-center gap-2 rounded-md border px-2.5 py-2 text-sm"
-                                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
-                            >
-                                <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    disabled={isOwner}
-                                    style={{ accentColor: 'var(--accent)' }}
-                                    onChange={() => {
-                                        if (isOwner) return;
-                                        onChange((prev) => {
-                                            const next = new Set(prev.compatiblePrinterProfileIds ?? []);
-                                            if (next.has(printer.id)) next.delete(printer.id);
-                                            else next.add(printer.id);
-                                            return { ...prev, compatiblePrinterProfileIds: [...next] };
-                                        });
+                            <Tooltip key={printer.id} wrapperClassName="w-full" content={blocked ? (
+                                <Trans>Different material settings or output format</Trans>
+                            ) : undefined}>
+                                <label
+                                    className="flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-sm"
+                                    style={{
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-1)',
+                                        opacity: blocked ? 0.55 : 1,
                                     }}
-                                />
-                                <span className="flex-1">{printer.name}</span>
-                                {isOwner && <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Owner</span>}
-                            </label>
+                                >
+                                    <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        disabled={isOwner || blocked}
+                                        style={{ accentColor: 'var(--accent)' }}
+                                        onChange={() => {
+                                            if (isOwner || blocked) return;
+                                            onChange((prev) => {
+                                                const next = new Set(prev.compatiblePrinterProfileIds ?? []);
+                                                if (next.has(printer.id)) next.delete(printer.id);
+                                                else next.add(printer.id);
+                                                return { ...prev, compatiblePrinterProfileIds: [...next] };
+                                            });
+                                        }}
+                                    />
+                                    <span className="flex-1">{printer.name}</span>
+                                    {isOwner && <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Owner</span>}
+                                    {blocked && <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}><Trans>Incompatible</Trans></span>}
+                                </label>
+                            </Tooltip>
                         );
                     })}
                 </div>
@@ -958,16 +982,18 @@ type MaterialProfileFormSectionsProps = {
     draft: MaterialDraft;
     onChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
     printerProfiles?: Array<{ id: string; name: string }>;
+    shareablePrinterIds?: string[];
     ownerPrinterId?: string;
 };
 
-export function MaterialProfileFormSections({ draft, onChange, printerProfiles, ownerPrinterId }: MaterialProfileFormSectionsProps) {
+export function MaterialProfileFormSections({ draft, onChange, printerProfiles, shareablePrinterIds, ownerPrinterId }: MaterialProfileFormSectionsProps) {
     return (
         <>
             <MaterialProfileIdentitySection
                 draft={draft}
                 onChange={onChange}
                 printerProfiles={printerProfiles}
+                shareablePrinterIds={shareablePrinterIds}
                 ownerPrinterId={ownerPrinterId}
             />
 
@@ -2876,6 +2902,7 @@ type ReplacementMaterialEditorShellProps = {
     localSettingsByOutput: LocalSettingsByOutputDraft;
     onLocalSettingsByOutputChange: React.Dispatch<React.SetStateAction<LocalSettingsByOutputDraft>>;
     printerProfiles?: Array<{ id: string; name: string }>;
+    shareablePrinterIds?: string[];
     ownerPrinterId?: string;
 };
 
@@ -2894,6 +2921,7 @@ export function ReplacementMaterialEditorShell({
     localSettingsByOutput,
     onLocalSettingsByOutputChange,
     printerProfiles,
+    shareablePrinterIds,
     ownerPrinterId,
 }: ReplacementMaterialEditorShellProps) {
     const measureRootRef = React.useRef<HTMLDivElement | null>(null);
@@ -2907,6 +2935,7 @@ export function ReplacementMaterialEditorShell({
                         draft={draft}
                         onChange={onDraftChange}
                         printerProfiles={printerProfiles}
+                        shareablePrinterIds={shareablePrinterIds}
                         ownerPrinterId={ownerPrinterId}
                     />
                     <PluginLocalMaterialSettingsMetaTab
