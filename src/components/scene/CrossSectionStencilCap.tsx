@@ -339,6 +339,24 @@ function meshContributesToStencil(mesh: THREE.Mesh): boolean {
   return materialContributesToStencil(material);
 }
 
+/**
+ * Whether the object sits under a `noClipping` group.
+ *
+ * A support detail group tagged `noClipping` is exempt from the cross-section
+ * and is drawn in full, so its geometry must not feed the cap's stencil: the
+ * cap would then be painted over the member's whole projection and the member
+ * itself would cover it. The batched supports are clipped and do feed the
+ * stencil, which is what keeps their cut faces.
+ */
+function isNoClippingSubtree(node: THREE.Object3D): boolean {
+  let current: THREE.Object3D | null = node;
+  while (current) {
+    if (current.userData?.noClipping === true) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
 function composeTransformMatrix(transform: ModelTransform): THREE.Matrix4 {
   return new THREE.Matrix4().compose(
     transform.position,
@@ -616,6 +634,7 @@ function collectStaticStencilEntries(
 
     sourceObject.updateWorldMatrix(true, true);
     sourceObject.traverse((node) => {
+      if (isNoClippingSubtree(node)) return;
       const mesh = node as THREE.Mesh;
       if (!mesh?.isMesh) return;
       if (!meshContributesToStencil(mesh)) return;
