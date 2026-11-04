@@ -3,6 +3,7 @@
 
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
 import type { Island } from '@/volumeAnalysis/IslandScan/types';
 import { getIslandPixelsByLayer } from '@/volumeAnalysis/VoxelSystem/IslandVolume';
 import { VOXEL_OFFSET_X, VOXEL_OFFSET_Y, VOXEL_OFFSET_Z, type ScanResults } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
@@ -22,9 +23,7 @@ interface IslandVoxelVisualizationProps {
   showMerged?: boolean;
   showTerritory?: boolean;
   centerOffset?: THREE.Vector3;
-  zOffset?: number; // Z offset from build plate (bbox.min.z)
-  clipLower?: number | null; // Lower clipping plane in world Z
-  clipUpper?: number | null; // Upper clipping plane in world Z
+  zOffset?: number; // Z offset from build plate (bbox.min.z) // Lower clipping plane in world Z // Upper clipping plane in world Z
   transform?: ModelTransform; // Model transform to follow
 }
 
@@ -249,8 +248,6 @@ export function IslandVoxelVisualization({
   showTerritory = false,
   centerOffset,
   zOffset = 0,
-  clipLower = null,
-  clipUpper = null,
   transform,
 }: IslandVoxelVisualizationProps) {
 
@@ -381,22 +378,9 @@ export function IslandVoxelVisualization({
   }, [enabled, scanResults, layerHeightMm, opacity, colorScheme, selectedIslandId, showMerged, showTerritory, centerOffset, zOffset]);
 
   // Initialize clipping planes once (update in-place to avoid recreation)
-  const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
-
-  React.useEffect(() => {
-    const planes: THREE.Plane[] = [];
-
-    if (clipLower != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-    }
-    if (clipUpper != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-    }
-
-    clippingPlanesRef.current = planes;
-  }, [clipLower, clipUpper]);
-
-  const clippingPlanes = clippingPlanesRef.current;
+  // The scene's shared planes: stable identity and length, so a scrub moves
+  // their constants without recompiling these materials.
+  const clippingPlanes = getSceneClipPlanes();
 
   if (!enabled) return null;
 

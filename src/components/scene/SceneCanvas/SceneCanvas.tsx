@@ -7035,8 +7035,6 @@ export function SceneCanvas({
                           regions={overhangIslands}
                           toppleCoverage={toppleCoverage !== false}
                           dragTotalMm3={dragTotalMm3}
-                          clipLower={clipLower}
-                          clipUpper={clipUpper}
                         />
                       )}
                       <SupportBlockerOverlay
@@ -8059,8 +8057,6 @@ export function SceneCanvas({
                   opacity={overlayOpacity ?? 0.5}
                   transform={transform}
                   selectedIslandId={overlaySelectedIslandId}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
                 />
               )}
 
@@ -8073,14 +8069,10 @@ export function SceneCanvas({
                   instances={islandInstances}
                   selectedIslandId={overlaySelectedIslandId}
                   opacity={overlayOpacity ?? 0.9}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
                 />
               )}
 
               <IslandVoxelVisualization
-                clipLower={clipLower}
-                clipUpper={clipUpper}
                 scanResults={scanResults ?? null}
                 layerHeightMm={layerHeightMm ?? 0.05}
                 enabled={voxelEnabled ?? false}

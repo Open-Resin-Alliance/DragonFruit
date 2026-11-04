@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useHoveredIslandId } from '@/volumeAnalysis/Islands/hoverStore';
 import { type IslandInstances } from '@/volumeAnalysis/Islands/islandInstances';
@@ -34,8 +35,6 @@ import { type IslandInstances } from '@/volumeAnalysis/Islands/islandInstances';
 interface IslandInstancesOverlayProps {
   instances: IslandInstances;
   selectedIslandId?: number | null;
-  clipLower?: number | null;
-  clipUpper?: number | null;
   opacity?: number;
 }
 
@@ -204,23 +203,14 @@ function instanceBounds(instances: IslandInstances): THREE.Sphere {
 export function IslandInstancesOverlay({
   instances,
   selectedIslandId,
-  clipLower,
-  clipUpper,
   opacity = 0.9,
 }: IslandInstancesOverlayProps) {
   const gl = useThree((state) => state.gl);
   const hoveredIslandId = useHoveredIslandId();
 
-  const clippingPlanes = useMemo(() => {
-    const planes: THREE.Plane[] = [];
-    if (clipLower != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-    }
-    if (clipUpper != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-    }
-    return planes;
-  }, [clipLower, clipUpper]);
+  // The scene's shared planes: stable identity and length, so a scrub moves
+  // their constants without recompiling these materials.
+  const clippingPlanes = getSceneClipPlanes();
 
   const geometry = useMemo(() => {
     const g = new THREE.InstancedBufferGeometry();
