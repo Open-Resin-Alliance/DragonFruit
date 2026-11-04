@@ -138,6 +138,9 @@ interface IslandOverhangOverlayProps {
    *  floor keeps its contacts, because a large flat is the best anchoring
    *  surface the part has, so it is drawn at full strength too. */
   dragTotalMm3?: number;
+  /** Cross-section planes: the overlay must disappear with the solid it marks. */
+  clipLower?: number | null;
+  clipUpper?: number | null;
 }
 
 export function IslandOverhangOverlay({
@@ -145,6 +148,8 @@ export function IslandOverhangOverlay({
   regions,
   toppleCoverage = true,
   dragTotalMm3 = 0,
+  clipLower = null,
+  clipUpper = null,
 }: IslandOverhangOverlayProps) {
   const centerOffset = useMemo(() => {
     if (!geometry) return new THREE.Vector3();
@@ -272,6 +277,20 @@ export function IslandOverhangOverlay({
     applyOverhangShader(material, false);
     return material;
   }, []);
+
+  const clippingPlanes = useMemo(() => {
+    const planes: THREE.Plane[] = [];
+    if (clipLower != null) planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
+    if (clipUpper != null) planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
+    return planes.length > 0 ? planes : null;
+  }, [clipLower, clipUpper]);
+
+  useEffect(() => {
+    for (const material of [toppleMaterial, formationMaterial, mutedMaterial]) {
+      material.clippingPlanes = clippingPlanes;
+      material.needsUpdate = true;
+    }
+  }, [clippingPlanes, toppleMaterial, formationMaterial, mutedMaterial]);
 
   useEffect(() => {
     return () => {

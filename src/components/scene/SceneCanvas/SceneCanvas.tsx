@@ -7034,6 +7034,8 @@ export function SceneCanvas({
                           regions={overhangIslands}
                           toppleCoverage={toppleCoverage !== false}
                           dragTotalMm3={dragTotalMm3}
+                          clipLower={clipLower}
+                          clipUpper={clipUpper}
                         />
                       )}
                       <SupportBlockerOverlay
