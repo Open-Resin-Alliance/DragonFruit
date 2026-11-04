@@ -10561,6 +10561,7 @@ export default function Home() {
 
       <FloatingPanelStack
         leftInsetPx={scene.models.length > 0 && (scene.mode === 'prepare' || scene.mode === 'support') && toolLayout === 'vertical' ? TOOL_RAIL_WIDTH_PX : 0}
+        rightInsetPx={scene.models.length > 0 && scene.mode !== 'printing' ? 48 : 0}
         railIsColumn={toolLayout === 'vertical'}
       >
         {scene.mode === 'prepare' ? (
@@ -10800,12 +10801,7 @@ export default function Home() {
 
         {SharedPanelStack({
           scene: scene,
-          slicing: slicing,
           transformMgr: transformMgr,
-          handleSceneLayerScrubStart: handleSceneLayerScrubStart,
-          handleSceneLayerScrubEnd: handleSceneLayerScrubEnd,
-          isCrossSectionEnabled: isCrossSectionEnabled,
-          handleToggleCrossSection: handleToggleCrossSection,
           isTransformDebugOverlayOpen: isTransformDebugOverlayOpen,
           setIsTransformDebugOverlayOpen: setIsTransformDebugOverlayOpen,
           displayActiveModelId: displayActiveModelId,
@@ -10836,6 +10832,29 @@ export default function Home() {
           printingSlicingBenchmark: printingSlicingBenchmark,
         })}
       </FloatingPanelStack>
+
+      {scene.models.length > 0 && scene.mode !== 'printing' && (
+        <div
+          className="absolute right-0 z-10 pointer-events-auto"
+          style={{ top: 'var(--topbar-height)', bottom: 8, width: 48 }}
+        >
+          <VisualSettingsPanel
+            layerIndex={slicing.layerIndex}
+            maxLayers={slicing.numLayers}
+            onLayerIndexChange={slicing.setLayerIndex}
+            onScrubStart={handleSceneLayerScrubStart}
+            onScrubEnd={handleSceneLayerScrubEnd}
+            currentHeightMm={slicing.currentHeightMm}
+            maxHeightMm={slicing.heightMm}
+            lowerLayerIndex={slicing.lowerLayerIndex}
+            onLowerLayerIndexChange={slicing.setLowerLayerIndex}
+            lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}
+            crossSectionEnabled={isCrossSectionEnabled}
+            onToggleCrossSection={handleToggleCrossSection}
+            layerHeightMm={slicing.layerHeightMm}
+          />
+        </div>
+      )}
 
       <div className="absolute inset-0 z-0 flex">
         <div

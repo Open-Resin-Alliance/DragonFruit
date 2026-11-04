@@ -1,9 +1,7 @@
 import React from 'react';
 import * as THREE from 'three';
-import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
-import type { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import type { useTransformManager } from '@/features/transform/useTransformManager';
 import { SupportInspectorPanel } from '@/supports/SupportInspectorPanel';
 import { Card, CardHeader } from '@/components/atoms/Card';
@@ -101,14 +99,7 @@ type SupportDebugStats = {
 /** Debug rows: the support types in registry order, then the primitives. */
 export type SharedPanelStackProps = {
   scene: ReturnType<typeof useSceneCollectionManager>;
-  slicing: ReturnType<typeof useSlicingManager>;
   transformMgr: ReturnType<typeof useTransformManager>;
-
-  // VisualSettingsPanel
-  handleSceneLayerScrubStart: React.ComponentProps<typeof VisualSettingsPanel>['onScrubStart'];
-  handleSceneLayerScrubEnd: React.ComponentProps<typeof VisualSettingsPanel>['onScrubEnd'];
-  isCrossSectionEnabled: boolean;
-  handleToggleCrossSection: () => void;
 
   // Debug overlay
   isTransformDebugOverlayOpen: boolean;
@@ -144,15 +135,10 @@ export type SharedPanelStackProps = {
   printingSlicingBenchmark: SliceExportResult['benchmark'] | null;
 };
 
-/** Mode-shared floating panels: visual settings + the transform/support/printing debug overlay. */
+/** Mode-shared floating panels: the transform/support/printing debug overlay. */
 export function SharedPanelStack({
   scene,
-  slicing,
   transformMgr,
-  handleSceneLayerScrubStart,
-  handleSceneLayerScrubEnd,
-  isCrossSectionEnabled,
-  handleToggleCrossSection,
   isTransformDebugOverlayOpen,
   setIsTransformDebugOverlayOpen,
   displayActiveModelId,
@@ -186,25 +172,6 @@ export function SharedPanelStack({
   'use no memo';
   return (
     <>
-      {scene.models.length > 0 && scene.mode !== 'printing' && (
-        <VisualSettingsPanel
-          key="visual-settings"
-          layerIndex={slicing.layerIndex}
-          maxLayers={slicing.numLayers}
-          onLayerIndexChange={slicing.setLayerIndex}
-          onScrubStart={handleSceneLayerScrubStart}
-          onScrubEnd={handleSceneLayerScrubEnd}
-          currentHeightMm={slicing.currentHeightMm}
-          maxHeightMm={slicing.heightMm}
-          lowerLayerIndex={slicing.lowerLayerIndex}
-          onLowerLayerIndexChange={slicing.setLowerLayerIndex}
-          lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}
-          crossSectionEnabled={isCrossSectionEnabled}
-          onToggleCrossSection={handleToggleCrossSection}
-          layerHeightMm={slicing.layerHeightMm}
-        />
-      )}
-
       {/* i18n-ignore-start: developer debug overlay (Ctrl+Shift+X), kept in English */}
       {isTransformDebugOverlayOpen && (
         <Card

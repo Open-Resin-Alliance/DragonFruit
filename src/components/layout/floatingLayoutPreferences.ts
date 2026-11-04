@@ -1,7 +1,8 @@
-// v5: layouts before this stored *derived* positions as well as moved ones, so a
-// stale order could keep overriding the profile. Only moved panels are stored now,
-// and the version bump drops the layouts written by the old code.
-export const FLOATING_LAYOUT_STORAGE_KEY = 'lumenslicer:floating-panel-layout:v5';
+// v6: the layout is a placement per panel (left dock, right dock, or float) plus
+// the dock widths. v5 stored absolute positions for moved panels only; it is read
+// once to migrate those moves into the new model.
+export const FLOATING_LAYOUT_STORAGE_KEY = 'lumenslicer:floating-panel-layout:v6';
+export const LEGACY_FLOATING_LAYOUT_STORAGE_KEY = 'lumenslicer:floating-panel-layout:v5';
 export const FLOATING_LAYOUT_PERSISTENCE_STORAGE_KEY = 'app-floating-layout-persistence';
 export const FLOATING_LAYOUT_PERSISTENCE_EVENT = 'lumenslicer:floating-layout-persistence-changed';
 export const FLOATING_LAYOUT_DEBUG_REQUEST_EVENT = 'lumenslicer:floating-layout-debug-request';
@@ -22,12 +23,19 @@ export type FloatingPanelPosition = {
 };
 
 export type FloatingLayoutDebugSnapshot = {
-  version: 1;
+  version: 2;
   capturedAt: string;
   persistenceEnabled: boolean;
   storageKey: string;
   panelIds: string[];
+  /** Floating panels only; docked panels are placed by their dock. */
   positions: Record<string, FloatingPanelPosition>;
+  placements: Record<string, {
+    dock: 'left' | 'right' | 'float';
+    order: number;
+    float?: FloatingPanelPosition;
+  }>;
+  docks: { leftWidth?: number; rightWidth?: number };
 };
 
 export type FloatingLayoutDebugRequestDetail = {
@@ -51,6 +59,7 @@ export function setFloatingLayoutPersistenceEnabled(enabled: boolean) {
 export function clearSavedFloatingLayout() {
   if (typeof window === 'undefined') return;
   window.localStorage.removeItem(FLOATING_LAYOUT_STORAGE_KEY);
+  window.localStorage.removeItem(LEGACY_FLOATING_LAYOUT_STORAGE_KEY);
 }
 
 /**
