@@ -762,6 +762,37 @@ function collectStaticStencilEntries(
         return;
       }
 
+      // A batched support is a plain mesh whose geometry is an
+      // `InstancedBufferGeometry`: the batch writes each instance's transform
+      // into the geometry's `instanceMatrix` attribute, and its own material
+      // applies it. A stencil material does not, so drawing that geometry once
+      // would stamp a single instance at the batch origin. Read the attribute
+      // and feed the cap's instanced pass instead.
+      const instancedGeometry = geometry as THREE.InstancedBufferGeometry;
+      if (instancedGeometry.isInstancedBufferGeometry) {
+        const matrixAttribute = instancedGeometry.getAttribute('instanceMatrix') as THREE.InstancedBufferAttribute | undefined;
+        if (matrixAttribute && matrixAttribute.count > 0) {
+          const count = matrixAttribute.count;
+          const matrixElements = new Float32Array(count * 16);
+          const meshMatrix = mesh.matrixWorld;
+          for (let i = 0; i < count; i += 1) {
+            instanceMatrix.fromArray(matrixAttribute.array as ArrayLike<number>, i * 16);
+            worldInstanceMatrix.multiplyMatrices(meshMatrix, instanceMatrix);
+            worldInstanceMatrix.toArray(matrixElements, i * 16);
+          }
+          results.push({
+            kind: 'instanced',
+            key: `${mesh.uuid}:instanced`,
+            geometry,
+            count,
+            matrixElements,
+            minZ: Number.NEGATIVE_INFINITY,
+            maxZ: Number.POSITIVE_INFINITY,
+          });
+          return;
+        }
+      }
+
       const worldMatrix = mesh.matrixWorld.clone();
       if (skipSourceZBounds) {
         results.push({
