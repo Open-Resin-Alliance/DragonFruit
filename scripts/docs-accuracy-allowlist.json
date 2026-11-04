@@ -108,7 +108,8 @@
             "rust/dragonfruit-slicing-engine/src/encoders/generated_plugin_encoders.rs",
             "src/features/plugins/generatedBuiltinSimplePlugins.ts",
             "rust/dragonfruit-voxl-thumbnail/generated/VoxlThumbnailExtension-Info.plist",
-            "src/supports/PlacementLogic/Pathfinding/PotentialFieldSolver.ts"
+            "src/supports/PlacementLogic/Pathfinding/PotentialFieldSolver.ts",
+            "VisualSettingsPanel"
       ],
       "_reasons": {
             "sideloaded plugin contract": "minAppVersion and protoVersion are field names of the .dfplugin manifest and the plugin protocol defined by docs/dev/plugins-sideloaded.md (ADR-0047). They are named before the implementation lands because the document IS the contract a partner builds against; when the loader exists these entries come out.",
@@ -134,7 +135,8 @@
             "removed with VOXL V1": "VoxlCompressedDocumentEnvelopeV1 / VoxlCompressionRef / VoxlDocumentCompressionEncoding / SerializeVoxlOptions / VoxlMeshEncoding, and the Rust CLI's load_voxl_v1_from_bytes: all deleted with VOXL V1 read support, and named by ADR-0043 because the record IS the removal. Reimplementing any of them should be a deliberate decision, not a re-import.",
             "projectService": "typescript-eslint's parser option for type-aware linting. docs/internal/backlog.md names it because the finding IS its absence from eslint.config.mjs; it will appear in the tree once that entry is done.",
             "directed_hole_loops": "deleted when the two boundary walks became one. repair-engine-winding-and-boundary.md names it because the record of that confusion IS the removed walk: the section explains what it returned and why that was wrong, and it also names `Topology::boundary_loops`, which survives as the single rotation walk. Rewriting the name to today's would misstate which walk was at fault.",
-            "sourceInverse": "ADR-0046 names the removed per-entry inverse to record why the merged Prepare geometry was baked model-local and why the world-space store made it necessary; it is deliberately absent from the code."
+            "sourceInverse": "ADR-0046 names the removed per-entry inverse to record why the merged Prepare geometry was baked model-local and why the world-space store made it necessary; it is deliberately absent from the code.",
+            "VisualSettingsPanel": "Renamed to CrossSliderPanel when the strip became a fixed sidebar. docs/internal/backlog.md cites the old name in a historical cleanup finding, so rewriting it to today's name would misstate what that entry listed."
       },
       "_comment_webkit_symbols": "The eight WebKit/JavaScriptCore internals above (javascript_gc_object_count through operationMapHash) are cited by docs/dev/performance-debugging.md as they appear in `sample` output and WebKit's own logs. They belong to the platform, not to this codebase, and will never be found here.",
       "_comment_anchor_constants": "ANCHOR_MIN_* / ANCHOR_SHAFT_MULTIPLIER: removed constants, cited by name in support-registry-findings.md because the finding IS their removal. The values live on the anchor descriptor's autoPlacement and are pinned by __tests__/autoPlacementPolicy.test.ts.",

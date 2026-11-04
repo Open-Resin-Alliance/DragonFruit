@@ -64,7 +64,7 @@ import {
   type ArrangePrecisionMode,
 } from '@/components/controls/ArrangePanel';
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
-import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
+import { CrossSliderPanel } from '@/components/controls/CrossSliderPanel';
 import { contactEndpointsFor, countSupportCollections, knotHostId, spanKnotHostType, getSupportTypeDescriptor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, updateSupportEntity, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
@@ -10561,6 +10561,7 @@ export default function Home() {
 
       <FloatingPanelStack
         leftInsetPx={scene.models.length > 0 && (scene.mode === 'prepare' || scene.mode === 'support') && toolLayout === 'vertical' ? TOOL_RAIL_WIDTH_PX : 0}
+        rightInsetPx={scene.models.length > 0 && scene.mode !== 'printing' ? 48 : 0}
         railIsColumn={toolLayout === 'vertical'}
       >
         {scene.mode === 'prepare' ? (
@@ -10800,12 +10801,7 @@ export default function Home() {
 
         {SharedPanelStack({
           scene: scene,
-          slicing: slicing,
           transformMgr: transformMgr,
-          handleSceneLayerScrubStart: handleSceneLayerScrubStart,
-          handleSceneLayerScrubEnd: handleSceneLayerScrubEnd,
-          isCrossSectionEnabled: isCrossSectionEnabled,
-          handleToggleCrossSection: handleToggleCrossSection,
           isTransformDebugOverlayOpen: isTransformDebugOverlayOpen,
           setIsTransformDebugOverlayOpen: setIsTransformDebugOverlayOpen,
           displayActiveModelId: displayActiveModelId,
@@ -10836,6 +10832,29 @@ export default function Home() {
           printingSlicingBenchmark: printingSlicingBenchmark,
         })}
       </FloatingPanelStack>
+
+      {scene.models.length > 0 && scene.mode !== 'printing' && (
+        <div
+          className="absolute right-0 z-10 pointer-events-auto"
+          style={{ top: 'calc(var(--topbar-height) + 6px)', bottom: 6, width: 48 }}
+        >
+          <CrossSliderPanel
+            layerIndex={slicing.layerIndex}
+            maxLayers={slicing.numLayers}
+            onLayerIndexChange={slicing.setLayerIndex}
+            onScrubStart={handleSceneLayerScrubStart}
+            onScrubEnd={handleSceneLayerScrubEnd}
+            currentHeightMm={slicing.currentHeightMm}
+            maxHeightMm={slicing.heightMm}
+            lowerLayerIndex={slicing.lowerLayerIndex}
+            onLowerLayerIndexChange={slicing.setLowerLayerIndex}
+            lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}
+            crossSectionEnabled={isCrossSectionEnabled}
+            onToggleCrossSection={handleToggleCrossSection}
+            layerHeightMm={slicing.layerHeightMm}
+          />
+        </div>
+      )}
 
       <div className="absolute inset-0 z-0 flex">
         <div

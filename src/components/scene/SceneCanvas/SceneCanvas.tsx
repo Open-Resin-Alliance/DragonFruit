@@ -1004,8 +1004,8 @@ export function SceneCanvas({
   /** Whether any placement mode is live. Derived, so no type is named here. */
   const supportCreationModeActive = Object.values(placementActive).some(Boolean);
   const isPlacementActive = supportCreationModeActive || isJointCreationActive;
-  // The visual-settings panel is a fixed 48px-wide strip; the view cube offsets
-  // by its full extent so it never overlaps the floating panel.
+  // The cross-section slider is a fixed 48px-wide strip; the view cube offsets
+  // by its full extent so it never overlaps the strip.
   const nonPrintingViewCubeRightMargin = 48 + FLOATING_PANEL_RIGHT_INSET_PX + VIEW_CUBE_PANEL_GAP_PX + VIEW_CUBE_HALF_EXTENT_PX;
 
   const smoothingProcessing = React.useSyncExternalStore(
