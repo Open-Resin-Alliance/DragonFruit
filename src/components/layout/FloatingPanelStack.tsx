@@ -23,6 +23,8 @@ type PanelPlacement = {
   order: number;
   /** Where a floating panel sits. Docked panels are placed by their dock. */
   float?: PanelPosition;
+  /** The panel's own width. Docking never changes it; the dock is sized to it. */
+  width?: number;
 };
 
 type PanelLayoutState = {
@@ -118,6 +120,7 @@ const PANEL_GAP = 6;
 const DEFAULT_PANEL_WIDTH = 320;
 const DEFAULT_PANEL_HEIGHT = 150;
 const MIN_DOCK_WIDTH = 200;
+const MIN_PANEL_WIDTH = 180;
 const MAX_DOCK_WIDTH = 520;
 const COLLAPSED_PANEL_HEIGHT = 48;
 
@@ -406,7 +409,10 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
     panelIdsRef.current = panelIds;
   }, [panelIds]);
 
-  const getPanelWidth = React.useCallback((panelId: string) => getPanelBaseWidth(panelId), []);
+  const getPanelWidth = React.useCallback(
+    (panelId: string) => layout.panels[panelId]?.width ?? getPanelBaseWidth(panelId),
+    [layout.panels],
+  );
   const getPanelSize = React.useCallback((panelId: string): PanelSize => (
     panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT }
   ), [getPanelWidth]);
@@ -691,13 +697,24 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
         MIN_DOCK_WIDTH,
         MAX_DOCK_WIDTH,
       );
-      setLayout((previous) => ({
-        ...previous,
-        docks: {
-          ...previous.docks,
-          [dockResize.side === 'left' ? 'leftWidth' : 'rightWidth']: width,
-        },
-      }));
+      const side = dockResize.side;
+      const panelWidth = Math.max(MIN_PANEL_WIDTH, width - PANEL_MARGIN * 2);
+      setLayout((previous) => {
+        const panels = { ...previous.panels };
+        // The drag sets the panels' own width; the dock follows them, so a
+        // panel keeps that width when it is dragged out to float.
+        (side === 'left' ? leftPanels : rightPanels).forEach((id) => {
+          panels[id] = { ...(panels[id] ?? defaultPlacement(id, 0)), width: panelWidth };
+        });
+        return {
+          ...previous,
+          panels,
+          docks: {
+            ...previous.docks,
+            [side === 'left' ? 'leftWidth' : 'rightWidth']: width,
+          },
+        };
+      });
     };
 
     const onPointerUp = () => setDockResize(null);
@@ -709,7 +726,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
     };
-  }, [dockResize]);
+  }, [dockResize, leftPanels, rightPanels]);
 
   const closeWindowContextMenu = React.useCallback(() => {
     setWindowContextMenu(null);
