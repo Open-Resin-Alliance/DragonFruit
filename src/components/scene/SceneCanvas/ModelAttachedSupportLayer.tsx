@@ -278,6 +278,8 @@ export function ModelAttachedSupportLayer({
             mode={mode}
             navigationLodActive={navigationLodActive}
             hidePlateContactPrimitives={hidePlateContactPrimitives}
+            clipLower={clipLower}
+            clipUpper={clipUpper}
             supportColorsByModelId={supportColorsByModelId}
             hoverTintColor={hoverTintColor}
             hoverTintStrength={hoverTintStrength}

@@ -2,7 +2,6 @@
 
 import React, { useSyncExternalStore, forwardRef, useImperativeHandle, useCallback, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
-import { getSupportClipPlanes, subscribeSupportClipPlanes } from './clipPlanesStore';
 import { useThree, type ThreeEvent } from '@react-three/fiber';
 import { LineMaterial, LineSegments2, LineSegmentsGeometry } from 'three-stdlib';
 import { subscribe, getSnapshot,
@@ -122,7 +121,8 @@ interface SupportRendererProps {
     mode?: SupportMode;
     navigationLodActive?: boolean;
     hidePlateContactPrimitives?: boolean;
-
+    clipLower?: number | null;
+    clipUpper?: number | null;
     supportColorsByModelId?: Record<string, string>;
     /**
      * Models on another bed. Their supports are drawn dimmed and answer no pointer, the
@@ -635,7 +635,7 @@ function getSnapshotWithoutHover(): SupportState {
     return next;
 }
 
-export const SupportRenderer = React.memo(forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, activeModelId = null, selectedModelIds = [], marqueeCandidateModelIds = EMPTY_SUPPORT_ID_LIST, hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 100000, placementPreviews = EMPTY_PLACEMENT_PREVIEWS, interiorView = false, cavityGeometryByModelId, modelWorldInverseById, pointerSceneryModelIds }, ref) => {
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], marqueeCandidateModelIds = EMPTY_SUPPORT_ID_LIST, hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 100000, placementPreviews = EMPTY_PLACEMENT_PREVIEWS, interiorView = false, cavityGeometryByModelId, modelWorldInverseById, pointerSceneryModelIds }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const stableState = useSyncExternalStore(subscribe, getSnapshotWithoutHover);
     noteActivity('support-mode:renderer');
@@ -1362,30 +1362,22 @@ export const SupportRenderer = React.memo(forwardRef<THREE.Group, SupportRendere
     const groupRef = React.useRef<THREE.Group>(null);
     useImperativeHandle(ref, () => groupRef.current!);
 
-    // The support tree does not re-render on a scrub. The planes live in a
-    // store whose array identity is stable and whose plane objects are replaced
-    // in place; the subscription below writes them into the materials, so a
-    // slider tick costs one plane update instead of an O(supports) element map.
-    const clippingPlanes = getSupportClipPlanes();
+    // Derive clipping planes synchronously so a freshly mounted renderer
+    // (e.g. after support refresh key changes) is clipped correctly on its
+    // very first render, without waiting for a post-commit effect.
+    const clippingPlanes = useMemo(() => {
+        const planes: THREE.Plane[] = [];
 
-    useEffect(() => subscribeSupportClipPlanes(() => {
-        const root = groupRef.current;
-        if (!root) return;
-        const nextPlanes = getSupportClipPlanes();
-        const next = nextPlanes.length > 0 ? nextPlanes : null;
-        root.traverse((object) => {
-            const mesh = object as THREE.Mesh;
-            if (!mesh.isMesh) return;
-            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-            for (const material of materials) {
-                if (!material) continue;
-                const clipMaterial = material as THREE.Material & { clippingPlanes?: THREE.Plane[] | null };
-                if (clipMaterial.clippingPlanes === next) continue;
-                clipMaterial.clippingPlanes = next;
-                material.needsUpdate = true;
-            }
-        });
-    }), []);
+        if (clipLower != null) {
+            planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
+        }
+
+        if (clipUpper != null) {
+            planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
+        }
+
+        return planes;
+    }, [clipLower, clipUpper]);
 
     const resolveBaseColor = useMemo(() => {
         const baseHex = '#9a9a9a';
@@ -4365,6 +4357,6 @@ export const SupportRenderer = React.memo(forwardRef<THREE.Group, SupportRendere
         </group>
         </DraggedSupportContext.Provider>
     );
-}));
+});
 
 SupportRenderer.displayName = 'SupportRenderer';
