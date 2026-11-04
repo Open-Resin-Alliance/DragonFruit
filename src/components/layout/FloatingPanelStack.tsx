@@ -1064,6 +1064,14 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, railIsColumn = t
         ...saved,
       };
 
+      // A saved position is a manual placement by definition: only moved panels
+      // are written. Mark it as an override, or a remount (and a tool switch that
+      // drops the panel from the current set) lets the profile anchor win and the
+      // panel returns to its default spot.
+      for (const panelId of Object.keys(saved)) {
+        manualOverrideRef.current[panelId] = true;
+      }
+
       if (Object.keys(restored).length > 0) {
         const modelsId = 'prepare-models';
         const debugId = 'prepare-debug-primitives';
@@ -1600,28 +1608,6 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, railIsColumn = t
       window.removeEventListener('pointerup', onPointerUp);
     };
   }, [activeDragPanelId, containerSize, getPanelSize, leftInsetPx, panelGap, snapPanelToNearestSpot]);
-
-  React.useEffect(() => {
-    const validIds = new Set(panelIdsRef.current);
-    const cleaned: Record<string, PanelAttachment[]> = {};
-    const cleanedOverrides: Record<string, boolean> = {};
-
-    for (const [panelId, attachments] of Object.entries(attachmentMemoryRef.current)) {
-      if (!validIds.has(panelId)) continue;
-      const filtered = attachments.filter((attachment) => validIds.has(attachment.to) && panelId !== attachment.to);
-      if (filtered.length === 0) continue;
-      cleaned[panelId] = filtered;
-    }
-
-    for (const [panelId, manual] of Object.entries(manualOverrideRef.current)) {
-      if (!validIds.has(panelId)) continue;
-      if (!manual) continue;
-      cleanedOverrides[panelId] = true;
-    }
-
-    attachmentMemoryRef.current = cleaned;
-    manualOverrideRef.current = cleanedOverrides;
-  }, [panelIds]);
 
   const handlePointerDown = React.useCallback((panelId: string, event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
