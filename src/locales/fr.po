@@ -43,7 +43,7 @@ msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr ""
 
 #. placeholder {0}: selectedLibraryPresetIds.size
-#: src/components/settings/ProfileSettingsModal.tsx:5317
+#: src/components/settings/ProfileSettingsModal.tsx:5346
 msgid "{0, plural, one {Add # printer} other {Add # printers}}"
 msgstr ""
 
@@ -527,6 +527,10 @@ msgstr ""
 msgid "<0>{fileName}</0> was saved in the VOXL V1 format, which this version no longer reads."
 msgstr ""
 
+#: src/components/modals/SceneMaterialReassignModal.tsx:134
+msgid "<0>{newPrinterName}</0> shares them, but its tanks are not assigned. Assign each material to the matching tank, or keep the previous printer."
+msgstr ""
+
 #. {overwriteCollisionCount} is always 2 or more; the singular case is its own message.
 #: src/features/slicing/components/SlicingPanel.tsx:3170
 msgid "<0>{overwriteCollisionCount}</0> files this run writes are already in that folder. Slicing replaces them."
@@ -745,8 +749,8 @@ msgstr ""
 #: src/components/printers/PrinterVariantPickerModal.tsx:707
 #: src/components/settings/FleetManagement.tsx:269
 #: src/components/settings/PluginStudioModal.tsx:2100
-#: src/components/settings/ProfileSettingsModal.tsx:3927
-#: src/components/settings/ProfileSettingsModal.tsx:3990
+#: src/components/settings/ProfileSettingsModal.tsx:3956
+#: src/components/settings/ProfileSettingsModal.tsx:4019
 msgid "Add printer"
 msgstr "Ajouter une imprimante"
 
@@ -754,7 +758,7 @@ msgstr "Ajouter une imprimante"
 msgid "Add printer variant"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:5318
+#: src/components/settings/ProfileSettingsModal.tsx:5347
 msgid "Add printers"
 msgstr ""
 
@@ -1070,12 +1074,12 @@ msgctxt "Undo history entry"
 msgid "Assign material"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:86
 #: src/components/modals/SceneMaterialReassignModal.tsx:87
+#: src/components/modals/SceneMaterialReassignModal.tsx:88
 msgid "Assign scene materials to tanks"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:113
+#: src/components/modals/SceneMaterialReassignModal.tsx:118
 msgid "Assign to matching tanks"
 msgstr ""
 
@@ -1505,7 +1509,7 @@ msgstr ""
 msgid "Bottom"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6677
+#: src/components/settings/ProfileSettingsModal.tsx:6706
 msgid "Bottom layer count"
 msgstr ""
 
@@ -1905,6 +1909,10 @@ msgstr ""
 msgid "Choose whether to keep the hollow."
 msgstr ""
 
+#: src/components/modals/SceneMaterialReassignModal.tsx:151
+msgid "Choose which materials on <0>{newPrinterName}</0> the scene should use."
+msgstr ""
+
 #: src/components/layout/FirstRunOnboarding.tsx:200
 msgid "Choose your theme"
 msgstr ""
@@ -2089,7 +2097,7 @@ msgstr ""
 msgid "Close material anti-aliasing settings"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:95
+#: src/components/modals/SceneMaterialReassignModal.tsx:98
 msgid "Close material reassignment"
 msgstr ""
 
@@ -2185,7 +2193,7 @@ msgstr ""
 msgid "Close supports modal"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6621
+#: src/components/settings/ProfileSettingsModal.tsx:6650
 msgid "Close tank material comparison"
 msgstr ""
 
@@ -2979,7 +2987,7 @@ msgstr ""
 msgid "Delete presets"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:4213
+#: src/components/settings/ProfileSettingsModal.tsx:4242
 msgid "Delete printer"
 msgstr ""
 
@@ -4883,7 +4891,7 @@ msgstr ""
 msgid "Keep {currentPrinterName}"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:101
+#: src/components/modals/SceneMaterialReassignModal.tsx:104
 msgid "Keep {previousPrinterName}"
 msgstr ""
 
@@ -5054,11 +5062,11 @@ msgstr "Couche 0 sur 0. On vit dangereusement."
 msgid "Layer Height"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6672
+#: src/components/settings/ProfileSettingsModal.tsx:6701
 msgid "Layer height (mm)"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6655
+#: src/components/settings/ProfileSettingsModal.tsx:6684
 msgid "Layer height, bottom layer count and transition layers must match across tanks. Choose which material supplies all three."
 msgstr ""
 
@@ -5232,6 +5240,10 @@ msgstr ""
 msgid "Load vendor profile plugins"
 msgstr ""
 
+#: src/components/modals/SceneMaterialReassignModal.tsx:108
+msgid "Load without materials"
+msgstr ""
+
 #: src/components/organisms/modals/SceneFileModals.tsx:664
 msgid "Loaded file"
 msgstr ""
@@ -5368,7 +5380,7 @@ msgstr ""
 msgid "Locked"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6691
+#: src/components/settings/ProfileSettingsModal.tsx:6720
 msgid "Locked materials cannot be changed. Unlock or make a custom copy before applying settings."
 msgstr ""
 
@@ -5919,6 +5931,7 @@ msgstr ""
 
 #. Value placeholder shown when the material is unknown because the printer is offline. Keep it as short as "N/A".
 #: src/components/controls/ModelStatsCard.tsx:140
+#: src/components/modals/SceneMaterialReassignModal.tsx:268
 msgid "N/A"
 msgstr ""
 
@@ -6257,6 +6270,10 @@ msgstr ""
 #: src/components/scene/MeshRepairReportModal.tsx:798
 msgctxt "Mesh analysis row"
 msgid "Non-manifold verts"
+msgstr ""
+
+#: src/components/modals/SceneMaterialReassignModal.tsx:162
+msgid "None of these materials are available on <0>{newPrinterName}</0>."
 msgstr ""
 
 #: src/supports/Settings/components/TipSettingsCard.tsx:60
@@ -7443,12 +7460,12 @@ msgstr "Prêt pour votre prochaine aventure ?"
 msgid "Ready to print"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:108
+#: src/components/modals/SceneMaterialReassignModal.tsx:113
 msgid "Reassign materials"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:86
 #: src/components/modals/SceneMaterialReassignModal.tsx:87
+#: src/components/modals/SceneMaterialReassignModal.tsx:88
 msgid "Reassign scene materials"
 msgstr ""
 
@@ -8525,8 +8542,7 @@ msgstr ""
 msgid "Scene is too large to save"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:143
-#: src/components/modals/SceneMaterialReassignModal.tsx:173
+#: src/components/modals/SceneMaterialReassignModal.tsx:207
 msgid "Scene material"
 msgstr ""
 
@@ -8869,7 +8885,7 @@ msgstr ""
 msgid "Set up private backups"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6661
+#: src/components/settings/ProfileSettingsModal.tsx:6690
 msgid "Setting"
 msgstr ""
 
@@ -9684,17 +9700,13 @@ msgstr ""
 msgid "Take me back!"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:144
-msgid "Tank"
-msgstr ""
-
 #. placeholder {0}: row.tankNumber
-#: src/components/modals/SceneMaterialReassignModal.tsx:162
+#: src/components/modals/SceneMaterialReassignModal.tsx:196
 msgid "Tank {0}"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6612
-#: src/components/settings/ProfileSettingsModal.tsx:6613
+#: src/components/settings/ProfileSettingsModal.tsx:6641
+#: src/components/settings/ProfileSettingsModal.tsx:6642
 msgid "Tank material settings do not match"
 msgstr ""
 
@@ -9856,15 +9868,19 @@ msgstr ""
 msgid "The mortise's silhouette lines."
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:90
+#: src/components/modals/SceneMaterialReassignModal.tsx:92
 msgid "The new printer has different material profiles"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:213
-msgid "The new printer has no materials assigned to its tanks. Unassign the scene materials, or keep the previous printer to preserve them."
+#: src/components/modals/SceneMaterialReassignModal.tsx:93
+msgid "The new printer has no matching materials"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:89
+#: src/components/modals/SceneMaterialReassignModal.tsx:275
+msgid "The new printer has no matching materials assigned to its tanks. Load without materials, or keep the previous printer to preserve them."
+msgstr ""
+
+#: src/components/modals/SceneMaterialReassignModal.tsx:90
 msgid "The new printer shares these materials but its tanks are not assigned"
 msgstr ""
 
@@ -10017,10 +10033,6 @@ msgstr ""
 msgid "Theme and custom UI token customization"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:121
-msgid "These scene materials are available on <0>{newPrinterName}</0>, but its tanks are not assigned to them. Assign each material to the tank it occupied on <1>{previousPrinterName}</1>, or keep the previous printer."
-msgstr ""
-
 #: src/supports/Settings/components/RaftSettingsCard.tsx:137
 msgid "Thickness"
 msgstr ""
@@ -10072,9 +10084,13 @@ msgstr ""
 msgid "This machine is currently offline"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6631
-#: src/components/settings/ProfileSettingsModal.tsx:6643
+#: src/components/settings/ProfileSettingsModal.tsx:6660
+#: src/components/settings/ProfileSettingsModal.tsx:6672
 msgid "This material is locked. Unlock it or make a custom copy before applying settings."
+msgstr ""
+
+#: src/components/modals/SceneMaterialReassignModal.tsx:157
+msgid "This material is not available on <0>{newPrinterName}</0>."
 msgstr ""
 
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:55
@@ -10139,8 +10155,9 @@ msgstr ""
 msgid "This scene may not fit the one selected"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:129
-msgid "This scene names materials from <0>{previousPrinterName}</0>. Choose which materials on <1>{newPrinterName}</1> the scene should use."
+#: src/components/modals/SceneMaterialReassignModal.tsx:128
+#: src/components/modals/SceneMaterialReassignModal.tsx:144
+msgid "This scene names materials from <0>{previousPrinterName}</0>."
 msgstr ""
 
 #. placeholder {0}: printerName || _(msg`the printer this scene was built for`)
@@ -10296,7 +10313,7 @@ msgctxt "Undo history entry"
 msgid "Transform {modelName}"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6682
+#: src/components/settings/ProfileSettingsModal.tsx:6711
 msgid "Transition layers"
 msgstr ""
 
@@ -10341,10 +10358,6 @@ msgstr ""
 
 #: src/app/page.tsx:8237
 msgid "Unapplied Holes"
-msgstr ""
-
-#: src/components/modals/SceneMaterialReassignModal.tsx:104
-msgid "Unassign scene materials"
 msgstr ""
 
 #. Placeholder when the autosave file path could not be resolved.
@@ -10626,7 +10639,7 @@ msgstr ""
 msgid "Use existing repo"
 msgstr ""
 
-#: src/components/modals/SceneMaterialReassignModal.tsx:174
+#: src/components/modals/SceneMaterialReassignModal.tsx:208
 msgid "Use on this printer"
 msgstr ""
 
@@ -11057,6 +11070,10 @@ msgstr ""
 
 #: src/components/controls/AutoSupportPanel.tsx:587
 msgid "You can replace all existing supports with auto-placed ones, or incorporate your existing supports and fill in the gaps."
+msgstr ""
+
+#: src/components/modals/SceneMaterialReassignModal.tsx:281
+msgid "You can share materials with printers that use the same material settings and output format in Material Settings."
 msgstr ""
 
 #: src/components/organisms/modals/SceneFileModals.tsx:559

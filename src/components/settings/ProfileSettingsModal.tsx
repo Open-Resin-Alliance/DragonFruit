@@ -381,6 +381,7 @@ export function ProfileSettingsModal({
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const { _ } = useLingui();
   const [selectedPrinterId, setSelectedPrinterId] = React.useState<string | null>(null);
+  const lastSyncedActivePrinterRef = React.useRef<string | null>(null);
   const [selectedMaterialId, setSelectedMaterialId] = React.useState<string | null>(null);
   const [selectedManufacturer, setSelectedManufacturer] = React.useState<string | null>(null);
   const [selectedResinFamily, setSelectedResinFamily] = React.useState<MaterialProfile['resinFamily'] | null>(null);
@@ -1910,6 +1911,7 @@ export function ProfileSettingsModal({
     }
 
     setSelectedPrinterId(profileState.activePrinterProfileId);
+    lastSyncedActivePrinterRef.current = profileState.activePrinterProfileId;
     setIsMaterialEditorOpen(false);
     setIsEditingPrinter(false);
     setIsNetworkSettingsOpen(shouldOpenNetworkSettings);
@@ -3185,6 +3187,33 @@ export function ProfileSettingsModal({
       setSelectedResinFamily(restored.resinFamily);
     }
   }, []);
+
+  // The active printer can change outside this modal (for example "Keep" on the
+  // scene-material prompt). Keep the local selection following the store.
+  React.useEffect(() => {
+    if (!isOpen) {
+      lastSyncedActivePrinterRef.current = null;
+      return;
+    }
+    const activeId = profileState.activePrinterProfileId;
+    if (!activeId || lastSyncedActivePrinterRef.current === activeId) return;
+    lastSyncedActivePrinterRef.current = activeId;
+
+    setSelectedPrinterId(activeId);
+    const materials = getMaterialProfilesForPrinter(activeId, profileState);
+    const mappedId = typeof profileState.activeMaterialProfileIdByPrinterId?.[activeId] === 'string'
+      ? profileState.activeMaterialProfileIdByPrinterId[activeId]!.trim()
+      : '';
+    const restored = materials.find((material) => material.id === mappedId)
+      ?? materials.find((material) => material.id === profileState.activeMaterialProfileId)
+      ?? materials[0]
+      ?? null;
+    setSelectedMaterialId(restored?.id ?? null);
+    if (restored) {
+      setSelectedManufacturer((restored.brand || 'Default').trim() || 'Default');
+      setSelectedResinFamily(restored.resinFamily);
+    }
+  }, [isOpen, profileState]);
 
   const handleAddPrinter = React.useCallback(() => {
     setSelectedLibraryPresetIds(new Set());

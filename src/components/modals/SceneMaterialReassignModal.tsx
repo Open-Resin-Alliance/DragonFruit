@@ -7,6 +7,7 @@ import { Trans } from '@lingui/react/macro';
 import { Palette } from 'lucide-react';
 import { Button } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { SelectDropdown } from '@/components/ui/SelectDropdown';
 
 export type SceneMaterialReassignOption = {
   id: string;
@@ -87,7 +88,9 @@ export function SceneMaterialReassignModal({
       title={_(isTankMatch ? msg`Assign scene materials to tanks` : msg`Reassign scene materials`)}
       subtitle={_(isTankMatch
         ? msg`The new printer shares these materials but its tanks are not assigned`
-        : msg`The new printer has different material profiles`)}
+        : canReassign
+          ? msg`The new printer has different material profiles`
+          : msg`The new printer has no matching materials`)}
       icon={<Palette className="h-4 w-4" />}
       iconTone="warning"
       zIndexClassName="z-[130]"
@@ -100,9 +103,9 @@ export function SceneMaterialReassignModal({
           <Button variant="secondary" onClick={onKeepPrevious}>
             <Trans>Keep {previousPrinterName}</Trans>
           </Button>
-          {!(isTankMatch && canAssignTanks) && (
+          {!canReassign && !(isTankMatch && canAssignTanks) && (
             <Button variant="secondary" onClick={onUnassign}>
-              <Trans>Unassign scene materials</Trans>
+              <Trans>Load without materials</Trans>
             </Button>
           )}
           {canReassign && (
@@ -118,32 +121,61 @@ export function SceneMaterialReassignModal({
         </>
       }
     >
-      <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+      <div className="space-y-1.5 text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
         {isTankMatch ? (
-          <Trans>
-            These scene materials are available on{' '}
-            <strong style={{ color: 'var(--text-strong)' }}>{newPrinterName}</strong>, but its tanks
-            are not assigned to them. Assign each material to the tank it occupied on{' '}
-            <strong style={{ color: 'var(--text-strong)' }}>{previousPrinterName}</strong>, or keep
-            the previous printer.
-          </Trans>
+          <>
+            <p>
+              <Trans>
+                This scene names materials from{' '}
+                <strong style={{ color: 'var(--text-strong)' }}>{previousPrinterName}</strong>.
+              </Trans>
+            </p>
+            <p>
+              <Trans>
+                <strong style={{ color: 'var(--text-strong)' }}>{newPrinterName}</strong> shares
+                them, but its tanks are not assigned. Assign each material to the matching tank, or
+                keep the previous printer.
+              </Trans>
+            </p>
+          </>
         ) : (
-          <Trans>
-            This scene names materials from{' '}
-            <strong style={{ color: 'var(--text-strong)' }}>{previousPrinterName}</strong>. Choose
-            which materials on <strong style={{ color: 'var(--text-strong)' }}>{newPrinterName}</strong>{' '}
-            the scene should use.
-          </Trans>
+          <>
+            <p>
+              <Trans>
+                This scene names materials from{' '}
+                <strong style={{ color: 'var(--text-strong)' }}>{previousPrinterName}</strong>.
+              </Trans>
+            </p>
+            <p>
+              {canReassign ? (
+                <Trans>
+                  Choose which materials on{' '}
+                  <strong style={{ color: 'var(--text-strong)' }}>{newPrinterName}</strong>{' '}
+                  the scene should use.
+                </Trans>
+              ) : rows.length === 1 ? (
+                <Trans>
+                  This material is not available on{' '}
+                  <strong style={{ color: 'var(--text-strong)' }}>{newPrinterName}</strong>.
+                </Trans>
+              ) : (
+                <Trans>
+                  None of these materials are available on{' '}
+                  <strong style={{ color: 'var(--text-strong)' }}>{newPrinterName}</strong>.
+                </Trans>
+              )}
+            </p>
+          </>
         )}
-      </p>
+      </div>
 
       {isTankMatch ? (
         <div className="overflow-hidden rounded-md border" style={{ borderColor: 'var(--border-subtle)' }}>
           <table className="w-full border-collapse text-left text-xs">
             <thead style={{ background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
               <tr>
-                <th scope="col" className="p-2 font-medium"><Trans>Scene material</Trans></th>
-                <th scope="col" className="p-2 font-medium"><Trans>Tank</Trans></th>
+                <th scope="col" className="p-2 font-medium break-words">{previousPrinterName}</th>
+                <th scope="col" className="p-2 font-medium break-words">{newPrinterName}</th>
               </tr>
             </thead>
             <tbody>
@@ -192,18 +224,16 @@ export function SceneMaterialReassignModal({
                     </span>
                   </th>
                   <td className="p-2">
-                    <select
-                      className="ui-input h-[32px] w-full px-2 text-xs"
-                      aria-label={row.name}
+                    <SelectDropdown
+                      className="w-full"
+                      selectClassName="w-full h-[32px] px-2 pr-8 text-xs"
+                      ariaLabel={row.name}
                       value={mapping[row.id] ?? ''}
-                      onChange={(event) => {
-                        setMapping((prev) => ({ ...prev, [row.id]: event.target.value }));
+                      options={options.map((option) => ({ value: option.id, label: option.name }))}
+                      onChange={(value) => {
+                        setMapping((prev) => ({ ...prev, [row.id]: value }));
                       }}
-                    >
-                      {options.map((option) => (
-                        <option key={option.id} value={option.id}>{option.name}</option>
-                      ))}
-                    </select>
+                    />
                   </td>
                 </tr>
               ))}
@@ -211,12 +241,49 @@ export function SceneMaterialReassignModal({
           </table>
         </div>
       ) : (
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          <Trans>
-            The new printer has no materials assigned to its tanks. Unassign the scene materials,
-            or keep the previous printer to preserve them.
-          </Trans>
-        </p>
+        <div className="space-y-2">
+          <div className="overflow-hidden rounded-md border" style={{ borderColor: 'var(--border-subtle)' }}>
+            <table className="w-full border-collapse text-left text-xs">
+              <thead style={{ background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
+                <tr>
+                  <th scope="col" className="p-2 font-medium break-words">{previousPrinterName}</th>
+                  <th scope="col" className="p-2 font-medium break-words">{newPrinterName}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id} className="border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <th scope="row" className="p-2 font-normal">
+                      <span className="inline-flex items-center gap-1.5">
+                        {row.color && (
+                          <span
+                            className="h-3 w-3 rounded-[3px]"
+                            style={{ background: row.color, boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.3)' }}
+                            aria-hidden="true"
+                          />
+                        )}
+                        {row.name}
+                      </span>
+                    </th>
+                    <td className="p-2" style={{ color: 'var(--text-muted)' }}><Trans>N/A</Trans></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            <Trans>
+              The new printer has no matching materials assigned to its tanks. Load without
+              materials, or keep the previous printer to preserve them.
+            </Trans>
+          </p>
+          <p className="text-xs leading-relaxed" style={{ color: '#f59e0b' }}>
+            <Trans>
+              You can share materials with printers that use the same material settings and output
+              format in Material Settings.
+            </Trans>
+          </p>
+        </div>
       )}
     </StructuredDialogModal>
   );
