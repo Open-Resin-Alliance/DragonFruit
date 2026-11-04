@@ -1743,15 +1743,13 @@ function convertStumpToTrunk(stump: Stump): { root: Roots; trunk: Trunk } | null
         diskHeight: INLINE_ROOT_SOCKET_CLEARANCE_MM,
         coneHeight: stump.rootHeight,
     };
+    // The root is the shaft's bottom, so the segment carries only its top joint.
+    // A bottom joint would move with the model on a Z transform and detach from
+    // the grounded root.
     const segment: Segment = {
         id: uuidv4(),
         type: 'straight',
         diameter: stump.rootTopDiameter,
-        bottomJoint: {
-            id: uuidv4(),
-            pos: { x: root.transform.pos.x, y: root.transform.pos.y, z: rootTopZ },
-            diameter: stump.rootTopDiameter,
-        },
         topJoint: { id: topJointId, pos: socket, diameter: stump.rootTopDiameter },
     };
     const trunk: Trunk = {
@@ -1777,16 +1775,20 @@ function convertTrunkToStump(trunk: Trunk, root: Roots | undefined): Stump | nul
     const segment = trunk.segments[0];
     if (segment.type === 'bezier') return null;
     const top = segment.topJoint;
-    const bottom = segment.bottomJoint;
-    if (!top || !bottom) return null;
-    if (Math.abs(bottom.pos.x - root.transform.pos.x) > 0.01
-        || Math.abs(bottom.pos.y - root.transform.pos.y) > 0.01
-        || Math.abs(top.pos.x - bottom.pos.x) > 0.01
-        || Math.abs(top.pos.y - bottom.pos.y) > 0.01) {
+    if (!top) return null;
+    // The first segment may leave its bottom to the root, which is the shape a
+    // stump-to-trunk conversion writes.
+    const bottomPos = segment.bottomJoint?.pos ?? root.transform.pos;
+    if (Math.abs(bottomPos.x - root.transform.pos.x) > 0.01
+        || Math.abs(bottomPos.y - root.transform.pos.y) > 0.01
+        || Math.abs(top.pos.x - bottomPos.x) > 0.01
+        || Math.abs(top.pos.y - bottomPos.y) > 0.01) {
         return null;
     }
     const rootTopZ = root.transform.pos.z + root.diskHeight + root.coneHeight;
-    if (getFinalSocketPosition(trunk.contactCone).z <= rootTopZ + 1e-3) return null;
+    // What matters is whether the tip is above the root, not whether the
+    // authored cone reaches it: a short gap is served by stretching the cone.
+    if (trunk.contactCone.pos.z <= rootTopZ + 1e-3) return null;
     return {
         id: trunk.id,
         modelId: trunk.modelId,

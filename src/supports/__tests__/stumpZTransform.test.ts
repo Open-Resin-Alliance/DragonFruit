@@ -26,10 +26,10 @@ function emptyPayload(): DragonfruitImportFormat {
     return payload;
 }
 
-function cone(tipZ: number, lengthMm: number, id: string) {
+function cone(tipZ: number, lengthMm: number, id: string, x = 5, y = 5) {
     return {
         id,
-        pos: { x: 5, y: 5, z: tipZ },
+        pos: { x, y, z: tipZ },
         normal: { x: 0, y: 0, z: -1 },
         surfaceNormal: { x: 0, y: 0, z: -1 },
         profile: { ...DEFAULT_TIP_PROFILE, lengthMm },
@@ -68,6 +68,22 @@ function bareTrunk(tipZ: number) {
     };
 }
 
+/** The shape a stump-to-trunk conversion writes: no bottom joint, authored cone. */
+function longConeTrunk(tipZ: number) {
+    return {
+        id: 'trunk-long',
+        modelId: MODEL_ID,
+        rootId: 'root-long',
+        segments: [{
+            id: 'seg-long',
+            type: 'straight',
+            diameter: 1.5,
+            topJoint: { id: 'seg-long-top', pos: { x: 30, y: 10, z: tipZ - 3.1 }, diameter: 1.5 },
+        }],
+        contactCone: cone(tipZ, 3, 'long-cone', 30, 10),
+    };
+}
+
 function hostedTrunk(tipZ: number) {
     return {
         id: 'trunk-hosted',
@@ -100,6 +116,7 @@ function loadScene(): void {
     (payload as unknown as Record<string, unknown>).roots = [
         root('root-bare', 10),
         root('root-hosted', 20),
+        root('root-long', 30),
     ];
     (payload as unknown as Record<string, unknown>).knots = [{
         id: 'hosted-knot',
@@ -109,7 +126,7 @@ function loadScene(): void {
         diameter: 1.6,
     }];
     (payload as unknown as Record<string, unknown>).stumps = [stump(3)];
-    (payload as unknown as Record<string, unknown>).trunks = [bareTrunk(6), hostedTrunk(6)];
+    (payload as unknown as Record<string, unknown>).trunks = [bareTrunk(6), hostedTrunk(6), longConeTrunk(6)];
     loadFromImportFormat(payload);
 }
 
@@ -160,7 +177,8 @@ test('a stump above the band becomes a trunk with a grounded root and a shaft', 
     const nextRoot = snapshot.roots[trunk.rootId];
     assert.ok(nextRoot, 'the trunk has a plate root');
     assert.equal(nextRoot.transform.pos.z, 0);
-    assert.equal(trunk.segments[0].bottomJoint?.pos.z, ROOT_TOP_Z);
+    assert.equal(trunk.segments[0].bottomJoint, undefined, 'the root is the shaft bottom');
+    assert.ok(trunk.segments[0].topJoint, 'the shaft has a top joint');
     assert.ok(trunk.contactCone, 'the trunk keeps the contact cone');
     assert.ok(getFinalSocketPosition(trunk.contactCone).z > ROOT_TOP_Z, 'the cone socket sits above the root');
 
@@ -183,6 +201,25 @@ test('a bare vertical trunk below the band becomes a stump, a hosted one stays a
     assert.equal(snapshot.roots['root-bare'], undefined, 'its root left with it');
 
     assert.ok(snapshot.trunks['trunk-hosted'], 'a trunk carrying a knot is left alone');
+
+    resetStore();
+});
+
+test('a trunk whose authored cone reaches below the root still becomes a stump', () => {
+    resetStore();
+    loadScene();
+
+    // Tip 6 -> 4. The authored 3 mm cone would put its socket at 0.9, below the
+    // 1.1 root top; the stump serves the gap by stretching the cone.
+    moveModel(-2);
+
+    const snapshot = getSnapshot();
+    assert.equal(snapshot.trunks['trunk-long'], undefined, 'the converted-shape trunk reverted');
+    const next = snapshot.stumps['trunk-long'];
+    assert.ok(next, 'the stump took its place');
+    assert.equal(next.rootPos.z, 0);
+    assert.equal(next.joint.pos.z, ROOT_TOP_Z);
+    assert.ok(Math.abs(getFinalSocketPosition(next.contactCone).z - ROOT_TOP_Z) < 1e-6);
 
     resetStore();
 });
