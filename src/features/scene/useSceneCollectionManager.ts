@@ -7965,6 +7965,61 @@ export function useSceneCollectionManager(options?: {
     pushSceneSnapshotHistory(before, after, ASSIGN_MATERIAL_LABEL);
   }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
+  /**
+   * Replace every scene material reference through one old-to-new map. Missing
+   * entries unassign, which is what a printer with no matching tank materials
+   * offers. One history entry, because the whole scene moved together.
+   */
+  const reassignSceneMaterials = useCallback((assignments: Map<string, { id: string; color?: string }>) => {
+    const nextModels = models.map((model) => {
+      const nextModelMaterial = model.materialProfileId ? assignments.get(model.materialProfileId) : undefined;
+      const bodyMaterialProfileIds = model.bodyMaterialProfileIds?.map((id) => (
+        id ? assignments.get(id)?.id : undefined
+      ));
+      const bodyColors = model.bodyMaterialProfileIds
+        ? model.bodyColors?.map((color, index) => {
+          const id = model.bodyMaterialProfileIds?.[index];
+          return id ? assignments.get(id)?.color : color;
+        })
+        : model.bodyColors;
+
+      const materialProfileId = nextModelMaterial?.id;
+      let materialBaseColor = model.materialBaseColor;
+      let color = model.color;
+      if (model.materialProfileId && !nextModelMaterial) {
+        materialBaseColor = undefined;
+        color = model.materialBaseColor ?? model.color;
+      } else if (nextModelMaterial?.color) {
+        materialBaseColor = model.materialBaseColor ?? model.color;
+        color = nextModelMaterial.color;
+      }
+
+      const changed = materialProfileId !== model.materialProfileId
+        || materialBaseColor !== model.materialBaseColor
+        || color !== model.color
+        || (bodyMaterialProfileIds && bodyMaterialProfileIds.some((id, index) => id !== model.bodyMaterialProfileIds?.[index]))
+        || (bodyColors && bodyColors.some((entry, index) => entry !== model.bodyColors?.[index]));
+      if (!changed) return model;
+      return {
+        ...model,
+        materialProfileId,
+        materialBaseColor,
+        color,
+        ...(bodyMaterialProfileIds ? { bodyMaterialProfileIds } : {}),
+        ...(bodyColors ? { bodyColors } : {}),
+      };
+    });
+
+    if (nextModels.every((model, index) => model === models[index])) return;
+    nextModels.forEach((next, index) => {
+      if (models[index].color !== next.color) paintModelBaseColor(next, next.color);
+    });
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    pushSceneSnapshotHistory(before, after, ASSIGN_MATERIAL_LABEL);
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
+
   const linkModels = useCallback((idsInput: string[]) => {
     const ids = new Set(idsInput);
     if (ids.size < 2) return;
@@ -9031,6 +9086,7 @@ export function useSceneCollectionManager(options?: {
     toggleSupportDesignation,
     setModelMaterialProfile,
     setModelBodyMaterial,
+    reassignSceneMaterials,
     linkModels,
     unlinkModels,
     setModelMeshModifiers,

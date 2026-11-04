@@ -27,6 +27,7 @@ import { PrintingPreviewPane } from '@/components/organisms/PrintingPreviewPane'
 import { DiagnosticsModals } from '@/components/organisms/modals/DiagnosticsModals';
 import { PrintingModals } from '@/components/organisms/modals/PrintingModals';
 import { SceneFileModals } from '@/components/organisms/modals/SceneFileModals';
+import { SceneMaterialReassignModal, type SceneMaterialReassignOption } from '@/components/modals/SceneMaterialReassignModal';
 import { ModifierModals } from '@/components/organisms/modals/ModifierModals';
 import { MeshRepairModals } from '@/components/organisms/modals/MeshRepairModals';
 import {
@@ -325,6 +326,7 @@ import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
+  getMaterialProfilesForPrinter,
   selectPrinterNetworkDevice,
   setActivePrinterProfile,
   subscribeToProfileStore,
@@ -934,6 +936,16 @@ export default function Home() {
     [scene.models],
   );
   const previousPrinterRef = React.useRef<{ id: string; materialMode?: string } | null>(null);
+  type MaterialReassignPrompt = {
+    previous: { id: string; name: string; materialMode?: string };
+    previousName: string;
+    newPrinterId: string;
+    newName: string;
+    rows: Array<{ id: string; name: string; color?: string }>;
+    options: SceneMaterialReassignOption[];
+  };
+  const materialReassignPreviousRef = React.useRef<{ id: string; name: string; materialMode?: string } | null>(null);
+  const [materialReassignPrompt, setMaterialReassignPrompt] = React.useState<MaterialReassignPrompt | null>(null);
   const [printerSceneConflictPreviousId, setPrinterSceneConflictPreviousId] = React.useState<string | null>(null);
   // A printer the user chose to keep despite the mismatch; the warning must not
   // re-raise for the same choice on every render.
@@ -968,6 +980,81 @@ export default function Home() {
       setPrinterSceneConflictPreviousId(previous.id);
     }
   }, [activePrinterProfile, conflictAcknowledgedPrinterId, sceneUsesMultiTankMaterials]);
+
+  // A different multi-tank printer keeps its own material profiles. Any scene
+  // references that do not resolve on the new printer must be mapped or cleared
+  // before the scene can slice.
+  React.useEffect(() => {
+    const current = activePrinterProfile;
+    const previous = materialReassignPreviousRef.current;
+    materialReassignPreviousRef.current = current
+      ? { id: current.id, name: current.name, materialMode: current.materialMode }
+      : null;
+    if (!current || !previous || previous.id === current.id) return;
+    if (!sceneUsesMultiTankMaterials) return;
+    if (previous.materialMode !== 'multiTank' || current.materialMode !== 'multiTank') return;
+
+    const sceneMaterialIds = new Set<string>();
+    for (const model of scene.models) {
+      if (model.materialProfileId) sceneMaterialIds.add(model.materialProfileId);
+      for (const id of model.bodyMaterialProfileIds ?? []) {
+        if (id) sceneMaterialIds.add(id);
+      }
+    }
+    if (sceneMaterialIds.size === 0) return;
+
+    const newMaterials = getMaterialProfilesForPrinter(current.id, profileState);
+    const resolvedOnNewPrinter = new Set(newMaterials.map((material) => material.id));
+    const unresolved = [...sceneMaterialIds].filter((id) => !resolvedOnNewPrinter.has(id));
+    if (unresolved.length === 0) return;
+
+    const assignedTankMaterials = (current.tankMaterials ?? [])
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+    const options = assignedTankMaterials
+      .map((id) => newMaterials.find((material) => material.id === id))
+      .filter((material): material is NonNullable<typeof material> => Boolean(material))
+      .map((material) => ({
+        id: material.id,
+        name: resolveCompositeMaterialLabel(material) ?? material.name,
+        ...(material.color ? { color: material.color } : {}),
+      }));
+    const rows = unresolved.map((id) => {
+      const material = profileState.materialProfiles.find((entry) => entry.id === id);
+      return {
+        id,
+        name: resolveCompositeMaterialLabel(material) ?? material?.name ?? 'Unknown material',
+        ...(material?.color ? { color: material.color } : {}),
+      };
+    });
+    setMaterialReassignPrompt({
+      previous,
+      previousName: previous.name,
+      newPrinterId: current.id,
+      newName: current.name,
+      rows,
+      options,
+    });
+  }, [activePrinterProfile, profileState, scene.models, sceneUsesMultiTankMaterials]);
+
+  const applyMaterialReassignment = React.useCallback((mapping: Map<string, SceneMaterialReassignOption>) => {
+    const next = new Map<string, { id: string; color?: string }>();
+    mapping.forEach((option, oldId) => next.set(oldId, { id: option.id, ...(option.color ? { color: option.color } : {}) }));
+    scene.reassignSceneMaterials(next);
+    setMaterialReassignPrompt(null);
+  }, [scene.reassignSceneMaterials]);
+
+  const unassignSceneMaterialsForPrinter = React.useCallback(() => {
+    scene.reassignSceneMaterials(new Map());
+    setMaterialReassignPrompt(null);
+  }, [scene.reassignSceneMaterials]);
+
+  const keepPreviousPrinterForMaterials = React.useCallback(() => {
+    const prompt = materialReassignPrompt;
+    if (!prompt) return;
+    materialReassignPreviousRef.current = prompt.previous;
+    setMaterialReassignPrompt(null);
+    setActivePrinterProfile(prompt.previous.id);
+  }, [materialReassignPrompt]);
 
   /**
    * Undo the incompatible choice: go back to the printer that was active, or —
@@ -11552,6 +11639,18 @@ export default function Home() {
         dismissSceneSaveError={dismissSceneSaveError}
         zipPickerResolveRef={zipPickerResolveRef}
         zipPickerState={zipPickerState}
+      />
+
+      <SceneMaterialReassignModal
+        open={Boolean(materialReassignPrompt)}
+        previousPrinterName={materialReassignPrompt?.previousName ?? ''}
+        newPrinterName={materialReassignPrompt?.newName ?? ''}
+        canReassign={(materialReassignPrompt?.options.length ?? 0) > 0}
+        rows={materialReassignPrompt?.rows ?? []}
+        options={materialReassignPrompt?.options ?? []}
+        onApply={applyMaterialReassignment}
+        onUnassign={unassignSceneMaterialsForPrinter}
+        onKeepPrevious={keepPreviousPrinterForMaterials}
       />
 
       <ModifierModals
