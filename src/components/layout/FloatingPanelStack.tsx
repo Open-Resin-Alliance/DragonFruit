@@ -333,6 +333,10 @@ function FloatingPanelItem({
         left: docked ? undefined : position?.x ?? 0,
         top: docked ? undefined : position?.y ?? 0,
         width: panelWidth,
+        // A docked panel is right-aligned in its dock, so a panel wider than the
+        // dock's content box would have its left edge clipped by the dock's
+        // `overflow-x: hidden`. Cap it instead; the panel reflows and stays whole.
+        maxWidth: docked ? '100%' : undefined,
         flex: docked ? '0 0 auto' : undefined,
         zIndex: isDragging ? 100 : 20 + index,
         cursor: isDragging ? 'grabbing' : 'default',
