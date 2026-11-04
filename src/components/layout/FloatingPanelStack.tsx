@@ -130,6 +130,7 @@ type DropTarget = {
   height: number;
   /** The dock's box in container coordinates, measured when the target was set. */
   dockLeft: number;
+  dockTop: number;
   dockWidth: number;
 };
 
@@ -625,16 +626,24 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
     }
   }, [drag, getPanelSize, leftPanels, panelSizeVersion, registryVersion, rightPanels, viewportSize.height]);
 
+  // Panels a tool is not showing stay in the dock's list (their placement is
+  // kept) but have no box, so they must not take part in drop maths.
+  const visibleDockIds = React.useCallback((dock: 'left' | 'right', draggedId: string) => (
+    (dock === 'left' ? leftPanels : rightPanels).filter((id) => {
+      if (id === draggedId) return false;
+      const rect = containerRef.current?.querySelector(`[data-panel-id="${id}"]`)?.getBoundingClientRect();
+      return !!rect && rect.height > 0;
+    })
+  ), [leftPanels, rightPanels]);
+
   const dockIndexAt = React.useCallback((dock: 'left' | 'right', clientY: number, draggedId: string) => {
-    const ids = (dock === 'left' ? leftPanels : rightPanels).filter((id) => id !== draggedId);
     let index = 0;
-    for (const id of ids) {
-      const element = containerRef.current?.querySelector(`[data-panel-id="${id}"]`);
-      const rect = element?.getBoundingClientRect();
+    for (const id of visibleDockIds(dock, draggedId)) {
+      const rect = containerRef.current?.querySelector(`[data-panel-id="${id}"]`)?.getBoundingClientRect();
       if (rect && clientY > rect.top + rect.height / 2) index += 1;
     }
     return index;
-  }, [leftPanels, rightPanels]);
+  }, [visibleDockIds]);
 
   // The top of the slot the dragged panel would occupy, so the drop preview
   // can be drawn where the panel will actually land.
@@ -642,20 +651,22 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
     dock: 'left' | 'right',
     index: number,
     draggedId: string,
-    containerTop: number,
   ) => {
-    const ids = (dock === 'left' ? leftPanels : rightPanels).filter((id) => id !== draggedId);
+    const dockTop = containerRef.current
+      ?.querySelector(`[data-dock="${dock}"]`)
+      ?.getBoundingClientRect().top ?? 0;
+    const ids = visibleDockIds(dock, draggedId);
     const rectFor = (id: string) => containerRef.current
       ?.querySelector(`[data-panel-id="${id}"]`)
       ?.getBoundingClientRect();
     if (ids.length === 0) return PANEL_MARGIN;
     if (index >= ids.length) {
       const last = rectFor(ids[ids.length - 1]);
-      return last ? last.bottom - containerTop + PANEL_GAP : PANEL_MARGIN;
+      return last ? Math.max(PANEL_MARGIN, last.bottom - dockTop + PANEL_GAP) : PANEL_MARGIN;
     }
     const next = rectFor(ids[index]);
-    return next ? next.top - containerTop : PANEL_MARGIN;
-  }, [leftPanels, rightPanels]);
+    return next ? Math.max(PANEL_MARGIN, next.top - dockTop) : PANEL_MARGIN;
+  }, [visibleDockIds]);
 
   const handlePointerDown = React.useCallback((panelId: string, event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -707,6 +718,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
         const rect = containerRef.current?.querySelector(`[data-dock="${side}"]`)?.getBoundingClientRect();
         return {
           dockLeft: rect ? rect.left - containerLeft : 0,
+          dockTop: rect ? rect.top - containerTop : 0,
           dockWidth: rect ? rect.width : 0,
         };
       };
@@ -716,7 +728,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
           dock: 'left',
           index,
           y: event.clientY - containerTop,
-          slotTop: dockSlotTop('left', index, drag.id, containerTop),
+          slotTop: dockSlotTop('left', index, drag.id),
           height: getPanelSize(drag.id).height,
           ...dockBox('left'),
         });
@@ -726,7 +738,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
           dock: 'right',
           index,
           y: event.clientY - containerTop,
-          slotTop: dockSlotTop('right', index, drag.id, containerTop),
+          slotTop: dockSlotTop('right', index, drag.id),
           height: getPanelSize(drag.id).height,
           ...dockBox('right'),
         });
@@ -768,6 +780,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
   }, [
     dockIndexAt,
     dockSlotTop,
+    visibleDockIds,
     drag,
     dropTarget,
     getPanelSize,
@@ -1004,7 +1017,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
                 className="absolute pointer-events-none rounded-lg border-2 border-dashed"
                 style={{
                   left: dockLeft + PANEL_MARGIN,
-                  top: dropTarget.slotTop,
+                  top: dropTarget.dockTop + dropTarget.slotTop,
                   width: dockWidthPx - PANEL_MARGIN * 2,
                   height: dropTarget.height,
                   borderColor: 'color-mix(in srgb, var(--accent), white 12%)',
