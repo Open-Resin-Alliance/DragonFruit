@@ -134,7 +134,6 @@ const PANEL_GAP = 6;
 const DEFAULT_PANEL_WIDTH = 320;
 const DEFAULT_PANEL_HEIGHT = 150;
 const MIN_DOCK_WIDTH = 200;
-const MIN_PANEL_WIDTH = 180;
 const MAX_DOCK_WIDTH = 520;
 const COLLAPSED_PANEL_HEIGHT = 48;
 
@@ -764,21 +763,25 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
         MAX_DOCK_WIDTH,
       );
       const side = dockResize.side;
-      const panelWidth = Math.max(MIN_PANEL_WIDTH, width - PANEL_MARGIN * 2);
       setLayout((previous) => {
         const panels = { ...previous.panels };
         // The drag sets the panels' own width; the dock follows them, so a
-        // panel keeps that width when it is dragged out to float.
+        // panel keeps that width when it is dragged out to float. The drag can
+        // only widen: a panel never goes below its natural width.
+        let widest = 0;
         (side === 'left' ? leftPanels : rightPanels).forEach((id) => {
           if (!RESIZABLE_PANELS.has(id)) return;
-          panels[id] = { ...(panels[id] ?? defaultPlacement(id, 0)), width: panelWidth };
+          const nextWidth = Math.max(getPanelBaseWidth(id), width - PANEL_MARGIN * 2);
+          widest = Math.max(widest, nextWidth);
+          panels[id] = { ...(panels[id] ?? defaultPlacement(id, 0)), width: nextWidth };
         });
+        const dockWidth = widest > 0 ? widest + PANEL_MARGIN * 2 : width;
         return {
           ...previous,
           panels,
           docks: {
             ...previous.docks,
-            [side === 'left' ? 'leftWidth' : 'rightWidth']: width,
+            [side === 'left' ? 'leftWidth' : 'rightWidth']: dockWidth,
           },
         };
       });
