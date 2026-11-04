@@ -369,7 +369,13 @@ function composeCenteredGeometryMatrix(matrix: THREE.Matrix4, center: THREE.Vect
 }
 
 const INSTANCED_STENCIL_Z_BUCKET_MM = 6;
-const STENCIL_RENDER_ORDER_BASE = 9800;
+/**
+ * Above the support render order: supports draw at `ghostRenderOrder`
+ * (100000), and a cap below that is painted before them and then hidden. The
+ * batched passes made that visible as missing caps when a cross-section cut
+ * through a stump forest.
+ */
+const STENCIL_RENDER_ORDER_BASE = 100000;
 const STENCIL_MODEL_BACK_ORDER = STENCIL_RENDER_ORDER_BASE + 0.1;
 const STENCIL_MODEL_FRONT_ORDER = STENCIL_RENDER_ORDER_BASE + 0.2;
 const STENCIL_SOURCE_BACK_ORDER = STENCIL_RENDER_ORDER_BASE + 0.3;
