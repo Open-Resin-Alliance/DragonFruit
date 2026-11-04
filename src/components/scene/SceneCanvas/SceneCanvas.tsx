@@ -4017,9 +4017,13 @@ export function SceneCanvas({
 
   const activeModelTransform = React.useMemo(() => {
     if (!activeModel) return null;
-    if (transform && activeModelId === activeModel.id) return transform;
+    // The live manager transform is only the truth while a drag is driving it.
+    // At rest the store owns the model, and a manager value left over from a
+    // gesture (or a linked peer's propagation) must not move the gizmo.
+    const live = isGizmoDragging || isGizmoRetargeting;
+    if (live && transform && activeModelId === activeModel.id) return transform;
     return activeModel.transform;
-  }, [activeModel, transform, activeModelId]);
+  }, [activeModel, activeModelId, isGizmoDragging, isGizmoRetargeting, transform]);
 
   // Local space puts the gizmo in the model's own frame: its arrows point along the
   // model's axes and its rings turn about them. A multi-selection has no single
