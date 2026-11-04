@@ -443,7 +443,10 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
   const dockWidth = React.useCallback((side: 'left' | 'right', ids: string[]) => {
     const stored = side === 'left' ? layout.docks.leftWidth : layout.docks.rightWidth;
     const content = ids.reduce((max, id) => Math.max(max, getPanelWidth(id)), 0) + PANEL_MARGIN * 2;
-    return clamp(stored ?? content, MIN_DOCK_WIDTH, MAX_DOCK_WIDTH);
+    // A stored width from an older layout can be narrower than the panels it
+    // now holds; the dock clips its children horizontally, so it must never be
+    // narrower than the widest panel.
+    return clamp(Math.max(stored ?? content, content), MIN_DOCK_WIDTH, MAX_DOCK_WIDTH);
   }, [getPanelWidth, layout.docks]);
 
   const leftWidth = dockWidth('left', leftPanels);
