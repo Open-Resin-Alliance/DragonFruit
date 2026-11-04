@@ -7365,7 +7365,7 @@ export function SceneCanvas({
                   liveTransformsRef={crossSectionLiveTransformsRef}
                   sourceObject={supportDragGroupRef?.current ?? null}
                   sourceObjectVersion={clipUpper != null ? crossSectionStencilSourceVersion : undefined}
-                  extraSources={[activeGroupRef.current]}
+                  extraSources={[activeGroupRef.current, supportsRef?.current]}
                   extraSourcesKey={activeModelId}
                   // During slider scrubbing, avoid expensive source z-bound
                   // traversal/bucketing work. Stencil clipping still constrains
@@ -7394,7 +7394,7 @@ export function SceneCanvas({
                   liveTransformsRef={crossSectionLiveTransformsRef}
                   sourceObject={supportDragGroupRef?.current ?? null}
                   sourceObjectVersion={crossSectionStencilSourceVersion}
-                  extraSources={[activeGroupRef.current]}
+                  extraSources={[activeGroupRef.current, supportsRef?.current]}
                   extraSourcesKey={activeModelId}
                   skipSourceZBounds={isLayerScrubbing}
                   y={clipLower}
