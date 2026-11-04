@@ -397,6 +397,23 @@ function preprocessAdmonitions(source: string): string {
       continue;
     }
 
+    /* GitHub alerts (`> [!NOTE]` and the other four types) render the same way, so a
+       page reads correctly both on GitHub and on this site. */
+    const alert = /^\s*>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i.exec(line);
+    if (alert) {
+      const type = alert[1].toLowerCase();
+      const body: string[] = [];
+      while (index + 1 < lines.length && /^\s*>/.test(lines[index + 1])) {
+        index += 1;
+        body.push(lines[index].replace(/^\s*> ?/, ''));
+      }
+      if (output.length > 0 && output[output.length - 1].trim() !== '') output.push('');
+      output.push(`<div class="admonition admonition--${type}">`);
+      output.push(`<p class="admonition-title">${DEFAULT_ADMONITION_TITLES[type]}</p>`);
+      output.push('', ...body, '', '</div>', '');
+      continue;
+    }
+
     const marker = /^(\s*)!!!\s*([A-Za-z0-9_-]+)(?:\s+"([^"]*)")?\s*$/.exec(line);
     if (!marker) {
       output.push(line);

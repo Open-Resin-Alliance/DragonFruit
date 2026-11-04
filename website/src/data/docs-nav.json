@@ -192,8 +192,24 @@
       "label": "Troubleshooting",
       "items": [
         {
-          "label": "Common Issues",
+          "label": "Overview",
           "slug": "troubleshooting/common-issues"
+        },
+        {
+          "label": "Opening and Saving",
+          "slug": "troubleshooting/opening-and-saving"
+        },
+        {
+          "label": "Mesh Repair and Hollowing",
+          "slug": "troubleshooting/repair-and-hollowing"
+        },
+        {
+          "label": "Slicing, Export and Printers",
+          "slug": "troubleshooting/slicing-and-printers"
+        },
+        {
+          "label": "Supports, Updates and Backups",
+          "slug": "troubleshooting/supports-updates-backups"
         }
       ]
     },

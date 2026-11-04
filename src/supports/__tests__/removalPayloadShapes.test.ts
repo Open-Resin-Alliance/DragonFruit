@@ -97,7 +97,9 @@ test('a brace reports two NAMED knots, not a list', () => {
     assert.ok(removed);
     // The leaf's cascade declares `knots: 'knot'`, so the field is singular.
     assert.ok('knot' in removed.payload, 'leaf payload names its knot singularly');
-    assert.ok(!('knots' in removed.payload), 'and not as a list');
+    // A cascade reaching past that one slot records the rest under the
+    // collection, so the named slot keeps its meaning and nothing is dropped.
+    assert.deepEqual(removed.payload.knots, [], 'with no further knots to carry');
 });
 
 test('a branch removal re-solves its host trunk and reports the repair', () => {

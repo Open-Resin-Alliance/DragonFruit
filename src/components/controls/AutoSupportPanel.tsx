@@ -21,9 +21,9 @@ import {
   getAutoSupportPresetsSnapshot,
   subscribeToAutoSupportPresets,
 } from '@/supports/Settings/autoSupportPresets';
-import { getSnapshot, setSnapshot } from '@/supports/state';
-import { knotHostId, coneKnotHostType, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
-import type { Knot } from '@/supports/types';
+import { getSnapshot, removeSupportEntitiesForModel } from '@/supports/state';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '@/supports/history/supportEditHistory';
+import { REPLACE_SUPPORTS_LABEL } from '@/supports/history/supportHistoryLabels';
 import { AutoSupportSettingsBody } from './autoSupport/AutoSupportSettingsBody';
 import { AutoSupportRunDiagnostics } from './autoSupport/AutoSupportRunDiagnostics';
 import { AutoSupportPresetRow } from './autoSupport/AutoSupportPresetRow';
@@ -197,112 +197,12 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
   const doRun = React.useCallback((replace: boolean) => {
     if (!activeModelId) return;
     if (replace) {
-      const snap = getSnapshot();
-      // Every collection copied, from the registry: a hand-written list left
-      // kickstands aliasing the live snapshot, so deleting from it mutated state.
-      const next = { ...snap };
-      for (const key of SUPPORT_COLLECTION_KEYS as readonly SupportCollectionKey[]) {
-        (next as unknown as Record<string, Record<string, unknown>>)[key] = {
-          ...(snap[key] as unknown as Record<string, unknown>),
-        };
+      // One cascade, so a dependent of another model goes too; the entry is a
+      // snapshot because the auto-place that follows pushes its own.
+      const before = captureSupportEditSnapshot();
+      if (removeSupportEntitiesForModel(activeModelId) > 0) {
+        pushSupportEditHistory(REPLACE_SUPPORTS_LABEL, before, captureSupportEditSnapshot());
       }
-      for (const id of Object.keys(snap.trunks)) {
-        if (snap.trunks[id].modelId === activeModelId) {
-          delete next.trunks[id];
-          delete next.roots[snap.trunks[id].rootId];
-        }
-      }
-      for (const id of Object.keys(snap.branches)) {
-        if (snap.branches[id].modelId === activeModelId) delete next.branches[id];
-      }
-      for (const id of Object.keys(snap.leaves)) {
-        if (snap.leaves[id].modelId === activeModelId) delete next.leaves[id];
-      }
-      for (const id of Object.keys(snap.stumps)) {
-        if (snap.stumps[id].modelId === activeModelId) delete next.stumps[id];
-      }
-      // Delete only this model's braces: those carrying its modelId, or whose
-      // knots hang off its segments (legacy braces without modelId). Other
-      // models' braces survive.
-      const modelSegments = new Set<string>();
-      for (const t of Object.values(snap.trunks)) {
-        if (t.modelId === activeModelId) for (const s of t.segments) modelSegments.add(s.id);
-      }
-      for (const b of Object.values(snap.branches)) {
-        if (b.modelId === activeModelId) for (const s of b.segments) modelSegments.add(s.id);
-      }
-      const removedBraceIds = new Set<string>();
-      for (const [id, brace] of Object.entries(snap.braces)) {
-        const knotA = brace.startKnotId ? snap.knots[brace.startKnotId] : undefined;
-        const knotB = brace.endKnotId ? snap.knots[brace.endKnotId] : undefined;
-        const belongsToModel =
-          brace.modelId === activeModelId ||
-          (knotA ? modelSegments.has(knotA.parentShaftId) : false) ||
-          (knotB ? modelSegments.has(knotB.parentShaftId) : false);
-        if (belongsToModel) {
-          removedBraceIds.add(id);
-          delete next.braces[id];
-        }
-      }
-      // Rebuild knots: keep those referenced by surviving entities (other
-      // models' trunks/branches/braces/leaf cones) or by the kickstand store;
-      // drop orphans left by this model's deleted supports.
-      //
-      // Every shaft still standing, across every type that has one.
-      const survivingSegmentIds = new Set<string>();
-      for (const descriptor of SUPPORT_TYPES) {
-        const collection = next[descriptor.location.key] as unknown as Record<string, { id: string; segments?: { id: string }[] }>;
-        for (const entity of Object.values(collection ?? {})) {
-          // This model's own supports are being replaced, so their shafts do
-          // not survive -- `next` still holds the ones removed above only for
-          // collections cleaned later in this function.
-          if ((entity as { modelId?: string }).modelId === activeModelId) continue;
-          if (descriptor.segmentSelectionPrefix) {
-            survivingSegmentIds.add(`${descriptor.segmentSelectionPrefix}${entity.id}`);
-            continue;
-          }
-          for (const s of entity.segments ?? []) survivingSegmentIds.add(s.id);
-        }
-      }
-      // A leaf's cone is addressable as a shaft too, but the prefix is not on
-      // the descriptor: leaf has no segments, so declaring it there changes how
-      // six other consumers treat leaves. Kept explicit until that is a
-      // deliberate change of its own.
-      for (const l of Object.values(next.leaves)) {
-        survivingSegmentIds.add(knotHostId(coneKnotHostType(), l.id));
-      }
-      // The model's kickstands are supports too — drop them from the
-      // kickstand store. They used to leak into the next run: stale roots
-      // occupied grid nodes and their axes fed the axis-mixing, which
-      // flipped a regenerated kickstand between the two sides of its axis.
-      for (const kickstand of Object.values(next.kickstands)) {
-        if (kickstand.modelId !== activeModelId) continue;
-        // Delete the root and host knot too: writing back a filtered set left
-        // them behind, and stale roots occupy grid nodes on the next run.
-        delete next.kickstands[kickstand.id];
-        delete next.roots[kickstand.rootId];
-        delete next.knots[kickstand.hostKnotId];
-      }
-      const kickstandKnotIds = new Set<string>();
-      for (const k of Object.values(next.kickstands)) {
-        kickstandKnotIds.add(k.hostKnotId);
-        for (const s of k.segments) survivingSegmentIds.add(s.id);
-      }
-      const nextKnots: Record<string, Knot> = {};
-      for (const [id, knot] of Object.entries(snap.knots)) {
-        if (survivingSegmentIds.has(knot.parentShaftId) || kickstandKnotIds.has(id)) {
-          nextKnots[id] = knot;
-        }
-      }
-      next.knots = nextKnots;
-      // Clean up twigs and sticks if they reference this model.
-      for (const id of Object.keys(snap.twigs)) {
-        if (snap.twigs[id].modelId === activeModelId) delete next.twigs[id];
-      }
-      for (const id of Object.keys(snap.sticks)) {
-        if (snap.sticks[id].modelId === activeModelId) delete next.sticks[id];
-      }
-      setSnapshot(next);
       // rAF fires after React flushes the snapshot, giving us
       // fresh islands.filteredIslands with updated supported flags.
       requestAnimationFrame(() => {
