@@ -139,7 +139,8 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
         <group
             onClick={handleClick}
         >
-            {!hidePlateContactPrimitives && (
+            {/* Hidden, not unmounted: crossing the plate used to rebuild it. */}
+            <group visible={!hidePlateContactPrimitives}>
                 <RootsRenderer
                     root={root}
                     shaftDiameter={shaftDiameter}
@@ -149,7 +150,7 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
                     radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                     sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                 />
-            )}
+            </group>
 
             <group ref={pickRef as React.RefObject<THREE.Group | null>}>
                 <InstancedShaftGroup

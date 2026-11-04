@@ -3972,6 +3972,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
             {rootSlotIndex ? (
+                // Hidden rather than dropped: the batch is built once and the
+                // crossing only flips a boolean.
+                <group visible={!hidePlateContactPrimitivesEffective}>
                 <InstancedRootBatch
                     index={rootSlotIndex}
                     hoveredSupportId={isInteractable ? hoveredSupportIdForVisual : null}
@@ -3984,6 +3987,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
                     onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
+                </group>
             ) : Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
                 // Hidden rather than dropped: rebuilding the root batches when
                 // the camera crosses the plate cost a full support rebuild.
