@@ -8813,6 +8813,12 @@ export default function Home() {
     };
     const expectedModelTransforms: Array<{ modelId: string; transform: ModelTransform }> = [];
 
+    // Reseat before the store write, so the committed transform is the one the
+    // model will rest at. Committing the raw rotation first and correcting it
+    // afterwards leaves the mesh and gizmo a write apart, which reads as a jump
+    // when a re-render lands between them.
+    const snappedAfter = operation === 'rotate' ? applyPostRotateLift() : null;
+
     // Flush the final model transform into the store synchronously so
     // transformSupportsForModel() recalculates all support positions before
     // we reset the visual drag-group matrix. This eliminates the 1-frame
@@ -8820,23 +8826,29 @@ export default function Home() {
     if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
       const pending = transformMgr.pendingTransformRef.current;
       const pendingHistory = pendingTransformHistoryRef.current;
-      const current = (
-        finalTransform && isFiniteTransform(finalTransform)
-      )
+      const current = snappedAfter
         ? {
-            position: finalTransform.position.clone(),
-            rotation: finalTransform.rotation.clone(),
-            scale: finalTransform.scale.clone(),
+            position: snappedAfter.position.clone(),
+            rotation: snappedAfter.rotation.clone(),
+            scale: snappedAfter.scale.clone(),
           }
         : (
-          pending && isFiniteTransform({ position: pending.pos, rotation: pending.rot, scale: pending.scl })
+          finalTransform && isFiniteTransform(finalTransform)
         )
           ? {
-              position: pending.pos.clone(),
-              rotation: pending.rot.clone(),
-              scale: pending.scl.clone(),
+              position: finalTransform.position.clone(),
+              rotation: finalTransform.rotation.clone(),
+              scale: finalTransform.scale.clone(),
             }
-          : transformMgr.transform;
+          : (
+            pending && isFiniteTransform({ position: pending.pos, rotation: pending.rot, scale: pending.scl })
+          )
+            ? {
+                position: pending.pos.clone(),
+                rotation: pending.rot.clone(),
+                scale: pending.scl.clone(),
+              }
+            : transformMgr.transform;
       if (isFiniteTransform(current)) {
         if (!finalTransform) {
           transformDebugTimelineRef.current.liveCalculatedAt = stampNow();
@@ -8954,10 +8966,8 @@ export default function Home() {
 
     transformMgr.setIsTransforming(false);
 
-    let snappedAfter: ModelTransform | null = null;
     if (operation === 'rotate') {
       islands.clearScanData();
-      snappedAfter = applyPostRotateLift();
     } else {
       // Scale keeps the gizmo's preserved bottom instead of running post-rotation reseat.
       transformMgr.pendingTransformRef.current = null;
