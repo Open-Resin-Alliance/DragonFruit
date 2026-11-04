@@ -40,6 +40,8 @@ type CollapsiblePanelRegistration = {
 
 type FloatingPanelStackContextValue = {
   registerCollapsiblePanel: (panelId: string, registration: CollapsiblePanelRegistration) => () => void;
+  /** Start a dock resize from a panel's own edge handle. */
+  beginDockResize: (side: 'left' | 'right', clientX: number) => void;
   requestPanelExpand: (panelId: string) => void;
 };
 
@@ -59,6 +61,15 @@ type FloatingPanelItemProps = {
   onSizeChange: (id: string, size: PanelSize) => void;
   children: React.ReactNode;
 };
+
+/**
+ * A panel's own edge handle resizes the dock it sits in, so the visible
+ * affordance and the working one are the same control.
+ */
+export function useFloatingPanelDockResize() {
+  const stack = React.useContext(FloatingPanelStackContext);
+  return stack?.beginDockResize ?? null;
+}
 
 export function useFloatingPanelCollapse(defaultExpanded = true, options?: { autoCollapse?: boolean }) {
   const stack = React.useContext(FloatingPanelStackContext);
@@ -561,10 +572,17 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
     }
   }, [getPanelSize, leftPanels, placementFor, rightPanels, viewportSize.height]);
 
+  const beginDockResize = React.useCallback((side: 'left' | 'right', clientX: number) => {
+    const dock = containerRef.current?.querySelector(`[data-dock="${side}"]`);
+    const startWidth = dock?.getBoundingClientRect().width ?? (side === 'left' ? leftWidth : rightWidth);
+    setDockResize({ side, startX: clientX, startWidth });
+  }, [leftWidth, rightWidth]);
+
   const floatingPanelStackContext = React.useMemo<FloatingPanelStackContextValue>(() => ({
     registerCollapsiblePanel,
     requestPanelExpand,
-  }), [registerCollapsiblePanel, requestPanelExpand]);
+    beginDockResize,
+  }), [registerCollapsiblePanel, requestPanelExpand, beginDockResize]);
 
   // Auto-compact a dock that no longer fits, from the bottom up.
   React.useEffect(() => {
