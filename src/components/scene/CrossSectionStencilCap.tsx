@@ -36,7 +36,6 @@ type CrossSectionStencilCapProps = {
   extraSources?: ReadonlyArray<THREE.Object3D | null | undefined>;
   /** A stable token for `extraSources`, which is rebuilt on every render. */
   extraSourcesKey?: unknown;
-  skipSourceZBounds?: boolean;
   y: number;
   /** The y position of the OTHER clip boundary (if dual-cut is active).
    *  When provided, the stencil geometry is clipped by both planes so
@@ -104,12 +103,6 @@ type VisibleStaticStencilInstancedEntry = {
   geometry: THREE.BufferGeometry;
   capacity: number;
   matrixElements: Float32Array;
-};
-
-type StencilZBoundsEntry<T> = {
-  item: T;
-  minZ: number;
-  maxZ: number;
 };
 
 type ModelStencilPassEntry = {
@@ -401,7 +394,6 @@ function CrossSectionStencilCapInner({
   sourceObjectVersion,
   extraSources,
   extraSourcesKey,
-  skipSourceZBounds = false,
   y,
   otherClipY,
   color = '#ffffff',
@@ -601,11 +593,11 @@ function CrossSectionStencilCapInner({
     const results: StaticStencilEntry[] = [];
     const roots = [sourceObject, ...(extraSources ?? [])].filter((root): root is THREE.Object3D => Boolean(root));
     for (const root of roots) {
-      collectStaticStencilEntries(root, skipSourceZBounds, results);
+      collectStaticStencilEntries(root, results);
     }
     return results;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the extras are read here but keyed through `extraSourcesKey` and the post-commit counter, so the traversal runs on the render after the scene graph moved rather than during it.
-  }, [skipSourceZBounds, sourceObject, postCommitTraversalKey]);
+  }, [sourceObject, postCommitTraversalKey]);
 
 /**
  * Collect the stencil geometry under one root.
@@ -618,7 +610,6 @@ function CrossSectionStencilCapInner({
  */
 function collectStaticStencilEntries(
     sourceObject: THREE.Object3D,
-    skipSourceZBounds: boolean,
     results: StaticStencilEntry[],
 ): void {
     const instanceMatrix = new THREE.Matrix4();
@@ -637,19 +628,17 @@ function collectStaticStencilEntries(
       if (maybeInstancedMesh.isInstancedMesh && maybeInstancedMesh.count > 0) {
         const initialCount = maybeInstancedMesh.count;
         const matrixElements = new Float32Array(initialCount * 16);
-        const minBounds = skipSourceZBounds ? null : new Float32Array(initialCount);
-        const maxBounds = skipSourceZBounds ? null : new Float32Array(initialCount);
+        const minBounds = new Float32Array(initialCount);
+        const maxBounds = new Float32Array(initialCount);
         let acceptedCount = 0;
 
         for (let i = 0; i < initialCount; i += 1) {
           maybeInstancedMesh.getMatrixAt(i, instanceMatrix);
           worldInstanceMatrix.multiplyMatrices(mesh.matrixWorld, instanceMatrix);
-          if (!skipSourceZBounds) {
-            const bounds = getGeometryWorldZBounds(geometry, worldInstanceMatrix);
-            if (!bounds) continue;
-            minBounds![acceptedCount] = bounds.min;
-            maxBounds![acceptedCount] = bounds.max;
-          }
+          const bounds = getGeometryWorldZBounds(geometry, worldInstanceMatrix);
+          if (!bounds) continue;
+          minBounds[acceptedCount] = bounds.min;
+          maxBounds[acceptedCount] = bounds.max;
 
           worldInstanceMatrix.toArray(matrixElements, acceptedCount * 16);
           acceptedCount += 1;
@@ -668,20 +657,6 @@ function collectStaticStencilEntries(
           ? (acceptedCount === initialCount ? maxBounds : maxBounds.slice(0, acceptedCount))
           : null;
 
-        if (skipSourceZBounds) {
-          results.push({
-            kind: 'instanced',
-            key: `${mesh.uuid}:instanced`,
-            geometry,
-            count: acceptedCount,
-            matrixElements: compactMatrixElements,
-            minZ: Number.NEGATIVE_INFINITY,
-            maxZ: Number.POSITIVE_INFINITY,
-          });
-          return;
-        }
-
-        if (!compactMinBounds || !compactMaxBounds) return;
         const compactMinBoundsSafe = compactMinBounds as Float32Array;
         const compactMaxBoundsSafe = compactMaxBounds as Float32Array;
 
@@ -786,18 +761,6 @@ function collectStaticStencilEntries(
       }
 
       const worldMatrix = mesh.matrixWorld.clone();
-      if (skipSourceZBounds) {
-        results.push({
-          kind: 'single',
-          key: mesh.uuid,
-          geometry,
-          matrix: worldMatrix,
-          minZ: Number.NEGATIVE_INFINITY,
-          maxZ: Number.POSITIVE_INFINITY,
-        });
-        return;
-      }
-
       const bounds = getGeometryWorldZBounds(geometry, worldMatrix);
       if (!bounds) return;
 
@@ -900,16 +863,22 @@ function collectStaticStencilEntries(
     const visibleSingles: StaticStencilMeshEntry[] = [];
     for (const entry of staticSourceEntries) {
       if (entry.kind !== 'single') continue;
+      if (y < entry.minZ || y > entry.maxZ) continue;
       visibleSingles.push(entry);
     }
     return visibleSingles;
-  }, [staticSourceEntries]);
+  }, [staticSourceEntries, y]);
 
+  // Only the instances that reach the cap's plane can contribute to it. The
+  // batches are bucketed by Z when the source is traversed, so this drops the
+  // buckets the plane never crosses instead of drawing every support instance
+  // twice per frame.
   const visibleStaticInstancedEntries = React.useMemo<VisibleStaticStencilInstancedEntry[]>(() => {
     const visibleInstanced: VisibleStaticStencilInstancedEntry[] = [];
 
     for (const entry of staticSourceEntries) {
       if (entry.kind !== 'instanced') continue;
+      if (y < entry.minZ || y > entry.maxZ) continue;
 
       visibleInstanced.push({
         key: entry.key,
@@ -920,7 +889,7 @@ function collectStaticStencilEntries(
     }
 
     return visibleInstanced;
-  }, [staticSourceEntries]);
+  }, [staticSourceEntries, y]);
 
   const hasVisibleStaticSource = visibleStaticSingleEntries.length > 0 || visibleStaticInstancedEntries.length > 0;
 
@@ -1034,7 +1003,6 @@ const areCrossSectionStencilCapPropsEqual = (
     && prev.sourceObject === next.sourceObject
     && prev.sourceObjectVersion === next.sourceObjectVersion
     && prev.extraSourcesKey === next.extraSourcesKey
-    && prev.skipSourceZBounds === next.skipSourceZBounds
     && prev.y === next.y
     && prev.otherClipY === next.otherClipY
     && prev.color === next.color

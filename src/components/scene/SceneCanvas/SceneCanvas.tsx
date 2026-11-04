@@ -7358,10 +7358,6 @@ export function SceneCanvas({
                   sourceObjectVersion={clipUpper != null ? crossSectionStencilSourceVersion : undefined}
                   extraSources={[activeGroupRef.current]}
                   extraSourcesKey={activeModelId}
-                  // During slider scrubbing, avoid expensive source z-bound
-                  // traversal/bucketing work. Stencil clipping still constrains
-                  // fragments correctly, so this is a safe CPU optimization.
-                  skipSourceZBounds={clipUpper == null || isLayerScrubbing}
                   y={(clipUpper ?? indicatorPlaneZ)!}
                   otherClipY={clipLower}
                   color={clipUpper != null ? '#FFFFFF' : (indicatorPlaneColor ?? '#ec2a77')}
@@ -7387,7 +7383,6 @@ export function SceneCanvas({
                   sourceObjectVersion={crossSectionStencilSourceVersion}
                   extraSources={[activeGroupRef.current]}
                   extraSourcesKey={activeModelId}
-                  skipSourceZBounds={isLayerScrubbing}
                   y={clipLower}
                   otherClipY={clipUpper}
                   color="#FFFFFF"
