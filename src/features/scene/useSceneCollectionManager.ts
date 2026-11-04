@@ -1637,6 +1637,8 @@ export type PrinterMismatchPrompt = {
   installedProfileId: string | null;
   /** Whether the selected printer is smaller on some axis, so nothing fits as packed. */
   currentIsSmaller: boolean;
+  /** Whether the selected printer already has every material the scene references. */
+  currentHasRequiredMaterials: boolean;
   /** The plugin that contributes the recorded printer, when it is not installed. */
   missingPlugin?: { id: string; name: string };
   /** Models this import created, so a geometry-only answer can strip their material refs. */
@@ -2213,6 +2215,9 @@ export function useSceneCollectionManager(options?: {
     }
 
     if (choice === 'keep') {
+      if (!printerMismatch.currentHasRequiredMaterials) {
+        clearImportedMaterialAssignments(printerMismatch.importedModelIds);
+      }
       setPrinterMismatch(null);
       return;
     }
@@ -7498,6 +7503,25 @@ export function useSceneCollectionManager(options?: {
             const sceneUsesMultiTankMaterials = document.models.some((entry) => (
               !!entry.materialProfileId || (entry.bodyMaterialProfileIds?.some((id) => !!id) ?? false)
             ));
+            const requiredMaterialIds = new Set<string>();
+            for (const entry of document.models) {
+              if (entry.materialProfileId) requiredMaterialIds.add(entry.materialProfileId);
+              for (const id of entry.bodyMaterialProfileIds ?? []) {
+                if (id) requiredMaterialIds.add(id);
+              }
+            }
+            const recordedTankMaterials = recordedPrinter.printer.tankMaterials;
+            if (Array.isArray(recordedTankMaterials)) {
+              for (const id of recordedTankMaterials) {
+                if (typeof id === 'string' && id.length > 0) requiredMaterialIds.add(id);
+              }
+            }
+            const currentMaterialIds = new Set(
+              getMaterialProfilesForPrinter(currentPrinter.id, getProfileStoreSnapshot())
+                .map((material) => material.id),
+            );
+            const currentHasRequiredMaterials = [...requiredMaterialIds]
+              .every((id) => currentMaterialIds.has(id));
             setPrinterMismatch({
               bundle: recordedPrinter,
               ...(sceneMaterials.length > 0 ? { materials: sceneMaterials } : {}),
@@ -7509,6 +7533,7 @@ export function useSceneCollectionManager(options?: {
               currentBuildVolumeMm: { ...currentPrinter.buildVolumeMm },
               installedProfileId: installed?.id ?? null,
               currentIsSmaller: buildVolumeIsSmaller(currentPrinter, recordedPrinter),
+              currentHasRequiredMaterials,
               ...(installed?.missingPlugin ? { missingPlugin: installed.missingPlugin } : {}),
               importedModelIds: importedModels.map((model) => model.id),
             });
