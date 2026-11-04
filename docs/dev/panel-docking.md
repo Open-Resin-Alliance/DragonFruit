@@ -58,7 +58,7 @@ in its default dock on first render and can be moved from there.
   never drawn under the rail.
 - The model lists are locked while the rail is a column. Locked panels cannot be
   dragged.
-- The cross-section strip (`VisualSettingsPanel`) is a fixed 48 px sidebar
+- The cross-section strip (`CrossSliderPanel`) is a fixed 48 px sidebar
   rendered outside the stack. The right dock is inset by its width.
 - The layout is client-side only. It is not part of the scene file and does not
   travel with a VOXL.

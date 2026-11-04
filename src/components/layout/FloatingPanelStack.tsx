@@ -817,7 +817,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
       >
         <div
           data-dock="left"
-          className="absolute top-0 bottom-0 flex flex-col pointer-events-auto"
+          className="absolute top-0 bottom-0 flex flex-col pointer-events-none"
           style={{
             left: leftInsetPx,
             width: leftWidth,
@@ -830,7 +830,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
         >
           {leftPanels.map((panelId, index) => renderPanel(panelId, index, true))}
           <div
-            className="absolute inset-y-0 cursor-col-resize"
+            className="absolute inset-y-0 cursor-col-resize pointer-events-auto"
             style={{ right: 0, width: 6 }}
             onPointerDown={(event) => {
               event.preventDefault();
@@ -841,7 +841,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
 
         <div
           data-dock="right"
-          className="absolute top-0 bottom-0 flex flex-col pointer-events-auto"
+          className="absolute top-0 bottom-0 flex flex-col pointer-events-none"
           style={{
             right: rightInsetPx,
             width: rightWidth,
@@ -854,7 +854,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
         >
           {rightPanels.map((panelId, index) => renderPanel(panelId, index, true))}
           <div
-            className="absolute inset-y-0 cursor-col-resize"
+            className="absolute inset-y-0 cursor-col-resize pointer-events-auto"
             style={{ left: 0, width: 6 }}
             onPointerDown={(event) => {
               event.preventDefault();

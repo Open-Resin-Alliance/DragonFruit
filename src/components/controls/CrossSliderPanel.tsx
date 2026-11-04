@@ -4,7 +4,7 @@ import React from 'react';
 import { Card } from '@/components/atoms';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 
-type VisualSettingsPanelProps = {
+type CrossSliderPanelProps = {
   layerIndex: number;
   maxLayers: number;
   onLayerIndexChange: (value: number) => void;
@@ -20,7 +20,7 @@ type VisualSettingsPanelProps = {
   layerHeightMm?: number;
 };
 
-export function VisualSettingsPanel({
+export function CrossSliderPanel({
   layerIndex,
   maxLayers,
   onLayerIndexChange,
@@ -34,7 +34,7 @@ export function VisualSettingsPanel({
   crossSectionEnabled,
   onToggleCrossSection,
   layerHeightMm,
-}: VisualSettingsPanelProps) {
+}: CrossSliderPanelProps) {
   const handleLayerChange = React.useCallback((nextValue: number) => {
     onLayerIndexChange(Math.round(nextValue));
   }, [onLayerIndexChange]);

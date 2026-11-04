@@ -64,7 +64,7 @@ import {
   type ArrangePrecisionMode,
 } from '@/components/controls/ArrangePanel';
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
-import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
+import { CrossSliderPanel } from '@/components/controls/CrossSliderPanel';
 import { contactEndpointsFor, countSupportCollections, knotHostId, spanKnotHostType, getSupportTypeDescriptor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, updateSupportEntity, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
@@ -10836,9 +10836,9 @@ export default function Home() {
       {scene.models.length > 0 && scene.mode !== 'printing' && (
         <div
           className="absolute right-0 z-10 pointer-events-auto"
-          style={{ top: 'var(--topbar-height)', bottom: 8, width: 48 }}
+          style={{ top: 'calc(var(--topbar-height) + 6px)', bottom: 6, width: 48 }}
         >
-          <VisualSettingsPanel
+          <CrossSliderPanel
             layerIndex={slicing.layerIndex}
             maxLayers={slicing.numLayers}
             onLayerIndexChange={slicing.setLayerIndex}
