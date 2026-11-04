@@ -95,17 +95,11 @@ test('the types with no batched overlay are exactly the ones the detail route se
 
     assert.deepEqual(
         withoutOverlay,
-        ['brace', 'stump'],
+        ['brace'],
         'the set of types relying on the detail route changed',
     );
 });
 
-test('a simple view moves a type the passes carry there onto the overlay route', () => {
-    // The stump draws through no batched pass in the full view, where its own
-    // renderer is what the marquee colours. A simple view skips that renderer,
-    // and carries the stump through the cone and root passes, so the overlay is
-    // the only route left to it.
-    assert.equal(typeHasBatchedMarqueeOverlay('stump', false), false);
-    assert.equal(typeHasBatchedMarqueeOverlay('stump', true), true);
+test('a simple view leaves the brace on its own curve batch', () => {
     assert.equal(typeHasBatchedMarqueeOverlay('brace', true), false, 'brace keeps its own curve batch');
 });

@@ -28,6 +28,7 @@ The contact cone is **stretched to fit**, not placed at its authored length: the
 
 - **Always standalone, because it is load-bearing.** A stump never merges into a branching tree, never hosts a fan or merge leaf, and is never converted into a leaf by the consolidation pass. A flat region's grid infill therefore stays a 1:1 pillar forest instead of merging into trees at roughly 4 mm of root.
 - Branches, leaves and braces cannot target it — it is not a host shaft.
+- **Drawn through the shared instanced passes.** The root pass draws the frustum and the cone pass draws the contact cone, so a forest of stumps costs two instanced draws instead of a mesh set per stump. The per-stump detail renderer mounts only for a selected stump, which the batches exclude.
 - `origin` records which auto-support pass created it, used only for debug origin colouring.
 
 ## Constraints

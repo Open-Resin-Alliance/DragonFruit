@@ -919,7 +919,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
         transformPropagatesToShaft: false,
         ownsEditHistoryEntry: false,
         jointDragUsesLivePreview: true,
-        batchesContactCones: false,
+        batchesContactCones: true,
         batchesShaft: false,
         bezierContextIdPrefix: 'stump-',
         broadcastsAttachmentsWhileDragging: false,
