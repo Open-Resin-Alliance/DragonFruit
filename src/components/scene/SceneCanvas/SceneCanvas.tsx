@@ -212,6 +212,7 @@ import { rotateSelectionFromActive, type SelectionRotationMode } from '@/feature
 import { alignModelToLift, preserveModelBottom } from '@/features/scene/selectionLiftDrop';
 import { DEFAULT_LIFT_DISTANCE_MM } from '@/features/transform/liftDefaults';
 import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
+import { setSupportClipPlanes } from '@/supports/clipPlanesStore';
 import {
   TRACKPAD_POSE_RELEASE_MS,
   applyTrackpadOrbitToPose,
@@ -893,6 +894,11 @@ export function SceneCanvas({
   freezeViewportActive?: boolean;
   onNewDeviceDetected?: (deviceId: string) => void;
 }) {
+  // The support tree reads the planes from the store, not from props, so a
+  // scrub tick does not re-render it.
+  React.useLayoutEffect(() => {
+    setSupportClipPlanes(clipLower ?? null, clipUpper ?? null);
+  }, [clipLower, clipUpper]);
   const { _ } = useLingui();
   const DROP_ANIMATION_DURATION_MS = 760;
   const selectedMarker = React.useMemo(() => {
