@@ -62,6 +62,14 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const valueRef = React.useRef(value);
+  // While a scrub is live the owner may defer its own state (the scene publishes
+  // the clip imperatively instead), so the slider draws the value it just sent.
+  const scrubActiveRef = React.useRef(false);
+  // The live drag values. The owner may defer its own state during a scrub (the
+  // scene publishes the clip imperatively instead), so the slider keeps what it
+  // just sent and hands the committed value back on release.
+  const [liveValue, setLiveValue] = React.useState<number | null>(null);
+  const [liveLowerValue, setLiveLowerValue] = React.useState<number | null>(null);
   const [inputValue, setInputValue] = React.useState(String(Math.round(value)));
   const [showError, setShowError] = React.useState(false);
   const [isShiftHeld, setIsShiftHeld] = React.useState(false);
@@ -114,6 +122,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     const floor = lowerValueRef.current ?? min;
     const next = Math.max(clamp(snap(rawNext)), floor);
     if (next === valueRef.current) return;
+    if (scrubActiveRef.current) {
+      valueRef.current = next;
+      setLiveValue(next);
+    }
     onChange(next);
   }, [clamp, min, onChange, snap]);
 
@@ -126,6 +138,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     if (!onLowerChange) return;
     const next = Math.min(clamp(snap(rawNext)), valueRef.current);
     if (next === lowerValueRef.current) return;
+    if (scrubActiveRef.current) {
+      lowerValueRef.current = next;
+      setLiveLowerValue(next);
+    }
     onLowerChange(next);
   }, [clamp, onLowerChange, snap]);
 
@@ -167,10 +183,18 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     const finalUpper = clamp(snap(snappedUpper));
     const finalLower = Math.min(clamp(snap(snappedLower)), finalUpper);
 
-    if (finalLower !== lowerValueRef.current) {
+    const lowerChanged = finalLower !== lowerValueRef.current;
+    const upperChanged = finalUpper !== valueRef.current;
+    if (scrubActiveRef.current) {
+      lowerValueRef.current = finalLower;
+      valueRef.current = finalUpper;
+      setLiveLowerValue(finalLower);
+      setLiveValue(finalUpper);
+    }
+    if (lowerChanged) {
       onLowerChange(finalLower);
     }
-    if (finalUpper !== valueRef.current) {
+    if (upperChanged) {
       onChange(finalUpper);
     }
   }, [clamp, max, min, onChange, onLowerChange, snap]);
@@ -315,6 +339,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     if (e.button !== 0) return; // only left-click drags
     e.preventDefault();
     e.stopPropagation();
+    scrubActiveRef.current = true;
     onScrubStart?.();
     // Start with current shift state
     setIsDraggingThumb(true);
@@ -489,6 +514,9 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       setIsDraggingThumb(false);
       dragShiftModeRef.current = false;
       setIsShiftHeld(false);
+      scrubActiveRef.current = false;
+      setLiveValue(null);
+      setLiveLowerValue(null);
       onScrubEnd?.();
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
@@ -604,9 +632,25 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const easesPosition = glide.eased && !isDraggingThumb;
 
   const thumbColor = crossSectionEnabled ? 'var(--accent)' : 'var(--text-muted)';
-  const percent = Math.min(100, Math.max(0, ((value - min) / Math.max(1, (max - min))) * 100));
-  const lowerPercent = lowerValue != null
-    ? Math.min(100, Math.max(0, ((lowerValue - min) / Math.max(1, (max - min))) * 100))
+  // A live scrub draws the value the slider just sent, not the owner's committed
+  // one: the owner defers that until the thumb is released.
+  const displayValue = liveValue ?? value;
+  const displayHeightMm = liveValue != null && typeof layerHeightMm === 'number'
+    ? Math.min(
+      Math.max(displayValue * layerHeightMm, 0),
+      typeof maxHeightMm === 'number' ? maxHeightMm : Number.POSITIVE_INFINITY,
+    )
+    : currentHeightMm;
+  const percent = Math.min(100, Math.max(0, ((displayValue - min) / Math.max(1, (max - min))) * 100));
+  const displayLowerValue = liveLowerValue ?? lowerValue;
+  const displayLowerHeightMm = liveLowerValue != null && typeof layerHeightMm === 'number'
+    ? Math.min(
+      Math.max((displayLowerValue ?? 0) * layerHeightMm, 0),
+      typeof maxHeightMm === 'number' ? maxHeightMm : Number.POSITIVE_INFINITY,
+    )
+    : lowerCurrentHeightMm;
+  const lowerPercent = displayLowerValue != null
+    ? Math.min(100, Math.max(0, ((displayLowerValue - min) / Math.max(1, (max - min))) * 100))
     : null;
   const EDGE_BADGE_HIDE_EPS = 1e-6;
   const hideUpperFloatingBadge = percent <= EDGE_BADGE_HIDE_EPS || percent >= (100 - EDGE_BADGE_HIDE_EPS);
@@ -635,10 +679,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     ? { marginLeft: '10px' }
     : { marginRight: '10px' };
   const minimalRailTitle = React.useMemo(() => {
-    const mmLabel = typeof currentHeightMm === 'number' ? formatMm(currentHeightMm) : '—';
+    const mmLabel = typeof displayHeightMm === 'number' ? formatMm(displayHeightMm) : '—';
     const crossSection = onToggleCrossSection ? (crossSectionEnabled ? 'on' : 'off') : 'none';
-    return formatMinimalRailTitle(_, value, mmLabel, crossSection);
-  }, [_, crossSectionEnabled, currentHeightMm, formatMm, onToggleCrossSection, value]);
+    return formatMinimalRailTitle(_, Math.round(displayValue), mmLabel, crossSection);
+  }, [_, crossSectionEnabled, displayHeightMm, displayValue, formatMm, onToggleCrossSection]);
   const railClassName = `relative mx-auto ${embedded ? (expandToContainer ? 'flex-1 h-full min-h-[300px]' : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`;
 
   return (
@@ -671,7 +715,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 {_(msg`Layer`)}
               </div>
               <div className="text-xs font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
-                {value}
+                {Math.round(displayValue)}
               </div>
             </div>
 
@@ -682,7 +726,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 background: 'color-mix(in srgb, var(--surface-1), transparent 12%)',
               }}
             >
-              {typeof currentHeightMm === 'number' ? formatMm(currentHeightMm) : '—'}
+              {typeof displayHeightMm === 'number' ? formatMm(displayHeightMm) : '—'}
             </div>
             {typeof maxHeightMm === 'number' && !embedded && (
               <div className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
@@ -777,7 +821,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 }}
               >
                 <div className="relative">
-                  {showValue && typeof lowerCurrentHeightMm === 'number' && !hideLowerFloatingBadge && (
+                  {showValue && typeof displayLowerHeightMm === 'number' && !hideLowerFloatingBadge && (
                     <div
                       className={isMinimalRail
                         ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${minimalRailBadgeClass} pointer-events-none top-3`
@@ -790,7 +834,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                             color: 'var(--text-strong)',
                           }}
                     >
-                      {isMinimalRail ? `${lowerValue}` : formatMm(lowerCurrentHeightMm)}
+                      {isMinimalRail ? `${Math.round(displayLowerValue ?? 0)}` : formatMm(displayLowerHeightMm ?? 0)}
                     </div>
                   )}
                   <div
@@ -874,7 +918,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               }}
             >
               <div className="relative">
-                {showValue && typeof currentHeightMm === 'number' && !hideUpperFloatingBadge && (
+                {showValue && typeof displayHeightMm === 'number' && !hideUpperFloatingBadge && (
                   <div
                     className={isMinimalRail
                       ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${minimalRailBadgeClass} pointer-events-none ${shouldPlaceCurrentBadgeBelowThumb ? 'top-3' : '-top-5'}`
@@ -888,8 +932,8 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                         }}
                   >
                     {isMinimalRail
-                      ? `${value}`
-                      : formatMm(currentHeightMm)}
+                      ? `${Math.round(displayValue)}`
+                      : formatMm(displayHeightMm)}
                   </div>
                 )}
             <div

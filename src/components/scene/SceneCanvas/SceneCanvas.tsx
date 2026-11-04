@@ -147,6 +147,7 @@ import { modelAnswersPointer, modelPlateScope, sceneryModelIds, SCENERY_DIM, typ
 import type { PlateFrame, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
+import { getSceneClip, subscribeSceneClip } from '@/features/slicing/sceneClipStore';
 import { setSupportPlacementGuideZ, useSupportPlacementGuideActive } from './supportPlacementGuideStore';
 import { setModelMesh } from '@/supports/autoSupport/meshStore';
 import { setSupportNavigationActive } from '@/supports/interaction/navigationActiveStore';
@@ -505,8 +506,6 @@ export function SceneCanvas({
   selectedModelIds,
   // Legacy props kept for compatibility if needed
   geom,
-  clipLower,
-  clipUpper,
   meshColor, // Global fallback color? Each model has color.
   meshVisible,
   shaderType,
@@ -643,8 +642,6 @@ export function SceneCanvas({
   visualActiveModelId?: string | null;
   selectedModelIds?: string[];
   geom?: any;
-  clipLower?: number | null;
-  clipUpper?: number | null;
   meshColor?: string;
   meshVisible?: boolean;
   shaderType?: import('@/features/shaders/mesh').MeshShaderType;
@@ -894,6 +891,11 @@ export function SceneCanvas({
   onNewDeviceDetected?: (deviceId: string) => void;
 }) {
   const { _ } = useLingui();
+  // The cross-section clip lives outside React so a slider drag does not
+  // re-render the page (and with it every panel) once per tick.
+  const sceneClip = React.useSyncExternalStore(subscribeSceneClip, getSceneClip, getSceneClip);
+  const clipLower = sceneClip.lower;
+  const clipUpper = sceneClip.upper;
   const DROP_ANIMATION_DURATION_MS = 760;
   const selectedMarker = React.useMemo(() => {
     if (overlaySelectedIslandId == null || !islandMarkers) return null;
