@@ -166,8 +166,8 @@ Autosave timing is stored in milliseconds: `debounceMs` defaults to `45_000` (45
 | `dragonfruit-local-backups:last-sync-at`      | localStorage | Last local sync timestamp       |
 | `dragonfruit-local-backups:directory`         | localStorage | Selected local backup directory |
 
-!!! note
-      Backup auth/session state uses secure cookies and server-side endpoints in addition to client-side setting keys.
+> [!NOTE]
+> Backup auth/session state uses secure cookies and server-side endpoints in addition to client-side setting keys.
 
 ## IndexedDB contract
 

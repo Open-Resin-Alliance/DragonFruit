@@ -7,8 +7,8 @@ Use Duplicate in **Prepare mode** to create additional copies of the active mode
 - Click the model you want to copy.
 - Open the **Duplicate** panel.
 
-!!! note
-    Duplicate actions require an active model selection.
+> [!NOTE]
+> Duplicate actions require an active model selection.
 
 ## 2) Choose layout strategy
 
