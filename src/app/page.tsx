@@ -74,6 +74,7 @@ import { getSettings as getSupportDisplaySettings, subscribeToSettings as subscr
 import { useLeafPlacementState } from '@/supports/SupportTypes/Leaf/leafPlacementState';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
+import { buildSceneSaveContext } from '@/features/export/logic/sceneSaveContext';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { joinSliceOutputPath, sliceFileBaseName } from '@/features/slicing/plateSliceNaming';
@@ -4594,8 +4595,6 @@ export default function Home() {
     // Captured before the save so a Save As can clean up the sidecar beside the
     // project the user just moved away from.
     const previousScenePath = activeSceneFilePath;
-    const visibleModels = scene.models.filter((model) => model.visible);
-    const scopeModels = visibleModels.length > 0 ? visibleModels : scene.models;
     const resolvedNativePath = options?.nativePathOverride !== undefined
       ? options.nativePathOverride
       : activeSceneFilePath;
@@ -4631,17 +4630,19 @@ export default function Home() {
         includeSupports: true,
         includeModel: true,
       },
-      {
-        models: scopeModels,
-        activeModelId: scene.activeModelId,
-        selectedModelIds: scene.selectedModelIds,
-        plates: scene.plates,
-        activePlateId: scene.activePlateId,
-        plateName: scene.plateName,
-        printer: scene.voxlPrinterBundle ?? undefined,
-        plateOrdering: scene.plateOrdering,
-        exportThumbnailPng: exportThumbnailPng ?? undefined,
-      },
+      buildSceneSaveContext(
+        {
+          models: scene.models,
+          activeModelId: scene.activeModelId,
+          selectedModelIds: scene.selectedModelIds,
+          plates: scene.plates,
+          activePlateId: scene.activePlateId,
+          plateName: scene.plateName,
+          printer: scene.voxlPrinterBundle ?? undefined,
+          plateOrdering: scene.plateOrdering,
+        },
+        exportThumbnailPng,
+      ),
       {
         nativePath: resolvedNativePath,
       },
@@ -4687,7 +4688,23 @@ export default function Home() {
     }
 
     return savedPath;
-  }, [activeSceneFilePath, clearAutosave, markSceneSaveBaseline, scene.activeModelId, scene.models, scene.selectedModelIds]);
+  }, [
+    activeSceneFilePath,
+    clearAutosave,
+    exportSuccessToastFadeTimeoutRef,
+    exportThumbnailCaptureRunnerRef,
+    markSceneSaveBaseline,
+    scene.activeModelId,
+    scene.activePlateId,
+    scene.models,
+    scene.plateName,
+    scene.plateOrdering,
+    scene.plates,
+    scene.selectedModelIds,
+    scene.voxlPrinterBundle,
+    setExportSuccessToast,
+    setIsExportSuccessToastVisible,
+  ]);
 
   const handleAutosaveRestore = React.useCallback(async () => {
     const recoverySnapshot = autosaveRecovery;
