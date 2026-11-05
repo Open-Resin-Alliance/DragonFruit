@@ -1072,7 +1072,14 @@ fn cmd_rle_subtract(mask_a: &PathBuf, mask_b: &PathBuf, output: &PathBuf) -> Res
 // Slice command implementations — wraps engine::slice_with_progress_v3_to_path
 // ===========================================================================
 
+/// Whole-process CPU seconds. `getrusage` is POSIX only, so Windows reports 0.
+#[cfg(not(unix))]
+fn cpu_total_seconds() -> f64 {
+    0.0
+}
+
 /// Whole-process CPU seconds (user+system, aggregated across all threads).
+#[cfg(unix)]
 fn cpu_total_seconds() -> f64 {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
     if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
@@ -1083,10 +1090,21 @@ fn cpu_total_seconds() -> f64 {
         + u.ru_stime.tv_sec as f64 + u.ru_stime.tv_usec as f64 / 1e6
 }
 
+/// Slicer-process CPU + RSS needs `getrusage`, which is POSIX only.
+#[cfg(not(unix))]
+fn capture_resources(
+    _wall_s: f64,
+    _samples: Vec<serde_json::Value>,
+    _sample_interval_ms: u64,
+) -> serde_json::Value {
+    serde_json::json!({ "error": "resource usage needs getrusage (POSIX only)" })
+}
+
 /// Slicer-process CPU + RSS. Peak RSS is the kernel high-water mark (ru_maxrss),
 /// so it captures transient peaks without a sampler thread. CPU time aggregates
 /// all rayon worker threads, so cpu_percent can exceed 100% under parallelism.
 /// `samples` is the periodic RSS/CPU time series gathered during the run.
+#[cfg(unix)]
 fn capture_resources(
     wall_s: f64,
     samples: Vec<serde_json::Value>,
