@@ -686,10 +686,9 @@ jobs:
     runs-on: macos-latest
     permissions:
       # Deliberately no actions: write. This job compiles whatever ref it is
-      # handed (npm ci, build.rs) with the Apple certificate and the updater
-      # signing key in scope. With actions: write it could dispatch docs-pages
-      # and have a poisoned latest.json published to Pages. It makes no calls
-      # to the Actions API.
+      # handed (npm ci, build.rs) with the updater signing key in scope. With
+      # actions: write it could dispatch docs-pages and have a poisoned
+      # latest.json published to Pages. It makes no calls to the Actions API.
       contents: write
     steps:
       - name: Checkout
@@ -721,11 +720,12 @@ jobs:
           toolchain: ${{ steps.rust_toolchain.outputs.channel }}
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Install Apple Certificate
-        uses: apple-actions/import-codesign-certs@v7
-        with:
-          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
-          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASS }}
+      - name: Use ad-hoc signing
+        # Preview builds are not releases. They never import the Developer ID
+        # certificate and never notarize: the certificate stays out of a job
+        # that compiles an arbitrary branch, and a preview does not spend the
+        # notary quota a release needs.
+        run: node scripts/use-adhoc-macos-signing.mjs
 
       # `swatinem/rust-cache` hashes every toolchain `rustup` lists, not only the
       # one the build uses, and the runner image ships its own `stable` (1.98.1
@@ -777,18 +777,11 @@ jobs:
           DF_BUILD_TARGET_TRIPLE: universal-apple-darwin
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: MHNF3GA2MM
         with:
           tauriScript: npx tauri
           args: --target universal-apple-darwin --bundles app,dmg
 
       - name: Embed QuickLook extension + verify universal bundle
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: MHNF3GA2MM
         run: |
           node scripts/macos-embed-appex.mjs --target universal-apple-darwin
           node scripts/verify-universal-bundle.mjs
