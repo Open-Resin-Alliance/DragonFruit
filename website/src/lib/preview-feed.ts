@@ -40,7 +40,7 @@ function render(body: HTMLElement, builds: PreviewBuild[]): void {
   if (builds.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'muted';
-    empty.textContent = 'No branch has built a preview in the last two weeks.';
+    empty.textContent = 'No previews available at this time.';
     body.replaceChildren(empty);
     return;
   }
@@ -98,9 +98,13 @@ export function initPreviewFeed(): void {
   const body = document.querySelector<HTMLElement>('[data-preview-body]');
   if (!body) return;
 
+  /* The notice says the build could not reach the API. Any answer here disproves it. */
+  const notice = document.querySelector<HTMLElement>('[data-preview-notice]');
+
   const cached = readCache();
   if (cached) {
     render(body, cached);
+    if (notice) notice.hidden = true;
     return;
   }
 
@@ -113,6 +117,7 @@ export function initPreviewFeed(): void {
         /* storage unavailable: the refresh still happened */
       }
       render(body, builds);
+      if (notice) notice.hidden = true;
     })
     .catch(() => {
       /* Keep the built snapshot, which is still better than an empty list. */

@@ -286,9 +286,10 @@ The split is deliberate and worth keeping:
   no-JavaScript and failed-fetch fallback, and it is hidden when the build could not
   reach the feed at all so the browser can still fill it in.
 - **Anything that has to be right without JavaScript is built, not fetched.** The
-  previews list is rendered at build time and degrades to a note plus a link to
-  GitHub if the API was unreachable — an empty list would read as "there are no
-  builds". Then `preview-feed.ts` refreshes it from the public releases API and
+  previews list is rendered at build time, and its column stays whether or not there
+  is anything in it: an empty list would read as "there are no builds", so the empty
+  state says so plainly and an unreachable API adds a note above it pointing at
+  GitHub. Then `preview-feed.ts` refreshes the list from the public releases API and
   caches the answer for two minutes, because a preview release is deleted and
   recreated on every push; the build snapshot would otherwise name releases that
   no longer exist. `releases.ts` takes an optional token for the build request (the

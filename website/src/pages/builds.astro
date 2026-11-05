@@ -167,52 +167,57 @@ try {
         </div>
       </section>
 
-      {
-        reachedReleases && (
-          <section class="block" aria-labelledby="previews-title">
-            <div class="block__head">
-              <h2 class="block__title" id="previews-title">Branch previews</h2>
-              <p class="block__note">
-                Every branch that builds an installer publishes one here for a fortnight. They are not wired into the
-                updater: they will not replace an installed release, and an install of one should be replaced by a
-                release when you are done with it.
-              </p>
-            </div>
+      <section class="block" aria-labelledby="previews-title">
+        <div class="block__head">
+          <h2 class="block__title" id="previews-title">Branch previews</h2>
+          <p class="block__note">
+            Builds of work in progress, published so you can test a change and give feedback before it lands. The last
+            fortnight is listed. They are not wired into the updater: they will not replace an installed release, and an
+            install of one should be replaced by a release when you are done with it.
+          </p>
+        </div>
 
-            <div class="block__body" data-preview-body aria-live="polite">
-              {previews.length > 0 ? (
-                <ul class="builds">
-                  {previews.map((build) => (
-                    <li class="build">
-                      <a class="build__tag mono" href={build.url} rel="noopener noreferrer" target="_blank">
-                        {build.tag}
+        <p class="notice" data-preview-notice hidden={reachedReleases}>
+          The releases API did not answer while this page was built, so this list may be empty even though branches
+          have built. The browser tries again on load, and every build is on the{' '}
+          <a href={LINKS.releases} rel="noopener noreferrer" target="_blank">
+            releases page
+          </a>
+          .
+        </p>
+
+        <div class="block__body" data-preview-body aria-live="polite">
+          {previews.length > 0 ? (
+            <ul class="builds">
+              {previews.map((build) => (
+                <li class="build">
+                  <a class="build__tag mono" href={build.url} rel="noopener noreferrer" target="_blank">
+                    {build.tag}
+                  </a>
+                  <div class="build__right">
+                    <span class="build__date">{build.date}</span>
+                    <div class="build__assets">
+                      <a class="build__asset" data-download href={build.url} {...downloadAttributes(build.assets)}>
+                        Download
                       </a>
-                      <div class="build__right">
-                        <span class="build__date">{build.date}</span>
-                        <div class="build__assets">
-                          <a class="build__asset" data-download href={build.url} {...downloadAttributes(build.assets)}>
-                            Download
-                          </a>
-                          <a
-                            class="build__more"
-                            href={sourcesUrlFor(build.tag)}
-                            rel="noopener noreferrer"
-                            target="_blank"
-                          >
-                            Show sources
-                          </a>
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p class="muted">No branch has built a preview in the last two weeks.</p>
-              )}
-            </div>
-          </section>
-        )
-      }
+                      <a
+                        class="build__more"
+                        href={sourcesUrlFor(build.tag)}
+                        rel="noopener noreferrer"
+                        target="_blank"
+                      >
+                        Show sources
+                      </a>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p class="muted">No previews available at this time.</p>
+          )}
+        </div>
+      </section>
     </div>
 
   </section>
@@ -276,11 +281,6 @@ try {
     display: grid;
     gap: 2.5rem 3rem;
     align-items: start;
-  }
-
-  /* A missing releases answer leaves one section; it takes the whole width. */
-  .blocks > :only-child {
-    grid-column: 1 / -1;
   }
 
   @media (min-width: 60rem) {
