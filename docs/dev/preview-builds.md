@@ -48,16 +48,15 @@ check afterwards what was actually built.
 
 Preview branches are deleted automatically once their pull request closes.
 
-!!! warning "If you are not sure, ask"
-
-    If you feel pressured to create a preview, and/or you are not sure if an
-    external PR's code is safe, please ask a senior member of the dev team
-    before risking our keys.
-
-    Nobody will mind the delay. A contributor waiting an extra day for a test
-    build costs us nothing; a signing certificate used to sign someone else's
-    malware costs us the certificate, every release ever signed with it, and
-    the trust of everyone running DragonFruit on macOS.
+> [!WARNING]
+> **If you are not sure, ask.** If you feel pressured to create a preview, and/or you are not sure if an
+> external PR's code is safe, please ask a senior member of the dev team
+> before risking our keys.
+>
+> Nobody will mind the delay. A contributor waiting an extra day for a test
+> build costs us nothing; a signing certificate used to sign someone else's
+> malware costs us the certificate, every release ever signed with it, and
+> the trust of everyone running DragonFruit on macOS.
 
 ### What to look for in an external diff
 

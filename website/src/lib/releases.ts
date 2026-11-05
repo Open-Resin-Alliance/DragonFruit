@@ -8,7 +8,8 @@
 
 export const OWNER = 'Open-Resin-Alliance';
 export const REPO = 'DragonFruit';
-export const RELEASES_URL = `https://github.com/${OWNER}/${REPO}/releases`;
+export const REPO_URL = `https://github.com/${OWNER}/${REPO}`;
+export const RELEASES_URL = `${REPO_URL}/releases`;
 export const RELEASES_API_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=30`;
 export const LATEST_API_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`;
 
@@ -38,19 +39,40 @@ const TARGET_LABELS: Record<string, string> = {
   'linux-aarch64': 'Linux on ARM',
 };
 
+/** Which of the site's three platforms a target triple installs on. */
+const TARGET_PLATFORMS: Record<string, PlatformKey> = {
+  'windows-x86_64': 'windows',
+  'windows-aarch64': 'windows',
+  'darwin-universal': 'macos',
+  'darwin-x86_64': 'macos',
+  'darwin-aarch64': 'macos',
+  'linux-x86_64': 'linux',
+  'linux-aarch64': 'linux',
+};
+
 /** One entry per platform the feed offers, named as the reader's platform. */
-export function devFeedTargets(feed: UpdaterFeed): { label: string; url: string; file: string }[] {
+export function devFeedTargets(feed: UpdaterFeed): { platform: PlatformKey | null; label: string; url: string; file: string }[] {
   return Object.entries(feed.platforms ?? {})
     .filter(([, target]) => typeof target?.url === 'string' && target.url !== '')
     .map(([key, target]) => {
       const url = target.url as string;
-      return { label: TARGET_LABELS[key] ?? key, url, file: decodeURIComponent(url.split('/').pop() ?? '') };
+      return {
+        platform: TARGET_PLATFORMS[key] ?? null,
+        label: TARGET_LABELS[key] ?? key,
+        url,
+        file: decodeURIComponent(url.split('/').pop() ?? ''),
+      };
     });
 }
 
 /** Where everything else for that build lives: its release page. */
 export function releaseUrlFor(version: string): string {
   return `${RELEASES_URL}/tag/v${version}`;
+}
+
+/** The code that build was cut from: the tag, which is the commit it shipped. */
+export function sourcesUrlFor(tag: string): string {
+  return `${REPO_URL}/tree/${encodeURIComponent(tag)}`;
 }
 
 /** Previews are cut per branch, so only the last fortnight is worth offering. */
@@ -103,7 +125,7 @@ export interface PreviewBuild {
   tag: string;
   url: string;
   date: string;
-  assets: { label: string; url: string }[];
+  assets: { platform: PlatformKey; label: string; file: string; url: string }[];
 }
 
 export function toPreviewBuild(release: Release): PreviewBuild {
@@ -113,8 +135,10 @@ export function toPreviewBuild(release: Release): PreviewBuild {
     date: formatDate(release.published_at),
     assets: PLATFORM_KEYS.map((key) => {
       const asset = pickAsset(release.assets ?? [], key);
-      return asset ? { label: PLATFORMS[key].label, url: asset.browser_download_url } : null;
-    }).filter((asset): asset is { label: string; url: string } => asset !== null),
+      return asset
+        ? { platform: key, label: PLATFORMS[key].label, file: asset.name, url: asset.browser_download_url }
+        : null;
+    }).filter((asset): asset is { platform: PlatformKey; label: string; file: string; url: string } => asset !== null),
   };
 }
 

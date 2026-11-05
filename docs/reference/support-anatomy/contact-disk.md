@@ -30,8 +30,8 @@ Then the round tip that sits on the disk's top face floors it: the ball is cente
 
 Implemented in `calculateDiskThickness` (`src/supports/SupportPrimitives/ContactDisk/contactDiskUtils.ts`).
 
-!!! warning "Legacy clamp on `maxStandoffMm`"
-    A `maxStandoffMm` of exactly `1.5` is treated as the old default and silently clamped to `0.35`; any other value is used as authored. A user who deliberately sets 1.5 gets 0.35. Keep this in mind before trusting a profile's stored number — and before changing the default, which would change which profiles the clamp catches.
+> [!WARNING]
+> **Legacy clamp on `maxStandoffMm`.** A `maxStandoffMm` of exactly `1.5` is treated as the old default and silently clamped to `0.35`; any other value is used as authored. A user who deliberately sets 1.5 gets 0.35. Keep this in mind before trusting a profile's stored number — and before changing the default, which would change which profiles the clamp catches.
 
 ## Behavior
 

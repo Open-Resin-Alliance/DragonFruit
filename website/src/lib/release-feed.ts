@@ -7,26 +7,10 @@
  * makes the page correct with JavaScript disabled.
  */
 
-import { LATEST_API_URL, PLATFORMS, RELEASES_URL, fetchJson, formatDate, pickAsset, type PlatformKey, type Release } from './releases';
+import { LATEST_API_URL, PLATFORMS, RELEASES_URL, fetchJson, formatDate, pickAsset, type Release } from './releases';
+import { detectPlatform, platformHint } from './build-downloads';
 
 const REPO_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
-
-/**
- * `navigator.userAgentData.platform` is the modern spelling; TypeScript's DOM
- * library does not know it, and every browser that lacks it has `userAgent`.
- */
-function platformHint(): string {
-  const data = (navigator as Navigator & { userAgentData?: { platform?: string; mobile?: boolean } }).userAgentData;
-  return data?.platform || '';
-}
-
-function detectPlatform(): PlatformKey | null {
-  const source = `${platformHint()} ${navigator.userAgent || ''}`.toLowerCase();
-  if (source.includes('win')) return 'windows';
-  if (source.includes('mac') || source.includes('darwin')) return 'macos';
-  if (source.includes('linux') || source.includes('x11')) return 'linux';
-  return null;
-}
 
 function isMobile(): boolean {
   const source = `${platformHint()} ${navigator.userAgent || ''}`.toLowerCase();
