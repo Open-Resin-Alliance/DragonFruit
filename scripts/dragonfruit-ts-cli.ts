@@ -1431,10 +1431,10 @@ function resolveSlicePlate(
   }
   const indexOf = new Map(frames.map((f) => [f.id, f.index]));
   return {
-    scope: plateSliceScope(frame, doc.models.filter((m) => m.visible), frames),
+    scope: plateSliceScope({ frame, models: doc.models.filter((m) => m.visible), frames }),
     number: frame.index + 1,
     plateCount: frames.length,
-    plateNumberOf: (model) => (indexOf.get(resolveModelPlateId(model, frames)) ?? 0) + 1,
+    plateNumberOf: (model) => (indexOf.get(resolveModelPlateId({ model, frames })) ?? 0) + 1,
   };
 }
 

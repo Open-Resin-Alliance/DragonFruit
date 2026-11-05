@@ -842,7 +842,7 @@ export default function Home() {
    */
   const activePlateModelIds = React.useMemo(
     () => new Set(
-      modelsOnPlate(scene.models, scene.activePlateId, scene.plateFrames).map((model) => model.id),
+      modelsOnPlate({ models: scene.models, plateId: scene.activePlateId, frames: scene.plateFrames }).map((model) => model.id),
     ),
     [scene.activePlateId, scene.models, scene.plateFrames],
   );
@@ -3217,7 +3217,7 @@ export default function Home() {
    */
   const printingScrubPreviewModels = React.useMemo(() => {
     const activeFrame = scene.plateFrames.find((frame) => frame.id === scene.activePlateId);
-    const onPlate = modelsOnPlate(scene.models, scene.activePlateId, scene.plateFrames);
+    const onPlate = modelsOnPlate({ models: scene.models, plateId: scene.activePlateId, frames: scene.plateFrames });
     if (!activeFrame || (activeFrame.dxMm === 0 && activeFrame.dyMm === 0)) return onPlate;
 
     return onPlate.map((model) => ({
@@ -11117,7 +11117,7 @@ export default function Home() {
               // An empty bed has nothing to lose, so it goes straight away; the
               // confirmation is for the models a delete takes with it.
               if (intent === 'delete'
-                && modelsOnPlate(scene.models, plateId, scene.plateFrames).length === 0) {
+                && modelsOnPlate({ models: scene.models, plateId, frames: scene.plateFrames }).length === 0) {
                 scene.removePlate(plateId);
                 return;
               }
@@ -12020,7 +12020,7 @@ export default function Home() {
                 // The plate, not the scene: with more than one bed, the bin empties
                 // the one you are working on and leaves the others alone.
                 void scene.deleteModels(
-                  modelsOnPlate(scene.models, scene.activePlateId, scene.plateFrames).map((model) => model.id),
+                  modelsOnPlate({ models: scene.models, plateId: scene.activePlateId, frames: scene.plateFrames }).map((model) => model.id),
                 );
               }}
             >

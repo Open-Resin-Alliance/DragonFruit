@@ -97,7 +97,13 @@ export function computePlateFrames({
  * The hint is the fallback for a model that stands outside every plate, where
  * position cannot answer; then the first plate.
  */
-export function resolveModelPlateId(model: PlateMember, frames: readonly PlateFrame[]): string {
+export function resolveModelPlateId({
+  model,
+  frames,
+}: {
+  model: PlateMember;
+  frames: readonly PlateFrame[];
+}): string {
   const { x, y } = model.transform.position;
   const containing = frames.find(
     (frame) => x >= frame.minX && x <= frame.maxX && y >= frame.minY && y <= frame.maxY,
@@ -112,22 +118,30 @@ export function resolveModelPlateId(model: PlateMember, frames: readonly PlateFr
  * gesture already knows where it put it. Membership follows the model; with no
  * plate to name (no frames yet) it keeps the one it had.
  */
-export function withPlateMembership<M extends PlateMember>(
-  model: M,
-  frames: readonly PlateFrame[],
-  landedPlateId?: string,
-): M {
-  const plateId = landedPlateId ?? resolveModelPlateId(model, frames);
+export function withPlateMembership<M extends PlateMember>({
+  model,
+  frames,
+  landedPlateId,
+}: {
+  model: M;
+  frames: readonly PlateFrame[];
+  landedPlateId?: string;
+}): M {
+  const plateId = landedPlateId ?? resolveModelPlateId({ model, frames });
   return plateId ? { ...model, plateId } : model;
 }
 
 /** The models standing on a plate, in their original order. */
-export function modelsOnPlate<M extends PlateMember>(
-  models: readonly M[],
-  plateId: string,
-  frames: readonly PlateFrame[],
-): M[] {
-  return models.filter((model) => resolveModelPlateId(model, frames) === plateId);
+export function modelsOnPlate<M extends PlateMember>({
+  models,
+  plateId,
+  frames,
+}: {
+  models: readonly M[];
+  plateId: string;
+  frames: readonly PlateFrame[];
+}): M[] {
+  return models.filter((model) => resolveModelPlateId({ model, frames }) === plateId);
 }
 
 /** What a slice of one plate covers: its models, its volume, and the shift that brings it to the origin. */
@@ -142,14 +156,18 @@ export interface PlateSliceScope {
  * The scope of a slice of one plate. A slice covers one plate, is judged against
  * that plate's volume and is shifted to the origin for the rasterizer.
  */
-export function plateSliceScope<M extends PlateMember & { id: string }>(
-  frame: PlateFrame,
-  models: readonly M[],
-  frames: readonly PlateFrame[],
-): PlateSliceScope {
+export function plateSliceScope<M extends PlateMember & { id: string }>({
+  frame,
+  models,
+  frames,
+}: {
+  frame: PlateFrame;
+  models: readonly M[];
+  frames: readonly PlateFrame[];
+}): PlateSliceScope {
   return {
     plateId: frame.id,
-    modelIds: modelsOnPlate(models, frame.id, frames).map((model) => model.id),
+    modelIds: modelsOnPlate({ models, plateId: frame.id, frames }).map((model) => model.id),
     volumeBoundsMm: { minX: frame.minX, minY: frame.minY, maxX: frame.maxX, maxY: frame.maxY },
     offsetMm: { dxMm: frame.dxMm, dyMm: frame.dyMm },
   };
