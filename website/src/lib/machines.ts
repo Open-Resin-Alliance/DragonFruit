@@ -40,6 +40,8 @@ export interface Family {
 
 export interface Group {
   manufacturer: string;
+  /** The manufacturer as an anchor target, so the rail works without a script. */
+  slug: string;
   machines: Machine[];
   families: Family[];
 }
@@ -151,7 +153,12 @@ export function loadMachines(): MachineLibrary {
         .map(([name, entries]) => ({ name, machines: entries.sort((a, b) => a.name.localeCompare(b.name)) }))
         .sort((a, b) => a.name.localeCompare(b.name));
 
-      return { manufacturer, machines: list.flatMap((family) => family.machines), families: list };
+      return {
+        manufacturer,
+        slug: manufacturer.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+        machines: list.flatMap((family) => family.machines),
+        families: list,
+      };
     })
     .sort((a, b) => b.machines.length - a.machines.length || a.manufacturer.localeCompare(b.manufacturer));
 

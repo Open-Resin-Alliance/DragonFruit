@@ -26,11 +26,13 @@ const lede =
       <p class="lede">{lede}</p>
     </header>
 
-    <div class="library" data-library>
-      {/* Hidden until the script that drives the filter is running: the rail is a
-          control, and a control that does nothing is worse than none. */}
-      <aside class="rail" data-machine-rail hidden>
-        <div class="rail__search">
+    <div class="library" id="machines-list" data-library>
+      {/* The rail is always in the markup, so the page does not reflow when the
+          script arrives. Its buttons are anchors: without JavaScript they jump to
+          the manufacturer's section, and the script turns them into a filter. The
+          search field is the one control that cannot work without it, so it waits. */}
+      <aside class="rail">
+        <div class="rail__search" data-machine-search hidden>
           <input
             class="rail__input"
             type="search"
@@ -44,15 +46,15 @@ const lede =
         </div>
 
         <div class="rail__makers" role="group" aria-label="Manufacturers">
-          <button class="maker" type="button" data-maker data-manufacturer="" aria-pressed="true">
+          <a class="maker" href="#machines-list" data-maker data-manufacturer="" aria-current="true">
             <span class="maker__name">All machines</span>
             <span class="maker__count mono">{machines.length}</span>
-          </button>
+          </a>
           {groups.map((group) => (
-            <button class="maker" type="button" data-maker data-manufacturer={group.manufacturer} aria-pressed="false">
+            <a class="maker" href={`#${group.slug}`} data-maker data-manufacturer={group.manufacturer}>
               <span class="maker__name">{group.manufacturer}</span>
               <span class="maker__count mono">{group.machines.length}</span>
-            </button>
+            </a>
           ))}
         </div>
       </aside>
@@ -60,7 +62,7 @@ const lede =
       <div class="library__main">
         {
           groups.map((group) => (
-            <section class="group" data-group data-manufacturer={group.manufacturer}>
+            <section class="group" id={group.slug} data-group data-manufacturer={group.manufacturer}>
               <h2 class="group__title">{group.manufacturer}</h2>
 
               {group.families.map((family) => (
@@ -152,15 +154,12 @@ const lede =
     font-size: 0.9375rem;
   }
 
+  /* Two columns from the first paint: the rail is in the markup, so nothing
+     moves when the script arrives. */
   .library {
     display: grid;
     gap: 2rem;
     align-items: start;
-  }
-
-  /* The rail only exists once the script can drive it; without it the machines
-     read as one column of groups. */
-  .library[data-ready] {
     grid-template-columns: 14rem minmax(0, 1fr);
   }
 
@@ -172,7 +171,7 @@ const lede =
     top: 5rem;
   }
 
-  .rail[hidden] {
+  .rail__search[hidden] {
     display: none;
   }
 
@@ -212,6 +211,7 @@ const lede =
     font: inherit;
     font-size: 0.875rem;
     text-align: start;
+    text-decoration: none;
     color: var(--muted);
     background: transparent;
     border: 1px solid transparent;
@@ -226,7 +226,7 @@ const lede =
     border-color: var(--glass-border);
   }
 
-  .maker[aria-pressed='true'] {
+  .maker[aria-current='true'] {
     color: var(--ink);
     background: var(--glass-bg);
     border-color: var(--border-strong);
@@ -347,7 +347,7 @@ const lede =
   }
 
   @media (max-width: 52rem) {
-    .library[data-ready] {
+    .library {
       grid-template-columns: minmax(0, 1fr);
     }
 

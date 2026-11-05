@@ -66,9 +66,10 @@ const reference = [
       <div class="hero__cta"><DownloadMenu /></div>
 
       <p class="hero__machines">
-        <span class="mono">{machines.length} machines</span>
-        <span class="muted">supported out of the box</span>
-        <a class="hero__machines-link" href="/machines/">See all machines</a>
+        <span class="hero__machines-question muted">Will it work with my printer?</span>
+        <a class="hero__machines-link" href="/machines/">
+          {machines.length} machines supported<span aria-hidden="true"> →</span>
+        </a>
       </p>
 
       <p class="hero__note mono muted">
@@ -189,21 +190,22 @@ const reference = [
      the app knows their printer is already looking. */
   .hero__machines {
     display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 0.3rem 0.7rem;
+    flex-direction: column;
+    gap: 0.15rem;
     margin-top: 1.1rem;
     font-size: 0.8125rem;
+    line-height: 1.5;
   }
 
   .hero__machines-link {
-    color: var(--accent);
+    color: var(--ink);
     text-decoration: underline;
     text-decoration-color: var(--border-strong);
     text-underline-offset: 3px;
   }
 
   .hero__machines-link:hover {
+    color: var(--accent);
     text-decoration-color: currentColor;
   }
 

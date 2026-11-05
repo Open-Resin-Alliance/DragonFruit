@@ -322,15 +322,16 @@ machine no pack carries cannot appear. A missing build area is derived from the
 panel (pixels times pixel pitch) the way the app derives it.
 
 The layout follows the app's own Printer Library: a manufacturer rail and a search
-field on the left, the presets grouped by family on the right. `machine-library.ts`
-drives the filter, and the rail is hidden in the markup and revealed by the script,
-so without JavaScript the page is one column of every machine rather than a control
-that does nothing. Searching ignores the manufacturer, the same way the app does.
+field on the left, the presets grouped by family on the right. The rail is in the
+markup and its entries are anchors to each manufacturer's section, so without
+JavaScript they jump instead of filtering and the two-column layout is there from
+the first paint; `machine-library.ts` turns them into a filter, and only the search
+field waits for it. Searching ignores the manufacturer, the same way the app does.
 
 The renders come from the packs through `website/src/integrations/printer-images.mjs`,
 which resizes each `imageAssetPath` to a 480px WebP: a middleware serves
-`/printers/<presetId>.webp` in `astro dev`, and the build hook writes the same files
-into the artifact. Nothing is committed, and the packs stay the only copy of the
+`/printers/<presetId>.webp` in `astro dev` from a cache it fills at startup, and the
+build hook writes the same files into the artifact. Nothing is committed, and the packs stay the only copy of the
 artwork. The integration is registered in `astro.config.mjs`, so a dev server that
 was already running when it landed has to be restarted before the images resolve.
 

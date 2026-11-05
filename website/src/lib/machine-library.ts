@@ -3,17 +3,18 @@
  * manufacturer rail and a search field on the left, the presets grouped by family
  * on the right.
  *
- * The rail is hidden in the markup and only revealed here, because a filter that
- * does nothing is worse than no filter. Searching ignores the manufacturer, the
- * same way the app does, so a name always finds its machine.
+ * The rail is in the markup and its buttons are anchors, so without this script
+ * they jump to the manufacturer's section instead of filtering. The search field
+ * is the one control that cannot work without it, so it is hidden until here.
+ * Searching ignores the manufacturer, the same way the app does, so a name always
+ * finds its machine.
  */
 export function initMachineLibrary(): void {
-  const library = document.querySelector<HTMLElement>('[data-library]');
-  const rail = document.querySelector<HTMLElement>('[data-machine-rail]');
+  const search = document.querySelector<HTMLElement>('[data-machine-search]');
   const input = document.querySelector<HTMLInputElement>('[data-machine-query]');
   const empty = document.querySelector<HTMLElement>('[data-machine-empty]');
-  const makers = [...document.querySelectorAll<HTMLButtonElement>('[data-maker]')];
-  if (!library || !rail || !input || !empty || makers.length === 0) return;
+  const makers = [...document.querySelectorAll<HTMLAnchorElement>('[data-maker]')];
+  if (!search || !input || !empty || makers.length === 0) return;
 
   const groups = [...document.querySelectorAll<HTMLElement>('[data-group]')];
   let manufacturer = '';
@@ -51,15 +52,19 @@ export function initMachineLibrary(): void {
   };
 
   for (const maker of makers) {
-    maker.addEventListener('click', () => {
+    maker.addEventListener('click', (event) => {
+      event.preventDefault();
       manufacturer = maker.dataset.manufacturer ?? '';
-      for (const other of makers) other.setAttribute('aria-pressed', String(other === maker));
+
+      for (const other of makers) {
+        if (other === maker) other.setAttribute('aria-current', 'true');
+        else other.removeAttribute('aria-current');
+      }
+
       apply();
     });
   }
 
   input.addEventListener('input', apply);
-
-  rail.hidden = false;
-  library.setAttribute('data-ready', '');
+  search.hidden = false;
 }

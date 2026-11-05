@@ -67,6 +67,19 @@ export default function printerImages() {
       'astro:server:setup': ({ server }) => {
         const cache = new Map();
 
+        /* Fill the cache before the first visitor asks for it: the dev server would
+           otherwise encode 57 renders while the page is already scrolling them in,
+           which is the one place the gallery ever looks slow. */
+        void (async () => {
+          for (const [id, source] of printerSources()) {
+            try {
+              cache.set(id, await render(source));
+            } catch {
+              /* A render sharp cannot read is skipped, not fatal. */
+            }
+          }
+        })();
+
         server.middlewares.use((request, response, next) => {
           const match = /^\/printers\/([^/]+)\.webp$/.exec(new URL(request.url ?? '/', 'http://localhost').pathname);
           if (!match) return next();
@@ -84,7 +97,9 @@ export default function printerImages() {
 
           const send = (body) => {
             response.setHeader('Content-Type', 'image/webp');
-            response.setHeader('Cache-Control', 'no-cache');
+            /* The URL is the preset id, so a reload re-uses the render instead of
+               re-encoding and re-sending all 57 of them. */
+            response.setHeader('Cache-Control', 'public, max-age=3600');
             response.end(body);
           };
 
