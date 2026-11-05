@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test from 'node:test';
 
-import { resolveSceneSliceJob } from '../../../../scripts/cli/sceneSliceJob';
+import { resolveSceneSliceJob, resolveSceneTipShrinkPercent } from '../../../../scripts/cli/sceneSliceJob';
 import { getActiveMaterialProfile, getActivePrinterProfile } from '@/features/profiles/profileStore';
 import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
 import { PRINTERS } from './helpers/sliceJobFixtures';
@@ -65,4 +67,35 @@ test('a layer height override leaves the job on the material it asked for', () =
   assert.equal(job.material?.normalExposureSec, 3.3);
   assert.equal(getActiveMaterialProfile()?.normalExposureSec, 3.3);
   assert.equal(getActiveMaterialProfile()?.layerHeightMm, 0.03);
+});
+
+const mars4Ultra = () => JSON.parse(
+  readFileSync(join(__dirname, '../../../../plugins/elegoo/printers/mars-series.json'), 'utf-8'),
+) as unknown;
+const thinMaterial = (percent?: number) => ({
+  name: 'Thin',
+  layerHeightMm: 0.03,
+  ...(percent === undefined ? {} : { antiAliasingSettings: { supportTipShrinkPercent: percent } }),
+});
+const shrinkFor = (aaPreset: 'raw' | 'sharp' | 'balanced' | 'smooth', percent?: number) => resolveSceneTipShrinkPercent(
+  resolveSceneSliceJob({ printer: mars4Ultra(), printerId: 'Mars 4 Ultra', material: thinMaterial(percent), aaPreset }),
+);
+
+test('3DAA presets shrink tips by the material default, as the app does', () => {
+  assert.equal(shrinkFor('balanced'), 10);
+  assert.equal(shrinkFor('smooth'), 10);
+});
+
+test('the material decides how much tips shrink under 3DAA', () => {
+  assert.equal(shrinkFor('balanced', 25), 25);
+  assert.equal(shrinkFor('balanced', 0), 0);
+});
+
+test('tips do not shrink without 3DAA', () => {
+  assert.equal(shrinkFor('sharp', 25), 0);
+  assert.equal(shrinkFor('raw', 25), 0);
+});
+
+test('a job without a printer has no tip shrink', () => {
+  assert.equal(resolveSceneTipShrinkPercent(resolveSceneSliceJob({})), 0);
 });

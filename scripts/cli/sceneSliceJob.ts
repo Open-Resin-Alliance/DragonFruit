@@ -13,7 +13,11 @@
 
 import type { AaPreset } from '../../src/features/slicing/autoAaPhysics';
 import type { SavedCurve } from '../../src/features/slicing/lutCurves';
-import type { SliceAntiAliasingOverride, SliceJobAntiAliasingRequest } from '../../src/features/slicing/sliceAntiAliasing';
+import {
+  resolveSliceJobAntiAliasing,
+  type SliceAntiAliasingOverride,
+  type SliceJobAntiAliasingRequest,
+} from '../../src/features/slicing/sliceAntiAliasing';
 import {
   addMaterialProfile,
   addPrinterProfileFromPreset,
@@ -256,6 +260,21 @@ export type SceneSliceRun = {
    */
   jobJson: string | null;
 };
+
+/**
+ * How much support tips shrink in this job, the way the export orchestrator
+ * resolves it: the material's setting under 3DAA, 0 otherwise. Geometry, so the
+ * mesh takes it and the job does not.
+ */
+export function resolveSceneTipShrinkPercent(job: SceneSliceJob): number {
+  if (!job.printer || !job.material) return 0;
+  return resolveSliceJobAntiAliasing({
+    printerProfile: job.printer,
+    materialProfile: job.material,
+    layerHeightMm: resolveSliceRasterSettings({ printerProfile: job.printer, materialProfile: job.material }).layerHeightMm,
+    request: job.antiAliasing ?? undefined,
+  }).supportTipShrinkPercent;
+}
 
 export function buildSceneSliceRun(
   job: SceneSliceJob,

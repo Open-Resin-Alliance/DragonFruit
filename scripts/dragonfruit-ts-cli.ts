@@ -1633,6 +1633,7 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
       raftMode,
       raftSettings,
       plateOffsetMm: plate.scope.offsetMm,
+      supportTipShrinkPercent: sliceJob.resolveSceneTipShrinkPercent(job),
     });
     meshPositions = mesh.trianglesXYZ;
     modelTriangleCount = mesh.modelTriangleCount;
