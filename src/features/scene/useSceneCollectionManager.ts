@@ -21,8 +21,10 @@ import {
   computePlateFrames,
   modelsOnPlate,
   plateLocalRect,
+  relaidPlateShifts,
   resolveModelPlateId as plateIdForModel,
   withPlateMembership,
+  type PlateFootprint,
   type PlateFrame,
 } from '@/features/scene/plates/plateLayout';
 import { decodeVoxlBodyChunk, detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlates, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef, type VoxlMeshRange } from '@/features/scene/voxl';
@@ -587,6 +589,12 @@ function paintModelBaseColor(model: LoadedModel, color: string): void {
 function hasSupportsForModel(modelId: string, supportState: SupportState): boolean {
   const supportIds = getSupportsForModel(supportState, modelId);
   return Object.values(supportIds).some((ids) => ids.length > 0);
+}
+
+/** What the beds were laid out with, when it is not the current footprint or ordering. */
+interface PlateRelayoutOptions {
+  laidOut?: PlateFootprint;
+  wasOrdering?: PlateOrdering;
 }
 
 /**
@@ -8430,71 +8438,32 @@ export function useSceneCollectionManager(options?: {
   plateOffsetForRef.current = plateOffsetFor;
 
   /**
-   * Add an empty plate after the last one. The plate being worked on does not
-   * change: adding a bed is not a reason to leave the one you are on.
-   */
-  /**
-   * The models, moved with their beds when the grid is re-laid.
-   *
-   * Plates are numbered by position, so adding or removing one can shuffle the plates
-   * already placed. A model left where its bed used to be would quietly belong to whichever
-   * plate now covers that spot, so each one is shifted by exactly how far its own
-   * plate moved. A model on no plate stays where it was put: it was dragged off a bed
-   * deliberately and is not standing on anything that moved.
-   *
-   * The beds are spaced by their own footprint, so the same shift applies when the
-   * build volume changes under them — a printer switch moves every bed but the first.
-   * `laidOut` is the footprint they were placed on then, which is what the models'
-   * positions are still measured against.
+   * The models, moved with their beds when the grid is re-laid: `relaidPlateShifts` in
+   * plateLayout decides how far each one moves, and this applies it to the app's models.
+   * A model that stays put keeps its transform object, which is how the support shift
+   * knows to skip it.
    */
   const modelsShiftedForRelaidPlates = useCallback((
     before: readonly ScenePlate[],
     after: readonly ScenePlate[],
     models: readonly LoadedModel[],
-    options?: {
-      /** The footprint the models were laid out against, when it is not the current one. */
-      laidOut?: { widthMm: number; depthMm: number; originMode: View3DSettings['originMode'] };
-      /** The ordering those beds were laid out under, when it is not the current one. */
-      wasOrdering?: PlateOrdering;
-    },
+    options?: PlateRelayoutOptions,
   ): LoadedModel[] => {
-    if (after.length <= 1) return models as LoadedModel[];
-
     const { widthMm, depthMm, originMode } = view3dSettings;
-    const footprint = { widthMm, depthMm };
-    const was = options?.laidOut ?? { widthMm, depthMm, originMode };
-    const nowOrdering = plateOrderingRef.current;
-    const { minX: wasMinX, minY: wasMinY } = plateLocalRect(was);
-
-    const shifts = new Map<string, { dxMm: number; dyMm: number }>();
-    const frames = before.map((plate, index) => {
-      const from = plateCascadeOffsetMm(index, was, before.length, options?.wasOrdering ?? nowOrdering);
-      // By id, not by index: a bed taken out of the middle moves every one after it a slot
-      // down. A bed that is gone takes its models with it, so they have nowhere to move.
-      const afterIndex = after.findIndex((candidate) => candidate.id === plate.id);
-      const to = afterIndex < 0 ? from : plateCascadeOffsetMm(afterIndex, footprint, after.length, nowOrdering);
-      if (from.dxMm !== to.dxMm || from.dyMm !== to.dyMm) {
-        shifts.set(plate.id, { dxMm: to.dxMm - from.dxMm, dyMm: to.dyMm - from.dyMm });
-      }
-      return {
-        id: plate.id,
-        minX: wasMinX + from.dxMm,
-        minY: wasMinY + from.dyMm,
-        maxX: wasMinX + from.dxMm + was.widthMm,
-        maxY: wasMinY + from.dyMm + was.depthMm,
-      };
+    const shifts = relaidPlateShifts({
+      before,
+      after,
+      models,
+      footprint: { widthMm, depthMm, originMode },
+      ordering: plateOrderingRef.current,
+      laidOut: options?.laidOut,
+      wasOrdering: options?.wasOrdering,
     });
-
     if (shifts.size === 0) return models as LoadedModel[];
 
     return models.map((model) => {
-      const { x, y } = model.transform.position;
-      const frame = frames.find(
-        (candidate) => x >= candidate.minX && x <= candidate.maxX && y >= candidate.minY && y <= candidate.maxY,
-      );
-      const shift = frame ? shifts.get(frame.id) : undefined;
+      const shift = shifts.get(model.id);
       if (!shift) return model;
-
       return {
         ...model,
         transform: {
@@ -8504,6 +8473,33 @@ export function useSceneCollectionManager(options?: {
       };
     });
   }, [view3dSettings]);
+
+  /**
+   * Lay the beds out as `next` and move what stands on them: each model by how far its own
+   * bed moved, its supports by the same move, and the refs as well as the state, because a
+   * caller may place models from the same lists in this same tick. Every relayout goes
+   * through here, so none can move the models and leave their supports behind (#926).
+   *
+   * Returns the models before and after, for a caller that records a history step.
+   */
+  const relayPlates = useCallback((
+    next: ScenePlate[],
+    options?: PlateRelayoutOptions,
+  ): { modelsBefore: LoadedModel[]; shiftedModels: LoadedModel[] } => {
+    const current = platesRef.current;
+    const modelsBefore = modelsRef.current;
+    const shiftedModels = modelsShiftedForRelaidPlates(current, next, modelsBefore, options);
+    if (next !== current) {
+      platesRef.current = next;
+      setPlates(next);
+    }
+    if (shiftedModels !== modelsBefore) {
+      shiftSupportsWithModels(modelsBefore, shiftedModels);
+      modelsRef.current = shiftedModels;
+      setModels(shiftedModels);
+    }
+    return { modelsBefore, shiftedModels };
+  }, [modelsShiftedForRelaidPlates]);
 
   /**
    * The build volume the beds were last laid out on.
@@ -8535,25 +8531,16 @@ export function useSceneCollectionManager(options?: {
     if (!printerChanged && !footprintChanged) return;
 
     const currentPlates = platesRef.current;
-    const modelsBefore = modelsRef.current;
-    const supportStateBefore = supportStateFor(modelsBefore);
-    const shiftedModels = modelsShiftedForRelaidPlates(
-      currentPlates,
-      currentPlates,
-      modelsBefore,
-      {
-        laidOut: {
-          widthMm: previous.widthMm,
-          depthMm: previous.depthMm,
-          originMode: view3dSettings.originMode,
-        },
+    const supportStateBefore = supportStateFor(modelsRef.current);
+    const { modelsBefore, shiftedModels } = relayPlates(currentPlates, {
+      laidOut: {
+        widthMm: previous.widthMm,
+        depthMm: previous.depthMm,
+        originMode: view3dSettings.originMode,
       },
-    );
+    });
 
     if (shiftedModels !== modelsBefore) {
-      shiftSupportsWithModels(modelsBefore, shiftedModels);
-      modelsRef.current = shiftedModels;
-      setModels(shiftedModels);
       // The bed being worked on moved with the others, so the view comes along the way it
       // does when you pick a bed.
       setPlateViewRunId((id) => id + 1);
@@ -8582,8 +8569,8 @@ export function useSceneCollectionManager(options?: {
     );
   }, [
     activePrinterProfile,
-    modelsShiftedForRelaidPlates,
     pushSceneSnapshotHistory,
+    relayPlates,
     view3dSettings.depthMm,
     view3dSettings.originMode,
     view3dSettings.widthMm,
@@ -8607,57 +8594,12 @@ export function useSceneCollectionManager(options?: {
     const currentPlates = platesRef.current;
     if (currentPlates.length <= 1) return;
 
-    const modelsBefore = modelsRef.current;
-    const shiftedModels = modelsShiftedForRelaidPlates(currentPlates, currentPlates, modelsBefore, {
-      wasOrdering: previous,
-    });
+    const { modelsBefore, shiftedModels } = relayPlates(currentPlates, { wasOrdering: previous });
     if (shiftedModels === modelsBefore) return;
 
-    shiftSupportsWithModels(modelsBefore, shiftedModels);
-    modelsRef.current = shiftedModels;
-    setModels(shiftedModels);
     // The bed being worked on moved with the others, so the view comes along.
     setPlateViewRunId((id) => id + 1);
-  }, [modelsShiftedForRelaidPlates, plateOrdering]);
-
-  const addPlate = useCallback((options?: { pushHistory?: boolean }): string => {
-    const plate: ScenePlate = { id: uuidv4(), name: '' };
-    const current = platesRef.current;
-    const next = [...current, plate];
-    const modelsBefore = modelsRef.current;
-    const shiftedModels = modelsShiftedForRelaidPlates(current, next, modelsBefore);
-
-    if (options?.pushHistory === false) {
-      setPlates(next);
-      if (shiftedModels !== modelsBefore) {
-        shiftSupportsWithModels(modelsBefore, shiftedModels);
-        setModels(shiftedModels);
-      }
-      return plate.id;
-    }
-
-    const supportStateBefore = supportStateFor(modelsBefore);
-    const before = captureSceneSnapshot(modelsBefore, activeModelIdRef.current, selectedModelIdsRef.current, {
-      plates: current,
-      activePlateId: activePlateIdRef.current,
-      includeSupportState: supportStateBefore !== undefined,
-      supportStateOverride: supportStateBefore,
-    });
-
-    setPlates(next);
-    if (shiftedModels !== modelsBefore) {
-      shiftSupportsWithModels(modelsBefore, shiftedModels);
-      setModels(shiftedModels);
-    }
-
-    const after = captureSceneSnapshot(shiftedModels, activeModelIdRef.current, selectedModelIdsRef.current, {
-      plates: next,
-      activePlateId: activePlateIdRef.current,
-      includeSupportState: supportStateBefore !== undefined,
-    });
-    pushSceneSnapshotHistory(before, after, addPlateLabel(next.length));
-    return plate.id;
-  }, [modelsShiftedForRelaidPlates, pushSceneSnapshotHistory]);
+  }, [plateOrdering, relayPlates]);
 
   /**
    * Drops beds from the scene without touching what stands on them.
@@ -8678,24 +8620,16 @@ export function useSceneCollectionManager(options?: {
     const remaining = current.filter((plate) => !doomed.has(plate.id));
     if (remaining.length === current.length || remaining.length === 0) return current;
 
-    const shiftedModels = modelsShiftedForRelaidPlates(current, remaining, modelsRef.current);
-    // The refs as well as the state: an arrange places its models from the same lists in the
-    // same tick, and a bed list or a model left stale would be placed against the wrong
-    // cascade.
-    platesRef.current = remaining;
-    setPlates(remaining);
-    if (shiftedModels !== modelsRef.current) {
-      shiftSupportsWithModels(modelsRef.current, shiftedModels);
-      modelsRef.current = shiftedModels;
-      setModels(shiftedModels);
-    }
+    // An arrange places its models from the same lists in the same tick, which is why
+    // `relayPlates` refreshes the refs and not only the state.
+    relayPlates(remaining);
     if (doomed.has(activePlateIdRef.current)) {
       setActivePlateId(remaining[0].id);
       setPlateViewRunId((id) => id + 1);
     }
 
     return remaining;
-  }, [modelsShiftedForRelaidPlates]);
+  }, [relayPlates]);
 
   /**
    * Add `count` empty beds after the last one, and report the scene's beds with the frame
@@ -8723,17 +8657,9 @@ export function useSceneCollectionManager(options?: {
       : [];
     const settled = addedPlates.length > 0 ? [...current, ...addedPlates] : current;
 
-    if (addedPlates.length > 0) {
-      const shiftedModels = modelsShiftedForRelaidPlates(current, settled, modelsRef.current);
-      setPlates(settled);
-      if (shiftedModels !== modelsRef.current) {
-        // The ref as well as the state: whatever asked for the beds places its models from
-        // the same list in this same tick, and a model left on the stale list would be
-        // dropped back to where its bed used to be.
-        modelsRef.current = shiftedModels;
-        setModels(shiftedModels);
-      }
-    }
+    // Whatever asked for the beds places its models from the same lists in this same tick,
+    // which is why `relayPlates` refreshes the refs and not only the state.
+    if (addedPlates.length > 0) relayPlates(settled);
 
     const offsets = new Map<string, { dxMm: number; dyMm: number }>();
     settled.forEach((plate, index) => {
@@ -8741,8 +8667,36 @@ export function useSceneCollectionManager(options?: {
     });
 
     return { plates: settled, added: addedPlates, offsets };
-  }, [modelsShiftedForRelaidPlates, view3dSettings.depthMm, view3dSettings.widthMm]);
+  }, [relayPlates, view3dSettings.depthMm, view3dSettings.widthMm]);
   addPlatesRef.current = addPlates;
+
+  /**
+   * Add an empty plate after the last one, as its own history step. The plate being worked
+   * on does not change: adding a bed is not a reason to leave the one you are on.
+   */
+  const addPlate = useCallback((options?: { pushHistory?: boolean }): string => {
+    if (options?.pushHistory === false) return addPlates(1).added[0].id;
+
+    const platesBefore = platesRef.current;
+    const modelsBefore = modelsRef.current;
+    const supportStateBefore = supportStateFor(modelsBefore);
+    const before = captureSceneSnapshot(modelsBefore, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: platesBefore,
+      activePlateId: activePlateIdRef.current,
+      includeSupportState: supportStateBefore !== undefined,
+      supportStateOverride: supportStateBefore,
+    });
+
+    const { plates: next, added } = addPlates(1);
+
+    const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: next,
+      activePlateId: activePlateIdRef.current,
+      includeSupportState: supportStateBefore !== undefined,
+    });
+    pushSceneSnapshotHistory(before, after, addPlateLabel(next.length));
+    return added[0].id;
+  }, [addPlates, pushSceneSnapshotHistory]);
 
   const activatePlate = useCallback((plateId: string) => {
     if (!platesRef.current.some((plate) => plate.id === plateId)) return;
@@ -8812,14 +8766,7 @@ export function useSceneCollectionManager(options?: {
 
     // The beds after it move up a slot, and their models and supports with them; the doomed
     // models stay put for the delete below to find.
-    const shiftedModels = modelsShiftedForRelaidPlates(current, remaining, modelsRef.current);
-    platesRef.current = remaining;
-    setPlates(remaining);
-    if (shiftedModels !== modelsRef.current) {
-      shiftSupportsWithModels(modelsRef.current, shiftedModels);
-      modelsRef.current = shiftedModels;
-      setModels(shiftedModels);
-    }
+    relayPlates(remaining);
     setActivePlateId(nextActivePlateId);
     // Deleting the bed being worked on moves to another one, and the view comes with
     // it — the same slide picking a bed gives, rather than leaving the camera where the
@@ -8845,7 +8792,7 @@ export function useSceneCollectionManager(options?: {
     });
 
     return true;
-  }, [deleteModels, modelsShiftedForRelaidPlates, pushSceneSnapshotHistory]);
+  }, [deleteModels, pushSceneSnapshotHistory, relayPlates]);
 
   /**
    * Delete the models *and* every bed but the first.

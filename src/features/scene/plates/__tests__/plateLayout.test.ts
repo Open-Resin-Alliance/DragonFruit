@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DYNAMIC_PLATE_ORDERING } from '../plateCascade';
+import { DYNAMIC_PLATE_ORDERING, type PlateOrdering } from '../plateCascade';
 import {
   computePlateFrames,
   modelsOnPlate,
   plateLocalRect,
+  relaidPlateShifts,
   plateSliceScope,
   resolveModelPlateId,
   withPlateMembership,
@@ -75,4 +76,94 @@ test('a slice scope carries the plate\'s models, volume and offset', () => {
     volumeBoundsMm: { minX: frames[1].minX, minY: frames[1].minY, maxX: frames[1].maxX, maxY: frames[1].maxY },
     offsetMm: { dxMm: 242.88, dyMm: 0 },
   });
+});
+
+/** Freeze a fixture all the way down, so a rule that writes to its input throws (ADR-0045). */
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !ArrayBuffer.isView(value)) {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+const plateIds = (count: number) => Array.from({ length: count }, (_, i) => ({ id: `p${i + 1}` }));
+const centreOf = (frame: { minX: number; maxX: number; minY: number; maxY: number }) => ({
+  x: (frame.minX + frame.maxX) / 2,
+  y: (frame.minY + frame.maxY) / 2,
+});
+const FIXED_3: PlateOrdering = { mode: 'fixed', columns: 3 };
+
+test('adding a bed that widens the grid moves the models on the beds it re-lays', () => {
+  const four = plateIds(4);
+  const five = [...four, { id: 'p5' }];
+  const was = computePlateFrames({ plates: four, footprint, ordering: DYNAMIC_PLATE_ORDERING });
+  const now = computePlateFrames({ plates: five, footprint, ordering: DYNAMIC_PLATE_ORDERING });
+  const models = deepFreeze([
+    at('on1', centreOf(was[0]).x, centreOf(was[0]).y),
+    at('on3', centreOf(was[2]).x, centreOf(was[2]).y),
+    at('off', -1000, -1000),
+  ]);
+
+  const shifts = relaidPlateShifts({
+    before: deepFreeze(four), after: deepFreeze(five), models, footprint, ordering: DYNAMIC_PLATE_ORDERING,
+  });
+
+  // A 2x2 grid becomes 3x2: the third bed goes from the second row to the end of the first.
+  assert.deepEqual([...shifts.keys()], ['on3'], 'the first bed never moves, and a model on no bed stays put');
+  assert.deepEqual(shifts.get('on3'), { dxMm: now[2].dxMm - was[2].dxMm, dyMm: now[2].dyMm - was[2].dyMm });
+});
+
+test('removing a bed moves the ones after it a slot down, by id, and leaves its own models', () => {
+  const three = plateIds(3);
+  const remaining = [three[0], three[2]];
+  const was = computePlateFrames({ plates: three, footprint, ordering: FIXED_3 });
+  const models = deepFreeze([
+    at('on2', centreOf(was[1]).x, centreOf(was[1]).y),
+    at('on3', centreOf(was[2]).x, centreOf(was[2]).y),
+  ]);
+
+  const shifts = relaidPlateShifts({ before: three, after: remaining, models, footprint, ordering: FIXED_3 });
+
+  assert.deepEqual([...shifts.keys()], ['on3'], 'the removed bed takes its model with it');
+  assert.deepEqual(shifts.get('on3'), { dxMm: was[1].dxMm - was[2].dxMm, dyMm: was[1].dyMm - was[2].dyMm });
+});
+
+test('a new build volume moves every bed but the first, and the models with them', () => {
+  const two = plateIds(2);
+  const smaller = { widthMm: 150, depthMm: 90, originMode: 'center' as const };
+  const was = computePlateFrames({ plates: two, footprint, ordering: FIXED_3 });
+  const now = computePlateFrames({ plates: two, footprint: smaller, ordering: FIXED_3 });
+  const models = deepFreeze([at('on2', centreOf(was[1]).x, centreOf(was[1]).y)]);
+
+  const shifts = relaidPlateShifts({
+    before: two, after: two, models, footprint: smaller, ordering: FIXED_3, laidOut: footprint,
+  });
+
+  assert.deepEqual(shifts.get('on2'), { dxMm: now[1].dxMm - was[1].dxMm, dyMm: 0 });
+});
+
+test('a new ordering moves the models from the grid they were laid out on', () => {
+  const four = plateIds(4);
+  const was = computePlateFrames({ plates: four, footprint, ordering: FIXED_3 });
+  const now = computePlateFrames({ plates: four, footprint, ordering: DYNAMIC_PLATE_ORDERING });
+  const models = deepFreeze(was.map((frame, i) => at(`on${i + 1}`, centreOf(frame).x, centreOf(frame).y)));
+
+  const shifts = relaidPlateShifts({
+    before: four, after: four, models, footprint, ordering: DYNAMIC_PLATE_ORDERING, wasOrdering: FIXED_3,
+  });
+
+  for (const [i, frame] of was.entries()) {
+    const moved = { dxMm: now[i].dxMm - frame.dxMm, dyMm: now[i].dyMm - frame.dyMm };
+    if (moved.dxMm === 0 && moved.dyMm === 0) assert.equal(shifts.has(`on${i + 1}`), false);
+    else assert.deepEqual(shifts.get(`on${i + 1}`), moved);
+  }
+  assert.ok(shifts.size > 0, 'the two grids differ for four beds');
+});
+
+test('a scene left with one bed has nothing to re-lay', () => {
+  const two = plateIds(2);
+  const was = computePlateFrames({ plates: two, footprint, ordering: FIXED_3 });
+  const models = deepFreeze([at('on1', centreOf(was[0]).x, centreOf(was[0]).y)]);
+  assert.equal(relaidPlateShifts({ before: two, after: [two[0]], models, footprint, ordering: FIXED_3 }).size, 0);
 });

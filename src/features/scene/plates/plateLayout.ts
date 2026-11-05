@@ -154,3 +154,68 @@ export function plateSliceScope<M extends PlateMember & { id: string }>(
     offsetMm: { dxMm: frame.dxMm, dyMm: frame.dyMm },
   };
 }
+
+/** How far one model moves in a relayout, in millimetres. */
+export interface PlateShift {
+  dxMm: number;
+  dyMm: number;
+}
+
+/**
+ * How far each model moves when the beds are re-laid, by model id. Models that stay
+ * put are left out, so an empty map means nothing moves.
+ *
+ * Plates are numbered by position, so adding or removing one can shuffle the plates
+ * already placed. A model left where its bed used to be would quietly belong to
+ * whichever plate now covers that spot, so each one moves by exactly how far its own
+ * plate moved, matched by id: a bed taken out of the middle moves every one after it
+ * a slot down. A bed that is gone takes its models with it, so they do not move. A
+ * model on no plate stays where it was put: it was dragged off a bed deliberately.
+ *
+ * The beds are spaced by their own footprint, so the same shift applies when the
+ * build volume or the ordering changes under them. `laidOut` and `wasOrdering` are
+ * what the beds were placed with then, which is what the models' positions are
+ * still measured against; each defaults to the current one.
+ */
+export function relaidPlateShifts({
+  before,
+  after,
+  models,
+  footprint,
+  ordering,
+  laidOut = footprint,
+  wasOrdering = ordering,
+}: {
+  before: readonly { id: string }[];
+  after: readonly { id: string }[];
+  models: readonly (PlateMember & { id: string })[];
+  footprint: PlateFootprint;
+  ordering: PlateOrdering;
+  laidOut?: PlateFootprint;
+  wasOrdering?: PlateOrdering;
+}): Map<string, PlateShift> {
+  const shifts = new Map<string, PlateShift>();
+  if (after.length <= 1) return shifts;
+
+  const wasFrames = computePlateFrames({ plates: before, footprint: laidOut, ordering: wasOrdering });
+  const nowFrames = new Map(
+    computePlateFrames({ plates: after, footprint, ordering }).map((frame) => [frame.id, frame]),
+  );
+  const plateShifts = new Map<string, PlateShift>();
+  for (const was of wasFrames) {
+    const now = nowFrames.get(was.id);
+    if (!now || (now.dxMm === was.dxMm && now.dyMm === was.dyMm)) continue;
+    plateShifts.set(was.id, { dxMm: now.dxMm - was.dxMm, dyMm: now.dyMm - was.dyMm });
+  }
+  if (plateShifts.size === 0) return shifts;
+
+  for (const model of models) {
+    const { x, y } = model.transform.position;
+    const frame = wasFrames.find(
+      (candidate) => x >= candidate.minX && x <= candidate.maxX && y >= candidate.minY && y <= candidate.maxY,
+    );
+    const shift = frame ? plateShifts.get(frame.id) : undefined;
+    if (shift) shifts.set(model.id, shift);
+  }
+  return shifts;
+}
