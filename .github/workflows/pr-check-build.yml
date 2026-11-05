@@ -72,36 +72,14 @@ jobs:
           toolchain: ${{ steps.rust_toolchain.outputs.channel }}
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Check for Apple signing secret
-        id: apple_cert
-        shell: bash
-        run: echo "available=${{ secrets.APPLE_CERTIFICATE != '' }}" >> "$GITHUB_OUTPUT"
-
-      - name: Install Apple Certificate
-        if: steps.apple_cert.outputs.available == 'true'
-        uses: apple-actions/import-codesign-certs@v7
-        with:
-          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
-          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASS }}
-
-      - name: Fall back to ad-hoc signing if Developer ID cert is unavailable
-        shell: bash
-        run: |
-          if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application: Pascal Krumme (MHNF3GA2MM)"; then
-            echo "⚠️ Developer ID certificate not found in keychain — falling back to ad-hoc signing"
-            node -e "
-              const fs = require('fs');
-              const p = 'src-tauri/tauri.macos.conf.json';
-              const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
-              cfg.bundle.macOS.signingIdentity = '-';
-              fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
-            "
-          else
-            echo "✅ Developer ID certificate available — using full codesigning"
-          fi
-
-      - name: Export Apple Team ID for notarization
-        run: echo "APPLE_TEAM_ID=MHNF3GA2MM" >> "$GITHUB_ENV"
+      - name: Use ad-hoc signing
+        # A check build is not a release: it never imports the Developer ID
+        # certificate and never notarizes, so a push to a pull request costs
+        # nothing and the certificate stays out of a job that runs unreviewed
+        # code. Ad-hoc keeps the bundle loadable on Apple Silicon — Tauri skips
+        # signing altogether when no identity is configured, and an unsigned
+        # .app does not launch there.
+        run: node scripts/use-adhoc-macos-signing.mjs
 
       # `swatinem/rust-cache` hashes every toolchain `rustup` lists, not only the
       # one the build uses, and the runner image ships its own `stable` (1.98.1
@@ -157,24 +135,6 @@ jobs:
         run: |
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
           echo "commit_hash=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Export Apple notarization credentials for preview builds
-        # Also gated on the certificate, not just the label. Without a Developer
-        # ID the build falls back to ad-hoc signing, which Apple will not
-        # notarize at all — and exporting an empty APPLE_ID is worse than
-        # exporting none: tauri-action reads the variable being set as "notarize
-        # this", tries to authenticate with nothing, and fails the build with an
-        # HTTP 401. Same reason as the TAURI_SIGNING_PRIVATE_KEY guard below.
-        if: >-
-          steps.apple_cert.outputs.available == 'true' &&
-          contains(github.event.pull_request.labels.*.name, 'preview-build')
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-        run: |
-          echo "APPLE_ID=$APPLE_ID" >> "$GITHUB_ENV"
-          echo "APPLE_PASSWORD=$APPLE_PASSWORD" >> "$GITHUB_ENV"
-          echo "APPLE_TEAM_ID=MHNF3GA2MM" >> "$GITHUB_ENV"
 
       - name: Generate plugin registry
         run: node scripts/generate-plugin-registry.mjs
@@ -241,10 +201,6 @@ jobs:
           args: --target ${{ env.DF_BUILD_TARGET_TRIPLE }} --bundles app,dmg
 
       - name: Embed QuickLook extension + verify universal bundle
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: MHNF3GA2MM
         run: |
           if [ "${{ env.DF_BUILD_TARGET_TRIPLE }}" = "universal-apple-darwin" ]; then
             node scripts/macos-embed-appex.mjs --target universal-apple-darwin

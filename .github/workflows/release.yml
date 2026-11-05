@@ -211,7 +211,9 @@ jobs:
             df_build_triple: universal-apple-darwin
           - platform: windows-latest
             build_kind: tauri
-            args: --target x86_64-pc-windows-msvc --bundles nsis,msi
+            # The signing overlay is CI-only: it points `bundle.windows.signCommand`
+            # at Azure Artifact Signing, which a local build has no credentials for.
+            args: --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.windows-signing.conf.json
             artifact_name: dragonfruit-windows-x64
           - platform: ubuntu-22.04
             build_kind: flatpak
@@ -220,6 +222,9 @@ jobs:
     permissions:
       actions: write
       contents: write
+      # Windows code signing logs in to Azure with the workflow's OIDC token;
+      # the federated credential is what replaces a stored client secret.
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -316,6 +321,27 @@ jobs:
           git config --system core.longpaths true
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
 
+      # Windows installers are signed with Azure Artifact Signing. The login is
+      # OIDC: no client secret is stored, the federated credential on the app
+      # registration trusts this repository and ref. `scripts/sign-windows.ps1`
+      # then picks the login up through DefaultAzureCredential's CLI credential.
+      - name: Azure login (Artifact Signing)
+        if: matrix.platform == 'windows-latest'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # The same PowerShell module `azure/artifact-signing-action` installs;
+      # it is invoked per file from the Tauri bundler instead of once over a
+      # folder, so the signature lands before the updater artifacts are made.
+      - name: Install the Artifact Signing module
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
+
       - name: Build Tauri bundle
         if: matrix.build_kind == 'tauri'
         uses: tauri-apps/tauri-action@v0
@@ -328,6 +354,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: MHNF3GA2MM
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
         with:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
@@ -336,6 +365,26 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/verify-windows-bundles.ps1
+
+      # A release that silently ships unsigned installers is worse than a
+      # failed one: SmartScreen would warn on every download and nothing in the
+      # pipeline would say why.
+      - name: Verify Windows binaries are signed
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $target = 'src-tauri/target/x86_64-pc-windows-msvc/release'
+          $files = @(
+            Get-Item "$target/dragonfruit-desktop.exe"
+            Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe', '*.msi'
+          )
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne 'Valid') {
+              throw "$($file.Name) is not validly signed (status: $($signature.Status))."
+            }
+            Write-Host "$($file.Name): $($signature.SignerCertificate.Subject)"
+          }
 
       - name: Embed QuickLook extension + verify universal bundle
         if: matrix.platform == 'macos-latest'
