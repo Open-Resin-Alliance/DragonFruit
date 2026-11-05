@@ -20,6 +20,7 @@ export const SITE = {
 export const LINKS = {
   org: 'https://openresin.org',
   github: 'https://github.com/Open-Resin-Alliance/DragonFruit',
+  contributors: 'https://github.com/Open-Resin-Alliance/DragonFruit/graphs/contributors',
   releases: 'https://github.com/Open-Resin-Alliance/DragonFruit/releases',
   issues: 'https://github.com/Open-Resin-Alliance/DragonFruit/issues',
   license: 'https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/LICENSE',
