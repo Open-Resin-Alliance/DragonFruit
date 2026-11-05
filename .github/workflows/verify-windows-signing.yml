@@ -1,0 +1,168 @@
+name: Windows release build (signing check)
+
+# Builds the Windows release exactly as `release.yml` does — same profile, same
+# target, same bundles, same signing overlay — signs it with Azure Artifact
+# Signing, and uploads the signed installers as a workflow artifact. Nothing is
+# tagged, published or released.
+#
+# Manual only, on purpose: it costs a full release compile, so it is for
+# checking the signing setup after touching the certificate, the federated
+# credential, the account or the overlay — not something to run per push.
+#
+# The build steps mirror the `windows-latest` leg of `release.yml`. Keep them in
+# step: a check that drifts from the release build stops proving anything.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: windows-signing-check
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Signed Windows release build
+    runs-on: windows-latest
+    timeout-minutes: 120
+    # The shipped profile, stated here as well as in Cargo.toml so that
+    # `swatinem/rust-cache` keys on it (see `env-vars` below). The two empty
+    # platform variables are here only because the release job lists them in
+    # `env-vars`; leaving them out would change the cache key and rebuild every
+    # crate from scratch.
+    env:
+      CARGO_PROFILE_RELEASE_LTO: fat
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
+      CMAKE_OSX_ARCHITECTURES: ""
+      DF_BUILD_TARGET_TRIPLE: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # Pinned, not `@stable`: the floating channel is what churns the Rust cache
+      # key (see warm-rust-cache.yml).
+      - name: Read the pinned Rust toolchain
+        id: rust_toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust_toolchain.outputs.channel }}
+
+      # `swatinem/rust-cache` hashes every toolchain `rustup` lists, not only the
+      # one the build uses, and the runner image ships its own `stable`. Pinning
+      # the channel alone leaves the key to move whenever the image moves that
+      # one; removing the rest leaves the pinned toolchain as the only Rust input
+      # to the key.
+      - name: Drop the runner's other Rust toolchains
+        shell: bash
+        env:
+          PINNED: ${{ steps.rust_toolchain.outputs.channel }}
+        run: |
+          rustup default "$PINNED"
+          rustup toolchain list | awk '{print $1}' | while read -r tc; do
+            case "$tc" in
+              "$PINNED"-* | system) ;;
+              *) rustup toolchain uninstall "$tc" || echo "::warning::could not uninstall $tc" ;;
+            esac
+          done
+          rustup toolchain list
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            ./src-tauri -> target
+            ./rust/dragonfruit-voxl-thumbnail -> target
+          shared-key: tauri
+          # Same list as the release job, so the two share one cache entry.
+          env-vars: CARGO_PROFILE_RELEASE_LTO CARGO_PROFILE_RELEASE_CODEGEN_UNITS DF_BUILD_TARGET_TRIPLE CMAKE_OSX_ARCHITECTURES
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Cache Next.js build
+        uses: actions/cache@v6
+        with:
+          path: .next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('src/**/*.ts', 'src/**/*.tsx', 'next.config.ts', 'tsconfig.json') }}
+          restore-keys: |
+            next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+
+      - name: Enable Windows long paths
+        run: |
+          git config --system core.longpaths true
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
+
+      - name: Azure login (Artifact Signing)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install the Artifact Signing module
+        shell: pwsh
+        run: |
+          Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
+
+      - name: Build Tauri bundle
+        uses: tauri-apps/tauri-action@v0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+        with:
+          tauriScript: npx tauri
+          args: --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.windows-signing.conf.json
+
+      - name: Verify Windows installer runtime payloads
+        shell: pwsh
+        run: ./scripts/verify-windows-bundles.ps1
+
+      # The point of the run: if the certificate profile, the role assignment or
+      # the federated credential is wrong, the build above fails; if it silently
+      # produced unsigned binaries, this does.
+      - name: Verify Windows binaries are signed
+        shell: pwsh
+        run: |
+          $target = 'src-tauri/target/x86_64-pc-windows-msvc/release'
+          $files = @(
+            Get-Item "$target/dragonfruit-desktop.exe"
+            Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe', '*.msi'
+          )
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne 'Valid') {
+              throw "$($file.Name) is not validly signed (status: $($signature.Status))."
+            }
+            if (-not $signature.TimeStamperCertificate) {
+              throw "$($file.Name) is signed but not timestamped; the signature dies with the certificate."
+            }
+            Write-Host "$($file.Name): $($signature.SignerCertificate.Subject)"
+          }
+
+      - name: Upload signed installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: dragonfruit-windows-x64-signed
+          path: |
+            src-tauri/target/*/release/bundle/nsis/*
+            src-tauri/target/*/release/bundle/msi/*
+          if-no-files-found: error
