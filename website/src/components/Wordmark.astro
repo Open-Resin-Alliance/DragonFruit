@@ -1,12 +1,15 @@
 ---
 import raw from '../assets/wordmark.svg?raw';
+import { SITE } from '../data/site';
 
 interface Props {
   /** The rendered width. The SVG keeps its aspect ratio. */
   size?: string;
+  /** The heading or link around it already names the site, so the drawing is decoration. */
+  decorative?: boolean;
 }
 
-const { size = 'min(420px, 78vw)' } = Astro.props;
+const { size = 'min(420px, 78vw)', decorative = false } = Astro.props;
 
 /**
  * The DragonFruit wordmark, inlined so its letterforms can follow the theme.
@@ -26,7 +29,13 @@ const svg = raw
   .replace('<svg ', '<svg aria-hidden="true" ');
 ---
 
-<span class="wordmark" style={`--wordmark-size: ${size}`} role="img" aria-label="DragonFruit">
+<span
+  class="wordmark"
+  style={`--wordmark-size: ${size}`}
+  role={decorative ? undefined : 'img'}
+  aria-label={decorative ? undefined : SITE.name}
+  aria-hidden={decorative ? 'true' : undefined}
+>
   <Fragment set:html={svg} />
 </span>
 

@@ -1,7 +1,13 @@
 export const SITE = {
-  name: 'DragonFruit',
-  /** The name Google Search should use for the site, not the app's short name. */
-  siteName: 'DragonFruit Resin Slicer',
+  /**
+   * The name the site calls itself, in the header, in every `<title>` and in the
+   * structured data. Google Search only picks a site name when the home page is
+   * consistent about it: while the title and headings said "DragonFruit" and the
+   * structured data said "DragonFruit Resin Slicer", it fell back to the hostname.
+   */
+  name: 'DragonFruit Slicer',
+  /** The name Google Search should use for the site. Must match `name`. */
+  siteName: 'DragonFruit Slicer',
   /** What the project says about itself, in the hero and again in the footer. */
   motto:
     'From the community, for the community. Free to use, open to contribute, and shaped by the people who print with it.',

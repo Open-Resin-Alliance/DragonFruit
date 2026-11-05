@@ -49,7 +49,7 @@ const website = {
   '@context': 'https://schema.org',
   '@type': 'WebSite',
   name: SITE.siteName,
-  alternateName: ['DragonFruit', 'DragonFruit Slicer'],
+  alternateName: ['DragonFruit', 'DragonFruit Resin Slicer', 'dragonfruit-slicer.com'],
   url: new URL('/', Astro.site).href,
 };
 ---
@@ -65,12 +65,15 @@ const website = {
     {noindex && <meta name="robots" content="noindex" />}
     <meta name="generator" content={Astro.generator} />
 
-    {/* Google Search only accepts bitmap favicons (PNG, ICO, …), so the PNG is
-        listed first and the SVG follows for browsers that can use it. The ICO is
-        what browsers and OS shortcuts probe when they never parse this head. The
+    {/* The icon has two forms. A browser tab shows the bare emblem — the SVG, and
+        the 16/32/48 frames in the ICO — the same thing openresin.org shows. Google
+        only accepts bitmap favicons and serves the largest one a page declares, on a
+        white card where the bare mark disappears, so the tiled PNGs are declared for
+        it. 384 and 192 are multiples of 48, the size grid Google asks for. The
         manifest is what names the site in Chrome's UI, off the search index. */}
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
-    <link rel="icon" href="/favicon.png" type="image/png" sizes="512x512" />
+    <link rel="icon" href="/favicon-384.png" type="image/png" sizes="384x384" />
+    <link rel="icon" href="/favicon-192.png" type="image/png" sizes="192x192" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
