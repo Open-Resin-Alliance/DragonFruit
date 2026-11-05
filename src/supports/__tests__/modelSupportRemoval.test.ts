@@ -2,86 +2,15 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { modelCascadeSeeds, withoutModelSupports } from '../PlacementLogic/SupportModelLinker';
-import { getSnapshot, removeSupportEntitiesForModels, resetStore, setSnapshot } from '../state';
-import { IMPORT_PAYLOAD_COLLECTION_ORDER, importPayloadCollections } from '../supportCollections';
+import { IMPORT_PAYLOAD_COLLECTION_ORDER } from '../supportCollections';
 import { SUPPORT_TYPES, type SupportCollectionKey } from '../supportTypeRegistry';
-import type { DragonfruitImportFormat, SupportState } from '../types';
+import { idsOf, payloadOf, storeIdsAfterRemoving, supportsOf } from './helpers/modelSupportFixtures';
 
 /**
  * Removing a model's supports from the file's arrays and from the store is one
  * rule (ADR-0045). The fixture holds one support of every type, so a new type
  * has to be added here, and the parity test holds the CLI's path to the app's.
  */
-
-const seg = (id: string) => ({
-    id,
-    diameter: 1,
-    bottomJoint: { id: `${id}-bj`, pos: { x: 0, y: 0, z: 0 }, diameter: 1 },
-    topJoint: { id: `${id}-tj`, pos: { x: 0, y: 0, z: 4 }, diameter: 1 },
-});
-
-const knot = (id: string, parentShaftId: string) => ({ id, parentShaftId, pos: { x: 0, y: 0, z: 2 } });
-
-/** One support of every type on `model`, each with the knots and root it needs. */
-function supportsOf(model: string) {
-    const segment = `${model}-seg`;
-    const kickstandRoot = { id: `${model}-kick-root`, modelId: model };
-    const kickstandKnot = knot(`${model}-kick-knot`, segment);
-    return {
-        roots: [{ id: `${model}-root`, modelId: model }, kickstandRoot],
-        trunks: [{ id: `${model}-trunk`, modelId: model, rootId: `${model}-root`, segments: [seg(segment)] }],
-        branches: [{ id: `${model}-branch`, modelId: model, parentKnotId: `${model}-branch-knot`, segments: [seg(`${model}-branch-seg`)] }],
-        leaves: [{ id: `${model}-leaf`, modelId: model, parentKnotId: `${model}-leaf-knot` }],
-        twigs: [{ id: `${model}-twig`, modelId: model }],
-        sticks: [{ id: `${model}-stick`, modelId: model }],
-        braces: [{ id: `${model}-brace`, modelId: model, startKnotId: `${model}-brace-start`, endKnotId: `${model}-brace-end` }],
-        stumps: [{ id: `${model}-stump`, modelId: model }],
-        knots: [
-            knot(`${model}-branch-knot`, segment),
-            knot(`${model}-leaf-knot`, segment),
-            knot(`${model}-brace-start`, segment),
-            knot(`${model}-brace-end`, segment),
-            kickstandKnot,
-        ],
-        kickstands: [{
-            root: kickstandRoot,
-            hostKnot: kickstandKnot,
-            kickstand: {
-                id: `${model}-kick`,
-                modelId: model,
-                rootId: kickstandRoot.id,
-                hostKnotId: kickstandKnot.id,
-                hostSegmentId: segment,
-                segments: [],
-            },
-        }],
-    };
-}
-
-function payloadOf(...parts: ReturnType<typeof supportsOf>[]): DragonfruitImportFormat {
-    const payload: Record<string, unknown> = {
-        version: 1,
-        meta: { source: 'test', objectCenter: { x: 0, y: 0, z: 0 } },
-    };
-    for (const key of IMPORT_PAYLOAD_COLLECTION_ORDER) {
-        payload[key] = parts.flatMap((part) => part[key as keyof typeof part] as unknown[]);
-    }
-    return payload as unknown as DragonfruitImportFormat;
-}
-
-const kickstandEntityId = (entry: unknown) => (entry as { kickstand: { id: string } }).kickstand.id;
-
-/** Every id in a payload, per collection, sorted. */
-function idsOf(payload: DragonfruitImportFormat): Record<string, string[]> {
-    const ids: Record<string, string[]> = {};
-    for (const key of IMPORT_PAYLOAD_COLLECTION_ORDER) {
-        const list = (payload[key as keyof DragonfruitImportFormat] ?? []) as unknown[];
-        ids[key] = list
-            .map((entry) => (key === 'kickstands' ? kickstandEntityId(entry) : (entry as { id: string }).id))
-            .sort();
-    }
-    return ids;
-}
 
 describe('removing a model\'s supports', () => {
     it('has a fixture entity for every support type', () => {
@@ -177,26 +106,8 @@ describe('removing a model\'s supports', () => {
         const input = payloadOf(supportsOf('a'), supportsOf('b'));
         input.branches[1].parentKnotId = 'a-branch-knot';
 
-        // Written in directly: the fixture holds ids and edges, not the geometry
-        // `loadFromImportFormat` normalises, and the cascade reads only those.
-        resetStore();
-        const records = Object.fromEntries(IMPORT_PAYLOAD_COLLECTION_ORDER.map((key) => [
-            key,
-            Object.fromEntries(((input[key as keyof DragonfruitImportFormat] ?? []) as { id: string }[])
-                .filter(() => key !== 'kickstands')
-                .map((entity) => [entity.id, entity])),
-        ]));
-        records.kickstands = Object.fromEntries((input.kickstands ?? []).map(({ kickstand }) => [kickstand.id, kickstand]));
-        setSnapshot({ ...getSnapshot(), ...records } as SupportState);
-        removeSupportEntitiesForModels(['a']);
-        const store = importPayloadCollections(getSnapshot());
-
         const { payload } = withoutModelSupports({ payload: input, modelIds: ['a'] });
 
-        // The store holds kickstands as bare entities, the file in their wrapper.
-        const { kickstands, ...rest } = store;
-        const storeIds = idsOf({ ...input, ...rest, kickstands: [] } as DragonfruitImportFormat);
-        storeIds.kickstands = (kickstands as unknown as { id: string }[]).map((entry) => entry.id).sort();
-        assert.deepEqual(idsOf(payload), storeIds);
+        assert.deepEqual(idsOf(payload), storeIdsAfterRemoving(input, ['a']));
     });
 });
