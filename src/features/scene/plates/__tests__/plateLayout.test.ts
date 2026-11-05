@@ -5,6 +5,7 @@ import { DYNAMIC_PLATE_ORDERING, type PlateOrdering } from '../plateCascade';
 import {
   computePlateFrames,
   modelsOnPlate,
+  plateCanBeRemoved,
   plateLocalRect,
   relaidPlateShifts,
   plateSliceScope,
@@ -166,4 +167,12 @@ test('a scene left with one bed has nothing to re-lay', () => {
   const was = computePlateFrames({ plates: two, footprint, ordering: FIXED_3 });
   const models = deepFreeze([at('on1', centreOf(was[0]).x, centreOf(was[0]).y)]);
   assert.equal(relaidPlateShifts({ before: two, after: [two[0]], models, footprint, ordering: FIXED_3 }).size, 0);
+});
+
+test('any plate can be deleted, the first included, while another is left', () => {
+  const three = Object.freeze([{ id: 'p1' }, { id: 'p2' }, { id: 'p3' }].map((plate) => Object.freeze(plate)));
+  assert.equal(plateCanBeRemoved(three, 'p1'), true);
+  assert.equal(plateCanBeRemoved(three, 'p3'), true);
+  assert.equal(plateCanBeRemoved(three, 'nope'), false, 'a plate that is not there');
+  assert.equal(plateCanBeRemoved(Object.freeze([Object.freeze({ id: 'p1' })]), 'p1'), false, 'the last plate stays');
 });

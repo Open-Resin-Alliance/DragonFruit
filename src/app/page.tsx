@@ -253,7 +253,7 @@ import {
 } from '@/features/scene/arrange/highPrecisionArrange';
 import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
 import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
-import { modelsOnPlate } from '@/features/scene/plates/plateLayout';
+import { modelsOnPlate, plateCanBeRemoved } from '@/features/scene/plates/plateLayout';
 
 // Domain Features
 import { useSceneCollectionManager, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
@@ -808,8 +808,8 @@ export default function Home() {
   // Which bed refused, so the notice can name it. A refusal is not always about the
   // one being worked on: a row for another bed, or a drag landing on a locked bed.
   const [plateLockedNoticePlateId, setPlateLockedNoticePlateId] = React.useState<string | null>(null);
-  // What the plate bin is about to do: take the bed you are standing at, or — on
-  // the scene's first plate, which has to stay — only empty it.
+  // What the plate bin is about to do: take the bed you are standing at, or — when
+  // it is the only one left, which has to stay — only empty it.
   const [plateTrashIntent, setPlateTrashIntent] = React.useState<'delete' | 'clear' | null>(null);
   const plateLockedNoticeTimerRef = React.useRef<number | null>(null);
   const notifyPlateLockedRef = React.useRef<(plateId?: string) => void>(() => {});
@@ -11153,18 +11153,17 @@ export default function Home() {
             plateOrdering={scene.plateOrdering}
             plateLocked={scene.plateLocked}
             onTogglePlateLock={() => scene.setPlateLocked(!scene.plateLocked)}
-            plateClearTitle={scene.plates.length > 1 && scene.activePlateId !== scene.plates[0]?.id
+            plateClearTitle={plateCanBeRemoved(scene.plates, scene.activePlateId)
               ? _(msg({ message: 'Delete this plate', comment: 'Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.' }))
               : _(msg({ message: 'Clear build plate', comment: 'Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.' }))}
             onClearPlate={() => {
               const plateId = scene.activePlateId;
-              const isFirstPlate = plateId === scene.plates[0]?.id;
-              const intent = scene.plates.length > 1 && !isFirstPlate ? 'delete' : 'clear';
-              // An empty bed has nothing to lose, so it goes straight away; the
-              // confirmation is for the models a delete takes with it.
-              if (intent === 'delete'
-                && modelsOnPlate(scene.models, plateId, scene.plateFrames).length === 0) {
-                scene.removePlate(plateId);
+              const intent = plateCanBeRemoved(scene.plates, plateId) ? 'delete' : 'clear';
+              // An empty bed has nothing to lose: a delete takes it straight away, and
+              // a clear has nothing to do. The confirmation is for the models either
+              // one takes with it.
+              if (modelsOnPlate(scene.models, plateId, scene.plateFrames).length === 0) {
+                if (intent === 'delete') scene.removePlate(plateId);
                 return;
               }
               setPlateTrashIntent(intent);

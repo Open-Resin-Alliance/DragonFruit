@@ -121,6 +121,14 @@ export function withPlateMembership<M extends PlateMember>(
   return plateId ? { ...model, plateId } : model;
 }
 
+/**
+ * Whether a plate can be deleted. Any plate can, the first one included, as long
+ * as one is left to build on.
+ */
+export function plateCanBeRemoved(plates: readonly { id: string }[], plateId: string): boolean {
+  return plates.length > 1 && plates.some((plate) => plate.id === plateId);
+}
+
 /** The models standing on a plate, in their original order. */
 export function modelsOnPlate<M extends PlateMember>(
   models: readonly M[],
