@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { resolveObjectURL } from 'node:buffer';
 import test from 'node:test';
 import { useEffect } from 'react';
+import { getMultiPlateSettingsSnapshot, saveMultiPlateSettings } from '@/components/settings/multiPlatePreferences';
 import { clearHistory, undo } from '@/history/historyStore';
 import { getSnapshot as getSupportSnapshot, loadFromImportFormat, resetStore as resetSupportStore } from '@/supports/state';
 import { SUPPORT_COLLECTION_KEYS } from '@/supports/supportTypeRegistry';
@@ -78,7 +79,8 @@ async function waitFor(condition: () => boolean, label: string, timeoutMs = 10_0
   }
 }
 
-test('deleting a plate from the middle keeps every other model on its own plate', async () => {
+/** Mount the scene manager and hand back the probes both tests read it through. */
+async function mountScene() {
   const ref: { scene: Scene | null } = { scene: null };
   function Probe() {
     const scene = useSceneCollectionManager();
@@ -100,7 +102,6 @@ test('deleting a plate from the middle keeps every other model on its own plate'
     return scene().models[scene().models.length - 1].id;
   };
   const plateOf = (id: string) => scene().resolveModelPlateId(scene().models.find((m) => m.id === id)!);
-  const plateNames = () => scene().plates.map((plate) => plate.name);
   const positionOf = (id: string) => {
     const { x, y } = scene().models.find((m) => m.id === id)!.transform.position;
     return { x, y };
@@ -110,6 +111,17 @@ test('deleting a plate from the middle keeps every other model on its own plate'
     assert.ok(pos, `${id} still has its support`);
     return { x: pos.x, y: pos.y };
   };
+  const unmount = async () => {
+    await tree.unmount();
+    clearHistory();
+    resetSupportStore();
+  };
+  return { scene, loadCube, plateOf, positionOf, rootOf, unmount };
+}
+
+test('deleting a plate from the middle keeps every other model on its own plate', async () => {
+  const { scene, loadCube, plateOf, positionOf, rootOf, unmount } = await mountScene();
+  const plateNames = () => scene().plates.map((plate) => plate.name);
 
   try {
     const a = await loadCube('a.stl');
@@ -154,8 +166,46 @@ test('deleting a plate from the middle keeps every other model on its own plate'
     for (const [id, plateId] of Object.entries(placed)) assert.equal(plateOf(id), plateId, 'and undo puts them back');
     for (const id of [a, c, d]) assert.deepEqual(rootOf(id), rootsBefore[id], 'supports included');
   } finally {
-    await tree.unmount();
-    clearHistory();
+    await unmount();
+  }
+});
+
+test('adding beds in one go moves the supports of every model whose bed moves (#926)', async () => {
+  // The dynamic grid widens as beds are added, which re-lays the ones already there; the
+  // fixed grid only ever appends.
+  const orderingBefore = getMultiPlateSettingsSnapshot().plateOrdering;
+  saveMultiPlateSettings({ plateOrdering: 'dynamic' });
+  const { scene, loadCube, plateOf, positionOf, rootOf, unmount } = await mountScene();
+
+  try {
+    const a = await loadCube('a.stl');
+    const c = await loadCube('c.stl');
+    const plate1 = plateOf(a);
+    scene().addPlate();
+    await settle(20);
+    const plate3 = scene().addPlate();
+    await settle(20);
+    scene().addPlate();
+    await settle(20);
+    scene().moveModelsToPlate([c], plate3);
+    await settle(50);
+    assert.equal(plateOf(a), plate1, 'set up as described');
+    assert.equal(plateOf(c), plate3, 'set up as described');
     resetSupportStore();
+    loadFromImportFormat(rootsUnder([a, c].map((id) => ({ id, ...positionOf(id) }))));
+    const cBefore = positionOf(c);
+
+    // Four beds sit in a 2x2 grid; a fifth makes it 3x2, which moves the third bed from
+    // the second row to the end of the first.
+    scene().addPlates(1);
+    await waitFor(() => scene().plates.length === 5, 'the bed to be added');
+    await settle(50);
+
+    assert.notDeepEqual(positionOf(c), cBefore, 'the third bed did move');
+    assert.equal(plateOf(c), plate3, 'the model moves with its bed');
+    for (const id of [a, c]) assert.deepEqual(rootOf(id), positionOf(id), 'and its supports with it');
+  } finally {
+    await unmount();
+    saveMultiPlateSettings({ plateOrdering: orderingBefore });
   }
 });
