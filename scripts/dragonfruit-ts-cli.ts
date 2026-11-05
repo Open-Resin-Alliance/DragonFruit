@@ -274,6 +274,8 @@ async function sceneRemoveModel(args: ReturnType<typeof parseArgs>): Promise<voi
   const doc = await loadVoxl(voxlPath);
   const id = requireFlag(args.flags, 'id');
 
+  if (!doc.models.some((m) => m.id === id)) throw new Error(`Model '${id}' not found`);
+
   const before = doc.models.length;
   doc.models = doc.models.filter((m) => m.id !== id);
 
