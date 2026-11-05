@@ -46,6 +46,7 @@ export interface NavItem {
 
 export const NAV: readonly NavItem[] = [
   { label: 'Home', href: '/' },
+  { label: 'Machines', href: '/machines/' },
   { label: 'Documentation', href: docs() },
   { label: 'Translations', href: LINKS.translate, external: true },
 ];

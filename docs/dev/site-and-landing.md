@@ -262,12 +262,13 @@ rewritten caption. The captions are the dialog's text and nothing else.
 
 ## Pages, and what the network is for
 
-The landing project has two pages and one grid:
+The landing project has three pages and one grid:
 
 | Page | Source | Data |
 |---|---|---|
 | `/` | `website/src/pages/index.astro` | none at build time; `website/src/lib/release-feed.ts` narrows the download button to the visitor's platform in the browser. |
 | `/builds/` | `website/src/pages/builds.astro` | both sections are built into the page and then refreshed in the browser: the developer build from the site's own `latest-dev.json` (`website/src/lib/developer-feed.ts`), the branch previews from the GitHub releases API (`website/src/lib/preview-feed.ts`). Each section degrades on its own. |
+| `/machines/` | `website/src/pages/machines.astro` | generated at build time from the printer packs (`plugins/*/printers/*.json`) plus the core Generic Machine: a manufacturer rail, a search field, and the presets grouped by family. The renders come from the packs through `website/src/integrations/printer-images.mjs`. |
 | the screenshot grid, below *What it does* | `website/src/components/ScreenshotGrid.astro` | none — four images, one per view, laid out two by two with none of them paged. A click opens one full size in a `<dialog>`, with its caption and arrows under it: the arrows (and Left/Right) step to the next image without closing, and wrap at either end. That lightbox is the only script on the landing page, and without JavaScript the grid is still a grid. |
 
 The split is deliberate and worth keeping:
@@ -311,6 +312,27 @@ The split is deliberate and worth keeping:
 - **The download button is an enhancement.** The built markup already carries a
   working link to the latest release and a line saying where the number came from,
   and every failure path leaves the built page exactly as it is.
+
+### The machines page
+
+`/machines/` is generated, not written. `website/src/pages/machines.astro` reads
+`plugins/*/printers/*.json` and `profiles/printers/generic/printers.json` at build
+time, so a pack that gains a machine changes the page on the next build, and a
+machine no pack carries cannot appear. A missing build area is derived from the
+panel (pixels times pixel pitch) the way the app derives it.
+
+The layout follows the app's own Printer Library: a manufacturer rail and a search
+field on the left, the presets grouped by family on the right. `machine-library.ts`
+drives the filter, and the rail is hidden in the markup and revealed by the script,
+so without JavaScript the page is one column of every machine rather than a control
+that does nothing. Searching ignores the manufacturer, the same way the app does.
+
+The renders come from the packs through `website/src/integrations/printer-images.mjs`,
+which resizes each `imageAssetPath` to a 480px WebP: a middleware serves
+`/printers/<presetId>.webp` in `astro dev`, and the build hook writes the same files
+into the artifact. Nothing is committed, and the packs stay the only copy of the
+artwork. The integration is registered in `astro.config.mjs`, so a dev server that
+was already running when it landed has to be restarted before the images resolve.
 
 ### The updater feeds are not part of the build
 
