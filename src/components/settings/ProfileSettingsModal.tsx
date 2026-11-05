@@ -7,7 +7,7 @@ import { useLingui } from '@lingui/react';
 import { createPortal } from 'react-dom';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { tankMaterialShape, tankMaterialValueMatches, tankMaterialsDisagree } from '@/features/profiles/tankMaterialCompatibility';
-import { AlertTriangle, Box, Check, Square, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, Info, LayoutGrid, Link2, Lock, OctagonAlert, Plus, Printer, RefreshCw, Search, Trash2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Box, Check, Crown, Square, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, Edit3, FlaskConical, Frown, ImagePlus, Info, LayoutGrid, Link2, Lock, OctagonAlert, Plus, Printer, RefreshCw, Search, Trash2, Unlock, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import { Button, IconButton, IconChip, Spinner, FadeText } from '@/components/atoms';
 import FleetManagement from '@/components/settings/FleetManagement';
 import { NumberInput } from '@/components/ui/NumberInput';
@@ -126,6 +126,17 @@ const tankMaterialsMatchMessage = msg({
   message: 'Tank materials have compatible settings.',
   comment: 'Tooltip on the green link between two Multi-Tank tank labels whose materials agree.',
 });
+function materialSharingPrinters(printers: PrinterProfile[], ownerId: string | undefined): PrinterProfile[] {
+  const owner = ownerId ? printers.find((printer) => printer.id === ownerId) : undefined;
+  if (!owner) return printers;
+  return printers.filter((printer) => printer.id === owner.id || (
+    printer.display.outputFormat === owner.display.outputFormat
+    && (printer.display.settingsMode ?? '') === (owner.display.settingsMode ?? '')
+  ));
+}
+
+const materialOwnedByMessage = (ownerName: string) => msg`Owned by ${ownerName}`;
+const materialSharedWithMessage = (machineNames: string) => msg`Shared with ${machineNames}`;
 const tankMaterialsMismatchMessage = msg({
   message: 'Tank materials have incompatible settings. Please click to resolve mismatches.',
   comment: 'Tooltip on the warning between two Multi-Tank tank labels whose materials would print different layer stacks.',
@@ -167,6 +178,7 @@ type RemoteMaterialsCacheEntry = {
 
 
 const REMOTE_MATERIAL_BY_PRINTER_STORAGE_KEY = 'dragonfruit.network.remoteMaterialByPrinter.v1';
+const MATERIAL_EDITOR_TAB_BY_PRINTER_STORAGE_KEY = 'dragonfruit.materialSettings.activeTabByPrinterProfile.v1';
 
 function readRemoteMaterialByPrinter(): Record<string, string> {
   try {
@@ -191,6 +203,35 @@ function writeRemoteMaterialByPrinter(printerId: string, materialId: string): vo
     const current = readRemoteMaterialByPrinter();
     const next = { ...current, [printerId]: materialId };
     localStorage.setItem(REMOTE_MATERIAL_BY_PRINTER_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function readMaterialEditorTabByPrinter(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(MATERIAL_EDITOR_TAB_BY_PRINTER_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+    const result: Record<string, string> = {};
+    for (const [printerId, tabId] of Object.entries(parsed)) {
+      if (typeof printerId === 'string' && typeof tabId === 'string' && printerId.trim() && tabId.trim()) {
+        result[printerId.trim()] = tabId.trim();
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function writeMaterialEditorTabByPrinter(printerId: string, tabId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const next = { ...readMaterialEditorTabByPrinter(), [printerId]: tabId };
+    window.localStorage.setItem(MATERIAL_EDITOR_TAB_BY_PRINTER_STORAGE_KEY, JSON.stringify(next));
   } catch {
     // ignore storage errors
   }
@@ -370,6 +411,7 @@ export function ProfileSettingsModal({
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const { _ } = useLingui();
   const [selectedPrinterId, setSelectedPrinterId] = React.useState<string | null>(null);
+  const lastSyncedActivePrinterRef = React.useRef<string | null>(null);
   const [selectedMaterialId, setSelectedMaterialId] = React.useState<string | null>(null);
   const [selectedManufacturer, setSelectedManufacturer] = React.useState<string | null>(null);
   const [selectedResinFamily, setSelectedResinFamily] = React.useState<MaterialProfile['resinFamily'] | null>(null);
@@ -1158,6 +1200,30 @@ export function ProfileSettingsModal({
   }, [filteredMaterialProfiles, selectedMaterialId]);
   const isSelectedMaterialOfficial = typeof selectedMaterial?.officialTemplateId === 'string'
     && selectedMaterial.officialTemplateId.trim().length > 0;
+  const selectedMaterialIsShared = Boolean(
+    selectedMaterial
+    && selectedPrinter
+    && selectedMaterial.printerProfileId !== selectedPrinter.id,
+  );
+  const selectedMaterialOwnerName = selectedMaterial
+    ? profileState.printerProfiles.find((printer) => printer.id === selectedMaterial.printerProfileId)?.name
+    : undefined;
+  const editMaterialSharingPrinters = React.useMemo(
+    () => materialSharingPrinters(profileState.printerProfiles, selectedMaterial?.printerProfileId),
+    [profileState.printerProfiles, selectedMaterial?.printerProfileId],
+  );
+  const newMaterialSharingPrinters = React.useMemo(
+    () => materialSharingPrinters(profileState.printerProfiles, selectedPrinter?.id),
+    [profileState.printerProfiles, selectedPrinter?.id],
+  );
+  const editShareablePrinterIds = React.useMemo(
+    () => editMaterialSharingPrinters.map((printer) => printer.id),
+    [editMaterialSharingPrinters],
+  );
+  const newShareablePrinterIds = React.useMemo(
+    () => newMaterialSharingPrinters.map((printer) => printer.id),
+    [newMaterialSharingPrinters],
+  );
 
   const selectedPrinterUpdate = React.useMemo(() => {
     if (!selectedPrinter) return null;
@@ -1875,6 +1941,7 @@ export function ProfileSettingsModal({
     }
 
     setSelectedPrinterId(profileState.activePrinterProfileId);
+    lastSyncedActivePrinterRef.current = profileState.activePrinterProfileId;
     setIsMaterialEditorOpen(false);
     setIsEditingPrinter(false);
     setIsNetworkSettingsOpen(shouldOpenNetworkSettings);
@@ -3091,7 +3158,18 @@ export function ProfileSettingsModal({
 
   React.useEffect(() => {
     if (!isMaterialEditorOpen || !selectedMaterial) return;
-    setMaterialEditorTab(materialEditorInitialTabOverrideRef.current ?? replacementMaterialEditorDefaultTab);
+    const rememberedTab = selectedPrinter
+      ? readMaterialEditorTabByPrinter()[selectedPrinter.id]
+      : undefined;
+    const validRememberedTab = rememberedTab
+      && replacementMaterialEditorTabs.some((tab) => tab.id === rememberedTab)
+      ? rememberedTab
+      : null;
+    setMaterialEditorTab(
+      materialEditorInitialTabOverrideRef.current
+      ?? validRememberedTab
+      ?? replacementMaterialEditorDefaultTab,
+    );
     materialEditorInitialTabOverrideRef.current = null;
     setEditMaterialDraft({
       name: selectedMaterial.name,
@@ -3117,6 +3195,7 @@ export function ProfileSettingsModal({
       retractSpeedMmMin: selectedMaterial.retractSpeedMmMin,
       minimumAaAlphaPercent: selectedMaterial.minimumAaAlphaPercent,
       antiAliasingSettings: selectedMaterial.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+      compatiblePrinterProfileIds: selectedMaterial.compatiblePrinterProfileIds,
     });
     if (selectedPrinter) {
       setEditMaterialLocalSettingsByOutput(
@@ -3127,7 +3206,7 @@ export function ProfileSettingsModal({
         ),
       );
     }
-  }, [isMaterialEditorOpen, replacementMaterialEditorDefaultTab, selectedMaterial, selectedPrinter, selectedResolvedSettingsMode]);
+  }, [isMaterialEditorOpen, replacementMaterialEditorDefaultTab, replacementMaterialEditorTabs, selectedMaterial, selectedPrinter, selectedResolvedSettingsMode]);
 
   const handlePickPrinter = React.useCallback((printerId: string) => {
     materialSelectionInitializedRef.current = false;
@@ -3149,6 +3228,33 @@ export function ProfileSettingsModal({
       setSelectedResinFamily(restored.resinFamily);
     }
   }, []);
+
+  // The active printer can change outside this modal (for example "Keep" on the
+  // scene-material prompt). Keep the local selection following the store.
+  React.useEffect(() => {
+    if (!isOpen) {
+      lastSyncedActivePrinterRef.current = null;
+      return;
+    }
+    const activeId = profileState.activePrinterProfileId;
+    if (!activeId || lastSyncedActivePrinterRef.current === activeId) return;
+    lastSyncedActivePrinterRef.current = activeId;
+
+    setSelectedPrinterId(activeId);
+    const materials = getMaterialProfilesForPrinter(activeId, profileState);
+    const mappedId = typeof profileState.activeMaterialProfileIdByPrinterId?.[activeId] === 'string'
+      ? profileState.activeMaterialProfileIdByPrinterId[activeId]!.trim()
+      : '';
+    const restored = materials.find((material) => material.id === mappedId)
+      ?? materials.find((material) => material.id === profileState.activeMaterialProfileId)
+      ?? materials[0]
+      ?? null;
+    setSelectedMaterialId(restored?.id ?? null);
+    if (restored) {
+      setSelectedManufacturer((restored.brand || 'Default').trim() || 'Default');
+      setSelectedResinFamily(restored.resinFamily);
+    }
+  }, [isOpen, profileState]);
 
   const handleAddPrinter = React.useCallback(() => {
     setSelectedLibraryPresetIds(new Set());
@@ -3354,9 +3460,9 @@ export function ProfileSettingsModal({
   }, [newMaterialDraft, newMaterialLocalSettingsByOutput, printerMaterials.length, selectedPrinter]);
 
   const requestDeleteSelectedMaterial = React.useCallback(() => {
-    if (!selectedMaterial) return;
+    if (!selectedMaterial || selectedMaterialIsShared) return;
     setDeleteConfirmTarget({ kind: 'material', id: selectedMaterial.id, name: selectedMaterial.name });
-  }, [selectedMaterial]);
+  }, [selectedMaterial, selectedMaterialIsShared]);
 
   const openSelectedMaterialEditor = React.useCallback(() => {
     if (!selectedMaterial) return;
@@ -3401,6 +3507,11 @@ export function ProfileSettingsModal({
 
     setIsMaterialEditorOpen(false);
   }, [editMaterialDraft, editMaterialLocalSettingsByOutput, selectedMaterial]);
+
+  const handleMaterialEditorTabChange = React.useCallback((tab: string) => {
+    setMaterialEditorTab(tab);
+    if (selectedPrinter) writeMaterialEditorTabByPrinter(selectedPrinter.id, tab);
+  }, [selectedPrinter]);
 
   const handleApplySelectedPrinterOfficialUpdate = React.useCallback(() => {
     if (!selectedPrinterUpdate) return;
@@ -3453,6 +3564,7 @@ export function ProfileSettingsModal({
       retractSpeedMmMin: selectedMaterial.retractSpeedMmMin,
       minimumAaAlphaPercent: selectedMaterial.minimumAaAlphaPercent,
       antiAliasingSettings: selectedMaterial.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+      compatiblePrinterProfileIds: selectedMaterial.compatiblePrinterProfileIds,
       localSettingsByOutput: selectedMaterial.localSettingsByOutput,
       officialTemplateId: undefined,
       officialTemplateVersion: undefined,
@@ -4826,6 +4938,12 @@ export function ProfileSettingsModal({
                         const active = selectedMaterial?.id === material.id;
                         const isOfficial = typeof material.officialTemplateId === 'string' && material.officialTemplateId.trim().length > 0;
                         const isLocked = isOfficial || material.locked === true;
+                        const isOwnerMaterial = material.printerProfileId === selectedPrinter?.id;
+                        const isActivelyShared = (material.compatiblePrinterProfileIds?.length ?? 0) > 0;
+                        const sharedMachineNames = (material.compatiblePrinterProfileIds ?? [])
+                          .map((id) => profileState.printerProfiles.find((printer) => printer.id === id)?.name)
+                          .filter((name): name is string => Boolean(name))
+                          .join(', ');
                         return (
                           <button
                             key={material.id}
@@ -4861,10 +4979,26 @@ export function ProfileSettingsModal({
                           >
                             <div className="flex min-w-0 items-center justify-between gap-2">
                               <span className="flex min-w-0 flex-1 items-center gap-1.5 font-semibold">
+                                {isOwnerMaterial ? (
+                                  isActivelyShared && (
+                                    <Tooltip content={_(materialSharedWithMessage(sharedMachineNames))}>
+                                      <Crown className="h-3.5 w-3.5 shrink-0" style={{ color: '#fbbf24' }} />
+                                    </Tooltip>
+                                  )
+                                ) : (
+                                  <Tooltip content={_(materialOwnedByMessage(
+                                    profileState.printerProfiles.find((printer) => printer.id === material.printerProfileId)?.name ?? 'another printer',
+                                  ))}>
+                                    <Link2 className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent-secondary)' }} />
+                                  </Tooltip>
+                                )}
                                 {isLocked && <Lock className="w-3.5 h-3.5 shrink-0" />}
+                                <FadeText className="min-w-0 flex-1">{material.name}</FadeText>
+                              </span>
+                              <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap tabular-nums">
                                 {material.color && (
                                   <span
-                                    className="h-3.5 w-3.5 shrink-0 rounded-[4px]"
+                                    className="h-3.5 w-3.5 rounded-[4px]"
                                     style={{
                                       background: material.color,
                                       boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--border-subtle)',
@@ -4872,9 +5006,8 @@ export function ProfileSettingsModal({
                                     aria-hidden="true"
                                   />
                                 )}
-                                <FadeText className="min-w-0 flex-1">{material.name}</FadeText>
+                                {Math.round(material.layerHeightMm * 1000)} μm
                               </span>
-                              <span className="shrink-0 whitespace-nowrap tabular-nums">{Math.round(material.layerHeightMm * 1000)} μm</span>
                             </div>
                           </button>
                         );
@@ -4956,16 +5089,23 @@ export function ProfileSettingsModal({
                         : <><Lock className="w-3.5 h-3.5" /> Lock</>}
                     </Button>
                   )}
-                  <Button
-                    type="button"
-                    onClick={requestDeleteSelectedMaterial}
-                    disabled={!selectedMaterial || printerMaterials.length <= 1}
-                    variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45 ml-auto"
-                    style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : 'var(--danger)' }}
+                  <Tooltip
+                    wrapperClassName="ml-auto"
+                    content={selectedMaterialIsShared
+                      ? _(materialOwnedByMessage(selectedMaterialOwnerName ?? 'another printer'))
+                      : undefined}
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Delete
-                  </Button>
+                    <Button
+                      type="button"
+                      onClick={requestDeleteSelectedMaterial}
+                      disabled={!selectedMaterial || printerMaterials.length <= 1 || selectedMaterialIsShared}
+                      variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45 ml-auto"
+                      style={{ color: !selectedMaterial || printerMaterials.length <= 1 || selectedMaterialIsShared ? 'var(--text-muted)' : 'var(--danger)' }}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Delete
+                    </Button>
+                  </Tooltip>
                 </div>
               </div>
 
@@ -5297,7 +5437,7 @@ export function ProfileSettingsModal({
                   <ReplacementMaterialEditorShell
                     tabs={replacementMaterialEditorTabs}
                     activeTabId={materialEditorTab}
-                    onActiveTabChange={setMaterialEditorTab}
+                    onActiveTabChange={handleMaterialEditorTabChange}
                     activeTabStyle={accentSecondaryActionStyle92}
                     draft={editMaterialDraft}
                     onDraftChange={setEditMaterialDraft}
@@ -5308,10 +5448,19 @@ export function ProfileSettingsModal({
                     adapter={selectedLocalMaterialSettingsAdapter}
                     localSettingsByOutput={editMaterialLocalSettingsByOutput}
                     onLocalSettingsByOutputChange={setEditMaterialLocalSettingsByOutput}
+                    printerProfiles={profileState.printerProfiles}
+                    shareablePrinterIds={editShareablePrinterIds}
+                    ownerPrinterId={selectedMaterial?.printerProfileId}
                   />
                 ) : (
                   <>
-                    <MaterialProfileFormSections draft={editMaterialDraft} onChange={setEditMaterialDraft} />
+                    <MaterialProfileFormSections
+                      draft={editMaterialDraft}
+                      onChange={setEditMaterialDraft}
+                      printerProfiles={profileState.printerProfiles}
+                      shareablePrinterIds={editShareablePrinterIds}
+                      ownerPrinterId={selectedMaterial?.printerProfileId}
+                    />
                     <MaterialAntiAliasingSection
                       draft={editMaterialDraft}
                       onChange={setEditMaterialDraft}
@@ -5331,19 +5480,23 @@ export function ProfileSettingsModal({
               </div>
 
               <div className="px-3 py-3 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
-                <Button
-                  type="button"
-                  onClick={() => {
-                    requestDeleteSelectedMaterial();
-                    setIsMaterialEditorOpen(false);
-                  }}
-                  disabled={!selectedMaterial || printerMaterials.length <= 1}
-                  variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center gap-1 rounded-full disabled:opacity-45"
-                  style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : 'var(--danger)' }}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  Delete Material
-                </Button>
+                <Tooltip content={selectedMaterialIsShared
+                  ? _(materialOwnedByMessage(selectedMaterialOwnerName ?? 'another printer'))
+                  : undefined}>
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      requestDeleteSelectedMaterial();
+                      setIsMaterialEditorOpen(false);
+                    }}
+                    disabled={!selectedMaterial || printerMaterials.length <= 1 || selectedMaterialIsShared}
+                    variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center gap-1 rounded-full disabled:opacity-45"
+                    style={{ color: !selectedMaterial || printerMaterials.length <= 1 || selectedMaterialIsShared ? 'var(--text-muted)' : 'var(--danger)' }}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete Material
+                  </Button>
+                </Tooltip>
                 <div className="flex items-center gap-2">
                   <Button
                     type="button"
@@ -6203,7 +6356,7 @@ export function ProfileSettingsModal({
                   <ReplacementMaterialEditorShell
                     tabs={replacementMaterialEditorTabs}
                     activeTabId={materialEditorTab}
-                    onActiveTabChange={setMaterialEditorTab}
+                    onActiveTabChange={handleMaterialEditorTabChange}
                     activeTabStyle={accentSecondaryActionStyle92}
                     draft={newMaterialDraft}
                     onDraftChange={setNewMaterialDraft}
@@ -6214,10 +6367,19 @@ export function ProfileSettingsModal({
                     adapter={selectedLocalMaterialSettingsAdapter}
                     localSettingsByOutput={newMaterialLocalSettingsByOutput}
                     onLocalSettingsByOutputChange={setNewMaterialLocalSettingsByOutput}
+                    printerProfiles={profileState.printerProfiles}
+                    shareablePrinterIds={newShareablePrinterIds}
+                    ownerPrinterId={selectedPrinter?.id}
                   />
                 ) : (
                   <>
-                    <MaterialProfileFormSections draft={newMaterialDraft} onChange={setNewMaterialDraft} />
+                    <MaterialProfileFormSections
+                      draft={newMaterialDraft}
+                      onChange={setNewMaterialDraft}
+                      printerProfiles={profileState.printerProfiles}
+                      shareablePrinterIds={newShareablePrinterIds}
+                      ownerPrinterId={selectedPrinter?.id}
+                    />
                     <MaterialAntiAliasingSection
                       draft={newMaterialDraft}
                       onChange={setNewMaterialDraft}

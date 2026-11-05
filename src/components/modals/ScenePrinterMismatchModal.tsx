@@ -22,6 +22,8 @@ type ScenePrinterMismatchModalProps = {
   willAddPrinter: boolean;
   /** True when the selected printer is smaller on some axis, so nothing fits as packed. */
   currentIsSmaller: boolean;
+  /** Whether the selected printer already has every material the scene references. */
+  currentHasRequiredMaterials?: boolean;
   /** The scene names tank materials for models or bodies. */
   sceneUsesMultiTankMaterials?: boolean;
   /** The material mode of the selected profile. */
@@ -50,6 +52,7 @@ export function ScenePrinterMismatchModal({
   currentBuildVolumeMm,
   willAddPrinter,
   currentIsSmaller,
+  currentHasRequiredMaterials = true,
   sceneUsesMultiTankMaterials = false,
   currentMaterialMode,
   missingPluginName,
@@ -63,6 +66,11 @@ export function ScenePrinterMismatchModal({
   // The scene was authored with per-tank material assignments and the profile
   // selected now has one material: keeping it throws those assignments away.
   const losesMaterialAssignments = sceneUsesMultiTankMaterials && currentMaterialMode !== 'multiTank';
+  const lacksRequiredMaterials = !pluginMissing && !currentHasRequiredMaterials;
+  const sameAxis = (left: number, right: number) => Math.abs(left - right) < 1e-6;
+  const buildVolumesMatch = sameAxis(recordedBuildVolumeMm.width, currentBuildVolumeMm.width)
+    && sameAxis(recordedBuildVolumeMm.depth, currentBuildVolumeMm.depth)
+    && sameAxis(recordedBuildVolumeMm.height, currentBuildVolumeMm.height);
 
   return (
     <StructuredDialogModal
@@ -79,11 +87,13 @@ export function ScenePrinterMismatchModal({
           : _(msg`Built for another printer`)}
       subtitle={pluginMissing
         ? _(msg`Only the geometry can be imported`)
-        : losesMaterialAssignments
-          ? _(msg`This scene is made for a multi-material printer`)
-          : currentIsSmaller
-            ? _(msg`This scene may not fit the one selected`)
-            : _(msg`Its plates are spaced for that printer`)}
+        : lacksRequiredMaterials
+          ? _(msg`The selected printer is missing the scene's materials`)
+          : losesMaterialAssignments
+            ? _(msg`This scene is made for a multi-material printer`)
+            : currentIsSmaller
+              ? _(msg`This scene may not fit the one selected`)
+              : _(msg`Its plates are spaced for that printer`)}
       icon={<AlertTriangle className="h-4 w-4" />}
       iconTone="warning"
       zIndexClassName="z-[130]"
@@ -103,6 +113,19 @@ export function ScenePrinterMismatchModal({
             onClick={onKeep}
           >
             <Trans>Import Geometry</Trans>
+          </Button>
+        </>
+      ) : lacksRequiredMaterials ? (
+        <>
+          <Button variant="secondary" onClick={onKeep}>
+            <Trans>Load without materials</Trans>
+          </Button>
+          <Button
+            variant="tinted-accent"
+            className="inline-flex items-center justify-center gap-1.5"
+            onClick={onSwitch}
+          >
+            <Trans>Switch to {recordedLabel}</Trans>
           </Button>
         </>
       ) : (
@@ -136,6 +159,16 @@ export function ScenePrinterMismatchModal({
         </>
       ) : (
         <>
+      {lacksRequiredMaterials && (
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans comment="A printer name, shown in bold.">
+            <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{currentPrinterName}</strong>{' '}
+            does not have the materials this scene uses. Load the geometry without them, or switch
+            to <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{recordedLabel}</strong>{' '}
+            to restore them.
+          </Trans>
+        </p>
+      )}
       {losesMaterialAssignments && (
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
           <Trans>
@@ -145,45 +178,49 @@ export function ScenePrinterMismatchModal({
           </Trans>
         </p>
       )}
-      <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        <Trans comment="A printer name, shown in bold.">
-          <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{recordedLabel}</strong>{' '}
-          has a build volume of {recordedBuildVolumeMm.width} × {recordedBuildVolumeMm.depth} ×{' '}
-          {recordedBuildVolumeMm.height} mm.
-        </Trans>
-      </p>
-      <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        {currentIsSmaller ? (
-          <Trans comment="A printer name, shown in bold.">
-            The printer selected now,{' '}
-            <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{currentPrinterName}</strong>
-            , has a build volume of {currentBuildVolumeMm.width} × {currentBuildVolumeMm.depth} ×{' '}
-            {currentBuildVolumeMm.height} mm. A plate packed for the larger machine will not fit.
-          </Trans>
-        ) : (
-          <Trans comment="A printer name, shown in bold.">
-            The printer selected now,{' '}
-            <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{currentPrinterName}</strong>
-            , has a build volume of {currentBuildVolumeMm.width} × {currentBuildVolumeMm.depth} ×{' '}
-            {currentBuildVolumeMm.height} mm, and this scene was laid out for the other one.
-          </Trans>
-        )}
-      </p>
-      <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        {willAddPrinter ? (
-          <Trans comment="A printer name, shown in bold.">
-            It is not in your printer library, so switching adds{' '}
-            <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{recordedLabel}</strong>{' '}
-            from this scene.
-          </Trans>
-        ) : (
-          <Trans comment="A printer name, shown in bold.">
-            Switch to{' '}
-            <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{recordedLabel}</strong>{' '}
-            before importing?
-          </Trans>
-        )}
-      </p>
+      {!buildVolumesMatch && (
+        <>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                  <Trans comment="A printer name, shown in bold.">
+                    <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{recordedLabel}</strong>{' '}
+                    has a build volume of {recordedBuildVolumeMm.width} × {recordedBuildVolumeMm.depth} ×{' '}
+                    {recordedBuildVolumeMm.height} mm.
+                  </Trans>
+                </p>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                  {currentIsSmaller ? (
+                    <Trans comment="A printer name, shown in bold.">
+                      The printer selected now,{' '}
+                      <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{currentPrinterName}</strong>
+                      , has a build volume of {currentBuildVolumeMm.width} × {currentBuildVolumeMm.depth} ×{' '}
+                      {currentBuildVolumeMm.height} mm. A plate packed for the larger machine will not fit.
+                    </Trans>
+                  ) : (
+                    <Trans comment="A printer name, shown in bold.">
+                      The printer selected now,{' '}
+                      <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{currentPrinterName}</strong>
+                      , has a build volume of {currentBuildVolumeMm.width} × {currentBuildVolumeMm.depth} ×{' '}
+                      {currentBuildVolumeMm.height} mm, and this scene was laid out for the other one.
+                    </Trans>
+                  )}
+                </p>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                  {willAddPrinter ? (
+                    <Trans comment="A printer name, shown in bold.">
+                      It is not in your printer library, so switching adds{' '}
+                      <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{recordedLabel}</strong>{' '}
+                      from this scene.
+                    </Trans>
+                  ) : (
+                    <Trans comment="A printer name, shown in bold.">
+                      Switch to{' '}
+                      <strong className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>{recordedLabel}</strong>{' '}
+                      before importing?
+                    </Trans>
+                  )}
+                </p>
+        </>
+      )}
         </>
       )}
     </StructuredDialogModal>

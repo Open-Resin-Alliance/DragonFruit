@@ -1637,6 +1637,8 @@ export type PrinterMismatchPrompt = {
   installedProfileId: string | null;
   /** Whether the selected printer is smaller on some axis, so nothing fits as packed. */
   currentIsSmaller: boolean;
+  /** Whether the selected printer already has every material the scene references. */
+  currentHasRequiredMaterials: boolean;
   /** The plugin that contributes the recorded printer, when it is not installed. */
   missingPlugin?: { id: string; name: string };
   /** Models this import created, so a geometry-only answer can strip their material refs. */
@@ -2213,6 +2215,9 @@ export function useSceneCollectionManager(options?: {
     }
 
     if (choice === 'keep') {
+      if (!printerMismatch.currentHasRequiredMaterials) {
+        clearImportedMaterialAssignments(printerMismatch.importedModelIds);
+      }
       setPrinterMismatch(null);
       return;
     }
@@ -7498,6 +7503,25 @@ export function useSceneCollectionManager(options?: {
             const sceneUsesMultiTankMaterials = document.models.some((entry) => (
               !!entry.materialProfileId || (entry.bodyMaterialProfileIds?.some((id) => !!id) ?? false)
             ));
+            const requiredMaterialIds = new Set<string>();
+            for (const entry of document.models) {
+              if (entry.materialProfileId) requiredMaterialIds.add(entry.materialProfileId);
+              for (const id of entry.bodyMaterialProfileIds ?? []) {
+                if (id) requiredMaterialIds.add(id);
+              }
+            }
+            const recordedTankMaterials = recordedPrinter.printer.tankMaterials;
+            if (Array.isArray(recordedTankMaterials)) {
+              for (const id of recordedTankMaterials) {
+                if (typeof id === 'string' && id.length > 0) requiredMaterialIds.add(id);
+              }
+            }
+            const currentMaterialIds = new Set(
+              getMaterialProfilesForPrinter(currentPrinter.id, getProfileStoreSnapshot())
+                .map((material) => material.id),
+            );
+            const currentHasRequiredMaterials = [...requiredMaterialIds]
+              .every((id) => currentMaterialIds.has(id));
             setPrinterMismatch({
               bundle: recordedPrinter,
               ...(sceneMaterials.length > 0 ? { materials: sceneMaterials } : {}),
@@ -7509,6 +7533,7 @@ export function useSceneCollectionManager(options?: {
               currentBuildVolumeMm: { ...currentPrinter.buildVolumeMm },
               installedProfileId: installed?.id ?? null,
               currentIsSmaller: buildVolumeIsSmaller(currentPrinter, recordedPrinter),
+              currentHasRequiredMaterials,
               ...(installed?.missingPlugin ? { missingPlugin: installed.missingPlugin } : {}),
               importedModelIds: importedModels.map((model) => model.id),
             });
@@ -7959,6 +7984,71 @@ export function useSceneCollectionManager(options?: {
       if (previous.color !== next.color) paintModelBaseColor(next, next.color);
     });
 
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    pushSceneSnapshotHistory(before, after, ASSIGN_MATERIAL_LABEL);
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
+
+  /**
+   * Replace every scene material reference through one old-to-new map. Missing
+   * entries unassign, which is what a printer with no matching tank materials
+   * offers. One history entry, because the whole scene moved together.
+   */
+  const reassignSceneMaterials = useCallback((
+    assignments: Map<string, { id: string; color?: string }>,
+    unassignMissing = false,
+  ) => {
+    const nextModels = models.map((model) => {
+      const nextModelMaterial = model.materialProfileId ? assignments.get(model.materialProfileId) : undefined;
+      const clearModel = Boolean(model.materialProfileId) && !nextModelMaterial && unassignMissing;
+      const bodyMaterialProfileIds = model.bodyMaterialProfileIds?.map((id) => {
+        if (!id) return undefined;
+        const next = assignments.get(id);
+        if (next) return next.id;
+        return unassignMissing ? undefined : id;
+      });
+      const bodyColors = model.bodyMaterialProfileIds
+        ? model.bodyColors?.map((color, index) => {
+          const id = model.bodyMaterialProfileIds?.[index];
+          if (!id) return color;
+          const next = assignments.get(id);
+          if (next) return next.color;
+          return unassignMissing ? undefined : color;
+        })
+        : model.bodyColors;
+
+      const materialProfileId = nextModelMaterial?.id ?? (clearModel ? undefined : model.materialProfileId);
+      let materialBaseColor = model.materialBaseColor;
+      let color = model.color;
+      if (clearModel) {
+        materialBaseColor = undefined;
+        color = model.materialBaseColor ?? model.color;
+      } else if (nextModelMaterial?.color) {
+        materialBaseColor = model.materialBaseColor ?? model.color;
+        color = nextModelMaterial.color;
+      }
+
+      const changed = materialProfileId !== model.materialProfileId
+        || materialBaseColor !== model.materialBaseColor
+        || color !== model.color
+        || (bodyMaterialProfileIds && bodyMaterialProfileIds.some((id, index) => id !== model.bodyMaterialProfileIds?.[index]))
+        || (bodyColors && bodyColors.some((entry, index) => entry !== model.bodyColors?.[index]));
+      if (!changed) return model;
+      return {
+        ...model,
+        materialProfileId,
+        materialBaseColor,
+        color,
+        ...(bodyMaterialProfileIds ? { bodyMaterialProfileIds } : {}),
+        ...(bodyColors ? { bodyColors } : {}),
+      };
+    });
+
+    if (nextModels.every((model, index) => model === models[index])) return;
+    nextModels.forEach((next, index) => {
+      if (models[index].color !== next.color) paintModelBaseColor(next, next.color);
+    });
     const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
     setModels(nextModels);
     const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
@@ -9031,6 +9121,7 @@ export function useSceneCollectionManager(options?: {
     toggleSupportDesignation,
     setModelMaterialProfile,
     setModelBodyMaterial,
+    reassignSceneMaterials,
     linkModels,
     unlinkModels,
     setModelMeshModifiers,

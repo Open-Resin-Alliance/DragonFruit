@@ -380,7 +380,25 @@ export type MaterialProfile = {
     minimumAaAlphaPercent: number;
     antiAliasingSettings: MaterialAntiAliasingSettings;
     localSettingsByOutput?: Record<string, LocalMaterialSettingsMap>;
+    /** Other printers this profile is shared with. The owner remains `printerProfileId`. */
+    compatiblePrinterProfileIds?: string[];
 };
+
+function sanitizeCompatiblePrinterIds(value: unknown, ownerPrinterId?: string): string[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const owner = ownerPrinterId?.trim();
+    const ids = Array.from(new Set(value
+        .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== owner)));
+    return ids.length > 0 ? ids : undefined;
+}
+
+/** Whether a material profile is the owner's or explicitly shared with a printer. */
+export function materialProfileIsAvailableForPrinter(profile: MaterialProfile, printerId: string): boolean {
+    return profile.printerProfileId === printerId
+        || (profile.compatiblePrinterProfileIds?.includes(printerId) ?? false);
+}
 
 function sanitizeMaterialColor(value: unknown): string | undefined {
     if (typeof value !== 'string') return undefined;
@@ -988,10 +1006,10 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
     network: sanitizePrinterNetworkSettings((preset as any).network),
 }));
 
-function sanitizeTankMaterials(value: unknown, tankCount: number | undefined, knownMaterialIds: ReadonlySet<string>): string[] | undefined {
+function sanitizeTankMaterials(value: unknown, tankCount: number | undefined, availableMaterialIds: ReadonlySet<string>): string[] | undefined {
     if (!Array.isArray(value) || !tankCount) return undefined;
     const entries = value.slice(0, tankCount).map((entry) => (
-        typeof entry === 'string' && knownMaterialIds.has(entry) ? entry : ''
+        typeof entry === 'string' && availableMaterialIds.has(entry) ? entry : ''
     ));
     while (entries.length < tankCount) entries.push('');
     return entries.some((entry) => entry.length > 0) ? entries : undefined;
@@ -1146,13 +1164,32 @@ function notify(): void {
 
 function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): ProfileStoreState {
     const fallback = createDefaultState();
-    // Tank assignments reference material profiles by id; an id whose material is
-    // gone is cleared rather than left dangling.
-    const knownMaterialIds = new Set(
-        (Array.isArray(input?.materialProfiles) ? input!.materialProfiles : [])
-            .map((profile) => (typeof profile?.id === 'string' ? profile.id : ''))
-            .filter((id) => id.length > 0),
-    );
+    // Tank assignments reference material profiles by id. A tank may only hold a
+    // material this printer owns or one explicitly shared with it, so a stale id
+    // from a deleted or unshared profile is cleared rather than left dangling.
+    const materialAvailability = new Map<string, { ownerPrinterId: string; compatiblePrinterIds: Set<string> }>();
+    for (const material of Array.isArray(input?.materialProfiles) ? input!.materialProfiles : []) {
+        if (typeof material?.id !== 'string' || material.id.length === 0) continue;
+        const ownerPrinterId = typeof material.printerProfileId === 'string' ? material.printerProfileId : '';
+        const compatible = (material as any).compatiblePrinterProfileIds;
+        materialAvailability.set(material.id, {
+            ownerPrinterId,
+            compatiblePrinterIds: new Set(
+                Array.isArray(compatible)
+                    ? compatible.filter((id): id is string => typeof id === 'string' && id.length > 0)
+                    : [],
+            ),
+        });
+    }
+    const availableMaterialIdsForPrinter = (printerId: string): Set<string> => {
+        const available = new Set<string>();
+        for (const [materialId, availability] of materialAvailability) {
+            if (availability.ownerPrinterId === printerId || availability.compatiblePrinterIds.has(printerId)) {
+                available.add(materialId);
+            }
+        }
+        return available;
+    };
 
     const printerProfiles = Array.isArray(input?.printerProfiles)
         ? input!.printerProfiles
@@ -1189,6 +1226,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                 const resolvedTankCount = sanitizeTankCount((profile as any).tankCount)
                     ?? sanitizeTankCount((matchedPreset as any)?.tankCount)
                     ?? (resolvedMaterialMode === 'multiTank' ? 2 : undefined);
+                const availableTankMaterialIds = availableMaterialIdsForPrinter(profile.id);
                 const networkSupport = resolveNetworkSupport(profile);
                 const networkProfileState = networkSupport
                     ? deriveNetworkProfileState(profile, networkSupport)
@@ -1226,7 +1264,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         ? 'circle'
                         : 'rectangle',
                     tankMaterials: resolvedMaterialMode === 'multiTank'
-                        ? sanitizeTankMaterials((profile as any).tankMaterials, resolvedTankCount, knownMaterialIds)
+                        ? sanitizeTankMaterials((profile as any).tankMaterials, resolvedTankCount, availableTankMaterialIds)
                         : undefined,
                     notes: sanitizePrinterNotes((profile as any).notes),
                     officialPresetId,
@@ -1350,6 +1388,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((profile as any).minimumAaAlphaPercent, 35),
                         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((profile as any).antiAliasingSettings),
                         localSettingsByOutput: sanitizeLocalSettingsByOutput((profile as any).localSettingsByOutput),
+                        compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds((profile as any).compatiblePrinterProfileIds),
                     };
                 })
                 .filter((profile): profile is MaterialProfile => profile !== null)
@@ -2005,6 +2044,7 @@ export function addMaterialProfile(
         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(partial?.minimumAaAlphaPercent, 35),
         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(partial?.antiAliasingSettings),
         localSettingsByOutput: sanitizeLocalSettingsByOutput(partial?.localSettingsByOutput),
+        compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds(partial?.compatiblePrinterProfileIds, printerProfileId),
     };
 
     setState(ensureActiveMaterialForActivePrinter({
@@ -2372,6 +2412,9 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
             antiAliasingSettings: updates.antiAliasingSettings !== undefined
                 ? sanitizeMaterialAntiAliasingSettings(updates.antiAliasingSettings)
                 : profile.antiAliasingSettings,
+            compatiblePrinterProfileIds: updates.compatiblePrinterProfileIds !== undefined
+                ? sanitizeCompatiblePrinterIds(updates.compatiblePrinterProfileIds, profile.printerProfileId)
+                : profile.compatiblePrinterProfileIds,
         };
     });
 
@@ -2416,7 +2459,16 @@ export function removePrinterProfile(id: string): void {
     if (!state.printerProfiles.some((profile) => profile.id === id)) return;
 
     const printerProfiles = state.printerProfiles.filter((profile) => profile.id !== id);
-    const materialProfiles = state.materialProfiles.filter((profile) => profile.printerProfileId !== id);
+    const materialProfiles = state.materialProfiles
+        .filter((profile) => profile.printerProfileId !== id)
+        .map((profile) => {
+            const shared = profile.compatiblePrinterProfileIds?.filter((printerId) => printerId !== id);
+            if (!profile.compatiblePrinterProfileIds?.includes(id)) return profile;
+            return {
+                ...profile,
+                compatiblePrinterProfileIds: shared && shared.length > 0 ? shared : undefined,
+            };
+        });
     const activePrinterProfileId =
         state.activePrinterProfileId === id
             ? printerProfiles[0]?.id ?? ''
@@ -2651,6 +2703,7 @@ export function importPrinterBundle(payload: unknown): string {
             minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(material.minimumAaAlphaPercent, 35),
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(material.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
+            compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds(material.compatiblePrinterProfileIds),
         }));
 
     const sourceTankMaterials = Array.isArray(sourcePrinter.tankMaterials)
@@ -2928,12 +2981,12 @@ export function getActiveMaterialProfile(stateOverride?: ProfileStoreState): Mat
 
     const materialProfile = (
         snapshot.materialProfiles.find(
-            (profile) => profile.id === mappedActiveMaterialId && profile.printerProfileId === activePrinterId,
+            (profile) => profile.id === mappedActiveMaterialId && materialProfileIsAvailableForPrinter(profile, activePrinterId),
         )
         ?? snapshot.materialProfiles.find(
-            (profile) => profile.id === snapshot.activeMaterialProfileId && profile.printerProfileId === activePrinterId,
+            (profile) => profile.id === snapshot.activeMaterialProfileId && materialProfileIsAvailableForPrinter(profile, activePrinterId),
         )
-        ?? snapshot.materialProfiles.find((profile) => profile.printerProfileId === activePrinterId)
+        ?? snapshot.materialProfiles.find((profile) => materialProfileIsAvailableForPrinter(profile, activePrinterId))
         ?? snapshot.materialProfiles[0]
         ?? null
     );
@@ -3033,6 +3086,7 @@ export function importSceneMaterials(printerProfileId: string, materials: unknow
             minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(source.minimumAaAlphaPercent, 35),
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(source.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(source.localSettingsByOutput),
+            compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds(source.compatiblePrinterProfileIds),
             locked: source.locked === true,
         };
         changed = true;
@@ -3053,7 +3107,7 @@ export function getMaterialProfilesForPrinter(printerProfileId: string, stateOve
     const snapshot = stateOverride ?? state;
     const printerProfile = snapshot.printerProfiles.find((entry) => entry.id === printerProfileId) ?? null;
     return snapshot.materialProfiles
-        .filter((profile) => profile.printerProfileId === printerProfileId)
+        .filter((profile) => materialProfileIsAvailableForPrinter(profile, printerProfileId))
         .map((profile) => resolveMaterialProfileWithLocalSettings(profile, printerProfile));
 }
 
