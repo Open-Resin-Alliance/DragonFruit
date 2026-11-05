@@ -30,9 +30,8 @@ Remove the label to stop.
 
 The reason is worth understanding rather than working around: a preview build
 runs the branch's own code — `npm ci` lifecycle scripts, `build.rs` scripts,
-the whole toolchain — in a job that holds the Apple Developer ID certificate,
-the app-specific password and the updater signing key. Building a branch is
-running its code with those secrets in reach.
+the whole toolchain — in a job that holds the updater signing key. Building a
+branch is running its code with that secret in reach.
 
 Once you have **read the diff**, run:
 
@@ -99,11 +98,28 @@ it by hand. Keep that in mind when merging.
 GitHub does not give repository secrets to a workflow triggered by a
 `pull_request` event from a fork. That is deliberate on GitHub's part and we
 rely on it: the macOS check that runs on every pull request builds fork code
-with no certificate and no keys, falls back to ad-hoc signing, and proves the
-app compiles. Nothing more.
+with no keys and proves the app compiles. Nothing more.
 
-That is also why a fork's check build produces a bundle macOS will refuse to
-open without going through **System Settings → Privacy & Security → Open
-Anyway**. It is unsigned on purpose. If a contributor needs something a tester
-can actually run, that is what `/create-preview-external` is for — after
-someone has read the code.
+## macOS builds are only signed for releases
+
+Neither the pull-request check nor a preview build imports the Developer ID
+certificate or notarizes anything. Both call
+`scripts/use-adhoc-macos-signing.mjs`, which swaps the identity in
+`src-tauri/tauri.macos.conf.json` for `-`. Only `release.yml` signs with the
+Developer ID and notarizes, because only a release is something users install
+and keep.
+
+Ad-hoc rather than unsigned: Tauri skips signing altogether when no identity is
+configured, and an unsigned `.app` does not launch on Apple Silicon. Ad-hoc
+keeps the bundle loadable on the machine that built it.
+
+The consequence is that a downloaded check or preview build fails Gatekeeper —
+macOS refuses to open it because it cannot verify the developer. To run one,
+either:
+
+- **System Settings → Privacy & Security → Open Anyway** after the first
+  refusal, or
+- `xattr -dr com.apple.quarantine /Applications/DragonFruit.app` after dragging
+  it in.
+
+A release build needs neither.
