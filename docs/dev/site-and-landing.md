@@ -266,7 +266,7 @@ The landing project has three pages and one grid:
 
 | Page | Source | Data |
 |---|---|---|
-| `/` | `website/src/pages/index.astro` | none at build time; `website/src/lib/release-feed.ts` narrows the download button to the visitor's platform in the browser. |
+| `/` | `website/src/pages/index.astro` | none at build time; `website/src/lib/release-feed.ts` narrows the download button to the visitor's platform in the browser. The hero's machine count comes from `website/src/lib/machines.ts`, the same loader the machines page renders. |
 | `/builds/` | `website/src/pages/builds.astro` | both sections are built into the page and then refreshed in the browser: the developer build from the site's own `latest-dev.json` (`website/src/lib/developer-feed.ts`), the branch previews from the GitHub releases API (`website/src/lib/preview-feed.ts`). Each section degrades on its own. |
 | `/machines/` | `website/src/pages/machines.astro` | generated at build time from the printer packs (`plugins/*/printers/*.json`) plus the core Generic Machine: a manufacturer rail, a search field, and the presets grouped by family. The renders come from the packs through `website/src/integrations/printer-images.mjs`. |
 | the screenshot grid, below *What it does* | `website/src/components/ScreenshotGrid.astro` | none — four images, one per view, laid out two by two with none of them paged. A click opens one full size in a `<dialog>`, with its caption and arrows under it: the arrows (and Left/Right) step to the next image without closing, and wrap at either end. That lightbox is the only script on the landing page, and without JavaScript the grid is still a grid. |

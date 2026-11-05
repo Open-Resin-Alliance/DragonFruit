@@ -5,6 +5,7 @@ import ScreenshotGrid from '../components/ScreenshotGrid.astro';
 import DiscordIcon from '../components/DiscordIcon.astro';
 import Wordmark from '../components/Wordmark.astro';
 import { LINKS, SITE, docs } from '../data/site';
+import { loadMachines } from '../lib/machines';
 
 /** Every claim below is one the documentation states; the links are its pages. */
 const capabilities = [
@@ -40,6 +41,14 @@ const capabilities = [
   },
 ];
 
+/* The hero quotes the count the machines page renders, so the two cannot drift. */
+const { machines, groups } = loadMachines();
+const makers = groups
+  .filter((group) => group.machines.length > 1)
+  .map((group) => group.manufacturer);
+const makerList =
+  makers.length > 1 ? `${makers.slice(0, -1).join(', ')} and ${makers.at(-1)}` : (makers[0] ?? '');
+
 const reference = [
   { title: 'Installation', body: 'Installers for Windows, macOS and Linux, plus Flatpak and build-from-source.', href: docs('getting-started/installation/') },
   { title: 'Quick start', body: 'Import a model, orient it, hollow it, add supports and slice your first plate.', href: docs('getting-started/quick-start/') },
@@ -60,6 +69,12 @@ const reference = [
       <p class="lede hero__lede">{SITE.motto}</p>
 
       <div class="hero__cta"><DownloadMenu /></div>
+
+      <p class="hero__machines">
+        <span class="mono">{machines.length} machines</span>
+        <span class="muted">from {makerList}</span>
+        <a class="hero__machines-link" href="/machines/">See all machines</a>
+      </p>
 
       <p class="hero__note mono muted">
         Beta software, under active development. Validate outputs and don't leave a first print unattended.
@@ -173,6 +188,28 @@ const reference = [
      before them is what says so. */
   .hero__cta {
     margin-top: 1.25rem;
+  }
+
+  /* The machine count sits under the download, where a visitor deciding whether
+     the app knows their printer is already looking. */
+  .hero__machines {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.3rem 0.7rem;
+    margin-top: 1.1rem;
+    font-size: 0.8125rem;
+  }
+
+  .hero__machines-link {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-color: var(--border-strong);
+    text-underline-offset: 3px;
+  }
+
+  .hero__machines-link:hover {
+    text-decoration-color: currentColor;
   }
 
   /* A step further from the release line than the hero's own rhythm: the warning
