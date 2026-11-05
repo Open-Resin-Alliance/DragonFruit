@@ -42,12 +42,7 @@ const capabilities = [
 ];
 
 /* The hero quotes the count the machines page renders, so the two cannot drift. */
-const { machines, groups } = loadMachines();
-const makers = groups
-  .filter((group) => group.machines.length > 1)
-  .map((group) => group.manufacturer);
-const makerList =
-  makers.length > 1 ? `${makers.slice(0, -1).join(', ')} and ${makers.at(-1)}` : (makers[0] ?? '');
+const { machines } = loadMachines();
 
 const reference = [
   { title: 'Installation', body: 'Installers for Windows, macOS and Linux, plus Flatpak and build-from-source.', href: docs('getting-started/installation/') },
@@ -72,7 +67,7 @@ const reference = [
 
       <p class="hero__machines">
         <span class="mono">{machines.length} machines</span>
-        <span class="muted">from {makerList}</span>
+        <span class="muted">supported out of the box</span>
         <a class="hero__machines-link" href="/machines/">See all machines</a>
       </p>
 
