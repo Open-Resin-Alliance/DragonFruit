@@ -76,7 +76,7 @@ const lede =
                       <article
                         class="card"
                         data-machine-row
-                        data-search={`${machine.name} ${machine.family} ${machine.manufacturer} ${machine.format}`.toLowerCase()}
+                        data-search={`${machine.name} ${machine.family} ${machine.manufacturer}`.toLowerCase()}
                       >
                         <div class="card__figure">
                           {machine.image ? (
@@ -93,7 +93,6 @@ const lede =
                         </div>
                         <div class="card__body">
                           <p class="card__name">{machine.name}</p>
-                          <p class="card__format mono muted">{machine.format}</p>
                         </div>
                       </article>
                     ))}
@@ -331,15 +330,17 @@ const lede =
     padding: 0.45rem 0.6rem 0.55rem;
   }
 
+  /* One line per card, so every card in a row is the same height. A name too long
+     for its card fades out at the edge instead of clipping mid-letter, which is
+     how the app labels a long printer name too. */
   .card__name {
     font-size: 0.8125rem;
     font-weight: 600;
     line-height: 1.3;
-  }
-
-  .card__format {
-    font-size: 0.6875rem;
-    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 1.25rem), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 1.25rem), transparent);
   }
 
   .empty {
