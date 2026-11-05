@@ -21,6 +21,8 @@ import {
   getMaterialProfilesForPrinter,
   getProfileStoreSnapshot,
   importPrinterBundle,
+  setActiveMaterialProfile,
+  setActivePrinterProfile,
   type MaterialProfile,
   type PrinterProfile,
 } from '../../src/features/profiles/profileStore';
@@ -128,6 +130,21 @@ function storedMaterial(printerId: string, raw: unknown): MaterialProfile {
   return getMaterialProfilesForPrinter(printerId).find((entry) => entry.id === defaultId)!;
 }
 
+/**
+ * Makes the job's printer and material the active ones. Support tip penetration
+ * reads them from the store while the mesh is built, so anything else sinks the
+ * tips by another material's offset. A `--layer-height` override lives only on
+ * the job's copy of the material, so it needs its own stored copy.
+ */
+function activateJobProfiles(printerId: string, material: MaterialProfile, layerHeightOverridden: boolean): void {
+  setActivePrinterProfile(printerId);
+  if (!layerHeightOverridden) {
+    setActiveMaterialProfile(material.id);
+    return;
+  }
+  setActiveMaterialProfile(addMaterialProfile(printerId, material));
+}
+
 const AA_PRESETS = ['raw', 'sharp', 'balanced', 'smooth'] as const;
 
 function parseAaOverride(raw: unknown): SliceAntiAliasingOverride {
@@ -184,6 +201,7 @@ export function resolveSceneSliceJob(options: SceneSliceJobOptions): SceneSliceJ
     };
     const storedMat = storedMaterial(printerId, options.material);
     material = options.layerHeight ? { ...storedMat, layerHeightMm: Number(options.layerHeight) } : storedMat;
+    activateJobProfiles(printerId, material, Boolean(options.layerHeight));
   }
 
   if (options.aaPreset && !(AA_PRESETS as readonly string[]).includes(options.aaPreset)) {
