@@ -119,11 +119,11 @@ GPU string, viewport, screen size and device pixel ratio.
 Without a header every report floats in a vacuum: a 12-second freeze means
 nothing until you know whether it happened on an M4 Max or a 2017 iMac.
 
-!!! warning "Nothing may be logged before `setup()`"
-    `tauri-plugin-log` attaches the `log` facade during its own plugin setup.
-    Any `log::info!` emitted earlier in `main()` is silently dropped — it does
-    not reach the file, or stdout, or anywhere. This is why the header is
-    emitted from inside `setup()`.
+> [!WARNING]
+> **Nothing may be logged before `setup()`.** `tauri-plugin-log` attaches the `log` facade during its own plugin setup.
+> Any `log::info!` emitted earlier in `main()` is silently dropped — it does
+> not reach the file, or stdout, or anywhere. This is why the header is
+> emitted from inside `setup()`.
 
 ### Asking a user for a report
 
@@ -372,12 +372,12 @@ successive captures. For a flame graph:
 Note that `sample` aggregates: you get totals, not a timeline. Take one capture
 per phase if you need the sequence.
 
-!!! warning "JIT frames are not symbolicated"
-    Application JavaScript appears as `???  (in <unknown binary>)`. Neither
-    `sample` nor Instruments can symbolicate JavaScriptCore's JIT output. These
-    tools tell you *where in WebKit* you are — event dispatch, GC, compositing —
-    not which of your functions is responsible. For that, use the Web Inspector
-    profiler, or profile the plain web build in Chrome.
+> [!WARNING]
+> **JIT frames are not symbolicated.** Application JavaScript appears as `???  (in <unknown binary>)`. Neither
+> `sample` nor Instruments can symbolicate JavaScriptCore's JIT output. These
+> tools tell you *where in WebKit* you are — event dispatch, GC, compositing —
+> not which of your functions is responsible. For that, use the Web Inspector
+> profiler, or profile the plain web build in Chrome.
 
 ### Reading a WebKit sample
 

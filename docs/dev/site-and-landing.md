@@ -27,7 +27,7 @@ piece lives, how the Markdown becomes pages, and what to run before pushing.
 | `website/src/styles/ora.css` | The design language — tokens, layout shell, buttons, surfaces. |
 | `website/src/assets/wordmark.svg` | The wordmark, inlined by `Wordmark.astro` so the part of it drawn in white can follow the theme. |
 | `website/public/brand/` | The emblem (`simple_icon.svg`) and the social card. |
-| `website/public/favicon.png` | The bitmap favicon Google Search reads. `favicon.svg` is the original for browsers; Google does not support SVG favicons. `favicon.ico` (16/32/48 px) is what clients that never parse the head probe, and `site.webmanifest` names the site outside search. |
+| `website/public/favicon*.png`, `favicon.svg`, `favicon.ico` | The site icon, in two forms. `favicon.svg` and `favicon.ico` (16/32/48) are the bare emblem, which is what a browser tab shows — the same thing openresin.org does. `favicon-384.png` and `favicon-192.png` are the emblem on a dark rounded tile: Google serves the largest icon a page declares, and the bare mark is unreadable at the 16–32 px a results card shows on white. `favicon.png` (512) is the manifest's, and `apple-touch-icon.png` is the square tile iOS masks. `site.webmanifest` names the site outside search. |
 | `website/public/media/` | The four screenshots in the landing page grid, re-encoded from the marketing renders. |
 | `website/src/og/` | The social cards: a build hook, the renderer, the fonts and the emblem PNG. |
 | `website/src/lib/og.ts` | Where a card lives, and the digest its URL carries. |
@@ -211,9 +211,28 @@ points at keeps resolving.
 `Base.astro` puts a `WebSite` JSON-LD block on the home page only. Google Search takes
 the site name for the whole domain from that block; without it the system falls back
 to the hostname, which is why search results can read `dragonfruit-slicer.com`. The
-block names the site `DragonFruit Resin Slicer` and offers `DragonFruit` as an
-alternate. The favicon PNG is the bitmap Google reads; the SVG beside it is for
-browsers, because Google does not accept SVG favicons.
+block names the site `DragonFruit Slicer` and offers `DragonFruit`, `DragonFruit Resin
+Slicer` and the lowercase domain as alternates.
+
+The name has to be the one the rest of the home page uses. Google's guidance is to keep
+the structured-data name consistent with `og:site_name`, the `<title>`, the headings
+and the body text; while the markup said "DragonFruit Resin Slicer" and the title and
+wordmark said "DragonFruit", the system had no confident answer and kept the hostname.
+`SITE.name` and `SITE.siteName` are therefore the same string, and every title, the
+wordmark's accessible name and the manifest carry it. Changing one without the others
+puts the site back to the hostname. The favicon PNGs are the bitmaps Google reads; the SVG beside them is for
+browsers, because Google does not accept SVG favicons, and it is the largest icon a
+page declares that Google serves.
+
+That is why the icon exists in two forms. A browser tab shows the bare emblem —
+`favicon.svg`, or the 16/32 frames in `favicon.ico` — which is what openresin.org
+shows too. Google instead takes the largest bitmap declared, so `favicon-384.png` and
+`favicon-192.png` (both multiples of 48, the size grid Google asks for) carry the
+emblem on a dark rounded tile: the mark is drawn in thin outlines and pale whites,
+which disappears at the 16–32 px a results card shows on a white page. The tile is
+what gives it an edge there, and it stays out of the tab. `apple-touch-icon.png` is
+the square version because iOS masks the icon itself and fills transparency with
+black, and `favicon.png` (512) is the manifest's, for the same home-screen reason.
 
 Two files cover the surfaces that never read any of that: `website/public/favicon.ico`
 answers the bare `/favicon.ico` probe made by browsers and OS shortcuts, and
@@ -243,12 +262,13 @@ rewritten caption. The captions are the dialog's text and nothing else.
 
 ## Pages, and what the network is for
 
-The landing project has two pages and one grid:
+The landing project has three pages and one grid:
 
 | Page | Source | Data |
 |---|---|---|
-| `/` | `website/src/pages/index.astro` | none at build time; `website/src/lib/release-feed.ts` narrows the download button to the visitor's platform in the browser. |
-| `/builds/` | `website/src/pages/builds.astro` | the developer build is read **at build time** from the updater's own `latest-dev.json` at the site root. Branch previews are also built into the page, then refreshed in the browser from the GitHub releases API (`website/src/lib/preview-feed.ts`). Each section degrades on its own. |
+| `/` | `website/src/pages/index.astro` | none at build time; `website/src/lib/release-feed.ts` narrows the download button to the visitor's platform in the browser. The hero's machine count comes from `website/src/lib/machines.ts`, the same loader the machines page renders. |
+| `/builds/` | `website/src/pages/builds.astro` | both sections are built into the page and then refreshed in the browser: the developer build from the site's own `latest-dev.json` (`website/src/lib/developer-feed.ts`), the branch previews from the GitHub releases API (`website/src/lib/preview-feed.ts`). Each section degrades on its own. |
+| `/machines/` | `website/src/pages/machines.astro` | generated at build time from the printer packs (`plugins/*/printers/*.json`) plus the core Generic Machine: a manufacturer rail, a search field, and the presets grouped by family. The renders come from the packs through `website/src/integrations/printer-images.mjs`. |
 | the screenshot grid, below *What it does* | `website/src/components/ScreenshotGrid.astro` | none — four images, one per view, laid out two by two with none of them paged. A click opens one full size in a `<dialog>`, with its caption and arrows under it: the arrows (and Left/Right) step to the next image without closing, and wrap at either end. That lightbox is the only script on the landing page, and without JavaScript the grid is still a grid. |
 
 The split is deliberate and worth keeping:
@@ -257,18 +277,63 @@ The split is deliberate and worth keeping:
   is what an install on the dev channel updates to, and it is the only source that
   answers "what is the developer build". Asking the releases API for the newest
   prerelease answers a different question and gets it wrong.
+- **The developer build is refreshed in the browser too, because the build cannot
+  see the current feed.** The deploy workflow runs `npm run build` *before* it
+  copies the release's `latest-dev.json` into the artifact, so the page's build-time
+  fetch of `https://dragonfruit-slicer.com/latest-dev.json` reads the previous
+  deploy's copy — one dev release behind whenever a release triggered the build.
+  `developer-feed.ts` therefore re-reads the same file from the site's own origin
+  (no CORS, no rate limit, no token) and rewrites the row; the built row is the
+  no-JavaScript and failed-fetch fallback, and it is hidden when the build could not
+  reach the feed at all so the browser can still fill it in.
 - **Anything that has to be right without JavaScript is built, not fetched.** The
-  previews list is rendered at build time and degrades to a note plus a link to
-  GitHub if the API was unreachable — an empty list would read as "there are no
-  builds". Then `preview-feed.ts` refreshes it from the public releases API and
+  previews list is rendered at build time, and its column stays whether or not there
+  is anything in it: an empty list would read as "there are no builds", so the empty
+  state says so plainly and an unreachable API adds a note above it pointing at
+  GitHub. Then `preview-feed.ts` refreshes the list from the public releases API and
   caches the answer for two minutes, because a preview release is deleted and
   recreated on every push; the build snapshot would otherwise name releases that
   no longer exist. `releases.ts` takes an optional token for the build request (the
   deploy workflow passes `GITHUB_TOKEN`); the browser request is unauthenticated,
   and a failed one leaves the built list alone.
+- **Each row offers one Download and one link to the sources.** The row carries
+  its per-platform asset URLs as `data-download-<platform>`, and
+  `build-downloads.ts` points the button at the visitor's platform with the same
+  detection the home page uses. Without JavaScript, or for a platform the build
+  did not produce, it stays on the release page, which lists every platform and
+  the source archives. *Show sources* opens the tag's tree on GitHub.
+- **The build rows are styled globally, on purpose.** `preview-feed.ts` and
+  `developer-feed.ts` create their rows and links in the browser, outside the
+  `.astro` file, so they carry none of Astro's `data-astro-cid-*` scope attribute:
+  a scoped `.build*` rule styles the built snapshot and leaves the refreshed one
+  unstyled (unbulleted, unpadded, platform links run together). Every `.build*`
+  rule therefore lives in the `is:global` block at the bottom of `builds.astro`,
+  which Astro inlines in that page alone.
 - **The download button is an enhancement.** The built markup already carries a
   working link to the latest release and a line saying where the number came from,
   and every failure path leaves the built page exactly as it is.
+
+### The machines page
+
+`/machines/` is generated, not written. `website/src/pages/machines.astro` reads
+`plugins/*/printers/*.json` and `profiles/printers/generic/printers.json` at build
+time, so a pack that gains a machine changes the page on the next build, and a
+machine no pack carries cannot appear. A missing build area is derived from the
+panel (pixels times pixel pitch) the way the app derives it.
+
+The layout follows the app's own Printer Library: a manufacturer rail and a search
+field on the left, the presets grouped by family on the right. The rail is in the
+markup and its entries are anchors to each manufacturer's section, so without
+JavaScript they jump instead of filtering and the two-column layout is there from
+the first paint; `machine-library.ts` turns them into a filter, and only the search
+field waits for it. Searching ignores the manufacturer, the same way the app does.
+
+The renders come from the packs through `website/src/integrations/printer-images.mjs`,
+which resizes each `imageAssetPath` to a 480px WebP: a middleware serves
+`/printers/<presetId>.webp` in `astro dev` from a cache it fills at startup, and the
+build hook writes the same files into the artifact. Nothing is committed, and the packs stay the only copy of the
+artwork. The integration is registered in `astro.config.mjs`, so a dev server that
+was already running when it landed has to be restarted before the images resolve.
 
 ### The updater feeds are not part of the build
 

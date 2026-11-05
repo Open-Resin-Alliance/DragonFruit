@@ -12,10 +12,12 @@ import {
   RELEASES_API_URL,
   fetchJson,
   recentPreviews,
+  sourcesUrlFor,
   toPreviewBuild,
   type PreviewBuild,
   type Release,
 } from './releases';
+import { applyDownload } from './build-downloads';
 
 const CACHE_KEY = 'dragonfruit-preview-builds-v1';
 const CACHE_TTL_MS = 2 * 60 * 1000;
@@ -38,7 +40,7 @@ function render(body: HTMLElement, builds: PreviewBuild[]): void {
   if (builds.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'muted';
-    empty.textContent = 'No branch has built a preview in the last two weeks.';
+    empty.textContent = 'No previews available at this time.';
     body.replaceChildren(empty);
     return;
   }
@@ -67,20 +69,21 @@ function render(body: HTMLElement, builds: PreviewBuild[]): void {
     const assets = document.createElement('div');
     assets.className = 'build__assets';
 
-    if (build.assets.length === 0) {
-      const none = document.createElement('span');
-      none.className = 'muted';
-      none.textContent = 'No installer attached';
-      assets.append(none);
-    } else {
-      for (const asset of build.assets) {
-        const link = document.createElement('a');
-        link.className = 'build__asset';
-        link.href = asset.url;
-        link.textContent = asset.label;
-        assets.append(link);
-      }
-    }
+    const download = document.createElement('a');
+    download.className = 'build__asset';
+    download.dataset.download = '';
+    download.href = build.url;
+    download.textContent = 'Download';
+    for (const asset of build.assets) download.setAttribute(`data-download-${asset.platform}`, asset.url);
+
+    const sources = document.createElement('a');
+    sources.className = 'build__more';
+    sources.href = sourcesUrlFor(build.tag);
+    sources.target = '_blank';
+    sources.rel = 'noopener noreferrer';
+    sources.textContent = 'Show sources';
+
+    assets.append(download, sources);
 
     right.append(date, assets);
     item.append(tag, right);
@@ -88,15 +91,20 @@ function render(body: HTMLElement, builds: PreviewBuild[]): void {
   }
 
   body.replaceChildren(list);
+  applyDownload(list);
 }
 
 export function initPreviewFeed(): void {
   const body = document.querySelector<HTMLElement>('[data-preview-body]');
   if (!body) return;
 
+  /* The notice says the build could not reach the API. Any answer here disproves it. */
+  const notice = document.querySelector<HTMLElement>('[data-preview-notice]');
+
   const cached = readCache();
   if (cached) {
     render(body, cached);
+    if (notice) notice.hidden = true;
     return;
   }
 
@@ -109,6 +117,7 @@ export function initPreviewFeed(): void {
         /* storage unavailable: the refresh still happened */
       }
       render(body, builds);
+      if (notice) notice.hidden = true;
     })
     .catch(() => {
       /* Keep the built snapshot, which is still better than an empty list. */

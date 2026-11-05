@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import socialCards from './src/og/integration.mjs';
 import documentation from './src/integrations/docs.mjs';
+import printerImages from './src/integrations/printer-images.mjs';
 
 /**
  * The URLs the Markdown documentation used to be served from, before it moved under
@@ -78,6 +79,8 @@ export default defineConfig({
     socialCards(),
     /* The documentation is Markdown from `docs/`; its screenshots live beside it. */
     documentation(),
+    /* The compatibility page's printer renders, resized out of the plugin packs. */
+    printerImages(),
   ],
   build: {
     inlineStylesheets: 'auto',

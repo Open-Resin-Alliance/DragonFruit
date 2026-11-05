@@ -5,6 +5,7 @@ import ScreenshotGrid from '../components/ScreenshotGrid.astro';
 import DiscordIcon from '../components/DiscordIcon.astro';
 import Wordmark from '../components/Wordmark.astro';
 import { LINKS, SITE, docs } from '../data/site';
+import { loadMachines } from '../lib/machines';
 
 /** Every claim below is one the documentation states; the links are its pages. */
 const capabilities = [
@@ -40,6 +41,9 @@ const capabilities = [
   },
 ];
 
+/* The hero quotes the count the machines page renders, so the two cannot drift. */
+const { machines } = loadMachines();
+
 const reference = [
   { title: 'Installation', body: 'Installers for Windows, macOS and Linux, plus Flatpak and build-from-source.', href: docs('getting-started/installation/') },
   { title: 'Quick start', body: 'Import a model, orient it, hollow it, add supports and slice your first plate.', href: docs('getting-started/quick-start/') },
@@ -53,12 +57,20 @@ const reference = [
 
     <div class="shell hero__inner">
       <h1 class="hero__title">
-        <Wordmark />
+        <span class="visually-hidden">{SITE.name}</span>
+        <Wordmark decorative />
       </h1>
 
       <p class="lede hero__lede">{SITE.motto}</p>
 
       <div class="hero__cta"><DownloadMenu /></div>
+
+      <p class="hero__machines">
+        <span class="hero__machines-question muted">Will it work with my printer?</span>
+        <a class="hero__machines-link" href="/machines/">
+          {machines.length} machines supported<span aria-hidden="true"> →</span>
+        </a>
+      </p>
 
       <p class="hero__note mono muted">
         Beta software, under active development. Validate outputs and don't leave a first print unattended.
@@ -172,6 +184,31 @@ const reference = [
      before them is what says so. */
   .hero__cta {
     margin-top: 1.25rem;
+  }
+
+  /* The machine count sits under the download, where a visitor deciding whether
+     the app knows their printer is already looking. */
+  .hero__machines {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    /* Closer to the release line than to the warning below: the two are one
+       footnote about the download, and the warning is a different thought. */
+    margin-top: 0.55rem;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+  }
+
+  .hero__machines-link {
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-color: var(--border-strong);
+    text-underline-offset: 3px;
+  }
+
+  .hero__machines-link:hover {
+    color: var(--accent);
+    text-decoration-color: currentColor;
   }
 
   /* A step further from the release line than the hero's own rhythm: the warning

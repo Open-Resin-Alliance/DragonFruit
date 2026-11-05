@@ -1,13 +1,13 @@
 # Notifications and Toasts
 
-!!! note "Two systems: pick by surface"
-    Bottom-corner toasts follow the shell pattern below (`useEditorToasts` state
-    pair + timers, block in `NotificationStack`) — the orientation receipt uses
-    it. `pushSystemNotification()` in
-    `src/features/notifications/systemNotificationStore.ts` (rendered by
-    `SystemNotificationStack`) is the notification-center queue for richer
-    title/subtitle/action cards. The six legacy shell toasts predate both —
-    leave them until the consolidation in the internal backlog lands.
+> [!NOTE]
+> **Two systems: pick by surface.** Bottom-corner toasts follow the shell pattern below (`useEditorToasts` state
+> pair + timers, block in `NotificationStack`) — the orientation receipt uses
+> it. `pushSystemNotification()` in
+> `src/features/notifications/systemNotificationStore.ts` (rendered by
+> `SystemNotificationStack`) is the notification-center queue for richer
+> title/subtitle/action cards. The six legacy shell toasts predate both —
+> leave them until the consolidation in the internal backlog lands.
 
 ## The two paths
 
