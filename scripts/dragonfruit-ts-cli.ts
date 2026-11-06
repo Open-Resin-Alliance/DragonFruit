@@ -34,6 +34,7 @@ import {
   readPlateOrdering,
 } from '../src/features/scene/plates/plateCascade';
 import { computePlateFrames, plateSliceScope, resolveModelPlateId, type PlateSliceScope } from '../src/features/scene/plates/plateLayout';
+import { withoutModelSupports } from '../src/supports/PlacementLogic/SupportModelLinker';
 import type {
   BuildVoxlDocumentInput,
   VoxlDocumentV1,
@@ -273,16 +274,12 @@ async function sceneRemoveModel(args: ReturnType<typeof parseArgs>): Promise<voi
   const doc = await loadVoxl(voxlPath);
   const id = requireFlag(args.flags, 'id');
 
+  if (!doc.models.some((m) => m.id === id)) throw new Error(`Model '${id}' not found`);
+
   const before = doc.models.length;
   doc.models = doc.models.filter((m) => m.id !== id);
 
-  // Clean supports referencing this model
-  const s = doc.supports;
-  s.roots = s.roots.filter((r) => r.modelId !== id);
-  s.trunks = s.trunks.filter((t) => t.modelId !== id);
-  s.branches = s.branches.filter((b) => b.modelId !== id);
-  s.leaves = s.leaves.filter((l) => l.modelId !== id);
-  s.braces = s.braces.filter((b) => b.modelId !== id);
+  doc.supports = withoutModelSupports({ payload: doc.supports, modelIds: [id] }).payload;
 
   if (doc.scene.activeModelId === id) doc.scene.activeModelId = null;
   doc.scene.selectedModelIds = doc.scene.selectedModelIds.filter((sid) => sid !== id);

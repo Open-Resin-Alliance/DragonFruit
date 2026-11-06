@@ -253,8 +253,9 @@ wiring is explicit:
 
 - **Proxy picking** (`SupportProxyMeshLayer.tsx`) — cached refs + per-type reads
   for raycast selection in prepare mode.
-- **Model-link cascade** (`SupportModelLinker.ts`) — if gadgets should be removed
-  when their model is deleted, add to the collections tuple and removal logic.
+- **Model-link cascade** (`SupportModelLinker.ts`) — nothing to add: a type with a
+  `modelId` is removed with its model through `MODEL_ID_COLLECTION_KEYS`, in the
+  store and in a saved file alike. Only add a case to `modelSupportRemoval.test.ts`.
 - **Home snapshot caching** (`supportSnapshotHelpers.ts`) — add `'gadgets'` to
   `HomeSupportCollectionsSnapshot` if home-scene caching should include it.
 - **Settings cards / anatomy preview** — only for types that need a settings UI.
