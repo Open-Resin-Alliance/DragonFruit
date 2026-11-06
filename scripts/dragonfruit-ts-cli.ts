@@ -1686,7 +1686,6 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   releaseHeap();
 
   // Phase 4: Shell out to Rust slicer
-  const rustCli = rustCliPath();
   const run = sliceJob.buildSceneSliceRun(job, {
     maxZMm,
     modelTriangleCount,
@@ -1719,9 +1718,9 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   }
 
   const shown = run.args.map((arg, i) => (run.args[i - 1] === '--metadata-json' ? `<${arg.length} bytes>` : arg));
-  console.error(`  slicing: ${rustCli} ${shown.join(' ')}`);
+  console.error(`  slicing: ${rustCliPath()} ${shown.join(' ')}`);
   // No shell: the metadata is JSON, and the paths may contain spaces.
-  const result = execFileSync(rustCli, run.args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+  const result = execFileSync(rustCliPath(), run.args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
 
   // Cleanup temp
   rmSync(tmpDir, { recursive: true, force: true });
