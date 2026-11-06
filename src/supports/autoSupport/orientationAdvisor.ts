@@ -968,20 +968,27 @@ export function composeOrientationDelta(
  * model as loaded (upright, front −Y), so only the stored turntable — the
  * twist about plate Z — is kept, any earlier tilt is dropped, and the turntable
  * is applied after the lean so the front still leans back from where it faces.
- * Applying it twice therefore lands on the same pose.
+ *
+ * The lean goes on as its swing, with its own twist split off: a lean with a
+ * sideways part turns about Z a little by itself, which the next call would read
+ * as turntable and add again. A turn about Z changes no overhang or height, so
+ * the pose scores the same, and applying it twice lands on the same pose.
  */
 export function composeLeanBack(
     currentRotation: { x: number; y: number; z: number } | null | undefined,
     rotXDeg: number,
     rotYDeg: number,
 ): THREE.Euler {
-    const current = quaternionFromGlobalEuler(currentRotation);
-    // Swing-twist split: the twist about Z is the quaternion's Z part, renormalized.
-    const twist = new THREE.Quaternion(0, 0, current.z, current.w);
-    if (twist.lengthSq() < 1e-12) twist.identity();
-    else twist.normalize();
     const lean = new THREE.Quaternion().setFromEuler(
         new THREE.Euler((rotXDeg * Math.PI) / 180, (rotYDeg * Math.PI) / 180, 0, 'YXZ'),
     );
-    return new THREE.Euler().setFromQuaternion(twist.multiply(lean), 'ZYX');
+    const swing = twistAboutZ(lean).invert().multiply(lean);
+    const turntable = twistAboutZ(quaternionFromGlobalEuler(currentRotation));
+    return new THREE.Euler().setFromQuaternion(turntable.multiply(swing), 'ZYX');
+}
+
+/** Swing-twist split: the twist about Z is the quaternion's Z part, renormalized. */
+function twistAboutZ(q: THREE.Quaternion): THREE.Quaternion {
+    const twist = new THREE.Quaternion(0, 0, q.z, q.w);
+    return twist.lengthSq() < 1e-12 ? twist.identity() : twist.normalize();
 }

@@ -453,3 +453,23 @@ test('composeLeanBack keeps the turntable, drops an old tilt, and lands on the s
     const front = new THREE.Vector3(0, -1, 0).applyQuaternion(q1);
     assert.ok(front.x > 0.9 && front.z > 0.2, `front ${front.toArray()}`);
 });
+
+test('composeLeanBack holds still with a sideways part, however often it is applied', () => {
+    for (const turntable of [0, 1.2, -2]) {
+        for (const [rotX, rotY] of [[-30, 15], [-10, 15], [-20, -12.5], [-45, 15]]) {
+            const once = composeLeanBack({ x: 0, y: 0, z: turntable }, rotX, rotY);
+            let pose = once;
+            for (let i = 0; i < 10; i += 1) pose = composeLeanBack(pose, rotX, rotY);
+            const angle = quaternionFromGlobalEuler(once).angleTo(quaternionFromGlobalEuler(pose));
+            assert.ok(angle < 1e-6, `${turntable}/${rotX}/${rotY} moved ${angle} rad`);
+        }
+    }
+});
+
+test('composeLeanBack tilts by the lean it was given, whatever the turntable', () => {
+    for (const turntable of [0, 1.2]) {
+        const up = new THREE.Vector3(0, 0, 1).applyQuaternion(quaternionFromGlobalEuler(composeLeanBack({ x: 0, y: 0, z: turntable }, -30, 15)));
+        const lean = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler((-30 * Math.PI) / 180, (15 * Math.PI) / 180, 0, 'YXZ'));
+        assert.ok(Math.abs(up.z - lean.z) < 1e-9);
+    }
+});
