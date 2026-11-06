@@ -354,9 +354,15 @@ jobs:
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
         run: |
+          # csc, not Add-Type: PowerShell 7 cannot emit an assembly ("Both the
+          # assembly types 'ConsoleApplication' and 'WindowsApplication' are not
+          # currently supported"), and this step runs on 7.
           $probe = Join-Path $env:RUNNER_TEMP 'signing-probe.exe'
-          Add-Type -TypeDefinition 'public static class Probe { public static void Main() {} }' `
-            -OutputAssembly $probe -OutputType ConsoleApplication
+          $source = Join-Path $env:RUNNER_TEMP 'signing-probe.cs'
+          'public static class Probe { public static void Main() {} }' |
+            Out-File -FilePath $source -Encoding ascii
+          & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
+            /nologo /target:exe "/out:$probe" $source | Out-Null
           $overlay = Get-Content src-tauri/tauri.windows-signing.conf.json -Raw | ConvertFrom-Json
           $signCommand = $overlay.bundle.windows.signCommand
           $arguments = @($signCommand.args | ForEach-Object { if ($_ -eq '%1') { $probe } else { $_ } })
