@@ -1,30 +1,189 @@
 name: Windows release build (signing check)
 
-# Builds the Windows release exactly as `release.yml` does — same profile, same
-# target, same bundles, same signing overlay — signs it with Azure Artifact
-# Signing, and uploads the signed installers as a workflow artifact. Nothing is
-# tagged, published or released.
+# Checks the Azure Artifact Signing path `release.yml` uses, without publishing
+# anything.
 #
-# Manual only, on purpose: it costs a full release compile, so it is for
-# checking the signing setup after touching the certificate, the federated
-# credential, the account or the overlay — not something to run per push.
+# The `smoke` job signs one throwaway executable through the same config overlay
+# and script the release build runs. It needs no Node, no Rust and no npm, so it
+# answers "does signing work" in about ninety seconds. Run it after touching
+# anything in the signing path.
 #
-# The build steps mirror the `windows-latest` leg of `release.yml`. Keep them in
+# The `build` job is the full Windows release build, signed, uploaded as an
+# artifact. It costs a full release compile, so it only runs when asked.
+#
+# Its build steps mirror the `windows-latest` leg of `release.yml`. Keep them in
 # step: a check that drifts from the release build stops proving anything.
 on:
   workflow_dispatch:
+    inputs:
+      full_build:
+        description: Also build and sign the real installers (about 40 minutes).
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   id-token: write
 
+# One group per mode: a smoke run must not cancel a full build that has already
+# spent twenty minutes compiling, and two smokes should still replace each other.
 concurrency:
-  group: windows-signing-check
+  group: windows-signing-check-${{ inputs.full_build && 'full' || 'smoke' }}
   cancel-in-progress: true
 
 jobs:
+  smoke:
+    name: Sign a probe
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Azure login (Artifact Signing)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install the Artifact Signing module
+        shell: pwsh
+        run: |
+          Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
+
+      # Tauri discards the signer's stderr: any non-zero exit becomes
+      # "failed to run pwsh", with no reason attached. Signing a throwaway
+      # binary through the overlay is what turns that into a named failure.
+      - name: Sign a probe executable
+        shell: pwsh
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
+        run: |
+          # csc, not Add-Type: PowerShell 7 cannot emit an assembly ("Both the
+          # assembly types 'ConsoleApplication' and 'WindowsApplication' are not
+          # currently supported"), and this step runs on 7.
+          $probe = Join-Path $env:RUNNER_TEMP 'signing-probe.exe'
+          $source = Join-Path $env:RUNNER_TEMP 'signing-probe.cs'
+          'public static class Probe { public static void Main() {} }' |
+            Out-File -FilePath $source -Encoding ascii
+          & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
+            /nologo /target:exe "/out:$probe" $source | Out-Null
+          # The bundler chdirs to src-tauri before it builds this command, and
+          # only absolutizes an argument that exists from there. Run it the same
+          # way, or this check passes over the failure it exists to catch.
+          $tauriDir = Join-Path (Get-Location).Path 'src-tauri'
+          $overlay = Get-Content (Join-Path $tauriDir 'tauri.windows-signing.conf.json') -Raw | ConvertFrom-Json
+          $signCommand = $overlay.bundle.windows.signCommand
+          $arguments = @($signCommand.args | ForEach-Object {
+            if ($_ -eq '%1') { $probe }
+            else {
+              $candidate = Join-Path $tauriDir $_
+              if (Test-Path -LiteralPath $candidate -PathType Leaf) { (Resolve-Path -LiteralPath $candidate).Path }
+              else { $_ }
+            }
+          })
+          Push-Location $tauriDir
+          try {
+            & $signCommand.cmd @arguments
+            $exit = $LASTEXITCODE
+          } finally {
+            Pop-Location
+          }
+          if ($exit -ne 0) {
+            throw "The signing command exited $exit."
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $probe
+          if (-not $signature.SignerCertificate) {
+            throw "The probe came back unsigned: $($signature.StatusMessage)"
+          }
+          if ($signature.Status -eq 'HashMismatch') {
+            throw 'The probe signature does not match its contents.'
+          }
+          if (-not $signature.TimeStamperCertificate) {
+            throw 'The probe is signed but not timestamped.'
+          }
+          # The subject carries the certificate holder's name and locality, and
+          # these logs are public. The thumbprint identifies the certificate
+          # without naming anyone; the full subject is on the artifact itself.
+          Write-Host "Probe signed: status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
+
+      # The bundler is a Rust process, and its spawn of the sign command is what
+      # has failed every time. PowerShell resolving that command proves nothing
+      # about it, so spawn it from Node instead: libuv searches PATH and calls
+      # CreateProcess the way the bundler does. Tauri also absolutizes any
+      # argument naming an existing relative path, which this reproduces, so the
+      # script is passed the way the bundler passes it.
+      - name: Invoke the signing command from a non-PowerShell process
+        shell: pwsh
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
+        run: |
+          $probe = Join-Path $env:RUNNER_TEMP 'signing-probe-2.exe'
+          $source = Join-Path $env:RUNNER_TEMP 'signing-probe-2.cs'
+          'public static class Probe2 { public static void Main() {} }' |
+            Out-File -FilePath $source -Encoding ascii
+          & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
+            /nologo /target:exe "/out:$probe" $source | Out-Null
+
+          $tauriDir = Join-Path (Get-Location).Path 'src-tauri'
+          $overlay = Get-Content (Join-Path $tauriDir 'tauri.windows-signing.conf.json') -Raw | ConvertFrom-Json
+          $signCommand = $overlay.bundle.windows.signCommand
+          $arguments = @($signCommand.args | ForEach-Object {
+            if ($_ -eq '%1') { $probe }
+            else {
+              $candidate = Join-Path $tauriDir $_
+              if (Test-Path -LiteralPath $candidate -PathType Leaf) { (Resolve-Path -LiteralPath $candidate).Path }
+              else { $_ }
+            }
+          })
+          $spec = Join-Path $env:RUNNER_TEMP 'sign-command.json'
+          @{ cmd = $signCommand.cmd; args = $arguments; cwd = $tauriDir } |
+            ConvertTo-Json -Compress | Out-File -FilePath $spec -Encoding utf8
+
+          $spawner = Join-Path $env:RUNNER_TEMP 'spawn-sign.js'
+          @'
+          const { execFileSync } = require('node:child_process');
+          const fs = require('node:fs');
+          const spec = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          execFileSync(spec.cmd, spec.args, { stdio: 'inherit', cwd: spec.cwd });
+          '@ | Out-File -FilePath $spawner -Encoding utf8
+
+          node $spawner $spec
+          if ($LASTEXITCODE -ne 0) {
+            throw "The signing command exited $LASTEXITCODE when spawned outside PowerShell."
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $probe
+          if (-not $signature.SignerCertificate) {
+            throw "The probe came back unsigned: $($signature.StatusMessage)"
+          }
+          Write-Host "Spawned outside PowerShell: status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
+
+      - name: Show the signing log
+        if: always()
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'dragonfruit-sign.log'
+          if (Test-Path $log) { Get-Content $log } else { Write-Host 'the signing script never ran' }
+          if (Test-Path "$log.out") { Get-Content "$log.out" }
+
   build:
     name: Signed Windows release build
+    needs:
+      - smoke
+    if: inputs.full_build
     runs-on: windows-latest
     timeout-minutes: 120
     # The shipped profile, stated here as well as in Cargo.toml so that
@@ -120,17 +279,6 @@ jobs:
         run: |
           Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
 
-      # The bundler spawns `pwsh` by name, because that is what the signing
-      # overlay names, and the runner image does not put PowerShell 7 on PATH:
-      # it resolves `shell: pwsh` by absolute path instead. Without this the
-      # first signing call dies with "failed to run pwsh" after the whole
-      # release has compiled.
-      - name: Put PowerShell 7 on PATH
-        shell: pwsh
-        run: |
-          Split-Path -Parent (Get-Process -Id $PID).Path |
-            Out-File -FilePath $env:GITHUB_PATH -Append
-
       - name: Build Tauri bundle
         uses: tauri-apps/tauri-action@v0
         env:
@@ -139,13 +287,27 @@ jobs:
           AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
         with:
           tauriScript: npx tauri
           args: --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.windows-signing.conf.json
 
+      # Tauri discards the signer's stderr, so a failed signing call says only
+      # "failed to run pwsh". The script writes what happened to this file; an
+      # absent or empty one means it never started.
+      - name: Show the signing log
+        if: always()
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'dragonfruit-sign.log'
+          if (Test-Path $log) { Get-Content $log } else { Write-Host 'the signing script never ran' }
+          if (Test-Path "$log.out") { Get-Content "$log.out" }
+
       - name: Verify Windows installer runtime payloads
         shell: pwsh
-        run: ./scripts/verify-windows-bundles.ps1
+        run: ./scripts/verify-windows-bundles.ps1 -RequireSignature
 
       # The point of the run: if the certificate profile, the role assignment or
       # the federated credential is wrong, the build above fails; if it silently
@@ -153,20 +315,24 @@ jobs:
       - name: Verify Windows binaries are signed
         shell: pwsh
         run: |
+          # Not the executable in target/release: the bundler restores the
+          # unsigned original there after building each package type, and the
+          # signed copy lives inside the installers. verify-windows-bundles.ps1
+          # checks that one.
           $target = 'src-tauri/target/x86_64-pc-windows-msvc/release'
-          $files = @(
-            Get-Item "$target/dragonfruit-desktop.exe"
-            Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe', '*.msi'
-          )
+          $files = @(Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe', '*.msi')
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-            if ($signature.Status -ne 'Valid') {
-              throw "$($file.Name) is not validly signed (status: $($signature.Status))."
+            if (-not $signature.SignerCertificate) {
+              throw "$($file.Name) is not signed."
+            }
+            if ($signature.Status -eq 'HashMismatch') {
+              throw "$($file.Name) has a signature that does not match its contents."
             }
             if (-not $signature.TimeStamperCertificate) {
               throw "$($file.Name) is signed but not timestamped; the signature dies with the certificate."
             }
-            Write-Host "$($file.Name): $($signature.SignerCertificate.Subject)"
+            Write-Host "$($file.Name): status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
           }
 
       - name: Upload signed installers

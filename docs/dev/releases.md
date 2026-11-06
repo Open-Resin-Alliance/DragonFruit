@@ -280,8 +280,19 @@ overlay that only `release.yml` passes (`--config …`), so local
 credentials. Preview builds (`build-preview.yml`) are unsigned for the same
 reason: they are not release artifacts.
 
-`scripts/sign-windows.ps1` is the command Tauri runs, once per file, with the
-path as its only argument. It calls `Invoke-ArtifactSigning` from the
+`scripts/sign-windows.cmd` is the command Tauri runs, once per file, with the
+path as its only argument. It exists because the bundler spawns the command by
+name and `pwsh` is not on the PATH that process sees, even though a PowerShell
+step resolves it; `cmd.exe` is always in System32, which Windows searches before
+PATH, so the batch file finds PowerShell 7 and hands the work to
+`scripts/sign-windows.ps1`.
+
+The overlay names it as `..\scripts\sign-windows.cmd`, not `scripts\…`. The
+bundler calls `set_current_dir` into `src-tauri` before it builds the sign
+command, and only absolutizes an argument that exists from there, so a path
+relative to the repository root is passed through unchanged and resolves
+against the wrong directory. Anything that invokes the overlay outside the
+bundler has to run from `src-tauri` too, which is what the smoke check does. That script calls `Invoke-ArtifactSigning` from the
 `ArtifactSigning` PowerShell module pinned to `0.1.20` — the same module the
 `azure/artifact-signing-action` action installs. The action itself is not used
 because it signs a folder after the build, which is both too late for the
@@ -361,12 +372,29 @@ local run exercises the same credential the release does.
 
 ### Verification
 
-`release.yml` runs `Get-AuthenticodeSignature` over the application executable
-and every produced installer and fails the release if any of them is not
-`Valid`. A release that ships unsigned installers is worse than one that fails:
-nothing else in the pipeline would say why SmartScreen started warning.
+`release.yml` runs `Get-AuthenticodeSignature` over every produced installer
+and over the executable extracted from each one, and fails the release if any of
+them is unsigned, if the signature does not match the file's contents, or if it
+carries no timestamp.
 
-To check a downloaded installer by hand:
+The executable left in `target/release` is not checked, because the bundler
+restores the unsigned original there after building each package type: it copies
+the binary, patches and signs the copy for each bundle, then puts the original
+back. The signed copy is the one inside the installers, which is why the check
+unpacks them.
+
+It deliberately does not require `Status` to be `Valid`. A clean runner's root
+store does not carry the Microsoft root that Artifact Signing certificates chain
+to, so a perfectly good signature reports `UnknownError` there: "a certificate
+chain processed, but terminated in a root certificate which is not trusted by
+the trust provider". That root reaches end users through Windows Update. The
+runner is the odd one out, not the installer, and gating on `Valid` would fail
+every release.
+
+A release that ships unsigned installers is worse than one that fails: nothing
+else in the pipeline would say why SmartScreen started warning.
+
+To check a downloaded installer by hand, where the root is present:
 
 ```powershell
 Get-AuthenticodeSignature .\DragonFruit_0.3.1_x64-setup.exe | Format-List Status, SignerCertificate
