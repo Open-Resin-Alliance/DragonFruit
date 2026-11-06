@@ -25,8 +25,10 @@ permissions:
   contents: read
   id-token: write
 
+# One group per mode: a smoke run must not cancel a full build that has already
+# spent twenty minutes compiling, and two smokes should still replace each other.
 concurrency:
-  group: windows-signing-check
+  group: windows-signing-check-${{ inputs.full_build && 'full' || 'smoke' }}
   cancel-in-progress: true
 
 jobs:
