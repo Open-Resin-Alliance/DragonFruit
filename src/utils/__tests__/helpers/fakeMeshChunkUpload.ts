@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import type { InvokeArgs, InvokeOptions } from '@tauri-apps/api/core';
 import type { TauriInvoke } from '../../tauriMeshBridge';
 import {
   MeshChunkWorkerBody,
@@ -14,7 +15,7 @@ import {
 
 type NativeInvoke = (
   command: string,
-  args?: Record<string, unknown> | ArrayBuffer | Uint8Array,
+  args?: InvokeArgs,
   options?: { headers?: Record<string, string> },
 ) => Promise<unknown>;
 
@@ -93,10 +94,11 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
 
   const invoke: TauriInvoke = async <T>(
     command: string,
-    args?: Record<string, unknown> | ArrayBuffer | Uint8Array,
-    options?: { headers?: Record<string, string> },
+    args?: InvokeArgs,
+    options?: InvokeOptions,
   ): Promise<T> => {
     const fields = args as Record<string, unknown> | undefined;
+    const headers = options ? Object.fromEntries(new Headers(options.headers)) : undefined;
     let result: unknown;
     switch (command) {
       case 'mesh_chunk_upload_begin':
@@ -124,9 +126,9 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
       case 'mesh_chunk_upload_append': {
         assert.ok(pending);
         assert.ok(args instanceof Uint8Array);
-        assert.equal(options?.headers?.['x-mesh-upload-id'], pending.uploadId);
+        assert.equal(headers?.['x-mesh-upload-id'], pending.uploadId);
         const hash = createHash('sha256').update(args).digest('hex');
-        assert.equal(options?.headers?.['x-mesh-chunk-hash'], hash);
+        assert.equal(headers?.['x-mesh-chunk-hash'], hash);
         const bytes = args.slice();
         cache.set(hash, bytes);
         pending.chunks.push(bytes);
@@ -174,7 +176,7 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
         if (ready?.uploadId === fields?.uploadId) ready = undefined;
         break;
       default:
-        result = await nativeInvoke(command, args, options);
+        result = await nativeInvoke(command, args, headers ? { headers } : undefined);
     }
     return result as T;
   };

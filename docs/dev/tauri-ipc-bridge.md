@@ -79,6 +79,11 @@ grep -rhoE '\binvoke(<[^>]*>)?\(' src plugins --include=*.ts --include=*.tsx \
   rejected at the call site — *"expected a value for key … but the IPC call used
   a bytes payload"*. Put options in request headers, or keep them as crate
   constants; `mesh_chunk_upload_append` uses headers for its upload ID and hash.
+- **Use the SDK invoke contract.** `TauriInvoke` aliases the SDK's `invoke` type,
+  not a separately weakened signature. The options argument may be omitted, but
+  an options object must contain `headers: HeadersInit`. When there are no headers,
+  pass `undefined`, never `{ headers: undefined }`; do not cast real SDK invokes
+  to bypass this boundary.
 - **Header values are visible ASCII — percent-encode anything else.** An HTTP
   header value may only hold bytes `0x20`–`0x7E`; `HeaderValue::to_str` rejects
   the rest, so a header carrying a *path* breaks the moment the path has an

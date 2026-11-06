@@ -1,12 +1,9 @@
 import * as THREE from 'three';
+import type { invoke as sdkInvoke } from '@tauri-apps/api/core';
 import { isTauriRuntime } from './tauriRuntime';
 import { createMeshChunkUpload, invokeWithChunkedMesh } from './meshChunkUpload';
 
-export type TauriInvoke = <T>(
-  cmd: string,
-  args?: Record<string, unknown> | ArrayBuffer | Uint8Array,
-  opts?: { headers?: Record<string, string> },
-) => Promise<T>;
+export type TauriInvoke = typeof sdkInvoke;
 
 /** Subscribe to a backend event. Returns the unsubscribe function. */
 export type TauriListen = <T>(
@@ -72,7 +69,7 @@ export async function loadTauriCore(): Promise<TauriCoreModule | null> {
       import('@tauri-apps/api/event'),
     ])
       .then(([core, event]) => ({
-        invoke: core.invoke as TauriInvoke,
+        invoke: core.invoke,
         listen: event.listen as TauriListen,
       }))
       .catch(() => null);

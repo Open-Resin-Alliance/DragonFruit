@@ -136,7 +136,8 @@ class ChunkUploadSession implements MeshChunkUploadSession {
           const started = performance.now();
           let value: unknown;
           try {
-            value = await this.invoke(message.command, message.args, { headers: message.headers });
+            value = await this.invoke(message.command, message.args,
+              message.headers ? { headers: message.headers } : undefined);
           } finally {
             this.ipcMs += performance.now() - started;
           }
@@ -298,9 +299,7 @@ export async function invokeWithChunkedMesh<T>(
     throwIfAborted(options.signal);
     const result = await invoke<T>(command, {
       ...options.args, meshUploadId: ack.uploadId, expectedBytes: bytes.byteLength,
-    }, {
-      headers: options.headers,
-    });
+    }, options.headers ? { headers: options.headers } : undefined);
     await session.abort();
     return result;
   } catch (error) {

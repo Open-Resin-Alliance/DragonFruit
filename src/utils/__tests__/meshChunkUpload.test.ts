@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+import type { InvokeArgs } from '@tauri-apps/api/core';
 import { createMeshChunkUpload, type MeshChunkUploadSession } from '../meshChunkUpload';
 import type { TauriInvoke } from '../tauriMeshBridge';
 import { runExclusiveNativeMesh } from '../tauriMeshBridge';
@@ -192,7 +193,7 @@ test('cancelled native begin is cleaned by its exact ID before another worker ca
   let begins = 0;
   const invoke: TauriInvoke = async <T>(
     command: string,
-    args?: Record<string, unknown> | ArrayBuffer | ArrayBufferView,
+    args?: InvokeArgs,
   ): Promise<T> => {
     if (command === 'mesh_chunk_upload_begin') {
       if (++begins === 1) {
