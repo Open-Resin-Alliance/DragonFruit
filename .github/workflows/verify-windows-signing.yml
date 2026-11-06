@@ -170,9 +170,20 @@ jobs:
           AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
         with:
           tauriScript: npx tauri
           args: --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.windows-signing.conf.json
+
+      # Tauri discards the signer's stderr, so a failed signing call says only
+      # "failed to run pwsh". The script writes what happened to this file; an
+      # absent or empty one means it never started.
+      - name: Show the signing log
+        if: always()
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'dragonfruit-sign.log'
+          if (Test-Path $log) { Get-Content $log } else { Write-Host 'the signing script never ran' }
 
       - name: Verify Windows installer runtime payloads
         shell: pwsh

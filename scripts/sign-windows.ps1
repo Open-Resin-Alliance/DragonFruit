@@ -32,38 +32,69 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$required = @(
-    'AZURE_SIGNING_ENDPOINT',
-    'AZURE_SIGNING_ACCOUNT',
-    'AZURE_SIGNING_CERTIFICATE_PROFILE'
-)
-foreach ($name in $required) {
-    if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-        throw "$name is not set. Windows release builds sign with Azure Artifact Signing; see docs/dev/releases.md."
+# Tauri runs this through output_ok, which turns any non-zero exit into
+# "failed to run pwsh" and throws the stderr away. Write what happened to a
+# file the workflow can print, so a failure is diagnosable at all. An empty log
+# means the script never started, which points at the spawn rather than here.
+$logPath = if ([string]::IsNullOrWhiteSpace($env:DF_SIGN_LOG)) {
+    Join-Path ([IO.Path]::GetTempPath()) 'dragonfruit-sign.log'
+} else {
+    $env:DF_SIGN_LOG
+}
+
+function Write-SignLog([string]$Message) {
+    try {
+        Add-Content -LiteralPath $logPath -Value $Message -Encoding utf8
+    } catch {
+        Write-Warning "could not write $logPath"
     }
 }
 
-if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-    throw "Cannot sign '$Path': no such file."
+Write-SignLog "$(Get-Date -Format o) signing $Path"
+
+try {
+    $required = @(
+        'AZURE_SIGNING_ENDPOINT',
+        'AZURE_SIGNING_ACCOUNT',
+        'AZURE_SIGNING_CERTIFICATE_PROFILE'
+    )
+    foreach ($name in $required) {
+        if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+            throw "$name is not set. Windows release builds sign with Azure Artifact Signing; see docs/dev/releases.md."
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Cannot sign '$Path': no such file."
+    }
+
+    Import-Module ArtifactSigning -ErrorAction Stop
+
+    Invoke-ArtifactSigning `
+        -Endpoint $env:AZURE_SIGNING_ENDPOINT `
+        -CodeSigningAccountName $env:AZURE_SIGNING_ACCOUNT `
+        -CertificateProfileName $env:AZURE_SIGNING_CERTIFICATE_PROFILE `
+        -Files $Path `
+        -FileDigest SHA256 `
+        -TimestampRfc3161 'http://timestamp.acs.microsoft.com' `
+        -TimestampDigest SHA256 `
+        -Description 'DragonFruit' `
+        -ExcludeEnvironmentCredential `
+        -ExcludeWorkloadIdentityCredential `
+        -ExcludeManagedIdentityCredential `
+        -ExcludeSharedTokenCacheCredential `
+        -ExcludeVisualStudioCredential `
+        -ExcludeVisualStudioCodeCredential `
+        -ExcludeAzurePowerShellCredential `
+        -ExcludeAzureDeveloperCliCredential `
+        -ExcludeInteractiveBrowserCredential
+
+    Write-SignLog "$(Get-Date -Format o) signed $Path"
+} catch {
+    Write-SignLog (@(
+        "$(Get-Date -Format o) FAILED $Path"
+        ($_ | Out-String)
+        $_.ScriptStackTrace
+    ) -join "`n")
+    throw
 }
-
-Import-Module ArtifactSigning -ErrorAction Stop
-
-Invoke-ArtifactSigning `
-    -Endpoint $env:AZURE_SIGNING_ENDPOINT `
-    -CodeSigningAccountName $env:AZURE_SIGNING_ACCOUNT `
-    -CertificateProfileName $env:AZURE_SIGNING_CERTIFICATE_PROFILE `
-    -Files $Path `
-    -FileDigest SHA256 `
-    -TimestampRfc3161 'http://timestamp.acs.microsoft.com' `
-    -TimestampDigest SHA256 `
-    -Description 'DragonFruit' `
-    -ExcludeEnvironmentCredential `
-    -ExcludeWorkloadIdentityCredential `
-    -ExcludeManagedIdentityCredential `
-    -ExcludeSharedTokenCacheCredential `
-    -ExcludeVisualStudioCredential `
-    -ExcludeVisualStudioCodeCredential `
-    -ExcludeAzurePowerShellCredential `
-    -ExcludeAzureDeveloperCliCredential `
-    -ExcludeInteractiveBrowserCredential
