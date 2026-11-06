@@ -15,7 +15,14 @@ set "PWSH=%ProgramFiles%\PowerShell\7\pwsh.exe"
 if not exist "%PWSH%" set "PWSH=pwsh"
 >>"%DF_SIGN_LOG%" echo [shim] pwsh=%PWSH%
 
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0sign-windows.ps1" %* >>"%DF_SIGN_LOG%" 2>&1
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0sign-windows.ps1" %* >>"%DF_SIGN_LOG%.out" 2>&1
 set "RC=%ERRORLEVEL%"
 >>"%DF_SIGN_LOG%" echo [shim] exit=%RC%
+if not "%RC%"=="0" (
+  rem The bundler reduces any non-zero exit to "failed to run cmd.exe" and drops
+  rem the child's output, so put the real reason on stdout where the build log
+  rem shows it instead of leaving it only in the file.
+  echo [shim] signing failed with exit %RC%, output follows:
+  type "%DF_SIGN_LOG%.out"
+)
 exit /b %RC%
