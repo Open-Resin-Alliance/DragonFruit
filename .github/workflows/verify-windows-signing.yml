@@ -307,7 +307,7 @@ jobs:
 
       - name: Verify Windows installer runtime payloads
         shell: pwsh
-        run: ./scripts/verify-windows-bundles.ps1
+        run: ./scripts/verify-windows-bundles.ps1 -RequireSignature
 
       # The point of the run: if the certificate profile, the role assignment or
       # the federated credential is wrong, the build above fails; if it silently
@@ -315,11 +315,12 @@ jobs:
       - name: Verify Windows binaries are signed
         shell: pwsh
         run: |
+          # Not the executable in target/release: the bundler restores the
+          # unsigned original there after building each package type, and the
+          # signed copy lives inside the installers. verify-windows-bundles.ps1
+          # checks that one.
           $target = 'src-tauri/target/x86_64-pc-windows-msvc/release'
-          $files = @(
-            Get-Item "$target/dragonfruit-desktop.exe"
-            Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe', '*.msi'
-          )
+          $files = @(Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe', '*.msi')
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
             if (-not $signature.SignerCertificate) {

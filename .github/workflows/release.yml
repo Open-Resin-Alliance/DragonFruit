@@ -418,7 +418,7 @@ jobs:
       - name: Verify Windows installer runtime payloads
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./scripts/verify-windows-bundles.ps1
+        run: ./scripts/verify-windows-bundles.ps1 -RequireSignature
 
       # A release that silently ships unsigned installers is worse than a
       # failed one: SmartScreen would warn on every download and nothing in the
@@ -427,11 +427,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # Not the executable in target/release: the bundler restores the
+          # unsigned original there after building each package type, and the
+          # signed copy lives inside the installers. verify-windows-bundles.ps1
+          # checks that one.
           $target = 'src-tauri/target/x86_64-pc-windows-msvc/release'
-          $files = @(
-            Get-Item "$target/dragonfruit-desktop.exe"
-            Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe', '*.msi'
-          )
+          $files = @(Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe', '*.msi')
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
             if (-not $signature.SignerCertificate) {
