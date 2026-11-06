@@ -63,6 +63,8 @@ jobs:
           AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
         run: |
           # csc, not Add-Type: PowerShell 7 cannot emit an assembly ("Both the
@@ -125,6 +127,8 @@ jobs:
           AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
         run: |
           $probe = Join-Path $env:RUNNER_TEMP 'signing-probe-2.exe'
@@ -173,6 +177,7 @@ jobs:
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'dragonfruit-sign.log'
           if (Test-Path $log) { Get-Content $log } else { Write-Host 'the signing script never ran' }
+          if (Test-Path "$log.out") { Get-Content "$log.out" }
 
   build:
     name: Signed Windows release build
@@ -282,6 +287,8 @@ jobs:
           AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
         with:
           tauriScript: npx tauri
@@ -296,6 +303,7 @@ jobs:
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'dragonfruit-sign.log'
           if (Test-Path $log) { Get-Content $log } else { Write-Host 'the signing script never ran' }
+          if (Test-Path "$log.out") { Get-Content "$log.out" }
 
       - name: Verify Windows installer runtime payloads
         shell: pwsh
