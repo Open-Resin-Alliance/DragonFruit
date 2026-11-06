@@ -4,6 +4,15 @@ The native Rust slicing backend for DragonFruit Desktop (Tauri), in `rust/dragon
 
 This crate is the production slicing engine that converts triangle geometry into printer-ready layer containers. Format output is dispatched through a plugin-driven encoder registry (currently `.nanodlp`, `.ctb`, `.goo`, and others).
 
+## What changed in v3.3.1
+
+Perturbation 3DAA RLE dithering can process four independent layer streams with
+Pulp-native packed f32 arithmetic. Scalar output order/rounding, per-layer support
+merge and existing window/memory caps are preserved; low-cap and partial groups
+retain individual task scheduling. No spatial-island/error-cutoff, Z/RLE, or
+other optimization is included. See [Development Guide](development-guide.md)
+and [Pipeline](pipeline.md) for the contracts.
+
 ## What changed in v3.2
 
 v3.2 adds volumetric anti-aliasing, grayscale dithering, and a deeply reworked post-processing pipeline:

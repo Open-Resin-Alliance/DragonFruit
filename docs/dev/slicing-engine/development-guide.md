@@ -54,6 +54,58 @@ When changing `dragonfruit-slicing-engine`, preserve:
 - validate early and fail clearly
 - keep error variants meaningful and surfaced
 
+### Prepared perturbation 3DAA support splits
+
+For a valid model/support boundary with support AA disabled, the perturbation
+3DAA RLE path prepares `PerturbSupportSplitJobs` once per render in `pipeline.rs`.
+The internal model job clears split metadata after candidate classification, so
+it cannot re-enter the generic support-bypass full-frame mask fallback. Model AA
+samples, patterns and all later XY/Z/LUT/dither processing are unchanged. The
+cached support job remains AA Off/Coverage with a binary core, merged after the
+model tail. No halo settings or generation are introduced.
+
+Support-free layers use the prepared model directly before partition allocation.
+Required component statistics are computed once on the final combined or
+support-only stream. Raw, ordinary 2DAA and support-AA-enabled jobs retain their
+previous paths. No worker, queue/window or adaptive RAM limits are changed by
+support preparation.
+
+### Active-row perturbation RLE coverage
+
+Only the Z-perturbed branch of `rasterize_layer_rle` tracks each physical row's
+union of touched X extents across its subscanlines. Coverage resolution and
+scratch cleanup visit that range and its closing delta sentinel, with explicit
+zero runs before and after the emitted interval. Every emitted row byte is
+overwritten, including fractions that round to zero; bytes outside the interval
+are never emitted, so no whole-row clear is needed. Component row transitions,
+float accumulation order, winding repair, clipping, bounds and statistics remain
+unchanged. Binary single-Z, dense/ordinary 2DAA and block raster paths are untouched.
+
+### Touched-row 3DAA XY BOX blur
+
+The perturbation engine calls the private
+`blur_gray_rle_streaming_3daa_with_bounds` entry. It const-specializes the shared
+streaming BOX kernel to track decoded row extents, expanded horizontal ranges
+and per-ring-slot bounds. Addition, eviction, normalization and RLE emission
+visit only the relevant ranges; zero decoding clears only overlap with prior
+content. Moving/contracting or empty ranges cannot reuse stale source rows.
+
+SIMD and scalar-tail normalization offset their divider metadata to the same
+image-global coordinates; cropped row ranges do not change border denominators,
+integer rounding or output bounds. Extra bounds metadata is O(radius) on the
+stack, with no new row-sized/image buffer or cache. The optimized domain is the
+existing 3DAA radius limit 0–6 and min-alpha zero; larger radii use the original
+generic kernel. Public BOX blur callers retain the dense-ROI specialization,
+so Raw and ordinary 2DAA do not acquire sparse per-pixel checks or new settings.
+
+These paths compose with the independent-layer dithering below: prepared support
+splits feed the active-row rasterizer, whose gray RLE stream feeds touched-row
+BOX blur and the existing Z blur. The model then receives LUT/energy dithering
+before raw supports are merged. Raster/blur bounds metadata does not cross the
+stage boundary. The combined variant uses default admission of four times the
+selected post-worker count and retains its adaptive RAM clamp; no extra worker
+or image buffer is introduced.
+
 ### Portable SIMD arithmetic
 
 `pulp_simd` is a crate-private seam shared by XY raster blur and Z blur. Each
@@ -144,6 +196,112 @@ integer divide/round/min-alpha behavior. Reduced precision is a separate
 experiment, not a side effect of SIMD dispatch. Consumer tests may force each
 CPU-supported backend through the test-only `Backend::supported_for_tests()`
 iterator; shipping code has no backend override or telemetry.
+
+### Independent-layer Floyd–Steinberg SIMD
+
+Perturbation 3DAA RLE jobs with dithering enabled can run four independent layer
+streams together **after Z blur and before raw support merge**. This is not SIMD
+over adjacent pixels: each layer still walks left-to-right, top-to-bottom, and
+has its own two f32 error rows, source decoder, output accumulator and exact carry
+band. No error crosses Z. The scalar API and ordinary 2D/Raw paths are unchanged.
+
+The crate-private surface in `dither.rs` is `DitherLayer`,
+`LAYER_DITHER_BATCH`, `can_batch_layers`, and `dither_rle_layers`. Borrow input
+runs (do not clone them), supply dimensions per stream, and dispatch from the
+worker executing the operation:
+
+```rust
+let backend = Backend::detected();
+let layers = std::array::from_fn::<_, 4, _>(|lane| DitherLayer {
+    runs: &model_runs[lane], width, height,
+});
+let output = dither_rle_layers(&layers, &palette, backend);
+```
+
+The returned fixed array has one output per supplied stream; unused entries are
+empty. The private API accepts zero through four streams. A complete native-four
+batch performs packed f32 addition, subtraction and multiplication; partial
+batches, scalar backends and non-zero-at-input-zero LUTs call the original
+`dither_rle_layer_with_lut_and_gamma`. Its empty/all-zero-layer decisions and
+full-frame fallback remain the oracle, even for a curing-zero LUT. Neither
+clipping margins nor approximate error cutoffs are permitted.
+
+`Backend::for_layer_dither` reuses the cached runtime feature proof but narrows
+x86 V3/V4 to their Pulp-provided native V2 gate: four f32 lanes, not eight or
+sixteen mostly-unused lanes. This is an operation-specific width choice, not a
+user override; XY/Z blur retain their existing wider backend selection. Other
+architectures use their existing Pulp dispatcher, batching only when its f32
+width is exactly four. The arithmetic gate is entered on the executing scoped
+post worker. `can_batch_layers` checks width/inert-zero eligibility once for
+scheduling, not inside pixel loops.
+
+The native kernel `dither_independent_layers_with_simd` has interleaved complete
+four-f32 error-row vectors and individual byte rows: `32 * max(width)` error
+bytes plus the sum of active stream widths in byte-row storage. Production
+streams have equal dimensions, so this equals four scalar row working sets.
+There is no full-frame expansion, per-pixel allocation, input-RLE copy, or scratch
+for eight/sixteen native lanes. Different dimensions/ROIs retain per-lane borders
+and the exact existing carry-band growth/clearing rules. Table lookup remains
+scalar per lane; FS energy/bin arithmetic and error-weight multiplication/addition
+are separate f32 operations. Do not introduce FMA or reassociate additions.
+
+After each row, scalar and per-lane SIMD carry bounds contract to the first and
+last actual nonzero incoming errors. Only exact signed zeros are discarded;
+positive/negative subnormals, infinities and NaNs remain active. Zero-only tails
+can therefore close naturally instead of widening an obsolete interval. The
+full-frame oracle, diffusion order and row-clearing range are unchanged; there
+is no epsilon, FTZ/DAZ mode or assumed clipping margin.
+
+#### Borrowed source rows
+
+`RleSourcePosition` derives each row's actual raw-nonzero input extent without
+expanding an input byte row. `RleEnergyCursor` caches the exact immutable source
+energy for the current input run, including across rows. The processed interval
+is the union of actual input and incoming-error bounds; rightward bleed is still
+followed. Existing byte rows hold output only. No input clone, frame buffer or
+per-row span vector is added, and non-inert-zero LUTs keep the full-frame path.
+
+
+`finalize_perturb_rle_post_batch` owns the Z-blurred gray outputs while every
+layer remains charged to `PostTaskPermit`. The collector
+`extend_perturb_rle_post_batch` uses `try_extend_perturb_rle_post_batch` for
+nonblocking probes, but retains a charged partial group while other queued or
+executing post bodies can make useful progress. The external std dispatcher alone
+may wait on `PostTaskGate`; it samples the gate generation before probing and
+rechecks generation, permit availability, body count, EOF/failure and the current
+cap under the same mutex before sleeping. Empty probes do not advance generation,
+avoiding self-notification spins. Cap shrink below four, no useful bodies, EOF
+or failure flush without waiting. Partial groups still split into individual
+scoped tasks; low caps and final tails never serialize their scalar chains.
+
+`PostTaskBody` is an RAII queued/executing-body guard, registered before spawn
+and dropped after finalize, before encode/output send. `PostInputProgress`
+publishes XY readiness/disconnection or source closure after its sender drops,
+including panic. Successful source enqueue and cap changes also notify the gate.
+Only batch-eligible jobs create these guards/notifications. Existing permit
+release points, channel depths, RAM formula, radius windows and the single
+waiting-input stage are unchanged; see [Pipeline](pipeline.md).
+
+Regression tests named `layer_simd_` cover scalar-run parity for all CPU-supported
+Pulp backends, zero through four streams, dimensions/ROIs, curing-zero fallback,
+subnormals, quantization boundaries, packed FP arithmetic, consumer routing,
+monotonic progress, low caps, 257-layer slow-sink pressure, sink/cancellation
+failure and permit unwind. `queue_aware_` tests use channel/condvar handshakes,
+not sleeps/polling, to retain a partial group across absent input and unfinished
+XY work, form four after notifications, flush on last-body completion while its
+encode permit remains held, handle shrink/EOF/failure/cancellation/body/XY unwind, and cover
+notifications or permit release before sleep. Consumer tests add all one-through-
+seven-layer tails with zero/nonzero Z radius and both RLE/encoded sinks. The
+wait observer, backend and cap injection are test-only and never mutate process
+environment.
+
+Body/task counts are not occupied-worker or CPU measurements: Z blur has internal
+parallelism, and logical Arc-window bytes are not unique resident memory. Measure
+actual process CPU and grouping coverage separately in an untimed diagnostic.
+A benchmark must prove a native four-stream execution inside `LayerDither::with_simd`
+in the real CLI, then remove the throwaway diagnostic before measuring production
+code. No diagnostic overlay belongs in production timing binaries.
+
 
 ## Adding a new packing mode
 

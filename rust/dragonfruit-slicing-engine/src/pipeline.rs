@@ -224,6 +224,40 @@ fn encode_zero_rle(width: usize, height: usize) -> Vec<RleRun> {
     out.finish()
 }
 
+struct PerturbSupportSplitJobs {
+    model: SliceJobV3,
+    support: SliceJobV3,
+}
+
+impl PerturbSupportSplitJobs {
+    fn for_job(job: &SliceJobV3, split: Option<usize>) -> Option<Self> {
+        if split.is_none() || job.aa_on_supports || !crate::zaa::use_raster_perturbation(job)
+            || job.effective_xy_aa_steps() <= 1
+        {
+            return None;
+        }
+        let mut model = job.clone();
+        model.triangles_xyz = Vec::new();
+        // Candidates are already partitioned. Do not re-enter the generic
+        // support bypass, which materializes a full-frame model mask.
+        model.aa_on_supports = true;
+        model.model_triangle_count = 0;
+        let support = binary_support_raster_job(&model);
+        Some(Self { model, support })
+    }
+}
+
+fn binary_support_raster_job(job: &SliceJobV3) -> SliceJobV3 {
+    let mut support = job.clone();
+    support.anti_aliasing_level = "Off".to_string();
+    support.anti_aliasing_mode = "Coverage".to_string();
+    support.blur_brush_radius_px = 0;
+    support.minimum_aa_alpha_percent = 100.0;
+    support.aa_on_supports = true;
+    support.model_triangle_count = 0;
+    support
+}
+
 fn rasterize_layer_rle_with_support_split(
     job: &SliceJobV3,
     triangles: &[Triangle],
@@ -231,7 +265,15 @@ fn rasterize_layer_rle_with_support_split(
     layer: u32,
     compute_area_stats: bool,
     model_triangle_count: usize,
+    split_jobs: Option<&PerturbSupportSplitJobs>,
 ) -> (Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3) {
+    let model_job = split_jobs.map_or(job, |jobs| &jobs.model);
+    if split_jobs.is_some() && !layer_candidates.iter().any(|&i| i >= model_triangle_count) {
+        let (runs, stats) = rasterize_layer_rle(
+            model_job, triangles, layer_candidates, layer, compute_area_stats,
+        );
+        return (runs, None, stats);
+    }
     let mut model_layer_indices = Vec::with_capacity(layer_candidates.len());
     let mut support_layer_indices = Vec::with_capacity(layer_candidates.len());
     for &candidate in layer_candidates {
@@ -244,7 +286,7 @@ fn rasterize_layer_rle_with_support_split(
 
     if support_layer_indices.is_empty() {
         let (runs, stats) =
-            rasterize_layer_rle(job, triangles, layer_candidates, layer, compute_area_stats);
+            rasterize_layer_rle(model_job, triangles, layer_candidates, layer, compute_area_stats);
         return (runs, None, stats);
     }
 
@@ -257,30 +299,33 @@ fn rasterize_layer_rle_with_support_split(
     let model_runs = if model_layer_indices.is_empty() {
         encode_zero_rle(width, height)
     } else {
-        rasterize_layer_rle(job, triangles, &model_layer_indices, layer, false).0
+        rasterize_layer_rle(model_job, triangles, &model_layer_indices, layer, false).0
     };
 
-    // Support geometry must be binary before it is held aside from the model
-    // AA post-process. This matters for perturbation 3DAA, whose rasterizer
-    // itself emits grayscale coverage before the later XY/Z blur stages.
-    let mut support_job = job.clone();
-    support_job.anti_aliasing_level = "Off".to_string();
-    support_job.anti_aliasing_mode = "Coverage".to_string();
-    support_job.blur_brush_radius_px = 0;
-    support_job.minimum_aa_alpha_percent = 100.0;
-    support_job.aa_on_supports = true;
-    support_job.model_triangle_count = 0;
+    // Raw/2D callers retain the original per-layer binary job behavior.
+    let owned_support_job;
+    let support_job = if let Some(jobs) = split_jobs {
+        &jobs.support
+    } else {
+        owned_support_job = binary_support_raster_job(job);
+        &owned_support_job
+    };
 
     let (support_runs, support_stats) = rasterize_layer_rle(
-        &support_job,
+        support_job,
         triangles,
         &support_layer_indices,
         layer,
-        compute_area_stats,
+        compute_area_stats && split_jobs.is_none(),
     );
 
     if model_layer_indices.is_empty() {
-        return (model_runs, Some(support_runs), support_stats);
+        let stats = if compute_area_stats && split_jobs.is_some() {
+            recompute_layer_stats_from_rle(&support_runs, width, height, pixel_area_mm2, true)
+        } else {
+            support_stats
+        };
+        return (model_runs, Some(support_runs), stats);
     }
 
     let stats = if compute_area_stats {
@@ -767,6 +812,8 @@ pub fn render_layers_rle(
     let progress = AtomicU32::new(0);
     let support_split_model_triangle_count =
         support_split_model_triangle_count.filter(|&count| count > 0 && count < triangles.len());
+    let split_jobs = PerturbSupportSplitJobs::for_job(job, support_split_model_triangle_count);
+    let split_jobs = split_jobs.as_ref();
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<
         Result<(u32, Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3), SlicerV3Error>,
@@ -808,6 +855,7 @@ pub fn render_layers_rle(
                                             layer,
                                             compute_area_stats,
                                             model_triangle_count,
+                                            split_jobs,
                                         )
                                     } else {
                                         let (runs, stats) = rasterize_layer_rle(
@@ -929,6 +977,8 @@ pub fn render_layers_rle_encoded(
     let progress = AtomicU32::new(0);
     let support_split_model_triangle_count =
         support_split_model_triangle_count.filter(|&count| count > 0 && count < triangles.len());
+    let split_jobs = PerturbSupportSplitJobs::for_job(job, support_split_model_triangle_count);
+    let split_jobs = split_jobs.as_ref();
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<
         Result<(u32, Vec<u8>, LayerAreaStatsV3), SlicerV3Error>,
@@ -968,6 +1018,7 @@ pub fn render_layers_rle_encoded(
                                             layer,
                                             compute_area_stats,
                                             model_triangle_count,
+                                            split_jobs,
                                         )
                                     } else {
                                         let (runs, stats) = rasterize_layer_rle(
