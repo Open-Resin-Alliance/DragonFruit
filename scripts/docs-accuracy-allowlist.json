@@ -95,7 +95,8 @@
             "directed_hole_loops",
             "sourceInverse",
             "minAppVersion",
-            "protoVersion"
+            "protoVersion",
+            "UnknownError"
       ],
       "paths": [
             "src/supports/generatedSupportRegistrations.ts",
@@ -136,7 +137,8 @@
             "projectService": "typescript-eslint's parser option for type-aware linting. docs/internal/backlog.md names it because the finding IS its absence from eslint.config.mjs; it will appear in the tree once that entry is done.",
             "directed_hole_loops": "deleted when the two boundary walks became one. repair-engine-winding-and-boundary.md names it because the record of that confusion IS the removed walk: the section explains what it returned and why that was wrong, and it also names `Topology::boundary_loops`, which survives as the single rotation walk. Rewriting the name to today's would misstate which walk was at fault.",
             "sourceInverse": "ADR-0046 names the removed per-entry inverse to record why the merged Prepare geometry was baked model-local and why the world-space store made it necessary; it is deliberately absent from the code.",
-            "VisualSettingsPanel": "Renamed to CrossSliderPanel when the strip became a fixed sidebar. docs/internal/backlog.md cites the old name in a historical cleanup finding, so rewriting it to today's name would misstate what that entry listed."
+            "VisualSettingsPanel": "Renamed to CrossSliderPanel when the strip became a fixed sidebar. docs/internal/backlog.md cites the old name in a historical cleanup finding, so rewriting it to today's name would misstate what that entry listed.",
+            "UnknownError": "Get-AuthenticodeSignature's SignatureStatus value for a signature whose chain terminates in a root the local store does not trust. docs/dev/releases.md names it because that is exactly what a clean CI runner reports for a good Artifact Signing signature, and the release gate deliberately does not treat it as a failure. It is a .NET enum member, not a symbol in this tree."
       },
       "_comment_webkit_symbols": "The eight WebKit/JavaScriptCore internals above (javascript_gc_object_count through operationMapHash) are cited by docs/dev/performance-debugging.md as they appear in `sample` output and WebKit's own logs. They belong to the platform, not to this codebase, and will never be found here.",
       "_comment_anchor_constants": "ANCHOR_MIN_* / ANCHOR_SHAFT_MULTIPLIER: removed constants, cited by name in support-registry-findings.md because the finding IS their removal. The values live on the anchor descriptor's autoPlacement and are pinned by __tests__/autoPlacementPolicy.test.ts.",
