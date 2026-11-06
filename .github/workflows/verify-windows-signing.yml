@@ -120,6 +120,17 @@ jobs:
         run: |
           Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
 
+      # The bundler spawns `pwsh` by name, because that is what the signing
+      # overlay names, and the runner image does not put PowerShell 7 on PATH:
+      # it resolves `shell: pwsh` by absolute path instead. Without this the
+      # first signing call dies with "failed to run pwsh" after the whole
+      # release has compiled.
+      - name: Put PowerShell 7 on PATH
+        shell: pwsh
+        run: |
+          Split-Path -Parent (Get-Process -Id $PID).Path |
+            Out-File -FilePath $env:GITHUB_PATH -Append
+
       - name: Build Tauri bundle
         uses: tauri-apps/tauri-action@v0
         env:
