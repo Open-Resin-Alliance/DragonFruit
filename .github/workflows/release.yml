@@ -342,17 +342,33 @@ jobs:
         run: |
           Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
 
-      # The bundler spawns `pwsh` by name, because that is what the signing
-      # overlay names, and the runner image does not put PowerShell 7 on PATH:
-      # it resolves `shell: pwsh` by absolute path instead. Without this the
-      # first signing call dies with "failed to run pwsh" after the whole
-      # release has compiled.
-      - name: Put PowerShell 7 on PATH
+      # The bundler discards the signer's stderr: any non-zero exit becomes
+      # "failed to run pwsh", with no reason attached. Signing a throwaway
+      # binary first turns a broken signer into a two-minute failure that
+      # prints its own error, instead of a nine-minute build that says nothing.
+      - name: Sign a probe executable
         if: matrix.platform == 'windows-latest'
         shell: pwsh
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
         run: |
-          Split-Path -Parent (Get-Process -Id $PID).Path |
-            Out-File -FilePath $env:GITHUB_PATH -Append
+          $probe = Join-Path $env:RUNNER_TEMP 'signing-probe.exe'
+          Add-Type -TypeDefinition 'public static class Probe { public static void Main() {} }' `
+            -OutputAssembly $probe -OutputType ConsoleApplication
+          $overlay = Get-Content src-tauri/tauri.windows-signing.conf.json -Raw | ConvertFrom-Json
+          $signCommand = $overlay.bundle.windows.signCommand
+          $arguments = @($signCommand.args | ForEach-Object { if ($_ -eq '%1') { $probe } else { $_ } })
+          & $signCommand.cmd @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "The signing command exited $LASTEXITCODE."
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $probe
+          if ($signature.Status -ne 'Valid') {
+            throw "The probe came back $($signature.Status): $($signature.StatusMessage)"
+          }
+          Write-Host "Probe signed by $($signature.SignerCertificate.Subject)"
 
       - name: Build Tauri bundle
         if: matrix.build_kind == 'tauri'
