@@ -53,6 +53,7 @@ import type {
 } from '../src/supports/types';
 import type { AaPreset } from '../src/features/slicing/autoAaPhysics';
 import type { SceneSliceModelInput } from './cli/sceneSliceMesh';
+import { withoutModelInGroups } from './cli/sceneRemovalGroups';
 import type { RaftSettings } from '../src/supports/Rafts/Crenelated/RaftTypes';
 
 // ---------------------------------------------------------------------------
@@ -277,7 +278,14 @@ async function sceneRemoveModel(args: ReturnType<typeof parseArgs>): Promise<voi
   if (!doc.models.some((m) => m.id === id)) throw new Error(`Model '${id}' not found`);
 
   const before = doc.models.length;
-  doc.models = doc.models.filter((m) => m.id !== id);
+  const removed = doc.models.find((m) => m.id === id)!;
+  const remaining = withoutModelInGroups({
+    models: doc.models.filter((m) => m.id !== id),
+    groups: getGroups(doc),
+    removed,
+  });
+  doc.models = remaining.models;
+  if (getGroups(doc).length > 0) setGroups(doc, remaining.groups);
 
   doc.supports = withoutModelSupports({ payload: doc.supports, modelIds: [id] }).payload;
 
