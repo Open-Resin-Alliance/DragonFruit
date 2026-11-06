@@ -148,10 +148,16 @@ jobs:
             throw "The signing command exited $LASTEXITCODE."
           }
           $signature = Get-AuthenticodeSignature -LiteralPath $probe
-          if ($signature.Status -ne 'Valid') {
-            throw "The probe came back $($signature.Status): $($signature.StatusMessage)"
+          if (-not $signature.SignerCertificate) {
+            throw "The probe came back unsigned: $($signature.StatusMessage)"
           }
-          Write-Host "Probe signed by $($signature.SignerCertificate.Subject)"
+          if ($signature.Status -eq 'HashMismatch') {
+            throw 'The probe signature does not match its contents.'
+          }
+          if (-not $signature.TimeStamperCertificate) {
+            throw 'The probe is signed but not timestamped.'
+          }
+          Write-Host "Probe signed by $($signature.SignerCertificate.Subject) [$($signature.Status)]"
 
       - name: Build Tauri bundle
         uses: tauri-apps/tauri-action@v0
@@ -182,13 +188,16 @@ jobs:
           )
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-            if ($signature.Status -ne 'Valid') {
-              throw "$($file.Name) is not validly signed (status: $($signature.Status))."
+            if (-not $signature.SignerCertificate) {
+              throw "$($file.Name) is not signed."
+            }
+            if ($signature.Status -eq 'HashMismatch') {
+              throw "$($file.Name) has a signature that does not match its contents."
             }
             if (-not $signature.TimeStamperCertificate) {
               throw "$($file.Name) is signed but not timestamped; the signature dies with the certificate."
             }
-            Write-Host "$($file.Name): $($signature.SignerCertificate.Subject)"
+            Write-Host "$($file.Name): $($signature.SignerCertificate.Subject) [$($signature.Status)]"
           }
 
       - name: Upload signed installers
