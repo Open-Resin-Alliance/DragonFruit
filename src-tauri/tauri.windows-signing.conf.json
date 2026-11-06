@@ -6,7 +6,7 @@
         "args": [
           "/d",
           "/c",
-          "scripts\\sign-windows.cmd",
+          "..\\scripts\\sign-windows.cmd",
           "%1"
         ]
       }
