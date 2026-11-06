@@ -94,6 +94,56 @@ jobs:
           # without naming anyone; the full subject is on the artifact itself.
           Write-Host "Probe signed: status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
 
+      # The bundler is a Rust process, and its spawn of the sign command is what
+      # has failed every time. PowerShell resolving that command proves nothing
+      # about it, so spawn it from Node instead: libuv searches PATH and calls
+      # CreateProcess the way the bundler does. Tauri also absolutizes any
+      # argument naming an existing relative path, which this reproduces, so the
+      # script is passed the way the bundler passes it.
+      - name: Invoke the signing command from a non-PowerShell process
+        shell: pwsh
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
+        run: |
+          $probe = Join-Path $env:RUNNER_TEMP 'signing-probe-2.exe'
+          $source = Join-Path $env:RUNNER_TEMP 'signing-probe-2.cs'
+          'public static class Probe2 { public static void Main() {} }' |
+            Out-File -FilePath $source -Encoding ascii
+          & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
+            /nologo /target:exe "/out:$probe" $source | Out-Null
+
+          $overlay = Get-Content src-tauri/tauri.windows-signing.conf.json -Raw | ConvertFrom-Json
+          $signCommand = $overlay.bundle.windows.signCommand
+          $arguments = @($signCommand.args | ForEach-Object {
+            if ($_ -eq '%1') { $probe }
+            elseif (Test-Path -LiteralPath $_ -PathType Leaf) { (Resolve-Path -LiteralPath $_).Path }
+            else { $_ }
+          })
+          $spec = Join-Path $env:RUNNER_TEMP 'sign-command.json'
+          @{ cmd = $signCommand.cmd; args = $arguments } |
+            ConvertTo-Json -Compress | Out-File -FilePath $spec -Encoding utf8
+
+          $spawner = Join-Path $env:RUNNER_TEMP 'spawn-sign.js'
+          @'
+          const { execFileSync } = require('node:child_process');
+          const fs = require('node:fs');
+          const spec = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          execFileSync(spec.cmd, spec.args, { stdio: 'inherit' });
+          '@ | Out-File -FilePath $spawner -Encoding utf8
+
+          node $spawner $spec
+          if ($LASTEXITCODE -ne 0) {
+            throw "The signing command exited $LASTEXITCODE when spawned outside PowerShell."
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $probe
+          if (-not $signature.SignerCertificate) {
+            throw "The probe came back unsigned: $($signature.StatusMessage)"
+          }
+          Write-Host "Spawned outside PowerShell: status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
+
       - name: Show the signing log
         if: always()
         shell: pwsh
