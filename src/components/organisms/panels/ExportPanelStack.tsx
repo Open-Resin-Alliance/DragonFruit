@@ -90,7 +90,7 @@ export function ExportPanelStack({
   // several plates can be sliced one file per plate.
   const plateSliceScopes = scene.plateFrames.length > 0
     ? scene.plateFrames.map((frame) => ({
-        ...plateSliceScope(frame, scene.models, scene.plateFrames),
+        ...plateSliceScope({ frame, models: scene.models, frames: scene.plateFrames }),
         plateName: scene.plates.find((plate) => plate.id === frame.id)?.name ?? '',
       }))
     : undefined;
@@ -110,7 +110,7 @@ export function ExportPanelStack({
     .map((plate) => ({
       id: plate.id,
       name: plate.name,
-      modelIds: modelsOnPlate(scene.models, plate.id, scene.plateFrames).map((model) => model.id),
+      modelIds: modelsOnPlate({ models: scene.models, plateId: plate.id, frames: scene.plateFrames }).map((model) => model.id),
     }))
     .filter((plate) => plate.modelIds.length > 0);
 

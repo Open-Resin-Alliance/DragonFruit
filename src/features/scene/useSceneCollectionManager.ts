@@ -1920,7 +1920,7 @@ export function useSceneCollectionManager(options?: {
    * first plate, which is what a scene written before plates meant by it.
    */
   const modelPlateId = useCallback(
-    (model: LoadedModel) => plateIdForModel(model, plateFramesRef.current),
+    (model: LoadedModel) => plateIdForModel({ model, frames: plateFramesRef.current }),
     [],
   );
   /** Whether the plate a model stands on refuses edits. */
@@ -3643,7 +3643,7 @@ export function useSceneCollectionManager(options?: {
     // place for a side effect, and the active plate is a second piece of state.
     const current = modelsRef.current.find((m) => m.id === id);
     if (current) {
-      const plateId = plateIdForModel({ ...current, transform }, plateFramesRef.current);
+      const plateId = plateIdForModel({ model: { ...current, transform }, frames: plateFramesRef.current });
       if (plateId && plateId !== current.plateId && followLandedPlateRef.current) {
         setActivePlateId((active) => (active === plateId ? active : plateId));
       }
@@ -3652,7 +3652,7 @@ export function useSceneCollectionManager(options?: {
     setModels((prev) => prev.map((m) => {
       if (m.id !== id) return m;
       // Membership follows the model: it stands on whichever plate it now does.
-      return withPlateMembership({ ...m, transform }, plateFramesRef.current);
+      return withPlateMembership({ model: { ...m, transform }, frames: plateFramesRef.current });
     }));
   }, []);
 
@@ -3786,7 +3786,7 @@ export function useSceneCollectionManager(options?: {
     for (const model of modelsRef.current) {
       const nextTransform = updateMap.get(model.id);
       if (!nextTransform) continue;
-      const plateId = plateIdForModel({ ...model, transform: nextTransform }, plateFramesRef.current);
+      const plateId = plateIdForModel({ model: { ...model, transform: nextTransform }, frames: plateFramesRef.current });
       if (plateId) landedPlateIds.add(plateId);
     }
     // A drag that lands on another bed makes that bed the one you are working on,
@@ -3801,7 +3801,11 @@ export function useSceneCollectionManager(options?: {
       const nextTransform = updateMap.get(m.id);
       if (!nextTransform) return m;
       // Membership follows the model: it stands on whichever plate it now does.
-      return withPlateMembership({ ...m, transform: nextTransform }, plateFramesRef.current, options?.landedPlateId);
+      return withPlateMembership({
+        model: { ...m, transform: nextTransform },
+        frames: plateFramesRef.current,
+        landedPlateId: options?.landedPlateId,
+      });
     }));
 
     if (followedPlateId && activePlateIdRef.current !== followedPlateId) {
@@ -4127,7 +4131,7 @@ export function useSceneCollectionManager(options?: {
       };
       // Membership follows the model, folded into the same update so a drag does
       // not cost a second render.
-      return withPlateMembership(nextModel, plateFramesRef.current);
+      return withPlateMembership({ model: nextModel, frames: plateFramesRef.current });
     });
 
     // Follow the moved set when it lands wholly on one plate, which is a drag of one or a
@@ -8864,7 +8868,7 @@ export function useSceneCollectionManager(options?: {
 
   /** The plate a model stands on; the rule is `resolveModelPlateId` in plateLayout. */
   const resolveModelPlateId = useCallback(
-    (model: LoadedModel): string => plateIdForModel(model, plateFrames),
+    (model: LoadedModel): string => plateIdForModel({ model, frames: plateFrames }),
     [plateFrames],
   );
 
@@ -8890,7 +8894,7 @@ export function useSceneCollectionManager(options?: {
       return false;
     }
 
-    const doomed = modelsOnPlate(modelsRef.current, plateId, plateFramesRef.current);
+    const doomed = modelsOnPlate({ models: modelsRef.current, plateId, frames: plateFramesRef.current });
     const nextActivePlateId = activePlateIdRef.current === plateId ? remaining[0].id : activePlateIdRef.current;
     // The supports too: the delete takes the doomed models' supports, and the shift moves the
     // others', so an undo without them would leave both where the delete put them.
