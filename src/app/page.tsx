@@ -3605,27 +3605,70 @@ export default function Home() {
   function estimatePrintTime(activeMaterialProfile): number {
     
     if (!activeMaterialProfile || printingPreviewTotalLayers <= 0) return '—';
-
+    //It looks like tsmc settings will be undefined if its not included in the printer settings/profile.
+    
     const matProf = activeMaterialProfile;
     const totalLayers = printingPreviewTotalLayers;
+    const tsmc = matProf.liftDistance2Mm !== undefined;
+    const hasTransitionLayers = matProf.transitionLayerCount !== undefined && matProf.transitionLayerCount > 0;
+    const hasBottomLiftDistance = matProf.bottomLiftDistanceMm !== undefined;
+    console.log(tsmc, "TSMC ON");
+    console.log(hasTransitionLayers, "TRANSITION ON");
+    console.log(hasBottomLiftDistance, "BOTTOM LIFT DISTANCES")
 
-    const bottomLayerTime = ((matProf.bottomLiftDistanceMm / matProf.bottomLiftSpeedMmMin + matProf.bottomLiftDistance2Mm / matProf.bottomLiftSpeed2MmMin + matProf.bottomLiftDistanceMm / matProf.bottomRetractSpeedMmMin + matProf.bottomLiftDistance2Mm / matProf.bottomRetractSpeed2MmMin) * 60) + matProf.bottomExposureSec;
+    let firstStepBotMoveTime = 0;
+    let secondStepBotMoveTime = 0;
+    if (tsmc) {
+      firstStepBotMoveTime = (matProf.bottomLiftDistanceMm / matProf.bottomLiftSpeedMmMin + matProf.bottomLiftDistanceMm / matProf.bottomRetractSpeedMmMin) * 60;
+      secondStepBotMoveTime = (matProf.bottomLiftDistance2Mm / matProf.bottomLiftSpeed2MmMin + matProf.bottomLiftDistance2Mm / matProf.bottomRetractSpeed2MmMin) * 60;
+    }
+
+    console.log(firstStepBotMoveTime);
+    console.log(secondStepBotMoveTime);
+
+    //So if tsmc is off, there are no defined parameters for burn-in movement. So we need to calculate bottom layers with regular layer movement plus the exposure time.
+    //If TSMC is on, it will have its own, and we want to use it.
+    
+    const firstStepMoveTime = (matProf.liftDistanceMm / matProf.liftSpeedMmMin + matProf.liftDistanceMm / matProf.retractSpeedMmMin) * 60;
+
+    console.log(firstStepMoveTime);
+
+    let secondStepMoveTime = 0;
+    if (tsmc) secondStepMoveTime = (matProf.liftDistance2Mm / matProf.liftSpeed2MmMin + matProf.liftDistance2Mm / matProf.retractSpeed2MmMin) * 60;
+
+    console.log(secondStepMoveTime)
+
+    let bottomLayerTime = firstStepMoveTime + matProf.bottomExposureSec;
+    if (tsmc) bottomLayerTime = firstStepBotMoveTime + secondStepBotMoveTime + matProf.bottomExposureSec;
+    
+    console.log(bottomLayerTime);
+    
+    const regularLayerTime = firstStepMoveTime + secondStepMoveTime + matProf.normalExposureSec;
+
+    console.log(regularLayerTime);
+
+    let transitionLayerCount = 0;
+    if (hasTransitionLayers) transitionLayerCount = matProf.transitionLayerCount;
+
     const totalBottomLayerEstimate = bottomLayerTime * matProf.bottomLayerCount;
-
-    const regularLayerTime = ((matProf.liftDistanceMm / matProf.liftSpeedMmMin +  matProf.liftDistance2Mm / matProf.liftSpeed2MmMin + matProf.liftDistanceMm / matProf.retractSpeedMmMin + matProf.liftDistance2Mm / matProf.retractSpeed2MmMin) * 60) + matProf.normalExposureSec;
-    const totalRegularLayerEstimate = regularLayerTime * (totalLayers - matProf.bottomLayerCount - matProf.transitionLayerCount);
+    const totalRegularLayerEstimate = regularLayerTime * (totalLayers - matProf.bottomLayerCount - transitionLayerCount);
 
     //No wait times yet. We need to make a solution for them to pass through properly.
 
     //cant think of a way to do transitions without a for loop.
     let totalTransitionLayerEstimate = 0;
-    for (let i=0; i < matProf.transitionLayerCount; i++){
-      const pct = i / matProf.transitionLayerCount;
-      //Simple Linear Interpolation. No reason to believe the printer doesnt do the same.
-      const layerExposure = matProf.normalExposureSec + pct * (matProf.bottomExposureSec - matProf.normalExposureSec);
-      console.log("Layer Exposure Transition: ", layerExposure);
-      const layerTime = ((matProf.bottomLiftDistanceMm / matProf.bottomLiftSpeedMmMin + matProf.bottomLiftDistance2Mm / matProf.bottomLiftSpeed2MmMin + matProf.bottomLiftDistanceMm / matProf.bottomRetractSpeedMmMin + matProf.bottomLiftDistance2Mm / matProf.bottomRetractSpeed2MmMin) * 60) + layerExposure;
-      totalTransitionLayerEstimate += layerTime;
+    if (hasTransitionLayers) {
+      for (let i=0; i < matProf.transitionLayerCount; i++){
+        const pct = i / matProf.transitionLayerCount;
+        //Simple Linear Interpolation. No reason to believe the printer doesnt do the same.
+        const layerExposure = matProf.normalExposureSec + pct * (matProf.bottomExposureSec - matProf.normalExposureSec);
+        
+        let layerMoveTime = firstStepMoveTime;
+        if (tsmc) layerMoveTime = firstStepBotMoveTime + secondStepBotMoveTime;
+        
+        const layerTime = layerMoveTime + layerExposure;
+        totalTransitionLayerEstimate += layerTime;
+      }
     }
 
     console.log(activeMaterialProfile);

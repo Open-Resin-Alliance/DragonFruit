@@ -526,7 +526,7 @@ function coerceLocalMaterialOverrideValue(
         if (!Number.isFinite(parsed)) return null;
         return kind === 'integer' ? Math.round(parsed) : parsed;
     }
-
+    
     return String(rawValue);
 }
 
@@ -546,6 +546,9 @@ function resolveMaterialProfileWithLocalSettings(
         printerProfile.display.settingsMode,
     );
 
+    console.log(materialProfile, "DINGDONG");
+    console.log("ADAPTER = ", adapter);
+
     if (!adapter?.replacesDefaultMaterialSettings || adapter.fields.length === 0) {
         return materialProfile;
     }
@@ -563,12 +566,15 @@ function resolveMaterialProfileWithLocalSettings(
         if (!Object.prototype.hasOwnProperty.call(localForOutput, field.key)) return;
 
         const targetKey = resolveLocalMaterialOverrideTargetKey(field);
+        console.log(field, "Target = ", targetKey);
         if (!targetKey) return;
 
         const coercedValue = coerceLocalMaterialOverrideValue(localForOutput[field.key]!, field.kind);
+        console.log(field.key, field.kind, "Coerced = ", coercedValue);
         if (coercedValue == null) return;
-
+    
         if (materialProfile[targetKey] === coercedValue) return;
+        console.log(materialProfile[targetKey]);
 
         if (!nextProfile) {
             nextProfile = { ...materialProfile };
@@ -576,7 +582,7 @@ function resolveMaterialProfileWithLocalSettings(
 
         (nextProfile as unknown as Record<string, LocalMaterialSettingsValue>)[targetKey] = coercedValue;
     });
-
+    console.log(nextProfile);
     return nextProfile ?? materialProfile;
 }
 
