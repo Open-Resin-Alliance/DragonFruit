@@ -372,10 +372,16 @@ local run exercises the same credential the release does.
 
 ### Verification
 
-`release.yml` runs `Get-AuthenticodeSignature` over the application executable
-and every produced installer, and fails the release if any of them is unsigned,
-if the signature does not match the file's contents, or if it carries no
-timestamp.
+`release.yml` runs `Get-AuthenticodeSignature` over every produced installer
+and over the executable extracted from each one, and fails the release if any of
+them is unsigned, if the signature does not match the file's contents, or if it
+carries no timestamp.
+
+The executable left in `target/release` is not checked, because the bundler
+restores the unsigned original there after building each package type: it copies
+the binary, patches and signs the copy for each bundle, then puts the original
+back. The signed copy is the one inside the installers, which is why the check
+unpacks them.
 
 It deliberately does not require `Status` to be `Valid`. A clean runner's root
 store does not carry the Microsoft root that Artifact Signing certificates chain
