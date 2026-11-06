@@ -62,6 +62,7 @@ import {
 } from './LutCurveEditor';
 import { useKeyPressed } from '@/hotkeys/hotkeyStore';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+import { useSliceMeshWarmup } from '@/features/slicing/useSliceMeshWarmup';
 import type { LocaleFormat } from '@/utils/localeNumber';
 
 export type SliceIntent = 'file' | 'upload' | 'print' | 'preview' | 'uvtools';
@@ -1449,6 +1450,27 @@ export function SlicingPanel({
     savedCurves,
     sessionAaOverrideDraft,
   ]);
+  // Prepare the first plate the next action will slice, while the context is idle.
+  // Auto-preview always covers the active plate; a manual batch starts at its first bed.
+  const warmupPlateScope = !shouldAutoSlice && effectiveSlicePlateScope === 'all_plates'
+    ? (populatedPlateScopes[0] ?? activePlateSliceScope)
+    : activePlateSliceScope;
+  const warmupModels = useMemo(() => {
+    if (!warmupPlateScope) return models;
+    const ids = new Set(warmupPlateScope.modelIds);
+    return models.filter(model => ids.has(model.id));
+  }, [models, warmupPlateScope]);
+  const cancelMeshWarmup = useSliceMeshWarmup(activePrinterProfile && materialProfileForSlicing ? {
+    models: warmupModels,
+    excludedModelIds,
+    ...(warmupPlateScope ? {
+      plateVolumeBoundsMm: warmupPlateScope.volumeBoundsMm,
+      plateOffsetMm: warmupPlateScope.offsetMm,
+    } : {}),
+    printerProfile: activePrinterProfile,
+    materialProfile: materialProfileForSlicing,
+    antiAliasing: { preset: aaAutoPreset, override: sessionAaOverrideDraft, lutCurves: savedCurves },
+  } : null, shouldAutoSlice === true);
   const effectiveAutoAaConfig = sliceAntiAliasing.decision.autoConfig;
 
   const materialAaOverrideEnabled = sliceAntiAliasing.decision.overrideEnabled;
@@ -1597,7 +1619,6 @@ export function SlicingPanel({
     window.localStorage.setItem(SLICING_Z_BLUR_RADIUS_CUSTOM_ENABLED_STORAGE_KEY, serialized);
     window.sessionStorage.setItem(SLICING_Z_BLUR_RADIUS_CUSTOM_ENABLED_STORAGE_KEY, serialized);
   }, [useCustomZBlurRadius]);
-
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const serialized = String(useCustomBlurBrushRadius);
@@ -2253,8 +2274,9 @@ export function SlicingPanel({
     setCurrentPhase('Cancelling');
     // i18n-ignore: sliceStatus is never rendered
     setSliceStatus('Cancelling');
+    cancelMeshWarmup();
     slicingAbortControllerRef.current?.abort();
-  }, [isSlicingZip]);
+  }, [cancelMeshWarmup, isSlicingZip]);
 
   // Close intent dropdown on outside click
   useEffect(() => {
@@ -3176,5 +3198,4 @@ export function SlicingPanel({
     </Card>
   );
 }
-
 export default SlicingPanel;

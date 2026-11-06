@@ -49,7 +49,7 @@ scope.onmessage = (event) => {
     try {
       let value: unknown;
       switch (message.type) {
-        case 'begin': value = await body.begin(message.reserveBytes); break;
+        case 'begin': value = await body.begin(message.reserveBytes, message.retainForSlice); break;
         case 'append': await body.append(message.bytes); break;
         case 'finish': value = await body.finish(message.stage); break;
       }

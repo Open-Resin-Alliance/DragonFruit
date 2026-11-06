@@ -7,6 +7,21 @@ This page is the developer-facing source of truth for client-side persistence us
 - `localStorage`: primary persistent settings and feature state
 - `sessionStorage`: transient/session fallback for selected slicing/profile settings
 - IndexedDB: recent-file payload cache (`dragonfruit-recent-files`)
+- OPFS: private undo spill and the separate disposable `dragonfruit-prepared-geometry` cache
+- Native app cache: one anonymous/delete-on-close last-slice backing file
+
+## Runtime geometry cache storage
+
+Prepared modifier results retain at most 64 MiB RAM payload, 1 GiB in their own OPFS
+directory and 4096 entries. Files are created only when needed; old prepared scratch
+files are pruned on first use. These are rebuildable caches, never scene/undo files.
+Native mesh uploads have a separate 64 MiB hot cache and one last-slice backing of
+at most 2 GiB in `app_cache_dir`. It is not preallocated, never intentionally uses
+a RAM filesystem, and is removed by the OS when its process closes. Missing,
+corrupt, unavailable or over-budget retention causes real work on demand, not fake
+geometry. The cache/key/lease API and exact bounds are documented in
+[Tauri IPC and Native Bridge](tauri-ipc-bridge.md#cached-mesh-preparation-before-slicing).
+No new user-setting key or main app version migration is required.
 
 ## Key conventions
 

@@ -1,10 +1,6 @@
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { Box3, Vector3 } from 'three';
-import { computeApproxModelWorldBounds, computePreciseModelWorldBounds, isBoundsDisjointFromVolume } from '@/utils/modelBounds';
-import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { attachJobMetadataPayloads, getJobMetadataPayloadDeclarations } from './jobMetadataPayloads';
-import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from './formats/registry';
 import { asciiFileBaseName } from './plateSliceNaming';
 import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
@@ -15,12 +11,11 @@ import {
     type NativeSlicerPerfMetrics,
     type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
-import { invoke } from '@tauri-apps/api/core';
-import { createMeshChunkUpload } from '@/utils/meshChunkUpload';
-import { runExclusiveNativeMesh } from '@/utils/tauriMeshBridge';
-import type { MeshChunkUploadSession } from '@/utils/meshChunkUpload';
-import { assembleSliceJob, buildNativeSliceJob, resolveSliceRasterSettings } from './sliceJobAssembly';
-import { resolveSliceJobAntiAliasing, type SliceJobAntiAliasingRequest } from './sliceAntiAliasing';
+import { assembleSliceJob, buildNativeSliceJob } from './sliceJobAssembly';
+import type { SliceJobAntiAliasingRequest } from './sliceAntiAliasing';
+import { runWithSliceMesh } from './sliceMeshSnapshot';
+export { prewarmSliceMesh, getSliceMeshInputSignature, equalSliceMeshInputSignatures, subscribeSliceMeshInputChanges } from './sliceMeshSnapshot';
+export type { SliceMeshPrewarmOptions, SliceMeshInputSignature } from './sliceMeshSnapshot';
 
 const DEBUG_PREFIX = '[SlicingDebug]';
 const BYTES_PER_TRIANGLE_XYZ = Float32Array.BYTES_PER_ELEMENT * 9;
@@ -28,7 +23,6 @@ const STAGING_PREALLOC_MIN_BYTES = 16 * 1024 * 1024;
 const STAGING_PREALLOC_MAX_BYTES = 1024 * 1024 * 1024;
 const STAGING_PREALLOC_HEADROOM = 1.35;
 const MESH_TRANSPORT_ENCODING = 'raw_f32' as const;
-const STAGE_PROGRESS_UPDATE_MIN_INTERVAL_MS = 250;
 
 function logDebug(...args: unknown[]): void {
     if (typeof console === 'undefined' || typeof console.debug !== 'function') return;
@@ -188,9 +182,14 @@ export type SliceExportResult = {
             bridgeInvokeRoundTripMs: number | null;
             bridgeTotalMs: number | null;
             bridgePayloadChars: number | null;
+            bridgePayloadContributors?: Record<string, { chars: number; bytes: number }>;
+            bridgePayloadUploadedBytes?: number;
+            bridgePayloadReusedBytes?: number;
+            bridgePayloadCacheMs?: number;
             triangleFloatCount: number | null;
             meshBytesLen: number | null;
             stageMeshMs: number | null;
+            stageMeshWallMs: number;
             stageMeshBytes: number | null;
             stageMeshUploadedBytes: number;
             stageMeshReusedBytes: number;
@@ -234,29 +233,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     };
 
     const excludedModelIdSet = new Set(options.excludedModelIds ?? []);
-    const halfWidth = Math.max(1, Number(options.printerProfile.buildVolumeMm.width) || 1) * 0.5;
-    const halfDepth = Math.max(1, Number(options.printerProfile.buildVolumeMm.depth) || 1) * 0.5;
-    const buildHeight = Math.max(1, Number(options.printerProfile.buildVolumeMm.height) || 1);
-    const plateBounds = options.plateVolumeBoundsMm;
-    const buildVolume = plateBounds
-        ? new Box3(
-            new Vector3(plateBounds.minX, plateBounds.minY, 0),
-            new Vector3(plateBounds.maxX, plateBounds.maxY, buildHeight),
-        )
-        : new Box3(new Vector3(-halfWidth, -halfDepth, 0), new Vector3(halfWidth, halfDepth, buildHeight));
-    const visibleModels = options.models.filter((model) => {
-        if (!model.visible || excludedModelIdSet.has(model.id)) return false;
-        const approximate = computeApproxModelWorldBounds(model.geometry, model.transform);
-        if (buildVolume.containsBox(approximate)) return true;
-        // An enclosing box that misses the volume cannot contribute any pixels.
-        // For rotated boxes that overlap, use the actual transformed vertices.
-        if (isBoundsDisjointFromVolume(approximate, buildVolume, 0.01)) return false;
-        return !isBoundsDisjointFromVolume(
-            computePreciseModelWorldBounds(model.geometry, model.transform),
-            buildVolume,
-            0.01,
-        );
-    });
+    const visibleModels = options.models.filter((model) => model.visible && !excludedModelIdSet.has(model.id));
     if (visibleModels.length === 0) {
         throw new Error('No in-bounds visible models available for slicing.');
     }
@@ -303,141 +280,23 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     const meshTransportQuantization = null;
     const meshChunkTargetBytes = 4 * 1024 * 1024;
     const meshTransferMode = 'cached-chunks' as const;
-    let meshUpload: MeshChunkUploadSession | null = null;
-    let cumulativeBytesStage = 0;
-    let stageMeshIpcMs = 0;
-    let stageMeshChunkCount = 0;
-    let stageMeshAckAppendNsTotal = 0;
-    let stageMeshCapacityMaxBytes = 0;
-    let stageMeshReserveGrowthEvents = 0;
-    let stageMeshUploadedBytes = 0;
-    let stageMeshReusedBytes = 0;
-    let lastStageProgressUpdateMs = 0;
-
-    const handleMeshChunk = async (chunk: Uint8Array) => {
-        throwIfAborted(options.abortSignal);
-        if (!meshUpload) throw new Error('Mesh chunk upload has not started.');
-        const started = performance.now();
-        await meshUpload.append(chunk);
-        stageMeshIpcMs += performance.now() - started;
-        cumulativeBytesStage += chunk.byteLength;
-        const now = performance.now();
-        if (now - lastStageProgressUpdateMs >= STAGE_PROGRESS_UPDATE_MIN_INTERVAL_MS) {
-            options.onProgress?.(0, 1, `Transferring Mesh (${Math.round(cumulativeBytesStage / (1024 * 1024))} MB)`);
-            lastStageProgressUpdateMs = now;
-        }
-    };
-
-    const modifierBakeStartMs = performance.now();
-    options.onProgress?.(0, 1, 'Baking Modifiers');
-    const preparedModelsForOutput = await prepareLoadedModelsForOutput(visibleModels);
-    let preparedDisposed = false;
-    const disposePreparedModels = () => {
-        if (preparedDisposed) return;
-        preparedDisposed = true;
-        preparedModelsForOutput.dispose();
-    };
-    const modifierBakeMs = performance.now() - modifierBakeStartMs;
-
-    const survivingCombinedModels = preparedModelsForOutput.models.filter((model) => {
-        const modelTriangleCount = model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count;
-        if (!modelTriangleCount || modelTriangleCount <= 0) return false;
-        const position = model.geometry.geometry.getAttribute('position');
-        const totalTriangleCount = Math.floor(
-            (model.geometry.geometry.getIndex()?.count ?? position?.count ?? 0) / 3,
-        );
-        return modelTriangleCount < totalTriangleCount;
-    });
-    if (survivingCombinedModels.length > 0) {
-        preparedModelsForOutput.dispose();
-        throw new Error(
-            `Classified support geometry was not separated before slicing: ${survivingCombinedModels
-                .map((model) => model.name)
-                .join(', ')}`,
-        );
-    }
-
-    logDebug('Prepared models for slice/export handoff', {
-        visibleModelCount: visibleModels.length,
-        preparedModelCount: preparedModelsForOutput.models.length,
-        modifiedModelCount: preparedModelsForOutput.modifiedModelCount,
-        modifierBakeMs,
-    });
-    // Support tips shrink while the mesh is prepared, before the job is
-    // assembled, so the anti-aliasing is resolved here first; assembleSliceJob
-    // resolves the same request again below.
-    const { supportTipShrinkPercent } = resolveSliceJobAntiAliasing({
-        printerProfile: options.printerProfile,
-        materialProfile: options.materialProfile,
-        layerHeightMm: resolveSliceRasterSettings({
-            printerProfile: options.printerProfile,
-            materialProfile: options.materialProfile,
-        }).layerHeightMm,
-        request: options.antiAliasing,
-    });
-    return runExclusiveNativeMesh(async () => {
-        const meshPrepStartMs = performance.now();
-        let solidMesh: Awaited<ReturnType<typeof buildSolidSliceMeshForWasm>>;
-        try {
-            meshUpload = await createMeshChunkUpload(invoke, {
-                reserveBytes: meshTransportBytesEstimate,
-                signal: options.abortSignal,
-            });
-
-            logDebug('Initialized mesh staging buffer', {
-                initialMeshStagingBytes,
-                initialMeshStagingMiB: Number((initialMeshStagingBytes / (1024 * 1024)).toFixed(2)),
-                meshChunkTargetBytes,
-                meshChunkTargetMiB: Number((meshChunkTargetBytes / (1024 * 1024)).toFixed(2)),
-                meshTransportBytesEstimate,
-                meshTransportEncoding,
-                meshTransferMode,
-            });
-
-            solidMesh = await buildSolidSliceMeshForWasm({
-                models: preparedModelsForOutput.models,
-                printerProfile: options.printerProfile,
-                materialProfile: options.materialProfile,
-                filenameBase: options.filenameBase,
-                plateOffsetMm: options.plateOffsetMm,
-                supportTipShrinkPercent,
-                flushBinaryMeshChunk: handleMeshChunk,
-                meshChunkTargetBytes,
-            });
-            const finishStarted = performance.now();
-            const chunkAck = await meshUpload.finish();
-            stageMeshIpcMs += performance.now() - finishStarted;
-            cumulativeBytesStage = chunkAck.totalBytes;
-            stageMeshChunkCount = chunkAck.chunksReceived;
-            stageMeshAckAppendNsTotal = chunkAck.appendNsTotal;
-            stageMeshCapacityMaxBytes = chunkAck.capacityBytes;
-            stageMeshReserveGrowthEvents = Number(chunkAck.reserveGrew);
-            stageMeshUploadedBytes = chunkAck.uploadedBytes;
-            stageMeshReusedBytes = chunkAck.reusedBytes;
-        } catch (error) {
-            await meshUpload?.abort();
-            throw error;
-        } finally {
-            disposePreparedModels();
-        }
-        const meshPrepMs = performance.now() - meshPrepStartMs;
-
-        logDebug('Solid mesh prepared for native backend', {
-            source: `${solidMesh.sourceWidthPx}x${solidMesh.sourceHeightPx}`,
-            output: `${solidMesh.widthPx}x${solidMesh.heightPx}`,
-            packingMode: solidMesh.xPackingMode,
-            totalLayers: solidMesh.totalLayers,
-            meshPrepMs,
-            stagedMeshBytes: cumulativeBytesStage,
-            stagedMeshChunkCount: stageMeshChunkCount,
-            stageMeshIpcMs,
-            meshTransportEncoding,
-            meshTransferMode,
-            modifiedModelCount: preparedModelsForOutput.modifiedModelCount,
-        });
+    return runWithSliceMesh(options, options.abortSignal,
+        () => options.onProgress?.(0, 1, 'Baking Modifiers'),
+        async (descriptor, chunkAck, meshPrepMs) => {
+        const sourceModelIds = new Set(descriptor.sourceModelIds);
+        const visibleModels = options.models.filter((model) => sourceModelIds.has(model.id));
+        const solidMesh = { ...descriptor, trianglesXYZ: new Float32Array(0) };
+        const cumulativeBytesStage = chunkAck.totalBytes;
+        const stageMeshIpcMs = chunkAck.ipcMs;
+        const stageMeshChunkCount = chunkAck.chunksReceived;
+        const stageMeshAckAppendNsTotal = chunkAck.appendNsTotal;
+        const stageMeshCapacityMaxBytes = chunkAck.capacityBytes;
+        const stageMeshReserveGrowthEvents = Number(chunkAck.reserveGrew);
+        const stageMeshUploadedBytes = chunkAck.uploadedBytes;
+        const stageMeshReusedBytes = chunkAck.reusedBytes;
         emitDiagnosticProgress('Preparing mesh complete', 1, 1, {
             meshPrepMs,
-            triangleFloatCount: solidMesh.trianglesXYZ.length,
+            triangleFloatCount: cumulativeBytesStage / Float32Array.BYTES_PER_ELEMENT,
             totalLayers: solidMesh.totalLayers,
         });
 
@@ -467,6 +326,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                 ? encodeBytesToBase64(options.exportThumbnailPng)
                 : null,
             trianglesXYZ: solidMesh.trianglesXYZ,
+            meshByteLength: cumulativeBytesStage,
             tankCount: solidMesh.tankCount,
             triangleTankIndex: solidMesh.triangleTankIndex,
             meshEncoding: meshTransportEncoding,
@@ -584,7 +444,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                     zaaPattern: nativeJob.zaaPattern,
                     zaaDuplicateZ: nativeJob.zaaDuplicateZ,
                     modelTriangleCount: nativeJob.modelTriangleCount,
-                    triangleFloatCount: nativeJob.trianglesXYZ.length,
+                    triangleFloatCount: cumulativeBytesStage / Float32Array.BYTES_PER_ELEMENT,
                     buildWidthMm: nativeJob.buildWidthMm,
                     buildDepthMm: nativeJob.buildDepthMm,
                     layerHeightMm: nativeJob.layerHeightMm,
@@ -605,11 +465,14 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                     bridgeInvokeRoundTripMs: encodedArtifact.bridge?.invokeRoundTripMs ?? null,
                     bridgeTotalMs: encodedArtifact.bridge?.bridgeTotalMs ?? null,
                     bridgePayloadChars: encodedArtifact.bridge?.payloadChars ?? null,
+                    bridgePayloadContributors: encodedArtifact.bridge?.payloadContributors,
+                    bridgePayloadUploadedBytes: encodedArtifact.bridge?.payloadUploadedBytes,
+                    bridgePayloadReusedBytes: encodedArtifact.bridge?.payloadReusedBytes,
+                    bridgePayloadCacheMs: encodedArtifact.bridge?.payloadCacheMs,
                     triangleFloatCount: encodedArtifact.bridge?.triangleFloatCount ?? null,
                     meshBytesLen: encodedArtifact.bridge?.meshBytesLen ?? null,
-                    stageMeshMs: stageMeshIpcMs > 0
-                        ? stageMeshIpcMs
-                        : (encodedArtifact.bridge?.stageMeshMs ?? null),
+                    stageMeshMs: stageMeshIpcMs,
+                    stageMeshWallMs: chunkAck.wallMs,
                     stageMeshBytes: cumulativeBytesStage > 0 ? cumulativeBytesStage : null,
                     stageMeshUploadedBytes,
                     stageMeshReusedBytes,
@@ -643,5 +506,5 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                 },
             },
         };
-    }, options.abortSignal).finally(disposePreparedModels);
+    });
 }

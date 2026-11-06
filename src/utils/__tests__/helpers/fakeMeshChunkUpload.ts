@@ -20,6 +20,7 @@ type NativeInvoke = (
 
 /** Real chunk hashing behind a browser Worker façade; only native IPC is faked. */
 export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
+  const stats = { workerStarts: 0, uploadBegins: 0, restoreCalls: 0 };
   class MeshWorker {
     onmessage: ((event: MessageEvent<MeshChunkWorkerOutput>) => void) | null = null;
     onerror: ((event: ErrorEvent) => void) | null = null;
@@ -38,6 +39,8 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
       this.emit({ type: 'invoke', relayId, command, args, headers });
     });
     private body = new MeshChunkWorkerBody(this.relay);
+
+    constructor() { stats.workerStarts += 1; }
 
     private emit(message: MeshChunkWorkerOutput): void {
       const data = structuredClone(message);
@@ -61,7 +64,7 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
         try {
           let value: unknown;
           switch (message.type) {
-            case 'begin': value = await this.body.begin(message.reserveBytes); break;
+            case 'begin': value = await this.body.begin(message.reserveBytes, message.retainForSlice); break;
             case 'append': await this.body.append(message.bytes); break;
             case 'finish': value = await this.body.finish(message.stage); break;
           }
@@ -81,9 +84,11 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
   let nextId = 0;
   let staged = new Uint8Array(0);
   let ready: { uploadId: string; bytes: Uint8Array } | undefined;
+  let retained: { snapshotId: string; bytes: Uint8Array; ack: MeshChunkUploadAck } | undefined;
+  let retentionAvailable = true;
   let pending: {
     uploadId: string; chunks: Uint8Array[]; reserveBytes: number;
-    uploadedBytes: number; reusedBytes: number;
+    uploadedBytes: number; reusedBytes: number; retainForSlice: boolean;
   } | undefined;
 
   const invoke: TauriInvoke = async <T>(
@@ -95,11 +100,13 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
     let result: unknown;
     switch (command) {
       case 'mesh_chunk_upload_begin':
+        stats.uploadBegins += 1;
         assert.equal(pending, undefined, 'an unfinished native upload was replaced');
         assert.equal(ready, undefined, 'an unconsumed native snapshot was replaced');
         pending = {
           uploadId: `test-upload-${++nextId}`, chunks: [],
           reserveBytes: fields?.reserveBytes as number, uploadedBytes: 0, reusedBytes: 0,
+          retainForSlice: fields?.retainForSlice === true,
         };
         result = pending.uploadId;
         break;
@@ -143,10 +150,25 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
           reserveGrew: totalBytes > pending.reserveBytes, chunksReceived: pending.chunks.length,
           chunkBytes: pending.chunks[pending.chunks.length - 1]?.byteLength ?? 0, appendNs: 0, appendNsTotal: 0,
           uploadedBytes: pending.uploadedBytes, reusedBytes: pending.reusedBytes,
+          ...(fields?.stage && pending.retainForSlice && retentionAvailable ? { sliceSnapshotId: pending.uploadId } : {}),
         } satisfies MeshChunkUploadAck;
+        if (fields?.stage && pending.retainForSlice && retentionAvailable) {
+          retained = { snapshotId: pending.uploadId, bytes: bytes.slice(), ack: result as MeshChunkUploadAck };
+        }
         pending = undefined;
         break;
       }
+      case 'restore_cached_slice_mesh':
+        stats.restoreCalls += 1;
+        assert.equal(pending, undefined, 'restoring while an upload is pending');
+        assert.equal(ready, undefined, 'restoring while a snapshot awaits consumption');
+        if (!retained || retained.snapshotId !== fields?.snapshotId) {
+          result = null;
+        } else {
+          staged = retained.bytes.slice();
+          result = { ...retained.ack, uploadedBytes: 0, reusedBytes: staged.byteLength, reserveGrew: false, appendNs: 0, appendNsTotal: 0 };
+        }
+        break;
       case 'mesh_chunk_upload_abort':
         if (pending?.uploadId === fields?.uploadId) pending = undefined;
         if (ready?.uploadId === fields?.uploadId) ready = undefined;
@@ -161,6 +183,9 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
     invoke,
     readStaged: () => staged.slice(),
     replaceStaged: (bytes: Uint8Array) => { staged = bytes.slice(); },
+    discardSliceSnapshot: () => { retained = undefined; },
+    setSliceRetention: (available: boolean) => { retentionAvailable = available; if (!available) retained = undefined; },
+    readStats: () => ({ ...stats }),
     readUpload: (args: unknown) => {
       const fields = args as { meshUploadId: string; expectedBytes: number };
       assert.ok(ready, 'consumer has no immutable mesh snapshot');

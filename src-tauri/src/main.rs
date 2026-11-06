@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod job_payload_cache;
+mod job_payload_upload;
 mod mesh_chunk_cache;
 mod mesh_chunk_upload;
 mod mesh_minima;
@@ -1437,7 +1439,15 @@ async fn stage_mesh_file_path(mesh_file_path: String) -> Result<u64, String> {
 async fn slice_solid_native_to_temp_path(
     window: DragonFruitWindow,
     job_json: String,
+    payload_lease_id: Option<String>,
 ) -> Result<NativeSliceTempPathResult, String> {
+    // Resolve/validate every bulk reference and metadata field before consuming
+    // the shared mesh. resolve releases its lease on success and all errors.
+    let metadata_parse_start = std::time::Instant::now();
+    let expanded = job_payload_upload::resolve(&job_json, payload_lease_id.as_deref())?;
+    let meta: SliceJobMetadata = serde_json::from_value(expanded)
+        .map_err(|err| format!("Invalid slice job metadata JSON: {err}"))?;
+    let metadata_parse_ns = duration_ns_u64(metadata_parse_start.elapsed());
     // Take the completed, atomically published chunk upload.
     let staged_mesh_bytes = staged_mesh()
         .lock()
@@ -1491,10 +1501,6 @@ async fn slice_solid_native_to_temp_path(
     let result = tauri::async_runtime::spawn_blocking(move || {
         let wrapper_start = std::time::Instant::now();
 
-        let metadata_parse_start = std::time::Instant::now();
-        let meta: SliceJobMetadata = serde_json::from_str(&job_json)
-            .map_err(|err| format!("Invalid slice job metadata JSON: {err}"))?;
-        let metadata_parse_ns = duration_ns_u64(metadata_parse_start.elapsed());
         let requested_output_path = meta
             .output_path
             .as_deref()
@@ -4447,6 +4453,11 @@ fn main() {
             mesh_chunk_upload::mesh_chunk_upload_append,
             mesh_chunk_upload::mesh_chunk_upload_finish,
             mesh_chunk_upload::mesh_chunk_upload_abort,
+            mesh_chunk_upload::restore_cached_slice_mesh,
+            job_payload_upload::job_payload_begin,
+            job_payload_upload::job_payload_append,
+            job_payload_upload::job_payload_finish,
+            job_payload_upload::job_payload_release,
             allocate_mesh_stage_path,
             append_mesh_stage_chunk,
             finish_mesh_stage_write,

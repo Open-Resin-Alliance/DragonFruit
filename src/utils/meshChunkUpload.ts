@@ -13,13 +13,21 @@ export type { MeshChunkUploadAck } from './meshChunkUpload.shared';
 export interface MeshChunkUploadOptions {
   reserveBytes?: number;
   signal?: AbortSignal;
+  retainForSlice?: boolean;
+}
+
+export interface MeshChunkUploadResult extends MeshChunkUploadAck {
+  /** Native invoke round trips only; excludes hashing/copying/worker startup. */
+  ipcMs: number;
+  /** Upload session wall time after acquiring its turn. */
+  wallMs: number;
 }
 
 export interface MeshChunkUploadSession {
   /** Keep bytes unchanged until this promise settles; their buffer is never detached. */
   append(bytes: Uint8Array): Promise<void>;
   /** stage=false retains the global upload turn until abort releases the ready handle. */
-  finish(stage?: boolean): Promise<MeshChunkUploadAck>;
+  finish(stage?: boolean): Promise<MeshChunkUploadResult>;
   abort(): Promise<void>;
 }
 
@@ -64,6 +72,8 @@ async function acquireUploadTurn(signal?: AbortSignal): Promise<() => void> {
 class ChunkUploadSession implements MeshChunkUploadSession {
   private worker: Worker | null;
   private requestId = 0;
+  private ipcMs = 0;
+  private readonly startedAt = performance.now();
   private uploadId: string | undefined;
   private phase: 'open' | 'finishing' | 'finished' | 'aborted' = 'open';
   private failure: Error | undefined;
@@ -94,9 +104,9 @@ class ChunkUploadSession implements MeshChunkUploadSession {
     if (!this.worker) throw new Error('Mesh upload worker is closed');
   }
 
-  async start(reserveBytes: number): Promise<void> {
+  async start(reserveBytes: number, retainForSlice: boolean): Promise<void> {
     try {
-      await this.request<string>({ type: 'begin', requestId: ++this.requestId, reserveBytes });
+      await this.request<string>({ type: 'begin', requestId: ++this.requestId, reserveBytes, retainForSlice });
     } catch (error) {
       this.stop(error instanceof Error ? error : new Error(String(error)));
       throw error;
@@ -123,7 +133,13 @@ class ChunkUploadSession implements MeshChunkUploadSession {
       this.relayWork = this.relayWork.then(async () => {
         if (!this.worker || this.failure) return;
         try {
-          const value = await this.invoke(message.command, message.args, { headers: message.headers });
+          const started = performance.now();
+          let value: unknown;
+          try {
+            value = await this.invoke(message.command, message.args, { headers: message.headers });
+          } finally {
+            this.ipcMs += performance.now() - started;
+          }
           if (message.command === 'mesh_chunk_upload_begin') this.uploadId = value as string;
           this.worker?.postMessage({ type: 'relay-result', relayId: message.relayId, ok: true, value });
         } catch (error) {
@@ -173,7 +189,7 @@ class ChunkUploadSession implements MeshChunkUploadSession {
     });
   }
 
-  finish(stage = true): Promise<MeshChunkUploadAck> {
+  finish(stage = true): Promise<MeshChunkUploadResult> {
     if (this.phase !== 'open') return Promise.reject(this.failure ?? new Error('Mesh upload session is not open'));
     this.phase = 'finishing';
     return this.enqueue(async () => {
@@ -183,9 +199,10 @@ class ChunkUploadSession implements MeshChunkUploadSession {
       this.dropWorker();
       if (stage) {
         this.signal?.removeEventListener('abort', this.onAbort);
+        this.uploadId = undefined;
         this.release();
       }
-      return ack;
+      return { ...ack, ipcMs: this.ipcMs, wallMs: performance.now() - this.startedAt };
     });
   }
 
@@ -245,7 +262,7 @@ export async function createMeshChunkUpload(
     release();
     throw error;
   }
-  await session.start(options.reserveBytes ?? 0);
+  await session.start(options.reserveBytes ?? 0, options.retainForSlice === true);
   return session;
 }
 
@@ -253,7 +270,7 @@ export async function stageMeshBytes(
   invoke: TauriInvoke,
   bytes: Uint8Array,
   options: MeshChunkUploadOptions = {},
-): Promise<MeshChunkUploadAck> {
+): Promise<MeshChunkUploadResult> {
   const session = await createMeshChunkUpload(invoke, {
     ...options, reserveBytes: options.reserveBytes ?? bytes.byteLength,
   });
@@ -289,5 +306,25 @@ export async function invokeWithChunkedMesh<T>(
   } catch (error) {
     await session.abort().catch(() => undefined);
     throw error;
+  }
+}
+
+
+/** Restore native retained bytes without creating a worker or reading renderer geometry. */
+export async function restoreCachedSliceMesh(
+  invoke: TauriInvoke,
+  snapshotId: string,
+  signal?: AbortSignal,
+): Promise<MeshChunkUploadResult | null> {
+  const release = await acquireUploadTurn(signal);
+  const started = performance.now();
+  try {
+    throwIfAborted(signal);
+    const ack = await invoke<MeshChunkUploadAck | null>('restore_cached_slice_mesh', { snapshotId });
+    const elapsed = performance.now() - started;
+    throwIfAborted(signal);
+    return ack ? { ...ack, ipcMs: elapsed, wallMs: elapsed } : null;
+  } finally {
+    release();
   }
 }

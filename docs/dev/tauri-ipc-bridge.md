@@ -1,14 +1,13 @@
 # Tauri IPC and Native Bridge
 
-The desktop app (Tauri) exposes **109** native commands to the frontend
-(`#[tauri::command]` under `src-tauri/src/`, all registered in the single
-`tauri::generate_handler![…]` list in `main.rs`).
+The desktop app (Tauri) exposes native commands declared with
+`#[tauri::command]` under `src-tauri/src/`, all registered in the single
+`tauri::generate_handler![…]` list in `main.rs`.
 
-`src/features/slicing/tauri/nativeSlicerBridge.ts` is the **intended** seam: it
-holds 26 named wrappers and is where the cross-language conventions below are
-centralized. It is not yet the only one. Today there are also **84 direct
-`invoke(...)` call sites in 29 other modules**, reaching ~70 distinct commands —
-nine of those modules are React components (`SettingsModal.tsx`,
+`src/features/slicing/tauri/nativeSlicerBridge.ts` is the **intended** general
+seam for named wrappers and the cross-language conventions below. Bulk mesh
+transport has its own existing shared bridge. Legacy direct `invoke(...)` calls
+also remain, including in React components (`SettingsModal.tsx`,
 `PrintingPanel.tsx`, `SliceCompletedModal.tsx`, the settings tabs, `page.tsx`).
 
 So the rule is directional, not descriptive:
@@ -18,7 +17,7 @@ So the rule is directional, not descriptive:
   `meshChunkUpload.ts`, which owns the worker/queue protocol described below.
   Do not add a new direct `invoke` from a component.
 - **Existing direct call sites**: leave them alone unless you are already
-  changing that code. Consolidating all 84 is a deliberate refactor of its own —
+  changing that code. Consolidating the remaining legacy calls is a separate refactor —
   see `dev/backlog.md`.
 
 Regenerate these counts rather than trusting them:
@@ -106,58 +105,163 @@ grep -rhoE '\binvoke(<[^>]*>)?\(' src plugins --include=*.ts --include=*.tsx \
   a cancel command (`cancel_slicing`, …). Always offer cancellation for anything
   that runs longer than a second.
 
-## Lazy cached mesh uploads
+## Cached mesh preparation before slicing
 
-The bulk-mesh seam is `src/utils/meshChunkUpload.ts`; existing geometry helpers in
-`src/utils/tauriMeshBridge.ts` and the slice export orchestrator use it. It is
-separate from file writes: do not use the scene-file appender for this protocol.
-The worker is created only when a native operation requests mesh data. A normal
-worker has no `window.__TAURI_INTERNALS__`, so the window relays native commands;
-hashing, reblocking and cache-hit decisions run in `meshChunkUpload.worker.ts` /
-`meshChunkUpload.shared.ts`.
+The bulk-mesh seam is `src/utils/meshChunkUpload.ts`, with source geometry helpers
+in `src/utils/tauriMeshBridge.ts`. File writes use a separate protocol; never use
+the scene-file appender as this cache. Native slicing still renders and encodes
+layers on every job: these caches retain inputs, not previous printed output.
 
-- `createMeshChunkUpload(invoke, { reserveBytes?, signal? })` creates one upload;
-  `append(bytes)` accepts producer batches, and `finish(stage)` publishes it.
-  Keep each input unchanged until its append promise settles. Renderer-owned
-  buffers are never transferred: only bounded copies cross into the worker.
-- Append boundaries do not define cache identity. The worker reblocks the byte
-  stream into fixed 4 MiB chunks plus a final tail and computes SHA-256. It asks
-  Rust about each hash and uploads raw bytes only on a miss. One chunk is in flight;
-  a partial reblocking buffer is also at most 4 MiB. This bounds transport buffers,
-  not the renderer's live geometry or the existing CPU mesh-preparation buffers.
-- Rust's `mesh_chunk_cache.rs` stores immutable chunks in a 64 MiB payload-bounded
-  LRU. Metadata is additional. Evicted chunks are uploaded again even if unchanged;
-  uploads larger than the cache remain valid. There is no disk cache or eager
-  background preload. Changes in byte order also change chunk identities.
-- `finish(true)` atomically replaces the existing shared stage. Hold
-  `runExclusiveNativeMesh` across the entire upload / native operation / readback
-  window, not merely the upload. Repair, hollowing, punching, remeshing, organic
-  cut and slicing share this guard. Slicing acquires it after modifier baking so
-  an inner modifier's native pass cannot deadlock the slice. Its AbortSignal also
-  cancels a queued pass promptly without taking another pass's stage ownership.
-- `finish(false)` retains one immutable snapshot and keeps the upload turn until
-  `abort()`. `invokeWithChunkedMesh` owns this lifetime: it sends
-  `{ ...options.args, meshUploadId, expectedBytes }`, preserves headers and cleans
-  up even when the consumer fails. The ID and expected length are authoritative;
-  results indexed against a mesh never read the anonymous shared stage.
-- The backend `mesh_chunk_upload.rs` registers `mesh_chunk_upload_begin`,
-  `mesh_chunk_upload_append_cached`, `mesh_chunk_upload_append`,
-  `mesh_chunk_upload_finish` and `mesh_chunk_upload_abort`. Raw appends carry
-  `x-mesh-upload-id` and lowercase-hex `x-mesh-chunk-hash` headers. Rust verifies
-  SHA-256 before mutating upload state. Chunks are float-aligned and at most 4 MiB;
-  completion requires whole 36-byte triangles. Cache hits preserve requested
-  order, including repeated chunks. Unknown/stale IDs fail; abort affects only
-  its own ID, including when a cancelled native begin finishes late.
-- Geometry replacement, edits, undo and scene deletion do not need mutable owner
-  aliases: reuse depends on exact bytes, not a model ID or an old revision label.
-  The geometry staging helper checks attribute identity/version before publishing.
-  Native cache entries remain bounded independently of deleted renderer objects.
+### Ahead-of-job preparation and exact revisions
 
-The slice benchmark metadata reports `meshTransferMode: 'cached-chunks'`, logical
-`stageMeshBytes`, actual `stageMeshUploadedBytes`, and `stageMeshReusedBytes`.
-Staging wall time includes worker preparation, hashing and IPC; throughput uses
-actual uploaded bytes. A cache-hit export is not proof of an overall slicing
-speedup: measure the complete operation on the target Windows/Linux backend.
+`useSliceMeshWarmup` mounts with the active `SlicingPanel` once printer/material
+and plate inputs exist. `SliceMeshWarmup` starts at the first idle opportunity;
+subsequent real edits wait for a quiet interval and idle time. Pointer gestures,
+wheel/keyboard activity and hidden documents defer new background work. An
+already-requested automatic slice has idle priority rather than waiting behind
+the edit debounce. Unmounting releases the background subscription. Cancel also
+releases it, without immediately restarting the same revision; a real edit can
+schedule preparation again.
+
+`prewarmSliceMesh` prepares modifiers, world-space input and a native snapshot,
+without thumbnail capture, job metadata attachment, layer rendering or output.
+The real export joins identical in-flight preparation in either direction; a
+background subscriber's cancellation cannot cancel a joined export. If the job
+arrives before preparation is ready it must wait for that necessary work, but
+does not launch a duplicate. Warm job start restores a validated native snapshot
+without a vertex scan, modifier bake, world-mesh rebuild or hashing-worker startup.
+A cold export consumes its freshly staged bytes inside the same ownership guard,
+without an unnecessary restore or a second upload when retention is unavailable.
+
+For a custom slicing surface, use the same inputs in its idle/revision callback
+and its later Slice action (the built-in panel uses `useSliceMeshWarmup`):
+
+```ts
+import { prewarmSliceMesh, runSliceExportOrchestrator } from '@/features/slicing/sliceExportOrchestrator';
+
+const meshInputs = { models, printerProfile, materialProfile, antiAliasing, plateOffsetMm, plateVolumeBoundsMm };
+await prewarmSliceMesh(meshInputs); // Idle work, before the user starts the job.
+
+const result = await runSliceExportOrchestrator({
+  ...meshInputs,
+  filenameBase: 'plate',
+  outputMode: 'return',
+});
+```
+
+`getSliceMeshInputSignature` compares primitive identity/revision tokens and
+actual output inputs: source attributes and storage, exact transforms,
+classification/tanks, geometry-affecting support/raft collections, raster and
+plate settings and effective support-tip/modifier settings. Hover and selection,
+equivalent modifier wrappers and unapplied hole drafts are not geometry changes.
+The signature never scans position buffers. Effective blocker values use store
+revision stamps for memoization, including in-place notified edits and pose
+validity. `subscribeToMeshModifierStore` notifies the warmup observer;
+`getStoredMeshModifierRevisionToken` refreshes value memoization, but the token
+itself is never a geometry key. Source revisions are rechecked before a descriptor
+is published.
+
+The prepared modifier cache in `preparedGeometryCache.ts` owns its data; source,
+cache and returned geometry do not share mutable output buffers. Fresh classified
+partitions capture the source position revision at copy time, not when a later
+asynchronous bake begins. Keys cover that revision/partition and exact effective
+native options; equivalent split wrappers do not miss. Identical concurrent bakes
+share work. `clearPreparedGeometryCacheForModel` synchronously invalidates pending
+hash/read/write/native tickets. `prepareLoadedModelsForOutput` accepts `signal`
+and stops before later model bakes; an already-running native bake must finish
+before its temporary resources can be released. `onBake` reports only real native
+compute, so cache hits no longer display an unconditional Baking Modifiers phase.
+
+Retention is byte-bounded, not an eight-model limit: 64 MiB RAM payloads, up to
+1 GiB OPFS spill and 4096 entries. OPFS is lazy, in its dedicated
+`dragonfruit-prepared-geometry` directory, never the undo namespace. IO and SHA-256
+integrity checks use at most 4 MiB chunks. Old scratch files are pruned on first
+use. Unavailable/quota-failed/corrupt storage produces a genuine miss or RAM-only
+retention, never substitute geometry.
+
+### Chunk uploads and native last-slice retention
+
+`createMeshChunkUpload(invoke, { reserveBytes?, signal?, retainForSlice? })` creates
+one upload; await `append(bytes)` before changing the input. The worker reblocks
+producer batches into fixed 4 MiB chunks plus a tail and hashes SHA-256. Only missing
+raw mesh bytes cross IPC. Renderer buffers are never detached; one transferred
+chunk and a bounded partial reblocking buffer are additional transport memory,
+not a claim that the renderer or existing mesh producer is out-of-core. A normal
+worker has no Tauri window globals: only the window relay calls native invoke.
+
+Rust `mesh_chunk_cache.rs` keeps a 64 MiB hot payload LRU with 4096-entry metadata
+bound. Committed `retainForSlice` uploads also retain ONE last-slice backing, at
+most 2 GiB and 65536 manifest entries. The file is created lazily in Tauri's
+`app_cache_dir`, with no payload preallocation. Unix unlinks it immediately;
+Windows uses exclusive sharing and delete-on-close. The OS removes backing on
+exit/crash. Linux refuses memory-backed filesystems rather than consuming RAM.
+Modifier uploads cannot replace this backing; resident chunks avoid disk IO and
+rehashing, and disk reads are SHA-256 verified. Unchanged snapshots are not
+rewritten; safe same-offset changes write dirty ranges only. Actual cache IO errors
+or over-budget inputs disable retention without changing the uploaded geometry.
+
+A successful retained ack includes `sliceSnapshotId`.
+`restore_cached_slice_mesh({ snapshotId })` returns an ack or `null`; only an exact
+current snapshot ID is accepted, and a miss never replaces the existing stage.
+The frontend `restoreCachedSliceMesh` wrapper holds its upload turn while the
+caller holds `runExclusiveNativeMesh` across restore, slicing and readback.
+Cold slicing acquires stage ownership after modifier baking to avoid nested locks.
+
+`finish(true)` atomically publishes staged input. The shared stage guard also
+covers repair, hollowing, punching, remeshing, organic cut and path-based writers.
+`finish(false)` instead keeps one immutable named snapshot and the upload turn
+until `abort()`; `invokeWithChunkedMesh` sends authoritative
+`{ ...options.args, meshUploadId, expectedBytes }` and cleans up errors. Indexed
+outputs never borrow another operation's anonymous stage. The commands are
+`mesh_chunk_upload_begin`, `mesh_chunk_upload_append_cached`,
+`mesh_chunk_upload_append`, `mesh_chunk_upload_finish`, `mesh_chunk_upload_abort`
+and `restore_cached_slice_mesh`. Raw appends use ASCII `x-mesh-upload-id` and
+`x-mesh-chunk-hash` headers. Native validation precedes mutation; float alignment,
+4 MiB chunk limits, whole 36-byte triangles, requested order/duplicates and stale-ID
+cancellation rules remain enforced.
+
+### Large job payloads are separate from mesh data
+
+`jobPayloadCache.ts` caches eligible large JSON values independently for
+`metadata_json`, `export_thumbnail_png_base64` and `triangle_tank_index`.
+It does not remove scene embedding, previews, tank assignments or format settings.
+The native `job_payload_cache.rs` bounds complete plus reserved payload to 8 MiB,
+128 entries and 16 pinned leases (three fields each). The frontend's latest encoded
+values also have an 8 MiB charge including retained UTF-16 source and UTF-8 bytes.
+Values below 16 KiB, oversized values and nonadmitted fields stay inline.
+
+- `job_payload_begin({ fields: [{ field, hash, byteLen }] })` returns
+  `{ leaseId, acceptedFields, missingFields }` and pins accepted values.
+- `job_payload_append` accepts at most 4 MiB raw bytes with
+  `x-job-payload-lease`, `x-job-payload-field`, `x-job-payload-hash` and decimal
+  `x-job-payload-offset` headers. SHA-256, bounds, order, UTF-8/JSON and field types
+  are checked before a field becomes reusable.
+- `job_payload_finish({ leaseId })` completes new fields; an all-hit lease needs
+  no finish round trip. `job_payload_release({ leaseId })` is idempotent cleanup.
+- Slice invocation passes `{ jobJson, payloadLeaseId? }`; admitted fields are
+  represented by the internal `_payload_refs` map. Rust restores exact semantic
+  JSON values and deserializes `SliceJobMetadata` once, BEFORE taking staged mesh
+  bytes. Leases release on success/error; failed references never steal geometry.
+
+### Reading cache-hit metrics
+
+Logical `meshBytesLen` and `triangleFloatCount` use the actual native upload size,
+not the intentionally emptied frontend array after streaming. The job-level float
+count is likewise real; per-layer geometry counts are no longer reported as zero.
+`stageMeshBytes`/chunk count describe logical input, while
+`stageMeshUploadedBytes` and `stageMeshReusedBytes` distinguish raw transfer/reuse.
+`stageMeshMs` measures native invoke round trips; `stageMeshWallMs` also includes
+worker startup, copying and hashing. A warm restore creates no geometry worker.
+
+`bridgePayloadChars` is the actual small invoke job JSON, not the original bulk
+values. `bridgePayloadContributors` measures each semantic JSON value's chars and
+UTF-8 bytes (excluding its field name/separators); uploaded/reused payload byte
+counters include separate bulk field transfers. Unchanged large fields can thus
+use small references even while output paths and other job metadata change.
+Parallel worker CPU time is an aggregate, not wall time; percentages above 100%
+against a wall-time denominator are not evidence of a cache miss. Cache reuse is
+not a claimed total-export speedup: benchmark the complete operation on the target
+Windows/Linux runtime.
 
 ## Baked ambient occlusion (`bake_vertex_occlusion`)
 

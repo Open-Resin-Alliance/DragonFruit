@@ -16,6 +16,18 @@ import type { ModelMeshModifiers } from './types';
 const meshModifierStoreRef: { current: Map<string, ModelMeshModifiers> } = {
   current: new Map(),
 };
+const meshModifierListeners = new Set<() => void>();
+const meshModifierRevisionTokens = new Map<string, object>();
+
+/** An immutable-store revision stamp, not part of the modifier's value identity. */
+export function getStoredMeshModifierRevisionToken(modelId: string): object | undefined {
+  return meshModifierRevisionTokens.get(modelId);
+}
+
+export function subscribeToMeshModifierStore(listener: () => void): () => void {
+  meshModifierListeners.add(listener);
+  return () => { meshModifierListeners.delete(listener); };
+}
 
 export function storeModelMeshModifiers(
   modelId: string,
@@ -23,9 +35,12 @@ export function storeModelMeshModifiers(
 ): void {
   if (modifiers) {
     meshModifierStoreRef.current.set(modelId, modifiers);
+    meshModifierRevisionTokens.set(modelId, {});
   } else {
     meshModifierStoreRef.current.delete(modelId);
+    meshModifierRevisionTokens.delete(modelId);
   }
+  for (const listener of meshModifierListeners) listener();
 }
 
 export function getStoredMeshModifiers(modelId: string): ModelMeshModifiers | undefined {
@@ -33,7 +48,9 @@ export function getStoredMeshModifiers(modelId: string): ModelMeshModifiers | un
 }
 
 export function deleteStoredMeshModifiers(modelId: string): void {
-  meshModifierStoreRef.current.delete(modelId);
+  if (!meshModifierStoreRef.current.delete(modelId)) return;
+  meshModifierRevisionTokens.delete(modelId);
+  for (const listener of meshModifierListeners) listener();
 }
 
 /**

@@ -7,13 +7,18 @@
 use crate::mesh_chunk_cache::{ChunkHash, MeshChunkCache, UploadStats, CACHE_BYTES, CHUNK_BYTES, MAX_SAFE_BYTES};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex};
 use tauri::ipc::{InvokeBody, Request};
+use tauri::Manager;
 
-static UPLOADS: OnceLock<Mutex<MeshChunkCache>> = OnceLock::new();
+#[path = "mesh_slice_backing.rs"]
+mod slice_backing;
+
+static UPLOADS: LazyLock<Mutex<MeshChunkCache>> =
+    LazyLock::new(|| Mutex::new(MeshChunkCache::with_verifier(CACHE_BYTES, chunk_hash)));
 
 fn uploads() -> &'static Mutex<MeshChunkCache> {
-    UPLOADS.get_or_init(|| Mutex::new(MeshChunkCache::new(CACHE_BYTES)))
+    &UPLOADS
 }
 
 #[derive(Serialize)]
@@ -29,10 +34,12 @@ pub struct MeshChunkUploadAck {
     pub append_ns_total: u64,
     pub uploaded_bytes: u64,
     pub reused_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slice_snapshot_id: Option<String>,
 }
 
 impl MeshChunkUploadAck {
-    fn new(upload_id: String, stats: UploadStats) -> Self {
+    fn new(upload_id: String, stats: UploadStats, slice_snapshot_id: Option<String>) -> Self {
         Self {
             upload_id,
             chunk_bytes: stats.chunk_bytes as u64,
@@ -44,6 +51,7 @@ impl MeshChunkUploadAck {
             append_ns_total: stats.append_ns_total,
             uploaded_bytes: stats.uploaded_bytes as u64,
             reused_bytes: stats.reused_bytes as u64,
+            slice_snapshot_id,
         }
     }
 }
@@ -73,12 +81,16 @@ fn parse_chunk_hash(text: &str) -> Result<ChunkHash, String> {
     Ok(hash)
 }
 
+fn chunk_hash(bytes: &[u8]) -> ChunkHash {
+    Sha256::digest(bytes).into()
+}
+
 fn verified_chunk_hash(text: &str, bytes: &[u8]) -> Result<ChunkHash, String> {
     if bytes.is_empty() || bytes.len() > CHUNK_BYTES || bytes.len() % 4 != 0 {
         return Err("Mesh chunks must be nonempty, 4-byte aligned, and at most 4 MiB".into());
     }
     let expected = parse_chunk_hash(text)?;
-    let actual: ChunkHash = Sha256::digest(bytes).into();
+    let actual = chunk_hash(bytes);
     if actual != expected {
         return Err("Mesh chunk SHA-256 does not match x-mesh-chunk-hash".into());
     }
@@ -92,10 +104,22 @@ fn header<'a>(request: &'a Request<'_>, name: &str) -> Result<&'a str, String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn mesh_chunk_upload_begin(reserve_bytes: u64) -> Result<String, String> {
+pub async fn mesh_chunk_upload_begin(
+    app: crate::DragonFruitAppHandle,
+    reserve_bytes: u64,
+    retain_for_slice: Option<bool>,
+) -> Result<String, String> {
     let reserve_bytes = native_size(reserve_bytes)?;
-    uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?
-        .begin(reserve_bytes)
+    let mut uploads = uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?;
+    if retain_for_slice.unwrap_or(false) {
+        uploads.begin_for_slice(reserve_bytes, || {
+            let directory = app.path().app_cache_dir()
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            slice_backing::open(&directory)
+        })
+    } else {
+        uploads.begin(reserve_bytes)
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -133,7 +157,7 @@ pub async fn mesh_chunk_upload_finish(
     let mut uploads = uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?;
     if !stage {
         let finished = uploads.finish(&upload_id, false)?;
-        return Ok(MeshChunkUploadAck::new(upload_id, finished.stats));
+        return Ok(MeshChunkUploadAck::new(upload_id, finished.stats, finished.slice_snapshot_id));
     }
 
     // Acquire every staging lock before consuming the upload or changing any
@@ -147,7 +171,7 @@ pub async fn mesh_chunk_upload_finish(
     let mut appender = crate::staged_mesh_file_appender().lock()
         .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
     let finished = uploads.finish(&upload_id, true)?;
-    let ack = MeshChunkUploadAck::new(upload_id, finished.stats);
+    let ack = MeshChunkUploadAck::new(upload_id, finished.stats, finished.slice_snapshot_id);
     *staged = finished.staged_bytes;
     *stats = crate::StageMeshStats {
         chunks_received: ack.chunks_received,
@@ -156,6 +180,37 @@ pub async fn mesh_chunk_upload_finish(
     *path = None;
     *appender = None;
     Ok(ack)
+}
+
+/// A miss is ordinary: never take or clear the caller's existing staged mesh.
+/// The frontend holds its native-mesh operation queue and upload turn throughout.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn restore_cached_slice_mesh(
+    snapshot_id: String,
+) -> Result<Option<MeshChunkUploadAck>, String> {
+    let mut uploads = uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?;
+    let Some(finished) = uploads.restore_slice(&snapshot_id)? else {
+        return Ok(None);
+    };
+    // Restore does not consume the retained snapshot. A staging-lock error also
+    // leaves it and the previous stage intact, unlike consuming a pending upload.
+    let mut staged = crate::staged_mesh().lock()
+        .map_err(|e| format!("staged mesh lock poisoned: {e}"))?;
+    let mut stats = crate::staged_mesh_stats().lock()
+        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))?;
+    let mut path = crate::staged_mesh_file_path().lock()
+        .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))?;
+    let mut appender = crate::staged_mesh_file_appender().lock()
+        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
+    let ack = MeshChunkUploadAck::new(snapshot_id, finished.stats, finished.slice_snapshot_id);
+    *staged = finished.staged_bytes;
+    *stats = crate::StageMeshStats {
+        chunks_received: ack.chunks_received,
+        append_ns_total: ack.append_ns_total,
+    };
+    *path = None;
+    *appender = None;
+    Ok(Some(ack))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -228,5 +283,28 @@ mod tests {
         assert!(native_size(MAX_SAFE_BYTES + 1).is_err());
         assert!(verified_chunk_hash(&"0".repeat(64), &[]).is_err());
         assert!(verified_chunk_hash(&"0".repeat(64), &[0; 3]).is_err());
+    }
+
+    #[test]
+    fn retained_reads_use_the_transport_sha256_verifier() {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut cache = MeshChunkCache::with_verifier(0, chunk_hash);
+        let mut witness = None;
+        let id = cache.begin_for_slice(0, || {
+            let file = slice_backing::open(&std::env::current_dir()?)?;
+            witness = Some(file.try_clone()?);
+            Ok(file)
+        }).unwrap();
+        let bytes = [7; 36];
+        cache.append_verified(&id, chunk_hash(&bytes), &bytes).unwrap();
+        let finished = cache.finish(&id, true).unwrap();
+        let ack = MeshChunkUploadAck::new(id.clone(), finished.stats, finished.slice_snapshot_id);
+        let json = serde_json::to_value(&ack).unwrap();
+        assert_eq!(json["sliceSnapshotId"], id);
+        assert_eq!(cache.restore_slice(&id).unwrap().unwrap().stats.reused_bytes, 36);
+        let mut witness = witness.unwrap();
+        witness.seek(SeekFrom::Start(18)).unwrap();
+        witness.write_all(&[8]).unwrap();
+        assert!(cache.restore_slice(&id).unwrap().is_none());
     }
 }

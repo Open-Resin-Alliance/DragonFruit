@@ -11,6 +11,7 @@ export interface MeshChunkUploadAck {
   appendNsTotal: number;
   uploadedBytes: number;
   reusedBytes: number;
+  sliceSnapshotId?: string | null;
 }
 
 export interface MeshChunkWorkerError {
@@ -32,7 +33,7 @@ export type MeshChunkRelay = <T>(
 ) => Promise<T>;
 
 export type MeshChunkWorkerCommand =
-  | { type: 'begin'; requestId: number; reserveBytes: number }
+  | { type: 'begin'; requestId: number; reserveBytes: number; retainForSlice?: boolean }
   | { type: 'append'; requestId: number; bytes: Uint8Array }
   | { type: 'finish'; requestId: number; stage: boolean };
 
@@ -77,12 +78,12 @@ export class MeshChunkWorkerBody {
 
   constructor(private readonly relay: MeshChunkRelay) {}
 
-  async begin(reserveBytes: number): Promise<string> {
+  async begin(reserveBytes: number, retainForSlice = false): Promise<string> {
     if (this.uploadId !== undefined) throw new Error('Mesh upload already began');
     if (!Number.isSafeInteger(reserveBytes) || reserveBytes < 0) {
       throw new Error('Mesh upload reserveBytes must be a nonnegative safe integer');
     }
-    this.uploadId = await this.relay<string>('mesh_chunk_upload_begin', { reserveBytes });
+    this.uploadId = await this.relay<string>('mesh_chunk_upload_begin', { reserveBytes, retainForSlice });
     return this.uploadId;
   }
 
