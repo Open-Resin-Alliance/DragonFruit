@@ -362,11 +362,22 @@ local run exercises the same credential the release does.
 ### Verification
 
 `release.yml` runs `Get-AuthenticodeSignature` over the application executable
-and every produced installer and fails the release if any of them is not
-`Valid`. A release that ships unsigned installers is worse than one that fails:
-nothing else in the pipeline would say why SmartScreen started warning.
+and every produced installer, and fails the release if any of them is unsigned,
+if the signature does not match the file's contents, or if it carries no
+timestamp.
 
-To check a downloaded installer by hand:
+It deliberately does not require `Status` to be `Valid`. A clean runner's root
+store does not carry the Microsoft root that Artifact Signing certificates chain
+to, so a perfectly good signature reports `UnknownError` there: "a certificate
+chain processed, but terminated in a root certificate which is not trusted by
+the trust provider". That root reaches end users through Windows Update. The
+runner is the odd one out, not the installer, and gating on `Valid` would fail
+every release.
+
+A release that ships unsigned installers is worse than one that fails: nothing
+else in the pipeline would say why SmartScreen started warning.
+
+To check a downloaded installer by hand, where the root is present:
 
 ```powershell
 Get-AuthenticodeSignature .\DragonFruit_0.3.1_x64-setup.exe | Format-List Status, SignerCertificate
