@@ -1,13 +1,21 @@
 @echo off
 rem Entry point for Tauri's bundle.windows.signCommand.
 rem
-rem The bundler spawns this by name, and `pwsh` is not on the PATH the Tauri
-rem process sees even though a PowerShell step resolves it: the same process
-rem spawns `powershell` from System32 without trouble, so the name lookup works
-rem and the entry is simply missing. cmd.exe is always in System32, which is
-rem searched before PATH, so going through it removes the dependency entirely.
+rem The bundler spawns this by name and reports any failure as "failed to run
+rem <command>" with the child's output discarded, so the batch file records what
+rem it did to DF_SIGN_LOG before anything else can go wrong. An empty log means
+rem the batch never started, which points at the spawn.
 setlocal
+
+>>"%DF_SIGN_LOG%" echo [shim] start cwd=%CD%
+>>"%DF_SIGN_LOG%" echo [shim] args=%*
+>>"%DF_SIGN_LOG%" echo [shim] script=%~dp0sign-windows.ps1
+
 set "PWSH=%ProgramFiles%\PowerShell\7\pwsh.exe"
 if not exist "%PWSH%" set "PWSH=pwsh"
-"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0sign-windows.ps1" %*
-exit /b %ERRORLEVEL%
+>>"%DF_SIGN_LOG%" echo [shim] pwsh=%PWSH%
+
+"%PWSH%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0sign-windows.ps1" %* >>"%DF_SIGN_LOG%" 2>&1
+set "RC=%ERRORLEVEL%"
+>>"%DF_SIGN_LOG%" echo [shim] exit=%RC%
+exit /b %RC%

@@ -25,8 +25,10 @@ permissions:
   contents: read
   id-token: write
 
+# One group per mode: a smoke run must not cancel a full build that has already
+# spent twenty minutes compiling, and two smokes should still replace each other.
 concurrency:
-  group: windows-signing-check
+  group: windows-signing-check-${{ inputs.full_build && 'full' || 'smoke' }}
   cancel-in-progress: true
 
 jobs:
@@ -72,12 +74,29 @@ jobs:
             Out-File -FilePath $source -Encoding ascii
           & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
             /nologo /target:exe "/out:$probe" $source | Out-Null
-          $overlay = Get-Content src-tauri/tauri.windows-signing.conf.json -Raw | ConvertFrom-Json
+          # The bundler chdirs to src-tauri before it builds this command, and
+          # only absolutizes an argument that exists from there. Run it the same
+          # way, or this check passes over the failure it exists to catch.
+          $tauriDir = Join-Path (Get-Location).Path 'src-tauri'
+          $overlay = Get-Content (Join-Path $tauriDir 'tauri.windows-signing.conf.json') -Raw | ConvertFrom-Json
           $signCommand = $overlay.bundle.windows.signCommand
-          $arguments = @($signCommand.args | ForEach-Object { if ($_ -eq '%1') { $probe } else { $_ } })
-          & $signCommand.cmd @arguments
-          if ($LASTEXITCODE -ne 0) {
-            throw "The signing command exited $LASTEXITCODE."
+          $arguments = @($signCommand.args | ForEach-Object {
+            if ($_ -eq '%1') { $probe }
+            else {
+              $candidate = Join-Path $tauriDir $_
+              if (Test-Path -LiteralPath $candidate -PathType Leaf) { (Resolve-Path -LiteralPath $candidate).Path }
+              else { $_ }
+            }
+          })
+          Push-Location $tauriDir
+          try {
+            & $signCommand.cmd @arguments
+            $exit = $LASTEXITCODE
+          } finally {
+            Pop-Location
+          }
+          if ($exit -ne 0) {
+            throw "The signing command exited $exit."
           }
           $signature = Get-AuthenticodeSignature -LiteralPath $probe
           if (-not $signature.SignerCertificate) {
@@ -115,15 +134,19 @@ jobs:
           & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
             /nologo /target:exe "/out:$probe" $source | Out-Null
 
-          $overlay = Get-Content src-tauri/tauri.windows-signing.conf.json -Raw | ConvertFrom-Json
+          $tauriDir = Join-Path (Get-Location).Path 'src-tauri'
+          $overlay = Get-Content (Join-Path $tauriDir 'tauri.windows-signing.conf.json') -Raw | ConvertFrom-Json
           $signCommand = $overlay.bundle.windows.signCommand
           $arguments = @($signCommand.args | ForEach-Object {
             if ($_ -eq '%1') { $probe }
-            elseif (Test-Path -LiteralPath $_ -PathType Leaf) { (Resolve-Path -LiteralPath $_).Path }
-            else { $_ }
+            else {
+              $candidate = Join-Path $tauriDir $_
+              if (Test-Path -LiteralPath $candidate -PathType Leaf) { (Resolve-Path -LiteralPath $candidate).Path }
+              else { $_ }
+            }
           })
           $spec = Join-Path $env:RUNNER_TEMP 'sign-command.json'
-          @{ cmd = $signCommand.cmd; args = $arguments } |
+          @{ cmd = $signCommand.cmd; args = $arguments; cwd = $tauriDir } |
             ConvertTo-Json -Compress | Out-File -FilePath $spec -Encoding utf8
 
           $spawner = Join-Path $env:RUNNER_TEMP 'spawn-sign.js'
@@ -131,7 +154,7 @@ jobs:
           const { execFileSync } = require('node:child_process');
           const fs = require('node:fs');
           const spec = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          execFileSync(spec.cmd, spec.args, { stdio: 'inherit' });
+          execFileSync(spec.cmd, spec.args, { stdio: 'inherit', cwd: spec.cwd });
           '@ | Out-File -FilePath $spawner -Encoding utf8
 
           node $spawner $spec
