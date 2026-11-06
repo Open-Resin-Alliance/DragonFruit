@@ -52,6 +52,36 @@ function Write-SignLog([string]$Message) {
 
 Write-SignLog "$(Get-Date -Format o) signing $Path"
 
+# azure/login exchanges the workflow's OIDC token once, and that assertion lives
+# about five minutes. A release build reaches its first signing call eight
+# minutes in, so the CLI can no longer refresh and the signer fails with
+# AADSTS700024. Mint a fresh assertion here instead, at most every four minutes
+# so a run that signs a dozen files does not log in a dozen times.
+function Connect-SigningIdentity {
+    $url = $env:ACTIONS_ID_TOKEN_REQUEST_URL
+    $bearer = $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN
+    if ([string]::IsNullOrWhiteSpace($url) -or [string]::IsNullOrWhiteSpace($bearer)) {
+        Write-SignLog 'no OIDC request context; using the existing az login'
+        return
+    }
+
+    $marker = Join-Path ([IO.Path]::GetTempPath()) 'dragonfruit-sign-login.stamp'
+    if ((Test-Path -LiteralPath $marker) -and
+        ((Get-Date) - (Get-Item -LiteralPath $marker).LastWriteTime).TotalMinutes -lt 4) {
+        return
+    }
+
+    $oidc = Invoke-RestMethod -Uri "$url&audience=api://AzureADTokenExchange" `
+        -Headers @{ Authorization = "Bearer $bearer" }
+    & az login --service-principal -u $env:AZURE_CLIENT_ID --tenant $env:AZURE_TENANT_ID `
+        --federated-token $oidc.value --output none
+    if ($LASTEXITCODE -ne 0) {
+        throw 'az login with a fresh federated token failed'
+    }
+    Set-Content -LiteralPath $marker -Value (Get-Date -Format o)
+    Write-SignLog 'refreshed the az login with a fresh federated token'
+}
+
 try {
     $required = @(
         'AZURE_SIGNING_ENDPOINT',
@@ -68,6 +98,7 @@ try {
         throw "Cannot sign '$Path': no such file."
     }
 
+    Connect-SigningIdentity
     Import-Module ArtifactSigning -ErrorAction Stop
 
     Invoke-ArtifactSigning `
