@@ -9,7 +9,11 @@ payloads, and checks the NSIS verifier, download plugin, and license notice.
 [CmdletBinding()]
 param(
     [string]$BundleDirectory,
-    [ValidateSet('nsis', 'msi')][string[]]$Formats = @('nsis', 'msi')
+    [ValidateSet('nsis', 'msi')][string[]]$Formats = @('nsis', 'msi'),
+    # Release builds sign the executable before packing it, so the copy inside
+    # the installer must carry a signature. Preview builds do not sign, so the
+    # check is opt-in rather than always on.
+    [switch]$RequireSignature
 )
 
 Set-StrictMode -Version Latest
@@ -53,6 +57,19 @@ try {
             }
             $executables = @($files | Where-Object Name -eq 'dragonfruit-desktop.exe')
             if ($executables.Count -ne 1) { throw "Expected one DragonFruit executable in $($installer.Name)." }
+            if ($RequireSignature) {
+                $signature = Get-AuthenticodeSignature -LiteralPath $executables[0].FullName
+                if (-not $signature.SignerCertificate) {
+                    throw "The executable inside $($installer.Name) is not signed."
+                }
+                if ($signature.Status -eq 'HashMismatch') {
+                    throw "The executable inside $($installer.Name) has a signature that does not match its contents."
+                }
+                if (-not $signature.TimeStamperCertificate) {
+                    throw "The executable inside $($installer.Name) is signed but not timestamped."
+                }
+                Write-Host "[windows-runtime] $($installer.Name): installed executable signed, status=$($signature.Status)"
+            }
             if ($format -eq 'nsis') {
                 foreach ($name in @('INetC.dll', 'verify-windows-runtime.ps1')) {
                     $matches = @($files | Where-Object Name -ieq $name)
