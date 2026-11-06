@@ -721,11 +721,22 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Use ad-hoc signing
-        # Preview builds are not releases. They never import the Developer ID
-        # certificate and never notarize: the certificate stays out of a job
-        # that compiles an arbitrary branch, and a preview does not spend the
-        # notary quota a release needs.
-        run: node scripts/use-adhoc-macos-signing.mjs
+        # Inlined rather than kept in a script: this workflow checks out the pull
+        # request head, while the workflow itself comes from the base branch, so
+        # a branch that predates a helper file would fail on a missing module.
+        shell: bash
+        run: |
+          node - <<'JS'
+          const fs = require('node:fs');
+          const file = 'src-tauri/tauri.macos.conf.json';
+          const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+          config.bundle ??= {};
+          config.bundle.macOS ??= {};
+          const previous = config.bundle.macOS.signingIdentity;
+          config.bundle.macOS.signingIdentity = '-';
+          fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n');
+          console.log(`macOS signing identity: ${previous ?? '(unset)'} -> "-" (ad-hoc; this build is not notarized)`);
+          JS
 
       # `swatinem/rust-cache` hashes every toolchain `rustup` lists, not only the
       # one the build uses, and the runner image ships its own `stable` (1.98.1
