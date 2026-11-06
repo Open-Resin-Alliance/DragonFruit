@@ -1,18 +1,25 @@
 name: Windows release build (signing check)
 
-# Builds the Windows release exactly as `release.yml` does — same profile, same
-# target, same bundles, same signing overlay — signs it with Azure Artifact
-# Signing, and uploads the signed installers as a workflow artifact. Nothing is
-# tagged, published or released.
+# Checks the Azure Artifact Signing path `release.yml` uses, without publishing
+# anything.
 #
-# Manual only, on purpose: it costs a full release compile, so it is for
-# checking the signing setup after touching the certificate, the federated
-# credential, the account or the overlay — not something to run per push.
+# The `smoke` job signs one throwaway executable through the same config overlay
+# and script the release build runs. It needs no Node, no Rust and no npm, so it
+# answers "does signing work" in about ninety seconds. Run it after touching
+# anything in the signing path.
 #
-# The build steps mirror the `windows-latest` leg of `release.yml`. Keep them in
+# The `build` job is the full Windows release build, signed, uploaded as an
+# artifact. It costs a full release compile, so it only runs when asked.
+#
+# Its build steps mirror the `windows-latest` leg of `release.yml`. Keep them in
 # step: a check that drifts from the release build stops proving anything.
 on:
   workflow_dispatch:
+    inputs:
+      full_build:
+        description: Also build and sign the real installers (about 40 minutes).
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,8 +30,82 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  smoke:
+    name: Sign a probe
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Azure login (Artifact Signing)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install the Artifact Signing module
+        shell: pwsh
+        run: |
+          Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
+
+      # Tauri discards the signer's stderr: any non-zero exit becomes
+      # "failed to run pwsh", with no reason attached. Signing a throwaway
+      # binary through the overlay is what turns that into a named failure.
+      - name: Sign a probe executable
+        shell: pwsh
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
+        run: |
+          # csc, not Add-Type: PowerShell 7 cannot emit an assembly ("Both the
+          # assembly types 'ConsoleApplication' and 'WindowsApplication' are not
+          # currently supported"), and this step runs on 7.
+          $probe = Join-Path $env:RUNNER_TEMP 'signing-probe.exe'
+          $source = Join-Path $env:RUNNER_TEMP 'signing-probe.cs'
+          'public static class Probe { public static void Main() {} }' |
+            Out-File -FilePath $source -Encoding ascii
+          & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
+            /nologo /target:exe "/out:$probe" $source | Out-Null
+          $overlay = Get-Content src-tauri/tauri.windows-signing.conf.json -Raw | ConvertFrom-Json
+          $signCommand = $overlay.bundle.windows.signCommand
+          $arguments = @($signCommand.args | ForEach-Object { if ($_ -eq '%1') { $probe } else { $_ } })
+          & $signCommand.cmd @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "The signing command exited $LASTEXITCODE."
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $probe
+          if (-not $signature.SignerCertificate) {
+            throw "The probe came back unsigned: $($signature.StatusMessage)"
+          }
+          if ($signature.Status -eq 'HashMismatch') {
+            throw 'The probe signature does not match its contents.'
+          }
+          if (-not $signature.TimeStamperCertificate) {
+            throw 'The probe is signed but not timestamped.'
+          }
+          # The subject carries the certificate holder's name and locality, and
+          # these logs are public. The thumbprint identifies the certificate
+          # without naming anyone; the full subject is on the artifact itself.
+          Write-Host "Probe signed: status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
+
+      - name: Show the signing log
+        if: always()
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'dragonfruit-sign.log'
+          if (Test-Path $log) { Get-Content $log } else { Write-Host 'the signing script never ran' }
+
   build:
     name: Signed Windows release build
+    needs:
+      - smoke
+    if: inputs.full_build
     runs-on: windows-latest
     timeout-minutes: 120
     # The shipped profile, stated here as well as in Cargo.toml so that
@@ -119,48 +200,6 @@ jobs:
         shell: pwsh
         run: |
           Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
-
-      # The bundler discards the signer's stderr: any non-zero exit becomes
-      # "failed to run pwsh", with no reason attached. Signing a throwaway
-      # binary first turns a broken signer into a two-minute failure that
-      # prints its own error, instead of a nine-minute build that says nothing.
-      - name: Sign a probe executable
-        shell: pwsh
-        env:
-          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
-        run: |
-          # csc, not Add-Type: PowerShell 7 cannot emit an assembly ("Both the
-          # assembly types 'ConsoleApplication' and 'WindowsApplication' are not
-          # currently supported"), and this step runs on 7.
-          $probe = Join-Path $env:RUNNER_TEMP 'signing-probe.exe'
-          $source = Join-Path $env:RUNNER_TEMP 'signing-probe.cs'
-          'public static class Probe { public static void Main() {} }' |
-            Out-File -FilePath $source -Encoding ascii
-          & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
-            /nologo /target:exe "/out:$probe" $source | Out-Null
-          $overlay = Get-Content src-tauri/tauri.windows-signing.conf.json -Raw | ConvertFrom-Json
-          $signCommand = $overlay.bundle.windows.signCommand
-          $arguments = @($signCommand.args | ForEach-Object { if ($_ -eq '%1') { $probe } else { $_ } })
-          & $signCommand.cmd @arguments
-          if ($LASTEXITCODE -ne 0) {
-            throw "The signing command exited $LASTEXITCODE."
-          }
-          $signature = Get-AuthenticodeSignature -LiteralPath $probe
-          if (-not $signature.SignerCertificate) {
-            throw "The probe came back unsigned: $($signature.StatusMessage)"
-          }
-          if ($signature.Status -eq 'HashMismatch') {
-            throw 'The probe signature does not match its contents.'
-          }
-          if (-not $signature.TimeStamperCertificate) {
-            throw 'The probe is signed but not timestamped.'
-          }
-          # The subject carries the certificate holder's name and locality, and
-          # these logs are public. The thumbprint identifies the certificate
-          # without naming anyone; the full subject is on the artifact itself.
-          Write-Host "Probe signed: status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
 
       - name: Build Tauri bundle
         uses: tauri-apps/tauri-action@v0
