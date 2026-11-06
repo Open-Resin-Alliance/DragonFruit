@@ -103,11 +103,15 @@ with no keys and proves the app compiles. Nothing more.
 ## macOS builds are only signed for releases
 
 Neither the pull-request check nor a preview build imports the Developer ID
-certificate or notarizes anything. Both call
-`scripts/use-adhoc-macos-signing.mjs`, which swaps the identity in
-`src-tauri/tauri.macos.conf.json` for `-`. Only `release.yml` signs with the
-Developer ID and notarizes, because only a release is something users install
-and keep.
+certificate or notarizes anything. Both rewrite the identity in
+`src-tauri/tauri.macos.conf.json` to `-` before building. Only `release.yml`
+signs with the Developer ID and notarizes, because only a release is something
+users install and keep.
+
+The rewrite is inlined in each workflow rather than kept in a helper script.
+A `pull_request` run takes its workflow from the base branch but checks out the
+pull request head, so a branch that predates a helper would fail on a missing
+module before it compiled anything.
 
 Ad-hoc rather than unsigned: Tauri skips signing altogether when no identity is
 configured, and an unsigned `.app` does not launch on Apple Silicon. Ad-hoc
