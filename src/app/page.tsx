@@ -3612,9 +3612,6 @@ export default function Home() {
     const tsmc = matProf.liftDistance2Mm !== undefined;
     const hasTransitionLayers = matProf.transitionLayerCount !== undefined && matProf.transitionLayerCount > 0;
     const hasBottomLiftDistance = matProf.bottomLiftDistanceMm !== undefined;
-    console.log(tsmc, "TSMC ON");
-    console.log(hasTransitionLayers, "TRANSITION ON");
-    console.log(hasBottomLiftDistance, "BOTTOM LIFT DISTANCES")
 
     let firstStepBotMoveTime = 0;
     let secondStepBotMoveTime = 0;
@@ -3623,29 +3620,19 @@ export default function Home() {
       secondStepBotMoveTime = (matProf.bottomLiftDistance2Mm / matProf.bottomLiftSpeed2MmMin + matProf.bottomLiftDistance2Mm / matProf.bottomRetractSpeed2MmMin) * 60;
     }
 
-    console.log(firstStepBotMoveTime);
-    console.log(secondStepBotMoveTime);
-
     //So if tsmc is off, there are no defined parameters for burn-in movement. So we need to calculate bottom layers with regular layer movement plus the exposure time.
     //If TSMC is on, it will have its own, and we want to use it.
     
     const firstStepMoveTime = (matProf.liftDistanceMm / matProf.liftSpeedMmMin + matProf.liftDistanceMm / matProf.retractSpeedMmMin) * 60;
 
-    console.log(firstStepMoveTime);
-
     let secondStepMoveTime = 0;
     if (tsmc) secondStepMoveTime = (matProf.liftDistance2Mm / matProf.liftSpeed2MmMin + matProf.liftDistance2Mm / matProf.retractSpeed2MmMin) * 60;
-
-    console.log(secondStepMoveTime)
 
     let bottomLayerTime = firstStepMoveTime + matProf.bottomExposureSec;
     if (tsmc) bottomLayerTime = firstStepBotMoveTime + secondStepBotMoveTime + matProf.bottomExposureSec;
     
-    console.log(bottomLayerTime);
-    
+ 
     const regularLayerTime = firstStepMoveTime + secondStepMoveTime + matProf.normalExposureSec;
-
-    console.log(regularLayerTime);
 
     let transitionLayerCount = 0;
     if (hasTransitionLayers) transitionLayerCount = matProf.transitionLayerCount;
@@ -3671,8 +3658,6 @@ export default function Home() {
       }
     }
 
-    console.log(activeMaterialProfile);
-    console.log("Print Stats - Bottom Layers: ", totalBottomLayerEstimate, " Transition Layers: ", totalTransitionLayerEstimate, " Normal Layers: ", totalRegularLayerEstimate);
     return totalBottomLayerEstimate + totalRegularLayerEstimate + totalTransitionLayerEstimate;
   }
 
