@@ -280,8 +280,12 @@ overlay that only `release.yml` passes (`--config …`), so local
 credentials. Preview builds (`build-preview.yml`) are unsigned for the same
 reason: they are not release artifacts.
 
-`scripts/sign-windows.ps1` is the command Tauri runs, once per file, with the
-path as its only argument. It calls `Invoke-ArtifactSigning` from the
+`scripts/sign-windows.cmd` is the command Tauri runs, once per file, with the
+path as its only argument. It exists because the bundler spawns the command by
+name and `pwsh` is not on the PATH that process sees, even though a PowerShell
+step resolves it; `cmd.exe` is always in System32, which Windows searches before
+PATH, so the batch file finds PowerShell 7 and hands the work to
+`scripts/sign-windows.ps1`. That script calls `Invoke-ArtifactSigning` from the
 `ArtifactSigning` PowerShell module pinned to `0.1.20` — the same module the
 `azure/artifact-signing-action` action installs. The action itself is not used
 because it signs a folder after the build, which is both too late for the

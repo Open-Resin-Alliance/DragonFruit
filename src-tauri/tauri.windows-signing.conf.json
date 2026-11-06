@@ -2,14 +2,11 @@
   "bundle": {
     "windows": {
       "signCommand": {
-        "cmd": "pwsh",
+        "cmd": "cmd.exe",
         "args": [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          "scripts/sign-windows.ps1",
+          "/d",
+          "/c",
+          "scripts\\sign-windows.cmd",
           "%1"
         ]
       }
