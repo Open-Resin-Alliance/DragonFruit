@@ -380,7 +380,10 @@ jobs:
           if (-not $signature.TimeStamperCertificate) {
             throw 'The probe is signed but not timestamped.'
           }
-          Write-Host "Probe signed by $($signature.SignerCertificate.Subject) [$($signature.Status)]"
+          # The subject carries the certificate holder's name and locality, and
+          # these logs are public. The thumbprint identifies the certificate
+          # without naming anyone; the full subject is on the artifact itself.
+          Write-Host "Probe signed: status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
 
       - name: Build Tauri bundle
         if: matrix.build_kind == 'tauri'
@@ -429,7 +432,7 @@ jobs:
             if (-not $signature.TimeStamperCertificate) {
               throw "$($file.Name) is signed but not timestamped; the signature dies with the certificate."
             }
-            Write-Host "$($file.Name): $($signature.SignerCertificate.Subject) [$($signature.Status)]"
+            Write-Host "$($file.Name): status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
           }
 
       - name: Embed QuickLook extension + verify universal bundle
