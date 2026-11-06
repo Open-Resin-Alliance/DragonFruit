@@ -758,8 +758,9 @@ export function generateM1Candidates(mesh: AdvisorMesh, opts: AdvisorOptions = {
 
 /** Lean range of a `leanBack` search in radians, as rotX: negative tips the front (−Y) up. */
 function leanBackRange(opts: AdvisorOptions): { minRotX: number; maxRotX: number; side: number } {
-    const lo = Math.max(0, Math.min(89, opts.leanBackMinDeg ?? DEFAULT_LEAN_MIN_DEG));
-    const hi = Math.max(lo, Math.min(89, opts.leanBackMaxDeg ?? DEFAULT_LEAN_MAX_DEG));
+    const finiteOr = (value: number | undefined, fallback: number) => (Number.isFinite(value) ? value as number : fallback);
+    const lo = Math.max(0, Math.min(89, finiteOr(opts.leanBackMinDeg, DEFAULT_LEAN_MIN_DEG)));
+    const hi = Math.max(lo, Math.min(89, finiteOr(opts.leanBackMaxDeg, DEFAULT_LEAN_MAX_DEG)));
     return { minRotX: -hi * DEG, maxRotX: -lo * DEG, side: LEAN_SIDE_MAX_DEG * DEG };
 }
 

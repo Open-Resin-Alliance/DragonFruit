@@ -473,3 +473,15 @@ test('composeLeanBack tilts by the lean it was given, whatever the turntable', (
         assert.ok(Math.abs(up.z - lean.z) < 1e-9);
     }
 });
+
+test('leanBack falls back to its default range when a bound is not a number', () => {
+    const tower = box(10, 10, 30);
+    const expected = suggestOrientation(tower, { objective: 'leanBack' });
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+        const s = suggestOrientation(tower, { objective: 'leanBack', leanBackMinDeg: bad, leanBackMaxDeg: bad });
+        assert.equal(s.rotXDeg, expected.rotXDeg);
+        assert.equal(s.rotYDeg, expected.rotYDeg);
+    }
+    const huge = suggestOrientation(tower, { objective: 'leanBack', leanBackMinDeg: 500, leanBackMaxDeg: 500 });
+    assert.equal(huge.rotXDeg, -89);
+});
