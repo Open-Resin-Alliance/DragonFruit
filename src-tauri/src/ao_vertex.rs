@@ -125,6 +125,7 @@ pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, Str
     // is the soup, as before — the path for a geometry whose mesh the loader never
     // had: a repaired one, a swap, a file out of a zip.
     if let InvokeBody::Json(payload) = request.body() {
+        if payload.get("meshUploadId").is_none() {
         let token = payload
             .get("meshToken")
             .and_then(|value| value.as_u64())
@@ -150,12 +151,10 @@ pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, Str
             occlusion.len(),
         );
         return Ok(Response::new(out));
+        }
     }
 
-    let bytes = match request.body() {
-        InvokeBody::Raw(bytes) => bytes.clone(),
-        InvokeBody::Json(_) => unreachable!("JSON answered above"),
-    };
+    let bytes = crate::mesh_chunk_upload::take_request_body(&request)?;
     tauri::async_runtime::spawn_blocking(move || {
         let soup: &[f32] = bytemuck::try_cast_slice(&bytes)
             .map_err(|e| format!("positions cast: {e}"))?;

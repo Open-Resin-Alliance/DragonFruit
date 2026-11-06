@@ -14,6 +14,8 @@ nine of those modules are React components (`SettingsModal.tsx`,
 So the rule is directional, not descriptive:
 
 - **New commands**: add a named wrapper in `nativeSlicerBridge.ts` and call that.
+  Bulk mesh uploads extend the existing `tauriMeshBridge.ts` seam through
+  `meshChunkUpload.ts`, which owns the worker/queue protocol described below.
   Do not add a new direct `invoke` from a component.
 - **Existing direct call sites**: leave them alone unless you are already
   changing that code. Consolidating all 84 is a deliberate refactor of its own —
@@ -62,7 +64,8 @@ grep -rhoE '\binvoke(<[^>]*>)?\(' src plugins --include=*.ts --include=*.tsx \
 
 - **Results indexed against geometry must be sent the geometry.**
   If a command's output is addressed *by element* — triangle ids, per-vertex
-  values, region masks — pass that mesh **in the request** (raw body is fine) and
+  values, region masks — pass that mesh **in the request** (raw body or an exact
+  immutable upload reference) and
   return values in the same order or index space. Do **not** read the shared
   staging buffer, and do **not** re-load the file on the Rust side: both give the
   Rust code a mesh that can differ from the one the frontend will map onto, and
@@ -76,7 +79,7 @@ grep -rhoE '\binvoke(<[^>]*>)?\(' src plugins --include=*.ts --include=*.tsx \
   `request: tauri::ipc::Request` has no JSON body, so any sibling parameter is
   rejected at the call site — *"expected a value for key … but the IPC call used
   a bytes payload"*. Put options in request headers, or keep them as crate
-  constants; `stage_mesh_binary_set` takes nothing else for this reason.
+  constants; `mesh_chunk_upload_append` uses headers for its upload ID and hash.
 - **Header values are visible ASCII — percent-encode anything else.** An HTTP
   header value may only hold bytes `0x20`–`0x7E`; `HeaderValue::to_str` rejects
   the rest, so a header carrying a *path* breaks the moment the path has an
@@ -102,6 +105,59 @@ grep -rhoE '\binvoke(<[^>]*>)?\(' src plugins --include=*.ts --include=*.tsx \
 - **Cancellation.** Long-running commands (slicing, SDF, A* pathfinding) support
   a cancel command (`cancel_slicing`, …). Always offer cancellation for anything
   that runs longer than a second.
+
+## Lazy cached mesh uploads
+
+The bulk-mesh seam is `src/utils/meshChunkUpload.ts`; existing geometry helpers in
+`src/utils/tauriMeshBridge.ts` and the slice export orchestrator use it. It is
+separate from file writes: do not use the scene-file appender for this protocol.
+The worker is created only when a native operation requests mesh data. A normal
+worker has no `window.__TAURI_INTERNALS__`, so the window relays native commands;
+hashing, reblocking and cache-hit decisions run in `meshChunkUpload.worker.ts` /
+`meshChunkUpload.shared.ts`.
+
+- `createMeshChunkUpload(invoke, { reserveBytes?, signal? })` creates one upload;
+  `append(bytes)` accepts producer batches, and `finish(stage)` publishes it.
+  Keep each input unchanged until its append promise settles. Renderer-owned
+  buffers are never transferred: only bounded copies cross into the worker.
+- Append boundaries do not define cache identity. The worker reblocks the byte
+  stream into fixed 4 MiB chunks plus a final tail and computes SHA-256. It asks
+  Rust about each hash and uploads raw bytes only on a miss. One chunk is in flight;
+  a partial reblocking buffer is also at most 4 MiB. This bounds transport buffers,
+  not the renderer's live geometry or the existing CPU mesh-preparation buffers.
+- Rust's `mesh_chunk_cache.rs` stores immutable chunks in a 64 MiB payload-bounded
+  LRU. Metadata is additional. Evicted chunks are uploaded again even if unchanged;
+  uploads larger than the cache remain valid. There is no disk cache or eager
+  background preload. Changes in byte order also change chunk identities.
+- `finish(true)` atomically replaces the existing shared stage. Hold
+  `runExclusiveNativeMesh` across the entire upload / native operation / readback
+  window, not merely the upload. Repair, hollowing, punching, remeshing, organic
+  cut and slicing share this guard. Slicing acquires it after modifier baking so
+  an inner modifier's native pass cannot deadlock the slice. Its AbortSignal also
+  cancels a queued pass promptly without taking another pass's stage ownership.
+- `finish(false)` retains one immutable snapshot and keeps the upload turn until
+  `abort()`. `invokeWithChunkedMesh` owns this lifetime: it sends
+  `{ ...options.args, meshUploadId, expectedBytes }`, preserves headers and cleans
+  up even when the consumer fails. The ID and expected length are authoritative;
+  results indexed against a mesh never read the anonymous shared stage.
+- The backend `mesh_chunk_upload.rs` registers `mesh_chunk_upload_begin`,
+  `mesh_chunk_upload_append_cached`, `mesh_chunk_upload_append`,
+  `mesh_chunk_upload_finish` and `mesh_chunk_upload_abort`. Raw appends carry
+  `x-mesh-upload-id` and lowercase-hex `x-mesh-chunk-hash` headers. Rust verifies
+  SHA-256 before mutating upload state. Chunks are float-aligned and at most 4 MiB;
+  completion requires whole 36-byte triangles. Cache hits preserve requested
+  order, including repeated chunks. Unknown/stale IDs fail; abort affects only
+  its own ID, including when a cancelled native begin finishes late.
+- Geometry replacement, edits, undo and scene deletion do not need mutable owner
+  aliases: reuse depends on exact bytes, not a model ID or an old revision label.
+  The geometry staging helper checks attribute identity/version before publishing.
+  Native cache entries remain bounded independently of deleted renderer objects.
+
+The slice benchmark metadata reports `meshTransferMode: 'cached-chunks'`, logical
+`stageMeshBytes`, actual `stageMeshUploadedBytes`, and `stageMeshReusedBytes`.
+Staging wall time includes worker preparation, hashing and IPC; throughput uses
+actual uploaded bytes. A cache-hit export is not proof of an overall slicing
+speedup: measure the complete operation on the target Windows/Linux backend.
 
 ## Baked ambient occlusion (`bake_vertex_occlusion`)
 
@@ -370,10 +426,11 @@ should take its *direction* from, and an estimator of the slope itself is still
 open. It was reverted rather than shipped: nothing consumes a payload whose
 magnitude is off by two orders of magnitude at the ends of its range.
 
-## The AO bake's two request shapes (`bake_vertex_occlusion`)
+## The AO bake's request shapes (`bake_vertex_occlusion`)
 
-A raw body is the soup — the mesh in the request, as above — and is what a geometry the
-loader never had sends: a plugin's geometry, a repaired one, a file out of a zip. A
+The frontend uses an immutable `{ meshUploadId, expectedBytes }` reference for a
+geometry the loader never had: a plugin's geometry, a repaired one or a swap. Raw
+soup bodies are also accepted at the native boundary. The separate loader-token
 **JSON** body is `{ meshToken, expectedCorners, rays? }`: the token the loader put in the
 `DFMX` header for that model, naming the refined mesh it kept in `mesh_repair`'s registry.
 That path skips the upload (36 bytes a triangle, 430 MB across a scene) *and* the weld

@@ -4,6 +4,7 @@ import {
   loadTauriCore,
   readPositionsFromCommand,
   stageGeometryToStagedMesh,
+  runExclusiveNativeMesh,
 } from './tauriMeshBridge';
 
 let stagedHollowPreviewSourceKey: string | null = null;
@@ -115,20 +116,22 @@ export async function hollowFromGeometry(
   const core = await loadTauriCore();
   if (!core) return null;
 
-  await stageGeometryToStagedMesh(core.invoke, geometry);
-  stagedHollowPreviewSourceKey = null;
+  return runExclusiveNativeMesh(async () => {
+    await stageGeometryToStagedMesh(core.invoke, geometry);
+    stagedHollowPreviewSourceKey = null;
 
-  const optionsJson = JSON.stringify(options);
-  const reportJson = await core.invoke<string>('mesh_hollow_staged', { optionsJson });
-  const report = JSON.parse(reportJson) as HollowReport;
-  const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-  let cavityPositions: Float32Array | undefined;
-  try {
-    cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions');
-  } catch {
-    cavityPositions = undefined;
-  }
-  return { report, positions, cavityPositions };
+    const optionsJson = JSON.stringify(options);
+    const reportJson = await core.invoke<string>('mesh_hollow_staged', { optionsJson });
+    const report = JSON.parse(reportJson) as HollowReport;
+    const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
+    let cavityPositions: Float32Array | undefined;
+    try {
+      cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions');
+    } catch {
+      cavityPositions = undefined;
+    }
+    return { report, positions, cavityPositions };
+  });
 }
 
 export async function stageHollowPreviewSource(
@@ -138,14 +141,16 @@ export async function stageHollowPreviewSource(
   const core = await loadTauriCore();
   if (!core) return false;
 
-  if (stagedHollowPreviewSourceKey === sourceKey) {
-    return true;
-  }
+  return runExclusiveNativeMesh(async () => {
+    if (stagedHollowPreviewSourceKey === sourceKey) {
+      return true;
+    }
 
-  await stageGeometryToStagedMesh(core.invoke, geometry);
-  await core.invoke('mesh_hollow_preview_capture_staged_source');
-  stagedHollowPreviewSourceKey = sourceKey;
-  return true;
+    await stageGeometryToStagedMesh(core.invoke, geometry);
+    await core.invoke('mesh_hollow_preview_capture_staged_source');
+    stagedHollowPreviewSourceKey = sourceKey;
+    return true;
+  });
 }
 
 export async function hollowPreviewFromCapturedSource(
@@ -154,49 +159,51 @@ export async function hollowPreviewFromCapturedSource(
   const core = await loadTauriCore();
   if (!core) return null;
 
-  const optionsJson = JSON.stringify(options);
-  const reportJson = await core.invoke<string>('mesh_hollow_preview_from_captured_source', { optionsJson });
-  const report = JSON.parse(reportJson) as HollowReport;
-  const positions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_positions');
-  let cavityPositions: Float32Array | undefined;
-  try {
-    cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_cavity_positions');
-  } catch {
-    cavityPositions = undefined;
-  }
-  let infillPositions: Float32Array | undefined;
-  let removedVoxelCenters: Float32Array | undefined;
-  let removedVoxelIndices: Uint32Array | undefined;
-  if (options.mode === 'infill') {
+  return runExclusiveNativeMesh(async () => {
+    const optionsJson = JSON.stringify(options);
+    const reportJson = await core.invoke<string>('mesh_hollow_preview_from_captured_source', { optionsJson });
+    const report = JSON.parse(reportJson) as HollowReport;
+    const positions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_positions');
+    let cavityPositions: Float32Array | undefined;
     try {
-      infillPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_infill_positions');
+      cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_cavity_positions');
     } catch {
-      infillPositions = undefined;
+      cavityPositions = undefined;
     }
-  }
-  try {
-    removedVoxelCenters = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_removed_voxel_centers');
-  } catch {
-    removedVoxelCenters = undefined;
-  }
-  try {
-    removedVoxelIndices = await readUint32FromCommand(core.invoke, 'mesh_hollow_preview_read_removed_voxel_indices');
-  } catch {
-    removedVoxelIndices = undefined;
-  }
-  let blockedVoxelCenters: Float32Array | undefined;
-  try {
-    blockedVoxelCenters = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_blocked_voxel_centers');
-  } catch {
-    blockedVoxelCenters = undefined;
-  }
-  let blockedVoxelIndices: Uint32Array | undefined;
-  try {
-    blockedVoxelIndices = await readUint32FromCommand(core.invoke, 'mesh_hollow_preview_read_blocked_voxel_indices');
-  } catch {
-    blockedVoxelIndices = undefined;
-  }
-  return { report, positions, cavityPositions, infillPositions, removedVoxelCenters, removedVoxelIndices, blockedVoxelCenters, blockedVoxelIndices };
+    let infillPositions: Float32Array | undefined;
+    let removedVoxelCenters: Float32Array | undefined;
+    let removedVoxelIndices: Uint32Array | undefined;
+    if (options.mode === 'infill') {
+      try {
+        infillPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_infill_positions');
+      } catch {
+        infillPositions = undefined;
+      }
+    }
+    try {
+      removedVoxelCenters = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_removed_voxel_centers');
+    } catch {
+      removedVoxelCenters = undefined;
+    }
+    try {
+      removedVoxelIndices = await readUint32FromCommand(core.invoke, 'mesh_hollow_preview_read_removed_voxel_indices');
+    } catch {
+      removedVoxelIndices = undefined;
+    }
+    let blockedVoxelCenters: Float32Array | undefined;
+    try {
+      blockedVoxelCenters = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_blocked_voxel_centers');
+    } catch {
+      blockedVoxelCenters = undefined;
+    }
+    let blockedVoxelIndices: Uint32Array | undefined;
+    try {
+      blockedVoxelIndices = await readUint32FromCommand(core.invoke, 'mesh_hollow_preview_read_blocked_voxel_indices');
+    } catch {
+      blockedVoxelIndices = undefined;
+    }
+    return { report, positions, cavityPositions, infillPositions, removedVoxelCenters, removedVoxelIndices, blockedVoxelCenters, blockedVoxelIndices };
+  });
 }
 
 export async function hollowApplyFromCapturedSource(
@@ -205,17 +212,19 @@ export async function hollowApplyFromCapturedSource(
   const core = await loadTauriCore();
   if (!core) return null;
 
-  const optionsJson = JSON.stringify(options);
-  const reportJson = await core.invoke<string>('mesh_hollow_apply_from_captured_source', { optionsJson });
-  const report = JSON.parse(reportJson) as HollowReport;
-  const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-  let cavityPositions: Float32Array | undefined;
-  try {
-    cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions');
-  } catch {
-    cavityPositions = undefined;
-  }
-  return { report, positions, cavityPositions };
+  return runExclusiveNativeMesh(async () => {
+    const optionsJson = JSON.stringify(options);
+    const reportJson = await core.invoke<string>('mesh_hollow_apply_from_captured_source', { optionsJson });
+    const report = JSON.parse(reportJson) as HollowReport;
+    const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
+    let cavityPositions: Float32Array | undefined;
+    try {
+      cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions');
+    } catch {
+      cavityPositions = undefined;
+    }
+    return { report, positions, cavityPositions };
+  });
 }
 
 /** Rust-side lasso selection of the FULL through-depth cavity voxel column

@@ -9,7 +9,6 @@ import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from './fo
 import { asciiFileBaseName } from './plateSliceNaming';
 import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import {
-    encodeStagePathHeader,
     isNativeSlicerAvailable,
     sliceSolidAndEncodeWithNativeSlicerToTempPath,
     type AntiAliasingLevel,
@@ -17,6 +16,9 @@ import {
     type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
 import { invoke } from '@tauri-apps/api/core';
+import { createMeshChunkUpload } from '@/utils/meshChunkUpload';
+import { runExclusiveNativeMesh } from '@/utils/tauriMeshBridge';
+import type { MeshChunkUploadSession } from '@/utils/meshChunkUpload';
 import { assembleSliceJob, buildNativeSliceJob, resolveSliceRasterSettings } from './sliceJobAssembly';
 import { resolveSliceJobAntiAliasing, type SliceJobAntiAliasingRequest } from './sliceAntiAliasing';
 
@@ -25,26 +27,8 @@ const BYTES_PER_TRIANGLE_XYZ = Float32Array.BYTES_PER_ELEMENT * 9;
 const STAGING_PREALLOC_MIN_BYTES = 16 * 1024 * 1024;
 const STAGING_PREALLOC_MAX_BYTES = 1024 * 1024 * 1024;
 const STAGING_PREALLOC_HEADROOM = 1.35;
-const STAGING_CHUNK_TARGET_MIN_BYTES = 16 * 1024 * 1024;
-const STAGING_CHUNK_TARGET_MAX_BYTES = 128 * 1024 * 1024;
-const STAGING_CHUNK_TARGET_DIVISOR = 6;
-const STAGE_MESH_SINGLE_SHOT_MAX_BYTES = 256 * 1024 * 1024;
-// File-backed staging incurs an additional disk write + read pass, so keep it as a
-// high-watermark fallback for very large meshes where in-memory staging becomes risky.
-const STAGE_MESH_FILE_BACKED_MIN_BYTES = 2 * 1024 * 1024 * 1024;
 const MESH_TRANSPORT_ENCODING = 'raw_f32' as const;
 const STAGE_PROGRESS_UPDATE_MIN_INTERVAL_MS = 250;
-const STAGE_PROGRESS_UPDATE_MIN_BYTES = 64 * 1024 * 1024;
-
-type StageMeshChunkAck = {
-    chunkBytes: number;
-    totalBytes: number;
-    capacityBytes: number;
-    reserveGrew: boolean;
-    chunksReceived: number;
-    appendNs: number;
-    appendNsTotal: number;
-};
 
 function logDebug(...args: unknown[]): void {
     if (typeof console === 'undefined' || typeof console.debug !== 'function') return;
@@ -71,14 +55,6 @@ function estimateInitialMeshStagingBytes(models: LoadedModel[]): number {
     return Math.max(
         STAGING_PREALLOC_MIN_BYTES,
         Math.min(STAGING_PREALLOC_MAX_BYTES, estimatedBytes),
-    );
-}
-
-function resolveMeshChunkTargetBytes(initialMeshStagingBytes: number): number {
-    const dynamicTarget = Math.ceil(initialMeshStagingBytes / STAGING_CHUNK_TARGET_DIVISOR);
-    return Math.max(
-        STAGING_CHUNK_TARGET_MIN_BYTES,
-        Math.min(STAGING_CHUNK_TARGET_MAX_BYTES, dynamicTarget),
     );
 }
 
@@ -203,8 +179,7 @@ export type SliceExportResult = {
                 maxY: number;
                 maxZ: number;
             } | null;
-            meshTransferMode: 'single-shot' | 'streamed' | 'file-backed';
-            meshStageFilePath: string | null;
+            meshTransferMode: 'cached-chunks';
         };
         nativePerf: {
             perf: NativeSlicerPerfMetrics | null;
@@ -217,6 +192,8 @@ export type SliceExportResult = {
             meshBytesLen: number | null;
             stageMeshMs: number | null;
             stageMeshBytes: number | null;
+            stageMeshUploadedBytes: number;
+            stageMeshReusedBytes: number;
             stageMeshChunkCount: number | null;
             stageMeshAvgChunkBytes: number | null;
             stageMeshThroughputMiBPerSec: number | null;
@@ -320,97 +297,46 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     });
 
     const initialMeshStagingBytes = estimateInitialMeshStagingBytes(visibleModels);
-    // Keep outside crossings and closed surfaces intact. Plate-box quantization
-    // clamps those coordinates; surface clipping removes the closing crossings.
-    // The rasterizer alone crops the filled spans to the printable dimensions.
+    // Preserve all crossings; the rasterizer alone crops to the printable volume.
     const meshTransportBytesEstimate = initialMeshStagingBytes;
     const meshTransportEncoding = MESH_TRANSPORT_ENCODING;
     const meshTransportQuantization = null;
-    const meshChunkTargetBytes = resolveMeshChunkTargetBytes(meshTransportBytesEstimate);
-    const meshTransferMode: 'single-shot' | 'streamed' | 'file-backed' = meshTransportBytesEstimate >= STAGE_MESH_FILE_BACKED_MIN_BYTES
-        ? 'file-backed'
-        : meshTransportBytesEstimate <= STAGE_MESH_SINGLE_SHOT_MAX_BYTES
-            ? 'single-shot'
-            : 'streamed';
-    let meshStageFilePath: string | null = null;
-
+    const meshChunkTargetBytes = 4 * 1024 * 1024;
+    const meshTransferMode = 'cached-chunks' as const;
+    let meshUpload: MeshChunkUploadSession | null = null;
     let cumulativeBytesStage = 0;
     let stageMeshIpcMs = 0;
     let stageMeshChunkCount = 0;
     let stageMeshAckAppendNsTotal = 0;
     let stageMeshCapacityMaxBytes = 0;
     let stageMeshReserveGrowthEvents = 0;
+    let stageMeshUploadedBytes = 0;
+    let stageMeshReusedBytes = 0;
     let lastStageProgressUpdateMs = 0;
-    let lastStageProgressUpdateBytes = 0;
-
-    const maybeEmitStageProgress = () => {
-        const nowMs = performance.now();
-        const shouldEmitProgress = stageMeshChunkCount === 1
-            || (nowMs - lastStageProgressUpdateMs) >= STAGE_PROGRESS_UPDATE_MIN_INTERVAL_MS
-            || (cumulativeBytesStage - lastStageProgressUpdateBytes) >= STAGE_PROGRESS_UPDATE_MIN_BYTES;
-        if (!shouldEmitProgress) return;
-
-        const mb = Math.round(cumulativeBytesStage / (1024 * 1024));
-        options.onProgress?.(0, 1, `Transferring Mesh (${mb} MB)`);
-        lastStageProgressUpdateMs = nowMs;
-        lastStageProgressUpdateBytes = cumulativeBytesStage;
-    };
 
     const handleMeshChunk = async (chunk: Uint8Array) => {
         throwIfAborted(options.abortSignal);
-
+        if (!meshUpload) throw new Error('Mesh chunk upload has not started.');
+        const started = performance.now();
+        await meshUpload.append(chunk);
+        stageMeshIpcMs += performance.now() - started;
         cumulativeBytesStage += chunk.byteLength;
-        stageMeshChunkCount += 1;
-        maybeEmitStageProgress();
-
-        const chunkInvokeStart = performance.now();
-        const chunkAck = await invoke<StageMeshChunkAck>('stage_mesh_binary_chunk', chunk, {
-            headers: { 'Content-Type': 'application/octet-stream' },
-        });
-
-        stageMeshAckAppendNsTotal = Math.max(stageMeshAckAppendNsTotal, chunkAck.appendNsTotal ?? 0);
-        stageMeshCapacityMaxBytes = Math.max(stageMeshCapacityMaxBytes, chunkAck.capacityBytes ?? 0);
-        if (chunkAck.reserveGrew) {
-            stageMeshReserveGrowthEvents += 1;
-        }
-
-        stageMeshIpcMs += performance.now() - chunkInvokeStart;
-    };
-
-    /** Byte offset of the next chunk in the file-backed stage sequence. */
-    let meshStageFileOffset = 0;
-
-    const handleMeshFileChunk = async (chunk: Uint8Array) => {
-        throwIfAborted(options.abortSignal);
-        if (!meshStageFilePath) {
-            throw new Error('Mesh stage file path was not allocated before chunk append.');
-        }
-
-        cumulativeBytesStage += chunk.byteLength;
-        stageMeshChunkCount += 1;
-        maybeEmitStageProgress();
-
-        const chunkOffset = meshStageFileOffset;
-        meshStageFileOffset += chunk.byteLength;
-
-        const appendStart = performance.now();
-        const appendedLen = await invoke<number>('append_mesh_stage_chunk', chunk, {
-            headers: {
-                'Content-Type': 'application/octet-stream',
-                'x-mesh-stage-path': encodeStagePathHeader(meshStageFilePath),
-                'x-mesh-stage-offset': String(chunkOffset),
-            },
-        });
-        stageMeshIpcMs += performance.now() - appendStart;
-
-        if (appendedLen > 0) {
-            cumulativeBytesStage = appendedLen;
+        const now = performance.now();
+        if (now - lastStageProgressUpdateMs >= STAGE_PROGRESS_UPDATE_MIN_INTERVAL_MS) {
+            options.onProgress?.(0, 1, `Transferring Mesh (${Math.round(cumulativeBytesStage / (1024 * 1024))} MB)`);
+            lastStageProgressUpdateMs = now;
         }
     };
 
     const modifierBakeStartMs = performance.now();
     options.onProgress?.(0, 1, 'Baking Modifiers');
     const preparedModelsForOutput = await prepareLoadedModelsForOutput(visibleModels);
+    let preparedDisposed = false;
+    const disposePreparedModels = () => {
+        if (preparedDisposed) return;
+        preparedDisposed = true;
+        preparedModelsForOutput.dispose();
+    };
     const modifierBakeMs = performance.now() - modifierBakeStartMs;
 
     const survivingCombinedModels = preparedModelsForOutput.models.filter((model) => {
@@ -449,303 +375,273 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         }).layerHeightMm,
         request: options.antiAliasing,
     });
-    const meshPrepStartMs = performance.now();
-    let solidMesh: Awaited<ReturnType<typeof buildSolidSliceMeshForWasm>>;
-    try {
-        if (meshTransferMode === 'streamed') {
-            // Modifier baking leaves raw f32 output in the shared native stage.
-            // Reset it before appending the prepared scene, never before baking.
-            await invoke('stage_mesh_binary_start', { totalBytes: meshTransportBytesEstimate });
-        } else if (meshTransferMode === 'file-backed') {
-            meshStageFilePath = await invoke<string>('allocate_mesh_stage_path');
-        }
+    return runExclusiveNativeMesh(async () => {
+        const meshPrepStartMs = performance.now();
+        let solidMesh: Awaited<ReturnType<typeof buildSolidSliceMeshForWasm>>;
+        try {
+            meshUpload = await createMeshChunkUpload(invoke, {
+                reserveBytes: meshTransportBytesEstimate,
+                signal: options.abortSignal,
+            });
 
-        logDebug('Initialized mesh staging buffer', {
-            initialMeshStagingBytes,
-            initialMeshStagingMiB: Number((initialMeshStagingBytes / (1024 * 1024)).toFixed(2)),
-            meshChunkTargetBytes,
-            meshChunkTargetMiB: Number((meshChunkTargetBytes / (1024 * 1024)).toFixed(2)),
-            meshTransportBytesEstimate,
+            logDebug('Initialized mesh staging buffer', {
+                initialMeshStagingBytes,
+                initialMeshStagingMiB: Number((initialMeshStagingBytes / (1024 * 1024)).toFixed(2)),
+                meshChunkTargetBytes,
+                meshChunkTargetMiB: Number((meshChunkTargetBytes / (1024 * 1024)).toFixed(2)),
+                meshTransportBytesEstimate,
+                meshTransportEncoding,
+                meshTransferMode,
+            });
+
+            solidMesh = await buildSolidSliceMeshForWasm({
+                models: preparedModelsForOutput.models,
+                printerProfile: options.printerProfile,
+                materialProfile: options.materialProfile,
+                filenameBase: options.filenameBase,
+                plateOffsetMm: options.plateOffsetMm,
+                supportTipShrinkPercent,
+                flushBinaryMeshChunk: handleMeshChunk,
+                meshChunkTargetBytes,
+            });
+            const finishStarted = performance.now();
+            const chunkAck = await meshUpload.finish();
+            stageMeshIpcMs += performance.now() - finishStarted;
+            cumulativeBytesStage = chunkAck.totalBytes;
+            stageMeshChunkCount = chunkAck.chunksReceived;
+            stageMeshAckAppendNsTotal = chunkAck.appendNsTotal;
+            stageMeshCapacityMaxBytes = chunkAck.capacityBytes;
+            stageMeshReserveGrowthEvents = Number(chunkAck.reserveGrew);
+            stageMeshUploadedBytes = chunkAck.uploadedBytes;
+            stageMeshReusedBytes = chunkAck.reusedBytes;
+        } catch (error) {
+            await meshUpload?.abort();
+            throw error;
+        } finally {
+            disposePreparedModels();
+        }
+        const meshPrepMs = performance.now() - meshPrepStartMs;
+
+        logDebug('Solid mesh prepared for native backend', {
+            source: `${solidMesh.sourceWidthPx}x${solidMesh.sourceHeightPx}`,
+            output: `${solidMesh.widthPx}x${solidMesh.heightPx}`,
+            packingMode: solidMesh.xPackingMode,
+            totalLayers: solidMesh.totalLayers,
+            meshPrepMs,
+            stagedMeshBytes: cumulativeBytesStage,
+            stagedMeshChunkCount: stageMeshChunkCount,
+            stageMeshIpcMs,
             meshTransportEncoding,
             meshTransferMode,
+            modifiedModelCount: preparedModelsForOutput.modifiedModelCount,
+        });
+        emitDiagnosticProgress('Preparing mesh complete', 1, 1, {
+            meshPrepMs,
+            triangleFloatCount: solidMesh.trianglesXYZ.length,
+            totalLayers: solidMesh.totalLayers,
         });
 
-        solidMesh = await buildSolidSliceMeshForWasm({
-            models: preparedModelsForOutput.models,
+        options.onProgress?.(0, solidMesh.totalLayers, 'Staging');
+
+        const perfSettings = getSavedSlicingPerformanceSettings();
+
+        const assembled = assembleSliceJob({
             printerProfile: options.printerProfile,
             materialProfile: options.materialProfile,
-            filenameBase: options.filenameBase,
-            plateOffsetMm: options.plateOffsetMm,
-            supportTipShrinkPercent,
-            flushBinaryMeshChunk: meshTransferMode === 'streamed'
-                ? handleMeshChunk
-                : meshTransferMode === 'file-backed'
-                    ? handleMeshFileChunk
-                    : undefined,
-            meshChunkTargetBytes,
+            scene: {
+                totalLayers: solidMesh.totalLayers,
+                tallestObjectHeightMm: solidMesh.tallestObjectHeightMm,
+                models: solidMesh.models,
+            },
+            dither: options,
+            antiAliasing: options.antiAliasing,
         });
-    } finally {
-        preparedModelsForOutput.dispose();
-    }
-    const meshPrepMs = performance.now() - meshPrepStartMs;
 
-    if (meshTransferMode === 'single-shot') {
-        const meshBytes = new Uint8Array(
-            solidMesh.trianglesXYZ.buffer,
-            solidMesh.trianglesXYZ.byteOffset,
-            solidMesh.trianglesXYZ.byteLength,
+        const nativeJob = {
+            ...buildNativeSliceJob(assembled, {
+                pngCompressionMode: solidMesh.pngCompressionStrategy,
+                aaOnSupportsFallback: perfSettings.aaOnSupportsExperimental === true,
+                modelTriangleCount: solidMesh.modelTriangleCount,
+            }),
+            exportThumbnailPngBase64: options.exportThumbnailPng && options.exportThumbnailPng.length > 0
+                ? encodeBytesToBase64(options.exportThumbnailPng)
+                : null,
+            trianglesXYZ: solidMesh.trianglesXYZ,
+            tankCount: solidMesh.tankCount,
+            triangleTankIndex: solidMesh.triangleTankIndex,
+            meshEncoding: meshTransportEncoding,
+            meshQuantization: meshTransportQuantization,
+            outputPath: options.outputPath?.trim() || null,
+            metadataJson: await attachJobMetadataPayloads(
+                assembled.metadataJson,
+                { models: visibleModels },
+                getJobMetadataPayloadDeclarations(),
+            ),
+        };
+
+        const coreStartMs = performance.now();
+        logDebug('Native slicing starting…');
+        logDebug('Native slicing AA settings', {
+            antiAliasingLevel: nativeJob.antiAliasingLevel,
+            antiAliasingMode: nativeJob.antiAliasingMode,
+            blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
+            zBlurRadiusLayers: nativeJob.zBlurRadiusLayers,
+            zaaKernel: nativeJob.zaaKernel,
+            zaaPattern: nativeJob.zaaPattern,
+            zaaDuplicateZ: nativeJob.zaaDuplicateZ,
+        });
+
+        let progressTotal = solidMesh.totalLayers;
+        let progressDone = 0;
+
+        options.onProgress?.(0, solidMesh.totalLayers, 'Slicing');
+
+        const slicerProgressCallback = (done: number, total: number, phase: string) => {
+            progressTotal = Math.max(1, total);
+            progressDone = Math.max(0, Math.min(done, progressTotal));
+            options.onProgress?.(
+                progressDone,
+                progressTotal,
+                phase,
+            );
+        };
+
+        const encodedArtifact = await sliceSolidAndEncodeWithNativeSlicerToTempPath(
+            nativeJob,
+            options.abortSignal,
+            slicerProgressCallback,
         );
-        const mb = Math.round(meshBytes.byteLength / (1024 * 1024));
-        options.onProgress?.(0, 1, `Transferring Mesh (${mb} MB)`);
+        const coreSlicingMs = performance.now() - coreStartMs;
+        logDebug('Native slicing completed', { coreSlicingMs });
 
-        const chunkInvokeStart = performance.now();
-        const chunkAck = await invoke<StageMeshChunkAck>('stage_mesh_binary_set', meshBytes, {
-            headers: { 'Content-Type': 'application/octet-stream' },
-        });
+        throwIfAborted(options.abortSignal);
+        options.onProgress?.(Math.max(progressDone, progressTotal), progressTotal, 'Finalizing');
 
-        stageMeshIpcMs += performance.now() - chunkInvokeStart;
-        cumulativeBytesStage = chunkAck.totalBytes > 0 ? chunkAck.totalBytes : meshBytes.byteLength;
-        stageMeshChunkCount = chunkAck.chunksReceived > 0 ? chunkAck.chunksReceived : 1;
-        stageMeshAckAppendNsTotal = Math.max(stageMeshAckAppendNsTotal, chunkAck.appendNsTotal ?? 0);
-        stageMeshCapacityMaxBytes = Math.max(stageMeshCapacityMaxBytes, chunkAck.capacityBytes ?? 0);
-        if (chunkAck.reserveGrew) {
-            stageMeshReserveGrowthEvents += 1;
-        }
-    } else if (meshTransferMode === 'file-backed') {
-        if (!meshStageFilePath) {
-            throw new Error('Mesh stage file path missing for file-backed transfer mode.');
-        }
+        const printerExt = resolveOutputFileExtension(
+            options.printerProfile.display.outputFormat,
+            options.printerProfile.display.formatVersion,
+        ) || format.outputFormat.replace(/^\./, '') || 'slice';
+        const outputName = `${asciiFileBaseName(options.filenameBase)}.${printerExt}`;
 
-        const registerStart = performance.now();
-        const registeredLen = await invoke<number>('stage_mesh_file_path', {
-            meshFilePath: meshStageFilePath,
-        });
-        stageMeshIpcMs += performance.now() - registerStart;
+        const totalElapsedMs = performance.now() - orchestratorStartMs;
+        options.onProgress?.(progressTotal, progressTotal, 'Handoff');
+        const layersPerSecond = totalElapsedMs > 0
+            ? (solidMesh.totalLayers * 1000) / totalElapsedMs
+            : null;
+        const stageMeshAvgChunkBytes = stageMeshChunkCount > 0
+            ? (cumulativeBytesStage / stageMeshChunkCount)
+            : null;
+        const stageMeshThroughputMiBPerSec = stageMeshIpcMs > 0
+            ? ((stageMeshUploadedBytes / (1024 * 1024)) / (stageMeshIpcMs / 1000))
+            : null;
+        const stageMeshAckAppendMs = stageMeshAckAppendNsTotal > 0
+            ? (stageMeshAckAppendNsTotal / 1_000_000)
+            : null;
 
-        if (registeredLen > 0) {
-            cumulativeBytesStage = registeredLen;
-        }
-    }
-
-    logDebug('Solid mesh prepared for native backend', {
-        source: `${solidMesh.sourceWidthPx}x${solidMesh.sourceHeightPx}`,
-        output: `${solidMesh.widthPx}x${solidMesh.heightPx}`,
-        packingMode: solidMesh.xPackingMode,
-        totalLayers: solidMesh.totalLayers,
-        meshPrepMs,
-        stagedMeshBytes: cumulativeBytesStage,
-        stagedMeshChunkCount: stageMeshChunkCount,
-        stageMeshIpcMs,
-        meshTransportEncoding,
-        meshTransferMode,
-        meshStageFilePath,
-        modifiedModelCount: preparedModelsForOutput.modifiedModelCount,
-    });
-    emitDiagnosticProgress('Preparing mesh complete', 1, 1, {
-        meshPrepMs,
-        triangleFloatCount: solidMesh.trianglesXYZ.length,
-        totalLayers: solidMesh.totalLayers,
-    });
-
-    options.onProgress?.(0, solidMesh.totalLayers, 'Staging');
-
-    const perfSettings = getSavedSlicingPerformanceSettings();
-
-    const assembled = assembleSliceJob({
-        printerProfile: options.printerProfile,
-        materialProfile: options.materialProfile,
-        scene: {
-            totalLayers: solidMesh.totalLayers,
-            tallestObjectHeightMm: solidMesh.tallestObjectHeightMm,
-            models: solidMesh.models,
-        },
-        dither: options,
-        antiAliasing: options.antiAliasing,
-    });
-
-    const nativeJob = {
-        ...buildNativeSliceJob(assembled, {
-            pngCompressionMode: solidMesh.pngCompressionStrategy,
-            aaOnSupportsFallback: perfSettings.aaOnSupportsExperimental === true,
-            modelTriangleCount: solidMesh.modelTriangleCount,
-        }),
-        exportThumbnailPngBase64: options.exportThumbnailPng && options.exportThumbnailPng.length > 0
-            ? encodeBytesToBase64(options.exportThumbnailPng)
-            : null,
-        trianglesXYZ: solidMesh.trianglesXYZ,
-        tankCount: solidMesh.tankCount,
-        triangleTankIndex: solidMesh.triangleTankIndex,
-        meshEncoding: meshTransportEncoding,
-        meshQuantization: meshTransportQuantization,
-        outputPath: options.outputPath?.trim() || null,
-        metadataJson: await attachJobMetadataPayloads(
-            assembled.metadataJson,
-            { models: visibleModels },
-            getJobMetadataPayloadDeclarations(),
-        ),
-    };
-
-    const coreStartMs = performance.now();
-    logDebug('Native slicing starting…');
-    logDebug('Native slicing AA settings', {
-        antiAliasingLevel: nativeJob.antiAliasingLevel,
-        antiAliasingMode: nativeJob.antiAliasingMode,
-        blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
-        zBlurRadiusLayers: nativeJob.zBlurRadiusLayers,
-        zaaKernel: nativeJob.zaaKernel,
-        zaaPattern: nativeJob.zaaPattern,
-        zaaDuplicateZ: nativeJob.zaaDuplicateZ,
-    });
-
-    let progressTotal = solidMesh.totalLayers;
-    let progressDone = 0;
-
-    options.onProgress?.(0, solidMesh.totalLayers, 'Slicing');
-
-    const slicerProgressCallback = (done: number, total: number, phase: string) => {
-        progressTotal = Math.max(1, total);
-        progressDone = Math.max(0, Math.min(done, progressTotal));
-        options.onProgress?.(
-            progressDone,
-            progressTotal,
-            phase,
-        );
-    };
-
-    const encodedArtifact = await sliceSolidAndEncodeWithNativeSlicerToTempPath(
-        nativeJob,
-        options.abortSignal,
-        slicerProgressCallback,
-    );
-    const coreSlicingMs = performance.now() - coreStartMs;
-    logDebug('Native slicing completed', { coreSlicingMs });
-
-    throwIfAborted(options.abortSignal);
-    options.onProgress?.(Math.max(progressDone, progressTotal), progressTotal, 'Finalizing');
-
-    const printerExt = resolveOutputFileExtension(
-        options.printerProfile.display.outputFormat,
-        options.printerProfile.display.formatVersion,
-    ) || format.outputFormat.replace(/^\./, '') || 'slice';
-    const outputName = `${asciiFileBaseName(options.filenameBase)}.${printerExt}`;
-
-    const totalElapsedMs = performance.now() - orchestratorStartMs;
-    options.onProgress?.(progressTotal, progressTotal, 'Handoff');
-    const layersPerSecond = totalElapsedMs > 0
-        ? (solidMesh.totalLayers * 1000) / totalElapsedMs
-        : null;
-    const stageMeshAvgChunkBytes = stageMeshChunkCount > 0
-        ? (cumulativeBytesStage / stageMeshChunkCount)
-        : null;
-    const stageMeshThroughputMiBPerSec = stageMeshIpcMs > 0
-        ? ((cumulativeBytesStage / (1024 * 1024)) / (stageMeshIpcMs / 1000))
-        : null;
-    const stageMeshAckAppendMs = stageMeshAckAppendNsTotal > 0
-        ? (stageMeshAckAppendNsTotal / 1_000_000)
-        : null;
-
-    return {
-        backend: 'native-rust-tauri',
-        outputFormat: format.outputFormat,
-        nativeAvailable,
-        nativeError: null,
-        artifact: {
-            blob: null,
-            outputName,
-            mimeType: 'application/octet-stream',
-            byteSize: encodedArtifact.byteLen,
-            nativeTempPath: encodedArtifact.tempPath,
+        return {
+            backend: 'native-rust-tauri',
             outputFormat: format.outputFormat,
-        },
-        benchmark: {
-            totalElapsedMs,
-            meshPrepMs,
-            coreSlicingMs,
-            totalLayers: solidMesh.totalLayers,
-            layersPerSecond,
-            jobConfig: {
+            nativeAvailable,
+            nativeError: null,
+            artifact: {
+                blob: null,
+                outputName,
+                mimeType: 'application/octet-stream',
+                byteSize: encodedArtifact.byteLen,
+                nativeTempPath: encodedArtifact.tempPath,
                 outputFormat: format.outputFormat,
-                formatVersion: nativeJob.formatVersion,
-                settingsMode: nativeJob.settingsMode,
-                outputDisplayName: format.displayName,
-                sourceWidthPx: nativeJob.sourceWidthPx,
-                sourceHeightPx: nativeJob.sourceHeightPx,
-                widthPx: nativeJob.widthPx,
-                heightPx: nativeJob.heightPx,
-                xPackingMode: nativeJob.xPackingMode,
-                pngCompressionStrategy: nativeJob.pngCompressionStrategy,
-                containerCompressionLevel: nativeJob.containerCompressionLevel,
-                antiAliasingLevel: nativeJob.antiAliasingLevel,
-                antiAliasingMode: nativeJob.antiAliasingMode,
-                blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
-                blurBrushKernel: nativeJob.blurBrushKernel,
-                blurBrushSigmaX: nativeJob.blurBrushSigmaX,
-                blurBrushSigmaY: nativeJob.blurBrushSigmaY,
-                zBlurRadiusLayers: nativeJob.zBlurRadiusLayers,
-                zBlurKernel: nativeJob.zBlurKernel,
-                zBlurSigma: nativeJob.zBlurSigma,
-                aaOnSupports: nativeJob.aaOnSupports,
-                minimumAaAlphaPercent: nativeJob.minimumAaAlphaPercent,
-                zaaKernel: nativeJob.zaaKernel,
-                zaaPattern: nativeJob.zaaPattern,
-                zaaDuplicateZ: nativeJob.zaaDuplicateZ,
-                modelTriangleCount: nativeJob.modelTriangleCount,
-                triangleFloatCount: nativeJob.trianglesXYZ.length,
-                buildWidthMm: nativeJob.buildWidthMm,
-                buildDepthMm: nativeJob.buildDepthMm,
-                layerHeightMm: nativeJob.layerHeightMm,
-                totalLayers: nativeJob.totalLayers,
-                metadataJsonBytes: nativeJob.metadataJson.length,
-                exportThumbnailProvided: Boolean(options.exportThumbnailPng && options.exportThumbnailPng.length > 0),
-                exportThumbnailBytes: options.exportThumbnailPng?.length ?? 0,
-                initialMeshStagingBytes: meshTransportBytesEstimate,
-                meshChunkTargetBytes,
-                meshEncoding: meshTransportEncoding,
-                meshQuantization: meshTransportQuantization,
-                meshTransferMode,
-                meshStageFilePath,
             },
-            nativePerf: {
-                perf: encodedArtifact.perf,
-                runtime: encodedArtifact.runtime,
-                bridgePayloadBuildMs: encodedArtifact.bridge?.payloadBuildMs ?? null,
-                bridgeInvokeRoundTripMs: encodedArtifact.bridge?.invokeRoundTripMs ?? null,
-                bridgeTotalMs: encodedArtifact.bridge?.bridgeTotalMs ?? null,
-                bridgePayloadChars: encodedArtifact.bridge?.payloadChars ?? null,
-                triangleFloatCount: encodedArtifact.bridge?.triangleFloatCount ?? null,
-                meshBytesLen: encodedArtifact.bridge?.meshBytesLen ?? null,
-                stageMeshMs: stageMeshIpcMs > 0
-                    ? stageMeshIpcMs
-                    : (encodedArtifact.bridge?.stageMeshMs ?? null),
-                stageMeshBytes: cumulativeBytesStage > 0 ? cumulativeBytesStage : null,
-                stageMeshChunkCount: stageMeshChunkCount > 0 ? stageMeshChunkCount : null,
-                stageMeshAvgChunkBytes,
-                stageMeshThroughputMiBPerSec,
-                stageMeshAckAppendMs,
-                stageMeshCapacityMaxBytes: stageMeshCapacityMaxBytes > 0 ? stageMeshCapacityMaxBytes : null,
-                stageMeshReserveGrowthEvents,
-                transportOverheadMs: encodedArtifact.perf
-                    ? Math.max(0, coreSlicingMs - (encodedArtifact.perf.totalNs / 1_000_000))
-                    : null,
-                renderWallMs: encodedArtifact.perf ? (encodedArtifact.perf.renderWallNs / 1_000_000) : null,
-                renderCpuMs: encodedArtifact.perf ? (encodedArtifact.perf.renderNs / 1_000_000) : null,
-                indexBuildMs: encodedArtifact.perf ? (encodedArtifact.perf.indexBuildNs / 1_000_000) : null,
-                pngEncodeCpuMs: encodedArtifact.perf ? (encodedArtifact.perf.pngEncodeNs / 1_000_000) : null,
-                archiveEncodeMs: encodedArtifact.perf ? (encodedArtifact.perf.archiveEncodeNs / 1_000_000) : null,
-                totalMs: encodedArtifact.perf ? (encodedArtifact.perf.totalNs / 1_000_000) : null,
-                renderWallMsPerLayer: encodedArtifact.perf && encodedArtifact.perf.layers > 0
-                    ? (encodedArtifact.perf.renderWallNs / 1_000_000) / encodedArtifact.perf.layers
-                    : null,
-                renderCpuMsPerLayer: encodedArtifact.perf && encodedArtifact.perf.layers > 0
-                    ? (encodedArtifact.perf.renderNs / 1_000_000) / encodedArtifact.perf.layers
-                    : null,
-                pngCpuMsPerLayer: encodedArtifact.perf && encodedArtifact.perf.layers > 0
-                    ? (encodedArtifact.perf.pngEncodeNs / 1_000_000) / encodedArtifact.perf.layers
-                    : null,
-                totalMsPerLayer: encodedArtifact.perf && encodedArtifact.perf.layers > 0
-                    ? (encodedArtifact.perf.totalNs / 1_000_000) / encodedArtifact.perf.layers
-                    : null,
+            benchmark: {
+                totalElapsedMs,
+                meshPrepMs,
+                coreSlicingMs,
+                totalLayers: solidMesh.totalLayers,
+                layersPerSecond,
+                jobConfig: {
+                    outputFormat: format.outputFormat,
+                    formatVersion: nativeJob.formatVersion,
+                    settingsMode: nativeJob.settingsMode,
+                    outputDisplayName: format.displayName,
+                    sourceWidthPx: nativeJob.sourceWidthPx,
+                    sourceHeightPx: nativeJob.sourceHeightPx,
+                    widthPx: nativeJob.widthPx,
+                    heightPx: nativeJob.heightPx,
+                    xPackingMode: nativeJob.xPackingMode,
+                    pngCompressionStrategy: nativeJob.pngCompressionStrategy,
+                    containerCompressionLevel: nativeJob.containerCompressionLevel,
+                    antiAliasingLevel: nativeJob.antiAliasingLevel,
+                    antiAliasingMode: nativeJob.antiAliasingMode,
+                    blurBrushRadiusPx: nativeJob.blurBrushRadiusPx,
+                    blurBrushKernel: nativeJob.blurBrushKernel,
+                    blurBrushSigmaX: nativeJob.blurBrushSigmaX,
+                    blurBrushSigmaY: nativeJob.blurBrushSigmaY,
+                    zBlurRadiusLayers: nativeJob.zBlurRadiusLayers,
+                    zBlurKernel: nativeJob.zBlurKernel,
+                    zBlurSigma: nativeJob.zBlurSigma,
+                    aaOnSupports: nativeJob.aaOnSupports,
+                    minimumAaAlphaPercent: nativeJob.minimumAaAlphaPercent,
+                    zaaKernel: nativeJob.zaaKernel,
+                    zaaPattern: nativeJob.zaaPattern,
+                    zaaDuplicateZ: nativeJob.zaaDuplicateZ,
+                    modelTriangleCount: nativeJob.modelTriangleCount,
+                    triangleFloatCount: nativeJob.trianglesXYZ.length,
+                    buildWidthMm: nativeJob.buildWidthMm,
+                    buildDepthMm: nativeJob.buildDepthMm,
+                    layerHeightMm: nativeJob.layerHeightMm,
+                    totalLayers: nativeJob.totalLayers,
+                    metadataJsonBytes: nativeJob.metadataJson.length,
+                    exportThumbnailProvided: Boolean(options.exportThumbnailPng && options.exportThumbnailPng.length > 0),
+                    exportThumbnailBytes: options.exportThumbnailPng?.length ?? 0,
+                    initialMeshStagingBytes: meshTransportBytesEstimate,
+                    meshChunkTargetBytes,
+                    meshEncoding: meshTransportEncoding,
+                    meshQuantization: meshTransportQuantization,
+                    meshTransferMode,
+                },
+                nativePerf: {
+                    perf: encodedArtifact.perf,
+                    runtime: encodedArtifact.runtime,
+                    bridgePayloadBuildMs: encodedArtifact.bridge?.payloadBuildMs ?? null,
+                    bridgeInvokeRoundTripMs: encodedArtifact.bridge?.invokeRoundTripMs ?? null,
+                    bridgeTotalMs: encodedArtifact.bridge?.bridgeTotalMs ?? null,
+                    bridgePayloadChars: encodedArtifact.bridge?.payloadChars ?? null,
+                    triangleFloatCount: encodedArtifact.bridge?.triangleFloatCount ?? null,
+                    meshBytesLen: encodedArtifact.bridge?.meshBytesLen ?? null,
+                    stageMeshMs: stageMeshIpcMs > 0
+                        ? stageMeshIpcMs
+                        : (encodedArtifact.bridge?.stageMeshMs ?? null),
+                    stageMeshBytes: cumulativeBytesStage > 0 ? cumulativeBytesStage : null,
+                    stageMeshUploadedBytes,
+                    stageMeshReusedBytes,
+                    stageMeshChunkCount: stageMeshChunkCount > 0 ? stageMeshChunkCount : null,
+                    stageMeshAvgChunkBytes,
+                    stageMeshThroughputMiBPerSec,
+                    stageMeshAckAppendMs,
+                    stageMeshCapacityMaxBytes: stageMeshCapacityMaxBytes > 0 ? stageMeshCapacityMaxBytes : null,
+                    stageMeshReserveGrowthEvents,
+                    transportOverheadMs: encodedArtifact.perf
+                        ? Math.max(0, coreSlicingMs - (encodedArtifact.perf.totalNs / 1_000_000))
+                        : null,
+                    renderWallMs: encodedArtifact.perf ? (encodedArtifact.perf.renderWallNs / 1_000_000) : null,
+                    renderCpuMs: encodedArtifact.perf ? (encodedArtifact.perf.renderNs / 1_000_000) : null,
+                    indexBuildMs: encodedArtifact.perf ? (encodedArtifact.perf.indexBuildNs / 1_000_000) : null,
+                    pngEncodeCpuMs: encodedArtifact.perf ? (encodedArtifact.perf.pngEncodeNs / 1_000_000) : null,
+                    archiveEncodeMs: encodedArtifact.perf ? (encodedArtifact.perf.archiveEncodeNs / 1_000_000) : null,
+                    totalMs: encodedArtifact.perf ? (encodedArtifact.perf.totalNs / 1_000_000) : null,
+                    renderWallMsPerLayer: encodedArtifact.perf && encodedArtifact.perf.layers > 0
+                        ? (encodedArtifact.perf.renderWallNs / 1_000_000) / encodedArtifact.perf.layers
+                        : null,
+                    renderCpuMsPerLayer: encodedArtifact.perf && encodedArtifact.perf.layers > 0
+                        ? (encodedArtifact.perf.renderNs / 1_000_000) / encodedArtifact.perf.layers
+                        : null,
+                    pngCpuMsPerLayer: encodedArtifact.perf && encodedArtifact.perf.layers > 0
+                        ? (encodedArtifact.perf.pngEncodeNs / 1_000_000) / encodedArtifact.perf.layers
+                        : null,
+                    totalMsPerLayer: encodedArtifact.perf && encodedArtifact.perf.layers > 0
+                        ? (encodedArtifact.perf.totalNs / 1_000_000) / encodedArtifact.perf.layers
+                        : null,
+                },
             },
-        },
-    };
+        };
+    }, options.abortSignal).finally(disposePreparedModels);
 }

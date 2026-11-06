@@ -35,7 +35,7 @@ import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
 
 const DEFAULT_MESH_CHUNK_TARGET_BYTES = 64 * 1024 * 1024;
-const MIN_MESH_CHUNK_TARGET_BYTES = 16 * 1024 * 1024;
+const MIN_MESH_CHUNK_TARGET_BYTES = 4 * 1024 * 1024;
 const MAX_MESH_CHUNK_TARGET_BYTES = 256 * 1024 * 1024;
 
 export type RasterLayerZipExportOptions = {
@@ -328,7 +328,6 @@ class TriangleFloatCollector {
     plateOffsetMm?: { dxMm: number; dyMm: number },
   ) {
     const safeTriangleCapacity = Math.max(1, Math.floor(initialTriangleCapacity));
-    this.data = new Float32Array(safeTriangleCapacity * 9);
     this.flushCallback = flushCallback;
     this.offsetX = -(plateOffsetMm?.dxMm ?? 0);
     this.offsetY = -(plateOffsetMm?.dyMm ?? 0);
@@ -340,6 +339,7 @@ class TriangleFloatCollector {
         Math.floor(normalizedChunkBytes / Float32Array.BYTES_PER_ELEMENT),
       );
     }
+    this.data = new Float32Array(Math.min(safeTriangleCapacity * 9, this.chunkElementLimit));
   }
 
   get triangleCount(): number {
@@ -797,7 +797,6 @@ function appendContactDiskPrimitive(
   const sphereSegments = Math.max(4, Math.floor(radialSegments));
   const heightSegments = Math.max(3, Math.floor(sphereSegments * 0.75));
   const sphereGeom = new THREE.SphereGeometry(radius, sphereSegments, heightSegments);
-
   const sphereMatrix = groupMatrix.clone().multiply(new THREE.Matrix4().makeTranslation(0, thickness / 2, 0));
   sphereGeom.applyMatrix4(sphereMatrix);
   appendGeometryTriangles(sink, sphereGeom);

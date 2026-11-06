@@ -3,6 +3,7 @@ import {
   loadTauriCore,
   readPositionsFromCommand,
   stageGeometryToStagedMesh,
+  runExclusiveNativeMesh,
 } from './tauriMeshBridge';
 
 let stagedPunchSourceKey: string | null = null;
@@ -38,14 +39,16 @@ export async function punchFromGeometry(
   const core = await loadTauriCore();
   if (!core) return null;
 
-  await stageGeometryToStagedMesh(core.invoke, geometry);
-  stagedPunchSourceKey = null;
+  return runExclusiveNativeMesh(async () => {
+    await stageGeometryToStagedMesh(core.invoke, geometry);
+    stagedPunchSourceKey = null;
 
-  const optionsJson = JSON.stringify(options);
-  const reportJson = await core.invoke<string>('mesh_punch_staged', { optionsJson });
-  const report = JSON.parse(reportJson) as PunchReport;
-  const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-  return { report, positions };
+    const optionsJson = JSON.stringify(options);
+    const reportJson = await core.invoke<string>('mesh_punch_staged', { optionsJson });
+    const report = JSON.parse(reportJson) as PunchReport;
+    const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
+    return { report, positions };
+  });
 }
 
 export async function stagePunchSource(
@@ -55,14 +58,16 @@ export async function stagePunchSource(
   const core = await loadTauriCore();
   if (!core) return false;
 
-  if (stagedPunchSourceKey === sourceKey) {
-    return true;
-  }
+  return runExclusiveNativeMesh(async () => {
+    if (stagedPunchSourceKey === sourceKey) {
+      return true;
+    }
 
-  await stageGeometryToStagedMesh(core.invoke, geometry);
-  await core.invoke('mesh_punch_capture_staged_source');
-  stagedPunchSourceKey = sourceKey;
-  return true;
+    await stageGeometryToStagedMesh(core.invoke, geometry);
+    await core.invoke('mesh_punch_capture_staged_source');
+    stagedPunchSourceKey = sourceKey;
+    return true;
+  });
 }
 
 export async function punchFromCapturedSource(
@@ -71,9 +76,11 @@ export async function punchFromCapturedSource(
   const core = await loadTauriCore();
   if (!core) return null;
 
-  const optionsJson = JSON.stringify(options);
-  const reportJson = await core.invoke<string>('mesh_punch_from_captured_source', { optionsJson });
-  const report = JSON.parse(reportJson) as PunchReport;
-  const positions = await readPositionsFromCommand(core.invoke, 'mesh_punch_read_positions');
-  return { report, positions };
+  return runExclusiveNativeMesh(async () => {
+    const optionsJson = JSON.stringify(options);
+    const reportJson = await core.invoke<string>('mesh_punch_from_captured_source', { optionsJson });
+    const report = JSON.parse(reportJson) as PunchReport;
+    const positions = await readPositionsFromCommand(core.invoke, 'mesh_punch_read_positions');
+    return { report, positions };
+  });
 }

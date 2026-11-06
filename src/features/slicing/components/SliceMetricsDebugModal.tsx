@@ -294,7 +294,6 @@ export function SliceMetricsDebugModal({
                   Raw Counters
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-0.5 text-xs max-h-[28vh] overflow-auto custom-scrollbar pr-1">
-                  <RuntimeStat label="Stage file path" value={benchmark.jobConfig.meshStageFilePath ?? '—'} />
                   <RuntimeStat label="artifactDir" value={runtime?.artifactDir ?? '—'} />
                   <RuntimeStat label="meshStageDir" value={runtime?.meshStageDir ?? '—'} />
                   <RuntimeStat label="bridgePayloadChars" value={benchmark.nativePerf.bridgePayloadChars != null ? benchmark.nativePerf.bridgePayloadChars.toLocaleString() : '—'} />

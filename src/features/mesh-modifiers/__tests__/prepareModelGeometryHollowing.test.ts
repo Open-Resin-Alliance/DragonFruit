@@ -6,36 +6,36 @@ import { snapshotGeometryPositions } from '@/utils/geometrySnapshot';
 import { clearPreparedGeometryCacheForModel, prepareModelGeometryForOutput } from '../prepareModelGeometry';
 import { deleteStoredMeshModifiers, storeModelMeshModifiers } from '../meshModifierStore';
 import { installFakeWindow } from '@/utils/__tests__/helpers/fakeWindow';
+import { installFakeMeshChunkUpload } from '@/utils/__tests__/helpers/fakeMeshChunkUpload';
 
 type InvokeCall = { cmd: string; args: unknown };
 
-// Installs a fake Tauri IPC boundary. `@tauri-apps/api/core`'s `invoke` reads
-// `window.__TAURI_INTERNALS__.invoke(cmd, args, options)` at call time
-// (node_modules/@tauri-apps/api/core.js:202), and meshHollowing.ts's
-// isTauriRuntime()/loadTauriCore() check lazily at call time, so re-installing
-// the window per test is sufficient even though loadTauriCore module-caches its
-// promise. Command names mirror the real hollowFromGeometry sequence
-// (meshHollowing.ts:199-212).
-function installFakeTauri(): InvokeCall[] {
+// Native hollowing produces a smaller shell; uploads use the real worker body.
+function installFakeTauri() {
   const calls: InvokeCall[] = [];
   const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-  const invoke = async (cmd: string, args?: unknown) => {
+  const upload = installFakeMeshChunkUpload(async (cmd, args) => {
     calls.push({ cmd, args });
     switch (cmd) {
-      case 'stage_mesh_binary_set':
-        return undefined;
       case 'mesh_hollow_staged':
+        upload.replaceStaged(new Uint8Array(positions.buffer));
         return JSON.stringify({ removedVoxels: 10 });
       case 'mesh_repair_read_positions':
-        return new Uint8Array(positions.buffer.slice(0));
+        return upload.readStaged();
       case 'mesh_hollow_staged_read_cavity_positions':
         return new Uint8Array(0);
       default:
         throw new Error(`unexpected command: ${cmd}`);
     }
+  });
+  const restoreWindow = installFakeWindow({ __TAURI_INTERNALS__: { invoke: upload.invoke } });
+  return {
+    calls,
+    restore: () => {
+      restoreWindow();
+      upload.restore();
+    },
   };
-  installFakeWindow({ __TAURI_INTERNALS__: { invoke } });
-  return calls;
 }
 
 function buildHollowedModel(
@@ -82,7 +82,7 @@ function buildHollowedModel(
 }
 
 test('flags-only hollowing leaves the restored model solid at output', async () => {
-  const calls = installFakeTauri();
+  const { calls, restore } = installFakeTauri();
   const model = buildHollowedModel(new THREE.Euler(), []);
   const source = model.meshModifiers?.hollowing;
   assert.ok(source);
@@ -99,12 +99,12 @@ test('flags-only hollowing leaves the restored model solid at output', async () 
     clearPreparedGeometryCacheForModel(model.id);
     deleteStoredMeshModifiers(model.id);
     model.geometry.geometry.dispose();
-    delete (globalThis as { window?: unknown }).window;
+    restore();
   }
 });
 
 test('slice-time hollowing forwards painted blocked voxel indices', async () => {
-  const calls = installFakeTauri();
+  const { calls, restore } = installFakeTauri();
   try {
     const model = buildHollowedModel(new THREE.Euler(0, 0, 0), [3, 5, 8]);
     await prepareModelGeometryForOutput(model);
@@ -120,12 +120,12 @@ test('slice-time hollowing forwards painted blocked voxel indices', async () => 
       'painted blockers must reach the slice-time hollow, not be silently dropped',
     );
   } finally {
-    delete (globalThis as { window?: unknown }).window;
+    restore();
   }
 });
 
 test('slice-time hollow cache misses when the model rotation changes', async () => {
-  const calls = installFakeTauri();
+  const { calls, restore } = installFakeTauri();
   try {
     const modelA = buildHollowedModel(new THREE.Euler(0, 0, 0), []);
     await prepareModelGeometryForOutput(modelA);
@@ -155,12 +155,12 @@ test('slice-time hollow cache misses when the model rotation changes', async () 
       'second hollow must be computed at the new rotation',
     );
   } finally {
-    delete (globalThis as { window?: unknown }).window;
+    restore();
   }
 });
 
 test('slice-time hollow cache misses when the painted blockers change', async () => {
-  const calls = installFakeTauri();
+  const { calls, restore } = installFakeTauri();
   try {
     const modelA = buildHollowedModel(new THREE.Euler(0, 0, 0), [1, 2]);
     await prepareModelGeometryForOutput(modelA);
@@ -190,12 +190,12 @@ test('slice-time hollow cache misses when the painted blockers change', async ()
     ) as { blockedVoxelIndices?: number[] };
     assert.deepEqual(optionsB.blockedVoxelIndices, [1, 2, 3]);
   } finally {
-    delete (globalThis as { window?: unknown }).window;
+    restore();
   }
 });
 
 test('slice-time hollow converts world-mm params to local-mm on scaled models', async () => {
-  const calls = installFakeTauri();
+  const { calls, restore } = installFakeTauri();
   try {
     // Uniform scale ×2: the voxel grid lives in local space, so a 2 mm world
     // shell must be forwarded as a 1 mm local shell — the same conversion the
@@ -218,12 +218,12 @@ test('slice-time hollow converts world-mm params to local-mm on scaled models', 
       `scaled-model shell must be world→local converted (expected 1, got ${options.shellThicknessMm})`,
     );
   } finally {
-    delete (globalThis as { window?: unknown }).window;
+    restore();
   }
 });
 
 test('undo releases only the reversed model\'s prepared shell before another bake', async () => {
-  const calls = installFakeTauri();
+  const { calls, restore } = installFakeTauri();
   const model = buildHollowedModel(new THREE.Euler(), []);
   const other = { ...buildHollowedModel(new THREE.Euler(), []), id: 'other-hollow-model' } as LoadedModel;
   const hollowing = model.meshModifiers?.hollowing;
@@ -266,6 +266,6 @@ test('undo releases only the reversed model\'s prepared shell before another bak
     deleteStoredMeshModifiers(other.id);
     model.geometry.geometry.dispose();
     other.geometry.geometry.dispose();
-    delete (globalThis as { window?: unknown }).window;
+    restore();
   }
 });
