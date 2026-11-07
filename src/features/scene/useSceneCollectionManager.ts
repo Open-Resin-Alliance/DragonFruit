@@ -7904,6 +7904,7 @@ export function useSceneCollectionManager(options?: {
         // The ref as well as the state: whatever asked for the beds places its models from
         // the same list in this same tick, and a model left on the stale list would be
         // dropped back to where its bed used to be.
+        shiftSupportsWithModels(modelsRef.current, shiftedModels);
         modelsRef.current = shiftedModels;
         setModels(shiftedModels);
       }
