@@ -4,6 +4,7 @@ mod job_payload_cache;
 mod job_payload_upload;
 mod mesh_chunk_cache;
 mod mesh_chunk_upload;
+mod mesh_slice_source;
 mod mesh_minima;
 mod mesh_repair;
 mod mesh_refine;
@@ -4451,6 +4452,8 @@ fn main() {
             mesh_chunk_upload::mesh_chunk_upload_begin,
             mesh_chunk_upload::mesh_chunk_upload_append_cached,
             mesh_chunk_upload::mesh_chunk_upload_append,
+            mesh_chunk_upload::retain_loaded_slice_mesh,
+            mesh_chunk_upload::mesh_chunk_upload_append_source,
             mesh_chunk_upload::mesh_chunk_upload_finish,
             mesh_chunk_upload::mesh_chunk_upload_abort,
             mesh_chunk_upload::restore_cached_slice_mesh,

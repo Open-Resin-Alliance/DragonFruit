@@ -7,23 +7,26 @@ import {
 } from './sliceMeshSnapshot';
 import type { SliceMeshInputSignature, SliceMeshPrewarmOptions } from './sliceMeshSnapshot';
 
-const QUIET_MS = 750;
+export const SLICE_MESH_CACHE_QUIET_MS = 15_000;
 
-/** Prepares the active slicing context once per real revision, outside slice startup. */
+/** One dirty-only scene producer, independent of autosave's enablement and clock. */
 export class SliceMeshWarmup {
   private options: SliceMeshPrewarmOptions | null = null;
   private signature: SliceMeshInputSignature | null = null;
   private attempted: SliceMeshInputSignature | null = null;
-  private timer: number | null = null;
+  private timer: number | undefined;
   private idle: number | null = null;
   private preparing: AbortController | null = null;
+  private quietUntil = 0;
+  private revision = 0;
+  private ready = true;
+  private paused = false;
   private readonly pointers = new Set<number>();
   private readonly unsubscribe: () => void;
   private disposed = false;
-  private imminentSlice = false;
 
   constructor(private readonly host: Window) {
-    this.unsubscribe = subscribeSliceMeshInputChanges(() => this.update(this.options, this.imminentSlice));
+    this.unsubscribe = subscribeSliceMeshInputChanges(() => this.update(this.options, this.revision, this.ready, this.paused));
     host.addEventListener('pointerdown', this.onPointerDown, true);
     host.addEventListener('pointerup', this.onPointerUp, true);
     host.addEventListener('pointercancel', this.onPointerUp, true);
@@ -34,32 +37,50 @@ export class SliceMeshWarmup {
     host.document.addEventListener('visibilitychange', this.onVisibility);
   }
 
-  update(options: SliceMeshPrewarmOptions | null, imminentSlice = false): void {
+  update(options: SliceMeshPrewarmOptions | null, revision = 0, ready = true, paused = false): void {
     if (this.disposed) return;
-    const becameImminent = imminentSlice && !this.imminentSlice;
-    this.imminentSlice = imminentSlice;
+    const revisionChanged = revision !== this.revision;
+    const becameReady = ready && !this.ready;
+    const resumed = !paused && this.paused;
     this.options = options;
+    this.revision = revision;
+    this.ready = ready;
+    this.paused = paused;
     if (!options || !isTauriRuntime() || !options.models.some(model => model.visible
       && !options.excludedModelIds?.includes(model.id))) {
       this.signature = null;
       this.attempted = null;
       this.cancelScheduled();
       this.preparing?.abort();
-      this.preparing = null;
+      return;
+    }
+    if (!ready) {
+      this.cancelScheduled();
+      // A transient/import edit invalidates this subscriber, but Slice's pause
+      // below must leave matching preparation alive for foreground adoption.
+      if (this.preparing && !this.preparing.signal.aborted) {
+        this.preparing.abort();
+        this.attempted = null;
+      }
       return;
     }
     const signature = getSliceMeshInputSignature(options);
-    if (this.signature && equalSliceMeshInputSignatures(this.signature, signature)) {
-      if (becameImminent) this.schedule(true);
+    const changed = !this.signature || !equalSliceMeshInputSignatures(this.signature, signature);
+    if (changed) {
+      this.signature = signature;
+      this.attempted = null;
+      this.cancelScheduled();
+      this.preparing?.abort();
+    }
+    if (changed || revisionChanged || becameReady || resumed) {
+      this.quietUntil = Date.now() + SLICE_MESH_CACHE_QUIET_MS;
+      this.cancelScheduled();
+    }
+    if (paused) {
+      this.cancelScheduled();
       return;
     }
-    const initialContext = this.signature === null;
-    this.signature = signature;
-    this.attempted = null;
-    this.cancelScheduled();
-    this.preparing?.abort();
-    this.preparing = null;
-    this.schedule(initialContext || this.imminentSlice);
+    this.schedule();
   }
 
   private readonly onPointerDown = (event: PointerEvent) => {
@@ -69,10 +90,11 @@ export class SliceMeshWarmup {
   };
 
   private readonly onPointerUp = (event: PointerEvent) => {
-    if (this.pointers.delete(event.pointerId)) this.schedule();
+    if (this.pointers.delete(event.pointerId)) this.onInteraction();
   };
 
   private readonly onInteraction = () => {
+    this.quietUntil = Date.now() + SLICE_MESH_CACHE_QUIET_MS;
     this.cancelScheduled();
     this.schedule();
   };
@@ -84,24 +106,24 @@ export class SliceMeshWarmup {
 
   private readonly onVisibility = () => {
     if (this.host.document.hidden) this.cancelScheduled();
-    else this.schedule();
+    else this.onInteraction();
   };
 
   private cancelScheduled(): void {
-    if (this.timer !== null) this.host.clearTimeout(this.timer);
+    this.host.clearTimeout(this.timer);
     if (this.idle !== null) this.host.cancelIdleCallback(this.idle);
-    this.timer = null;
+    this.timer = undefined;
     this.idle = null;
   }
 
-  private schedule(initialContext = false): void {
-    if (this.disposed || !this.options || !this.signature || this.pointers.size > 0
+  private schedule(): void {
+    if (this.disposed || !this.ready || this.paused || !this.options || !this.signature
+      || this.preparing || this.timer !== undefined || this.idle !== null || this.pointers.size > 0
       || this.host.document.hidden || (this.attempted
         && equalSliceMeshInputSignatures(this.signature, this.attempted))) return;
-    this.cancelScheduled();
     this.timer = this.host.setTimeout(() => {
-      this.timer = null;
-      if (this.pointers.size > 0 || this.host.document.hidden) return;
+      this.timer = undefined;
+      if (!this.ready || this.paused || this.pointers.size > 0 || this.host.document.hidden) return;
       if (typeof this.host.requestIdleCallback === 'function') {
         // No timeout: never force background preparation while the UI is busy.
         this.idle = this.host.requestIdleCallback(() => {
@@ -111,15 +133,15 @@ export class SliceMeshWarmup {
       } else {
         this.start();
       }
-    }, initialContext || this.imminentSlice ? 0 : QUIET_MS);
+    }, Math.max(0, this.quietUntil - Date.now()));
   }
 
   private start(): void {
-    if (this.disposed || !this.options || !this.signature || this.pointers.size > 0
-      || this.host.document.hidden) return;
+    if (this.disposed || !this.ready || this.paused || !this.options || !this.signature
+      || this.preparing || this.pointers.size > 0 || this.host.document.hidden) return;
     const signature = getSliceMeshInputSignature(this.options);
     if (!equalSliceMeshInputSignatures(signature, this.signature)) {
-      this.update(this.options, this.imminentSlice);
+      this.update(this.options, this.revision, this.ready, this.paused);
       return;
     }
     this.attempted = signature;
@@ -129,15 +151,16 @@ export class SliceMeshWarmup {
       if (!controller.signal.aborted) console.warn('[SliceMeshWarmup] Preparation unavailable; slice will prepare on demand.', error);
     }).finally(() => {
       if (this.preparing === controller) this.preparing = null;
+      // Superseding edits wait for release before another producer can start.
+      this.schedule();
     });
   }
 
-  /** Stop this context's background subscription until a real input revision changes. */
+  /** Release the background subscription until a real input signature changes. */
   cancel(): void {
     if (this.disposed) return;
     this.cancelScheduled();
     this.preparing?.abort();
-    this.preparing = null;
     this.attempted = this.signature;
   }
 
@@ -146,7 +169,6 @@ export class SliceMeshWarmup {
     this.disposed = true;
     this.cancelScheduled();
     this.preparing?.abort();
-    this.preparing = null;
     this.unsubscribe();
     this.host.removeEventListener('pointerdown', this.onPointerDown, true);
     this.host.removeEventListener('pointerup', this.onPointerUp, true);

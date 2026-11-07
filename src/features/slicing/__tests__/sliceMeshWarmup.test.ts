@@ -7,12 +7,12 @@ import { getRaftSettings, setRaftSettings, updateRaftSettings } from '@/supports
 import { installFakeWindow } from '@/utils/__tests__/helpers/fakeWindow';
 import { installFakeMeshChunkUpload } from '@/utils/__tests__/helpers/fakeMeshChunkUpload';
 import { cubeModel } from './helpers/captureAppSliceJob';
-import { SliceMeshWarmup } from '../sliceMeshWarmup';
-import { prewarmSliceMesh } from '../sliceMeshSnapshot';
+import { SliceMeshWarmup, SLICE_MESH_CACHE_QUIET_MS } from '../sliceMeshWarmup';
+import { prewarmSliceMesh, runWithSliceMesh } from '../sliceMeshSnapshot';
 import type { SliceMeshPrewarmOptions } from '../sliceMeshSnapshot';
 
 let nextFixture = 0;
-function fixture() {
+function fixture(onBegin?: () => Promise<void>) {
   const model = cubeModel(`idle-warm-${++nextFixture}`, 2);
   const previousSupports = getSnapshot();
   const previousRaft = getRaftSettings();
@@ -22,6 +22,7 @@ function fixture() {
   const documentEvents = new EventTarget();
   const document = Object.assign(documentEvents, { hidden: false });
   const timers = new Map<number, () => void>();
+  const delays = new Map<number, number>();
   const idle = new Map<number, () => void>();
   let nextId = 0;
   const storage = new Map<string, string>();
@@ -33,12 +34,15 @@ function fixture() {
   const upload = installFakeMeshChunkUpload(async command => { throw new Error(`Unexpected operation during mesh prewarm: ${command}`); });
   const restoreWindow = installFakeWindow({
     document, localStorage, sessionStorage: localStorage,
-    __TAURI_INTERNALS__: { invoke: upload.invoke },
+    __TAURI_INTERNALS__: { invoke: async (...args: Parameters<typeof upload.invoke>) => {
+      if (args[0] === 'mesh_chunk_upload_begin') await onBegin?.();
+      return upload.invoke(...args);
+    } },
     addEventListener: events.addEventListener.bind(events),
     removeEventListener: events.removeEventListener.bind(events),
     dispatchEvent: events.dispatchEvent.bind(events),
-    setTimeout: (callback: () => void) => { const id = ++nextId; timers.set(id, callback); return id; },
-    clearTimeout: (id: number) => { timers.delete(id); },
+    setTimeout: (callback: () => void, delay: number) => { const id = ++nextId; timers.set(id, callback); delays.set(id, delay); return id; },
+    clearTimeout: (id: number) => { timers.delete(id); delays.delete(id); },
     requestIdleCallback: (callback: () => void) => { const id = ++nextId; idle.set(id, callback); return id; },
     cancelIdleCallback: (id: number) => { idle.delete(id); },
   });
@@ -58,7 +62,7 @@ function fixture() {
     for (const callback of pending) callback();
   };
   return {
-    model, options, upload, warmer, timers, idle, document,
+    model, options, upload, warmer, timers, delays, idle, document,
     quiet: () => flush(timers), idleTurn: () => flush(idle),
     pointer(type: string, pointerId = 1) { events.dispatchEvent(Object.assign(new Event(type), { pointerId })); },
     dispose() {
@@ -70,10 +74,13 @@ function fixture() {
   };
 }
 
-test('active context warms exact input before a job, only after quiet/idle and pointer release', async () => {
+test('scene cache waits fifteen seconds and idle, then keeps equivalent inputs worker-free', async () => {
   const f = fixture();
   try {
     f.warmer.update(f.options);
+    const delay = [...f.delays.values()][0];
+    assert.ok(delay > SLICE_MESH_CACHE_QUIET_MS - 100 && delay <= SLICE_MESH_CACHE_QUIET_MS,
+      'initial import preparation uses the full independent quiet deadline');
     assert.equal(f.upload.readStats().uploadBegins, 0);
     f.quiet();
     assert.equal(f.upload.readStats().uploadBegins, 0, 'quiet period alone does not force work on a busy UI');
@@ -158,4 +165,56 @@ test('cancel pauses unchanged background preparation until the next real edit', 
     for (let i = 2; i < expected.length; i += 3) expected[i] += 0.25;
     assert.deepEqual(f.upload.readStaged(), new Uint8Array(expected.buffer));
   } finally { f.dispose(); }
+});
+
+
+
+test('busy import/transient windows retain only the latest dirty input', async () => {
+  const f = fixture();
+  try {
+    f.warmer.update(f.options, 1, false);
+    f.quiet(); f.idleTurn();
+    f.model.transform.position.x += 1;
+    f.warmer.update(f.options, 2, false);
+    assert.equal(f.timers.size, 0);
+    assert.equal(f.upload.readStats().workerStarts, 0);
+    f.warmer.update(f.options, 2, true);
+    assert.equal(f.timers.size, 1, 'settled import arms one quiet deadline');
+    f.quiet();
+    f.warmer.update(f.options, 2, true, true);
+    f.idleTurn();
+    assert.equal(f.upload.readStats().workerStarts, 0, 'Slice busy cancels only scheduled idle work');
+    f.warmer.update(f.options, 2, true, false);
+    f.quiet(); f.idleTurn();
+    await prewarmSliceMesh(f.options);
+    assert.equal(f.upload.readStats().uploadBegins, 1);
+    const before = f.upload.readStats();
+    f.warmer.update(f.options, 3);
+    f.quiet(); f.idleTurn();
+    assert.deepEqual(f.upload.readStats(), before, 'a content notification with an unchanged signature does no work');
+    assert.equal(f.timers.size, 0, 'a clean cache has no periodic deadline');
+  } finally { f.dispose(); }
+});
+
+test('Slice adopts matching in-flight preparation without the busy pause aborting it', async () => {
+  let release!: () => void;
+  let entered!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const f = fixture(async () => { entered(); await blocked; });
+  try {
+    f.warmer.update(f.options, 1);
+    f.quiet(); f.idleTurn();
+    await started;
+    const before = f.upload.readStats();
+    f.warmer.update(f.options, 1, true, true);
+    const foreground = runWithSliceMesh(f.options, undefined, () => {}, async (descriptor) => descriptor);
+    f.warmer.cancel(); // Explicit Cancel releases only the background subscriber.
+    release();
+    const mesh = await foreground;
+    assert.ok(mesh.modelTriangleCount > 0);
+    assert.equal(f.upload.readStats().workerStarts, before.workerStarts, 'foreground joins the existing worker');
+    assert.equal(f.upload.readStats().uploadBegins, 1);
+    assert.equal(f.upload.readStats().restoreCalls, 1);
+  } finally { release(); f.dispose(); }
 });

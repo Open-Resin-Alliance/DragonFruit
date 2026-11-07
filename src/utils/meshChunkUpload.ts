@@ -1,4 +1,5 @@
 import type { TauriInvoke } from './tauriMeshBridge';
+import type { AppendLoadedSliceMesh, AppendedLoadedSliceMesh } from './loadedSliceMesh';
 import {
   MESH_CHUNK_BYTES,
   deserializeMeshChunkError,
@@ -26,6 +27,7 @@ export interface MeshChunkUploadResult extends MeshChunkUploadAck {
 export interface MeshChunkUploadSession {
   /** Keep bytes unchanged until this promise settles; their buffer is never detached. */
   append(bytes: Uint8Array): Promise<void>;
+  appendSource(source: AppendLoadedSliceMesh): Promise<AppendedLoadedSliceMesh | null>;
   /** stage=false retains the global upload turn until abort releases the ready handle. */
   finish(stage?: boolean): Promise<MeshChunkUploadResult>;
   abort(): Promise<void>;
@@ -188,6 +190,11 @@ class ChunkUploadSession implements MeshChunkUploadSession {
         await this.request<void>({ type: 'append', requestId: ++this.requestId, bytes: chunk }, [chunk.buffer]);
       }
     });
+  }
+
+  appendSource(source: AppendLoadedSliceMesh): Promise<AppendedLoadedSliceMesh | null> {
+    if (this.phase !== 'open') return Promise.reject(this.failure ?? new Error('Mesh upload session is not open'));
+    return this.enqueue(() => this.request<AppendedLoadedSliceMesh | null>({ type: 'append-source', requestId: ++this.requestId, source }));
   }
 
   finish(stage = true): Promise<MeshChunkUploadResult> {

@@ -21,6 +21,16 @@ a RAM filesystem, and is removed by the OS when its process closes. Missing,
 corrupt, unavailable or over-budget retention causes real work on demand, not fake
 geometry. The cache/key/lease API and exact bounds are documented in
 [Tauri IPC and Native Bridge](tauri-ipc-bridge.md#cached-mesh-preparation-before-slicing).
+Native import sources have an additional 512 MiB / 4096-entry capacity-charged
+in-memory budget. The immutable indexed mesh is shared with the loader; only final
+renderer corner order is separately stored. This is separate from the hot chunk
+cache and last-slice backing, not a total-process memory limit. Missing or evicted
+sources use the real live-geometry path.
+
+Scene cache refresh shares autosave's change notification, not its enablement or
+write clock: after 15 seconds of quiet, dirty inputs may prepare at idle even when
+autosave is disabled. Clean signatures do not periodically launch workers, and
+cache completion does not advance autosave's saved revision.
 No new user-setting key or main app version migration is required.
 
 ## Key conventions

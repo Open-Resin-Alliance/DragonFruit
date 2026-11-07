@@ -6,6 +6,8 @@
 
 use crate::mesh_chunk_cache::{ChunkHash, MeshChunkCache, UploadStats, CACHE_BYTES, CHUNK_BYTES, MAX_SAFE_BYTES};
 use serde::{Deserialize, Serialize};
+use dragonfruit_mesh_core::mesh::IndexedMesh;
+use crate::mesh_slice_source::{SourceCache, SourceOrder, SourceTransform, SourceBounds, SOURCE_BYTES, SOURCE_ENTRIES};
 use sha2::{Digest, Sha256};
 use std::sync::{LazyLock, Mutex};
 use tauri::ipc::{InvokeBody, Request};
@@ -13,6 +15,9 @@ use tauri::Manager;
 
 #[path = "mesh_slice_backing.rs"]
 mod slice_backing;
+
+static SOURCES: LazyLock<Mutex<SourceCache<IndexedMesh>>> =
+    LazyLock::new(|| Mutex::new(SourceCache::new(SOURCE_BYTES, SOURCE_ENTRIES)));
 
 static UPLOADS: LazyLock<Mutex<MeshChunkCache>> =
     LazyLock::new(|| Mutex::new(MeshChunkCache::with_verifier(CACHE_BYTES, chunk_hash)));
@@ -149,6 +154,182 @@ pub async fn mesh_chunk_upload_append(request: Request<'_>) -> Result<(), String
         .append_verified(upload_id, hash, bytes)
 }
 
+/// Alias the exact loader mesh once; the optional body maps final geometry
+/// corners back to original soup corners, not to the loader's welded vertices.
+#[tauri::command]
+pub async fn retain_loaded_slice_mesh(request: Request<'_>) -> Result<Option<RetainedSourceAck>, String> {
+    let token: u32 = header(&request, "x-mesh-token")?.parse()
+        .map_err(|_| "Invalid x-mesh-token header")?;
+    let expected: usize = header(&request, "x-mesh-expected-corners")?.parse()
+        .map_err(|_| "Invalid x-mesh-expected-corners header")?;
+    let offset: [f64; 3] = serde_json::from_str(header(&request, "x-mesh-position-offset")?)
+        .map_err(|e| format!("Invalid x-mesh-position-offset header: {e}"))?;
+    let model_triangle_count = request.headers().get("x-mesh-model-triangles")
+        .map(|value| {
+            value.to_str().map_err(|e| format!("Invalid x-mesh-model-triangles header: {e}"))?
+                .parse::<usize>().map_err(|_| "Invalid x-mesh-model-triangles header".to_string())
+        }).transpose()?;
+    if model_triangle_count.map_or(false, |count| count == 0 || count >= expected / 3) {
+        return Err("Retained source model triangle boundary is invalid".into());
+    }
+    let bytes = match request.body() {
+        InvokeBody::Raw(bytes) => bytes,
+        InvokeBody::Json(_) => return Err("retain_loaded_slice_mesh expects a raw binary body".into()),
+    };
+    if expected == 0 || expected % 3 != 0 || !offset.iter().all(|value| value.is_finite()) {
+        return Err("Retained source requires whole triangles and a finite offset".into());
+    }
+    let order_bytes = expected.checked_mul(4).ok_or("Retained source order size overflow")?;
+    if !bytes.is_empty() && bytes.len() != order_bytes {
+        return Err("Retained source order byte length does not match expectedCorners".into());
+    }
+    let Some(mesh) = crate::mesh_repair::loaded_mesh(token) else { return Ok(None); };
+    if mesh.triangles.len().checked_mul(3) != Some(expected) {
+        return Ok(None);
+    }
+    let mesh_bytes = mesh.positions.capacity().checked_mul(std::mem::size_of::<dragonfruit_mesh_core::mesh::Vec3>())
+        .and_then(|bytes| mesh.triangles.capacity().checked_mul(std::mem::size_of::<[u32; 3]>())
+            .and_then(|triangles| bytes.checked_add(triangles)))
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<IndexedMesh>()))
+        .ok_or("Retained source mesh size overflow")?;
+    if mesh_bytes.checked_add(bytes.len()).map_or(true, |bytes| bytes > SOURCE_BYTES) {
+        return Ok(None);
+    }
+    let bytes = bytes.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut indices = Vec::new();
+        indices.try_reserve_exact(bytes.len() / 4)
+            .map_err(|e| format!("Cannot reserve retained source corner order: {e}"))?;
+        indices.extend(bytes.chunks_exact(4).map(|part| u32::from_le_bytes(part.try_into().expect("u32 order"))));
+        let source_id = SOURCES.lock().map_err(|e| format!("Retained source lock poisoned: {e}"))?
+            .retain(mesh.clone(), expected, mesh_bytes, indices, offset)?;
+        let Some(source_id) = source_id else { return Ok(None); };
+        // Scan only once at import retention, off the async thread and without
+        // registry/upload locks. Frontend partition views borrow these bounds.
+        let partitions = model_triangle_count.map(|model_triangle_count| {
+            let (model_bounds, support_bounds) = crate::mesh_slice_source::translated_partition_bounds(
+                mesh.triangles.len(), model_triangle_count, offset, |corner| {
+                    let vertex = mesh.triangles[corner / 3][corner % 3] as usize;
+                    let position = mesh.positions[vertex];
+                    [position.x, position.y, position.z]
+                })?;
+            Ok::<_, String>(RetainedSourcePartitions {
+                model_triangle_count,
+                model_bounds: model_bounds.into(),
+                support_bounds: support_bounds.into(),
+            })
+        }).transpose()?;
+        Ok(Some(RetainedSourceAck { source_id, partitions }))
+    })
+    .await
+    .map_err(|e| format!("retain source task panicked: {e}"))?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedSourceAck {
+    source_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    partitions: Option<RetainedSourcePartitions>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetainedSourcePartitions {
+    model_triangle_count: usize,
+    model_bounds: SourceMeshBounds,
+    support_bounds: SourceMeshBounds,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceAppendAck {
+    triangle_count: usize,
+    mesh_bounds: SourceMeshBounds,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceMeshBounds {
+    min_x: f64, min_y: f64, min_z: f64,
+    max_x: f64, max_y: f64, max_z: f64,
+}
+
+impl From<SourceBounds> for SourceMeshBounds {
+    fn from(bounds: SourceBounds) -> Self {
+        Self {
+            min_x: bounds.min[0], min_y: bounds.min[1], min_z: bounds.min[2],
+            max_x: bounds.max[0], max_y: bounds.max[1], max_z: bounds.max[2],
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mesh_chunk_upload_append_source(
+    upload_id: String,
+    source_id: String,
+    expected_corners: usize,
+    triangle_start: usize,
+    triangle_end: usize,
+    order: String,
+    matrix: [f64; 16],
+    center: [f64; 3],
+    plate_offset: [f64; 2],
+    flip_winding: bool,
+    negative_zero_mask: u32,
+) -> Result<Option<SourceAppendAck>, String> {
+    let order = match order.as_str() {
+        "geometry" => SourceOrder::Geometry,
+        "soup" => SourceOrder::Soup,
+        _ => return Err("Retained source order must be geometry or soup".into()),
+    };
+    let mut transform = SourceTransform { matrix, center, plate_offset, flip_winding };
+    transform.restore_negative_zeros(negative_zero_mask)?;
+    transform.validate()?;
+    if expected_corners == 0 || expected_corners % 3 != 0
+        || triangle_start >= triangle_end || triangle_end > expected_corners / 3
+    {
+        return Err("Retained source triangle range is invalid".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        // Drop the source registry lock immediately. An active command pins only
+        // its source; eviction never substitutes another mesh or changes its data.
+        let source = SOURCES.lock().map_err(|e| format!("Retained source lock poisoned: {e}"))?
+            .get(&source_id);
+        let Some(source) = source else { return Ok(None); };
+        let byte_length = source.validate_range(expected_corners, triangle_start, triangle_end)?;
+        let triangles_per_chunk = CHUNK_BYTES / 36;
+        let chunk_length = byte_length.min(triangles_per_chunk * 36);
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(chunk_length)
+            .map_err(|e| format!("Cannot reserve source transform chunk: {e}"))?;
+        uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?
+            .prepare_reused_append(&upload_id, byte_length)?;
+        let mut bounds = SourceBounds::empty();
+        let mut start = triangle_start;
+        while start < triangle_end {
+            let end = start.saturating_add(triangles_per_chunk).min(triangle_end);
+            source.write_triangles(start, end, order, &transform, |mesh, corner| {
+                let vertex = mesh.triangles[corner / 3][corner % 3] as usize;
+                let position = mesh.positions[vertex];
+                [position.x, position.y, position.z]
+            }, &mut bytes, &mut bounds);
+            let hash = chunk_hash(&bytes);
+            // Revalidate ownership on every chunk. Cancellation can remove only
+            // this ID; stale work cannot append to a subsequently begun upload.
+            uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?
+                .append_reused_verified(&upload_id, hash, &bytes)?;
+            start = end;
+        }
+        Ok(Some(SourceAppendAck {
+            triangle_count: triangle_end - triangle_start,
+            mesh_bounds: bounds.into(),
+        }))
+    })
+    .await
+    .map_err(|e| format!("append source task panicked: {e}"))?
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn mesh_chunk_upload_finish(
     upload_id: String,
@@ -251,6 +432,28 @@ pub fn take_request_body(request: &Request<'_>) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_source_ack_uses_optional_camel_case_partition_metadata() {
+        let plain = RetainedSourceAck { source_id: "mesh-source-1".into(), partitions: None };
+        assert_eq!(serde_json::to_value(plain).unwrap(), serde_json::json!({"sourceId": "mesh-source-1"}));
+        let ack = RetainedSourceAck {
+            source_id: "mesh-source-2".into(),
+            partitions: Some(RetainedSourcePartitions {
+                model_triangle_count: 7,
+                model_bounds: SourceBounds { min: [-1., -2., -3.], max: [1., 2., 3.] }.into(),
+                support_bounds: SourceBounds { min: [-4., -5., -6.], max: [4., 5., 6.] }.into(),
+            }),
+        };
+        assert_eq!(serde_json::to_value(ack).unwrap(), serde_json::json!({
+            "sourceId": "mesh-source-2",
+            "partitions": {
+                "modelTriangleCount": 7,
+                "modelBounds": {"minX": -1., "minY": -2., "minZ": -3., "maxX": 1., "maxY": 2., "maxZ": 3.},
+                "supportBounds": {"minX": -4., "minY": -5., "minZ": -6., "maxX": 4., "maxY": 5., "maxZ": 6.}
+            }
+        }));
+    }
 
     #[test]
     fn sha256_hashes_must_be_lowercase_and_exact_length() {

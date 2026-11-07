@@ -51,6 +51,7 @@ scope.onmessage = (event) => {
       switch (message.type) {
         case 'begin': value = await body.begin(message.reserveBytes, message.retainForSlice); break;
         case 'append': await body.append(message.bytes); break;
+        case 'append-source': value = await body.appendSource(message.source); break;
         case 'finish': value = await body.finish(message.stage); break;
       }
       scope.postMessage({ type: 'result', requestId: message.requestId, value }, []);

@@ -1,3 +1,5 @@
+import type { AppendLoadedSliceMesh, AppendedLoadedSliceMesh } from './loadedSliceMesh';
+
 export const MESH_CHUNK_BYTES = 4 * 1024 * 1024;
 
 export interface MeshChunkUploadAck {
@@ -24,6 +26,7 @@ export type MeshChunkNativeCommand =
   | 'mesh_chunk_upload_begin'
   | 'mesh_chunk_upload_append_cached'
   | 'mesh_chunk_upload_append'
+  | 'mesh_chunk_upload_append_source'
   | 'mesh_chunk_upload_finish';
 
 export type MeshChunkRelay = <T>(
@@ -35,6 +38,7 @@ export type MeshChunkRelay = <T>(
 export type MeshChunkWorkerCommand =
   | { type: 'begin'; requestId: number; reserveBytes: number; retainForSlice?: boolean }
   | { type: 'append'; requestId: number; bytes: Uint8Array }
+  | { type: 'append-source'; requestId: number; source: AppendLoadedSliceMesh }
   | { type: 'finish'; requestId: number; stage: boolean };
 
 export type MeshChunkWorkerInput = MeshChunkWorkerCommand | (
@@ -67,6 +71,14 @@ export function deserializeMeshChunkError(error: MeshChunkWorkerError): Error {
   result.name = error.name;
   if (error.stack) result.stack = error.stack;
   return result;
+}
+
+function negativeZeroBits(values: readonly number[], shift: number): number {
+  let bits = 0;
+  for (let index = 0; index < values.length; index++) {
+    if (Object.is(values[index], -0)) bits |= 1 << (shift + index);
+  }
+  return bits;
 }
 
 /** DOM-free worker body; the relay is the only route to native IPC. */
@@ -136,14 +148,25 @@ export class MeshChunkWorkerBody {
     }
   }
 
+  private async flushPartial(): Promise<void> {
+    if (!this.partial) return;
+    const tail = this.partial.subarray(0, this.partialBytes);
+    this.partial = undefined;
+    this.partialBytes = 0;
+    await this.uploadChunk(tail);
+  }
+
+  async appendSource(source: AppendLoadedSliceMesh): Promise<AppendedLoadedSliceMesh | null> {
+    const uploadId = this.activeUploadId();
+    await this.flushPartial();
+    // JSON normalizes -0 to +0; carry its sign bits alongside numeric metadata.
+    const negativeZeroMask = negativeZeroBits(source.matrix, 0) | negativeZeroBits(source.center, 16) | negativeZeroBits(source.plateOffset, 19);
+    return this.relay<AppendedLoadedSliceMesh | null>('mesh_chunk_upload_append_source', { ...source, uploadId, negativeZeroMask });
+  }
+
   async finish(stage: boolean): Promise<MeshChunkUploadAck> {
     const uploadId = this.activeUploadId();
-    if (this.partial) {
-      const tail = this.partial.subarray(0, this.partialBytes);
-      this.partial = undefined;
-      this.partialBytes = 0;
-      await this.uploadChunk(tail);
-    }
+    await this.flushPartial();
     const ack = await this.relay<MeshChunkUploadAck>('mesh_chunk_upload_finish', { uploadId, stage });
     this.finished = true;
     return ack;

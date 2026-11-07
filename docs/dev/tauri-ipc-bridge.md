@@ -119,14 +119,57 @@ layers on every job: these caches retain inputs, not previous printed output.
 
 ### Ahead-of-job preparation and exact revisions
 
-`useSliceMeshWarmup` mounts with the active `SlicingPanel` once printer/material
-and plate inputs exist. `SliceMeshWarmup` starts at the first idle opportunity;
-subsequent real edits wait for a quiet interval and idle time. Pointer gestures,
-wheel/keyboard activity and hidden documents defer new background work. An
-already-requested automatic slice has idle priority rather than waiting behind
-the edit debounce. Unmounting releases the background subscription. Cancel also
-releases it, without immediately restarting the same revision; a real edit can
-schedule preparation again.
+`useSceneSliceMeshWarmup` mounts once in `src/app/page.tsx`, independently of
+`SlicingPanel` and of whether scene autosave is enabled. It waits for completed
+import batches and finalized geometry operations. It never starts a whole-scene
+assembly immediately on import: dirty input waits for **15 seconds of quiet** and
+then `requestIdleCallback`, without a forced idle timeout. Activity, hidden
+windows, imports, autosaving, printing and transient geometry tools defer work.
+The deadline is not a recurring 15-second worker poll: a completed or explicitly
+cancelled unchanged signature starts no new worker.
+
+`useSceneAutosave` accepts `onSceneContentChanged(revision)`. History edits and
+model add/remove triggers notify it **before** the autosave-enabled guard; it is
+a notification, not a save request. The app forwards that revision to the cache
+coordinator. Autosave keeps its existing debounce, cooldown, cap and independently
+committed revision. Cache completion neither writes a file nor advances/postpones
+autosave. Source/store/settings revisions also invalidate the exact cache inputs.
+
+`paused` suppresses new starts when foreground Slice begins but preserves matching
+in-flight work until export can join it. `ready` gates imports and transient tool
+output. Cancel calls `cancelSliceMeshWarmup` and aborts foreground export; ordinary
+navigation/readiness changes cannot restart that cancelled signature. Replacing
+cancelled work waits for the real producer's cleanup, not just its subscriber's
+rejected promise.
+
+`src/features/slicing/sliceInputContext.ts` resolves active profiles, remote
+material/offline layer height, AA preset, session override and LUT curves for both
+the scene coordinator and panel. `readSliceMeshWarmupContext` works before the
+panel first mounts. `subscribeToSliceMeshWarmupContext` observes profile,
+reachability and stored preference changes; `publishSliceMeshWarmupContext` lets
+the panel publish live choices and its plate target without owning another
+producer. A publication cannot override newer profile/storage revisions.
+`notifySliceMeshWarmupPreferencesChanged` covers same-window preference writers.
+
+For another scene host, the notification-only wiring is:
+
+```tsx
+const [revision, setRevision] = useState(0);
+const autosave = useSceneAutosave({
+  ...saveInputs,
+  enabled: autosaveSettings.enabled,
+  onSceneContentChanged: setRevision,
+});
+useSceneSliceMeshWarmup({
+  ...cacheInputs,
+  revision,
+  ready: importsFinished && !autosave.isAutosaving,
+  paused: slicingBusy,
+});
+```
+
+The built-in app already owns this coordinator; custom panels must not mount a
+second producer below it.
 
 `prewarmSliceMesh` prepares modifiers, world-space input and a native snapshot,
 without thumbnail capture, job metadata attachment, layer rendering or output.
@@ -138,8 +181,8 @@ without a vertex scan, modifier bake, world-mesh rebuild or hashing-worker start
 A cold export consumes its freshly staged bytes inside the same ownership guard,
 without an unnecessary restore or a second upload when retention is unavailable.
 
-For a custom slicing surface, use the same inputs in its idle/revision callback
-and its later Slice action (the built-in panel uses `useSliceMeshWarmup`):
+For a custom slicing surface that owns its own scheduling, use the same inputs in
+its idle/revision callback and its later Slice action:
 
 ```ts
 import { prewarmSliceMesh, runSliceExportOrchestrator } from '@/features/slicing/sliceExportOrchestrator';
@@ -164,7 +207,9 @@ revision stamps for memoization, including in-place notified edits and pose
 validity. `subscribeToMeshModifierStore` notifies the warmup observer;
 `getStoredMeshModifierRevisionToken` refreshes value memoization, but the token
 itself is never a geometry key. Source revisions are rechecked before a descriptor
-is published.
+is published and immediately before cold foreground consumption. Uncached model
+scans and support emission cross cancellation/backpressure checkpoints; the model
+scan checks its source revision after yielding instead of publishing mixed input.
 
 The prepared modifier cache in `preparedGeometryCache.ts` owns its data; source,
 cache and returned geometry do not share mutable output buffers. Fresh classified
@@ -183,6 +228,63 @@ Retention is byte-bounded, not an eight-model limit: 64 MiB RAM payloads, up to
 integrity checks use at most 4 MiB chunks. Old scratch files are pruned on first
 use. Unavailable/quota-failed/corrupt storage produces a genuine miss or RAM-only
 retention, never substitute geometry.
+
+### Native import retention
+
+Native STL path/byte and VOXL range loaders return a token for the exact
+single-body payload they produced, including a reduced preview when applicable.
+Import repair/classification returns a fresh token with the same response as its
+final staged positions. `MeshRepairResult.meshToken` is ephemeral; the durable
+`MeshHealthReport` whitelist strips `slice_mesh_token` before any scene save.
+Never query the shared staging buffer later to infer which token a result owns.
+
+`src/utils/loadedSliceMesh.ts` binds a loader token to its original position
+storage/revision. Only the import's synchronous exact clone and known centering
+translation inherit it; repair/reordering must supply a new native token.
+`retainImportedSliceMesh` runs after import processing/BVH order is final. It sends
+only the finalized Uint32 corner order and translation metadata, not the vertices
+back to Rust. Primitive identity/revision tokens do not pin retired renderer
+buffers after replacement. Later position/index replacement, notified in-place
+edits, changed counts and changed attribute layout invalidate the reference.
+
+`retain_loaded_slice_mesh` is raw-body IPC. Headers are `x-mesh-token`,
+`x-mesh-expected-corners`, and `x-mesh-position-offset` (ASCII JSON with exact
+f64 translation values). Its body is little-endian Uint32 indices, or empty for
+identity order. Optional `x-mesh-model-triangles` asks for raw-soup model/support
+partition bounds computed once natively after import translation's f32 rounding.
+The response is `null` on a genuine retention miss, otherwise
+`{ sourceId, partitions? }`.
+
+`src-tauri/src/mesh_slice_source.rs` owns a **512 MiB / 4096-entry** retained-source
+budget. It shares the loader's immutable indexed mesh through `Arc`; final corner
+order is separately owned and capacity-charged. Entries conservatively charge the
+full mesh, even when shared. An active command may pin an evicted source until it
+finishes. This budget is not a process-RSS limit, and the loader/AO registry retains
+its own existing bounded entry lifetime.
+
+`MeshChunkUploadSession.appendSource` flushes preceding worker partial bytes before
+calling `mesh_chunk_upload_append_source`. The JSON command takes the upload ID,
+source ID, original corner count, triangle range, geometry-or-soup order, a
+column-major matrix, export centre, plate offset, winding flag and
+`negativeZeroMask`. The worker carries f64 negative-zero sign bits separately
+because JSON normalizes them; native parsing also enables exact float round trips.
+Source eviction returns `null` before adding source bytes, so the caller can emit
+the exact live geometry instead. Invalid ranges/ownership are errors.
+
+The native transform follows JavaScript's f64 operation order, including import
+translation rounded through f32 before export centre subtraction, mirrored winding
+and plate-local coordinates. It writes bounded triangle-aligned chunks into the
+existing upload, counted as reused rather than IPC-uploaded bytes. Native source
+transforms run off the async/UI thread. Nothing about this cache stores rendered
+layers or changes print AA/dither policy.
+
+For classified geometry without unapplied hollowing, transient output sections
+borrow source-array views and retained native bounds; preparing them does not copy
+or bbox-scan the whole mesh again. Modified output still uses owned geometry. A
+missing/stale/over-budget reference falls back to actual live geometry work, never
+substitute bytes. Geometry edits or non-native imports can therefore still require
+preparation; import membership/bounds checks and modifier computations are not
+promised free.
 
 ### Chunk uploads and native last-slice retention
 

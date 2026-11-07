@@ -266,6 +266,35 @@ impl MeshChunkCache {
         Ok(())
     }
 
+    /// Reserve the existing output buffer before streaming a retained source.
+    /// No world-space copy is allocated. Stale IDs never reserve another upload.
+    pub fn prepare_reused_append(&mut self, upload_id: &str, byte_length: usize) -> Result<(), String> {
+        let pending = self.pending.as_mut().filter(|upload| upload.id == upload_id)
+            .ok_or("Unknown or stale mesh upload ID")?;
+        if byte_length == 0 || byte_length % 36 != 0 || pending.bytes.len() % 36 != 0 {
+            return Err("Retained source appends must start and end on whole triangles".into());
+        }
+        let total = pending.bytes.len().checked_add(byte_length).ok_or("Mesh upload size overflow")?;
+        validate_size(total)?;
+        let before = pending.bytes.capacity();
+        pending.bytes.try_reserve_exact(byte_length)
+            .map_err(|e| format!("Cannot grow mesh upload buffer: {e}"))?;
+        pending.stats.reserve_grew |= pending.bytes.capacity() > before;
+        pending.stats.capacity_bytes = pending.bytes.capacity();
+        Ok(())
+    }
+
+    /// Native-generated immutable bytes count as reuse, not IPC uploads. They
+    /// still contribute verified hashes to the retained last-slice manifest.
+    pub fn append_reused_verified(&mut self, upload_id: &str, hash: ChunkHash, bytes: &[u8]) -> Result<(), String> {
+        let pending = self.pending.as_mut().filter(|upload| upload.id == upload_id)
+            .ok_or("Unknown or stale mesh upload ID")?;
+        validate_chunk_size(bytes.len())?;
+        pending.append(bytes, true)?;
+        pending.remember(hash, bytes.len());
+        Ok(())
+    }
+
     pub fn finish(&mut self, upload_id: &str, stage: bool) -> Result<FinishedUpload, String> {
         let pending = self.pending.as_ref()
             .filter(|upload| upload.id == upload_id)
@@ -509,6 +538,27 @@ mod tests {
     }
 
     #[test]
+    fn native_source_chunks_are_reused_and_stale_ids_cannot_damage_replacement() {
+        let mut cache = MeshChunkCache::new(72);
+        let old = cache.begin(0).unwrap();
+        assert!(cache.prepare_reused_append(&old, 35).is_err());
+        cache.prepare_reused_append(&old, 72).unwrap();
+        cache.append_reused_verified(&old, hash(1), &triangle(1)).unwrap();
+        cache.abort(&old);
+        let current = cache.begin(0).unwrap();
+        assert!(cache.prepare_reused_append(&old, 36).is_err());
+        assert!(cache.append_reused_verified(&old, hash(2), &triangle(2)).is_err());
+        cache.prepare_reused_append(&current, 72).unwrap();
+        cache.append_reused_verified(&current, hash(2), &triangle(2)).unwrap();
+        cache.append_reused_verified(&current, hash(1), &triangle(1)).unwrap();
+        let done = cache.finish(&current, true).unwrap();
+        assert_eq!(done.stats.uploaded_bytes, 0);
+        assert_eq!(done.stats.reused_bytes, 72);
+        assert_eq!(done.stats.chunks_received, 2);
+        assert_eq!(done.staged_bytes.unwrap(), [triangle(2), triangle(1)].concat());
+    }
+
+    #[test]
     fn unchanged_chunks_are_reused_and_only_changed_chunks_are_uploaded() {
         let mut cache = MeshChunkCache::new(108);
         stage(&mut cache, &[(1, triangle(1)), (2, triangle(2))]);
@@ -683,6 +733,24 @@ mod tests {
         assert_eq!(done.stats.reused_bytes, 108);
         assert_eq!(done.stats.chunks_received, 3);
         assert_eq!(done.slice_snapshot_id.as_deref(), Some(id.as_str()));
+    }
+
+    #[test]
+    fn native_source_bytes_retain_a_snapshot_without_ipc_transfer_or_hot_cache_copy() {
+        let mut cache = disk_cache(72);
+        let id = begin_slice(&mut cache);
+        cache.prepare_reused_append(&id, 72).unwrap();
+        for value in [2, 1] {
+            let bytes = triangle(value);
+            cache.append_reused_verified(&id, verify(&bytes), &bytes).unwrap();
+        }
+        let done = cache.finish(&id, true).unwrap();
+        assert_eq!(done.stats.uploaded_bytes, 0);
+        assert_eq!(done.stats.reused_bytes, 72);
+        assert_eq!(done.slice_snapshot_id.as_deref(), Some(id.as_str()));
+        assert_eq!(cache.cached_bytes, 0);
+        assert_eq!(cache.restore_slice(&id).unwrap().unwrap().staged_bytes.unwrap(),
+            [triangle(2), triangle(1)].concat());
     }
 
     #[test]

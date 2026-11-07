@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { inheritLoadedSliceMeshRange, loadedSliceMeshPartitions } from '@/utils/loadedSliceMesh';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelHollowingModifier } from './types';
 import { getStoredMeshModifierRevisionToken, resolveModelMeshModifiers } from './meshModifierStore';
@@ -177,8 +178,12 @@ function splitClassifiedModelForOutput(model: LoadedModel): {
   // Capture before copying: later edits of the original must not relabel old partitions.
   // Classification slices the raw position soup, independently of any BVH index.
   const sourceRevision = JSON.stringify([sourceIdentity(geometry), attributeSignature(position)]);
-  const split = splitClassifiedSupportGeometry(model);
+  const partitions = !hasHollowingToBake(resolveModelMeshModifiers(model)) ? loadedSliceMeshPartitions(geometry) : null;
+  const retainedBounds = partitions?.modelTriangleCount === modelTriangleCount ? partitions : undefined;
+  const split = splitClassifiedSupportGeometry(model, { retainedBounds });
   if (!split) return null;
+  inheritLoadedSliceMeshRange(geometry, split.modelGeometry.geometry, 0, split.modelTriangleCount);
+  inheritLoadedSliceMeshRange(geometry, split.supportGeometry.geometry, split.modelTriangleCount, split.totalTriangleCount);
 
   // Split geometries have fresh UUIDs every export. Their immutable derivation
   // is the original source storage/revisions plus the classification boundary.

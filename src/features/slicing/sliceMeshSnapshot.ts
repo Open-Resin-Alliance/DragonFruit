@@ -36,6 +36,7 @@ type Preparation = {
 };
 let latest: Snapshot | null = null;
 let preparation: Preparation | null = null;
+let preparationTail: Promise<void> = Promise.resolve();
 const identities = new WeakMap<object, number>();
 let nextIdentity = 0;
 function identity(value: object | null | undefined): number {
@@ -170,6 +171,7 @@ async function prepareSnapshot(
                     ...options, models: prepared.models, filenameBase: '', supportTipShrinkPercent,
                     abortSignal: signal, meshChunkTargetBytes: 4 * 1024 * 1024,
                     flushBinaryMeshChunk: async (bytes) => { throwIfAborted(signal); await upload.append(bytes); },
+                    appendLoadedMesh: async (source) => { throwIfAborted(signal); return upload.appendSource(source); },
                 });
                 throwIfAborted(signal);
                 const ack = await upload.finish();
@@ -203,12 +205,15 @@ function startPreparation(
     void promise.catch(() => undefined);
     const entry: Preparation = { signature, controller: new AbortController(), users: 0, onBake: new Set(), promise };
     preparation = entry;
-    const completion = Promise.resolve().then(() => prepareSnapshot(options, signature, entry.controller.signal, () => {
+    const completion = preparationTail.then(() => prepareSnapshot(options, signature, entry.controller.signal, () => {
         for (const notify of entry.onBake) notify();
     }, async (snapshot, ack) => {
         resolve(snapshot);
         await onReady?.(snapshot, ack);
     }));
+    // A cancelled subscriber can leave a native bake unwinding. Do not start a
+    // replacement producer until that producer has released its real resources.
+    preparationTail = completion.then(() => undefined, () => undefined);
     void completion.then(resolve, reject).finally(() => { if (preparation === entry) preparation = null; });
     return { entry, completion };
 }
@@ -279,6 +284,9 @@ export async function runWithSliceMesh<T>(
     let result!: T; // onReady is awaited by completion before result is read.
     const { entry, completion } = startPreparation(options, getSliceMeshInputSignature(options), async (snapshot, ack) => {
         throwIfAborted(signal);
+        if (!equalSliceMeshInputSignatures(snapshot.signature, getSliceMeshInputSignature(options))) {
+            throw new Error('Scene changed while preparing slice input; retry with the current scene.');
+        }
         result = await consume(snapshot.descriptor, ack, performance.now() - started);
     });
     entry.users += 1;

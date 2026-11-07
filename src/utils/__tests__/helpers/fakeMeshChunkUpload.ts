@@ -67,6 +67,7 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
           switch (message.type) {
             case 'begin': value = await this.body.begin(message.reserveBytes, message.retainForSlice); break;
             case 'append': await this.body.append(message.bytes); break;
+            case 'append-source': value = await this.body.appendSource(message.source); break;
             case 'finish': value = await this.body.finish(message.stage); break;
           }
           this.emit({ type: 'result', requestId: message.requestId, value });

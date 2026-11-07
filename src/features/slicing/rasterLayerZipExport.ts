@@ -32,6 +32,8 @@ import {
   type SliceRasterSettings,
 } from '@/features/slicing/sliceJobAssembly';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { loadedSliceMeshReference, type AppendLoadedSliceMesh, type AppendedLoadedSliceMesh } from '@/utils/loadedSliceMesh';
+import { yieldToEventLoop } from '@/utils/yieldToEventLoop';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
 
 const DEFAULT_MESH_CHUNK_TARGET_BYTES = 64 * 1024 * 1024;
@@ -48,6 +50,7 @@ export type RasterLayerZipExportOptions = {
   abortSignal?: AbortSignal;
   onProgress?: (done: number, total: number, phase: string) => void;
   flushBinaryMeshChunk?: (chunk: Uint8Array) => Promise<void>;
+  appendLoadedMesh?: (source: AppendLoadedSliceMesh) => Promise<AppendedLoadedSliceMesh | null>;
   meshChunkTargetBytes?: number;
   /**
    * Where the plate being sliced sits in the cascade. The rasterizer maps the
@@ -307,6 +310,8 @@ class TriangleFloatCollector {
   private flushCallback?: (chunk: Uint8Array) => Promise<void>;
   
   private flushChain: Promise<void> = Promise.resolve();
+  private flushPending = false;
+  private lastYieldMs = performance.now();
   
   private chunkElementLimit = Number.POSITIVE_INFINITY;
 
@@ -326,6 +331,8 @@ class TriangleFloatCollector {
     flushCallback?: (chunk: Uint8Array) => Promise<void>,
     chunkTargetBytes?: number,
     plateOffsetMm?: { dxMm: number; dyMm: number },
+    private readonly appendLoadedCallback?: (source: AppendLoadedSliceMesh) => Promise<AppendedLoadedSliceMesh | null>,
+    private readonly trackTanks = false,
   ) {
     const safeTriangleCapacity = Math.max(1, Math.floor(initialTriangleCapacity));
     this.flushCallback = flushCallback;
@@ -392,7 +399,7 @@ class TriangleFloatCollector {
     this.data[base + 8] = cz;
     this.cursor = base + 9;
     this.triangleCountValue += 1;
-    this.tankValues.push(tank);
+    if (this.trackTanks) this.tankValues.push(tank);
 
     const triMaxZ = Math.max(az, bz, cz);
     if (triMaxZ > this.maxZValue) {
@@ -435,6 +442,57 @@ class TriangleFloatCollector {
     return Uint32Array.from(this.tankValues);
   }
 
+  async flush(): Promise<void> {
+    if (this.flushCallback && this.cursor > 0) {
+      const remaining = new Uint8Array(this.data.buffer, this.data.byteOffset, this.cursor * 4);
+      this.flushChain = this.flushChain.then(() => this.flushCallback!(remaining));
+      await this.flushChain;
+      this.cursor = 0;
+    } else {
+      await this.flushChain;
+    }
+    this.flushPending = false;
+  }
+
+  async checkpoint(signal?: AbortSignal): Promise<void> {
+    throwIfAborted(signal);
+    if (this.flushPending) {
+      await this.flushChain;
+      this.flushPending = false;
+    }
+    if (performance.now() - this.lastYieldMs >= 8) {
+      await yieldToEventLoop();
+      this.lastYieldMs = performance.now();
+    }
+    throwIfAborted(signal);
+  }
+
+  async appendLoadedGeometry(geometry: THREE.BufferGeometry, matrix: THREE.Matrix4, center: THREE.Vector3, start: number, end: number, tank: number, signal?: AbortSignal): Promise<boolean> {
+    const source = this.appendLoadedCallback && this.flushCallback ? loadedSliceMeshReference(geometry) : null;
+    if (!source) return false;
+    await this.flush();
+    throwIfAborted(signal);
+    if (loadedSliceMeshReference(geometry) !== source) throw new Error('Geometry changed while preparing slice input; retry with the current geometry.');
+    const result = await this.appendLoadedCallback!({ ...source,
+      triangleStart: source.triangleStart + start, triangleEnd: Math.min(source.triangleStart + end, source.triangleEnd),
+      matrix: matrix.elements, center: center.toArray(), plateOffset: [-this.offsetX, -this.offsetY],
+      flipWinding: matrix.determinant() < 0,
+    });
+    throwIfAborted(signal);
+    if (loadedSliceMeshReference(geometry) !== source) throw new Error('Geometry changed while preparing slice input; retry with the current geometry.');
+    if (!result) return false;
+    this.triangleCountValue += result.triangleCount;
+    if (this.trackTanks) for (let i = 0; i < result.triangleCount; i++) this.tankValues.push(tank);
+    const bounds = result.meshBounds;
+    if (bounds.minX < this.minXValue) this.minXValue = bounds.minX;
+    if (bounds.minY < this.minYValue) this.minYValue = bounds.minY;
+    if (bounds.minZ < this.minZValue) this.minZValue = bounds.minZ;
+    if (bounds.maxX > this.maxXValue) this.maxXValue = bounds.maxX;
+    if (bounds.maxY > this.maxYValue) this.maxYValue = bounds.maxY;
+    if (bounds.maxZ > this.maxZValue) this.maxZValue = bounds.maxZ;
+    return true;
+  }
+
   async finalize(): Promise<Float32Array> {
     if (this.flushCallback) {
       if (this.cursor > 0) {
@@ -458,6 +516,7 @@ class TriangleFloatCollector {
     if (this.flushCallback && required >= this.chunkElementLimit) {
       const chunk = new Uint8Array(this.data.buffer, this.data.byteOffset, this.cursor * 4);
       this.flushChain = this.flushChain.then(() => this.flushCallback!(chunk));
+      this.flushPending = true;
       
       this.data = new Float32Array(this.chunkElementLimit);
       this.cursor = 0;
@@ -808,12 +867,40 @@ export function buildSupportAndRaftWorldTriangles(
   visibleModelIds: Set<string>,
   collector?: TriangleFloatCollector,
   supportTipShrinkPercent = 0,
-  /** Visible models, whose plate footprint the raft has to clear. */
   plateClearanceModels: readonly PlateFootprintSource[] = [],
 ): WorldTriangle[] {
+  const batches = supportAndRaftBatches(visibleModelIds, collector, supportTipShrinkPercent, plateClearanceModels);
+  let batch = batches.next();
+  while (!batch.done) batch = batches.next();
+  return batch.value;
+}
+
+async function appendSupportAndRaftBatches(
+  visibleModelIds: Set<string>, collector: TriangleFloatCollector,
+  supportTipShrinkPercent: number, plateClearanceModels: readonly PlateFootprintSource[], signal?: AbortSignal,
+): Promise<void> {
+  const batches = supportAndRaftBatches(visibleModelIds, collector, supportTipShrinkPercent, plateClearanceModels);
+  try {
+    let batch = batches.next();
+    while (!batch.done) {
+      await collector.checkpoint(signal);
+      batch = batches.next();
+    }
+    await collector.checkpoint(signal);
+  } finally { batches.return([]); }
+}
+
+function* supportAndRaftBatches(
+  visibleModelIds: Set<string>,
+  collector?: TriangleFloatCollector,
+  supportTipShrinkPercent = 0,
+  /** Visible models, whose plate footprint the raft has to clear. */
+  plateClearanceModels: readonly PlateFootprintSource[] = [],
+): Generator<void, WorldTriangle[]> {
   if (visibleModelIds.size === 0) return [];
 
   const out: WorldTriangle[] = [];
+  let visited = 0;
   const supportState = getSupportSnapshot();
   const sink: TriangleSink = collector ?? out;
   const tipScale = 1 - supportTipShrinkPercent / 100;
@@ -842,6 +929,7 @@ export function buildSupportAndRaftWorldTriangles(
     : 0;
 
   for (const trunk of Object.values(supportState.trunks)) {
+    if ((++visited & 1023) === 0) yield;
     if (!visibleModelIds.has(trunk.modelId)) continue;
     visibleRootIds.add(trunk.rootId);
     if (!rootModelKeyById.has(trunk.rootId)) {
@@ -850,6 +938,7 @@ export function buildSupportAndRaftWorldTriangles(
   }
 
   for (const kickstand of Object.values(supportState.kickstands)) {
+    if ((++visited & 1023) === 0) yield;
     if (!visibleModelIds.has(kickstand.modelId)) continue;
     visibleRootIds.add(kickstand.rootId);
     if (!rootModelKeyById.has(kickstand.rootId)) {
@@ -859,12 +948,14 @@ export function buildSupportAndRaftWorldTriangles(
 
   const rootTopRadiusByRootId = new Map<string, number>();
   for (const trunk of Object.values(supportState.trunks)) {
+    if ((++visited & 1023) === 0) yield;
     const firstDiameter = trunk.segments[0]?.diameter;
     if (Number.isFinite(firstDiameter) && firstDiameter! > 0) {
       rootTopRadiusByRootId.set(trunk.rootId, Math.max(0.05, firstDiameter! * 0.5));
     }
   }
   for (const kickstand of Object.values(supportState.kickstands)) {
+    if ((++visited & 1023) === 0) yield;
     const firstDiameter = kickstand.segments[0]?.diameter;
     if (Number.isFinite(firstDiameter) && firstDiameter! > 0) {
       rootTopRadiusByRootId.set(kickstand.rootId, Math.max(0.05, firstDiameter! * 0.5));
@@ -872,6 +963,7 @@ export function buildSupportAndRaftWorldTriangles(
   }
 
   for (const root of Object.values(supportState.roots)) {
+    if ((++visited & 1023) === 0) yield;
     const rootVisibleByModel = visibleModelIds.has(root.modelId);
     const rootVisibleByLink = visibleRootIds.has(root.id);
     if (!rootVisibleByModel && !rootVisibleByLink) continue;
@@ -901,6 +993,7 @@ export function buildSupportAndRaftWorldTriangles(
       appendGeometryTriangles(sink, coneGeom);
       coneGeom.dispose();
     }
+    yield;
   }
 
   /**
@@ -926,6 +1019,7 @@ export function buildSupportAndRaftWorldTriangles(
     const collection = supportState[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
 
     for (const entity of Object.values(collection ?? {})) {
+      if ((++visited & 1023) === 0) yield;
       const modelId = entity.modelId as string | undefined;
       if (!modelId || !visibleModelIds.has(modelId)) continue;
 
@@ -974,9 +1068,10 @@ export function buildSupportAndRaftWorldTriangles(
 
       const segments = (entity.segments as Segment[] | undefined) ?? [];
       const shaft = entity as unknown as ShaftEntity;
-      segments.forEach((seg, index) => {
+      for (let index = 0; index < segments.length; index++) {
+        const seg = segments[index];
         const endpoints = resolveSegmentEndpoints(shaft, seg, index, { root, hostKnot });
-        if (!endpoints) return;
+        if (!endpoints) continue;
 
         appendSegmentPrimitive(
           sink,
@@ -989,7 +1084,8 @@ export function buildSupportAndRaftWorldTriangles(
 
         emitJoint(seg.bottomJoint);
         emitJoint(seg.topJoint);
-      });
+        yield;
+      }
 
       // A brace spans its two knots instead of carrying a shaft. Its diameter
       // mirrors the renderer: derived from the host knots, not profile.diameter.
@@ -1018,6 +1114,7 @@ export function buildSupportAndRaftWorldTriangles(
         } else {
           appendContactConePrimitive(sink, contact as any, tessellation.contactConeRadialSegments, tipPenetrationMm, tipScale);
         }
+        yield;
       }
     }
   }
@@ -1027,6 +1124,7 @@ export function buildSupportAndRaftWorldTriangles(
   if (raft.bottomMode !== 'off') {
     const rootsByModel = new Map<string, Array<{ x: number; y: number; r: number }>>();
     for (const root of Object.values(supportState.roots)) {
+    if ((++visited & 1023) === 0) yield;
       const rootVisibleByModel = visibleModelIds.has(root.modelId);
       const rootVisibleByLink = visibleRootIds.has(root.id);
       if (!rootVisibleByModel && !rootVisibleByLink) continue;
@@ -1046,6 +1144,7 @@ export function buildSupportAndRaftWorldTriangles(
     const clearanceCut = inflateModelPlateClearance(clearance);
 
     for (const circles of rootsByModel.values()) {
+      yield;
       if (circles.length === 0) continue;
 
       const parts = buildRaftFootprintMeshes({ circles, raft, clearance });
@@ -1093,6 +1192,7 @@ export function buildSupportAndRaftWorldTriangles(
               chamferAngleDeg: 90,
             });
             appendGeometryTriangles(sink, beam.geometry);
+            yield;
           }
         }
       }
@@ -1433,17 +1533,35 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
   return triangles;
 }
 
+function geometryReadGuard(geometry: THREE.BufferGeometry): () => void {
+  const position = geometry.getAttribute('position');
+  const index = geometry.getIndex();
+  const positions = position?.array;
+  const indices = index?.array;
+  const readVersion = () => position instanceof THREE.InterleavedBufferAttribute ? position.data.version : position?.version;
+  const positionVersion = readVersion();
+  const indexVersion = index?.version;
+  return () => {
+    if (geometry.getAttribute('position') !== position || geometry.getIndex() !== index
+      || position?.array !== positions || index?.array !== indices
+      || readVersion() !== positionVersion || index?.version !== indexVersion) {
+      throw new Error('Geometry changed while preparing slice input; retry with the current geometry.');
+    }
+  };
+}
+
 /**
  * Appends one 3MF body as model geometry, in the merged model's own space: the
  * bodies were processed in that space, so the same centre subtraction and model
  * matrix place them exactly where the merged mesh would.
  */
-function appendBodyTrianglesInModelSpace(
+async function appendBodyTrianglesInModelSpace(
   model: LoadedModel,
   body: GeometryWithBounds,
   collector: TriangleFloatCollector,
   tank: number,
-): void {
+  signal?: AbortSignal,
+): Promise<void> {
   const matrix = composeModelMatrix(model.transform);
   const flipWinding = matrix.determinant() < 0;
   const center = model.geometry.center;
@@ -1451,6 +1569,10 @@ function appendBodyTrianglesInModelSpace(
   const position = geometry.getAttribute('position');
   const index = geometry.getIndex();
   if (!position) return;
+  const assertSource = geometryReadGuard(geometry);
+  if (await collector.appendLoadedGeometry(geometry, matrix, center, 0, Math.floor((index?.count ?? position.count) / 3), tank, signal)) { assertSource(); return; }
+  assertSource();
+  let batch = 0;
 
   const v0 = new THREE.Vector3();
   const v1 = new THREE.Vector3();
@@ -1477,6 +1599,11 @@ function appendBodyTrianglesInModelSpace(
       readVertex(Number(idx[i + 1]), v1);
       readVertex(Number(idx[i + 2]), v2);
       push();
+      if (++batch === 8192) {
+        batch = 0;
+        await collector.checkpoint(signal);
+        assertSource();
+      }
     }
   } else {
     for (let i = 0; i + 2 < position.count; i += 3) {
@@ -1484,17 +1611,25 @@ function appendBodyTrianglesInModelSpace(
       readVertex(i + 1, v1);
       readVertex(i + 2, v2);
       push();
+      if (++batch === 8192) {
+        batch = 0;
+        await collector.checkpoint(signal);
+        assertSource();
+      }
     }
   }
+  await collector.checkpoint(signal);
+  assertSource();
 }
 
-function appendModelTrianglesInRange(
+async function appendModelTrianglesInRange(
   model: LoadedModel,
   collector: TriangleFloatCollector,
   startTri: number,
   endTri: number,
   tank = 0,
-): void {
+  signal?: AbortSignal,
+): Promise<void> {
   const matrix = composeModelMatrix(model.transform);
   // A negative-determinant model transform (a mirror / negative scale, e.g.
   // from a Lychee-mirrored .lys import or a transient live mirror preview)
@@ -1509,6 +1644,10 @@ function appendModelTrianglesInRange(
   const position = geometry.getAttribute('position');
   const index = geometry.getIndex();
   if (!position) return;
+  const assertSource = geometryReadGuard(geometry);
+  if (await collector.appendLoadedGeometry(geometry, matrix, center, startTri, endTri, tank, signal)) { assertSource(); return; }
+  assertSource();
+  let batch = 0;
 
   const v0 = new THREE.Vector3();
   const v1 = new THREE.Vector3();
@@ -1538,6 +1677,11 @@ function appendModelTrianglesInRange(
       readVertex(Number(idx[i + 1]), v1);
       readVertex(Number(idx[i + 2]), v2);
       push();
+      if (++batch === 8192) {
+        batch = 0;
+        await collector.checkpoint(signal);
+        assertSource();
+      }
     }
   } else {
     const triStart = startTri * 3;
@@ -1547,8 +1691,15 @@ function appendModelTrianglesInRange(
       readVertex(i + 1, v1);
       readVertex(i + 2, v2);
       push();
+      if (++batch === 8192) {
+        batch = 0;
+        await collector.checkpoint(signal);
+        assertSource();
+      }
     }
   }
+  await collector.checkpoint(signal);
+  assertSource();
 }
 
 /** Returns the number of triangles in a model that belong to the actual
@@ -2176,18 +2327,20 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   });
   // Preserve closed surfaces, including their out-of-volume portions. The
   // rasterizer needs those crossings to determine winding at the plate edge.
+  const tankMaterials = options.printerProfile.tankMaterials ?? [];
+  const multiTank = options.printerProfile.materialMode === 'multiTank' && tankMaterials.length > 1;
   const collector = new TriangleFloatCollector(
     modelTriangleEstimate + 4096,
     options.flushBinaryMeshChunk,
     options.meshChunkTargetBytes,
     options.plateOffsetMm,
+    options.appendLoadedMesh,
+    multiTank,
   );
 
   // A multi-tank printer prints a body from the tank its material sits in. The
   // mapping is the material's position in the printer's tank list; anything
   // unassigned (or a single-tank printer) falls back to Tank 1.
-  const tankMaterials = options.printerProfile.tankMaterials ?? [];
-  const multiTank = options.printerProfile.materialMode === 'multiTank' && tankMaterials.length > 1;
   const tankForMaterial = (materialId: string | undefined): number => {
     if (!multiTank || !materialId) return 0;
     const index = tankMaterials.indexOf(materialId);
@@ -2203,15 +2356,16 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   // This produces the same collector layout as manually splitting before slicing.
   for (const model of visibleModels) {
     if (usesBodyTanks(model)) {
-      model.splitBodies?.forEach((body, index) => {
+      const bodies = model.splitBodies ?? [];
+      for (let index = 0; index < bodies.length; index++) {
         const materialId = model.bodyMaterialProfileIds?.[index] ?? model.materialProfileId;
-        appendBodyTrianglesInModelSpace(model, body, collector, tankForMaterial(materialId));
-      });
+        await appendBodyTrianglesInModelSpace(model, bodies[index], collector, tankForMaterial(materialId), options.abortSignal);
+      }
       continue;
     }
     const modelTriCount = effectiveModelTriangleCount(model);
     if (modelTriCount > 0) {
-      appendModelTrianglesInRange(model, collector, 0, modelTriCount, tankForMaterial(model.materialProfileId));
+      await appendModelTrianglesInRange(model, collector, 0, modelTriCount, tankForMaterial(model.materialProfileId), options.abortSignal);
     }
   }
   // The native side splits the buffer here, before support-classified meshes
@@ -2221,7 +2375,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     const totalTris = getModelTriangleCount(model);
     const modelTriCount = effectiveModelTriangleCount(model);
     if (modelTriCount < totalTris) {
-      appendModelTrianglesInRange(model, collector, modelTriCount, totalTris);
+      await appendModelTrianglesInRange(model, collector, modelTriCount, totalTris, 0, options.abortSignal);
     }
   }
   emitMeshPrepDiagnostic('Mesh prep: models', 1, 4, {
@@ -2230,7 +2384,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
   });
 
   const visibleModelIds = new Set(visibleModels.map((model) => model.id));
-  buildSupportAndRaftWorldTriangles(visibleModelIds, collector, options.supportTipShrinkPercent ?? 0, visibleModels);
+  await appendSupportAndRaftBatches(visibleModelIds, collector, options.supportTipShrinkPercent ?? 0, visibleModels, options.abortSignal);
   emitMeshPrepDiagnostic('Mesh prep: supports', 2, 4, {
     triangleCountAfterSupports: collector.triangleCount,
   });
@@ -2397,7 +2551,6 @@ export function buildProjectedCrossSectionLoopsAtZFromContext(options: {
         const [a, b] = segments[s];
         const first = loop[0];
         const last = loop[loop.length - 1];
-
         if (pointsEqual(last, a)) {
           loop.push(b);
           segments.splice(s, 1);

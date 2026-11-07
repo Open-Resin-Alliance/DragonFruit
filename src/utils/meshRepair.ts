@@ -123,6 +123,8 @@ export interface MeshRepairResult {
   report: MeshHealthReport;
   /** Repaired positions buffer — ready to drop into a THREE.BufferGeometry */
   positions: Float32Array;
+  /** Ephemeral native token for exactly these final positions; never persist it. */
+  meshToken?: number;
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -270,6 +272,19 @@ function normalizeMeshHealthReport(input: unknown): MeshHealthReport {
   };
 }
 
+function decodeMeshRepairReport(reportJson: string): Pick<MeshRepairResult, 'report' | 'meshToken'> {
+  const raw = asRecord(JSON.parse(reportJson));
+  const token = raw.slice_mesh_token;
+  // The normalizer deliberately whitelists durable report fields, stripping the
+  // process-local token before any caller stores this report in a VOXL scene.
+  return {
+    report: normalizeMeshHealthReport(raw),
+    meshToken: typeof token === 'number' && Number.isInteger(token) && token > 0 && token <= 0xffffffff
+      ? token
+      : undefined,
+  };
+}
+
 /**
  * Runs the native mesh-repair engine on a file the Rust side can read
  * directly (STL/OBJ/3MF). Returns null if the current runtime isn't Tauri.
@@ -305,9 +320,9 @@ export async function repairFromPath(
         optionsJson,
         progressToken: token,
       });
-      const report = normalizeMeshHealthReport(JSON.parse(reportJson));
+      const result = decodeMeshRepairReport(reportJson);
       const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-      return { report, positions };
+      return { ...result, positions };
     });
   } finally {
     unlisten?.();
@@ -355,9 +370,9 @@ export async function repairPartsFromPath(
         optionsJson,
         progressToken: token,
       });
-      const report = normalizeMeshHealthReport(JSON.parse(reportJson));
+      const result = decodeMeshRepairReport(reportJson);
       const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-      return { report, positions };
+      return { ...result, positions };
     });
   } finally {
     unlisten?.();
@@ -496,9 +511,9 @@ export async function repairFromGeometry(
         optionsJson,
         progressToken: token,
       });
-      const report = normalizeMeshHealthReport(JSON.parse(reportJson));
+      const result = decodeMeshRepairReport(reportJson);
       const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-      return { report, positions };
+      return { ...result, positions };
     } finally {
       unlisten?.();
     }
@@ -530,9 +545,9 @@ export async function classifyFromGeometry(
     const reportJson = await core.invoke<string>('mesh_classify_staged', {
       optionsJson,
     });
-    const report = normalizeMeshHealthReport(JSON.parse(reportJson));
+    const result = decodeMeshRepairReport(reportJson);
     const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-    return { report, positions };
+    return { ...result, positions };
   });
 }
 

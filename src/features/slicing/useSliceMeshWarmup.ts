@@ -1,22 +1,34 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { SliceMeshWarmup } from './sliceMeshWarmup';
 import type { SliceMeshPrewarmOptions } from './sliceMeshSnapshot';
 
-/** Only mounted by the active slicing panel; no inactive-tool modifier warmups. */
-export function useSliceMeshWarmup(options: SliceMeshPrewarmOptions | null, imminentSlice = false): () => void {
+let activeWarmup: SliceMeshWarmup | null = null;
+
+/** Release only background ownership; a foreground subscriber keeps its work. */
+export function cancelSliceMeshWarmup(): void {
+  activeWarmup?.cancel();
+}
+
+/** Mounted once at scene lifetime, independently of the visible editor panel. */
+export function useSliceMeshWarmup(
+  options: SliceMeshPrewarmOptions | null,
+  revision: number,
+  ready: boolean,
+  paused: boolean,
+): void {
   const warmup = useRef<SliceMeshWarmup | null>(null);
 
-  // Compare real input signatures after every render, not the options wrapper's identity.
+  // Compare real inputs, not wrapper identity; history also catches in-place edits.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     warmup.current ??= new SliceMeshWarmup(window);
-    warmup.current.update(options, imminentSlice);
+    activeWarmup = warmup.current;
+    warmup.current.update(options, revision, ready, paused);
   });
 
   useEffect(() => () => {
+    if (activeWarmup === warmup.current) activeWarmup = null;
     warmup.current?.dispose();
     warmup.current = null;
   }, []);
-
-  return useCallback(() => { warmup.current?.cancel(); }, []);
 }
