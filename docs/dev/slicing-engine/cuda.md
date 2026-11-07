@@ -10,6 +10,11 @@ component and **Visual Studio 2022 Build Tools with MSVC 19.3x** (v143 toolset
 substitute; select an older v143 x64/x86 toolset in the installer's Individual
 components. The Rust application can retain its VS2026 toolchain.
 
+Native MSVC compilation uses UTF-8 source/execution character sets, including
+NVCC's host compilation phase, so UTF-8 CUDA/CUB headers are not decoded using
+the machine's legacy code page. CUDA's pre-75 architecture deprecation warning
+remains visible: Pascal targets are intentional and stay supported by CUDA 12.9.
+
 ```powershell
 $env:CUDA_PATH_V12_9 = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9'
 node scripts/tauri-build.mjs --features cuda

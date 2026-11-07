@@ -59,7 +59,9 @@ target_compile_options(df_cuda_slicer PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--prec-div=true>
     $<$<COMPILE_LANGUAGE:CUDA>:--prec-sqrt=true>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/fp:strict>
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/utf-8>
     $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>>:-Xcompiler=/fp:strict>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>>:-Xcompiler=/utf-8>
 )
 
 target_compile_definitions(df_cuda_slicer PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

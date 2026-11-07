@@ -1,4 +1,5 @@
 #include "raster.h"
+#include <math_constants.h>
 #include <cub/cub.cuh>
 #include <thrust/iterator/reverse_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
