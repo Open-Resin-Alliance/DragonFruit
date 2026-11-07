@@ -80,23 +80,65 @@ export function GpuPerformanceWarningModal() {
     >
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
         <Trans>
-          DragonFruit is rendering on an integrated or software GPU. If this computer also has a
-          discrete graphics card, Windows may not be using it, and the viewport can feel much
+          Windows is rendering DragonFruit on an integrated or software GPU. If this computer also
+          has a discrete graphics card, Windows may not be using it — the viewport can feel much
           slower than it should.
         </Trans>
       </p>
-      <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        <Trans>
-          To give DragonFruit the faster GPU, open Windows Settings → System → Display → Graphics,
-          add <code>msedgewebview2.exe</code>, and set it to High performance. This setting applies
-          to every app that uses WebView2.
-        </Trans>
-      </p>
-      {renderer ? (
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          <Trans>Detected renderer:</Trans>{' '}
-          <span className="font-mono break-all" style={{ color: 'var(--text-strong)' }}>{renderer}</span>
+
+      <div
+        className="rounded-lg border p-3.5"
+        style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+      >
+        <p
+          className="text-[10px] font-semibold uppercase tracking-wide"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          <Trans>Use the faster GPU</Trans>
         </p>
+        <ol
+          className="mt-2 list-decimal space-y-1.5 pl-4 text-sm leading-relaxed"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          <li>
+            <Trans>
+              Open <strong>Settings → System → Display → Graphics</strong>.
+            </Trans>
+          </li>
+          <li>
+            <Trans>
+              Add <code>msedgewebview2.exe</code> as a <strong>Desktop app</strong>.
+            </Trans>
+          </li>
+          <li>
+            <Trans>
+              Set it to <strong>High performance</strong>, then restart DragonFruit.
+            </Trans>
+          </li>
+        </ol>
+        <p className="mt-2 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+          <Trans>This setting applies to every app that uses WebView2.</Trans>
+        </p>
+      </div>
+
+      {renderer ? (
+        <div
+          className="rounded-md border px-3 py-2"
+          style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+        >
+          <div
+            className="text-[10px] font-semibold uppercase tracking-wide"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            <Trans>Detected renderer</Trans>
+          </div>
+          <div
+            className="mt-0.5 font-mono text-[11px] leading-snug break-words"
+            style={{ color: 'var(--text-strong)' }}
+          >
+            {renderer}
+          </div>
+        </div>
       ) : null}
     </StructuredDialogModal>
   );
