@@ -3613,26 +3613,18 @@ export default function Home() {
     const hasTransitionLayers = matProf.transitionLayerCount !== undefined && matProf.transitionLayerCount > 0;
     const hasBottomLiftDistance = matProf.bottomLiftDistanceMm !== undefined;
 
-    let firstStepBotMoveTime = 0;
-    let secondStepBotMoveTime = 0;
-    if (tsmc) {
-      firstStepBotMoveTime = (matProf.bottomLiftDistanceMm / matProf.bottomLiftSpeedMmMin + matProf.bottomLiftDistanceMm / matProf.bottomRetractSpeedMmMin) * 60;
-      secondStepBotMoveTime = (matProf.bottomLiftDistance2Mm / matProf.bottomLiftSpeed2MmMin + matProf.bottomLiftDistance2Mm / matProf.bottomRetractSpeed2MmMin) * 60;
-    }
-
-    //So if tsmc is off, there are no defined parameters for burn-in movement. So we need to calculate bottom layers with regular layer movement plus the exposure time.
-    //If TSMC is on, it will have its own, and we want to use it.
+    //These fields are all given by TSMC, if its disabled they will come through as undefined.
+    //Null operator will catch and convert to whatever is needed to correct the calculation. (either 0 or just the regular layer speeds/distances)
     
     const firstStepMoveTime = (matProf.liftDistanceMm / matProf.liftSpeedMmMin + matProf.liftDistanceMm / matProf.retractSpeedMmMin) * 60;
-
-    let secondStepMoveTime = 0;
-    if (tsmc) secondStepMoveTime = (matProf.liftDistance2Mm / matProf.liftSpeed2MmMin + matProf.liftDistance2Mm / matProf.retractSpeed2MmMin) * 60;
-
-    let bottomLayerTime = firstStepMoveTime + matProf.bottomExposureSec;
-    if (tsmc) bottomLayerTime = firstStepBotMoveTime + secondStepBotMoveTime + matProf.bottomExposureSec;
+    const secondStepMoveTime = typeof(matProf.liftDistance2Mm) === "undefined" ? 0 : (matProf.liftDistance2Mm / matProf.liftSpeed2MmMin + matProf.liftDistance2Mm / matProf.retractSpeed2MmMin) * 60;
     
- 
     const regularLayerTime = firstStepMoveTime + secondStepMoveTime + matProf.normalExposureSec;
+    
+    const firstStepBotMoveTime = typeof(matProf.bottomLiftDistanceMm) === "undefined" ? firstStepMoveTime : (matProf.bottomLiftDistanceMm / matProf.bottomLiftSpeedMmMin + matProf.bottomLiftDistanceMm / matProf.bottomRetractSpeedMmMin) * 60;
+    const secondStepBotMoveTime = typeof(matProf.bottomLiftDistance2Mm) === "undefined" ? 0 : (matProf.bottomLiftDistance2Mm / matProf.bottomLiftSpeed2MmMin + matProf.bottomLiftDistance2Mm / matProf.bottomRetractSpeed2MmMin) * 60;
+
+    const bottomLayerTime = firstStepBotMoveTime + secondStepBotMoveTime + matProf.bottomExposureSec;
 
     let transitionLayerCount = 0;
     if (hasTransitionLayers) transitionLayerCount = matProf.transitionLayerCount;
@@ -3650,8 +3642,7 @@ export default function Home() {
         //Simple Linear Interpolation. No reason to believe the printer doesnt do the same.
         const layerExposure = matProf.normalExposureSec + pct * (matProf.bottomExposureSec - matProf.normalExposureSec);
         
-        let layerMoveTime = firstStepMoveTime;
-        if (tsmc) layerMoveTime = firstStepBotMoveTime + secondStepBotMoveTime;
+        const layerMoveTime = tsmc ? firstStepBotMoveTime + secondStepBotMoveTime : firstStepMoveTime;
         
         const layerTime = layerMoveTime + layerExposure;
         totalTransitionLayerEstimate += layerTime;
