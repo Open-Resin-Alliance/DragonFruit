@@ -1388,7 +1388,7 @@ fn box_store_vector<S: pulp::Simd>(values: S::u32s, row: &mut [u8]) -> bool {
 #[inline(always)]
 fn box_normalize_row<S: pulp::Simd>(
     simd: S, columns: &[u32], denominators: &mut BoxNormalizeDenominators<'_>,
-    v_denom: u32, min_alpha: u8, row: &mut [u8],
+    v_denom: u32, min_alpha: u8, row: &mut [u8], x_offset: usize,
 ) -> bool {
     denominators.set_vertical(v_denom);
     let lanes = pulp_simd::u32_lanes::<S>();
@@ -1397,11 +1397,11 @@ fn box_normalize_row<S: pulp::Simd>(
     let mut all_zero = true;
     for (x, &sum) in vectors.iter().enumerate() {
         let x = x * lanes;
-        let value = box_normalize_vector(simd, sum, denominators.vectors(simd, x), min_alpha);
+        let value = box_normalize_vector(simd, sum, denominators.vectors(simd, x_offset + x), min_alpha);
         all_zero &= box_store_vector::<S>(value, &mut row[x..x + lanes]);
     }
     for (lane, (&sum, out)) in tail.iter().zip(&mut row[end..]).enumerate() {
-        let divider = denominators.divider(end + lane);
+        let divider = denominators.divider(x_offset + end + lane);
         let value = divider.divide(sum + divider.denominator / 2).min(255) as u8;
         *out = if value < min_alpha { 0 } else { value };
         all_zero &= *out == 0;
@@ -1470,7 +1470,7 @@ fn box_sequential_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
             let dst_y = roi_min_y + out_row;
             let dst_row_start = dst_y * width + roi_min_x;
             let row_out = &mut mask[dst_row_start..dst_row_start + roi_w];
-            box_normalize_row(simd, &col_sums, &mut denominators, v_denom[out_row], min_alpha_u8, row_out);
+            box_normalize_row(simd, &col_sums, &mut denominators, v_denom[out_row], min_alpha_u8, row_out, 0);
 
             if out_row >= radius {
                 let evict_start = ring_head * roi_w;
@@ -3111,56 +3111,65 @@ pub fn rasterize_layer_rle(
         } else {
             Vec::new()
         };
+        // Union all subscanline spans before resolving the physical row. The
+        // exclusive end also owns the delta arrays' closing sentinels.
+        let mut row_active_start = width;
+        let mut row_active_end = 0usize;
         let mut current_physical_y = first_physical_y;
         #[allow(unused_assignments)]
         let mut last_emitted_py = first_physical_y.wrapping_sub(1);
 
         macro_rules! flush_up_to {
             ($next_py:expr) => {{
-                let mut coverage = 0i32;
-                let mut occupied = 0i32;
-                let mut run_start: Option<usize> = None;
+                if row_active_start < row_active_end {
+                    let mut coverage = 0i32;
+                    let mut occupied = 0i32;
+                    let mut run_start: Option<usize> = None;
 
-                for x in 0..width {
-                    coverage += row_delta[x];
-                    let resolved = resolve_accumulated_aa_alpha(row_accum[x], coverage, aa_steps);
-                    if resolved > 0 {
-                        row_buf[x] = resolved;
+                    for x in row_active_start..row_active_end {
+                        coverage += row_delta[x];
+                        row_buf[x] =
+                            resolve_accumulated_aa_alpha(row_accum[x], coverage, aa_steps);
+                        row_accum[x] = 0.0;
+                        row_delta[x] = 0;
+
+                        if track_aa_components {
+                            occupied += row_hit_delta[x];
+                            let is_occupied = occupied > 0;
+                            if is_occupied {
+                                if run_start.is_none() {
+                                    run_start = Some(x);
+                                }
+                            } else if let Some(start) = run_start.take() {
+                                if let Some(ref mut tracker) = aa_component_tracker {
+                                    tracker.push_span(start, x - 1);
+                                }
+                            }
+                            row_hit_delta[x] = 0;
+                        }
                     }
-                    row_accum[x] = 0.0;
-                    row_delta[x] = 0;
 
+                    row_delta[row_active_end] = 0;
                     if track_aa_components {
-                        occupied += row_hit_delta[x];
-                        let is_occupied = occupied > 0;
-                        if is_occupied {
-                            if run_start.is_none() {
-                                run_start = Some(x);
-                            }
-                        } else if let Some(start) = run_start.take() {
+                        if let Some(start) = run_start {
                             if let Some(ref mut tracker) = aa_component_tracker {
-                                tracker.push_span(start, x - 1);
+                                tracker.push_span(start, row_active_end - 1);
                             }
                         }
-                        row_hit_delta[x] = 0;
+                        row_hit_delta[row_active_end] = 0;
                     }
-                }
 
-                row_delta[width] = 0;
-                if track_aa_components {
-                    if let Some(start) = run_start {
-                        if let Some(ref mut tracker) = aa_component_tracker {
-                            tracker.push_span(start, width - 1);
-                        }
-                    }
-                    row_hit_delta[width] = 0;
-                    if let Some(ref mut tracker) = aa_component_tracker {
-                        tracker.finish_row();
-                    }
+                    rle.push_run(row_active_start as u32, 0);
+                    emit_row(&mut rle, &row_buf[row_active_start..row_active_end]);
+                    rle.push_run((width - row_active_end) as u32, 0);
+                } else {
+                    emit_zero_rows(&mut rle, 1, width);
                 }
-
-                emit_row(&mut rle, &row_buf);
-                row_buf.fill(0);
+                if let Some(ref mut tracker) = aa_component_tracker {
+                    tracker.finish_row();
+                }
+                row_active_start = width;
+                row_active_end = 0;
                 last_emitted_py = current_physical_y;
 
                 let next = $next_py;
@@ -3199,6 +3208,9 @@ pub fn rasterize_layer_rle(
             let spans =
                 build_row_spans_nonzero_ctx(&active_edges, width, false, Some(&prev_spans));
             for span in spans.iter().copied() {
+                row_active_start = row_active_start.min(span.start);
+                row_active_end = row_active_end.max(span.end + 1);
+
                 let left_i = span.a.floor() as i32;
                 let right_i = span.b.ceil() as i32 - 1;
 
@@ -4356,6 +4368,28 @@ pub fn blur_gray_rle_streaming_with_bounds(
     )
 }
 
+const PERTURB_BOX_MAX_RADIUS: usize = 6;
+
+/// Touched-row BOX blur for perturbation 3DAA; other raster paths stay dense.
+pub(crate) fn blur_gray_rle_streaming_3daa_with_bounds(
+    runs: &[crate::rle::RleRun], width: usize, height: usize, radius: usize,
+) -> (Vec<crate::rle::RleRun>, Option<(usize, usize, usize, usize)>) {
+    blur_gray_rle_streaming_3daa_with_bounds_and_backend(
+        runs, width, height, radius, Backend::detected(),
+    )
+}
+
+fn blur_gray_rle_streaming_3daa_with_bounds_and_backend(
+    runs: &[crate::rle::RleRun], width: usize, height: usize, radius: usize, backend: Backend,
+) -> (Vec<crate::rle::RleRun>, Option<(usize, usize, usize, usize)>) {
+    if radius > PERTURB_BOX_MAX_RADIUS {
+        return blur_gray_rle_streaming_with_bounds_and_backend(
+            runs, width, height, radius, 0, backend,
+        );
+    }
+    backend.dispatch(BoxRleBlur::<true> { runs, width, height, radius, min_alpha_u8: 0 })
+}
+
 fn blur_gray_rle_streaming_with_bounds_and_backend(
     runs: &[crate::rle::RleRun],
     width: usize,
@@ -4367,10 +4401,10 @@ fn blur_gray_rle_streaming_with_bounds_and_backend(
     Vec<crate::rle::RleRun>,
     Option<(usize, usize, usize, usize)>,
 ) {
-    backend.dispatch(BoxRleBlur { runs, width, height, radius, min_alpha_u8 })
+    backend.dispatch(BoxRleBlur::<false> { runs, width, height, radius, min_alpha_u8 })
 }
 
-struct BoxRleBlur<'a> {
+struct BoxRleBlur<'a, const TOUCHED_ROWS: bool> {
     runs: &'a [crate::rle::RleRun],
     width: usize,
     height: usize,
@@ -4378,7 +4412,7 @@ struct BoxRleBlur<'a> {
     min_alpha_u8: u8,
 }
 
-impl pulp::WithSimd for BoxRleBlur<'_> {
+impl<const TOUCHED_ROWS: bool> pulp::WithSimd for BoxRleBlur<'_, TOUCHED_ROWS> {
     type Output = (Vec<crate::rle::RleRun>, Option<(usize, usize, usize, usize)>);
 
     #[inline(always)]
@@ -4386,16 +4420,16 @@ impl pulp::WithSimd for BoxRleBlur<'_> {
         // Select once: native safe-radius rows use independent SIMD columns;
         // scalar and oversized rows retain fused full-u32 horizontal additions.
         if pulp_simd::u32_lanes::<S>() == 1 || self.radius > 127 {
-            box_rle_blur_with_simd::<S, true>(self, simd)
+            box_rle_blur_with_simd::<S, true, TOUCHED_ROWS>(self, simd)
         } else {
-            box_rle_blur_with_simd::<S, false>(self, simd)
+            box_rle_blur_with_simd::<S, false, TOUCHED_ROWS>(self, simd)
         }
     }
 }
 
 #[inline(always)]
-fn box_rle_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
-    operation: BoxRleBlur<'_>, simd: S,
+fn box_rle_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool, const TOUCHED_ROWS: bool>(
+    operation: BoxRleBlur<'_, TOUCHED_ROWS>, simd: S,
 ) -> (Vec<crate::rle::RleRun>, Option<(usize, usize, usize, usize)>) {
     let BoxRleBlur { runs, width, height, radius, min_alpha_u8 } = operation;
     use crate::rle::{emit_row, emit_zero_rows, RleAccum};
@@ -4452,6 +4486,10 @@ fn box_rle_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
 
     let mut ring_head = 0usize;
     let mut ring_len = 0usize;
+    // Perturbation radii are at most six. Dense callers do not use this
+    // stack-only metadata; each live slot owns exactly the columns it added.
+    let mut ring_bounds = [(0usize, 0usize); 2 * PERTURB_BOX_MAX_RADIUS + 1];
+    let mut decode_range = (0usize, 0usize);
     let mut denominators = BoxNormalizeDenominators::new(&h_denom);
 
     // RLE decode state.
@@ -4495,11 +4533,22 @@ fn box_rle_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
             let global_y = roi_min_y + add_row;
             let row_abs_start = global_y * width + roi_min_x;
             advance_to(row_abs_start, &mut run_idx, &mut run_pos, &mut abs_pos);
+            // Only zero runs overlapping the previous decoded extent need
+            // clearing; nonzero runs overwrite their pixels directly.
+            let previous_decode_range = decode_range;
+            if TOUCHED_ROWS { decode_range = (0, 0); }
 
             let mut written = 0usize;
             while written < roi_w {
                 if run_idx >= runs.len() {
-                    decode_buf[written..].fill(0);
+                    if TOUCHED_ROWS {
+                        let start = written.max(previous_decode_range.0);
+                        if start < previous_decode_range.1 {
+                            decode_buf[start..previous_decode_range.1].fill(0);
+                        }
+                    } else {
+                        decode_buf[written..].fill(0);
+                    }
                     abs_pos += roi_w - written;
                     break;
                 }
@@ -4511,7 +4560,19 @@ fn box_rle_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
                     continue;
                 }
                 let take = avail.min(roi_w - written);
-                decode_buf[written..written + take].fill(run.value);
+                if TOUCHED_ROWS {
+                    if run.value != 0 {
+                        if decode_range.0 == decode_range.1 { decode_range.0 = written; }
+                        decode_range.1 = written + take;
+                        decode_buf[written..written + take].fill(run.value);
+                    } else {
+                        let start = written.max(previous_decode_range.0);
+                        let end = (written + take).min(previous_decode_range.1);
+                        if start < end { decode_buf[start..end].fill(0); }
+                    }
+                } else {
+                    decode_buf[written..written + take].fill(run.value);
+                }
                 written += take;
                 abs_pos += take;
                 run_pos += take;
@@ -4528,9 +4589,24 @@ fn box_rle_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
             let new_slot = (ring_head + ring_len) % ring_cap;
             let slot_start = new_slot * roi_w;
 
-            let ring_row = &mut ring[slot_start..slot_start + roi_w];
-            box_horizontal_row::<ADD_COLUMNS>(&decode_buf, radius, ring_row, &mut col_sums);
-            if !ADD_COLUMNS { box_update_columns::<S, false>(simd, &mut col_sums, ring_row); }
+            let (start, end) = if TOUCHED_ROWS {
+                if decode_range.0 == decode_range.1 {
+                    (0, 0)
+                } else {
+                    (decode_range.0.saturating_sub(radius), (decode_range.1 + radius).min(roi_w))
+                }
+            } else {
+                (0, roi_w)
+            };
+            if TOUCHED_ROWS { ring_bounds[new_slot] = (start, end); }
+            if !TOUCHED_ROWS || start < end {
+                // The expanded slice contains every nonzero source tap, so
+                // the existing horizontal kernel remains exact at both ends.
+                let ring_row = &mut ring[slot_start + start..slot_start + end];
+                let columns = &mut col_sums[start..end];
+                box_horizontal_row::<ADD_COLUMNS>(&decode_buf[start..end], radius, ring_row, columns);
+                if !ADD_COLUMNS { box_update_columns::<S, false>(simd, columns, ring_row); }
+            }
             ring_len += 1;
         }
 
@@ -4543,18 +4619,36 @@ fn box_rle_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
             let v_denom_val =
                 (1 + radius.min(global_out_y) + radius.min(height - 1 - global_out_y)) as u32;
 
-            let all_zero = box_normalize_row(simd, &col_sums, &mut denominators, v_denom_val, min_alpha_u8, &mut emit_buf);
+            let (emit_start, emit_end) = if TOUCHED_ROWS {
+                let mut extent = (roi_w, 0);
+                for &(start, end) in &ring_bounds[..ring_cap] {
+                    if start < end {
+                        extent.0 = extent.0.min(start);
+                        extent.1 = extent.1.max(end);
+                    }
+                }
+                if extent.1 == 0 { (0, 0) } else { extent }
+            } else {
+                (0, roi_w)
+            };
+            // Denominators are still image-global; the slice offset must also
+            // offset the SIMD boundary metadata and scalar-tail dividers.
+            let row = &mut emit_buf[emit_start..emit_end];
+            let all_zero = box_normalize_row(
+                simd, &col_sums[emit_start..emit_end], &mut denominators,
+                v_denom_val, min_alpha_u8, row, emit_start,
+            );
 
             if all_zero {
                 emit_zero_rows(&mut out_rle, 1, width);
             } else {
-                let row_min_x = roi_min_x
-                    + emit_buf
+                let row_min_x = roi_min_x + emit_start
+                    + row
                         .iter()
                         .position(|&value| value != 0)
                         .expect("nonzero blur row should have a first nonzero pixel");
-                let row_max_x = roi_min_x
-                    + emit_buf
+                let row_max_x = roi_min_x + emit_start
+                    + row
                         .iter()
                         .rposition(|&value| value != 0)
                         .expect("nonzero blur row should have a last nonzero pixel");
@@ -4567,10 +4661,12 @@ fn box_rle_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
                     out_bounds = Some((row_min_x, row_max_x, global_out_y, global_out_y));
                 }
 
-                if roi_min_x > 0 {
-                    out_rle.push_run(roi_min_x as u32, 0);
+                let left_zeros = roi_min_x + emit_start;
+                let right_zeros = right_zeros + roi_w - emit_end;
+                if left_zeros > 0 {
+                    out_rle.push_run(left_zeros as u32, 0);
                 }
-                emit_row(&mut out_rle, &emit_buf);
+                emit_row(&mut out_rle, row);
                 if right_zeros > 0 {
                     out_rle.push_run(right_zeros as u32, 0);
                 }
@@ -4579,8 +4675,10 @@ fn box_rle_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
             // Evict the oldest ring row once the full vertical window is in use.
             if out_row >= radius {
                 let evict_start = ring_head * roi_w;
-                let row = &ring[evict_start..evict_start + roi_w];
-                box_update_columns::<S, true>(simd, &mut col_sums, row);
+                let (start, end) = if TOUCHED_ROWS { ring_bounds[ring_head] } else { (0, roi_w) };
+                let row = &ring[evict_start + start..evict_start + end];
+                box_update_columns::<S, true>(simd, &mut col_sums[start..end], row);
+                if TOUCHED_ROWS { ring_bounds[ring_head] = (0, 0); }
                 ring_head = (ring_head + 1) % ring_cap;
                 ring_len -= 1;
             }
@@ -5892,6 +5990,157 @@ mod tests {
         );
     }
 
+    fn perturbation_row_extent_fixture() -> (SliceJobV3, Vec<crate::geometry::Triangle>) {
+        let mut job = job_for_single_layer();
+        job.source_width_px = 37;
+        job.width_px = 37;
+        job.source_height_px = 31;
+        job.height_px = 31;
+        job.build_width_mm = 36.0;
+        job.build_depth_mm = 30.0;
+        job.anti_aliasing_mode = "3DAA".to_string();
+        job.blur_brush_radius_px = 0;
+        job.aa_on_supports = true;
+
+        let mut flat = Vec::new();
+        // Pixel-space bounds: full-width rows, separated islands, fractional
+        // edges that round to zero, clipped right edges and empty row gaps.
+        for (x0, x1, y0, y1, z0, z1) in [
+            (-3.0, 40.0, 1.2, 3.8, -0.25, 1.25),
+            (0.9999, 5.75, 6.1, 10.8, -0.25, 1.25),
+            (29.2, 38.0, 6.1, 8.2, -0.25, 0.72),
+            (34.0, 43.0, 23.1, 25.9, -0.25, 1.25),
+            (15.9999, 20.0001, 25.1, 29.8, 0.35, 0.8),
+            (-9.0, -5.0, 0.0, 31.0, -0.25, 1.25),
+        ] {
+            push_box_triangles(
+                &mut flat,
+                (x0 + x1) * 0.5 - 18.0,
+                15.0 - (y0 + y1) * 0.5,
+                z0,
+                z1,
+                x1 - x0,
+                y1 - y0,
+            );
+        }
+
+        // This prism moves right and shrinks over physical rows, while its Z
+        // slope makes the subscanlines touch different X ranges in each row.
+        let prism_start = flat.len();
+        push_box_triangles(&mut flat, -8.0, -2.0, -0.25, 1.25, 14.0, 10.0);
+        for vertex in flat[prism_start..].chunks_exact_mut(3) {
+            let t = (15.0 - vertex[1] - 12.0) / 10.0;
+            vertex[0] = (vertex[0] + 8.0) * (1.0 - 0.7 * t) - 8.0
+                + 12.0 * t
+                + 2.0 * vertex[2];
+        }
+
+        let mut triangles = parse_triangles(&flat);
+        project_triangles_inplace(&mut triangles, &job);
+        (job, triangles)
+    }
+
+    fn assert_perturbation_rle_dense_parity(
+        job: &SliceJobV3,
+        triangles: &[crate::geometry::Triangle],
+    ) {
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        for compute_area_stats in [false, true] {
+            let (mask, expected) =
+                rasterize_layer_with_stats(job, triangles, &indices, 0, compute_area_stats);
+            let (runs, actual) =
+                rasterize_layer_rle(job, triangles, &indices, 0, compute_area_stats);
+            let context = format!(
+                "{}x{}, {}, {:?}, duplicate={:?}, stats={compute_area_stats}",
+                job.source_width_px,
+                job.source_height_px,
+                job.anti_aliasing_level,
+                job.zaa_pattern,
+                job.zaa_duplicate_z,
+            );
+            assert_eq!(
+                runs,
+                encode_mask_to_rle(
+                    &mask,
+                    job.effective_render_width_px() as usize,
+                    job.source_height_px as usize,
+                ),
+                "canonical dense/RLE output: {context}"
+            );
+            assert_eq!(
+                (
+                    actual.total_solid_pixels,
+                    actual.total_solid_area_mm2,
+                    actual.largest_area_mm2,
+                    actual.smallest_area_mm2,
+                    actual.min_x,
+                    actual.min_y,
+                    actual.max_x,
+                    actual.max_y,
+                    actual.area_count,
+                ),
+                (
+                    expected.total_solid_pixels,
+                    expected.total_solid_area_mm2,
+                    expected.largest_area_mm2,
+                    expected.smallest_area_mm2,
+                    expected.min_x,
+                    expected.min_y,
+                    expected.max_x,
+                    expected.max_y,
+                    expected.area_count,
+                ),
+                "dense/RLE bounds and stats: {context}"
+            );
+        }
+    }
+
+    #[test]
+    fn perturbation_moving_row_extents_match_dense_at_every_level_and_pattern() {
+        let (mut job, triangles) = perturbation_row_extent_fixture();
+        for steps in 2..=64 {
+            job.anti_aliasing_level = format!("{steps}x");
+            for pattern in ["uniform", "halton", "base2"] {
+                job.zaa_pattern = Some(pattern.to_string());
+                for duplicate in [false, true] {
+                    if duplicate && !matches!(steps, 16 | 32 | 64) {
+                        continue;
+                    }
+                    job.zaa_duplicate_z = Some(duplicate);
+                    assert_perturbation_rle_dense_parity(&job, &triangles);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn perturbation_clipped_tiny_and_odd_rows_match_dense() {
+        let (mut job, triangles) = perturbation_row_extent_fixture();
+        // Crop already-projected geometry so even width-one output has real
+        // spans crossing its boundaries, rather than a degenerate projection.
+        for width in [1, 2, 3, 7, 16, 17, 33] {
+            job.source_width_px = width;
+            job.width_px = width;
+            for height in [1, 2, 9, 31] {
+                job.source_height_px = height;
+                job.height_px = height;
+                for steps in [2, 16, 64] {
+                    job.anti_aliasing_level = format!("{steps}x");
+                    for pattern in ["uniform", "halton", "base2"] {
+                        job.zaa_pattern = Some(pattern.to_string());
+                        for duplicate in [false, true] {
+                            if duplicate && steps == 2 {
+                                continue;
+                            }
+                            job.zaa_duplicate_z = Some(duplicate);
+                            assert_perturbation_rle_dense_parity(&job, &triangles);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn blur_mode_ignores_ssaa_level_in_mask_path() {
         let mut base_job = job_for_single_layer();
@@ -6216,6 +6465,105 @@ mod tests {
                 "streamed pixels: {width}x{height}, radius {radius}, floor {min_alpha}, {backend:?}");
             assert_eq!(actual_runs, expected_runs);
             assert_eq!(bounds, expected_bounds);
+        }
+    }
+
+    fn assert_perturb_box_stream_consumer(
+        runs: &[crate::rle::RleRun], source: &[u8], width: usize, height: usize, radius: usize,
+    ) {
+        let expected = box_definition(source, width, height, radius, 0);
+        let expected_runs = encode_mask_to_rle(&expected, width, height);
+        let mut expected_bounds: Option<(usize, usize, usize, usize)> = None;
+        for (i, &value) in expected.iter().enumerate() {
+            if value != 0 {
+                let (x, y) = (i % width, i / width);
+                expected_bounds = Some(match expected_bounds {
+                    Some((a, b, c, d)) => (a.min(x), b.max(x), c.min(y), d.max(y)),
+                    None => (x, x, y, y),
+                });
+            }
+        }
+        for backend in crate::pulp_simd::Backend::supported_for_tests() {
+            let (actual_runs, bounds) = super::blur_gray_rle_streaming_3daa_with_bounds_and_backend(
+                runs, width, height, radius, backend,
+            );
+            assert_eq!(expand_rle_to_mask(&actual_runs, width * height), expected,
+                "perturbation BOX pixels: {width}x{height}, radius {radius}, {backend:?}");
+            assert_eq!(actual_runs, expected_runs,
+                "perturbation BOX runs: {width}x{height}, radius {radius}, {backend:?}");
+            assert_eq!(bounds, expected_bounds,
+                "perturbation BOX bounds: {width}x{height}, radius {radius}, {backend:?}");
+        }
+    }
+
+    #[test]
+    fn perturb_box_stream_tiny_full_width_and_corner_tails_match_every_backend() {
+        for width in [1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65] {
+            for height in [1, 2, 15] {
+                let full: Vec<u8> = (0..width * height)
+                    .map(|i| (1 + (i % width * 47 + i / width * 13) % 255) as u8).collect();
+                let mut corners = vec![0; width * height];
+                for (i, value) in [(0, 1), (width - 1, 127), ((height - 1) * width, 128), (width * height - 1, 255)] {
+                    corners[i] = value;
+                }
+                for source in [&full, &corners] {
+                    let runs = encode_mask_to_rle(source, width, height);
+                    for radius in 0..=6 {
+                        assert_perturb_box_stream_consumer(&runs, source, width, height, radius);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn perturb_box_stream_moving_contracting_and_cropped_ranges_match_every_backend() {
+        let (width, height) = (97, 59);
+        for padding in [0, 11] {
+            let content_width = width - 2 * padding;
+            let mut source = vec![0; width * height];
+            for y in 7..52 {
+                let (start, end) = match y {
+                    7 => (0, content_width),
+                    8 => (1, 2),
+                    9 => (content_width - 3, content_width - 1),
+                    // More than a complete ring of empty rows separates these
+                    // runs, then a moving point expands to a contracting span.
+                    24..=29 => (content_width / 2 + y % 3, content_width / 2 + y % 3 + 1),
+                    30 => (1, content_width - 1),
+                    31..=36 => (content_width / 3, content_width / 3 + (37 - y) * 2),
+                    49 => (content_width - 1, content_width),
+                    51 => (0, 1),
+                    _ => (0, 0),
+                };
+                for x in start..end {
+                    source[y * width + padding + x] = (1 + (x * 47 + y * 13) % 255) as u8;
+                }
+            }
+            let runs = encode_mask_to_rle(&source, width, height);
+            for radius in 0..=6 {
+                assert_perturb_box_stream_consumer(&runs, &source, width, height, radius);
+            }
+        }
+    }
+
+    #[test]
+    fn perturb_box_stream_empty_and_implicit_zero_tails_do_not_reuse_prior_rows() {
+        let (width, height) = (65, 31);
+        let mut source = vec![0; width * height];
+        source[4 * width + 3..5 * width - 4].fill(255);
+        source[5 * width + width - 2] = 128;
+        source[19 * width + 32] = 1;
+        let mut runs = encode_mask_to_rle(&source, width, height);
+        while runs.last().is_some_and(|run| run.value == 0) { runs.pop(); }
+        for radius in 1..=6 {
+            assert_perturb_box_stream_consumer(&runs, &source, width, height, radius);
+        }
+
+        let zero = vec![0; width * height];
+        let zero_runs = encode_mask_to_rle(&zero, width, height);
+        for radius in 0..=6 {
+            assert_perturb_box_stream_consumer(&zero_runs, &zero, width, height, radius);
         }
     }
 
