@@ -688,6 +688,10 @@ msgstr "Adaptive offset"
 msgid "Adaptive Offset (deg)"
 msgstr "Adaptive Offset (deg)"
 
+#: src/components/modals/GpuPerformanceWarningModal.tsx:109
+msgid "Add <0>msedgewebview2.exe</0> as a <1>Desktop app</1>."
+msgstr "Add <0>msedgewebview2.exe</0> as a <1>Desktop app</1>."
+
 #: src/features/organicCut/OrganicCutPanel.tsx:836
 msgid "Add another loop and start drawing it. On Cut, every loop is cut together — use it to free a part attached in several places (e.g. a tail joined at two posts)."
 msgstr "Add another loop and start drawing it. On Cut, every loop is cut together — use it to free a part attached in several places (e.g. a tail joined at two posts)."
@@ -2612,7 +2616,7 @@ msgstr "Could not read printer data."
 msgid "Could not reopen this file from cache."
 msgstr "Could not reopen this file from cache."
 
-#: src/features/scene/useSceneCollectionManager.ts:8160
+#: src/features/scene/useSceneCollectionManager.ts:8163
 msgid "Could not restore the model."
 msgstr "Could not restore the model."
 
@@ -3092,9 +3096,9 @@ msgstr "Detail View"
 msgid "Detected a {bitsLabel} screen that doesn't match any known variant of {presetName}."
 msgstr "Detected a {bitsLabel} screen that doesn't match any known variant of {presetName}."
 
-#: src/components/modals/GpuPerformanceWarningModal.tsx:97
-msgid "Detected renderer:"
-msgstr "Detected renderer:"
+#: src/components/modals/GpuPerformanceWarningModal.tsx:133
+msgid "Detected renderer"
+msgstr "Detected renderer"
 
 #: src/components/controls/AutoSupportPanel.tsx:463
 msgid "Detected surfaces, density and sizing, stability, and the saved presets a run follows"
@@ -3328,10 +3332,6 @@ msgstr "DragonFruit handles setup automatically and uses only your own private G
 #: src/components/layout/FirstRunOnboarding.tsx:177
 msgid "DragonFruit is a free, open-source slicer for resin 3D printing. Load a model, orient it, add supports, and slice it for your printer."
 msgstr "DragonFruit is a free, open-source slicer for resin 3D printing. Load a model, orient it, add supports, and slice it for your printer."
-
-#: src/components/modals/GpuPerformanceWarningModal.tsx:82
-msgid "DragonFruit is rendering on an integrated or software GPU. If this computer also has a discrete graphics card, Windows may not be using it, and the viewport can feel much slower than it should."
-msgstr "DragonFruit is rendering on an integrated or software GPU. If this computer also has a discrete graphics card, Windows may not be using it, and the viewport can feel much slower than it should."
 
 #: src/components/modals/GpuPerformanceWarningModal.tsx:64
 msgid "DragonFruit may run slowly"
@@ -6264,7 +6264,7 @@ msgstr "No resin selected"
 msgid "No snapshots yet. Run \"Backup Now\" to create your first local snapshot."
 msgstr "No snapshots yet. Run \"Backup Now\" to create your first local snapshot."
 
-#: src/features/scene/useSceneCollectionManager.ts:8133
+#: src/features/scene/useSceneCollectionManager.ts:8136
 msgid "No source file to restore this model from."
 msgstr "No source file to restore this model from."
 
@@ -6569,6 +6569,10 @@ msgstr "Opaque"
 #: src/features/slicing/components/LutCurveEditor.tsx:1617
 msgid "Opaque starts at 55% and ramps to 90%."
 msgstr "Opaque starts at 55% and ramps to 90%."
+
+#: src/components/modals/GpuPerformanceWarningModal.tsx:104
+msgid "Open <0>Settings → System → Display → Graphics</0>."
+msgstr "Open <0>Settings → System → Display → Graphics</0>."
 
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:399
 msgid "Open Autosave Location"
@@ -7667,11 +7671,11 @@ msgstr "Remesh {modelName}"
 msgid "Remesh confirmation"
 msgstr "Remesh confirmation"
 
-#: src/features/scene/useSceneCollectionManager.ts:8324
+#: src/features/scene/useSceneCollectionManager.ts:8327
 msgid "Remesh failed: {message}"
 msgstr "Remesh failed: {message}"
 
-#: src/features/scene/useSceneCollectionManager.ts:8297
+#: src/features/scene/useSceneCollectionManager.ts:8300
 msgid "Remesh needs the desktop app."
 msgstr "Remesh needs the desktop app."
 
@@ -8902,6 +8906,10 @@ msgstr "Set <0>Authorization callback URL</0> to <1>{oauthCallbackUrl}</1>."
 msgid "Set <0>Homepage URL</0> to <1>{oauthHomepageUrl}</1>."
 msgstr "Set <0>Homepage URL</0> to <1>{oauthHomepageUrl}</1>."
 
+#: src/components/modals/GpuPerformanceWarningModal.tsx:114
+msgid "Set it to <0>High performance</0>, then restart DragonFruit."
+msgstr "Set it to <0>High performance</0>, then restart DragonFruit."
+
 #: src/components/settings/BackupsSettingsTab.tsx:972
 #: src/components/settings/BackupsSettingsTab.tsx:1596
 msgid "Set up GitHub OAuth"
@@ -9110,11 +9118,11 @@ msgstr "Shrink-Wrap {modelName}"
 msgid "Shrink-Wrap confirmation"
 msgstr "Shrink-Wrap confirmation"
 
-#: src/features/scene/useSceneCollectionManager.ts:8378
+#: src/features/scene/useSceneCollectionManager.ts:8381
 msgid "Shrink-Wrap failed: {message}"
 msgstr "Shrink-Wrap failed: {message}"
 
-#: src/features/scene/useSceneCollectionManager.ts:8351
+#: src/features/scene/useSceneCollectionManager.ts:8354
 msgid "Shrink-Wrap needs the desktop app."
 msgstr "Shrink-Wrap needs the desktop app."
 
@@ -10209,6 +10217,10 @@ msgstr "This scene was saved for <0>{recordedLabel}</0>, whose printer and mater
 msgid "This self-compiled build needs your own GitHub OAuth app in .env before sign-in can work."
 msgstr "This self-compiled build needs your own GitHub OAuth app in .env before sign-in can work."
 
+#: src/components/modals/GpuPerformanceWarningModal.tsx:120
+msgid "This setting applies to every app that uses WebView2."
+msgstr "This setting applies to every app that uses WebView2."
+
 #: src/components/modals/DestructiveTransformModal.tsx:75
 msgid "This transform invalidates existing supports. If you continue, all supports for this model will be deleted."
 msgstr "This transform invalidates existing supports. If you continue, all supports for this model will be deleted."
@@ -10261,10 +10273,6 @@ msgstr "Tip Fit Margin"
 #: src/components/controls/autoSupport/AutoSupportRunDiagnostics.tsx:75
 msgid "Tip Ø range"
 msgstr "Tip Ø range"
-
-#: src/components/modals/GpuPerformanceWarningModal.tsx:89
-msgid "To give DragonFruit the faster GPU, open Windows Settings → System → Display → Graphics, add <0>msedgewebview2.exe</0>, and set it to High performance. This setting applies to every app that uses WebView2."
-msgstr "To give DragonFruit the faster GPU, open Windows Settings → System → Display → Graphics, add <0>msedgewebview2.exe</0>, and set it to High performance. This setting applies to every app that uses WebView2."
 
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:67
 msgid "To recover it, open the scene in an older version of DragonFruit and save it again — the re-saved scene will open here."
@@ -10682,6 +10690,10 @@ msgstr "Use existing repo"
 msgid "Use on this printer"
 msgstr "Use on this printer"
 
+#: src/components/modals/GpuPerformanceWarningModal.tsx:97
+msgid "Use the faster GPU"
+msgstr "Use the faster GPU"
+
 #. Tooltip on the Arrange panel's plate mode choice. It fills partly used plates around the models already on them.
 #: src/components/controls/ArrangePanel.tsx:192
 msgid "Use the plates the scene already has before adding more"
@@ -11026,6 +11038,10 @@ msgstr "Window context menu"
 #: src/components/layout/TopBar.tsx:1088
 msgid "Window controls"
 msgstr "Window controls"
+
+#: src/components/modals/GpuPerformanceWarningModal.tsx:82
+msgid "Windows is rendering DragonFruit on an integrated or software GPU. If this computer also has a discrete graphics card, Windows may not be using it — the viewport can feel much slower than it should."
+msgstr "Windows is rendering DragonFruit on an integrated or software GPU. If this computer also has a discrete graphics card, Windows may not be using it — the viewport can feel much slower than it should."
 
 #. View mode: only the mesh edges are drawn, so the surface between them shows through.
 #: src/features/shaders/mesh/types.ts:46
