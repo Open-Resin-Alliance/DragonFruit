@@ -13,7 +13,7 @@ This page is the developer-facing source of truth for client-side persistence us
 - `app-*`: application UI/settings
 - `dragonfruit-*` / `dragonfruit.*`: product/feature scoped data
 - `lumenslicer:*`: legacy namespace retained for compatibility
-- Unprefixed literals still exist (`autoLift`, `liftDistance`) and should be treated as legacy technical debt
+- Unprefixed literals still exist (`liftDistance`) and should be treated as legacy technical debt
 
 ## Support system keys
 
@@ -135,8 +135,7 @@ Autosave timing is stored in milliseconds: `debounceMs` defaults to `45_000` (45
 | Key                                 | Medium       | Purpose                  |
 | ----------------------------------- | ------------ | ------------------------ |
 | `app-hotkeys-config`                | localStorage | User hotkey overrides    |
-| `autoLift`                          | localStorage | Auto-lift enable flag    |
-| `liftDistance`                      | localStorage | Auto-lift distance in mm |
+| `liftDistance`                      | localStorage | Lift distance in mm      |
 
 ## Diagnostics and debug keys
 
@@ -167,8 +166,8 @@ Autosave timing is stored in milliseconds: `debounceMs` defaults to `45_000` (45
 | `dragonfruit-local-backups:last-sync-at`      | localStorage | Last local sync timestamp       |
 | `dragonfruit-local-backups:directory`         | localStorage | Selected local backup directory |
 
-!!! note
-      Backup auth/session state uses secure cookies and server-side endpoints in addition to client-side setting keys.
+> [!NOTE]
+> Backup auth/session state uses secure cookies and server-side endpoints in addition to client-side setting keys.
 
 ## IndexedDB contract
 

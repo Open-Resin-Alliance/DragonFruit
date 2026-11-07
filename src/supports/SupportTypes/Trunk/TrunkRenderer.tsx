@@ -279,7 +279,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
         >
             {/* Trunk Picking Group - Contains Roots, Shafts, Cones */}
             <group ref={pickRef as any}>
-                {!hidePlateContactPrimitives && !deferRootsToSceneBatch && (
+                <group visible={!hidePlateContactPrimitives && !deferRootsToSceneBatch}>
                     <RootsRenderer
                         root={root}
                         shaftDiameter={shaftDiameter}
@@ -289,7 +289,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
                         radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                         sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                     />
-                )}
+                </group>
                 <InstancedShaftGroup
                     shafts={batchedStraightShafts}
                     color={visuals.color}

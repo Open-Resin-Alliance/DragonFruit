@@ -1,5 +1,6 @@
 import React, { useMemo, useEffect } from 'react';
 import * as THREE from 'three';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
 import { steepFlatNeedsCoverage } from '@/supports/autoSupport/poseStability';
 
@@ -138,6 +139,7 @@ interface IslandOverhangOverlayProps {
    *  floor keeps its contacts, because a large flat is the best anchoring
    *  surface the part has, so it is drawn at full strength too. */
   dragTotalMm3?: number;
+  /** Cross-section planes: the overlay must disappear with the solid it marks. */
 }
 
 export function IslandOverhangOverlay({
@@ -273,6 +275,17 @@ export function IslandOverhangOverlay({
     return material;
   }, []);
 
+  // The scene's shared planes: stable identity and length, so a scrub moves
+  // their constants without recompiling these materials.
+  const clippingPlanes = getSceneClipPlanes();
+
+  useEffect(() => {
+    for (const material of [toppleMaterial, formationMaterial, mutedMaterial]) {
+      material.clippingPlanes = clippingPlanes;
+      material.needsUpdate = true;
+    }
+  }, [clippingPlanes, toppleMaterial, formationMaterial, mutedMaterial]);
+
   useEffect(() => {
     return () => {
       for (const b of built.meshes) b.geometry.dispose();
@@ -293,7 +306,13 @@ export function IslandOverhangOverlay({
   if (built.meshes.length === 0 && !built.toppleGeometry && !built.mutedGeometry) return null;
 
   return (
-    <group position={[-centerOffset.x, -centerOffset.y, -centerOffset.z]}>
+    <group
+      position={[-centerOffset.x, -centerOffset.y, -centerOffset.z]}
+      // The overhang scan is an overlay on the model, not part of its solid.
+      // Feeding it to the cross-section stencil painted the cap over the
+      // cut-away region wherever an overhang was scanned.
+      userData={{ noStencil: true }}
+    >
       {built.meshes.map((b) => (
         <mesh key={b.id} geometry={b.geometry} renderOrder={1001} raycast={() => null}>
           <primitive object={formationMaterial} attach="material" />

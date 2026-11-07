@@ -41,25 +41,6 @@ test('an inline root without a top radius is a cylinder, and half-built ones sta
     assert.equal(inlineRootBatchInstance(cylinder, { id: 'a', basePos: { x: 0, y: 0, z: 0 } }), null, 'no base width');
 });
 
-test('a type that does not batch its contact cones is still carried by the cone pass', () => {
-    // The stump's contact disc, and the line from its root to that disc, come from
-    // this pass: its own renderer is skipped in a simple view, and it has no
-    // `Roots` row either. Both places that decide it have to agree - the map of
-    // cone sets and the groups drawn from it - or the disc silently disappears.
-    const drawsOwnCones = SUPPORT_TYPES.filter(
-        (descriptor) => descriptor.upper.kind === 'cone' && !descriptor.batchesContactCones,
-    );
-
-    assert.ok(drawsOwnCones.length > 0, 'the stump is carried this way');
-    for (const descriptor of drawsOwnCones) {
-        assert.equal(
-            batchesInView('cone', descriptor, true),
-            true,
-            `${descriptor.id} must reach the cone pass in a simple view`,
-        );
-    }
-});
-
 test('a simple view draws every type through the batched passes', () => {
     // A simple view skips every detail renderer, so a type the batches leave out
     // vanishes from it entirely - which is what a stump did, a frustum root under

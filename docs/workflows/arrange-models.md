@@ -26,8 +26,8 @@ Use for algorithmic placement.
   - **High-Precision**: tighter hull/SAT-style packing.
 - **Allow Z-rotation** lets auto arrange rotate models by 90° on Z when beneficial.
 
-!!! note
-In High-Precision mode, Z-rotation is required and remains enabled.
+> [!NOTE]
+> In High-Precision mode, Z-rotation is required and remains enabled.
 
 ### Manual mode
 

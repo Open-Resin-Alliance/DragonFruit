@@ -254,6 +254,152 @@ again, so every external build is one a maintainer chose to run. Preview
 branches whose pull request has closed are swept away the next time any
 preview is activated.
 
+## Windows code signing (Azure Artifact Signing)
+
+Every Windows binary a release produces is Authenticode-signed with
+[Azure Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/overview)
+(formerly Trusted Signing). Without it SmartScreen warns on every download and
+Windows 11 Smart App Control refuses to run the app at all.
+
+### What gets signed, and when
+
+Tauri signs through `bundle.windows.signCommand`, so the signature is applied
+by the bundler itself, not bolted on afterwards. That ordering matters:
+
+- the application executable is signed **before** it is packed into the
+  installers, so the installed `dragonfruit-desktop.exe` carries a signature
+  too — signing only the outer installer would leave it unsigned;
+- the NSIS and MSI installers are signed when the bundler finishes them;
+- the updater artifacts (`createUpdaterArtifacts`) are generated **after**
+  bundling, so the `.exe.sig` covers the signed bytes. Signing a published
+  installer by hand would invalidate that signature.
+
+The command lives in `src-tauri/tauri.windows-signing.conf.json`, a config
+overlay that only `release.yml` passes (`--config …`), so local
+`npm run tauri:bundle:windows` builds stay unsigned and need no Azure
+credentials. Preview builds (`build-preview.yml`) are unsigned for the same
+reason: they are not release artifacts.
+
+`scripts/sign-windows.cmd` is the command Tauri runs, once per file, with the
+path as its only argument. It exists because the bundler spawns the command by
+name and `pwsh` is not on the PATH that process sees, even though a PowerShell
+step resolves it; `cmd.exe` is always in System32, which Windows searches before
+PATH, so the batch file finds PowerShell 7 and hands the work to
+`scripts/sign-windows.ps1`.
+
+The overlay names it as `..\scripts\sign-windows.cmd`, not `scripts\…`. The
+bundler calls `set_current_dir` into `src-tauri` before it builds the sign
+command, and only absolutizes an argument that exists from there, so a path
+relative to the repository root is passed through unchanged and resolves
+against the wrong directory. Anything that invokes the overlay outside the
+bundler has to run from `src-tauri` too, which is what the smoke check does. That script calls `Invoke-ArtifactSigning` from the
+`ArtifactSigning` PowerShell module pinned to `0.1.20` — the same module the
+`azure/artifact-signing-action` action installs. The action itself is not used
+because it signs a folder after the build, which is both too late for the
+executable inside the installer and destructive to the updater signature.
+
+### Authentication
+
+OIDC only; there is no client secret anywhere in the pipeline:
+
+1. `release.yml` grants the build job `id-token: write`.
+2. `azure/login@v3` exchanges that token for an Azure CLI login using the
+   federated credential on the app registration.
+3. `Invoke-ArtifactSigning` resolves credentials through
+   `DefaultAzureCredential`; the script excludes every credential type that
+   cannot work on a GitHub runner, leaving `AzureCliCredential` as the only
+   path so a misconfiguration fails immediately instead of after nine probes.
+
+The federated credential's subject must match the refs releases are cut from
+(`ref:refs/heads/main` and `ref:refs/heads/dev`), and the app registration
+needs the **Artifact Signing Certificate Profile Signer** role on the signing
+account.
+
+### Required repository secrets
+
+| Secret | Value |
+|---|---|
+| `AZURE_CLIENT_ID` | Application (client) ID of the app registration |
+| `AZURE_TENANT_ID` | Entra ID directory (tenant) ID |
+| `AZURE_SUBSCRIPTION_ID` | Subscription holding the signing account |
+| `AZURE_SIGNING_ENDPOINT` | Signing account endpoint, e.g. `https://eus.codesigning.azure.net/` |
+| `AZURE_SIGNING_ACCOUNT` | Artifact Signing account name |
+| `AZURE_SIGNING_CERTIFICATE_PROFILE` | Certificate profile name inside that account |
+
+The endpoint, account and profile are passed as environment variables rather
+than written into the overlay config because they name Azure resources that
+differ per deployment; the overlay stays the same for every fork.
+
+### Pre-flight check
+
+`verify-windows-signing.yml` builds the Windows release exactly as the release
+pipeline does — same profile, same target, same `nsis,msi` bundles, same
+signing overlay — then asserts every binary is signed and timestamped and
+uploads the installers as the `dragonfruit-windows-x64-signed` artifact. It
+tags nothing and publishes no release.
+
+It is `workflow_dispatch` only, because it costs a full release compile
+(roughly 40 minutes warm). Run it after touching anything in the signing path,
+and before the first release that depends on it: a bad federated credential, a
+missing role assignment, a wrong certificate profile or a stale module pin all
+surface there instead of halfway through a release build.
+
+The build steps mirror the `windows-latest` leg of `release.yml` rather than
+sharing it — a reusable workflow would have to be carved out of the release
+matrix, and the release path is not something to restructure for a
+once-in-a-while check. The cost is that the two can drift, so a change to one
+belongs in the other.
+
+A `workflow_dispatch` workflow only appears in the Actions UI once it is on the
+default branch, so the first run is after the merge.
+
+To check the signing command alone on a workstation, without a build, sign in
+with an account that holds the certificate-profile role and run what the overlay
+names:
+
+```powershell
+Install-Module ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
+az login
+$env:AZURE_SIGNING_ENDPOINT = 'https://eus.codesigning.azure.net/'
+$env:AZURE_SIGNING_ACCOUNT = '<account>'
+$env:AZURE_SIGNING_CERTIFICATE_PROFILE = '<profile>'
+./scripts/sign-windows.ps1 .\some-binary.exe
+Get-AuthenticodeSignature .\some-binary.exe | Format-List Status
+```
+
+`az login` is what `DefaultAzureCredential` picks up on both paths, so the
+local run exercises the same credential the release does.
+
+### Verification
+
+`release.yml` runs `Get-AuthenticodeSignature` over every produced installer
+and over the executable extracted from each one, and fails the release if any of
+them is unsigned, if the signature does not match the file's contents, or if it
+carries no timestamp.
+
+The executable left in `target/release` is not checked, because the bundler
+restores the unsigned original there after building each package type: it copies
+the binary, patches and signs the copy for each bundle, then puts the original
+back. The signed copy is the one inside the installers, which is why the check
+unpacks them.
+
+It deliberately does not require `Status` to be `Valid`. A clean runner's root
+store does not carry the Microsoft root that Artifact Signing certificates chain
+to, so a perfectly good signature reports `UnknownError` there: "a certificate
+chain processed, but terminated in a root certificate which is not trusted by
+the trust provider". That root reaches end users through Windows Update. The
+runner is the odd one out, not the installer, and gating on `Valid` would fail
+every release.
+
+A release that ships unsigned installers is worse than one that fails: nothing
+else in the pipeline would say why SmartScreen started warning.
+
+To check a downloaded installer by hand, where the root is present:
+
+```powershell
+Get-AuthenticodeSignature .\DragonFruit_0.3.1_x64-setup.exe | Format-List Status, SignerCertificate
+```
+
 ## Windows Microsoft C++ prerequisite
 
 Windows installers contain neither Microsoft CRT DLLs nor its redistributable.

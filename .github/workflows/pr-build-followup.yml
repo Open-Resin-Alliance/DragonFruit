@@ -167,9 +167,9 @@ jobs:
             // The label persists across pushes and the preview build checked out
             // refs/pull/N/head, which always points at the fork's current tip.
             // Labelling an external PR once would hand its author code execution
-            // with every secret in scope (Apple certificate, updater signing
-            // key) on every later push. Fork previews are authorised by a
-            // maintainer one command at a time instead.
+            // with the updater signing key in scope on every later push. Fork
+            // previews are authorised by a maintainer one command at a time
+            // instead.
             //
             // head.repo is null once a fork has been deleted, so an unknown head
             // repo counts as a fork and the check fails closed.

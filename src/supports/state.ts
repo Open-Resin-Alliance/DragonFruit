@@ -1,4 +1,5 @@
-import { SupportState, SupportEntityAny, DragonfruitImportFormat, Trunk, Roots, Segment, BezierSegment, StraightSegment, Branch, BraceCurve, Joint, Knot, Vec3, Leaf, Brace } from './types';
+import { SupportState, SupportEntityAny, DragonfruitImportFormat, Trunk, Roots, Segment, BezierSegment, StraightSegment, Branch, BraceCurve, Joint, Knot, Vec3, Leaf, Brace, Stump } from './types';
+import { ANCHOR_HEIGHT_THRESHOLD_MM } from './autoSupport/constants';
 import { calculateBezierControlPoints, getBezierPointAtT, toVector3, toVec3 } from './Curves/BezierUtils';
 import { calculateKnotPositionOnSegmentFromT } from './SupportPrimitives/Knot/knotUtils';
 import type { SupportSelectionCategory } from './supportTypeRegistry';
@@ -14,7 +15,7 @@ import { collectOwnedRootIds, hasSupportUpdater, hostKnotFieldsFor, typeIdForCol
 import { typesMissingExportGroupBuilder } from './exportGeometry/seam';
 import { migrateLegacySupportPayload } from './importMigrations';
 import type { SupportCollectionKey } from './supportTypeRegistry';
-import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
+import type { ContactCone, SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { resolveSegmentEndpoints, type ShaftEntity } from './SupportPrimitives/Knot/segmentEndpoints';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
@@ -1769,6 +1770,183 @@ export function transformSupportRecord(
     return next ?? record;
 }
 
+/**
+ * A stump's root is its plate contact, and its joint sits a fixed gap above that
+ * root. A model transform moves both, which lifts the root off the plate and
+ * leaves the cone's length unchanged; seat them back and stretch the cone so its
+ * socket stays on the joint. Only the model-transform paths call this — a paste
+ * is a placement delta and must move the whole stump with the copy.
+ */
+function seatStumpAfterTransform(stump: Stump, preserveRootZ: boolean, original: Stump): Stump {
+    const rootPos = preserveRootZ ? { ...stump.rootPos, z: original.rootPos.z } : stump.rootPos;
+    const socketZ = rootPos.z + stump.rootHeight + INLINE_ROOT_SOCKET_CLEARANCE_MM;
+    return {
+        ...stump,
+        rootPos,
+        joint: { ...stump.joint, pos: { x: rootPos.x, y: rootPos.y, z: socketZ } },
+        contactCone: seatStumpCone(stump.contactCone, socketZ),
+    };
+}
+
+/** Whether a trunk carries anything that would be stranded by removing it. */
+function trunkHasHostedMembers(
+    trunk: Trunk,
+    knots: Record<string, Knot>,
+    kickstands: Record<string, Kickstand>,
+): boolean {
+    const segmentIds = new Set(trunk.segments.map((segment) => segment.id));
+    for (const knot of Object.values(knots)) {
+        if (segmentIds.has(knot.parentShaftId)) return true;
+    }
+    for (const kickstand of Object.values(kickstands)) {
+        if (segmentIds.has(kickstand.hostSegmentId)) return true;
+    }
+    return false;
+}
+
+/**
+ * A stump whose tip has climbed past the near-plate band becomes a trunk: the
+ * stretched cone is reset to its authored length and the rest of the span is a
+ * real shaft over a plate root. Null when the authored cone already reaches the
+ * root, where a trunk would have no shaft to add.
+ */
+function convertStumpToTrunk(stump: Stump): { root: Roots; trunk: Trunk } | null {
+    const decoded = stump.settingsCodeHex ? decodeSupportSettingsHex(stump.settingsCodeHex) : null;
+    const authoredLength = decoded?.tip.lengthMm ?? stump.contactCone.profile.lengthMm;
+    const cone = {
+        ...stump.contactCone,
+        profile: { ...stump.contactCone.profile, lengthMm: authoredLength },
+    };
+    const socket = getFinalSocketPosition(cone);
+    const rootTopZ = stump.rootHeight + INLINE_ROOT_SOCKET_CLEARANCE_MM;
+    if (socket.z <= rootTopZ + 1e-3) return null;
+
+    const rootId = uuidv4();
+    const topJointId = uuidv4();
+    const root: Roots = {
+        id: rootId,
+        modelId: stump.modelId,
+        transform: {
+            pos: { x: stump.rootPos.x, y: stump.rootPos.y, z: 0 },
+            rot: { x: 0, y: 0, z: 0, w: 1 },
+        },
+        diameter: stump.rootBaseDiameter,
+        diskHeight: INLINE_ROOT_SOCKET_CLEARANCE_MM,
+        coneHeight: stump.rootHeight,
+    };
+    // The root is the shaft's bottom, so the segment carries only its top joint.
+    // A bottom joint would move with the model on a Z transform and detach from
+    // the grounded root.
+    const segment: Segment = {
+        id: uuidv4(),
+        type: 'straight',
+        diameter: stump.rootTopDiameter,
+        topJoint: { id: topJointId, pos: socket, diameter: stump.rootTopDiameter },
+    };
+    const trunk: Trunk = {
+        id: stump.id,
+        modelId: stump.modelId,
+        settingsCodeHex: stump.settingsCodeHex,
+        rootId,
+        segments: [segment],
+        contactCone: { ...cone, socketJointId: topJointId },
+        origin: stump.origin,
+    };
+    return { root, trunk };
+}
+
+/**
+ * A bare, vertical, single-segment trunk whose tip has fallen back into the
+ * near-plate band becomes a stump again. Anything diagonal, segmented or
+ * carrying members is left alone: a stump's root sits directly under its cone,
+ * and it cannot host.
+ */
+function convertTrunkToStump(trunk: Trunk, root: Roots | undefined): Stump | null {
+    if (!root || !trunk.contactCone || trunk.segments.length !== 1) return null;
+    const segment = trunk.segments[0];
+    if (segment.type === 'bezier') return null;
+    const top = segment.topJoint;
+    if (!top) return null;
+    // The first segment may leave its bottom to the root, which is the shape a
+    // stump-to-trunk conversion writes.
+    const bottomPos = segment.bottomJoint?.pos ?? root.transform.pos;
+    if (Math.abs(bottomPos.x - root.transform.pos.x) > 0.01
+        || Math.abs(bottomPos.y - root.transform.pos.y) > 0.01
+        || Math.abs(top.pos.x - bottomPos.x) > 0.01
+        || Math.abs(top.pos.y - bottomPos.y) > 0.01) {
+        return null;
+    }
+    const rootTopZ = root.transform.pos.z + root.diskHeight + root.coneHeight;
+    // What matters is whether the tip is above the root, not whether the
+    // authored cone reaches it: a short gap is served by stretching the cone.
+    if (trunk.contactCone.pos.z <= rootTopZ + 1e-3) return null;
+    return {
+        id: trunk.id,
+        modelId: trunk.modelId,
+        settingsCodeHex: trunk.settingsCodeHex,
+        rootPos: { x: root.transform.pos.x, y: root.transform.pos.y, z: 0 },
+        rootBaseDiameter: root.diameter,
+        rootTopDiameter: segment.diameter,
+        rootHeight: root.coneHeight,
+        joint: {
+            id: top.id,
+            pos: { x: root.transform.pos.x, y: root.transform.pos.y, z: rootTopZ },
+            diameter: top.diameter,
+        },
+        segments: [],
+        contactCone: seatStumpCone(trunk.contactCone, rootTopZ),
+        origin: trunk.origin,
+    };
+}
+
+/**
+ * Moves supports across the stump/trunk boundary after a Z move: a stump whose
+ * tip is above the near-plate band becomes a trunk, and a bare vertical trunk
+ * whose tip has dropped into the band becomes a stump. Runs on the transformed
+ * collections, so the conversion lands in the same history step as the move.
+ */
+function convertSupportsAcrossStumpBand(
+    collections: Record<string, unknown>,
+    knots: Record<string, Knot>,
+    modelId?: string,
+): boolean {
+    const stumps = { ...(collections.stumps as Record<string, Stump> | undefined) };
+    const trunks = { ...(collections.trunks as Record<string, Trunk> | undefined) };
+    const roots = { ...(collections.roots as Record<string, Roots> | undefined) };
+    const kickstands = (collections.kickstands as Record<string, Kickstand> | undefined) ?? {};
+    let changed = false;
+
+    for (const stump of Object.values(stumps)) {
+        if (modelId && stump.modelId !== modelId) continue;
+        if (stump.contactCone.pos.z <= ANCHOR_HEIGHT_THRESHOLD_MM) continue;
+        const converted = convertStumpToTrunk(stump);
+        if (!converted) continue;
+        delete stumps[stump.id];
+        roots[converted.root.id] = converted.root;
+        trunks[converted.trunk.id] = converted.trunk;
+        changed = true;
+    }
+
+    for (const trunk of Object.values(trunks)) {
+        if (modelId && trunk.modelId !== modelId) continue;
+        if (!trunk.contactCone || trunk.contactCone.pos.z >= ANCHOR_HEIGHT_THRESHOLD_MM) continue;
+        if (trunkHasHostedMembers(trunk, knots, kickstands)) continue;
+        const converted = convertTrunkToStump(trunk, roots[trunk.rootId]);
+        if (!converted) continue;
+        delete trunks[trunk.id];
+        delete roots[trunk.rootId];
+        stumps[converted.id] = converted;
+        changed = true;
+    }
+
+    if (changed) {
+        collections.stumps = stumps;
+        collections.trunks = trunks;
+        collections.roots = roots;
+    }
+    return changed;
+}
+
 function transformsRoughlyEqual(a: THREE.Matrix4, b: THREE.Matrix4, epsilon = 1e-8) {
     const ae = a.elements;
     const be = b.elements;
@@ -2152,7 +2330,10 @@ export function transformSupportsForModel(
                 if (contact?.socketJointId) touchedJointIds.add(contact.socketJointId);
             }
 
-            target[id] = transformSupportRecord(descriptor.id, entity, delta);
+            const transformed = transformSupportRecord(descriptor.id, entity, delta);
+            target[id] = descriptor.id === 'stump'
+                ? seatStumpAfterTransform(transformed as unknown as Stump, delta.preserveRootZ, entity as unknown as Stump)
+                : transformed;
         }
     }
 
@@ -2192,6 +2373,11 @@ export function transformSupportsForModel(
         nextCollections.roots = nextRoots;
         nextCollections.trunks = nextTrunks;
         nextCollections.knots = nextKnots;
+
+        // A pure Z move is what changes the gap a near-plate support spans.
+        if (delta.preserveRootZ) {
+            convertSupportsAcrossStumpBand(nextCollections, nextKnots, modelId);
+        }
 
         setState({ ...state, ...nextCollections } as SupportState);
         notify();
@@ -2233,6 +2419,13 @@ export function transformAllSupportsForSingleModel(
             : transformSupportRecord(typeIdForCollection(collection), record, delta)) as unknown as typeof entity;
     });
 
+    transformed.stumps = Object.fromEntries(
+        Object.entries(transformed.stumps).map(([id, stump]) => [
+            id,
+            seatStumpAfterTransform(stump, delta.preserveRootZ, state.stumps[id] ?? stump),
+        ]),
+    );
+
     const nextKnots: Record<string, Knot> = {};
     for (const knot of Object.values(state.knots)) {
         nextKnots[knot.id] = transformSupportRecord(
@@ -2240,6 +2433,10 @@ export function transformAllSupportsForSingleModel(
             knot as unknown as Record<string, unknown>,
             delta,
         ) as unknown as Knot;
+    }
+
+    if (delta.preserveRootZ) {
+        convertSupportsAcrossStumpBand(transformed as unknown as Record<string, unknown>, nextKnots);
     }
 
     // Read before `setState` replaces `state`.
@@ -3769,6 +3966,20 @@ function stretchConeToSocketZ<T extends { pos: Vec3; normal: Vec3; profile: { le
     const dz = cone.normal.z;
     if (!(Math.abs(dz) > 1e-6)) return cone;
     const lengthMm = (socketZ - cone.pos.z) / dz;
+    if (!Number.isFinite(lengthMm) || lengthMm <= 0) return cone;
+    return { ...cone, profile: { ...cone.profile, lengthMm } };
+}
+
+/**
+ * The stump's cone, stretched so its socket lands on the joint. Unlike the
+ * generic helper this measures from the socket `getFinalSocketPosition` reports,
+ * so the contact disk's own offset is part of the answer.
+ */
+function seatStumpCone(cone: ContactCone, socketZ: number): ContactCone {
+    const dz = cone.normal.z;
+    if (!(Math.abs(dz) > 1e-6)) return cone;
+    const current = getFinalSocketPosition(cone);
+    const lengthMm = cone.profile.lengthMm + (socketZ - current.z) / dz;
     if (!Number.isFinite(lengthMm) || lengthMm <= 0) return cone;
     return { ...cone, profile: { ...cone.profile, lengthMm } };
 }

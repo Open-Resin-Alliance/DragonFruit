@@ -18,17 +18,26 @@ Quick actions:
 - **Platform**: place model on platform.
 - **Arrange**: one-click center + platform action.
 
-### Auto-lift tools
+### Lift and Drop
 
-- Toggle **Auto-Lift** on/off.
-- Set **Distance (mm)**.
-- Use **Lift** / **Drop** for direct repositioning.
+- **Lift** seats the selection's lowest point at the **Distance (mm)**.
+- **Drop** seats it on the plate.
+- The **Auto** toggle is the mode: on lifts the selection to the distance and
+  remembers the height it came from; off returns it there. Use **Drop** when the
+  plate is the destination.
 
-The Auto Support panel carries the same flag as a toggle button beside its preset
-selector, labelled with the state it is in (`Auto-Lift ON` / `Auto-Lift OFF`) and
-filled with the theme accent while it is on, because the gap it holds under the
-model is what a generated support has to span. One flag, two controls: flipping
-either writes `useTransformManager`'s `autoLift`.
+The height belongs to each model, not to the tool. A model lifted for supports
+keeps its gap through moves, rotations and scaling; a model dropped on the plate
+stays on the plate; a model loaded from a project keeps the height it was saved
+at. Changing the distance does not move a model already placed — press **Lift**
+to reseat it. The mode is saved with the model, so a project reopens with the
+same models tracking the distance and the same ones holding their own height.
+
+The Auto Support panel carries the same toggle beside its preset selector,
+labelled with the state it is in (`Auto-Lift ON` / `Auto-Lift OFF`) and filled
+with the theme accent while it is on, because the gap it holds under the model is
+what a generated support has to span. Both controls read the selection and call
+the same handler, so they cannot disagree.
 
 ## 3) Rotate
 
@@ -51,8 +60,8 @@ either writes `useTransformManager`'s `autoLift`.
 - Scaling keeps the mesh's current bottom height fixed by moving its centre up
   or down. A model on the plate stays on the plate; a raised model keeps its gap.
   This applies to uniform and per-axis scaling, percentage and millimetre fields,
-  gizmo dragging, and **Reset Scale**, including tilted models. Scaling does not
-  snap the bottom to the Auto-Lift distance.
+  gizmo dragging, and **Reset Scale**, including tilted models. Scaling holds
+  the model's own bottom; it does not reseat it to the lift distance.
 
 ## Several models at once
 

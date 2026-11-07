@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef, type SetStateAction } from 'react';
+import { setSceneClip } from './sceneClipStore';
 
 interface SlicingStateProps {
   hasGeometry: boolean;
@@ -48,25 +49,96 @@ export function useSlicingManager({ hasGeometry, zRange, layerHeightMm: controll
     return Math.max(0, Math.min(maxLayer, safeValue));
   }, [numLayers]);
 
+  // The clip is published straight to the scene store, so a drag does not need
+  // a React render to move the cross-section. While the thumb is held the
+  // committed index is deferred to the release; the slider draws its own value.
+  const scrubRef = useRef(false);
+  const pendingLayerIndexRef = useRef<number | null>(null);
+  const pendingLowerLayerIndexRef = useRef<number | null>(null);
+  const layerIndexRef = useRef(layerIndex);
+  const lowerLayerIndexRef = useRef(lowerLayerIndex);
+  const clipParamsRef = useRef({ hasGeometry, zRange, layerHeightMm, numLayers });
+
+  const publishClip = useCallback((upperIndex: number, lowerIndexValue: number) => {
+    const params = clipParamsRef.current;
+    if (!params.hasGeometry) {
+      setSceneClip(null, null);
+      return;
+    }
+    const EPS = 1e-6;
+    const upper = Math.max(upperIndex, lowerIndexValue);
+    const lower = Math.min(upperIndex, lowerIndexValue);
+    const maxLayer = Math.max(0, params.numLayers);
+    const lowerMm = lower === 0
+      ? null
+      : Math.min(
+        Math.max(params.zRange.min + (lower * params.layerHeightMm) - EPS, params.zRange.min - EPS),
+        params.zRange.max,
+      );
+    const upperMm = upper === 0 || upper >= maxLayer
+      ? null
+      : Math.min(
+        Math.max(params.zRange.min + (upper * params.layerHeightMm) + EPS, params.zRange.min),
+        params.zRange.max + EPS,
+      );
+    setSceneClip(lowerMm, upperMm);
+  }, []);
+
+  const beginScrub = useCallback(() => {
+    scrubRef.current = true;
+  }, []);
+
+  const endScrub = useCallback(() => {
+    scrubRef.current = false;
+    const pendingUpper = pendingLayerIndexRef.current;
+    const pendingLower = pendingLowerLayerIndexRef.current;
+    pendingLayerIndexRef.current = null;
+    pendingLowerLayerIndexRef.current = null;
+    if (pendingUpper != null) setLayerIndexState(pendingUpper);
+    if (pendingLower != null) setLowerLayerIndexState(pendingLower);
+  }, []);
+
   const setLayerIndex = useCallback((next: SetStateAction<number>) => {
-    setLayerIndexState((previous) => {
-      const resolved = typeof next === 'function'
-        ? (next as (prevState: number) => number)(previous)
-        : next;
-      const clamped = clampLayerIndex(resolved);
-      return previous === clamped ? previous : clamped;
-    });
-  }, [clampLayerIndex]);
+    const previous = layerIndexRef.current;
+    const resolved = typeof next === 'function'
+      ? (next as (prevState: number) => number)(previous)
+      : next;
+    const clamped = clampLayerIndex(resolved);
+    if (clamped === previous) return;
+    layerIndexRef.current = clamped;
+    publishClip(clamped, lowerLayerIndexRef.current);
+    if (scrubRef.current) {
+      pendingLayerIndexRef.current = clamped;
+      return;
+    }
+    setLayerIndexState(clamped);
+  }, [clampLayerIndex, publishClip]);
 
   const setLowerLayerIndex = useCallback((next: SetStateAction<number>) => {
-    setLowerLayerIndexState((previous) => {
-      const resolved = typeof next === 'function'
-        ? (next as (prevState: number) => number)(previous)
-        : next;
-      const clamped = clampLayerIndex(resolved);
-      return previous === clamped ? previous : clamped;
-    });
-  }, [clampLayerIndex]);
+    const previous = lowerLayerIndexRef.current;
+    const resolved = typeof next === 'function'
+      ? (next as (prevState: number) => number)(previous)
+      : next;
+    const clamped = clampLayerIndex(resolved);
+    if (clamped === previous) return;
+    lowerLayerIndexRef.current = clamped;
+    publishClip(layerIndexRef.current, clamped);
+    if (scrubRef.current) {
+      pendingLowerLayerIndexRef.current = clamped;
+      return;
+    }
+    setLowerLayerIndexState(clamped);
+  }, [clampLayerIndex, publishClip]);
+
+  // Keep the published clip in step with the committed state and with a new
+  // model's height or layer height. The refs the setters read are synced here
+  // too, so a scrub started between renders still sees the current values.
+  useEffect(() => {
+    layerIndexRef.current = layerIndex;
+    lowerLayerIndexRef.current = lowerLayerIndex;
+    clipParamsRef.current = { hasGeometry, zRange, layerHeightMm, numLayers };
+    publishClip(layerIndex, lowerLayerIndex);
+  }, [publishClip, layerIndex, lowerLayerIndex, hasGeometry, zRange, layerHeightMm, numLayers]);
 
   useEffect(() => {
     setLayerIndexState((previous) => {
@@ -134,27 +206,6 @@ export function useSlicingManager({ hasGeometry, zRange, layerHeightMm: controll
     return Math.min(Math.max(height, 0), Math.max(heightMm, 0));
   }, [hasGeometry, orderedLayerRange.lower, layerHeightMm, heightMm]);
 
-  const clipLower = useMemo(() => {
-    if (!hasGeometry || orderedLayerRange.lower === 0) return null;
-    const EPS = 1e-6;
-    const lower = zRange.min + (orderedLayerRange.lower * layerHeightMm) - EPS;
-    return Math.min(Math.max(lower, zRange.min - EPS), zRange.max);
-  }, [hasGeometry, orderedLayerRange.lower, zRange, layerHeightMm]);
-
-  const clipUpper = useMemo(() => {
-    if (!hasGeometry) return null;
-
-    // Disable upper clipping at either edge of the slider range.
-    // - upper=0: historical behavior
-    // - upper=max: new default-rest behavior (top slider parked at max)
-    const maxLayer = Math.max(0, numLayers);
-    if (orderedLayerRange.upper === 0 || orderedLayerRange.upper >= maxLayer) return null;
-
-    const EPS = 1e-6;
-    const upper = zRange.min + (orderedLayerRange.upper * layerHeightMm) + EPS;
-    return Math.min(Math.max(upper, zRange.min), zRange.max + EPS);
-  }, [hasGeometry, numLayers, orderedLayerRange.upper, zRange, layerHeightMm]);
-
   return {
     layerHeightMicron,
     setLayerHeightMicron,
@@ -162,12 +213,12 @@ export function useSlicingManager({ hasGeometry, zRange, layerHeightMm: controll
     setLayerIndex,
     lowerLayerIndex,
     setLowerLayerIndex,
+    beginScrub,
+    endScrub,
     layerHeightMm,
     heightMm,
     currentHeightMm,
     lowerCurrentHeightMm,
     numLayers,
-    clipLower,
-    clipUpper
   };
 }

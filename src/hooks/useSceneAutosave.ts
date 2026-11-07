@@ -3,6 +3,7 @@
 import React from 'react';
 import { subscribeHistory } from '@/history/historyStore';
 import { ExportManager } from '@/features/export/logic/ExportManager';
+import { buildSceneSaveContext } from '@/features/export/logic/sceneSaveContext';
 import { VoxlChunkCache } from '@/features/scene/voxl';
 import type { VoxlPrinterBundle } from '@/features/scene/voxl';
 import type { PlateOrdering } from '@/features/scene/plates/plateCascade';
@@ -589,7 +590,7 @@ export function useSceneAutosave({
               includeSupports: true,
               includeModel: true,
             },
-            {
+            buildSceneSaveContext({
               models: currentModels,
               activeModelId: activeModelIdRef.current,
               selectedModelIds: selectedModelIdsRef.current,
@@ -598,7 +599,7 @@ export function useSceneAutosave({
               plateOrdering: plateOrderingRef.current,
               plateName: plateNameRef.current,
               printer: printerRef.current,
-            },
+            }),
             {
               nativePath: voxlPath,
               chunkModifierSnapshots,

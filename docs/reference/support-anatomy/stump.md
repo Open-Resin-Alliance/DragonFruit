@@ -8,8 +8,8 @@ A stump is a minimal grounded support for contacts that sit very close to the bu
 - Chosen automatically, not placed by hand: grid placement emits a stump instead of a trunk or branch whenever the contact point is below `ANCHOR_HEIGHT_THRESHOLD_MM` (5 mm, `src/supports/autoSupport/constants.ts`).
 - It bypasses the grid system entirely — a stump does not take a grid node or participate in trunk pairing.
 
-!!! note "The word *anchor* still appears nearby, and means something else"
-    This type was called `Anchor` until it was renamed to `stump`. The word survives in the codebase for unrelated things: geometric anchoring (the point something is fixed to), the `'anchor'` sizing preset, and the scene arrange anchor. None of them are this type. The threshold constant above keeps its original name.
+> [!NOTE]
+> **The word *anchor* still appears nearby, and means something else.** This type was called `Anchor` until it was renamed to `stump`. The word survives in the codebase for unrelated things: geometric anchoring (the point something is fixed to), the `'anchor'` sizing preset, and the scene arrange anchor. None of them are this type. The threshold constant above keeps its original name.
 
 ## Geometry
 
@@ -28,6 +28,7 @@ The contact cone is **stretched to fit**, not placed at its authored length: the
 
 - **Always standalone, because it is load-bearing.** A stump never merges into a branching tree, never hosts a fan or merge leaf, and is never converted into a leaf by the consolidation pass. A flat region's grid infill therefore stays a 1:1 pillar forest instead of merging into trees at roughly 4 mm of root.
 - Branches, leaves and braces cannot target it — it is not a host shaft.
+- **Drawn through the shared instanced passes.** The root pass draws the frustum and the cone pass draws the contact cone, so a forest of stumps costs two instanced draws instead of a mesh set per stump. The per-stump detail renderer mounts only for a selected stump, which the batches exclude.
 - `origin` records which auto-support pass created it, used only for debug origin colouring.
 
 ## Constraints

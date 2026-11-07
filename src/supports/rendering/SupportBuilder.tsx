@@ -339,7 +339,8 @@ export function SupportBuilder({
             )}
 
             {/* Roots (if present) */}
-            {data.roots && !hidePlateContactPrimitives && (
+            {data.roots && (
+                <group visible={!hidePlateContactPrimitives}>
                 <RootsRenderer
                     root={data.roots}
                     shaftDiameter={shaftDiameter}
@@ -354,6 +355,7 @@ export function SupportBuilder({
                     raycast={nullRaycast}
                     raftOverride={raftOverride}
                 />
+                </group>
             )}
 
             {/* Segments */}

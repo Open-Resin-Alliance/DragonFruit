@@ -147,6 +147,7 @@ import { modelAnswersPointer, modelPlateScope, sceneryModelIds, SCENERY_DIM, typ
 import type { PlateFrame, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { StlMesh } from './StlMesh';
 import { setClipBounds } from './clipBoundsStore';
+import { getSceneClip, subscribeSceneClip } from '@/features/slicing/sceneClipStore';
 import { setSupportPlacementGuideZ, useSupportPlacementGuideActive } from './supportPlacementGuideStore';
 import { setModelMesh } from '@/supports/autoSupport/meshStore';
 import { setSupportNavigationActive } from '@/supports/interaction/navigationActiveStore';
@@ -193,7 +194,7 @@ import {
   isBoundsOutsideVolume,
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
-import { computeLowestZ, countTriangles } from '@/utils/geometry';
+import { countTriangles } from '@/utils/geometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { Toast } from '@/components/atoms';
 import { getCenteredPositionSource, type CenteredPositionSource } from '@/utils/modelBounds';
@@ -209,7 +210,7 @@ import { applyScaleFactor } from '@/components/gizmo/scale/applyScaleFactor';
 import { createWheelDeviceClassifier, type WheelDevice } from '@/components/scene/SceneCanvas/wheelDeviceClassifier';
 import { getSelectionGizmoCenter } from '@/features/scene/selectionPosition';
 import { rotateSelectionFromActive, type SelectionRotationMode } from '@/features/scene/selectionTransform';
-import { preserveModelBottom } from '@/features/scene/selectionLiftDrop';
+import { alignModelToLift, preserveModelBottom } from '@/features/scene/selectionLiftDrop';
 import { DEFAULT_LIFT_DISTANCE_MM } from '@/features/transform/liftDefaults';
 import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 import {
@@ -505,8 +506,6 @@ export function SceneCanvas({
   selectedModelIds,
   // Legacy props kept for compatibility if needed
   geom,
-  clipLower,
-  clipUpper,
   meshColor, // Global fallback color? Each model has color.
   meshVisible,
   shaderType,
@@ -570,9 +569,7 @@ export function SceneCanvas({
   uniformScaling = true,
   localTransformSpace = false,
   selectionRotationMode = 'group',
-  autoLift = false,
   liftDistance = DEFAULT_LIFT_DISTANCE_MM,
-  autoSnapEnabled = true,
   onTransformChange,
   onTransformStart,
   isModelPlateLocked,
@@ -627,7 +624,6 @@ export function SceneCanvas({
   supportRenderRefreshNonce = 0,
   gizmoResetNonce = 0,
   historyTransformResyncToken = 0,
-  isLayerScrubbing = false,
   onRegisterExportThumbnailCapture,
   exportThumbnailRenderOptions,
   indicatorPlaneZ = null,
@@ -645,8 +641,6 @@ export function SceneCanvas({
   visualActiveModelId?: string | null;
   selectedModelIds?: string[];
   geom?: any;
-  clipLower?: number | null;
-  clipUpper?: number | null;
   meshColor?: string;
   meshVisible?: boolean;
   shaderType?: import('@/features/shaders/mesh').MeshShaderType;
@@ -740,9 +734,7 @@ export function SceneCanvas({
   localTransformSpace?: boolean;
   /** How the gizmo turns a multi-model selection: as one block, or each model in place. */
   selectionRotationMode?: SelectionRotationMode;
-  autoLift?: boolean;
   liftDistance?: number;
-  autoSnapEnabled?: boolean;
   onTransformChange?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
   /** Whether a model's bed refuses edits, so a drag never starts on one. */
   isModelPlateLocked?: (modelId: string) => boolean;
@@ -881,7 +873,6 @@ export function SceneCanvas({
   supportRenderRefreshNonce?: number;
   gizmoResetNonce?: number;
   historyTransformResyncToken?: number;
-  isLayerScrubbing?: boolean;
   /**
    * Registered with the canvas so a caller outside it can take the shot. The optional bounds
    * frame a bed other than the one being worked on — a batch slices one bed after another while
@@ -898,6 +889,11 @@ export function SceneCanvas({
   onNewDeviceDetected?: (deviceId: string) => void;
 }) {
   const { _ } = useLingui();
+  // The cross-section clip lives outside React so a slider drag does not
+  // re-render the page (and with it every panel) once per tick.
+  const sceneClip = React.useSyncExternalStore(subscribeSceneClip, getSceneClip, getSceneClip);
+  const clipLower = sceneClip.lower;
+  const clipUpper = sceneClip.upper;
   const DROP_ANIMATION_DURATION_MS = 760;
   const selectedMarker = React.useMemo(() => {
     if (overlaySelectedIslandId == null || !islandMarkers) return null;
@@ -1008,8 +1004,8 @@ export function SceneCanvas({
   /** Whether any placement mode is live. Derived, so no type is named here. */
   const supportCreationModeActive = Object.values(placementActive).some(Boolean);
   const isPlacementActive = supportCreationModeActive || isJointCreationActive;
-  // The visual-settings panel is a fixed 48px-wide strip; the view cube offsets
-  // by its full extent so it never overlaps the floating panel.
+  // The cross-section slider is a fixed 48px-wide strip; the view cube offsets
+  // by its full extent so it never overlaps the strip.
   const nonPrintingViewCubeRightMargin = 48 + FLOATING_PANEL_RIGHT_INSET_PX + VIEW_CUBE_PANEL_GAP_PX + VIEW_CUBE_HALF_EXTENT_PX;
 
   const smoothingProcessing = React.useSyncExternalStore(
@@ -1120,38 +1116,8 @@ export function SceneCanvas({
 
   const alignLiveTransformToLift = React.useCallback((model: LoadedModel | null | undefined, candidate: ModelTransform | null) => {
     if (!model || !candidate) return candidate;
-    if (!autoSnapEnabled) return candidate;
-
-    const geometry = model.geometry?.geometry;
-    if (!geometry) return candidate;
-
-    const bbox = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position') as THREE.BufferAttribute);
-    const center = bbox.getCenter(new THREE.Vector3());
-
-    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-    const rotScaleMatrix = new THREE.Matrix4();
-    rotScaleMatrix.compose(
-      new THREE.Vector3(0, 0, 0),
-      quaternionFromGlobalEuler(candidate.rotation),
-      candidate.scale,
-    );
-
-    const posMatrix = new THREE.Matrix4().makeTranslation(candidate.position.x, candidate.position.y, candidate.position.z);
-    const finalMatrix = posMatrix.multiply(rotScaleMatrix).multiply(offsetMatrix);
-    const lowestWorldZ = computeLowestZ(geometry, finalMatrix);
-    const targetZ = autoLift ? liftDistance : 0.001;
-    const offset = targetZ - lowestWorldZ;
-
-    if (!Number.isFinite(offset) || Math.abs(offset) <= 1e-5) {
-      return candidate;
-    }
-
-    return {
-      position: candidate.position.clone().add(new THREE.Vector3(0, 0, offset)),
-      rotation: candidate.rotation.clone(),
-      scale: candidate.scale.clone(),
-    };
-  }, [autoLift, autoSnapEnabled, liftDistance]);
+    return alignModelToLift(model, candidate, liftDistance);
+  }, [liftDistance]);
 
   /**
    * The models standing on another bed, which are scenery: drawn dimmed, and answering no
@@ -4051,9 +4017,13 @@ export function SceneCanvas({
 
   const activeModelTransform = React.useMemo(() => {
     if (!activeModel) return null;
-    if (transform && activeModelId === activeModel.id) return transform;
+    // The live manager transform is only the truth while a drag is driving it.
+    // At rest the store owns the model, and a manager value left over from a
+    // gesture (or a linked peer's propagation) must not move the gizmo.
+    const live = isGizmoDragging || isGizmoRetargeting;
+    if (live && transform && activeModelId === activeModel.id) return transform;
     return activeModel.transform;
-  }, [activeModel, transform, activeModelId]);
+  }, [activeModel, activeModelId, isGizmoDragging, isGizmoRetargeting, transform]);
 
   // Local space puts the gizmo in the model's own frame: its arrows point along the
   // model's axes and its rings turn about them. A multi-selection has no single
@@ -5068,7 +5038,10 @@ export function SceneCanvas({
   const hideRaftPrimitives = (mode === 'support' && plateContactCullActive) || ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing');
   const hideGridHelpers = false;
   const modifyToolActive = mode === 'prepare' && transformMode === 'transform';
-  const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting || isLayerScrubbing;
+  // A layer scrub is not a camera gesture: it moves the cross-section, and
+  // switching the scene's level of detail for it rebuilt the model geometry on
+  // both ends of every drag. That rebuild cost far more than the scrub saved.
+  const navigationLodActive = isOrbitInteracting || isWheelZoomInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting;
   /**
    * The active model's supports/raft always live in their own attached layer;
    * the world layer always excludes that model.
@@ -6753,7 +6726,10 @@ export function SceneCanvas({
           plateArrangeDisabledTitle={plateArrangeDisabledTitle}
           onArrangePlate={onArrangePlate}
         />
-        <EnableLocalClipping enabled={clipLower != null || clipUpper != null || indicatorPlaneZ != null || !!organicCutKeyGizmo} />
+        {/* Always on: the clip planes are always present (parked outside the
+            scene when a bound is open), and flipping the renderer's local
+            clipping would recompile every material that carries them. */}
+        <EnableLocalClipping enabled />
         <CameraProvider cameraRef={cameraRef} />
         <CameraProjectionController mode={cameraProjectionMode} perspectiveFov={perspectiveFov} sceneRadius={orthoSceneRadiusMm} />
         <OrthoFrustumSync
@@ -6869,6 +6845,7 @@ export function SceneCanvas({
                     : (transform ?? model.transform));
                 const shouldApplyLiveLiftAlignment =
                   (isGizmoDragging || isGizmoRetargeting || isPostGizmoInteractionGuardActive)
+                  && !isActiveGizmoZMove
                   && (activeGizmoDragDescriptor?.operation
                     ?? (isPostGizmoInteractionGuardActive ? lastEndedGizmoOperationRef.current : null)) !== 'scale';
                 const activeTransformForRender = isActive
@@ -6908,9 +6885,9 @@ export function SceneCanvas({
                   <React.Fragment key={model.id}>
                     <StlMesh
                       modelId={model.id}
-                      geometry={model.geometry.geometry}
                       clipLower={clipLower}
                       clipUpper={clipUpper}
+                      geometry={model.geometry.geometry}
                       meshColor={modelMeshColor} // Use model color, dimmed on a bed you are not working on
                       nonManifold={modelIsNonManifold} // Red checkerboard overlay when the model fails the manifold status check
                       meshRef={meshGroupRefCallback}
@@ -7004,8 +6981,6 @@ export function SceneCanvas({
                             hideRaftPrimitives={hideRaftPrimitives}
                             hideSupports={PREPARE_MERGED_SUPPORTS && prepareMergedSupports.entries.has(model.id)}
                             hidePlateContactPrimitives={hidePlateContactPrimitives}
-                            clipLower={clipLower}
-                            clipUpper={clipUpper}
                             supportColorsByModelId={supportColorsByModelId}
                             hoverTintColor={supportHoverTintColor}
                             hoverTintStrength={hoverTintStrength}
@@ -7037,8 +7012,6 @@ export function SceneCanvas({
                       {PREPARE_MERGED_SUPPORTS && mode === 'prepare' && perfLayerEnabled('mergedMesh') && (
                         <PrepareMergedSupportMesh
                           entry={prepareMergedSupports.entries.get(model.id) ?? null}
-                          clipLower={clipLower}
-                          clipUpper={clipUpper}
                           selectedModelIds={selectedModelIds}
                           marqueeCandidateModelIds={marqueeCandidateModelIds}
                           hoverModelId={supportHoverModelId}
@@ -7104,8 +7077,6 @@ export function SceneCanvas({
                         navigationLodActive
                         hideRaftPrimitives={hideRaftPrimitives}
                         hidePlateContactPrimitives={hidePlateContactPrimitives}
-                        clipLower={clipLower}
-                        clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
                         hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
@@ -7188,8 +7159,6 @@ export function SceneCanvas({
                         navigationLodActive
                         hideRaftPrimitives={hideRaftPrimitives}
                         hidePlateContactPrimitives={hidePlateContactPrimitives}
-                        clipLower={clipLower}
-                        clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
                         hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
@@ -7226,8 +7195,6 @@ export function SceneCanvas({
                         navigationLodActive
                         hideRaftPrimitives={hideRaftPrimitives}
                         hidePlateContactPrimitives={hidePlateContactPrimitives}
-                        clipLower={clipLower}
-                        clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
                         hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
@@ -7355,8 +7322,6 @@ export function SceneCanvas({
                   hideRaftPrimitives={hideRaftPrimitives}
                   hideRaftPrimitivesForInactiveModels={mode === 'support' && !!activeModelId}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
                   supportColorsByModelId={supportColorsByModelId}
                   hoverTintColor={supportHoverTintColor}
                   hoverTintStrength={hoverTintStrength}
@@ -7396,10 +7361,6 @@ export function SceneCanvas({
                   sourceObjectVersion={clipUpper != null ? crossSectionStencilSourceVersion : undefined}
                   extraSources={[activeGroupRef.current]}
                   extraSourcesKey={activeModelId}
-                  // During slider scrubbing, avoid expensive source z-bound
-                  // traversal/bucketing work. Stencil clipping still constrains
-                  // fragments correctly, so this is a safe CPU optimization.
-                  skipSourceZBounds={clipUpper == null || isLayerScrubbing}
                   y={(clipUpper ?? indicatorPlaneZ)!}
                   otherClipY={clipLower}
                   color={clipUpper != null ? '#FFFFFF' : (indicatorPlaneColor ?? '#ec2a77')}
@@ -7425,7 +7386,6 @@ export function SceneCanvas({
                   sourceObjectVersion={crossSectionStencilSourceVersion}
                   extraSources={[activeGroupRef.current]}
                   extraSourcesKey={activeModelId}
-                  skipSourceZBounds={isLayerScrubbing}
                   y={clipLower}
                   otherClipY={clipUpper}
                   color="#FFFFFF"
@@ -7482,8 +7442,6 @@ export function SceneCanvas({
                   supportExcludeModelIds={prepareMergedSupportProxyExcludeModelIds}
                   hideRaftPrimitives={hideRaftPrimitives}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
                   supportColorsByModelId={supportColorsByModelId}
                   hoverTintColor={supportHoverTintColor}
                   hoverTintStrength={hoverTintStrength}
@@ -7527,8 +7485,6 @@ export function SceneCanvas({
                         navigationLodActive={navigationLodActive}
                         hideRaftPrimitives={hideRaftPrimitives}
                         hidePlateContactPrimitives={hidePlateContactPrimitives}
-                        clipLower={clipLower}
-                        clipUpper={clipUpper}
                         supportColorsByModelId={supportColorsByModelId}
                         hoverTintColor={supportHoverTintColor}
                         hoverTintStrength={hoverTintStrength}
@@ -8102,8 +8058,6 @@ export function SceneCanvas({
                   opacity={overlayOpacity ?? 0.5}
                   transform={transform}
                   selectedIslandId={overlaySelectedIslandId}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
                 />
               )}
 
@@ -8115,8 +8069,6 @@ export function SceneCanvas({
                 <IslandInstancesOverlay
                   instances={islandInstances}
                   selectedIslandId={overlaySelectedIslandId}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
                   opacity={overlayOpacity ?? 0.9}
                 />
               )}
@@ -8132,8 +8084,6 @@ export function SceneCanvas({
                 showTerritory={voxelShowTerritory}
                 transform={transform}
                 zOffset={scanBBox?.min.z ?? 0}
-                clipLower={clipLower}
-                clipUpper={clipUpper}
               />
 
               {scanResults && (

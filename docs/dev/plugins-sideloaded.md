@@ -474,9 +474,10 @@ package that asks for it today is refused rather than quietly given a ring.
 - **macOS** is unproblematic for a spawned process: no library validation, no
   entitlements, hardened runtime stays strict. The executable lives in app data,
   written by the app, so no quarantine flag is attached.
-- **Windows** builds are unsigned today, so a partner executable will attract
-  SmartScreen and some AV heuristics on first run. Provenance comes from the
-  package signature, not the OS.
+- **Windows** does not sign spawned partner executables: they are third-party
+  binaries, and DragonFruit's own Authenticode signature does not extend to
+  them. A partner executable will attract SmartScreen and some AV heuristics on
+  first run. Provenance comes from the package signature, not the OS.
 - **Flatpak** needs nothing new: the plugin lives in the app's writable data
   dir, which the sandbox already sees, and spawning from there is ordinary `exec`.
 - All paths go through the app data resolver, never a hardcoded location; a

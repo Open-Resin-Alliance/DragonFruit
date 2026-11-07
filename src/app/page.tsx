@@ -27,6 +27,7 @@ import { PrintingPreviewPane } from '@/components/organisms/PrintingPreviewPane'
 import { DiagnosticsModals } from '@/components/organisms/modals/DiagnosticsModals';
 import { PrintingModals } from '@/components/organisms/modals/PrintingModals';
 import { SceneFileModals } from '@/components/organisms/modals/SceneFileModals';
+import { SceneMaterialReassignModal, type SceneMaterialReassignOption } from '@/components/modals/SceneMaterialReassignModal';
 import { ModifierModals } from '@/components/organisms/modals/ModifierModals';
 import { MeshRepairModals } from '@/components/organisms/modals/MeshRepairModals';
 import {
@@ -64,7 +65,7 @@ import {
   type ArrangePrecisionMode,
 } from '@/components/controls/ArrangePanel';
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
-import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
+import { CrossSliderPanel } from '@/components/controls/CrossSliderPanel';
 import { contactEndpointsFor, countSupportCollections, knotHostId, spanKnotHostType, getSupportTypeDescriptor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, updateSupportEntity, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
@@ -73,6 +74,7 @@ import { getSettings as getSupportDisplaySettings, subscribeToSettings as subscr
 import { useLeafPlacementState } from '@/supports/SupportTypes/Leaf/leafPlacementState';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
+import { buildSceneSaveContext } from '@/features/export/logic/sceneSaveContext';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { joinSliceOutputPath, sliceFileBaseName } from '@/features/slicing/plateSliceNaming';
@@ -90,7 +92,7 @@ import {
   dispatchDeleteModelAction,
   resolveModelActionTargetIds,
 } from '@/features/scene/modelActionTargets';
-import { buildLiftDropUpdates, getModelLowestWorldZ, preserveModelBottom } from '@/features/scene/selectionLiftDrop';
+import { alignModelToLift, buildLiftDropUpdates, buildLiftModeUpdates, getModelLowestWorldZ, isModelAutoLifted, PLATE_CLEARANCE_MM } from '@/features/scene/selectionLiftDrop';
 import { dropOverlaySupportedFormats, dropOverlayUnsupportedFormats } from '@/features/scene/sceneImportMessages';
 import {
   buildCenterSelectionUpdates,
@@ -258,6 +260,7 @@ import { useSceneCollectionManager, getSceneSnapshotRegistryBytes } from '@/feat
 import { useSupportHistoryHandlers } from '@/supports/history/useSupportHistoryHandlers';
 import { useNativeSpaceMouseLifecycle } from '@/components/scene/camera/useNativeSpaceMouseLifecycle';
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
+import { setSceneClipGate } from '@/features/slicing/sceneClipStore';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 // Islands PoC (Support-tab unified islands panel). Tab-agnostic + modular — see
@@ -324,6 +327,7 @@ import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
+  getMaterialProfilesForPrinter,
   selectPrinterNetworkDevice,
   setActivePrinterProfile,
   subscribeToProfileStore,
@@ -337,7 +341,7 @@ import {
   setPrinterReachabilityMap,
   subscribeToPrinterReachability,
 } from '@/features/network/printerReachabilityStore';
-import { resolveTankMaterialProfiles } from '@/features/profiles/tankMaterials';
+import { matchSceneMaterialsToTanks, resolveTankMaterialProfiles } from '@/features/profiles/tankMaterials';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import { sliceProfileFingerprint } from '@/features/printing/slicedPlates';
 import { useSlicedPlatePreviewLoading, useSlicedPlates } from '@/features/printing/useSlicedPlates';
@@ -933,6 +937,20 @@ export default function Home() {
     [scene.models],
   );
   const previousPrinterRef = React.useRef<{ id: string; materialMode?: string } | null>(null);
+  type MaterialReassignPrompt = {
+    previous: { id: string; name: string; materialMode?: string };
+    previousName: string;
+    newPrinterId: string;
+    newName: string;
+    mode: 'reassign' | 'tankMatch';
+    rows: Array<{ id: string; name: string; color?: string }>;
+    options: SceneMaterialReassignOption[];
+    tankRows?: Array<{ id: string; name: string; color?: string; tankNumber: number }>;
+    tankMaterials?: string[];
+    canAssignTanks?: boolean;
+  };
+  const materialReassignPreviousRef = React.useRef<{ id: string; name: string; materialMode?: string } | null>(null);
+  const [materialReassignPrompt, setMaterialReassignPrompt] = React.useState<MaterialReassignPrompt | null>(null);
   const [printerSceneConflictPreviousId, setPrinterSceneConflictPreviousId] = React.useState<string | null>(null);
   // A printer the user chose to keep despite the mismatch; the warning must not
   // re-raise for the same choice on every render.
@@ -968,6 +986,131 @@ export default function Home() {
     }
   }, [activePrinterProfile, conflictAcknowledgedPrinterId, sceneUsesMultiTankMaterials]);
 
+  // A different multi-tank printer keeps its own material profiles. Any scene
+  // references that do not resolve on the new printer must be mapped or cleared
+  // before the scene can slice.
+  React.useEffect(() => {
+    const current = activePrinterProfile;
+    const previous = materialReassignPreviousRef.current;
+    materialReassignPreviousRef.current = current
+      ? { id: current.id, name: current.name, materialMode: current.materialMode }
+      : null;
+    if (!current || !previous || previous.id === current.id) return;
+    if (!sceneUsesMultiTankMaterials) return;
+    if (previous.materialMode !== 'multiTank' || current.materialMode !== 'multiTank') return;
+
+    const sceneMaterialIds = new Set<string>();
+    for (const model of scene.models) {
+      if (model.materialProfileId) sceneMaterialIds.add(model.materialProfileId);
+      for (const id of model.bodyMaterialProfileIds ?? []) {
+        if (id) sceneMaterialIds.add(id);
+      }
+    }
+    if (sceneMaterialIds.size === 0) return;
+
+    const newMaterials = getMaterialProfilesForPrinter(current.id, profileState);
+    const resolvedOnNewPrinter = new Set(newMaterials.map((material) => material.id));
+    const unresolved = [...sceneMaterialIds].filter((id) => !resolvedOnNewPrinter.has(id));
+    const assignedTankMaterials = (current.tankMaterials ?? [])
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+    if (unresolved.length > 0) {
+      const options = assignedTankMaterials
+        .map((id) => newMaterials.find((material) => material.id === id))
+        .filter((material): material is NonNullable<typeof material> => Boolean(material))
+        .map((material) => ({
+          id: material.id,
+          name: resolveCompositeMaterialLabel(material) ?? material.name,
+          ...(material.color ? { color: material.color } : {}),
+        }));
+      const rows = unresolved.map((id) => {
+        const material = profileState.materialProfiles.find((entry) => entry.id === id);
+        return {
+          id,
+          name: resolveCompositeMaterialLabel(material) ?? material?.name ?? 'Unknown material',
+          ...(material?.color ? { color: material.color } : {}),
+        };
+      });
+      setMaterialReassignPrompt({
+        previous,
+        previousName: previous.name,
+        newPrinterId: current.id,
+        newName: current.name,
+        mode: 'reassign',
+        rows,
+        options,
+      });
+      return;
+    }
+
+    const unassignedSceneMaterials = [...sceneMaterialIds]
+      .filter((id) => !assignedTankMaterials.includes(id));
+    if (unassignedSceneMaterials.length === 0) return;
+
+    const tankCount = Math.max(0, current.tankCount ?? current.tankMaterials?.length ?? 0);
+    if (tankCount === 0) return;
+    const targetTanks = Array.from(
+      { length: tankCount },
+      (_, index) => current.tankMaterials?.[index] ?? '',
+    );
+    const previousPrinter = profileState.printerProfiles.find((printer) => printer.id === previous.id);
+    const { tankMaterials, assignments } = matchSceneMaterialsToTanks(
+      unassignedSceneMaterials,
+      previousPrinter?.tankMaterials ?? [],
+      targetTanks,
+    );
+    if (assignments.length === 0) return;
+    const tankRows = assignments.map((assignment) => {
+      const material = newMaterials.find((entry) => entry.id === assignment.materialId)
+        ?? profileState.materialProfiles.find((entry) => entry.id === assignment.materialId);
+      return {
+        id: assignment.materialId,
+        name: resolveCompositeMaterialLabel(material) ?? material?.name ?? 'Unknown material',
+        ...(material?.color ? { color: material.color } : {}),
+        tankNumber: assignment.tankIndex + 1,
+      };
+    });
+    setMaterialReassignPrompt({
+      previous,
+      previousName: previous.name,
+      newPrinterId: current.id,
+      newName: current.name,
+      mode: 'tankMatch',
+      rows: [],
+      options: [],
+      tankRows,
+      tankMaterials,
+      canAssignTanks: assignments.length === unassignedSceneMaterials.length,
+    });
+  }, [activePrinterProfile, profileState, scene.models, sceneUsesMultiTankMaterials]);
+
+  const applyMaterialReassignment = React.useCallback((mapping: Map<string, SceneMaterialReassignOption>) => {
+    const next = new Map<string, { id: string; color?: string }>();
+    mapping.forEach((option, oldId) => next.set(oldId, { id: option.id, ...(option.color ? { color: option.color } : {}) }));
+    scene.reassignSceneMaterials(next);
+    setMaterialReassignPrompt(null);
+  }, [scene.reassignSceneMaterials]);
+
+  const unassignSceneMaterialsForPrinter = React.useCallback(() => {
+    scene.reassignSceneMaterials(new Map(), true);
+    setMaterialReassignPrompt(null);
+  }, [scene.reassignSceneMaterials]);
+
+  const assignSceneMaterialsToMatchingTanks = React.useCallback(() => {
+    const prompt = materialReassignPrompt;
+    if (!prompt?.tankMaterials) return;
+    updatePrinterProfile(prompt.newPrinterId, { tankMaterials: prompt.tankMaterials });
+    setMaterialReassignPrompt(null);
+  }, [materialReassignPrompt]);
+
+  const keepPreviousPrinterForMaterials = React.useCallback(() => {
+    const prompt = materialReassignPrompt;
+    if (!prompt) return;
+    materialReassignPreviousRef.current = prompt.previous;
+    setMaterialReassignPrompt(null);
+    setActivePrinterProfile(prompt.previous.id);
+  }, [materialReassignPrompt]);
+
   /**
    * Undo the incompatible choice: go back to the printer that was active, or —
    * when the same profile's material mode was the change — switch that profile
@@ -991,7 +1134,7 @@ export default function Home() {
   );
 
   // 2. Transform Management (needs geom for bounds)
-  const transformMgr = useTransformManager({ geom: scene.geom });
+  const transformMgr = useTransformManager({ geom: scene.geom, activeModel: scene.activeModel ?? null });
   const [uniformScaling, setUniformScaling] = React.useState(true);
   // Gizmo frame: world axes, or the active model's own (issue #504).
   const [localTransformSpace, setLocalTransformSpace] = React.useState(false);
@@ -1523,7 +1666,6 @@ export default function Home() {
     setIsPrintingLayerScrubbing,
     printingPngLoadedUrl,
     setPrintingPngLoadedUrl,
-    isSceneLayerScrubbing,
     setIsSceneLayerScrubbing,
     isPrintingPreviewSettled,
     setIsPrintingPreviewSettled,
@@ -2542,9 +2684,11 @@ export default function Home() {
       rotation,
       scale: current.scale.clone(),
     };
-    // A new down-axis means new extents: seat to the plate clearance after
+    // A new down-axis means new extents: reseat to the lift distance after
     // orientation — lift OR drop — so repeated orienting never drifts the model
-    // upward. One history entry covers rotate + lift.
+    // upward. One history entry covers rotate + lift. This is an explicit
+    // placement action, so it uses the tool's distance rather than the model's
+    // own bottom.
     if (activeModel.id === modelId) {
       const lowestWorldZ = getModelLowestWorldZ({ id: modelId, geometry: activeModel.geometry, transform: after });
       after.position.z += transformMgr.liftDistance - lowestWorldZ;
@@ -4451,8 +4595,6 @@ export default function Home() {
     // Captured before the save so a Save As can clean up the sidecar beside the
     // project the user just moved away from.
     const previousScenePath = activeSceneFilePath;
-    const visibleModels = scene.models.filter((model) => model.visible);
-    const scopeModels = visibleModels.length > 0 ? visibleModels : scene.models;
     const resolvedNativePath = options?.nativePathOverride !== undefined
       ? options.nativePathOverride
       : activeSceneFilePath;
@@ -4488,17 +4630,19 @@ export default function Home() {
         includeSupports: true,
         includeModel: true,
       },
-      {
-        models: scopeModels,
-        activeModelId: scene.activeModelId,
-        selectedModelIds: scene.selectedModelIds,
-        plates: scene.plates,
-        activePlateId: scene.activePlateId,
-        plateName: scene.plateName,
-        printer: scene.voxlPrinterBundle ?? undefined,
-        plateOrdering: scene.plateOrdering,
-        exportThumbnailPng: exportThumbnailPng ?? undefined,
-      },
+      buildSceneSaveContext(
+        {
+          models: scene.models,
+          activeModelId: scene.activeModelId,
+          selectedModelIds: scene.selectedModelIds,
+          plates: scene.plates,
+          activePlateId: scene.activePlateId,
+          plateName: scene.plateName,
+          printer: scene.voxlPrinterBundle ?? undefined,
+          plateOrdering: scene.plateOrdering,
+        },
+        exportThumbnailPng,
+      ),
       {
         nativePath: resolvedNativePath,
       },
@@ -4544,7 +4688,23 @@ export default function Home() {
     }
 
     return savedPath;
-  }, [activeSceneFilePath, clearAutosave, markSceneSaveBaseline, scene.activeModelId, scene.models, scene.selectedModelIds]);
+  }, [
+    activeSceneFilePath,
+    clearAutosave,
+    exportSuccessToastFadeTimeoutRef,
+    exportThumbnailCaptureRunnerRef,
+    markSceneSaveBaseline,
+    scene.activeModelId,
+    scene.activePlateId,
+    scene.models,
+    scene.plateName,
+    scene.plateOrdering,
+    scene.plates,
+    scene.selectedModelIds,
+    scene.voxlPrinterBundle,
+    setExportSuccessToast,
+    setIsExportSuccessToastVisible,
+  ]);
 
   const handleAutosaveRestore = React.useCallback(async () => {
     const recoverySnapshot = autosaveRecovery;
@@ -6585,20 +6745,6 @@ export default function Home() {
         return;
       }
 
-      const shouldSuppressAutoLiftDuringSync =
-        scene.activeModel.ignoreAutoLift && displayActiveModelId !== scene.activeModelId;
-      const shouldDisableAutoSnap =
-        shouldSuppressAutoLiftDuringSync || scene.activeModel.manualZMoveOverride === true;
-
-      // Some imported models need to keep their stored transform when first synced into
-      // the live transform manager. Only suppress auto-lift for that initial sync pass;
-      // once synchronized, the Modify tab settings should work normally again.
-      if (shouldDisableAutoSnap) {
-        transformMgr.transformHook.setAutoSnapEnabled(false);
-      } else {
-        transformMgr.transformHook.setAutoSnapEnabled(true);
-      }
-
       // 1. Update transform manager to match model ONLY if different
       // This prevents infinite loop when model object reference changes but values are same
       const currentT = transformMgr.transform;
@@ -6790,7 +6936,7 @@ export default function Home() {
   const handleTransformChange = React.useCallback((pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
     transformMgr.setIsTransforming(true);
     if (isScaleGestureRef.current) {
-      // Scale gizmos already preserve the starting bottom; auto-snap would replace that Z.
+      // Scale gizmos already hold the starting bottom; the live snap would recompute the same Z.
       transformMgr.pendingTransformRef.current = { pos: pos.clone(), rot: rot.clone(), scl: scl.clone() };
       transformMgr.transformHook.setPosition(pos.x, pos.y, pos.z);
       transformMgr.transformHook.setRotation(rot.x, rot.y, rot.z);
@@ -8249,19 +8395,16 @@ export default function Home() {
 
   const isTransitioningOutOfPrinting = scene.mode !== 'printing' && previousSceneModeRef.current === 'printing';
 
-  const sceneClipLower = React.useMemo(() => {
-    if (isTemporarilyDisablingCrossSectionForThumbnail) return null;
-    if (!isCrossSectionEnabled) return null;
-    if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
-    return slicing.clipLower;
-  }, [isCrossSectionEnabled, isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipLower]);
-
-  const sceneClipUpper = React.useMemo(() => {
-    if (isTemporarilyDisablingCrossSectionForThumbnail) return null;
-    if (!isCrossSectionEnabled) return null;
-    if (scene.mode === 'printing' || isTransitioningOutOfPrinting) return null;
-    return slicing.clipUpper;
-  }, [isCrossSectionEnabled, isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode, slicing.clipUpper]);
+  // The scene reads the clip from its own store, so a slider drag does not
+  // re-render this page. The switch below is the only thing that gates it.
+  React.useEffect(() => {
+    setSceneClipGate(
+      !isTemporarilyDisablingCrossSectionForThumbnail
+      && isCrossSectionEnabled
+      && scene.mode !== 'printing'
+      && !isTransitioningOutOfPrinting,
+    );
+  }, [isCrossSectionEnabled, isTemporarilyDisablingCrossSectionForThumbnail, isTransitioningOutOfPrinting, scene.mode]);
 
   const effectiveHoverTintStrengthForScene = React.useMemo(() => {
     return scene.mode === 'printing' ? 0 : scene.hoverTintStrength;
@@ -8471,25 +8614,26 @@ export default function Home() {
 
   // Glue Logic: Transform End Hook
   // When rotation ends, we must clear scan data as it invalidates the scan
-  const applyPostRotateLift = () => {
+  const applyPostRotateLift = (): ModelTransform | null => {
     if (!scene.activeModelId) {
       transformMgr.pendingTransformRef.current = null;
-      return;
+      return null;
     }
 
     if (postRotateLiftScheduledRef.current) {
-      return;
+      return null;
     }
     postRotateLiftScheduledRef.current = true;
 
     // Run immediately: onRotateEnd already writes the latest transform into
     // pendingTransformRef, so performAutoSnap can safely use current values.
     try {
-      transformMgr.performAutoSnap();
+      const snapped = transformMgr.performAutoSnap(pendingTransformHistoryRef.current?.before);
       // handleTransformEnd flushes the raw rotated transform first so support
-      // geometry can catch up. Once auto-lift adjusts Z, we need to let the
-      // normal persistence effect write that lifted result back to the model.
+      // geometry can catch up. Once the reseat adjusts Z, we need to let the
+      // normal persistence effect write that result back to the model.
       transformEndFlushedRef.current = false;
+      return snapped;
     } finally {
       postRotateLiftScheduledRef.current = false;
     }
@@ -8501,6 +8645,7 @@ export default function Home() {
     options?: { skipStoreCommit?: boolean; spawnPlateForDrop?: boolean },
   ) => {
     isScaleGestureRef.current = false;
+    transformMgr.setSnapEnabled(true);
     const stampNow = () => ({ perfMs: performance.now(), epochMs: Date.now() });
     const releasePerf = performance.now();
 
@@ -8548,6 +8693,12 @@ export default function Home() {
     };
     const expectedModelTransforms: Array<{ modelId: string; transform: ModelTransform }> = [];
 
+    // Reseat before the store write, so the committed transform is the one the
+    // model will rest at. Committing the raw rotation first and correcting it
+    // afterwards leaves the mesh and gizmo a write apart, which reads as a jump
+    // when a re-render lands between them.
+    const snappedAfter = operation === 'rotate' ? applyPostRotateLift() : null;
+
     // Flush the final model transform into the store synchronously so
     // transformSupportsForModel() recalculates all support positions before
     // we reset the visual drag-group matrix. This eliminates the 1-frame
@@ -8555,23 +8706,29 @@ export default function Home() {
     if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
       const pending = transformMgr.pendingTransformRef.current;
       const pendingHistory = pendingTransformHistoryRef.current;
-      const current = (
-        finalTransform && isFiniteTransform(finalTransform)
-      )
+      const current = snappedAfter
         ? {
-            position: finalTransform.position.clone(),
-            rotation: finalTransform.rotation.clone(),
-            scale: finalTransform.scale.clone(),
+            position: snappedAfter.position.clone(),
+            rotation: snappedAfter.rotation.clone(),
+            scale: snappedAfter.scale.clone(),
           }
         : (
-          pending && isFiniteTransform({ position: pending.pos, rotation: pending.rot, scale: pending.scl })
+          finalTransform && isFiniteTransform(finalTransform)
         )
           ? {
-              position: pending.pos.clone(),
-              rotation: pending.rot.clone(),
-              scale: pending.scl.clone(),
+              position: finalTransform.position.clone(),
+              rotation: finalTransform.rotation.clone(),
+              scale: finalTransform.scale.clone(),
             }
-          : transformMgr.transform;
+          : (
+            pending && isFiniteTransform({ position: pending.pos, rotation: pending.rot, scale: pending.scl })
+          )
+            ? {
+                position: pending.pos.clone(),
+                rotation: pending.rot.clone(),
+                scale: pending.scl.clone(),
+              }
+            : transformMgr.transform;
       if (isFiniteTransform(current)) {
         if (!finalTransform) {
           transformDebugTimelineRef.current.liveCalculatedAt = stampNow();
@@ -8691,9 +8848,8 @@ export default function Home() {
 
     if (operation === 'rotate') {
       islands.clearScanData();
-      applyPostRotateLift();
     } else {
-      // Scale keeps the gizmo's preserved bottom instead of running post-rotation auto-snap.
+      // Scale keeps the gizmo's preserved bottom instead of running post-rotation reseat.
       transformMgr.pendingTransformRef.current = null;
     }
 
@@ -8742,8 +8898,16 @@ export default function Home() {
         ? !transformsApproximatelyEqual(pendingTransformHistoryRef.current.before, existingAfter)
         : false;
 
+      const afterFromSnap = snappedAfter && isFiniteTransform(snappedAfter)
+        ? {
+            position: snappedAfter.position.clone(),
+            rotation: snappedAfter.rotation.clone(),
+            scale: snappedAfter.scale.clone(),
+          }
+        : null;
+
       if (!existingAfterIsMeaningful) {
-        pendingTransformHistoryRef.current.after = afterFromFinal ?? afterFromPending ?? afterFromTransform ?? existingAfter ?? undefined;
+        pendingTransformHistoryRef.current.after = afterFromSnap ?? afterFromFinal ?? afterFromPending ?? afterFromTransform ?? existingAfter ?? undefined;
       }
 
       const afterSupportSnapshot = captureTransformSupportSnapshot();
@@ -8837,24 +9001,24 @@ export default function Home() {
   }, [captureTransformSupportSnapshot, scene]);
 
   /**
-   * Seats the models the way a single model is seated after a rotation: lowest point at the lift
-   * distance with Auto on, on the plate with it off. A model whose Z was set by hand (or that came
-   * in from a project with its own Z) is left where it is, as it would be on its own.
+   * Holds each model's own bottom through a rotation or scale. `beforeEntries` is the state the
+   * edit started from, so a run of live edits cannot drift: a model lifted for supports keeps its
+   * gap, one on the plate stays on the plate, and a project's stored height is left alone.
    */
-  const seatSelectionOnPlate = React.useCallback((
+  const holdSelectionBottoms = React.useCallback((
     entries: Array<{ id: string; transform: ModelTransform }>,
+    beforeEntries: Array<{ id: string; transform: ModelTransform }>,
   ) => {
-    const targetZ = transformMgr.autoLift ? transformMgr.liftDistance : 0;
     const modelById = new Map(scene.models.map((model) => [model.id, model]));
-    const seatable = entries.flatMap((entry) => {
+    const beforeById = new Map(beforeEntries.map((entry) => [entry.id, entry.transform]));
+    return entries.map((entry) => {
       const model = modelById.get(entry.id);
-      return model && model.manualZMoveOverride !== true ? [{ ...entry, geometry: model.geometry }] : [];
+      const before = beforeById.get(entry.id);
+      return model && before
+        ? { ...entry, transform: alignModelToLift({ ...model, transform: before }, entry.transform, transformMgr.liftDistance) }
+        : entry;
     });
-    const seated = new Map(
-      buildLiftDropUpdates(seatable, seatable.map((entry) => entry.id), targetZ).map((entry) => [entry.id, entry]),
-    );
-    return entries.map((entry) => seated.get(entry.id) ?? entry);
-  }, [scene.models, transformMgr.autoLift, transformMgr.liftDistance]);
+  }, [scene.models, transformMgr.liftDistance]);
 
   const handleGizmoTransformGroupCommit = React.useCallback((payload: {
     operation: 'move' | 'rotate' | 'scale';
@@ -8877,19 +9041,29 @@ export default function Home() {
       );
     };
 
-    const changedEntries = payload.entries
-      .filter((entry) => isFiniteTransform(entry.after) && hasMeaningfulChange(entry.before, entry.after))
-      .map((entry) => ({
-        id: entry.modelId,
-        transform: {
-          position: entry.after.position.clone(),
-          rotation: entry.after.rotation.clone(),
-          scale: entry.after.scale.clone(),
-        },
-      }));
-    // Only rotation seats the selection; scale already preserves each model's original bottom.
+    const changed = payload.entries
+      .filter((entry) => isFiniteTransform(entry.after) && hasMeaningfulChange(entry.before, entry.after));
+    const changedEntries = changed.map((entry) => ({
+      id: entry.modelId,
+      transform: {
+        position: entry.after.position.clone(),
+        rotation: entry.after.rotation.clone(),
+        scale: entry.after.scale.clone(),
+      },
+    }));
+    const beforeEntries = changed.map((entry) => ({
+      id: entry.modelId,
+      transform: {
+        position: entry.before.position.clone(),
+        rotation: entry.before.rotation.clone(),
+        scale: entry.before.scale.clone(),
+      },
+    }));
+    // Only rotation reseats the selection; scale already holds each model's original bottom.
     if (payload.operation === 'rotate' && changedEntries.length > 0) islands.clearScanData();
-    const updates = payload.operation === 'rotate' ? seatSelectionOnPlate(changedEntries) : changedEntries;
+    const updates = payload.operation === 'rotate'
+      ? holdSelectionBottoms(changedEntries, beforeEntries)
+      : changedEntries;
 
     if (updates.length === 0) {
       beginSupportDragSyncTransaction([], {
@@ -8928,7 +9102,7 @@ export default function Home() {
 
     setSupportRenderRefreshNonce((value) => value + 1);
     skipNextTransformEndCommitRef.current = null;
-  }, [beginSupportDragSyncTransaction, isFiniteTransform, islands, scene, seatSelectionOnPlate, transformMgr.transformHook]);
+  }, [beginSupportDragSyncTransaction, isFiniteTransform, islands, scene, holdSelectionBottoms, transformMgr.transformHook]);
 
   const commitPendingSelectionPositionHistory = React.useCallback(() => {
     const pending = pendingSelectionPositionHistoryRef.current;
@@ -9038,32 +9212,23 @@ export default function Home() {
       .filter((entry) => targetIdSet.has(entry.id));
   }, []);
 
-  const preserveSelectionBottoms = React.useCallback((
-    entries: Array<{ id: string; transform: ModelTransform }>,
-    beforeEntries: Array<{ id: string; transform: ModelTransform }>,
-  ) => {
-    const modelById = new Map(scene.models.map((model) => [model.id, model]));
-    const beforeById = new Map(beforeEntries.map((entry) => [entry.id, entry.transform]));
-    return entries.map((entry) => {
-      const model = modelById.get(entry.id);
-      const before = beforeById.get(entry.id);
-      return model && before
-        ? { ...entry, transform: preserveModelBottom({ ...model, transform: before }, entry.transform) }
-        : entry;
-    });
-  }, [scene.models]);
-
   const handlePositionSelectedModels = React.useCallback((x: number, y: number, z: number) => {
     const targetIds = getSelectionTargetIds();
     if (targetIds.length === 0) return;
 
     ensurePendingSelectionHistory(targetIds, 'move');
+    // A typed Z is a manual placement: the model keeps that height instead of
+    // tracking the lift distance.
+    const currentOrigin = getSelectionPositionOrigin(scene.models, targetIds);
+    if (!currentOrigin || Math.abs(z - currentOrigin.z) > 1e-6) {
+      scene.setModelsAutoLift(targetIds, false);
+    }
     applySelectionPositionUpdates(buildSelectionPositionUpdates(
       scene.models,
       targetIds,
       new THREE.Vector3(x, y, z),
     ), { pushHistory: false });
-  }, [applySelectionPositionUpdates, ensurePendingSelectionHistory, getSelectionTargetIds, scene.models]);
+  }, [applySelectionPositionUpdates, ensurePendingSelectionHistory, getSelectionTargetIds, scene.models, scene.setModelsAutoLift]);
 
   const handleRotateSelectedModels = React.useCallback((x: number, y: number, z: number) => {
     const activeModel = scene.activeModel;
@@ -9102,7 +9267,10 @@ export default function Home() {
     islands.clearScanData();
     const targetIds = getSelectionTargetIds();
     applySelectionPositionUpdates(
-      seatSelectionOnPlate(getSelectionTransformEntries(targetIds)),
+      holdSelectionBottoms(
+        getSelectionTransformEntries(targetIds),
+        getPendingSelectionStartEntries(targetIds),
+      ),
       { pushHistory: false },
     );
     commitPendingSelectionPositionHistory();
@@ -9112,7 +9280,7 @@ export default function Home() {
     getSelectionTargetIds,
     getSelectionTransformEntries,
     islands,
-    seatSelectionOnPlate,
+    holdSelectionBottoms,
   ]);
 
   const handleScaleSelectedModels = React.useCallback((x: number, y: number, z: number) => {
@@ -9130,7 +9298,7 @@ export default function Home() {
 
     ensurePendingSelectionHistory(targetIds, 'scale');
     const beforeEntries = getPendingSelectionStartEntries(targetIds);
-    applySelectionPositionUpdates(preserveSelectionBottoms(scaleSelectionFromActive(
+    applySelectionPositionUpdates(holdSelectionBottoms(scaleSelectionFromActive(
       beforeEntries,
       activeModel.id,
       new THREE.Vector3(x, y, z),
@@ -9140,7 +9308,7 @@ export default function Home() {
     ensurePendingSelectionHistory,
     getPendingSelectionStartEntries,
     getSelectionTargetIds,
-    preserveSelectionBottoms,
+    holdSelectionBottoms,
     requestDestructiveTransformSupportDeletion,
     scene.activeModel,
   ]);
@@ -9155,9 +9323,7 @@ export default function Home() {
     const beforeEntries = getSelectionTransformEntries(targetIds);
     const resetEntries = resetSelectionTransforms(beforeEntries, { [reset]: true });
     if (reset === 'rotation') islands.clearScanData();
-    applySelectionPositionUpdates(reset === 'rotation'
-      ? seatSelectionOnPlate(resetEntries)
-      : preserveSelectionBottoms(resetEntries, beforeEntries));
+    applySelectionPositionUpdates(holdSelectionBottoms(resetEntries, beforeEntries));
   }, [
     _,
     applySelectionPositionUpdates,
@@ -9165,9 +9331,8 @@ export default function Home() {
     getSelectionTargetIds,
     getSelectionTransformEntries,
     islands,
-    preserveSelectionBottoms,
     requestDestructiveTransformSupportDeletion,
-    seatSelectionOnPlate,
+    holdSelectionBottoms,
   ]);
 
   const selectionPositionOrigin = React.useMemo(() => {
@@ -9200,13 +9365,22 @@ export default function Home() {
     scene.view3dSettings.widthMm,
   ]);
 
-  const placeSelectedModelsAtWorldZ = React.useCallback((targetLowestWorldZ: number) => {
+  const placeSelectedModelsAtWorldZ = React.useCallback((
+    targetLowestWorldZ: number,
+    autoLift: boolean,
+    liftRestoreMm?: number | null,
+  ) => {
     const targetIds = resolveModelActionTargetIds({
       modelIds: scene.models.map((model) => model.id),
       selectedModelIds: scene.selectedModelIds,
       activeModelId: scene.activeModelId,
     });
-    const updates = buildLiftDropUpdates(scene.models, targetIds, targetLowestWorldZ);
+    const updates = buildLiftDropUpdates(scene.models, targetIds, targetLowestWorldZ)
+      .map((update) => ({
+        ...update,
+        autoLift,
+        ...(liftRestoreMm !== undefined ? { liftRestoreMm } : {}),
+      }));
     if (updates.length === 0) return;
 
     invalidatePendingTransformHistory();
@@ -9228,40 +9402,48 @@ export default function Home() {
   }, [invalidatePendingTransformHistory, scene, suppressTransformPersistenceCycles, transformMgr.transformHook]);
 
   const handleLiftSelectedModels = React.useCallback(() => {
-    placeSelectedModelsAtWorldZ(transformMgr.liftDistance);
-  }, [placeSelectedModelsAtWorldZ, transformMgr.liftDistance]);
+    // Remember where each model was, so turning auto-lift off returns it there.
+    applySelectionPositionUpdates(buildLiftModeUpdates(
+      scene.models,
+      getSelectionTargetIds(),
+      true,
+      transformMgr.liftDistance,
+    ));
+  }, [applySelectionPositionUpdates, getSelectionTargetIds, scene.models, transformMgr.liftDistance]);
 
   const handleDropSelectedModels = React.useCallback(() => {
-    placeSelectedModelsAtWorldZ(0);
+    placeSelectedModelsAtWorldZ(PLATE_CLEARANCE_MM, false, null);
   }, [placeSelectedModelsAtWorldZ]);
 
-  const disableAutoLiftForManualZMove = React.useCallback(() => {
-    if (!scene.activeModelId) return;
-    for (const modelId of getSelectionTargetIds()) {
-      scene.setModelManualZMoveOverride(modelId, true);
-    }
-    transformMgr.disableAutoLiftForManualZMove();
-  }, [getSelectionTargetIds, scene, transformMgr]);
+  /** A manual Z drag sets the height itself; the live snap stands down for that gesture. */
+  const disableSnapForManualZMove = React.useCallback(() => {
+    transformMgr.setSnapEnabled(false);
+  }, [transformMgr]);
 
-  // Auto applies to the whole selection: every selected model is snapped again, and with
-  // several selected they are lifted or dropped together, as a single model is on its own.
   const getCavityGeometryForModel = React.useCallback(
     (modelId: string) => cavityGeometryByModelIdRef.current.get(modelId)?.geometry ?? null,
     [],
   );
 
-  const handleAutoLiftChange = React.useCallback((enabled: boolean) => {
+  /** Whether every model in the selection follows the lift distance. */
+  const selectionLifted = React.useMemo(() => {
     const targetIds = getSelectionTargetIds();
-    // Placed before the overrides are cleared: the placement writes from the models as they
-    // stand, which would put the overrides back.
-    if (targetIds.length > 1) {
-      placeSelectedModelsAtWorldZ(enabled ? transformMgr.liftDistance : 0);
-    }
-    for (const modelId of targetIds) {
-      scene.setModelManualZMoveOverride(modelId, false);
-    }
-    transformMgr.setAutoLift(enabled);
-  }, [getSelectionTargetIds, placeSelectedModelsAtWorldZ, scene, transformMgr]);
+    if (targetIds.length === 0) return false;
+    const modelById = new Map(scene.models.map((model) => [model.id, model]));
+    return targetIds.every((id) => {
+      const model = modelById.get(id);
+      return model ? isModelAutoLifted(model) : false;
+    });
+  }, [getSelectionTargetIds, scene.models]);
+
+  const handleAutoLiftChange = React.useCallback((enabled: boolean) => {
+    applySelectionPositionUpdates(buildLiftModeUpdates(
+      scene.models,
+      getSelectionTargetIds(),
+      enabled,
+      transformMgr.liftDistance,
+    ));
+  }, [applySelectionPositionUpdates, getSelectionTargetIds, scene.models, transformMgr.liftDistance]);
 
   /** Whether the bed a model stands on refuses edits. */
   const isModelPlateLocked = React.useCallback((modelId: string) => {
@@ -9322,7 +9504,9 @@ export default function Home() {
     const targetModelName = (scene.activeModel.name ?? scene.activeModelId).trim();
 
     if (operation === 'move' && details?.axis === 'z') {
-      disableAutoLiftForManualZMove();
+      disableSnapForManualZMove();
+      // A Z drag is a manual placement too, for every model it moves.
+      scene.setModelsAutoLift(getSelectionTargetIds(), false);
     }
 
     if (!pendingTransformHistoryRef.current || pendingTransformHistoryRef.current.modelId !== scene.activeModelId) {
@@ -9344,7 +9528,7 @@ export default function Home() {
 
     isScaleGestureRef.current = operation === 'scale';
     return true;
-  }, [captureTransformSupportSnapshot, disableAutoLiftForManualZMove, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, scene.models, scene.selectedModelIds]);
+  }, [captureTransformSupportSnapshot, disableSnapForManualZMove, getSelectionTargetIds, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, scene.models, scene.selectedModelIds, scene.setModelsAutoLift]);
 
   const ensurePendingTransformHistoryForActiveModel = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
     if (!scene.activeModelId || !scene.activeModel) return;
@@ -9417,7 +9601,14 @@ export default function Home() {
     }
 
     islands.clearScanData();
-    applyPostRotateLift();
+    const snapped = applyPostRotateLift();
+    if (snapped && pendingTransformHistoryRef.current) {
+      pendingTransformHistoryRef.current.after = {
+        position: snapped.position.clone(),
+        rotation: snapped.rotation.clone(),
+        scale: snapped.scale.clone(),
+      };
+    }
     commitPendingTransformHistory();
   };
 
@@ -9847,16 +10038,12 @@ export default function Home() {
   const handlePlaceOnFaceAnimationStart = React.useCallback(() => {
     ensurePendingTransformHistoryForActiveModel('rotate');
 
-    // Place-On-Face is an orientation-to-plate operation, so it should
-    // restore gravity/auto-snap behavior even if manual Z translation had
-    // previously disabled it.
-    if (scene.activeModelId) {
-      scene.setModelManualZMoveOverride(scene.activeModelId, false);
-    }
-    transformMgr.transformHook.setAutoSnapEnabled(true);
+    // Place-On-Face is an orientation-to-plate operation, so it restores the
+    // live snap even if a manual Z drag had stood it down for that gesture.
+    transformMgr.setSnapEnabled(true);
 
     transformMgr.setIsTransforming(true);
-  }, [ensurePendingTransformHistoryForActiveModel, scene, transformMgr]);
+  }, [ensurePendingTransformHistoryForActiveModel, transformMgr]);
 
   const persistActiveModelModifiers = React.useCallback((
     next: ModelMeshModifiers | undefined,
@@ -10529,6 +10716,7 @@ export default function Home() {
 
       <FloatingPanelStack
         leftInsetPx={scene.models.length > 0 && (scene.mode === 'prepare' || scene.mode === 'support') && toolLayout === 'vertical' ? TOOL_RAIL_WIDTH_PX : 0}
+        rightInsetPx={scene.models.length > 0 && scene.mode !== 'printing' ? 48 : 0}
         railIsColumn={toolLayout === 'vertical'}
       >
         {scene.mode === 'prepare' ? (
@@ -10563,6 +10751,7 @@ export default function Home() {
               ensurePendingTransformHistoryForActiveModel: ensurePendingTransformHistoryForActiveModel,
               requestDestructiveTransformSupportDeletion: requestDestructiveTransformSupportDeletion,
               handleRotationComplete: handleRotationComplete,
+              autoLift: selectionLifted,
               handleAutoLiftChange: handleAutoLiftChange,
               selectionPositionOrigin: selectionPositionOrigin,
               handlePositionSelectedModels: handlePositionSelectedModels,
@@ -10681,7 +10870,7 @@ export default function Home() {
                   islands={islandsPoc}
                   hasGeometry={!!scene.geom}
                   activeModelId={scene.activeModelId ?? undefined}
-                  autoLift={transformMgr.autoLift}
+                  autoLift={selectionLifted}
                   onAutoLiftChange={handleAutoLiftChange}
                   onBeforeRun={requestModifierDecisionBeforeSupports}
                   getCavityGeometry={getCavityGeometryForModel}
@@ -10767,12 +10956,7 @@ export default function Home() {
 
         {SharedPanelStack({
           scene: scene,
-          slicing: slicing,
           transformMgr: transformMgr,
-          handleSceneLayerScrubStart: handleSceneLayerScrubStart,
-          handleSceneLayerScrubEnd: handleSceneLayerScrubEnd,
-          isCrossSectionEnabled: isCrossSectionEnabled,
-          handleToggleCrossSection: handleToggleCrossSection,
           isTransformDebugOverlayOpen: isTransformDebugOverlayOpen,
           setIsTransformDebugOverlayOpen: setIsTransformDebugOverlayOpen,
           displayActiveModelId: displayActiveModelId,
@@ -10803,6 +10987,35 @@ export default function Home() {
           printingSlicingBenchmark: printingSlicingBenchmark,
         })}
       </FloatingPanelStack>
+
+      {scene.models.length > 0 && scene.mode !== 'printing' && (
+        <div
+          className="absolute right-0 z-10 pointer-events-auto"
+          style={{ top: 'calc(var(--topbar-height) + 6px)', bottom: 6, width: 48 }}
+        >
+          <CrossSliderPanel
+            layerIndex={slicing.layerIndex}
+            maxLayers={slicing.numLayers}
+            onLayerIndexChange={slicing.setLayerIndex}
+            onScrubStart={() => {
+              handleSceneLayerScrubStart();
+              slicing.beginScrub();
+            }}
+            onScrubEnd={() => {
+              handleSceneLayerScrubEnd();
+              slicing.endScrub();
+            }}
+            currentHeightMm={slicing.currentHeightMm}
+            maxHeightMm={slicing.heightMm}
+            lowerLayerIndex={slicing.lowerLayerIndex}
+            onLowerLayerIndexChange={slicing.setLowerLayerIndex}
+            lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}
+            crossSectionEnabled={isCrossSectionEnabled}
+            onToggleCrossSection={handleToggleCrossSection}
+            layerHeightMm={slicing.layerHeightMm}
+          />
+        </div>
+      )}
 
       <div className="absolute inset-0 z-0 flex">
         <div
@@ -10874,8 +11087,6 @@ export default function Home() {
             activeModelId={sceneCanvasActiveModelId}
             visualActiveModelId={sceneCanvasVisualActiveModelId}
             selectedModelIds={sceneCanvasSelectedModelIds}
-            clipLower={sceneClipLower}
-            clipUpper={sceneClipUpper}
             meshColor={scene.meshColor}
             meshVisible={scene.meshVisible}
             shaderType={effectiveShaderType}
@@ -10975,9 +11186,7 @@ export default function Home() {
             uniformScaling={uniformScaling}
             localTransformSpace={localTransformSpace}
             selectionRotationMode={selectionRotationMode}
-            autoLift={transformMgr.autoLift}
             liftDistance={transformMgr.liftDistance}
-            autoSnapEnabled={transformMgr.autoSnapEnabled}
             isModelPlateLocked={isModelPlateLocked}
             onBlockedByPlateLock={notifyPlateLocked}
             onTransformStart={handleTransformStart}
@@ -11106,7 +11315,6 @@ export default function Home() {
             supportRenderRefreshNonce={supportRenderRefreshNonce}
             gizmoResetNonce={gizmoResetNonce}
             historyTransformResyncToken={historyTransformResyncTick}
-            isLayerScrubbing={scene.mode === 'printing' ? isPrintingLayerScrubbing : isSceneLayerScrubbing}
             arrangeArrayPreviewItems={arrangeArrayPreviewItems}
             hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}
@@ -11502,6 +11710,22 @@ export default function Home() {
         dismissSceneSaveError={dismissSceneSaveError}
         zipPickerResolveRef={zipPickerResolveRef}
         zipPickerState={zipPickerState}
+      />
+
+      <SceneMaterialReassignModal
+        open={Boolean(materialReassignPrompt)}
+        previousPrinterName={materialReassignPrompt?.previousName ?? ''}
+        newPrinterName={materialReassignPrompt?.newName ?? ''}
+        mode={materialReassignPrompt?.mode ?? 'reassign'}
+        canReassign={(materialReassignPrompt?.options.length ?? 0) > 0}
+        rows={materialReassignPrompt?.rows ?? []}
+        options={materialReassignPrompt?.options ?? []}
+        tankRows={materialReassignPrompt?.tankRows ?? []}
+        canAssignTanks={materialReassignPrompt?.canAssignTanks ?? false}
+        onApply={applyMaterialReassignment}
+        onUnassign={unassignSceneMaterialsForPrinter}
+        onAssignTanks={assignSceneMaterialsToMatchingTanks}
+        onKeepPrevious={keepPreviousPrinterForMaterials}
       />
 
       <ModifierModals

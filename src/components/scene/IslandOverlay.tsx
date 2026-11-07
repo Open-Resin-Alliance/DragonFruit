@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useLayoutEffect } from 'react';
 import * as THREE from 'three';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
 import { useFrame } from '@react-three/fiber';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
 import type { ModelTransform } from '@/hooks/useModelTransform';
@@ -13,8 +14,6 @@ type IslandOverlayProps = {
   transform?: ModelTransform;
   centerOffset?: THREE.Vector3;
   selectedIslandId?: number | null;
-  clipLower?: number | null;
-  clipUpper?: number | null;
 };
 
 // --- Puck Shaders ---
@@ -87,8 +86,6 @@ export function IslandOverlay({
   opacity,
   transform,
   selectedIslandId,
-  clipLower,
-  clipUpper,
 }: IslandOverlayProps) {
   const threeColor = useMemo(() => new THREE.Color(color), [color]);
   const visibleColor = useMemo(() => new THREE.Color('#ffff00'), []); // Bright yellow
@@ -96,20 +93,9 @@ export function IslandOverlay({
 
   const puckInstancedRef = useRef<THREE.InstancedMesh>(null);
 
-  // Initialize clipping planes
-  const clippingPlanesRef = useRef<THREE.Plane[]>([]);
-  React.useEffect(() => {
-    const planes: THREE.Plane[] = [];
-    if (clipLower != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-    }
-    if (clipUpper != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-    }
-    clippingPlanesRef.current = planes;
-  }, [clipLower, clipUpper]);
-
-  const clippingPlanes = clippingPlanesRef.current;
+  // The scene's shared planes: stable identity and length, so a scrub moves
+  // their constants without recompiling these materials.
+  const clippingPlanes = getSceneClipPlanes();
 
   // Single shared uTime uniform updated via THREE.Timer (Clock is deprecated)
   const globalTimeUniform = useMemo(() => ({ value: 0 }), []);
@@ -181,7 +167,9 @@ export function IslandOverlay({
   }
 
   return (
-    <group>
+    // Scan markers are annotations, not model solid: the cross-section cap
+    // must not take its stencil from them.
+    <group userData={{ noStencil: true }}>
       {/* 1. Render utility markers (negative IDs for center/seed points) */}
       {utilityMarkers.map((marker) => {
         if (!marker.geometry) return null;

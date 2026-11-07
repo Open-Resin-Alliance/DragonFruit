@@ -31,9 +31,10 @@ const AUTO_LIFT_OFF = msg({ message: 'Auto-Lift OFF', comment: 'Toggle button sh
 
 /**
  * What the flag does, in the terms an auto-support run cares about. Mirrors the
- * Prepare panel's own hint: lifting reseats the model and clears a manual Z move.
+ * Prepare panel's own hint: lifting seats the selection at the distance, and
+ * turning it off returns the selection to the height it came from.
  */
-const AUTO_LIFT_HINT = msg`Hold the model clear of the plate, so a support can stand under it. Turns off a manual Z move.`;
+const AUTO_LIFT_HINT = msg`Lift the selected models to this distance so a support can stand under them; off returns them to the height they were at.`;
 
 /**
  * The standard DragonFruit toggle treatment — the bracing card's quick-pick and

@@ -31,7 +31,7 @@ const CODE_FILES = [
       'package.json', 'next.config.ts', 'tsconfig.json', 'eslint.config.mjs',
       'lingui.config.ts', 'crowdin.yml', 'rust-toolchain.toml', 'website/astro.config.mjs',
 ];
-const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.astro', '.rs', '.mjs', '.js', '.json', '.toml', '.yml', '.yaml', '.css', '.sh']);
+const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.astro', '.rs', '.mjs', '.js', '.json', '.toml', '.yml', '.yaml', '.css', '.sh', '.ps1']);
 
 // A repo-relative path: starts at a known root, has a file extension or a trailing slash.
 const REPO_PATH_RE = new RegExp(`^(?:${CODE_ROOTS.join('|')})/[A-Za-z0-9_./-]+$`);

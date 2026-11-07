@@ -355,6 +355,10 @@
               "slug": "dev/ui-atoms"
             },
             {
+              "label": "Panel Docking",
+              "slug": "dev/panel-docking"
+            },
+            {
               "label": "Context Menu",
               "slug": "dev/context-menu"
             },

@@ -153,4 +153,10 @@ StumpRenderer.displayName = 'StumpRenderer';
 
 registerSupportDetailRenderer('stump', () => ({
     component: StumpRenderer as never,
+    // An unselected stump is drawn by the scene batches: its frustum root by
+    // the root pass and its cone by the cone pass, so a forest of them is two
+    // instanced draws instead of a mounted renderer and a handful of meshes
+    // per stump. The detail renderer is what a selected stump needs, because
+    // the batches exclude selected supports.
+    skip: ({ isSelected }) => !isSelected,
 }));

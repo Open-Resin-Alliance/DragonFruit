@@ -6,6 +6,10 @@ import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import {
   buildLiftDropUpdates,
   getModelLowestWorldZ,
+  alignModelToLift,
+  buildLiftModeUpdates,
+  isModelAutoLifted,
+  PLATE_CLEARANCE_MM,
   preserveModelBottom,
   type LiftDropModel,
 } from '@/features/scene/selectionLiftDrop';
@@ -149,4 +153,60 @@ test('Resetting scale and repeated live edits return to the original anchored tr
   const reset = preserveModelBottom(source, { ...source.transform, scale: new THREE.Vector3(1, 1, 1) });
   assert.ok(Math.abs(renderedBottom(source, reset) - bottom) < 1e-6);
   assert.deepEqual(reset.scale.toArray(), [1, 1, 1]);
+});
+
+test('A rotation holds each model at its own bottom, lifted or on the plate', () => {
+  const lifted = { ...model('lifted', new THREE.BoxGeometry(4, 6, 8), new THREE.Vector3(0, 0, 15)), autoLift: true };
+  const plate = model('plate', new THREE.BoxGeometry(4, 6, 8), new THREE.Vector3(20, 0, 4));
+  assert.equal(isModelAutoLifted(lifted), true);
+  assert.equal(isModelAutoLifted(plate), false);
+
+  const rotation = new THREE.Euler(0.6, -0.3, 0.4, 'ZYX');
+  for (const source of [lifted, plate]) {
+    const next = preserveModelBottom(source, { ...source.transform, rotation });
+    assert.ok(Math.abs(renderedBottom(source, next) - renderedBottom(source)) < 1e-6);
+  }
+});
+
+test('An auto-lifted model is seated at the lift distance, a manual one keeps its own bottom', () => {
+  const rotation = new THREE.Euler(0.6, -0.3, 0.4, 'ZYX');
+  const auto = { ...model('auto', new THREE.BoxGeometry(4, 6, 8), new THREE.Vector3(0, 0, 15)), autoLift: true };
+  const manual = model('manual', new THREE.BoxGeometry(4, 6, 8), new THREE.Vector3(20, 0, 15));
+  const manualBottom = renderedBottom(manual);
+
+  const autoNext = alignModelToLift(auto, { ...auto.transform, rotation }, 5);
+  const manualNext = alignModelToLift(manual, { ...manual.transform, rotation }, 5);
+
+  assert.ok(Math.abs(renderedBottom(auto, autoNext) - 5) < 1e-6);
+  assert.ok(Math.abs(renderedBottom(manual, manualNext) - manualBottom) < 1e-6);
+});
+
+test('Turning auto-lift off returns the model to the height it was lifted from', () => {
+  const source = model('mesh', new THREE.BoxGeometry(4, 6, 8), new THREE.Vector3(0, 0, 9));
+  assert.ok(Math.abs(renderedBottom(source) - 5) < 1e-6);
+
+  const [on] = buildLiftModeUpdates([source], [source.id], true, 10);
+  assert.equal(on.autoLift, true);
+  assert.equal(on.liftRestoreMm, 5);
+  assert.ok(Math.abs(renderedBottom(source, on.transform) - 10) < 1e-6);
+
+  const lifted = { ...source, autoLift: true, liftRestoreMm: on.liftRestoreMm, transform: on.transform };
+  const [off] = buildLiftModeUpdates([lifted], [lifted.id], false, 10);
+  assert.equal(off.autoLift, false);
+  assert.equal(off.liftRestoreMm, null);
+  assert.ok(Math.abs(renderedBottom(lifted, off.transform) - 5) < 1e-6);
+});
+
+test('A model with no remembered height still drops to the plate when auto-lift is turned off', () => {
+  const source = { ...model('mesh', new THREE.BoxGeometry(4, 6, 8), new THREE.Vector3(0, 0, 15)), autoLift: true };
+  const [off] = buildLiftModeUpdates([source], [source.id], false, 10);
+  assert.ok(Math.abs(renderedBottom(source, off.transform) - PLATE_CLEARANCE_MM) < 1e-6);
+});
+
+test('A drop seats the model on the plate and clears the auto-lift mode', () => {
+  const source = { ...model('mesh', new THREE.BoxGeometry(4, 6, 8), new THREE.Vector3(0, 0, 15)), autoLift: true };
+  const [update] = buildLiftDropUpdates([source], [source.id], PLATE_CLEARANCE_MM);
+  const dropped = { ...source, transform: update.transform, autoLift: false };
+  assert.ok(Math.abs(getModelLowestWorldZ(dropped) - PLATE_CLEARANCE_MM) < 1e-6);
+  assert.equal(isModelAutoLifted(dropped), false);
 });
