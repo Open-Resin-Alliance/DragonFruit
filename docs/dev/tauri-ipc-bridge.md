@@ -119,30 +119,14 @@ layers on every job: these caches retain inputs, not previous printed output.
 
 ### Ahead-of-job preparation and exact revisions
 
-`useSceneSliceMeshWarmup` mounts once in `src/app/page.tsx`, independently of
-`SlicingPanel` or the current workspace. It waits for the complete import batch,
-including overlapping imports, plugin handoff and finalized geometry operations.
-The `ready` input gates transient scenes; `paused` suppresses new background starts
-during slicing without discarding identical preparation before foreground export
-can join it. Clearing the scene releases its background subscription.
-
-`SliceMeshWarmup` starts at the first idle opportunity; subsequent real edits
-wait for a 750 ms quiet interval and idle time. Pointer gestures, wheel/keyboard
-activity and hidden documents defer new background work. Idle callbacks have no
-forced timeout. An already-requested automatic slice skips the edit debounce,
-not the idle requirement. Cancel calls `cancelSliceMeshWarmup` as well as aborting
-the foreground export; unchanged input stays cancelled until a real revision
-changes. Workspace switches do not create a second producer.
-
-`src/features/slicing/sliceInputContext.ts` resolves the same active profiles,
-remote-device material/offline layer height, AA preset, session override and LUT
-curves for the scene coordinator and panel. `readSliceMeshWarmupContext` works
-before the panel first mounts; `subscribeToSliceMeshWarmupContext` observes profile,
-reachability and stored preference changes. `publishSliceMeshWarmupContext` lets
-the panel publish live choices and an auto-slice target plate, never a captured
-profile or mesh. A publication cannot override newer profile/storage revisions.
-`notifySliceMeshWarmupPreferencesChanged` notifies same-window preference writers;
-ordinary cross-window storage events are also observed.
+`useSliceMeshWarmup` mounts with the active `SlicingPanel` once printer/material
+and plate inputs exist. `SliceMeshWarmup` starts at the first idle opportunity;
+subsequent real edits wait for a quiet interval and idle time. Pointer gestures,
+wheel/keyboard activity and hidden documents defer new background work. An
+already-requested automatic slice has idle priority rather than waiting behind
+the edit debounce. Unmounting releases the background subscription. Cancel also
+releases it, without immediately restarting the same revision; a real edit can
+schedule preparation again.
 
 `prewarmSliceMesh` prepares modifiers, world-space input and a native snapshot,
 without thumbnail capture, job metadata attachment, layer rendering or output.
@@ -155,8 +139,7 @@ A cold export consumes its freshly staged bytes inside the same ownership guard,
 without an unnecessary restore or a second upload when retention is unavailable.
 
 For a custom slicing surface, use the same inputs in its idle/revision callback
-and its later Slice action. Do not mount another `useSliceMeshWarmup` beneath the
-built-in scene-owned coordinator:
+and its later Slice action (the built-in panel uses `useSliceMeshWarmup`):
 
 ```ts
 import { prewarmSliceMesh, runSliceExportOrchestrator } from '@/features/slicing/sliceExportOrchestrator';
@@ -181,15 +164,7 @@ revision stamps for memoization, including in-place notified edits and pose
 validity. `subscribeToMeshModifierStore` notifies the warmup observer;
 `getStoredMeshModifierRevisionToken` refreshes value memoization, but the token
 itself is never a geometry key. Source revisions are rechecked before a descriptor
-is published and immediately before cold foreground consumption.
-
-World-space assembly in `rasterLayerZipExport.ts` checks cancellation and source
-attribute/index revisions at bounded triangle batches, yields to the event loop
-after roughly 8 ms of producer work, and awaits streamed-chunk backpressure.
-Support and raft primitives also cross checkpoints without changing emission
-order. A notified in-place source edit during a yielded scan fails instead of
-publishing mixed revisions. This keeps editing and cancellation responsive; it
-does not make an already-running native modifier bake instantly interruptible.
+is published.
 
 The prepared modifier cache in `preparedGeometryCache.ts` owns its data; source,
 cache and returned geometry do not share mutable output buffers. Fresh classified
@@ -233,13 +208,9 @@ or over-budget inputs disable retention without changing the uploaded geometry.
 A successful retained ack includes `sliceSnapshotId`.
 `restore_cached_slice_mesh({ snapshotId })` returns an ack or `null`; only an exact
 current snapshot ID is accepted, and a miss never replaces the existing stage.
-The frontend caller holds `runExclusiveNativeMesh` across restore, slicing and
-readback. `restoreCachedSliceMesh` bypasses the pending/ready upload queue: retained
-input is immutable and independent of a named analysis upload, so a long AO
-computation cannot block this read. Native restore preserves both pending and
-ready analysis inputs. Stage-mutating operations still serialize under the stage
-guard. Cold slicing acquires stage ownership after modifier baking to avoid
-nested locks.
+The frontend `restoreCachedSliceMesh` wrapper holds its upload turn while the
+caller holds `runExclusiveNativeMesh` across restore, slicing and readback.
+Cold slicing acquires stage ownership after modifier baking to avoid nested locks.
 
 `finish(true)` atomically publishes staged input. The shared stage guard also
 covers repair, hollowing, punching, remeshing, organic cut and path-based writers.
@@ -286,14 +257,6 @@ count is likewise real; per-layer geometry counts are no longer reported as zero
 `stageMeshUploadedBytes` and `stageMeshReusedBytes` distinguish raw transfer/reuse.
 `stageMeshMs` measures native invoke round trips; `stageMeshWallMs` also includes
 worker startup, copying and hashing. A warm restore creates no geometry worker.
-`meshPrepSharedWaitMs` reports joining an in-flight producer;
-`meshPrepStageQueueMs` reports waiting for shared stage ownership; and
-`meshUploadQueueWaitMs` reports waiting to begin an upload (zero on retained
-restore). These waits explain preparation time outside the native restore itself;
-shared-producer wait may include that producer's own queue waits, so do not sum
-these fields as mutually exclusive phases. A cache hit still copies retained
-bytes into the native stage, including verified backing-file reads for evicted
-chunks; zero upload bytes does not mean zero native IO or IPC.
 
 `bridgePayloadChars` is the actual small invoke job JSON, not the original bulk
 values. `bridgePayloadContributors` measures each semantic JSON value's chars and

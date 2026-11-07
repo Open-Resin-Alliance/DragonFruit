@@ -30,7 +30,6 @@ import {
 } from '@/features/plugins/pluginRegistry';
 import type { LocalMaterialFieldSchema } from '@/features/plugins/complexPluginContracts';
 import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
-import { notifySliceMeshWarmupPreferencesChanged } from '@/features/slicing/sliceInputContext';
 
 // ─── Shared Types ─────────────────────────────────────────────────────────────
 
@@ -1339,7 +1338,6 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
         const serialized = JSON.stringify(savedCurves);
         window.localStorage.setItem(LUT_CURVES_STORAGE_KEY, serialized);
         window.sessionStorage.setItem(LUT_CURVES_STORAGE_KEY, serialized);
-        notifySliceMeshWarmupPreferencesChanged();
     }, [savedCurves]);
 
     return (

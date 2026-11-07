@@ -354,8 +354,9 @@ impl MeshChunkCache {
         let Some(slice) = self.retained.as_ref().filter(|slice| slice.id == snapshot_id) else {
             return Ok(None);
         };
-        // A retained snapshot is independent of pending/ready read-only inputs.
-        // The adapter publishes it under the separate stage-operation ownership.
+        if self.pending.is_some() || self.ready.is_some() {
+            return Err("A mesh upload is still pending or awaiting consumption".into());
+        }
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(slice.total_bytes)
             .map_err(|e| format!("Cannot reserve restored mesh buffer: {e}"))?;
@@ -673,6 +674,7 @@ mod tests {
         let bake = cache.begin(0).unwrap();
         cache.append_verified(&bake, verify(&triangle(4)), &triangle(4)).unwrap();
         assert!(cache.finish(&bake, false).unwrap().slice_snapshot_id.is_none());
+        assert!(cache.restore_slice(&id).is_err());
         assert_eq!(cache.take_ready(&bake, 36).unwrap(), triangle(4));
         stage(&mut cache, &[(9, triangle(9))]);
         let done = cache.restore_slice(&id).unwrap().unwrap();
@@ -681,20 +683,6 @@ mod tests {
         assert_eq!(done.stats.reused_bytes, 108);
         assert_eq!(done.stats.chunks_received, 3);
         assert_eq!(done.slice_snapshot_id.as_deref(), Some(id.as_str()));
-    }
-
-    #[test]
-    fn restoring_a_retained_slice_preserves_pending_and_ready_analysis_inputs() {
-        let mut cache = disk_cache(36);
-        let expected = [triangle(1), triangle(2)].concat();
-        let slice = retain_parts(&mut cache, &[triangle(1), triangle(2)]);
-        let analysis = cache.begin(72).unwrap();
-        cache.append_verified(&analysis, verify(&triangle(3)), &triangle(3)).unwrap();
-        assert_eq!(cache.restore_slice(&slice).unwrap().unwrap().staged_bytes.unwrap(), expected);
-        cache.append_verified(&analysis, verify(&triangle(4)), &triangle(4)).unwrap();
-        cache.finish(&analysis, false).unwrap();
-        assert_eq!(cache.restore_slice(&slice).unwrap().unwrap().staged_bytes.unwrap(), expected);
-        assert_eq!(cache.take_ready(&analysis, 72).unwrap(), [triangle(3), triangle(4)].concat());
     }
 
     #[test]
@@ -772,6 +760,7 @@ mod tests {
         assert!(cache.finish(&good, true).is_err());
         assert!(cache.append_cached(&good, &verify(&triangle(1)), 36).is_err());
         assert!(cache.restore_slice(&abandoned).unwrap().is_none());
+        assert!(cache.restore_slice(&good).is_err());
         cache.abort(&abandoned);
         assert_eq!(cache.restore_slice(&good).unwrap().unwrap().staged_bytes.unwrap(), triangle(1));
         cache.abort(&good);

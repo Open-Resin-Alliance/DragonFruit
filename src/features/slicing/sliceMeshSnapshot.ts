@@ -157,9 +157,7 @@ async function prepareSnapshot(
         );
         // Never acquire the stage queue around modifier baking: native modifiers
         // use that same queue. Even the warm miss leaves it before coming here.
-        const stageQueuedAt = performance.now();
         return await runExclusiveNativeMesh(async () => {
-            const stageQueueWaitMs = performance.now() - stageQueuedAt;
             throwIfAborted(signal);
             if (!prepared) throw new Error('Prepared geometry was released before mesh assembly.');
             const triangleEstimate = models.reduce((sum, model) => sum + (Number.isFinite(model.polygonCount) ? Math.max(0, Math.floor(model.polygonCount)) : 0), 0);
@@ -174,7 +172,7 @@ async function prepareSnapshot(
                     flushBinaryMeshChunk: async (bytes) => { throwIfAborted(signal); await upload.append(bytes); },
                 });
                 throwIfAborted(signal);
-                const ack = { ...await upload.finish(), stageQueueWaitMs };
+                const ack = await upload.finish();
                 const descriptor: SliceMeshDescriptor = { ...mesh, sourceModelIds: models.map((model) => model.id) };
                 Reflect.deleteProperty(descriptor, 'trianglesXYZ');
                 const snapshot: Snapshot = { signature, descriptor, snapshotId: ack.sliceSnapshotId ?? null, preparationAck: ack };
@@ -254,19 +252,15 @@ export async function runWithSliceMesh<T>(
     const started = performance.now();
     throwIfAborted(signal);
     const signature = getSliceMeshInputSignature(options);
-    let preparationWaitMs = 0;
-    let stageQueueWaitMs = 0;
     const restore = async (snapshot: Snapshot): Promise<{ result: T } | null> => {
         if (!snapshot.snapshotId || !equalSliceMeshInputSignatures(signature, snapshot.signature)) return null;
-        const stageQueuedAt = performance.now();
         return runExclusiveNativeMesh(async () => {
-            stageQueueWaitMs += performance.now() - stageQueuedAt;
             throwIfAborted(signal);
             if (!equalSliceMeshInputSignatures(signature, getSliceMeshInputSignature(options))) return null;
             const ack = await restoreCachedSliceMesh(invoke, snapshot.snapshotId!, signal);
             throwIfAborted(signal);
             if (!ack) { if (latest === snapshot) latest = null; return null; }
-            return { result: await consume(snapshot.descriptor, { ...ack, stageQueueWaitMs, preparationWaitMs }, performance.now() - started) };
+            return { result: await consume(snapshot.descriptor, ack, performance.now() - started) };
         }, signal);
     };
     if (latest && equalSliceMeshInputSignatures(signature, latest.signature)) {
@@ -275,9 +269,7 @@ export async function runWithSliceMesh<T>(
     }
     if (preparation && !preparation.controller.signal.aborted
         && equalSliceMeshInputSignatures(preparation.signature, signature)) {
-        const waitStarted = performance.now();
         const snapshot = await requestSnapshot(options, signal, onBake);
-        preparationWaitMs += performance.now() - waitStarted;
         const hit = await restore(snapshot);
         if (hit) return hit.result;
     }
@@ -287,11 +279,7 @@ export async function runWithSliceMesh<T>(
     let result!: T; // onReady is awaited by completion before result is read.
     const { entry, completion } = startPreparation(options, getSliceMeshInputSignature(options), async (snapshot, ack) => {
         throwIfAborted(signal);
-        if (!equalSliceMeshInputSignatures(snapshot.signature, getSliceMeshInputSignature(options))) {
-            throw new Error('Scene changed while preparing slice input; retry with the current scene.');
-        }
-        result = await consume(snapshot.descriptor, { ...ack, preparationWaitMs,
-            stageQueueWaitMs: stageQueueWaitMs + (ack.stageQueueWaitMs ?? 0) }, performance.now() - started);
+        result = await consume(snapshot.descriptor, ack, performance.now() - started);
     });
     entry.users += 1;
     entry.onBake.add(onBake);

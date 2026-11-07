@@ -183,7 +183,7 @@ pub async fn mesh_chunk_upload_finish(
 }
 
 /// A miss is ordinary: never take or clear the caller's existing staged mesh.
-/// The frontend holds stage-operation ownership; unrelated input uploads remain independent.
+/// The frontend holds its native-mesh operation queue and upload turn throughout.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn restore_cached_slice_mesh(
     snapshot_id: String,

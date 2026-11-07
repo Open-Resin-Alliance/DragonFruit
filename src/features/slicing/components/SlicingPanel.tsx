@@ -47,6 +47,7 @@ import {
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, existingNativePaths, getSlicerEngineVersion, pickDirectoryWithNativeDialog } from '@/features/slicing/tauri/nativeSlicerBridge';
+import type { AaPreset as AaAutoPreset } from '@/features/slicing/autoAaPhysics';
 import {
   clampBlurSigma,
   formatAaLevel,
@@ -61,24 +62,7 @@ import {
 } from './LutCurveEditor';
 import { useKeyPressed } from '@/hotkeys/hotkeyStore';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
-import { cancelSliceMeshWarmup } from '@/features/slicing/useSliceMeshWarmup';
-import type { AaAutoPresetChoice as AaAutoUiPreset } from '@/features/slicing/sliceAntiAliasing';
-import {
-  SLICING_AA_AUTO_PRESET_STORAGE_KEY,
-  SLICING_3DAA_SAVED_CURVES_STORAGE_KEY,
-  SLICING_SESSION_AA_OVERRIDE_STORAGE_KEY,
-  SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY,
-  REMOTE_OFFLINE_LAYER_HEIGHT_CHANGED_EVENT,
-  clampRemoteOfflineLayerHeightMm,
-  notifySliceMeshWarmupPreferencesChanged,
-  publishSliceMeshWarmupContext,
-  readSessionAaOverride,
-  resolveInitialAaAutoPreset,
-  resolveInitialRemoteOfflineLayerHeightMm,
-  resolveInitialSavedCurves,
-  resolveSliceMaterialInput,
-  subscribeToSliceInputPreferences,
-} from '@/features/slicing/sliceInputContext';
+import { useSliceMeshWarmup } from '@/features/slicing/useSliceMeshWarmup';
 import type { LocaleFormat } from '@/utils/localeNumber';
 
 export type SliceIntent = 'file' | 'upload' | 'print' | 'preview' | 'uvtools';
@@ -342,6 +326,7 @@ const SLICING_3DAA_LOOK_BACK_STORAGE_KEY = 'dragonfruit.slicing.3daaLookBack';
 const SLICING_3DAA_LOOK_BACK_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.3daaLookBackCustomEnabled';
 const SLICING_3DAA_AUTO_MODE_STORAGE_KEY = 'dragonfruit.slicing.3daaAutoMode';
 const SLICING_3DAA_RESIN_TYPE_STORAGE_KEY = 'dragonfruit.slicing.3daaResinType';
+const SLICING_3DAA_SAVED_CURVES_STORAGE_KEY = 'dragonfruit.slicing.3daaSavedCurves';
 const SLICING_3DAA_SELECTED_CURVE_STORAGE_KEY = 'dragonfruit.slicing.3daaSelectedCurveId';
 const SLICING_ZAA_PATTERN_STORAGE_KEY = 'dragonfruit.slicing.zaaPattern';
 const SLICING_ZAA_DUPLICATE_Z_STORAGE_KEY = 'dragonfruit.slicing.zaaDuplicateZ';
@@ -353,6 +338,10 @@ const SLICING_Z_BLUR_KERNEL_STORAGE_KEY = 'dragonfruit.slicing.zBlurKernel';
 const SLICING_Z_BLUR_SIGMA_STORAGE_KEY = 'dragonfruit.slicing.zBlurSigma';
 const NEW_CURVE_EDITING_TARGET = '__dragonfruit_new_curve__';
 const SLICING_AA_QUALITY_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaQualityMode';
+const SLICING_AA_AUTO_PRESET_STORAGE_KEY = 'dragonfruit.slicing.aaAutoPreset';
+const SLICING_SESSION_AA_OVERRIDE_STORAGE_KEY = 'dragonfruit.slicing.sessionAaOverrideByMaterial.v1';
+const SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY = 'dragonfruit.slicing.remoteOfflineLayerHeightMm';
+const REMOTE_OFFLINE_LAYER_HEIGHT_CHANGED_EVENT = 'dragonfruit:slicing-remote-offline-layer-height-changed';
 const SLICING_INTENT_BY_PRINTER_PROFILE_STORAGE_KEY = 'dragonfruit.slicing.intentByPrinterProfile.v1';
 const REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM = 0.01;
 const REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM = 1;
@@ -389,12 +378,29 @@ type StoredSessionAaOverride = {
 };
 
 function readSessionAaOverrideDraft(profile: MaterialProfile): MaterialDraft | null {
-  const override = readSessionAaOverride(profile);
-  return override ? {
-    ...materialProfileToDraft(profile),
-    minimumAaAlphaPercent: override.minimumAaAlphaPercent ?? profile.minimumAaAlphaPercent,
-    antiAliasingSettings: { ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS, ...override.antiAliasingSettings },
-  } : null;
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(SLICING_SESSION_AA_OVERRIDE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const entry = (parsed as Record<string, StoredSessionAaOverride>)[profile.id];
+    if (!entry || typeof entry !== 'object') return null;
+    const minimumAaAlphaPercent = Number(entry.minimumAaAlphaPercent);
+    return {
+      ...materialProfileToDraft(profile),
+      minimumAaAlphaPercent: Number.isFinite(minimumAaAlphaPercent)
+        ? Math.max(0, Math.min(100, Math.round(minimumAaAlphaPercent)))
+        : profile.minimumAaAlphaPercent,
+      antiAliasingSettings: {
+        ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+        ...(profile.antiAliasingSettings ?? {}),
+        ...(entry.antiAliasingSettings && typeof entry.antiAliasingSettings === 'object' ? entry.antiAliasingSettings : {}),
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 function writeSessionAaOverrideDraft(materialId: string, draft: MaterialDraft): void {
@@ -410,7 +416,6 @@ function writeSessionAaOverrideDraft(materialId: string, draft: MaterialDraft): 
       antiAliasingSettings: draft.antiAliasingSettings,
     };
     window.sessionStorage.setItem(SLICING_SESSION_AA_OVERRIDE_STORAGE_KEY, JSON.stringify(next));
-    notifySliceMeshWarmupPreferencesChanged();
   } catch {
     // Ignore storage failures; the in-memory override still works.
   }
@@ -430,7 +435,6 @@ function clearSessionAaOverrideDraft(materialId: string): void {
     } else {
       window.sessionStorage.setItem(SLICING_SESSION_AA_OVERRIDE_STORAGE_KEY, JSON.stringify(next));
     }
-    notifySliceMeshWarmupPreferencesChanged();
   } catch {
     // ignore storage failures
   }
@@ -538,6 +542,28 @@ function writeSliceIntentByPrinterProfile(next: Record<string, SliceIntent>): vo
   window.sessionStorage.setItem(SLICING_INTENT_BY_PRINTER_PROFILE_STORAGE_KEY, serialized);
 }
 
+function clampLayerHeightMm(value: number, fallback = 0.05): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  const clamped = Math.max(0.001, Math.min(1, numeric));
+  return Math.round(clamped * 1000) / 1000;
+}
+
+function clampRemoteOfflineLayerHeightMm(value: number, fallback = 0.05): number {
+  const fallbackClamped = Math.max(
+    REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM,
+    Math.min(REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM, fallback),
+  );
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallbackClamped;
+
+  const clamped = Math.max(
+    REMOTE_OFFLINE_LAYER_HEIGHT_MIN_MM,
+    Math.min(REMOTE_OFFLINE_LAYER_HEIGHT_MAX_MM, numeric),
+  );
+  return Math.round(clamped * 1000) / 1000;
+}
 
 function resolveInitialAaMode(): 'Off' | 'Blur' | '3DAA' {
   if (typeof window === 'undefined') return 'Off';
@@ -698,6 +724,19 @@ function resolveInitialZBlendResinType(): 'opaque' | 'clear' | 'custom' {
   return stored === 'clear' ? 'clear' : stored === 'custom' ? 'custom' : 'opaque';
 }
 
+function resolveInitialSavedCurves(): SavedCurve[] {
+  if (typeof window === 'undefined') return DEFAULT_SAVED_CURVES;
+  try {
+    const raw =
+      window.sessionStorage.getItem(SLICING_3DAA_SAVED_CURVES_STORAGE_KEY)
+      ?? window.localStorage.getItem(SLICING_3DAA_SAVED_CURVES_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as SavedCurve[];
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch { /* ignore */ }
+  return DEFAULT_SAVED_CURVES;
+}
 
 function resolveInitialSelectedCurveId(curves: SavedCurve[]): string {
   if (typeof window === 'undefined') return curves[0].id;
@@ -715,6 +754,17 @@ function resolveInitialAaQualityMode(): 'auto' | 'expert' {
   return stored === 'advanced' || stored === 'expert' ? 'expert' : 'auto';
 }
 
+type AaAutoUiPreset = 'raw' | AaAutoPreset;
+
+
+function resolveInitialAaAutoPreset(): AaAutoUiPreset {
+  if (typeof window === 'undefined') return 'balanced';
+  const stored = window.localStorage.getItem(SLICING_AA_AUTO_PRESET_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_AA_AUTO_PRESET_STORAGE_KEY);
+  if (stored === 'raw') return 'raw';
+  if (stored === 'sharp' || stored === 'smooth') return stored;
+  return 'balanced';
+}
 
 const AUTO_AA_PRESET_OPTIONS: ReadonlyArray<{
   preset: AaAutoUiPreset;
@@ -726,6 +776,8 @@ const AUTO_AA_PRESET_OPTIONS: ReadonlyArray<{
   { preset: 'balanced', label: msg`Balanced`, desc: msg`Printer-aware smoothing.` },
   { preset: 'smooth', label: msg({ message: 'Smooth', context: 'Anti-aliasing preset' }), desc: msg`Soft organic curves.` },
 ];
+
+// AaAutoPreset is imported from autoAaPhysics.ts
 
 export function SlicingPanel({
   models,
@@ -845,32 +897,11 @@ export function SlicingPanel({
   const [zBlendAutoMode, setZBlendAutoMode] = useState<boolean>(resolveInitialZBlendAutoMode);
   const [zaaPattern] = useState<ZaaPattern>(resolveInitialZaaPattern);
   const [zaaDuplicateZ] = useState<boolean>(resolveInitialZaaDuplicateZ);
-  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
-  const printerReachabilityByDeviceId = React.useSyncExternalStore(
-    subscribeToPrinterReachability,
-    getPrinterReachabilitySnapshot,
-    getPrinterReachabilityServerSnapshot,
-  );
-  const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
-  const networkUiAdapter = useMemo(
-    () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
-    [activePrinterProfile?.networkSupport],
-  );
-  const activeMaterialProfile = useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   const [aaQualityMode, setAaQualityMode] = useState<'auto' | 'expert'>(resolveInitialAaQualityMode);
   const [aaAutoPreset, setAaAutoPreset] = useState<AaAutoUiPreset>(resolveInitialAaAutoPreset);
   const [materialAaEditorDraft, setMaterialAaEditorDraft] = useState<MaterialDraft | null>(null);
   const [isMaterialAaEditorOpen, setIsMaterialAaEditorOpen] = useState(false);
-  const [sessionAaOverride, setSessionAaOverride] = useState(() => ({
-    materialId: activeMaterialProfile?.id ?? null,
-    draft: activeMaterialProfile ? readSessionAaOverrideDraft(activeMaterialProfile) : null,
-  }));
-  const sessionAaOverrideDraft = sessionAaOverride.materialId === (activeMaterialProfile?.id ?? null)
-    ? sessionAaOverride.draft
-    : activeMaterialProfile ? readSessionAaOverrideDraft(activeMaterialProfile) : null;
-  const setSessionAaOverrideDraft = useCallback((draft: MaterialDraft | null) => {
-    setSessionAaOverride({ materialId: activeMaterialProfile?.id ?? null, draft });
-  }, [activeMaterialProfile?.id]);
+  const [sessionAaOverrideDraft, setSessionAaOverrideDraft] = useState<MaterialDraft | null>(null);
   const [editingSessionAaOverrideDraft, setEditingSessionAaOverrideDraft] = useState<MaterialDraft | null>(null);
   const [isSessionAaOverrideOpen, setIsSessionAaOverrideOpen] = useState(false);
 
@@ -886,7 +917,14 @@ export function SlicingPanel({
   const [minimumAaAlphaPercent] = useState<number>(resolveInitialMinimumAaAlphaPercent);
   const [enableMinimumAaAlphaOverride, setEnableMinimumAaAlphaOverride] = useState<boolean>(resolveInitialMinimumAaAlphaOverrideEnabled);
   const [blurGraySourceMode] = useState<BlurGraySourceMode>(resolveInitialBlurGraySourceMode);
-  const [remoteOfflineLayerHeightMm, setRemoteOfflineLayerHeightMm] = useState<number>(resolveInitialRemoteOfflineLayerHeightMm);
+  const [remoteOfflineLayerHeightMm, setRemoteOfflineLayerHeightMm] = useState<number>(() => {
+    if (typeof window === 'undefined') return 0.05;
+    const raw = window.localStorage.getItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY)
+      ?? window.sessionStorage.getItem(SLICING_REMOTE_OFFLINE_LAYER_HEIGHT_GLOBAL_STORAGE_KEY);
+    if (raw == null || raw.trim().length === 0) return 0.05;
+    const parsed = Number(raw);
+    return (Number.isFinite(parsed) && parsed > 0) ? clampRemoteOfflineLayerHeightMm(parsed) : 0.05;
+  });
   const [selectedRemoteMaterialName, setSelectedRemoteMaterialName] = useState<string | null>(null);
   const [isLoadingRemoteMaterial, setIsLoadingRemoteMaterial] = useState(false);
   const [lastBenchmark, setLastBenchmark] = useState<SliceBenchmarkSnapshot | null>(null);
@@ -906,31 +944,74 @@ export function SlicingPanel({
   const handleSliceZipExportRef = useRef<((scopeOverride?: PlateSliceScope) => Promise<boolean>) | null>(null);
   const hasSlicingProgressStartedRef = useRef(false);
 
+  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const printerReachabilityByDeviceId = React.useSyncExternalStore(
+    subscribeToPrinterReachability,
+    getPrinterReachabilitySnapshot,
+    getPrinterReachabilityServerSnapshot,
+  );
+  const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  const networkUiAdapter = useMemo(
+    () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
+    [activePrinterProfile?.networkSupport],
+  );
+  const activeMaterialProfile = useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   useEffect(() => {
     setSessionAaOverrideDraft(activeMaterialProfile ? readSessionAaOverrideDraft(activeMaterialProfile) : null);
     setEditingSessionAaOverrideDraft(null);
     setIsSessionAaOverrideOpen(false);
     setMaterialAaEditorDraft(null);
     setIsMaterialAaEditorOpen(false);
-  }, [activeMaterialProfile?.id, setSessionAaOverrideDraft]);
+  }, [activeMaterialProfile?.id]);
   const profileAntiAliasingSettings = useMemo(() => ({
     ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
     ...(activeMaterialProfile?.antiAliasingSettings ?? {}),
     ...(sessionAaOverrideDraft?.antiAliasingSettings ?? {}),
   }), [activeMaterialProfile?.antiAliasingSettings, sessionAaOverrideDraft?.antiAliasingSettings]);
-  const {
-    effectiveMaterialProfile,
-    materialProfileForSlicing,
-    effectiveLayerHeightMm,
-    isRemoteNetworkUnavailable,
-    showRemoteOfflineLayerHeightOverride,
-  } = useMemo(() => resolveSliceMaterialInput({
-    printerProfile: activePrinterProfile,
-    materialProfile: activeMaterialProfile,
-    reachability: printerReachabilityByDeviceId,
-    networkUiAdapter,
-    remoteOfflineLayerHeightMm,
-  }), [activeMaterialProfile, activePrinterProfile, networkUiAdapter, printerReachabilityByDeviceId, remoteOfflineLayerHeightMm]);
+  const effectiveMaterialProfile = useMemo(() => {
+    if (!activeMaterialProfile) return null;
+    if (!activePrinterProfile) return activeMaterialProfile;
+    if (!networkUiAdapter) return activeMaterialProfile;
+    if (activePrinterProfile.networkConnection?.connected !== true) return activeMaterialProfile;
+
+    const activeDeviceId = (
+      activePrinterProfile.activeNetworkDeviceId?.trim()
+      || (activePrinterProfile.networkFleet ?? []).find((device) => (
+        (device.ipAddress || '').trim().toLowerCase()
+        === (activePrinterProfile.networkConnection?.ipAddress || '').trim().toLowerCase()
+      ))?.id
+      || ''
+    );
+    if (activeDeviceId && printerReachabilityByDeviceId[activeDeviceId] === false) {
+      return activeMaterialProfile;
+    }
+
+    const selectedMaterialId = activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '';
+    if (!selectedMaterialId) return activeMaterialProfile;
+
+    const selectedLayerHeightMm = Number(activePrinterProfile.networkConnection?.selectedMaterialLayerHeightMm);
+    const selectedNormalExposureSec = Number(activePrinterProfile.networkConnection?.selectedMaterialNormalExposureSec);
+    const selectedBottomExposureSec = Number(activePrinterProfile.networkConnection?.selectedMaterialBottomExposureSec);
+    const selectedBottomLayerCount = Number(activePrinterProfile.networkConnection?.selectedMaterialBottomLayerCount);
+    const selectedMaterialName = activePrinterProfile.networkConnection?.selectedMaterialName?.trim() ?? '';
+
+    return {
+      ...activeMaterialProfile,
+      name: selectedMaterialName || activeMaterialProfile.name,
+      layerHeightMm: Number.isFinite(selectedLayerHeightMm) && selectedLayerHeightMm > 0
+        ? selectedLayerHeightMm
+        : activeMaterialProfile.layerHeightMm,
+      normalExposureSec: Number.isFinite(selectedNormalExposureSec) && selectedNormalExposureSec > 0
+        ? selectedNormalExposureSec
+        : activeMaterialProfile.normalExposureSec,
+      bottomExposureSec: Number.isFinite(selectedBottomExposureSec) && selectedBottomExposureSec > 0
+        ? selectedBottomExposureSec
+        : activeMaterialProfile.bottomExposureSec,
+      bottomLayerCount: Number.isFinite(selectedBottomLayerCount) && selectedBottomLayerCount >= 0
+        ? selectedBottomLayerCount
+        : activeMaterialProfile.bottomLayerCount,
+    };
+  }, [activeMaterialProfile, activePrinterProfile, networkUiAdapter, printerReachabilityByDeviceId]);
 
   const selectedFormat = useMemo(() => {
     if (!activePrinterProfile || !effectiveMaterialProfile) return null;
@@ -1035,7 +1116,6 @@ export function SlicingPanel({
     const json = JSON.stringify(savedCurves);
     window.localStorage.setItem(SLICING_3DAA_SAVED_CURVES_STORAGE_KEY, json);
     window.sessionStorage.setItem(SLICING_3DAA_SAVED_CURVES_STORAGE_KEY, json);
-    notifySliceMeshWarmupPreferencesChanged();
   }, [savedCurves]);
 
   useEffect(() => {
@@ -1045,6 +1125,27 @@ export function SlicingPanel({
   }, [selectedCurveId]);
 
   const selectedRemoteMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
+  const selectedNetworkDeviceId = useMemo(() => {
+    const directId = activePrinterProfile?.activeNetworkDeviceId?.trim();
+    if (directId) return directId;
+
+    const connectionIp = activePrinterProfile?.networkConnection?.ipAddress?.trim().toLowerCase() ?? '';
+    if (!connectionIp) return null;
+
+    const fleet = activePrinterProfile?.networkFleet ?? [];
+    return fleet.find((device) => (device.ipAddress || '').trim().toLowerCase() === connectionIp)?.id ?? null;
+  }, [
+    activePrinterProfile?.activeNetworkDeviceId,
+    activePrinterProfile?.networkConnection?.ipAddress,
+    activePrinterProfile?.networkFleet,
+  ]);
+  const selectedNetworkDeviceReachability = selectedNetworkDeviceId
+    ? (printerReachabilityByDeviceId[selectedNetworkDeviceId] ?? null)
+    : null;
+  const isRemoteNetworkUnavailable = Boolean(networkUiAdapter) && (
+    activePrinterProfile?.networkConnection?.connected !== true
+    || selectedNetworkDeviceReachability === false
+  );
   // Respect printer-profile capability: explicit `false` means AA must be disabled.
   const antiAliasingAvailable = activePrinterProfile != null && activePrinterProfile.antiAliasing !== false;
   const printerDitherBitDepth = useMemo<number | null>(() => {
@@ -1081,6 +1182,9 @@ export function SlicingPanel({
   );
 
   const isRemoteMaterialSyncConnected = Boolean(networkUiAdapter) && !isRemoteNetworkUnavailable;
+  const showRemoteOfflineLayerHeightOverride = Boolean(networkUiAdapter)
+    && isRemoteNetworkUnavailable
+    && networkUiAdapter?.supportsRemoteMaterialProfiles !== false;
   const remoteMaterialHost = (activePrinterProfile?.networkConnection?.ipAddress
     || activePrinterProfile?.network?.ipAddress
     || '').trim();
@@ -1256,6 +1360,31 @@ export function SlicingPanel({
     return fmt.quantity(ml, 2, 'ml');
   }, [estimatedVolumeLabelOverride, visibleModels, fmt]);
 
+  const effectiveLayerHeightMm = useMemo(() => {
+    if (showRemoteOfflineLayerHeightOverride) {
+      return clampRemoteOfflineLayerHeightMm(
+        remoteOfflineLayerHeightMm,
+        clampRemoteOfflineLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05),
+      );
+    }
+    if (!effectiveMaterialProfile) return null;
+    return clampLayerHeightMm(effectiveMaterialProfile.layerHeightMm, 0.05);
+  }, [activeMaterialProfile?.layerHeightMm, effectiveMaterialProfile, remoteOfflineLayerHeightMm, showRemoteOfflineLayerHeightOverride]);
+
+  const materialProfileForSlicing = useMemo(() => {
+    if (!effectiveMaterialProfile) return null;
+    if (showRemoteOfflineLayerHeightOverride) {
+      return {
+        ...effectiveMaterialProfile,
+        layerHeightMm: effectiveLayerHeightMm ?? clampRemoteOfflineLayerHeightMm(activeMaterialProfile?.layerHeightMm ?? 0.05),
+      };
+    }
+    return {
+      ...effectiveMaterialProfile,
+      layerHeightMm: clampLayerHeightMm(effectiveMaterialProfile.layerHeightMm, 0.05),
+    };
+  }, [activeMaterialProfile?.layerHeightMm, effectiveLayerHeightMm, effectiveMaterialProfile, showRemoteOfflineLayerHeightOverride]);
+
   const estimatedLayerCount = useMemo(() => {
     const overrideLayerHeightMm = Number(estimatedLayerHeightMmOverride);
     const canTrustOverride = Number.isFinite(estimatedLayerCountOverride)
@@ -1321,32 +1450,27 @@ export function SlicingPanel({
     savedCurves,
     sessionAaOverrideDraft,
   ]);
-  // Publish only the next target; the scene owns the sole warmup coordinator.
+  // Prepare the first plate the next action will slice, while the context is idle.
+  // Auto-preview always covers the active plate; a manual batch starts at its first bed.
   const warmupPlateScope = !shouldAutoSlice && effectiveSlicePlateScope === 'all_plates'
     ? (populatedPlateScopes[0] ?? activePlateSliceScope)
     : activePlateSliceScope;
-  useEffect(() => {
-    publishSliceMeshWarmupContext({
-      profileState,
-      antiAliasing: { preset: aaAutoPreset, override: sessionAaOverrideDraft, lutCurves: savedCurves },
-      remoteOfflineLayerHeightMm,
-      targetPlateId: warmupPlateScope?.plateId,
-      imminentSlice: shouldAutoSlice === true,
-    });
-  }, [profileState, aaAutoPreset, sessionAaOverrideDraft, savedCurves, remoteOfflineLayerHeightMm, warmupPlateScope?.plateId, shouldAutoSlice]);
-  useEffect(() => () => publishSliceMeshWarmupContext(null), []);
-  useEffect(() => subscribeToSliceInputPreferences(() => {
-    setAaAutoPreset(resolveInitialAaAutoPreset());
-    const curves = resolveInitialSavedCurves();
-    setSavedCurves((previous) => JSON.stringify(previous) === JSON.stringify(curves) ? previous : curves);
-    setRemoteOfflineLayerHeightMm(resolveInitialRemoteOfflineLayerHeightMm());
-    const draft = activeMaterialProfile ? readSessionAaOverrideDraft(activeMaterialProfile) : null;
-    setSessionAaOverride((previous) => previous.materialId === (activeMaterialProfile?.id ?? null)
-      && JSON.stringify(previous.draft) === JSON.stringify(draft) ? previous : {
-        materialId: activeMaterialProfile?.id ?? null,
-        draft,
-      });
-  }), [activeMaterialProfile]);
+  const warmupModels = useMemo(() => {
+    if (!warmupPlateScope) return models;
+    const ids = new Set(warmupPlateScope.modelIds);
+    return models.filter(model => ids.has(model.id));
+  }, [models, warmupPlateScope]);
+  const cancelMeshWarmup = useSliceMeshWarmup(activePrinterProfile && materialProfileForSlicing ? {
+    models: warmupModels,
+    excludedModelIds,
+    ...(warmupPlateScope ? {
+      plateVolumeBoundsMm: warmupPlateScope.volumeBoundsMm,
+      plateOffsetMm: warmupPlateScope.offsetMm,
+    } : {}),
+    printerProfile: activePrinterProfile,
+    materialProfile: materialProfileForSlicing,
+    antiAliasing: { preset: aaAutoPreset, override: sessionAaOverrideDraft, lutCurves: savedCurves },
+  } : null, shouldAutoSlice === true);
   const effectiveAutoAaConfig = sliceAntiAliasing.decision.autoConfig;
 
   const materialAaOverrideEnabled = sliceAntiAliasing.decision.overrideEnabled;
@@ -1545,7 +1669,6 @@ export function SlicingPanel({
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(SLICING_AA_AUTO_PRESET_STORAGE_KEY, aaAutoPreset);
     window.sessionStorage.setItem(SLICING_AA_AUTO_PRESET_STORAGE_KEY, aaAutoPreset);
-    notifySliceMeshWarmupPreferencesChanged();
   }, [aaAutoPreset]);
 
   useEffect(() => {
@@ -2151,9 +2274,9 @@ export function SlicingPanel({
     setCurrentPhase('Cancelling');
     // i18n-ignore: sliceStatus is never rendered
     setSliceStatus('Cancelling');
-    cancelSliceMeshWarmup();
+    cancelMeshWarmup();
     slicingAbortControllerRef.current?.abort();
-  }, [isSlicingZip]);
+  }, [cancelMeshWarmup, isSlicingZip]);
 
   // Close intent dropdown on outside click
   useEffect(() => {

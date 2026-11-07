@@ -260,7 +260,6 @@ import { useSceneCollectionManager, getSceneSnapshotRegistryBytes } from '@/feat
 import { useSupportHistoryHandlers } from '@/supports/history/useSupportHistoryHandlers';
 import { useNativeSpaceMouseLifecycle } from '@/components/scene/camera/useNativeSpaceMouseLifecycle';
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
-import { useSceneSliceMeshWarmup } from '@/features/slicing/useSceneSliceMeshWarmup';
 import { setSceneClipGate } from '@/features/slicing/sceneClipStore';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
@@ -10646,31 +10645,6 @@ export default function Home() {
   React.useEffect(() => {
     finalizeMirrorSessionRef.current = mirror.flushPendingBake;
   }, [mirror.flushPendingBake]);
-
-  // Imports publish their complete batch before clearing readiness; real edit producers
-  // already publish geometry/attribute revisions and atomic modifier/support commits.
-  useSceneSliceMeshWarmup({
-    models: scene.models,
-    plateFrames: scene.plateFrames,
-    activePlateId: scene.activePlateId,
-    excludedModelIds: excludedSliceModelIds,
-    exportMode: scene.mode === 'export',
-    paused: isSlicingBusy,
-    ready: !scene.isImporting
-      && !scene.importProgress.active
-      && !showPluginImportWarningModal
-      && scene.pluginImportPhase !== 'processing'
-      && !nativePickerPreparationState.active
-      && !pendingStartupSceneHandoff
-      && !showModifierApplyBlockingOverlay
-      && !(transformMgr.isTransforming && transformMgr.pendingTransformRef.current)
-      && !isManualRepairing
-      && !autoSupportBusy
-      && !orientationBusy
-      && !isAutoArranging
-      && !isDuplicating
-      && mirror.mirrorSessionRef.current === null,
-  });
 
   return (
     <EditorLayout>
