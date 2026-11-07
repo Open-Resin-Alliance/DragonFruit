@@ -130,6 +130,31 @@ nothing until you know whether it happened on an M4 Max or a 2017 iMac.
 > not reach the file, or stdout, or anywhere. This is why the header is
 > emitted from inside `setup()`.
 
+### GPU selection on hybrid systems
+
+Windows laptops with an integrated GPU and a discrete GPU default the WebView2
+GPU process to the integrated one. `powerPreference: 'high-performance'` on a
+WebGL context is only a hint; Chromium cannot composite across GPUs on Windows,
+so the hint does not move the GPU process. Both windows therefore pass
+`--force_high_performance_gpu` through `additionalBrowserArgs` in
+`src-tauri/tauri.conf.json`, alongside wry's default
+`--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` — setting the
+field replaces wry's defaults, so they have to be repeated. The flag needs
+WebView2 runtime 145 or newer; older runtimes ignore it. The `gpu=` field in the
+startup header is how to confirm which adapter the webview actually got.
+
+Every WebGL context should also request `powerPreference: 'high-performance'`:
+the main scene, the printing-layer preview and the export thumbnail capture.
+The only native GPU consumer is `dragonfruit-ao-gpu`, which already selects a
+`DiscreteGpu` adapter before falling back to an `IntegratedGpu`.
+
+If the webview still lands on an integrated or software adapter,
+`GpuPerformanceWarningModal` shows a dismissible warning with the manual
+Windows path (Settings → System → Display → Graphics → add
+`msedgewebview2.exe` → High performance). It is Windows-only, and "Don't show
+again" persists in `localStorage` under
+`df.gpu-performance-warning.v1.dismissed`.
+
 ### Asking a user for a report
 
 The plumbing already exists and needs no new UI: Settings has a log level

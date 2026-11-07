@@ -412,6 +412,7 @@ import { SceneAutosaveRecoveryModal } from '@/components/scene/SceneAutosaveReco
 import { MeshRepairReportModal } from '@/components/scene/MeshRepairReportModal';
 import { MeshRepairConfirmModal } from '@/components/scene/MeshRepairConfirmModal';
 import { ManifoldWarningModal } from '@/components/modals/ManifoldWarningModal';
+import { GpuPerformanceWarningModal } from '@/components/modals/GpuPerformanceWarningModal';
 import { TetrahedralRemeshConfirmModal } from '@/components/modals/TetrahedralRemeshConfirmModal';
 import { ShrinkWrapConfirmModal } from '@/components/modals/ShrinkWrapConfirmModal';
 import { SurfacingProgressModal, type SurfacingProgressState } from '@/components/scene/SurfacingProgressModal';
@@ -11786,6 +11787,8 @@ export default function Home() {
           setManualRepairModelIds([manifoldWarningModelId]);
         }}
       />
+
+      <GpuPerformanceWarningModal />
 
       <TetrahedralRemeshConfirmModal
         isOpen={tetSurfaceConfirmModelId !== null}
