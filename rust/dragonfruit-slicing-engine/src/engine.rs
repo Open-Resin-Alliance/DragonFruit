@@ -14,7 +14,7 @@ use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rl
 use crate::pulp_simd::{load_u8_as_u32, sat_add_u32, sat_mul_u32, u32_lanes, Backend, U32Divider};
 use crate::raster::{
     apply_blur_postprocess_inplace_with_roi, blur_gray_rle_streaming,
-    blur_gray_rle_streaming_with_bounds, downsample_binary_rle_to_gray_rle,
+    blur_gray_rle_streaming_3daa_with_bounds, downsample_binary_rle_to_gray_rle,
     rasterize_layer_with_stats, remap_gray_rle_with_lut,
 };
 use crate::types::{
@@ -232,6 +232,100 @@ struct PerturbRlePostReadyTask {
     support_runs: Option<Vec<crate::rle::RleRun>>,
     history: Vec<Arc<PerturbRleModelLayer>>,
     future: Vec<Arc<PerturbRleModelLayer>>,
+}
+
+struct PerturbRlePostBatch {
+    tasks: [Option<PerturbRlePostReadyTask>; crate::dither::LAYER_DITHER_BATCH],
+    permits: [Option<PostTaskPermit>; crate::dither::LAYER_DITHER_BATCH],
+    count: usize,
+}
+
+impl PerturbRlePostBatch {
+    fn new() -> Self {
+        Self { tasks: std::array::from_fn(|_| None), permits: std::array::from_fn(|_| None), count: 0 }
+    }
+}
+
+fn pending_perturb_rle_input(
+    input: PerturbRlePostInput, runs: Vec<crate::rle::RleRun>, bounds: RleNonzeroBounds,
+) -> PendingPerturbRleLayer {
+    PendingPerturbRleLayer {
+        layer_idx: input.layer_idx, model: Arc::new(PerturbRleModelLayer { runs, bounds }), support_runs: input.support_runs,
+    }
+}
+
+/// Snapshot exactly the existing radius, even while collecting a batch.
+fn take_perturb_rle_post_task(
+    pending: &mut VecDeque<PendingPerturbRleLayer>,
+    history: &mut VecDeque<Arc<PerturbRleModelLayer>>, radius: usize,
+) -> PerturbRlePostReadyTask {
+    let layer = pending.pop_front().expect("pending perturb 3DAA RLE layer should exist");
+    let task = PerturbRlePostReadyTask {
+        layer_idx: layer.layer_idx, model: Arc::clone(&layer.model), support_runs: layer.support_runs,
+        history: history.iter().cloned().collect(),
+        future: pending.iter().take(radius).map(|p| Arc::clone(&p.model)).collect(),
+    };
+    history.push_back(layer.model);
+    while history.len() > radius { history.pop_front(); }
+    task
+}
+
+/// A probe never blocks, and an unfinished XY receiver occupies only the ordinary
+/// loop's single waiting-input stage, keeping its already-acquired permit.
+fn try_extend_perturb_rle_post_batch(
+    pending: &mut VecDeque<PendingPerturbRleLayer>,
+    input_rx: &mpsc::Receiver<PerturbRlePostInput>,
+    waiting: &mut Option<(PerturbRlePostInput, PostTaskPermit)>,
+    gate: &Arc<PostTaskGate>, radius: usize, flushing: bool,
+) -> Option<PostTaskPermit> {
+    let (input, permit) = if let Some(waiting) = waiting.take() {
+        waiting
+    } else {
+        let permit = gate.try_acquire()?;
+        if flushing { return (!pending.is_empty()).then_some(permit); }
+        debug_assert_eq!(pending.len(), radius);
+        let input = match input_rx.try_recv() {
+            Ok(input) => input,
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                gate.close_input();
+                return None;
+            }
+        };
+        (input, permit)
+    };
+    match input.model_receiver.try_recv() {
+        Ok((runs, bounds)) => {
+            pending.push_back(pending_perturb_rle_input(input, runs, bounds));
+            Some(permit)
+        }
+        Err(mpsc::TryRecvError::Empty) => {
+            *waiting = Some((input, permit));
+            None
+        }
+        Err(mpsc::TryRecvError::Disconnected) => panic!("perturb 3DAA XY worker stopped"),
+    }
+}
+
+/// Hold a charged partial group only while other queued/executing post bodies
+/// can make useful progress. The generation is sampled BEFORE probing channels
+/// and capacity, so a notification between the probe and sleep cannot be lost.
+fn extend_perturb_rle_post_batch(
+    pending: &mut VecDeque<PendingPerturbRleLayer>,
+    input_rx: &mpsc::Receiver<PerturbRlePostInput>,
+    waiting: &mut Option<(PerturbRlePostInput, PostTaskPermit)>,
+    gate: &Arc<PostTaskGate>, radius: usize, flushing: bool,
+    cancel_flag: Option<&AtomicBool>,
+) -> Option<PostTaskPermit> {
+    loop {
+        if cancel_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) { return None; }
+        let (generation, needs_slot) = gate.batch_generation()?;
+        if let Some(permit) = try_extend_perturb_rle_post_batch(pending, input_rx, waiting, gate, radius, flushing) {
+            return Some(permit);
+        }
+        if flushing || cancel_flag.is_some_and(|flag| flag.load(Ordering::Relaxed))
+            || !gate.wait_for_batch_progress(generation, needs_slot) { return None; }
+    }
 }
 
 impl<'a> RleRowDecoder<'a> {
@@ -666,6 +760,61 @@ fn finalize_perturb_rle_post_layer(
         runs: Some(final_runs),
         encoded_bytes: None,
     }
+}
+
+fn finalize_perturb_rle_post_batch(
+    tasks: &mut [Option<PerturbRlePostReadyTask>; crate::dither::LAYER_DITHER_BATCH],
+    count: usize,
+    z_blur_radius: usize,
+    z_blur_weights: &[u32],
+    tail_cure_lut: Option<&[u8; 256]>,
+    dither_palette: Option<&crate::dither::DitherPaletteV3>,
+    dither_backend: Backend,
+    width: usize,
+    height: usize,
+    post: &PostStageCounters,
+) -> [Option<PerturbRlePostOutput>; crate::dither::LAYER_DITHER_BATCH] {
+    let mut runs = std::array::from_fn(|_| Vec::new());
+    let mut supports: [Option<Vec<crate::rle::RleRun>>; crate::dither::LAYER_DITHER_BATCH] = std::array::from_fn(|_| None);
+    let mut indices = [0; crate::dither::LAYER_DITHER_BATCH];
+    for lane in 0..count {
+        let task = tasks[lane].take().expect("charged post task should exist");
+        let z_blur_start = std::time::Instant::now();
+        runs[lane] = apply_z_weighted_blur_to_rle_layer(
+            &task.model, &task.history, &task.future, z_blur_radius, z_blur_weights, width, height,
+        );
+        add_elapsed(&post.post_blur_ns, z_blur_start);
+        indices[lane] = task.layer_idx;
+        supports[lane] = task.support_runs;
+        // Release Arc windows now; every retained output keeps its layer permit
+        // until that layer's turn at the existing post-finalize/encode boundary.
+    }
+
+    if let Some(palette) = dither_palette {
+        let lut_start = std::time::Instant::now();
+        let layers = std::array::from_fn::<_, { crate::dither::LAYER_DITHER_BATCH }, _>(|lane| crate::dither::DitherLayer {
+            runs: &runs[lane], width, height,
+        });
+        runs = crate::dither::dither_rle_layers(&layers[..count], palette, dither_backend);
+        add_elapsed(&post.dither_ns, lut_start);
+    } else if let Some(lut) = tail_cure_lut {
+        for layer_runs in &mut runs[..count] {
+            let lut_start = std::time::Instant::now();
+            *layer_runs = remap_gray_rle_with_lut(layer_runs, lut);
+            add_elapsed(&post.tail_remap_ns, lut_start);
+        }
+    }
+
+    std::array::from_fn(|lane| {
+        if lane >= count { return None; }
+        let mut final_runs = std::mem::take(&mut runs[lane]);
+        if let Some(support_runs) = supports[lane].take() {
+            let support_merge_start = std::time::Instant::now();
+            final_runs = merge_rle_max(final_runs, &support_runs);
+            add_elapsed(&post.support_merge_ns, support_merge_start);
+        }
+        Some(PerturbRlePostOutput { layer_idx: indices[lane], runs: Some(final_runs), encoded_bytes: None })
+    })
 }
 
 struct SupportMaskContext {
@@ -4373,8 +4522,8 @@ fn available_ram_bytes() -> Option<u64> {
     Some(sys.available_memory())
 }
 
-/// Counting semaphore bounding the number of outstanding (dispatched-but-unfinished)
-/// perturbation-3DAA post/z-blur tasks. Each outstanding task pins ~one more model
+/// Counting semaphore bounding charged waiting, collected, queued and active
+/// perturbation-3DAA post layers. Each outstanding layer pins ~one more model
 /// layer resident (the z-blur window is Arc-shared across neighbours), so an
 /// unbounded spawn count is the #386 OOM driver. Acquiring here blocks the single
 /// `post_worker` dispatch thread, which propagates backpressure through
@@ -4387,30 +4536,103 @@ fn available_ram_bytes() -> Option<u64> {
 struct GateState {
     count: usize,
     max: usize,
+    post_bodies: usize,
+    generation: u64,
+    input_closed: bool,
+    stopped: bool,
+    #[cfg(test)]
+    wait_observer: Option<mpsc::Sender<()>>,
 }
 
 struct PostTaskGate {
     state: std::sync::Mutex<GateState>,
     cv: std::sync::Condvar,
+    batching: bool,
 }
 
 impl PostTaskGate {
-    fn new(max: usize) -> Self {
+    fn new(max: usize, batching: bool) -> Self {
         Self {
             state: std::sync::Mutex::new(GateState {
                 count: 0,
                 max: max.max(1),
+                post_bodies: 0,
+                generation: 0,
+                input_closed: false,
+                stopped: false,
+                #[cfg(test)]
+                wait_observer: None,
             }),
             cv: std::sync::Condvar::new(),
+            batching,
         }
     }
 
-    fn acquire(&self) {
+    fn acquire(self: &Arc<Self>) -> PostTaskPermit {
         let mut s = self.state.lock().unwrap();
         while s.count >= s.max {
             s = self.cv.wait(s).unwrap();
         }
         s.count += 1;
+        PostTaskPermit { gate: Arc::clone(self), accounting: None }
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Option<PostTaskPermit> {
+        let mut s = self.state.lock().unwrap();
+        if s.count >= s.max { return None; }
+        s.count += 1;
+        Some(PostTaskPermit { gate: Arc::clone(self), accounting: None })
+    }
+
+    fn batch_generation(&self) -> Option<(u64, bool)> {
+        let s = self.state.lock().unwrap();
+        (s.max >= crate::dither::LAYER_DITHER_BATCH && !s.stopped)
+            .then_some((s.generation, s.count >= s.max))
+    }
+
+    // Slot availability is a separate predicate: release already notifies this
+    // condvar, but advancing generation for an empty probe's own permit drop
+    // would turn data waiting into a self-notification spin.
+    fn wait_for_batch_progress(&self, generation: u64, needs_slot: bool) -> bool {
+        let mut s = self.state.lock().unwrap();
+        loop {
+            if s.post_bodies == 0 || s.max < crate::dither::LAYER_DITHER_BATCH || s.input_closed || s.stopped {
+                return false;
+            }
+            if s.generation != generation || (needs_slot && s.count < s.max) { return true; }
+            #[cfg(test)]
+            if let Some(observer) = s.wait_observer.take() { let _ = observer.send(()); }
+            s = self.cv.wait(s).unwrap();
+        }
+    }
+
+    fn register_body(self: &Arc<Self>) -> PostTaskBody {
+        self.state.lock().unwrap().post_bodies += 1;
+        PostTaskBody { gate: Arc::clone(self) }
+    }
+
+    fn notify_ready(&self) {
+        let mut s = self.state.lock().unwrap();
+        s.generation = s.generation.wrapping_add(1);
+        drop(s);
+        self.cv.notify_one();
+    }
+
+    fn close_input(&self) {
+        let mut s = self.state.lock().unwrap();
+        s.input_closed = true;
+        s.stopped |= std::thread::panicking();
+        s.generation = s.generation.wrapping_add(1);
+        drop(s);
+        self.cv.notify_one();
+    }
+
+    fn stop_batching(&self) {
+        let mut s = self.state.lock().unwrap();
+        s.stopped = true;
+        s.generation = s.generation.wrapping_add(1);
+        drop(s);
+        self.cv.notify_one();
     }
 
     fn release(&self) {
@@ -4420,10 +4642,8 @@ impl PostTaskGate {
         self.cv.notify_one();
     }
 
-    /// #386 adaptive: resize the in-flight cap while slicing. Raising it wakes any
-    /// blocked dispatch; lowering it just makes the next `acquire` block sooner.
-    /// No-op when the cap is unchanged, so a monotonically-shrinking cap won't
-    /// spam wakeups.
+    /// #386 adaptive: preserve the cap formula and first-acquire predicate.
+    /// Batching also wakes on shrink so a held partial group can flush below four.
     fn retune(&self, new_max: usize) {
         let new_max = new_max.max(1);
         let mut s = self.state.lock().unwrap();
@@ -4431,22 +4651,67 @@ impl PostTaskGate {
             return;
         }
         let old_max = s.max;
-        let grew = new_max > old_max;
         s.max = new_max;
+        if self.batching { s.generation = s.generation.wrapping_add(1); }
         drop(s);
         // Log every real cap change so a future debugger can see when RAM
         // pressure resized the in-flight queue and by how much (issue #386).
         eprintln!("[In-flight Cap] post-task in-flight cap {old_max} -> {new_max}");
-        if grew {
+        if new_max > old_max || self.batching {
             self.cv.notify_all();
         }
+    }
+}
+
+/// One queued/executing finalize body, not a worker/CPU occupancy measurement.
+/// Construct before spawn; drop after finalize and BEFORE encode/output send.
+struct PostTaskBody {
+    gate: Arc<PostTaskGate>,
+}
+
+impl Drop for PostTaskBody {
+    fn drop(&mut self) {
+        let mut s = self.gate.state.lock().unwrap();
+        s.post_bodies -= 1;
+        s.stopped |= std::thread::panicking();
+        s.generation = s.generation.wrapping_add(1);
+        drop(s);
+        self.gate.cv.notify_one();
+    }
+}
+
+/// Declare before the corresponding sender, so success AND unwind drop that
+/// sender before publishing readiness/closure. Only batching creates these.
+struct PostInputProgress {
+    gate: Arc<PostTaskGate>,
+    closes_input: bool,
+}
+
+impl Drop for PostInputProgress {
+    fn drop(&mut self) {
+        if self.closes_input { self.gate.close_input(); } else { self.gate.notify_ready(); }
+    }
+}
+
+struct PostTaskPermit {
+    gate: Arc<PostTaskGate>,
+    accounting: Option<(Arc<AtomicUsize>, Arc<AtomicUsize>, usize)>,
+}
+
+impl Drop for PostTaskPermit {
+    fn drop(&mut self) {
+        if let Some((tasks, bytes, task_bytes)) = &self.accounting {
+            bytes.fetch_sub(*task_bytes, Ordering::Relaxed);
+            tasks.fetch_sub(1, Ordering::Relaxed);
+        }
+        self.gate.release();
     }
 }
 
 pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     job: &SliceJobV3,
     compute_area_stats: bool,
-    mut on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
+    on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
     parallel_encode_fn: Option<
         std::sync::Arc<
             dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
@@ -4455,6 +4720,29 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     on_encoded_layer: Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
+) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+    slice_and_rasterize_perturb_3daa_rle_impl(
+        job, compute_area_stats, on_rle_layer, parallel_encode_fn, on_encoded_layer, on_progress, cancel_flag,
+        #[cfg(test)] None,
+    )
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct PerturbPostTestOptions {
+    cap: usize,
+    backend: Backend,
+}
+
+fn slice_and_rasterize_perturb_3daa_rle_impl(
+    job: &SliceJobV3,
+    compute_area_stats: bool,
+    mut on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
+    parallel_encode_fn: Option<Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>>,
+    on_encoded_layer: Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+    #[cfg(test)] test_options: Option<PerturbPostTestOptions>,
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
     validate_job(job)?;
 
@@ -4522,22 +4810,22 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     } else {
         None
     };
+    let dither_backend = Backend::detected();
+    #[cfg(test)]
+    let dither_backend = test_options.map_or(dither_backend, |options| options.backend);
     let post_counters = Arc::new(PostStageCounters::default());
     let max_post_threads = choose_3daa_post_threads(width, height, job.total_layers);
-    // #386: never run a single post worker. `pool.scope` runs the dispatch loop on
-    // a pool worker; with only one worker it blocks in PostTaskGate::acquire() while
-    // the finalize tasks that would release the gate have no other worker to run on
-    // → deadlock (repros only when this was 1, i.e. hw<=4). Keep >=2 in all cases.
+    // Preserve the existing >=2-worker policy and capacity calculations. The
+    // blocking dispatcher runs on its existing std thread, not a pool worker.
     let post_worker_count = max_post_threads.max(2);
 
     let post_buffer = z_blur_radius
         .saturating_mul(2)
         .saturating_add(post_worker_count.saturating_mul(2))
         .clamp(4, 128);
-    // #386 fix: bound outstanding post/z-blur tasks so their RLE windows can't
-    // accumulate without limit. The cap tracks whichever resource is scarcer:
-    // `post_worker_count` is the throughput-optimal depth (extra queue beyond it
-    // buys no parallelism, only buffering), and available RAM is the ceiling.
+    // Bound charged post layers, not batch closures. Four layers per selected
+    // post worker admit one complete four-layer group per worker. Retain the
+    // existing worker floor and RAM-driven shrink for large model layers.
     //   - DF_3DAA_POST_MAX_INFLIGHT pins the cap and disables adaptation.
     //   - DF_3DAA_RAM_BUDGET_MB forces the RAM budget (emulate a low-RAM box).
     // We start at `default_cap` and shrink toward `budget / max_layer_cost` as the
@@ -4545,10 +4833,10 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     // not the whole window: with the Arc-shared window, one more in-flight task
     // pins ~one extra model layer resident, not (2·radius+1) of them.
     let gate_floor = post_worker_count.max(1);
-    let default_cap = post_worker_count
-        .saturating_add(z_blur_radius.saturating_mul(2))
-        .max(gate_floor);
+    let default_cap = post_worker_count.saturating_mul(4);
     let cap_override = env_override_usize("DF_3DAA_POST_MAX_INFLIGHT");
+    #[cfg(test)]
+    let cap_override = test_options.map(|options| options.cap).or(cap_override);
     let ram_budget_bytes: u64 = if cap_override.is_some() {
         0 // pinned cap => no adaptation
     } else if let Some(mb) = env_override_usize("DF_3DAA_RAM_BUDGET_MB") {
@@ -4558,13 +4846,14 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
         available_ram_bytes().map(|a| a / 2).unwrap_or(0)
     };
     let post_max_inflight = cap_override.map(|o| o.max(1)).unwrap_or(default_cap);
-    let post_gate = Arc::new(PostTaskGate::new(post_max_inflight));
+    let batch_layers = post_max_inflight >= crate::dither::LAYER_DITHER_BATCH
+        && dither_palette.as_deref().is_some_and(|palette| crate::dither::can_batch_layers(palette, dither_backend));
+    let post_gate = Arc::new(PostTaskGate::new(post_max_inflight, batch_layers));
     // #386 adaptive: worst model-layer window bytes observed so far (production,
     // survives 3DAA Stats removal). Drives the RAM-aware cap in `dispatch_ready`.
     let post_worst_layer_bytes = Arc::new(AtomicUsize::new(0));
-    // 3DAA Stats: live accounting of in-flight post-task memory. Each dispatched
-    // task deep-clones its z-blur window (history+future+model) as RLE runs;
-    // this measures how much that costs and whether it's the OOM driver.
+    // 3DAA Stats: logical in-flight Arc-shared window bytes, not unique resident
+    // memory or worker/CPU occupancy. Kept per layer through the encode boundary.
     let diag_inflight_tasks = Arc::new(AtomicUsize::new(0));
     let diag_inflight_bytes = Arc::new(AtomicUsize::new(0));
     let diag_peak_inflight_bytes = Arc::new(AtomicUsize::new(0));
@@ -4583,6 +4872,7 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     );
     let (rendered_layers, layer_area_stats, mut perf) = std::thread::scope(
         |scope| -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+            let input_progress = batch_layers.then(|| PostInputProgress { gate: Arc::clone(&post_gate), closes_input: true });
             let (post_tx, post_rx) = mpsc::sync_channel::<PerturbRlePostInput>(post_buffer);
             let (post_out_tx, post_out_rx) =
                 mpsc::sync_channel::<PerturbRlePostOutput>(post_buffer);
@@ -4607,134 +4897,115 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                 let dispatch_ready =
                     |pending: &mut VecDeque<PendingPerturbRleLayer>,
                      history: &mut VecDeque<Arc<PerturbRleModelLayer>>,
+                     waiting: &mut Option<(PerturbRlePostInput, PostTaskPermit)>,
+                     first_permit: Option<PostTaskPermit>, flushing: bool,
+                     input_rx: &mpsc::Receiver<PerturbRlePostInput>,
                      scope: &rayon::Scope<'_>| {
-                        // #386 fix: block here until an in-flight slot frees. This
-                        // is the single dispatch thread, so blocking it backpressures
-                        // post_rx -> post_tx -> the rasterizer. Acquire before the
-                        // window clone below so the clone only happens with a slot.
-                        post_gate_w.acquire();
-                        let post_gate_t = Arc::clone(&post_gate_w);
-
-                        let PendingPerturbRleLayer {
-                            layer_idx,
-                            model,
-                            support_runs,
-                        } = pending
-                            .pop_front()
-                            .expect("pending perturb 3DAA RLE layer should exist");
-
-                        let task = PerturbRlePostReadyTask {
-                            layer_idx,
-                            // #386 fix (Arc window): refcount bumps, not deep copies.
-                            model: Arc::clone(&model),
-                            support_runs,
-                            history: history.iter().cloned().collect(),
-                            future: pending.iter().map(|p| Arc::clone(&p.model)).collect(),
-                        };
-
-                        // 3DAA Stats: LOGICAL z-blur window bytes this task references.
-                        // With the Arc window these are SHARED across tasks, so this
-                        // over-counts true resident memory — trust RSS for the real
-                        // figure; this still shows the logical window is bounded by K.
-                        let rr = std::mem::size_of::<crate::rle::RleRun>();
-                        let model_run_bytes = task.model.runs.len() * rr;
-                        let task_bytes = model_run_bytes
-                            + task.history.iter().map(|l| l.runs.len() * rr).sum::<usize>()
-                            + task
-                                .future
-                                .iter()
-                                .map(|l| l.runs.len() * rr)
-                                .sum::<usize>()
-                            + task
-                                .support_runs
-                                .as_ref()
-                                .map(|r| r.len() * rr)
-                                .unwrap_or(0);
-                        atomic_max(&diag_max_layer_run_bytes_w, model_run_bytes);
-
-                        // #386 adaptive: shrink the in-flight cap toward what RAM
-                        // can hold. Each extra in-flight task pins ~one worst-case
-                        // model layer resident (the window is Arc-shared), plus a
-                        // fixed (2·radius+1)-layer frontier the dispatcher holds.
-                        // Solve (K + window)·worst_layer ≤ budget for K, clamp to
-                        // [2, default_cap]. Runs on the single dispatch thread, so
-                        // the cap reflects the worst layer seen before the next
-                        // acquire. RAM may shrink K, but never below 2 — a cap of 1
-                        // would reintroduce the single-drainer deadlock even with a
-                        // 2-worker pool, so 2 is the hard floor (issue #386).
-                        if ram_budget_bytes > 0 {
-                            atomic_max(&post_worst_layer_bytes_w, model_run_bytes.max(1));
-                            let worst =
-                                post_worst_layer_bytes_w.load(Ordering::Relaxed).max(1) as u64;
-                            let window_layers = (z_blur_radius as u64) * 2 + 1;
-                            let ram_cap = (ram_budget_bytes / worst)
-                                .saturating_sub(window_layers)
-                                .max(2) as usize;
-                            post_gate_w.retune(ram_cap.min(default_cap));
-                        }
-
-                        let now = diag_inflight_bytes_w.fetch_add(task_bytes, Ordering::Relaxed)
-                            + task_bytes;
-                        diag_inflight_tasks_w.fetch_add(1, Ordering::Relaxed);
-                        atomic_max(&diag_peak_inflight_bytes_w, now);
-                        let diag_inflight_tasks_t = Arc::clone(&diag_inflight_tasks_w);
-                        let diag_inflight_bytes_t = Arc::clone(&diag_inflight_bytes_w);
-                        let diag_max_out_run_bytes_t = Arc::clone(&diag_max_out_run_bytes_w);
-
-                        history.push_back(model);
-                        while history.len() > z_blur_radius {
-                            history.pop_front();
-                        }
-
-                        let post_out_tx = post_out_tx.clone();
-                        let z_blur_weights = z_blur_weights.clone();
-                        let tail_cure_lut = tail_cure_lut;
-                        let post_counters_worker = Arc::clone(&post_counters_worker);
-                        let active_dither = dither_palette.clone();
-                        let parallel_encode_fn = parallel_encode_fn.clone();
-                        scope.spawn(move |_| {
-                            let mut output = finalize_perturb_rle_post_layer(
-                                task,
-                                z_blur_radius,
-                                &z_blur_weights,
-                                tail_cure_lut.as_ref(),
-                                active_dither.as_deref(),
-                                width,
-                                height,
-                                &post_counters_worker,
-                            );
-
-                            // 3DAA Stats: post-blur/dither output run-vector size, and
-                            // release this task's in-flight window accounting.
+                        // Keep the original blocking first acquisition. Pop each
+                        // charged center before refill, preserving radius+1 pending
+                        // and radius-sized future/history snapshots while waiting.
+                        let mut permit = first_permit.unwrap_or_else(|| post_gate_w.acquire());
+                        let mut batch = PerturbRlePostBatch::new();
+                        let batch_limit = if batch_layers { crate::dither::LAYER_DITHER_BATCH } else { 1 };
+                        loop {
+                            let task = take_perturb_rle_post_task(pending, history, z_blur_radius);
+                            // Logical Arc-shared window accounting remains per layer.
                             let rr = std::mem::size_of::<crate::rle::RleRun>();
-                            if let Some(ref out_runs) = output.runs {
-                                atomic_max(&diag_max_out_run_bytes_t, out_runs.len() * rr);
-                            }
-                            diag_inflight_bytes_t.fetch_sub(task_bytes, Ordering::Relaxed);
-                            diag_inflight_tasks_t.fetch_sub(1, Ordering::Relaxed);
-                            // #386 fix: free the in-flight slot. The window (the big
-                            // memory) was already dropped when finalize consumed `task`.
-                            post_gate_t.release();
+                            let model_run_bytes = task.model.runs.len() * rr;
+                            let task_bytes = model_run_bytes
+                                + task.history.iter().map(|l| l.runs.len() * rr).sum::<usize>()
+                                + task.future.iter().map(|l| l.runs.len() * rr).sum::<usize>()
+                                + task.support_runs.as_ref().map(|r| r.len() * rr).unwrap_or(0);
+                            atomic_max(&diag_max_layer_run_bytes_w, model_run_bytes);
 
-                            let mut encoded_bytes = None;
-                            let runs = output.runs.take().expect("runs must exist");
-                            if let Some(ref encode_fn) = parallel_encode_fn {
-                                if let Ok(bytes) = encode_fn(output.layer_idx, &runs) {
-                                    encoded_bytes = Some(bytes);
-                                }
+                            // Preserve #386's existing RAM formula, cap and hard floor.
+                            if ram_budget_bytes > 0 {
+                                atomic_max(&post_worst_layer_bytes_w, model_run_bytes.max(1));
+                                let worst = post_worst_layer_bytes_w.load(Ordering::Relaxed).max(1) as u64;
+                                let window_layers = (z_blur_radius as u64) * 2 + 1;
+                                let ram_cap = (ram_budget_bytes / worst).saturating_sub(window_layers).max(2) as usize;
+                                post_gate_w.retune(ram_cap.min(default_cap));
                             }
 
-                            let final_output = PerturbRlePostOutput {
-                                layer_idx: output.layer_idx,
-                                runs: if parallel_encode_fn.is_some() {
-                                    None
+                            let now = diag_inflight_bytes_w.fetch_add(task_bytes, Ordering::Relaxed) + task_bytes;
+                            diag_inflight_tasks_w.fetch_add(1, Ordering::Relaxed);
+                            atomic_max(&diag_peak_inflight_bytes_w, now);
+                            permit.accounting = Some((Arc::clone(&diag_inflight_tasks_w), Arc::clone(&diag_inflight_bytes_w), task_bytes));
+                            let lane = batch.count;
+                            batch.tasks[lane] = Some(task);
+                            batch.permits[lane] = Some(permit);
+                            batch.count += 1;
+                            if batch.count == batch_limit { break; }
+                            let Some(next_permit) = extend_perturb_rle_post_batch(
+                                pending, input_rx, waiting, &post_gate_w, z_blur_radius, flushing, cancel_flag,
+                            ) else { break; };
+                            permit = next_permit;
+                        }
+
+                        let spawn_batch = |mut batch: PerturbRlePostBatch| {
+                            let post_out_tx = post_out_tx.clone();
+                            let z_blur_weights = z_blur_weights.clone();
+                            let post_counters_worker = Arc::clone(&post_counters_worker);
+                            let active_dither = dither_palette.clone();
+                            let parallel_encode_fn = parallel_encode_fn.clone();
+                            let diag_max_out_run_bytes_t = Arc::clone(&diag_max_out_run_bytes_w);
+                            // Count queued bodies before injection, not just running
+                            // closures. Encode or a blocked output send is not useful
+                            // post-body work and must never keep a partial group held.
+                            let body = batch_layers.then(|| post_gate_w.register_body());
+                            scope.spawn(move |_| {
+                                let mut outputs = if batch.count == crate::dither::LAYER_DITHER_BATCH {
+                                    finalize_perturb_rle_post_batch(
+                                        &mut batch.tasks, batch.count, z_blur_radius, &z_blur_weights,
+                                        tail_cure_lut.as_ref(), active_dither.as_deref(), dither_backend,
+                                        width, height, &post_counters_worker,
+                                    )
                                 } else {
-                                    Some(runs)
-                                },
-                                encoded_bytes,
-                            };
-                            let _ = post_out_tx.send(final_output);
-                        });
+                                    let task = batch.tasks[0].take().expect("single post task should exist");
+                                    let output = finalize_perturb_rle_post_layer(
+                                        task, z_blur_radius, &z_blur_weights, tail_cure_lut.as_ref(),
+                                        active_dither.as_deref(), width, height, &post_counters_worker,
+                                    );
+                                    [Some(output), None, None, None]
+                                };
+                                drop(body);
+                                for lane in 0..batch.count {
+                                    let mut output = outputs[lane].take().expect("post output should exist");
+                                    let rr = std::mem::size_of::<crate::rle::RleRun>();
+                                    if let Some(ref out_runs) = output.runs {
+                                        atomic_max(&diag_max_out_run_bytes_t, out_runs.len() * rr);
+                                    }
+                                    // Only this layer enters the existing per-worker
+                                    // encode stage. Other batch outputs stay charged.
+                                    drop(batch.permits[lane].take());
+                                    let mut encoded_bytes = None;
+                                    let runs = output.runs.take().expect("runs must exist");
+                                    if let Some(ref encode_fn) = parallel_encode_fn {
+                                        if let Ok(bytes) = encode_fn(output.layer_idx, &runs) { encoded_bytes = Some(bytes); }
+                                    }
+                                    let final_runs = if parallel_encode_fn.is_some() { drop(runs); None } else { Some(runs) };
+                                    let final_output = PerturbRlePostOutput {
+                                        layer_idx: output.layer_idx, runs: final_runs, encoded_bytes,
+                                    };
+                                    let sent = post_out_tx.send(final_output).is_ok();
+                                    if !sent { break; }
+                                }
+                                // RAII releases all unsent layers on sink failure/panic.
+                            });
+                        };
+                        if batch.count == crate::dither::LAYER_DITHER_BATCH {
+                            spawn_batch(batch);
+                        } else {
+                            // Low caps/tails retain the original layer-level pool
+                            // parallelism; never serialize two/three scalar chains.
+                            for lane in 0..batch.count {
+                                let mut single = PerturbRlePostBatch::new();
+                                single.tasks[0] = batch.tasks[lane].take();
+                                single.permits[0] = batch.permits[lane].take();
+                                single.count = 1;
+                                spawn_batch(single);
+                            }
+                        }
                     };
 
                 let pool = ThreadPoolBuilder::new()
@@ -4746,27 +5017,32 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                         ))
                     })?;
 
-                pool.scope(|post_scope| {
-                    for input in post_rx {
+                // A pool worker's local spawn notification may miss a sleeping
+                // peer: Rayon relies on that worker eventually popping its own
+                // job. Our dispatcher immediately blocks in gate/channel waits,
+                // so keep it on this existing std thread and inject scoped jobs
+                // externally. This preserves progress even with a pinned cap=1.
+                pool.in_place_scope(move |post_scope| {
+                    // Low-cap consumer tests deterministically enforce the
+                    // blocking-dispatch placement, rather than relying on races.
+                    #[cfg(test)]
+                    assert!(rayon::current_thread_index().is_none(), "post dispatcher must not block a Rayon worker");
+                    let mut waiting = None;
+                    loop {
+                        let (input, permit) = if let Some((input, permit)) = waiting.take() {
+                            (input, Some(permit))
+                        } else {
+                            let Ok(input) = post_rx.recv() else { break; };
+                            (input, None)
+                        };
                         let (model_runs, model_bounds) = input.model_receiver.recv().unwrap();
-
-                        pending.push_back(PendingPerturbRleLayer {
-                            layer_idx: input.layer_idx,
-                            // #386 fix (Arc window): one allocation, shared into the
-                            // window and every task that references this layer.
-                            model: Arc::new(PerturbRleModelLayer {
-                                runs: model_runs,
-                                bounds: model_bounds,
-                            }),
-                            support_runs: input.support_runs,
-                        });
-                        while pending.len() > z_blur_radius {
-                            dispatch_ready(&mut pending, &mut history, post_scope);
+                        pending.push_back(pending_perturb_rle_input(input, model_runs, model_bounds));
+                        if pending.len() > z_blur_radius {
+                            dispatch_ready(&mut pending, &mut history, &mut waiting, permit, false, &post_rx, post_scope);
                         }
                     }
-
                     while !pending.is_empty() {
-                        dispatch_ready(&mut pending, &mut history, post_scope);
+                        dispatch_ready(&mut pending, &mut history, &mut waiting, None, true, &post_rx, post_scope);
                     }
                 });
 
@@ -4855,15 +5131,17 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                     Option<(usize, usize, usize, usize)>,
                 )>(1);
                 let post_counters_worker = Arc::clone(&post_counters);
+                let xy_progress = batch_layers.then(|| PostInputProgress { gate: Arc::clone(&post_gate), closes_input: false });
                 rayon::spawn(move || {
+                    let _xy_progress = xy_progress;
+                    let tx = tx;
                     let result = if blur_radius > 0 {
                         let xy_blur_start = std::time::Instant::now();
-                        let res = blur_gray_rle_streaming_with_bounds(
+                        let res = blur_gray_rle_streaming_3daa_with_bounds(
                             &model_runs,
                             width,
                             height,
                             blur_radius,
-                            0,
                         );
                         post_counters_worker.post_blur_ns.fetch_add(
                             xy_blur_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
@@ -4889,7 +5167,10 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
                 loop {
                     drain_available(&mut on_rle_layer, &mut on_encoded_layer)?;
                     match post_tx.try_send(input.take().expect("post input should exist")) {
-                        Ok(()) => break,
+                        Ok(()) => {
+                            if batch_layers { post_gate.notify_ready(); }
+                            break;
+                        }
                         Err(mpsc::TrySendError::Full(returned_input)) => {
                             input = Some(returned_input);
                             std::thread::yield_now();
@@ -4916,7 +5197,9 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
             );
             drop(wrapped);
             drop(drain_available);
+            if batch_layers && render_result.is_err() { post_gate.stop_batching(); }
             drop(post_tx);
+            drop(input_progress);
 
             let final_result = match render_result {
                 Ok(rendered) => {
@@ -5755,6 +6038,392 @@ mod tests {
     };
     use std::collections::VecDeque;
     use std::sync::Arc;
+
+    fn layer_simd_test_job() -> SliceJobV3 {
+        let mut job = base_perturb_3daa_rle_test_job();
+        job.total_layers = 9;
+        job.source_width_px = 65;
+        job.width_px = 65;
+        job.source_height_px = 17;
+        job.height_px = 17;
+        job.build_width_mm = 65.0;
+        job.build_depth_mm = 17.0;
+        job.blur_brush_radius_px = 2;
+        job.z_blur_radius_layers = 2;
+        job.dither_enabled = true;
+        job.dither_bit_depth = Some(3);
+        job.model_triangle_count = 12;
+        push_box_triangles(&mut job.triangles_xyz, 0.0, 0.0, 0.25, 8.25, 12.3, 7.7);
+        push_box_triangles(&mut job.triangles_xyz, 20.0, 0.0, 0.0, 9.0, 3.0, 3.0);
+        job
+    }
+
+    fn layer_simd_consumer_masks(job: &SliceJobV3, cap: usize, backend: Backend, encoded: bool) -> Vec<Vec<u8>> {
+        let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&progress);
+        let on_progress: crate::types::ProgressCallbackV3 = Arc::new(move |update| {
+            recorded.lock().unwrap().push((update.done, update.total));
+        });
+        let mut masks = vec![None; job.total_layers as usize];
+        let pixels = job.width_px as usize * job.height_px as usize;
+        if encoded {
+            let encoder = Arc::new(move |_index, runs: &[crate::rle::RleRun]| Ok(expand_rle_to_mask(runs, pixels)));
+            let mut sink = |index: u32, bytes| {
+                assert!(masks[index as usize].replace(bytes).is_none());
+                Ok(())
+            };
+            super::slice_and_rasterize_perturb_3daa_rle_impl(
+                job, false, |_, _| panic!("encoded routing must not call the RLE sink"),
+                Some(encoder), Some(&mut sink), Some(on_progress), None,
+                Some(super::PerturbPostTestOptions { cap, backend }),
+            ).unwrap();
+        } else {
+            super::slice_and_rasterize_perturb_3daa_rle_impl(
+                job, false, |index, runs| {
+                    assert!(masks[index as usize].replace(expand_rle_to_mask(&runs, pixels)).is_none());
+                    Ok(())
+                }, None, None, Some(on_progress), None,
+                Some(super::PerturbPostTestOptions { cap, backend }),
+            ).unwrap();
+        }
+        assert_eq!(*progress.lock().unwrap(), (1..=job.total_layers).map(|done| (done, job.total_layers)).collect::<Vec<_>>());
+        masks.into_iter().map(|mask| mask.expect("every layer must reach its consumer")).collect()
+    }
+
+    #[test]
+    fn layer_simd_pipeline_matches_scalar_and_reports_progress_under_low_caps() {
+        let job = layer_simd_test_job();
+        let expected = layer_simd_consumer_masks(&job, 1, Backend::Scalar, false);
+        for backend in Backend::supported_for_tests() {
+            for cap in 1..=5 {
+                for encoded in [false, true] {
+                    assert_eq!(layer_simd_consumer_masks(&job, cap, backend, encoded), expected, "cap={cap} backend={backend:?} encoded={encoded}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn layer_simd_pipeline_slow_sink_preserves_progress_past_channel_capacity() {
+        let mut job = layer_simd_test_job();
+        job.total_layers = 257; // exceeds even the existing maximum channel depth (128)
+        job.triangles_xyz.clear();
+        push_box_triangles(&mut job.triangles_xyz, 0.0, 0.0, 0.25, 257.0, 12.3, 7.7);
+        push_box_triangles(&mut job.triangles_xyz, 20.0, 0.0, 0.0, 257.0, 3.0, 3.0);
+        let expected = layer_simd_consumer_masks(&job, 1, Backend::Scalar, false);
+        for cap in 1..=4 {
+            let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let recorded = Arc::clone(&progress);
+            let callback: crate::types::ProgressCallbackV3 = Arc::new(move |update| {
+                recorded.lock().unwrap().push((update.done, update.total));
+            });
+            let mut masks = vec![None; job.total_layers as usize];
+            let pixels = job.width_px as usize * job.height_px as usize;
+            super::slice_and_rasterize_perturb_3daa_rle_impl(
+                &job, false, |index, runs| {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    assert!(masks[index as usize].replace(expand_rle_to_mask(&runs, pixels)).is_none());
+                    Ok(())
+                }, None, None, Some(callback), None,
+                Some(super::PerturbPostTestOptions { cap, backend: Backend::detected() }),
+            ).unwrap();
+            assert_eq!(*progress.lock().unwrap(), (1..=job.total_layers).map(|done| (done, job.total_layers)).collect::<Vec<_>>());
+            assert_eq!(masks.into_iter().map(Option::unwrap).collect::<Vec<_>>(), expected);
+        }
+    }
+
+    #[test]
+    fn layer_simd_pipeline_sink_failure_and_cancellation_finish_under_low_caps() {
+        let job = layer_simd_test_job();
+        for cap in 1..=4 {
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let mut arrivals = 0;
+            let result = super::slice_and_rasterize_perturb_3daa_rle_impl(
+                &job, false, |_, _| {
+                    arrivals += 1;
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    Err(super::SlicerV3Error::Cancelled)
+                }, None, None, None, Some(&cancel),
+                Some(super::PerturbPostTestOptions { cap, backend: Backend::detected() }),
+            );
+            assert!(matches!(result, Err(super::SlicerV3Error::Cancelled)));
+            assert_eq!(arrivals, 1);
+            let encoder = Arc::new(|_, _runs: &[crate::rle::RleRun]| Ok(vec![1u8]));
+            let mut sink = |_, _| Err(super::SlicerV3Error::LayerPreview("consumer rejected layer".into()));
+            let result = super::slice_and_rasterize_perturb_3daa_rle_impl(
+                &job, false, |_, _| panic!("encoded routing must not call the RLE sink"),
+                Some(encoder), Some(&mut sink), None, None,
+                Some(super::PerturbPostTestOptions { cap, backend: Backend::detected() }),
+            );
+            assert!(matches!(result, Err(super::SlicerV3Error::LayerPreview(message)) if message == "consumer rejected layer"));
+        }
+    }
+
+    #[test]
+    fn layer_simd_ready_collection_forms_four_and_preserves_exact_z_neighbors() {
+        for cap in 1..=4 {
+            let gate = Arc::new(super::PostTaskGate::new(cap, true));
+            let (tx, rx) = std::sync::mpsc::sync_channel(7);
+            for index in 0..7 {
+                let (model_tx, model_receiver) = std::sync::mpsc::sync_channel(1);
+                model_tx.send((vec![crate::rle::RleRun { value: index as u8 + 1, length: 15 }], Some((0, 4, 0, 2)))).unwrap();
+                tx.send(super::PerturbRlePostInput { layer_idx: index, model_receiver, support_runs: None }).unwrap();
+            }
+            drop(tx);
+            let mut pending = VecDeque::new();
+            for _ in 0..3 {
+                let input = rx.recv().unwrap();
+                let (runs, bounds) = input.model_receiver.recv().unwrap();
+                pending.push_back(super::pending_perturb_rle_input(input, runs, bounds));
+            }
+            let mut history = VecDeque::new();
+            let mut waiting = None;
+            let mut permit = gate.acquire();
+            let mut batch = super::PerturbRlePostBatch::new();
+            loop {
+                let task = super::take_perturb_rle_post_task(&mut pending, &mut history, 2);
+                assert!(task.history.len() <= 2 && task.future.len() == 2);
+                for (offset, neighbor) in task.future.iter().enumerate() { assert_eq!(neighbor.runs[0].value, task.layer_idx as u8 + offset as u8 + 2); }
+                for (offset, neighbor) in task.history.iter().rev().enumerate() { assert_eq!(neighbor.runs[0].value, task.layer_idx as u8 - offset as u8); }
+                batch.tasks[batch.count] = Some(task);
+                batch.permits[batch.count] = Some(permit);
+                batch.count += 1;
+                assert_eq!(pending.len(), 2);
+                if batch.count == 4 { break; }
+                let Some(next) = super::try_extend_perturb_rle_post_batch(&mut pending, &rx, &mut waiting, &gate, 2, false) else { break; };
+                permit = next;
+            }
+            assert_eq!(batch.count, cap);
+            assert_eq!(gate.state.lock().unwrap().count, cap);
+            let palette = crate::dither::DitherPaletteV3::new(&std::array::from_fn(|i| i as u8), 2.2, 3);
+            let expected: Vec<_> = batch.tasks[..batch.count].iter().map(|task| {
+                let task = task.as_ref().unwrap();
+                let gray = super::apply_z_weighted_blur_to_rle_layer(&task.model, &task.history, &task.future, 2, &[1; 5], 5, 3);
+                crate::dither::dither_rle_layer_with_lut_and_gamma(&gray, &palette, 5, 3)
+            }).collect();
+            let outputs = super::finalize_perturb_rle_post_batch(&mut batch.tasks, batch.count, 2, &[1; 5], None, Some(&palette), Backend::detected(), 5, 3, &super::PostStageCounters::default());
+            for (lane, expected) in expected.into_iter().enumerate() { assert_eq!(outputs[lane].as_ref().unwrap().runs.as_ref().unwrap(), &expected); }
+            drop(outputs);
+            drop(batch);
+            assert_eq!(gate.state.lock().unwrap().count, 0);
+        }
+    }
+
+    #[test]
+    fn layer_simd_unfinished_receiver_and_group_unwind_keep_permits_bounded() {
+        let gate = Arc::new(super::PostTaskGate::new(4, true));
+        let first = gate.acquire();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let (_model_tx, model_receiver) = std::sync::mpsc::sync_channel(1);
+        tx.send(super::PerturbRlePostInput { layer_idx: 1, model_receiver, support_runs: None }).unwrap();
+        let mut pending = VecDeque::new();
+        let mut waiting = None;
+        assert!(super::try_extend_perturb_rle_post_batch(&mut pending, &rx, &mut waiting, &gate, 0, false).is_none());
+        assert!(pending.is_empty() && waiting.is_some());
+        assert_eq!(gate.state.lock().unwrap().count, 2);
+        gate.retune(1);
+        assert!(gate.try_acquire().is_none());
+        drop(first);
+        assert_eq!(gate.state.lock().unwrap().count, 1);
+        drop(waiting);
+        assert_eq!(gate.state.lock().unwrap().count, 0);
+        let unwind_gate = Arc::clone(&gate);
+        let result = std::panic::catch_unwind(move || {
+            let mut batch = super::PerturbRlePostBatch::new();
+            batch.permits[0] = Some(unwind_gate.acquire());
+            panic!("consumer unwind");
+        });
+        assert!(result.is_err());
+        assert_eq!(gate.state.lock().unwrap().count, 0);
+    }
+
+    fn queue_aware_wait_signal(gate: &super::PostTaskGate) -> std::sync::mpsc::Receiver<()> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        gate.state.lock().unwrap().wait_observer = Some(tx);
+        rx
+    }
+
+    fn queue_aware_ready_input(index: u32) -> super::PerturbRlePostInput {
+        let (tx, model_receiver) = std::sync::mpsc::sync_channel(1);
+        tx.send((vec![crate::rle::RleRun { value: index as u8 + 1, length: 15 }], Some((0, 4, 0, 2)))).unwrap();
+        super::PerturbRlePostInput { layer_idx: index, model_receiver, support_runs: None }
+    }
+
+    #[test]
+    fn queue_aware_partial_waits_for_input_and_xy_notifications_then_forms_four() {
+        let gate = Arc::new(super::PostTaskGate::new(8, true));
+        let _body_permit = gate.acquire();
+        let body = gate.register_body();
+        let first = gate.acquire();
+        let (tx, rx) = std::sync::mpsc::sync_channel(3);
+        let first_wait = queue_aware_wait_signal(&gate);
+        std::thread::scope(|scope| {
+            let worker_gate = Arc::clone(&gate);
+            let worker = scope.spawn(move || {
+                let input = queue_aware_ready_input(0);
+                let (runs, bounds) = input.model_receiver.recv().unwrap();
+                let mut pending = VecDeque::from([super::pending_perturb_rle_input(input, runs, bounds)]);
+                let mut history = VecDeque::new();
+                let mut waiting = None;
+                let mut batch = super::PerturbRlePostBatch::new();
+                let mut permit = first;
+                loop {
+                    batch.tasks[batch.count] = Some(super::take_perturb_rle_post_task(&mut pending, &mut history, 0));
+                    batch.permits[batch.count] = Some(permit);
+                    batch.count += 1;
+                    if batch.count == 4 { break; }
+                    permit = super::extend_perturb_rle_post_batch(&mut pending, &rx, &mut waiting, &worker_gate, 0, false, None)
+                        .expect("useful body keeps the partial group held");
+                }
+                assert!(pending.is_empty() && history.is_empty() && waiting.is_none());
+                batch
+            });
+            first_wait.recv().unwrap();
+            assert_eq!(gate.state.lock().unwrap().count, 2, "first partial remains charged while input is absent");
+            let xy_wait = queue_aware_wait_signal(&gate);
+            let (model_tx, model_receiver) = std::sync::mpsc::sync_channel(1);
+            tx.send(super::PerturbRlePostInput { layer_idx: 1, model_receiver, support_runs: None }).unwrap();
+            gate.notify_ready();
+            xy_wait.recv().unwrap();
+            assert_eq!(gate.state.lock().unwrap().count, 3, "only one unfinished XY input owns an extra permit");
+            model_tx.send((vec![crate::rle::RleRun { value: 2, length: 15 }], Some((0, 4, 0, 2)))).unwrap();
+            tx.send(queue_aware_ready_input(2)).unwrap();
+            tx.send(queue_aware_ready_input(3)).unwrap();
+            gate.notify_ready();
+            let batch = worker.join().unwrap();
+            assert_eq!(batch.count, 4);
+            assert_eq!(batch.tasks.iter().map(|task| task.as_ref().unwrap().layer_idx).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+            assert_eq!(gate.state.lock().unwrap().count, 5);
+            drop(batch);
+        });
+        drop(body);
+        assert_eq!(gate.state.lock().unwrap().count, 1);
+    }
+
+    #[test]
+    fn queue_aware_partial_flushes_without_bodies_and_before_encode_releases_its_permit() {
+        let gate = Arc::new(super::PostTaskGate::new(4, true));
+        let _partial = gate.acquire();
+        let (_tx, rx) = std::sync::mpsc::sync_channel(1);
+        assert!(super::extend_perturb_rle_post_batch(&mut VecDeque::new(), &rx, &mut None, &gate, 0, false, None).is_none());
+        let _encode_permit = gate.acquire();
+        let body = gate.register_body();
+        let asleep = queue_aware_wait_signal(&gate);
+        std::thread::scope(|scope| {
+            let worker_gate = &gate;
+            let worker = scope.spawn(move || super::extend_perturb_rle_post_batch(&mut VecDeque::new(), &rx, &mut None, worker_gate, 0, false, None));
+            asleep.recv().unwrap();
+            drop(body);
+            assert!(worker.join().unwrap().is_none());
+        });
+        assert_eq!(gate.state.lock().unwrap().count, 2, "encode/output retention is not useful post-body work");
+    }
+
+    #[test]
+    fn queue_aware_partial_wakes_and_flushes_on_shrink_eof_failure_unwind_and_cancel() {
+        for event in 0..5 {
+            let gate = Arc::new(super::PostTaskGate::new(8, true));
+            let _partial = gate.acquire();
+            let _body_permit = gate.acquire();
+            let _other_body = gate.register_body();
+            let body = gate.register_body();
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let asleep = queue_aware_wait_signal(&gate);
+            std::thread::scope(|scope| {
+                let worker_gate = &gate;
+                let worker_cancel = &cancel;
+                let worker = scope.spawn(move || super::extend_perturb_rle_post_batch(&mut VecDeque::new(), &rx, &mut None, worker_gate, 0, false, Some(worker_cancel)));
+                asleep.recv().unwrap();
+                match event {
+                    0 => gate.retune(3),
+                    1 => {
+                        drop(tx);
+                        gate.close_input();
+                    }
+                    2 => gate.stop_batching(),
+                    3 => {
+                        assert!(std::panic::catch_unwind(move || {
+                            let _body = body;
+                            panic!("post body failed");
+                        }).is_err());
+                    }
+                    _ => {
+                        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                        gate.notify_ready();
+                    }
+                }
+                assert!(worker.join().unwrap().is_none());
+            });
+            assert_eq!(gate.state.lock().unwrap().count, 2);
+        }
+    }
+
+    #[test]
+    fn queue_aware_notifications_and_permit_release_before_sleep_are_not_lost() {
+        let gate = Arc::new(super::PostTaskGate::new(4, true));
+        let _partial = gate.acquire();
+        let _body = gate.register_body();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let (generation, needs_slot) = gate.batch_generation().unwrap();
+        assert!(!needs_slot);
+        assert!(super::try_extend_perturb_rle_post_batch(&mut VecDeque::new(), &rx, &mut None, &gate, 0, false).is_none());
+        assert_eq!(gate.state.lock().unwrap().generation, generation, "an empty probe must not notify itself into a spin");
+        tx.send(queue_aware_ready_input(1)).unwrap();
+        gate.notify_ready();
+        assert!(gate.wait_for_batch_progress(generation, needs_slot));
+        let mut pending = VecDeque::new();
+        let next = super::extend_perturb_rle_post_batch(&mut pending, &rx, &mut None, &gate, 0, false, None).unwrap();
+        assert_eq!(pending[0].layer_idx, 1);
+        let third = gate.acquire();
+        let fourth = gate.acquire();
+        let (generation, needs_slot) = gate.batch_generation().unwrap();
+        assert!(needs_slot);
+        drop(fourth);
+        assert!(gate.wait_for_batch_progress(generation, needs_slot));
+        drop((next, third));
+    }
+
+    #[test]
+    fn queue_aware_xy_unwind_disconnects_before_notifying_the_waiting_dispatcher() {
+        let gate = Arc::new(super::PostTaskGate::new(4, true));
+        let _partial = gate.acquire();
+        let _body = gate.register_body();
+        let (input_tx, input_rx) = std::sync::mpsc::sync_channel(1);
+        let (model_tx, model_receiver) = std::sync::mpsc::sync_channel(1);
+        input_tx.send(super::PerturbRlePostInput { layer_idx: 1, model_receiver, support_runs: None }).unwrap();
+        let asleep = queue_aware_wait_signal(&gate);
+        std::thread::scope(|scope| {
+            let worker_gate = &gate;
+            let worker = scope.spawn(move || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                super::extend_perturb_rle_post_batch(&mut VecDeque::new(), &input_rx, &mut None, worker_gate, 0, false, None)
+            })).is_err());
+            asleep.recv().unwrap();
+            let progress = super::PostInputProgress { gate: Arc::clone(&gate), closes_input: false };
+            assert!(std::panic::catch_unwind(move || {
+                let _progress = progress;
+                let _tx = model_tx;
+                panic!("XY failed");
+            }).is_err());
+            assert!(worker.join().unwrap());
+        });
+        assert_eq!(gate.state.lock().unwrap().count, 1);
+    }
+
+    #[test]
+    fn queue_aware_pipeline_tail_lengths_match_scalar_with_and_without_z_neighbors() {
+        for layers in 1..=7 {
+            for radius in [0, 2] {
+                let mut job = layer_simd_test_job();
+                job.total_layers = layers;
+                job.z_blur_radius_layers = radius;
+                let expected = layer_simd_consumer_masks(&job, 1, Backend::Scalar, false);
+                for encoded in [false, true] {
+                    assert_eq!(layer_simd_consumer_masks(&job, 8, Backend::detected(), encoded), expected, "layers={layers} radius={radius} encoded={encoded}");
+                }
+            }
+        }
+    }
 
     /// Appends the 12 triangles of an axis-aligned box to a flat triangle buffer.
     fn push_box_xyz(xyz: &mut Vec<f32>, min_x: f32, min_y: f32, min_z: f32, max_x: f32, max_y: f32, max_z: f32) {
