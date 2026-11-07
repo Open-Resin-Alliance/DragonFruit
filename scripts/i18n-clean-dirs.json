@@ -28,6 +28,7 @@
             "src/components/layout",
             "src/components/modals/DestructiveTransformModal.tsx",
             "src/components/modals/IslandHierarchyModal.tsx",
+            "src/components/modals/GpuPerformanceWarningModal.tsx",
             "src/components/modals/ManifoldWarningModal.tsx",
             "src/components/modals/ObsoleteVoxlVersionModal.tsx",
             "src/components/modals/PrintingResliceModal.tsx",

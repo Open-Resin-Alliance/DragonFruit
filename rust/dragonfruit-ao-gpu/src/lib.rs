@@ -68,18 +68,39 @@ struct Gpu {
     adapter: String,
 }
 
-/// The process-wide device, or `None` when this machine has no usable adapter.
-///
-/// Created once: a wgpu device costs tens of milliseconds to bring up, which
-/// would be most of a small bake's wall time if it were per model.
-static GPU: std::sync::LazyLock<Option<Gpu>> = std::sync::LazyLock::new(|| {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+fn instance() -> wgpu::Instance {
+    wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
         flags: Default::default(),
         memory_budget_thresholds: Default::default(),
         backend_options: Default::default(),
         display: Default::default(),
-    });
+    })
+}
+
+/// Whether this machine has a discrete GPU.
+///
+/// The product policy is to skip the AO bake entirely without one: an
+/// integrated GPU can run the compute bake, but it is still a bake the machine
+/// has to pay for, and the caller has chosen not to spend it there. The crate
+/// itself still bakes on an integrated adapter when asked directly.
+static HAS_DISCRETE_ADAPTER: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+    let instance = instance();
+    pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
+        .iter()
+        .any(|adapter| adapter.get_info().device_type == wgpu::DeviceType::DiscreteGpu)
+});
+
+pub fn has_discrete_adapter() -> bool {
+    *HAS_DISCRETE_ADAPTER
+}
+
+/// The process-wide device, or `None` when this machine has no usable adapter.
+///
+/// Created once: a wgpu device costs tens of milliseconds to bring up, which
+/// would be most of a small bake's wall time if it were per model.
+static GPU: std::sync::LazyLock<Option<Gpu>> = std::sync::LazyLock::new(|| {
+    let instance = instance();
     let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
     let chosen = adapters
         .iter()

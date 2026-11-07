@@ -4605,6 +4605,7 @@ fn main() {
             mesh_minima::scan_islands_from_path,
             mesh_minima::scan_islands_staged,
             ao_vertex::bake_vertex_occlusion,
+            ao_vertex::ao_available,
             overhang::scan_overhangs,
             overhang::scan_overhangs_staged,
             export_mesh_file,

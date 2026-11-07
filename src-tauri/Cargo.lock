@@ -1628,7 +1628,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-ao-gpu"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "dragonfruit-mesh-core",
@@ -1782,7 +1782,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-slicing-engine"
-version = "3.3.2"
+version = "3.3.3"
 dependencies = [
  "aes",
  "base64 0.22.1",

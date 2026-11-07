@@ -128,7 +128,6 @@ Plugin-owned encoders (Elegoo GOO, Anycubic, CTB, etc.) live in `encoders/genera
 | `DF_3DAA_POST_THREADS` | Override 3DAA post-processing thread count |
 | `DF_3DAA_POST_BUFFER_DEPTH` | Override post-worker pipeline depth (0 = sequential) |
 | `DF_3DAA_ENCODE_BUFFER_DEPTH` | Encode channel capacity (default 3 for RLE baseline) |
-| `DF_3DAA_XY_BLUR_RADIUS_SCALE` | Scale factor for XY blur radius (default 1.5) |
 | `DF_3DAA_Z_BLUR_CENTER_WEIGHT_SCALE` | Centre-weight damping for Z-blur Gaussian kernel (default 0.8) |
 | `DF_3DAA_RATE_LOG_EVERY` | Log encode throughput every N layers (0 = off) |
 | `DF_ZAA_PERTURBATION_MODE` | Perturbation pattern override (`uniform`, `halton`, `base2`) |
