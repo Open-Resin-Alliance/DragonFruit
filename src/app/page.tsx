@@ -4561,8 +4561,6 @@ export default function Home() {
     // Captured before the save so a Save As can clean up the sidecar beside the
     // project the user just moved away from.
     const previousScenePath = activeSceneFilePath;
-    const visibleModels = scene.models.filter((model) => model.visible);
-    const scopeModels = visibleModels.length > 0 ? visibleModels : scene.models;
     const resolvedNativePath = options?.nativePathOverride !== undefined
       ? options.nativePathOverride
       : activeSceneFilePath;
@@ -4599,7 +4597,7 @@ export default function Home() {
         includeModel: true,
       },
       {
-        models: scopeModels,
+        models: scene.models,
         activeModelId: scene.activeModelId,
         selectedModelIds: scene.selectedModelIds,
         plates: scene.plates,
@@ -4654,7 +4652,7 @@ export default function Home() {
     }
 
     return savedPath;
-  }, [activeSceneFilePath, clearAutosave, markSceneSaveBaseline, scene.activeModelId, scene.models, scene.selectedModelIds]);
+  }, [activeSceneFilePath, clearAutosave, exportSuccessToastFadeTimeoutRef, exportThumbnailCaptureRunnerRef, markSceneSaveBaseline, scene.activeModelId, scene.activePlateId, scene.models, scene.plateName, scene.plateOrdering, scene.plates, scene.selectedModelIds, scene.voxlPrinterBundle, setExportSuccessToast, setIsExportSuccessToastVisible]);
 
   const handleAutosaveRestore = React.useCallback(async () => {
     const recoverySnapshot = autosaveRecovery;
