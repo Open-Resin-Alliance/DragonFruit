@@ -137,15 +137,19 @@ struct ScanlineSegmentIndex {
 }
 
 #[inline]
-fn make_row_span(x0: f32, x1: f32, width: usize) -> Option<RowSpan> {
+fn make_row_span(x0: f32, x1: f32, width: usize, snap_to_integer: bool) -> Option<RowSpan> {
     let a = x0.min(x1).max(0.0);
     let b = x0.max(x1).min(width as f32);
     if b <= a {
         return None;
     }
 
-    let start_px = a.floor() as i32;
-    let end_px = b.ceil() as i32;
+    // Binary spans include centers in [a, b); coverage AA retains fractional edges.
+    let (start_px, end_px) = if snap_to_integer {
+        ((a - 0.5).ceil() as i32, (b - 0.5).ceil() as i32)
+    } else {
+        (a.floor() as i32, b.ceil() as i32)
+    };
     if end_px <= start_px || end_px <= 0 || start_px >= width as i32 {
         return None;
     }
@@ -167,14 +171,7 @@ fn push_span_snapped(
     width: usize,
     snap_to_integer: bool,
 ) {
-    if snap_to_integer {
-        let a = x_left.round() as i64;
-        let b = x_right.round() as i64;
-        if a >= b {
-            return;
-        }
-    }
-    if let Some(span) = make_row_span(x_left, x_right, width) {
+    if let Some(span) = make_row_span(x_left, x_right, width, snap_to_integer) {
         spans.push(span);
     }
 }
@@ -343,11 +340,8 @@ fn distinct_points_push(points: &mut [(f32, f32); 3], count: &mut usize, candida
 
 /// Build filled spans for one scanline using non-zero winding.
 ///
-/// Iterates every consecutive edge pair. When `snap_to_integer` is
-/// true (non-AA path) we round each edge's x to the nearest integer pixel
-/// and skip the pair if both round to the same pixel,
-/// eliminating the 1-px bogus spans that near-coincident crossings on
-/// defective meshes used to produce.
+/// Binary spans include pixel centers in the half-open floating interval,
+/// matching the Y sample phase. Coverage AA keeps fractional X boundaries.
 fn build_row_spans_nonzero_ctx(
     active_edges: &[ActiveEdge],
     width: usize,
@@ -433,12 +427,6 @@ fn build_row_spans_nonzero_inner(
     snap_to_integer: bool,
     prev_spans: Option<&[RowSpan]>,
 ) -> (Vec<RowSpan>, bool) {
-    // Opposite crossings below the source raster's X resolution have zero
-    // printable extent. Remove them before winding repair so one crossing
-    // cannot be matched against another instance across the plate.
-    let collapsed_edges = collapse_subpixel_pairs(active_edges);
-    let active_edges = collapsed_edges.as_deref().unwrap_or(active_edges);
-
     let mut spans = Vec::with_capacity(active_edges.len() / 2 + 1);
     let mut winding = 0i32;
     let n = active_edges.len();
@@ -465,15 +453,7 @@ fn build_row_spans_nonzero_inner(
             break;
         }
 
-        if snap_to_integer {
-            let a = x_left.round() as i64;
-            let b = x_right.round() as i64;
-            if a >= b {
-                continue;
-            }
-        }
-
-        if let Some(span) = make_row_span(x_left, x_right, width) {
+        if let Some(span) = make_row_span(x_left, x_right, width, snap_to_integer) {
             spans.push(span);
         }
     }
@@ -492,6 +472,12 @@ fn build_row_spans_nonzero_inner(
     // row; discard the naive spans and rebuild from matched crossing pairs
     // so a stray crossing cannot leak fill across the row.
     if closure_winding != 0 || (min_winding < 0 && max_winding > 0) {
+        // Only defective rows collapse near-canceling crossings before repair.
+        // Closed geometry can have printable centers, holes or fractional AA
+        // within a subpixel span; dropping those would reintroduce X/Y bias.
+        let collapsed_edges = collapse_subpixel_pairs(active_edges);
+        let active_edges = collapsed_edges.as_deref().unwrap_or(active_edges);
+
         // Decide the row's true orientation by evidence, not by winding
         // extremes: a single flipped triangle can drive the winding lower
         // than the legitimate peak and would invert the whole row's
@@ -5013,6 +4999,103 @@ mod tests {
         }
     }
 
+    fn binary_row_pixels(edges: &[ActiveEdge], width: usize) -> Vec<u8> {
+        let spans = build_row_spans_nonzero(edges, width, true);
+        let mut rle = crate::rle::RleAccum::new();
+        super::emit_binary_row_spans(&mut rle, &spans, 0, width);
+        expand_rle_to_mask(&rle.finish(), width)
+    }
+
+    #[test]
+    fn binary_spans_use_half_open_pixel_centers() {
+        for (left, right, expected) in [
+            (1.5, 4.5, [0, 255, 255, 255, 0, 0, 0, 0]),
+            (1.51, 2.49, [0; 8]),
+            (-1.2, 1.5, [255, 0, 0, 0, 0, 0, 0, 0]),
+            (6.5, 9.0, [0, 0, 0, 0, 0, 0, 255, 255]),
+            (2.4, 2.6, [0, 0, 255, 0, 0, 0, 0, 0]),
+        ] {
+            for wind in [1, -1] {
+                assert_eq!(binary_row_pixels(&[edge(left, wind), edge(right, -wind)], 8), expected);
+            }
+        }
+        let repaired = [edge(1.5, 1), edge(1.5, 1), edge(4.5, -1)];
+        assert_eq!(binary_row_pixels(&repaired, 8), [0, 255, 255, 255, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn thin_closed_spans_preserve_centers_holes_and_fractional_aa() {
+        let hole = [edge(1.0, 1), edge(2.4, -1), edge(2.6, 1), edge(5.0, -1)];
+        assert_eq!(binary_row_pixels(&hole, 8), [0, 255, 0, 255, 255, 0, 0, 0]);
+        let spans = build_row_spans_nonzero(&[edge(2.4, 1), edge(2.6, -1)], 8, false);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(resolve_accumulated_aa_alpha((spans[0].b - spans[0].a) * 255.0, 0, 1), 51);
+    }
+
+    #[test]
+    fn binary_annulus_matches_center_samples_and_global_block_coordinates() {
+        const SIZE: usize = 100;
+        const STEPS: usize = 512;
+        for (center, outer, inner) in [
+            (49.5f32, 43.124817f32, 21.54645f32),
+            (24.5, 16.0001, 6.0001),
+            (24.25, 16.13, 6.83),
+            (3.2, 8.125, 3.125),
+        ] {
+            let mut segments = Vec::new();
+            for (radius, orientation) in [(outer, 1), (inner, -1)] {
+                let point = |i: usize| {
+                    let angle = std::f64::consts::TAU * i as f64 / STEPS as f64;
+                    (center + radius * angle.cos() as f32, center + radius * angle.sin() as f32)
+                };
+                for i in 0..STEPS {
+                    let (x1, y1) = point(i);
+                    let (x2, y2) = point((i + 1) % STEPS);
+                    let dy = y2 - y1;
+                    if dy.abs() < 1e-8 { continue; }
+                    segments.push(super::Segment {
+                        x1, y1, dx_dy: (x2 - x1) / dy,
+                        y_min: y1.min(y2), y_max: y1.max(y2),
+                        wind: if dy > 0.0 { orientation } else { -orientation },
+                    });
+                }
+            }
+            let index = super::build_scanline_segment_index(&segments, SIZE, 1, 0.5).unwrap();
+            let mut active: Vec<ActiveEdge> = Vec::new();
+            let mut full = crate::rle::RleAccum::new();
+            let mut blocks: Vec<_> = (0..4).map(|_| crate::rle::RleAccum::new()).collect();
+            let windows = [(0, 17), (17, 26), (43, 28), (71, 29)];
+            for y in 0..SIZE {
+                active.retain(|e| e.end_exclusive > y);
+                active.extend_from_slice(&index.starts[index.row_offsets[y]..index.row_offsets[y + 1]]);
+                active.sort_unstable_by(super::active_edge_cmp);
+                let spans = build_row_spans_nonzero(&active, SIZE, true);
+                super::emit_binary_row_spans(&mut full, &spans, 0, SIZE);
+                for ((start, width), block) in windows.iter().zip(&mut blocks) {
+                    super::emit_binary_row_spans(block, &spans, *start, *width);
+                }
+                for e in &mut active { e.x += e.dx_dy; }
+            }
+            let actual = expand_rle_to_mask(&full.finish(), SIZE * SIZE);
+            let expected: Vec<u8> = (0..SIZE * SIZE).map(|i| {
+                let x = (i % SIZE) as f64 + 0.5 - center as f64;
+                let y = (i / SIZE) as f64 + 0.5 - center as f64;
+                let distance = x.hypot(y);
+                if distance < outer as f64 && distance >= inner as f64 { 255 } else { 0 }
+            }).collect();
+            assert_eq!(actual, expected, "center={center}, outer={outer}, inner={inner}");
+            for ((start, width), block) in windows.iter().zip(blocks) {
+                let pixels = expand_rle_to_mask(&block.finish(), width * SIZE);
+                for y in 0..SIZE {
+                    assert_eq!(&pixels[y * width..(y + 1) * width], &expected[y * SIZE + start..y * SIZE + start + width]);
+                }
+            }
+            for y in 0..SIZE {
+                for x in 0..SIZE { assert_eq!(actual[y * SIZE + x], actual[x * SIZE + y]); }
+            }
+        }
+    }
+
     #[test]
     fn unbalanced_crossings_keep_only_matched_pairs() {
         let spans = build_row_spans_nonzero(
@@ -5355,14 +5438,6 @@ mod tests {
 
         assert_eq!(spans.len(), 1);
         assert_eq!((spans[0].start, spans[0].end), (100, 129));
-    }
-
-    #[test]
-    fn complete_subpixel_features_are_dropped_in_all_raster_modes() {
-        let edges = [edge(10.1, 1), edge(10.9, -1)];
-
-        assert!(build_row_spans_nonzero(&edges, 256, true).is_empty());
-        assert!(build_row_spans_nonzero(&edges, 256, false).is_empty());
     }
 
     #[test]

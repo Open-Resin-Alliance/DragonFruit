@@ -26,6 +26,25 @@ When changing `dragonfruit-slicing-engine`, preserve:
 - keep AA-off strictly binary
 - handle scanline edge rounding carefully
 
+Binary spans include pixel centers in the half-open interval `[left, right)`:
+`start = ceil(left - 0.5)`, `end_exclusive = ceil(right - 0.5)`, clipped to the
+frame. This matches the existing Y-center sample phase. The shared span builder
+applies the same rule to dense masks, binary RLE and binary support/SSAA raster
+jobs. Block output clips globally sampled spans, never a block-local phase.
+Coverage AA retains floating X boundaries and fractional overlap; do not apply
+binary snapping to those bounds or compensate with blur.
+
+Valid closed rows retain subpixel features and holes, including spans containing
+one pixel center and fractional AA contributions. Near-canceling crossing pairs
+are collapsed only when repairing a defective row, preserving the existing
+matched-pair and previous-row leak containment. This intentionally changes old
+edge pixels; old raster hashes are not a correctness oracle for the fix.
+
+`binary_spans_use_half_open_pixel_centers`,
+`thin_closed_spans_preserve_centers_holes_and_fractional_aa` and
+`binary_annulus_matches_center_samples_and_global_block_coordinates` cover
+half-pixel ties, clipping, thin geometry, annulus symmetry and block seams.
+
 ### `rle`
 
 - always merge adjacent same-value runs
