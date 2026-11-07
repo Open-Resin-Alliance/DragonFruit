@@ -103,6 +103,15 @@ fn bake_on_gpu(soup: &[f32], rays: usize) -> Result<(Vec<f32>, usize), String> {
     Ok((out, mesh.positions.len()))
 }
 
+/// Whether AO should be baked on this machine.
+///
+/// The bake is only run when a discrete GPU is present. Integrated-only
+/// machines render without baked occlusion instead of paying for the bake.
+#[tauri::command]
+pub fn ao_available() -> bool {
+    dragonfruit_ao_gpu::has_discrete_adapter()
+}
+
 /// Bake per-vertex ambient occlusion for a mesh supplied in the request body.
 ///
 /// **The mesh arrives in the request, not through the shared staging buffer.**
@@ -117,7 +126,13 @@ fn bake_on_gpu(soup: &[f32], rays: usize) -> Result<(Vec<f32>, usize), String> {
 /// buffer on the JS side.
 ///
 #[tauri::command]
-pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<ReadbackRef, String> {
+pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, String> {
+    if !dragonfruit_ao_gpu::has_discrete_adapter() {
+        return Err(
+            "bake_vertex_occlusion: AO is disabled without a discrete GPU".to_string(),
+        );
+    }
+
     // Two ways in. A JSON body names a mesh the loader registered for this bake
     // (`meshToken`) — a VOXL model's own mesh — so the caller sends forty bytes instead
     // of 36 bytes a triangle, and the field is identical: measured, the loader's weld
