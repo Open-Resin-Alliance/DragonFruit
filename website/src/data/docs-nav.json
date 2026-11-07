@@ -468,6 +468,10 @@
               "slug": "dev/slicing-benchmarks"
             },
             {
+              "label": "CUDA Backend",
+              "slug": "dev/slicing-engine/cuda"
+            },
+            {
               "label": "Development Guide",
               "slug": "dev/slicing-engine/development-guide"
             },

@@ -105,6 +105,25 @@ const canBuildFlatpak = targetsLinux && process.platform === "linux";
 const cmdArgs = ["tauri", "build", ...filteredPassThroughArgs];
 const hasBundlesArg = filteredPassThroughArgs.includes("--bundles");
 
+// A CUDA-enabled Windows binary has a dynamically linked CUDA runtime. The
+// resource overlay is feature-gated so CPU-only packages need no toolkit/DLL.
+const cudaEnabled = filteredPassThroughArgs.some((arg, index, args) => {
+  if (arg === "--all-features") return true;
+  if (arg.startsWith("--features=")) {
+    return arg.slice("--features=".length).split(/[\s,]+/).includes("cuda");
+  }
+  if (arg !== "--features") return false;
+  for (let next = index + 1; next < args.length && !args[next].startsWith("-"); next++) {
+    if (args[next].split(/[\s,]+/).includes("cuda")) return true;
+  }
+  return false;
+});
+if (cudaEnabled && targetTriple?.includes("windows")) {
+  const cargoArgs = cmdArgs.indexOf("--");
+  cmdArgs.splice(cargoArgs < 0 ? cmdArgs.length : cargoArgs, 0,
+    "--config", path.join(repoRoot, "src-tauri", "tauri.cuda.conf.json"));
+}
+
 // Universal builds target universal-apple-darwin (Tauri lipos both arches)
 // unless the caller already pinned an explicit --target.
 if (isUniversal && !passThroughArgs.includes("--target")) {

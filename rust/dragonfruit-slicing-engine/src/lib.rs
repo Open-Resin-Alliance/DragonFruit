@@ -10,6 +10,7 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod benchmark;
 pub mod binary_mask;
+pub mod cuda;
 pub mod dither;
 pub mod encode;
 pub mod encoders;
@@ -27,4 +28,4 @@ pub mod zaa;
 
 pub use engine::{slice_with_progress_v3, SlicerV3Error};
 pub use metrics::SlicingPerfV3;
-pub use types::{ProgressCallbackV3, SliceArtifactV3, SliceJobV3};
+pub use types::{ComputeBackend, ProgressCallbackV3, SliceArtifactV3, SliceJobV3};

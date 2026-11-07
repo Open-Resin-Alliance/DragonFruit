@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "windows-resources/cuda/cudart64_12.dll": "cudart64_12.dll"
+    }
+  }
+}

@@ -46,7 +46,7 @@ import {
   getSavedUvToolsSettings,
   resolveUvToolsExecutablePath,
 } from '@/components/settings/uvToolsPreferences';
-import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, existingNativePaths, getSlicerEngineVersion, pickDirectoryWithNativeDialog } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts, existingNativePaths, getSlicerEngineVersion, pickDirectoryWithNativeDialog, type SliceComputeBackend } from '@/features/slicing/tauri/nativeSlicerBridge';
 import type { AaPreset as AaAutoPreset } from '@/features/slicing/autoAaPhysics';
 import {
   clampBlurSigma,
@@ -172,8 +172,14 @@ function formatRemoteMaterialIdLabel(translate: Translate, materialId: string): 
   return translate(msg`${materialId} (Remote ID)`);
 }
 
-// Phases reported by the native slicer arrive already worded from the backend, so
-// only the ones this panel sets itself carry a catalog entry; the rest pass through.
+const COMPUTE_BACKEND_LABEL = msg({ id: 'slicing.computeBackend', message: 'Compute backend' });
+const CPU_LABEL = msg({ id: 'slicing.computeBackend.cpu', message: 'CPU' });
+const CUDA_LABEL = msg({ id: 'slicing.computeBackend.cuda', message: 'CUDA' });
+const CPU_FALLBACK_WARNING = msg({
+  id: 'slicing.cpuFallback',
+  message: 'CUDA slicing failed. The entire job is restarting on CPU; progress has been reset.',
+});
+
 const SLICING_PHASE_LABELS: Record<string, MessageDescriptor> = {
   Idle: msg`Idle`,
   Preparing: msg`Preparing`,
@@ -182,6 +188,7 @@ const SLICING_PHASE_LABELS: Record<string, MessageDescriptor> = {
   Opening: msg`Opening`,
   Cancelled: msg`Cancelled`,
   Cancelling: msg`Cancelling`,
+  cpuFallback: CPU_FALLBACK_WARNING,
 };
 
 /**
@@ -270,6 +277,7 @@ type ZaaPattern = 'uniform' | 'halton' | 'base2';
 
 function resolveSlicingPhaseKind(phase: string): SlicingPhaseKind {
   const lower = phase.toLowerCase();
+  if (phase === 'cpuFallback') return 'slicing';
   if (lower.includes('slicing')) return 'slicing';
   if (lower.includes('saving scene')) return 'preparing';
   if (lower.includes('preparing')) return 'preparing';
@@ -311,6 +319,7 @@ function formatElapsedClock(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
+const SLICING_COMPUTE_BACKEND_STORAGE_KEY = 'dragonfruit.slicing.computeBackend';
 const SLICING_AA_MODE_STORAGE_KEY = 'dragonfruit.slicing.aaMode';
 const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
 const SLICING_AA_LEVEL_CUSTOM_ENABLED_STORAGE_KEY = 'dragonfruit.slicing.aaLevelCustomEnabled';
@@ -805,6 +814,17 @@ export function SlicingPanel({
   resolveOutputPathForIntent,
 }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useFloatingPanelCollapse(true);
+  const [computeBackend, setComputeBackend] = useState<SliceComputeBackend>(() => {
+    if (typeof window === 'undefined') return 'cpu';
+    try {
+      const stored = window.localStorage.getItem(SLICING_COMPUTE_BACKEND_STORAGE_KEY)
+        ?? window.sessionStorage.getItem(SLICING_COMPUTE_BACKEND_STORAGE_KEY);
+      return stored === 'cuda' ? 'cuda' : 'cpu';
+    } catch {
+      return 'cpu';
+    }
+  });
+  const [didRestartOnCpu, setDidRestartOnCpu] = useState(false);
   const [sliceIntent, setSliceIntent] = useState<SliceIntent>(() => {
     const id = (getActivePrinterProfile(getProfileStoreSnapshot())?.id ?? '').trim();
     if (!id) return 'file';
@@ -1103,6 +1123,16 @@ export function SlicingPanel({
       setEditingTarget(null);
     }
   }, [editingTarget, savedCurves, selectedCurveId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(SLICING_COMPUTE_BACKEND_STORAGE_KEY, computeBackend);
+      window.sessionStorage.setItem(SLICING_COMPUTE_BACKEND_STORAGE_KEY, computeBackend);
+    } catch {
+      // The selected backend remains usable when storage is restricted.
+    }
+  }, [computeBackend]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1893,6 +1923,7 @@ export function SlicingPanel({
     const resolvedOutputPath = (resolveOutputPathForIntent?.(intentForRun) ?? '').trim();
 
     setIsSlicingZip(true);
+    setDidRestartOnCpu(false);
     setCurrentPhase('Preparing');
     // i18n-ignore: sliceStatus is never rendered
     setSliceStatus('Preparing');
@@ -1948,6 +1979,7 @@ export function SlicingPanel({
       }
 
       const result = await runSliceExportOrchestrator({
+        computeBackend,
         models: scopeModels,
         excludedModelIds,
         ...(scope
@@ -1976,11 +2008,23 @@ export function SlicingPanel({
         exportThumbnailPng,
         abortSignal: abortController.signal,
         onProgress: (done, total, phase) => {
+          if (phase === 'cpuFallback') {
+            setDidRestartOnCpu(true);
+            setDisplayProgressPercent(0);
+            setSlicingLayerDone(0);
+            setCurrentRasterMs(0);
+            setLiveLayersPerSec(null);
+            setEstimatedRemainingMs(null);
+            smoothedMetricsRef.current = { layersPerSec: 0, remainingMs: 0 };
+            rasterStartedMs = null;
+            rasterAccumulatedMs = 0;
+            slicingPhaseStartMs = null;
+          }
           const phaseKind = resolveSlicingPhaseKind(phase);
           const isSlicingPhase = phaseKind === 'slicing';
           const isPreSlicingPhase = phaseKind === 'preparing' || phaseKind === 'staging';
           const safeTotal = Math.max(1, total);
-          const safeDone = Math.max(0, Math.min(done, safeTotal));
+          const safeDone = phase === 'cpuFallback' ? 0 : Math.max(0, Math.min(done, safeTotal));
           setCurrentPhase(phase);
           setSliceStatus(phase);
 
@@ -2458,6 +2502,29 @@ export function SlicingPanel({
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{_(COMPUTE_BACKEND_LABEL)}</div>
+            <div className="grid grid-cols-2 gap-1.5" role="group" aria-label={_(COMPUTE_BACKEND_LABEL)}>
+              {(['cpu', 'cuda'] as const).map((backend) => (
+                <button
+                  key={backend}
+                  type="button"
+                  disabled={isSlicingZip}
+                  aria-pressed={computeBackend === backend}
+                  onClick={() => setComputeBackend(backend)}
+                  className="rounded border px-2 py-1.5 text-center text-xs font-semibold transition-colors disabled:cursor-not-allowed"
+                  style={{
+                    borderColor: computeBackend === backend ? 'var(--accent)' : 'var(--border-subtle)',
+                    background: computeBackend === backend ? 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)' : 'var(--surface-0)',
+                    color: 'var(--text-strong)',
+                  }}
+                >
+                  {_(backend === 'cpu' ? CPU_LABEL : CUDA_LABEL)}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -3031,6 +3098,11 @@ export function SlicingPanel({
             </div>
 
             <div className="p-4 space-y-3">
+              {didRestartOnCpu && (
+                <div role="alert" className="rounded-md border px-3 py-2 text-sm" style={{ borderColor: '#f59e0b', color: 'var(--text-strong)', background: 'var(--surface-1)' }}>
+                  {_(CPU_FALLBACK_WARNING)}
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2.5">
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                   <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Pipeline Stage</Trans></div>

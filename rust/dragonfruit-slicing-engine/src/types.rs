@@ -118,8 +118,24 @@ fn anti_aliasing_level_steps(level: &str) -> u8 {
     0
 }
 
+/// Numeric slicing backend; format encoders remain shared by both backends.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ComputeBackend {
+    #[default]
+    Cpu,
+    Cuda,
+}
+
+impl ComputeBackend {
+    pub fn is_cpu(&self) -> bool { *self == Self::Cpu }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SliceJobV3 {
+    /// Numeric backend selection. Missing/omitted CPU preserves historical jobs.
+    #[serde(default, skip_serializing_if = "ComputeBackend::is_cpu")]
+    pub compute_backend: ComputeBackend,
     /// Target output extension selected from registered encoders.
     pub output_format: String,
     /// Optional encoder-specific format version tag (e.g. `v4v5`, `v5enc`).
@@ -566,6 +582,7 @@ pub struct LayerAreaStatsV3 {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum SliceProgressPhaseV3 {
+    CpuFallback,
     Slicing,
     Encoding,
     Finalizing,

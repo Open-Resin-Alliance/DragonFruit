@@ -4,6 +4,17 @@ The native Rust slicing backend for DragonFruit Desktop (Tauri), in `rust/dragon
 
 This crate is the production slicing engine that converts triangle geometry into printer-ready layer containers. Format output is dispatched through a plugin-driven encoder registry (currently `.nanodlp`, `.ctb`, `.goo`, and others).
 
+## What changed in v3.4.0
+
+An optional Windows CUDA 12.9 backend implements native C++/CUDA rasterization,
+active 3DAA post-processing, deterministic regional dithering, GPU RLE
+compaction and pinned-buffer DMA. CPU remains the default and is the complete
+fallback after a reported CUDA failure; output layers are never mixed between
+backends. The backend targets Pascal or newer NVIDIA GPUs with a 6 GiB minimum
+VRAM floor and admits up to 90% of currently free device memory. See [CUDA
+Backend](cuda.md) for the ABI, route semantics, memory ownership and build
+contract.
+
 ## What changed in v3.3.2
 
 Binary rasterization now samples pixel centers consistently on X and Y, removing
@@ -26,11 +37,11 @@ and [Pipeline](pipeline.md) for the contracts.
 
 v3.2 adds volumetric anti-aliasing, grayscale dithering, and a deeply reworked post-processing pipeline:
 
-- **3DAA (Z-axis anti-aliasing)** — perturbation-based Z supersampling with XY blur, Z blur, cross-layer edge-aware blending, backward distance-field propagation, and topology-gated floor thresholds. Eliminates stairstepping on sloped surfaces without a full 3D voxel pipeline.
+- **3DAA (Z-axis anti-aliasing)** — perturbation-based Z supersampling with bounded XY/Z blur, LUT or dither remap, support merge, and topology-window bounds. The active implementation does not restore the retired EDT/BFS printing stages.
 - **RLE-native perturbation 3DAA path** — low-memory 3DAA mode that operates directly on run-length-encoded masks with row-streamed Z-blur kernels. Keeps per-layer working sets compact even at 12K resolution.
 - **Binned Floyd–Steinberg dithering** — O(1) binned energy lookup for non-8-bit display systems (2–7 bit). Integrates with the cure LUT and device gamma to produce perceptually linear PWM values.
-- **Dedicated encode thread** — PNG/format encoding runs concurrently with the next layer's raster + EDT pipeline, recovering ~35 ms/layer of serialised latency.
-- **Parallel post-processing workers** — topology sweep, backward EDT, and cross-blend stages fan out across multiple threads for large layers (≥ 8 MPx), with ROI-local workspace bounds to keep resident memory practical.
+- **Dedicated encode thread** — PNG/format encoding runs concurrently with the next layer's raster/post pipeline, recovering serialised latency.
+- **Bounded post-processing workers** — active layer windows and encoder backpressure cap resident masks and output; no whole-job layer materialization is introduced.
 - **Gaussian blur kernels** — adjustable sigma on X, Y, and Z axes, replacing the previous box-only blur. Centre-weight scaling prevents over-dominance at low kernel depths.
 - **Classified support geometry** — `model_triangle_count` field splits model and support triangles in the flat buffer. Supports can be rasterised independently (binary) and composited, or excluded from AA passes.
 - **Vertical-AA refactored as ZAA** — the old `Vertical2` mode is absorbed into the unified ZAA kernel selector (`zaa_kernel`, `zaa_pattern`, `zaa_duplicate_z`).

@@ -23,5 +23,19 @@ fn main() {
         println!("cargo:rustc-link-arg-bins=-Wl,--export-dynamic-symbol=mallinfo");
     }
 
+    println!("cargo:rerun-if-env-changed=DEP_DF_CUDA_SLICER_RUNTIME_DLL");
+    if std::env::var_os("CARGO_FEATURE_CUDA").is_some()
+        && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+    {
+        let runtime = std::path::PathBuf::from(std::env::var_os("DEP_DF_CUDA_SLICER_RUNTIME_DLL")
+            .expect("CUDA-enabled desktop build requires the engine runtime DLL metadata"));
+        println!("cargo:rerun-if-changed={}", runtime.display());
+        let manifest = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+        let resources = manifest.join("windows-resources/cuda");
+        std::fs::create_dir_all(&resources).expect("create CUDA packaging directory");
+        std::fs::copy(&runtime, resources.join("cudart64_12.dll"))
+            .expect("stage CUDA runtime for Windows installers");
+    }
+
     tauri_build::build();
 }

@@ -8,7 +8,7 @@ import {
 import type { PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import { resolveEffectiveDitherPolicy, type DitherPolicyInput } from '@/features/slicing/resolveEffectiveDitherPolicy';
 import type { SlicingFormatDefinition } from '@/features/slicing/formats/types';
-import type { AntiAliasingLevel } from '@/features/slicing/tauri/nativeSlicerBridge';
+import type { AntiAliasingLevel, SliceComputeBackend } from '@/features/slicing/tauri/nativeSlicerBridge';
 import {
   resolveSliceJobAntiAliasing,
   type SliceJobAntiAliasing,
@@ -382,6 +382,7 @@ export function buildSliceJobManifestNodes(options: {
 
 /** The slice-job fields decided by the profiles, plus the metadata the encoders read. */
 export type AssembledSliceJob = {
+  computeBackend: SliceComputeBackend;
   outputFormat: string;
   formatVersion?: string;
   settingsMode?: string;
@@ -417,6 +418,7 @@ export function assembleSliceJob(options: {
   printerProfile: PrinterProfile;
   materialProfile: MaterialProfile;
   scene: SliceJobScene;
+  computeBackend?: SliceComputeBackend;
   /** The user's dithering choice, when the caller has one; see `resolveEffectiveDitherPolicy`. */
   dither?: Pick<DitherPolicyInput, 'ditherEnabled' | 'ditherBitDepth' | 'ditherDeviceGamma'>;
   /** The user's anti-aliasing choice, when the caller has one; see `resolveSliceJobAntiAliasing`. */
@@ -444,6 +446,7 @@ export function assembleSliceJob(options: {
   const dither = resolveEffectiveDitherPolicy({ printerProfile, materialProfile, ...options.dither });
 
   return {
+    computeBackend: options.computeBackend ?? 'cpu',
     outputFormat: format.outputFormat,
     formatVersion: resolveOutputFormatVersion(format.outputFormat, printerProfile.display.formatVersion),
     settingsMode,
@@ -523,6 +526,7 @@ export function buildNativeSliceJob(assembled: AssembledSliceJob, options: {
     assembled.layerDataKind === 'png',
   );
   return {
+    ...(assembled.computeBackend === 'cuda' ? { computeBackend: assembled.computeBackend } : {}),
     outputFormat: assembled.outputFormat,
     formatVersion: assembled.formatVersion,
     settingsMode: assembled.settingsMode,

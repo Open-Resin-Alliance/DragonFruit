@@ -21,13 +21,14 @@ const STEEP_CURVE: SavedCurve = {
 };
 
 /** The same anti-aliasing choice, as the CLI flags take it and as the panel hands it over. */
-type AaScenario = { label: string; cli: SceneSliceJobOptions; app: SliceJobAntiAliasingRequest };
+type AaScenario = { label: string; cli: SceneSliceJobOptions; app: SliceJobAntiAliasingRequest; computeBackend?: 'cpu' | 'cuda' };
 
 const AA_SCENARIOS: AaScenario[] = [
   // No flags: the panel's default preset and the material's own settings.
   { label: 'default AA', cli: {}, app: { preset: 'balanced', override: null } },
   { label: 'AA smooth', cli: { aaPreset: 'smooth' }, app: { preset: 'smooth', override: null } },
   { label: 'AA raw', cli: { aaPreset: 'raw' }, app: { preset: 'raw', override: null } },
+  { label: 'CUDA with original balanced AA', cli: { computeBackend: 'cuda' }, app: { preset: 'balanced', override: null }, computeBackend: 'cuda' },
   {
     label: 'AA settings, 3DAA with a custom curve',
     cli: {
@@ -75,7 +76,7 @@ for (const printer of PRINTERS) {
           models: [cube],
           printerProfile: appPrinter,
           materialProfile: appMaterial(appPrinter, material(materialFixture)),
-          extraOptions: { antiAliasing: aa.app },
+          extraOptions: { antiAliasing: aa.app, computeBackend: aa.computeBackend },
         });
         const run = buildSceneSliceRun(
           resolveSceneSliceJob({ printer: printer.cliPrinter(), material: material(materialFixture), ...aa.cli }),
@@ -98,3 +99,7 @@ for (const printer of PRINTERS) {
     }
   }
 }
+
+test('scene slice rejects an unknown backend rather than silently selecting CPU', () => {
+  assert.throws(() => resolveSceneSliceJob({ computeBackend: 'gpu' }), /--backend must be cpu or cuda/);
+});

@@ -298,6 +298,9 @@ enum SliceCommands {
         /// Output archive path (extension determines format)
         #[arg(short, long)]
         output: PathBuf,
+        /// Numeric slicing backend; CUDA failures visibly restart the entire job on CPU
+        #[arg(long, default_value = "cpu", value_parser = ["cpu", "cuda"])]
+        backend: String,
         #[arg(long, default_value = "0.05")]
         layer_height: f32,
         #[arg(long, default_value = "218.0")]
@@ -389,7 +392,7 @@ enum SliceCommands {
             "blur_brush_kernel", "blur_brush_sigma_x", "blur_brush_sigma_y", "z_blur_radius_layers",
             "z_blur_kernel", "z_blur_sigma", "z_blend_look_back", "aa_on_supports", "x_packing_mode",
             "mirror_x", "mirror_y", "format_version", "min_aa_alpha", "dither", "dither_bit_depth",
-            "dither_device_gamma", "metadata_json",
+            "dither_device_gamma", "metadata_json", "backend",
         ])]
         job: Option<PathBuf>,
         /// Output as JSON to stdout
@@ -1143,6 +1146,7 @@ fn read_vmrss_bytes() -> Option<u64> {
 fn cmd_slice_run(
     input: &PathBuf,
     output: &PathBuf,
+    backend: &str,
     layer_height: f32,
     build_width_mm: f32,
     build_depth_mm: f32,
@@ -1253,6 +1257,9 @@ fn cmd_slice_run(
             .unwrap_or_else(|| ".nanodlp".to_string());
 
         SliceJobV3 {
+            compute_backend: if backend == "cuda" {
+                dragonfruit_slicing_engine::ComputeBackend::Cuda
+            } else { dragonfruit_slicing_engine::ComputeBackend::Cpu },
             output_format: ext.clone(),
             source_width_px,
             source_height_px,
@@ -1348,7 +1355,12 @@ fn cmd_slice_run(
     };
 
     let t0 = Instant::now();
-    let slice_result = slice_with_progress_v3_to_path(&job, output, None, None);
+    let progress: dragonfruit_slicing_engine::ProgressCallbackV3 = Arc::new(|update| {
+        if update.phase == dragonfruit_slicing_engine::types::SliceProgressPhaseV3::CpuFallback {
+            eprintln!("slice: CUDA failed; discarding the attempt and restarting the complete job on CPU");
+        }
+    });
+    let slice_result = slice_with_progress_v3_to_path(&job, output, Some(progress), None);
     let wall_s = t0.elapsed().as_secs_f64();
 
     // Stop the sampler regardless of slice success, then surface any error.
@@ -1364,6 +1376,7 @@ fn cmd_slice_run(
     let result = serde_json::json!({
         "output": output.display().to_string(),
         "format": job.output_format,
+        "compute_backend": perf.compute_backend,
         "layers": job.total_layers,
         "layer_height_mm": job.layer_height_mm,
         "build_width_mm": job.build_width_mm,
@@ -1381,6 +1394,7 @@ fn cmd_slice_run(
         "wall_s": wall_s,
         "layers_per_second": perf.layers_per_second(),
         "perf": {
+            "compute_backend": perf.compute_backend,
             "total_ns": perf.total_ns,
             "index_build_ns": perf.index_build_ns,
             "render_wall_ns": perf.render_wall_ns,
@@ -1954,14 +1968,14 @@ fn main() {
         },
 
         Commands::Slice { command } => match command {
-            SliceCommands::Run { input, output, layer_height, build_width_mm, build_depth_mm,
+            SliceCommands::Run { input, output, backend, layer_height, build_width_mm, build_depth_mm,
                 source_width_px, source_height_px, png_compression, anti_aliasing,
                 anti_aliasing_mode, blur_brush_radius_px, blur_brush_kernel, blur_brush_sigma_x,
                 blur_brush_sigma_y, z_blur_radius_layers, z_blur_kernel, z_blur_sigma,
                 z_blend_look_back, aa_on_supports, x_packing_mode, mirror_x, mirror_y,
                 format_version, min_aa_alpha, dither, dither_bit_depth, dither_device_gamma,
                 sample_interval_ms, metadata_json, job, json } =>
-                cmd_slice_run(&input, &output, layer_height, build_width_mm, build_depth_mm,
+                cmd_slice_run(&input, &output, &backend, layer_height, build_width_mm, build_depth_mm,
                     source_width_px, source_height_px, &png_compression, &anti_aliasing,
                     &anti_aliasing_mode, blur_brush_radius_px, &blur_brush_kernel,
                     blur_brush_sigma_x, blur_brush_sigma_y, z_blur_radius_layers,

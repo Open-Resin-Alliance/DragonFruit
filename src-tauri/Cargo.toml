@@ -86,6 +86,7 @@ libloading = "0.8"
 
 [features]
 default = ["custom-protocol", "tauri-wry"]
+cuda = ["dragonfruit-slicing-engine/cuda"]
 custom-protocol = ["tauri/custom-protocol"]
 # Runtime backend features — mutually exclusive.
 # Default: tauri-wry (WebKitGTK/WebView2/WebKit)

@@ -11200,3 +11200,23 @@ msgstr "Zigzag"
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:163
 msgid "Zigzag chains step by their own rise — interval has no effect"
 msgstr "Las cadenas en zigzag avanzan según su propia subida; el intervalo no tiene efecto"
+
+#. js-lingui-explicit-id
+#: src/features/slicing/components/SlicingPanel.tsx
+msgid "slicing.computeBackend"
+msgstr ""
+
+#. js-lingui-explicit-id
+#: src/features/slicing/components/SlicingPanel.tsx
+msgid "slicing.computeBackend.cpu"
+msgstr ""
+
+#. js-lingui-explicit-id
+#: src/features/slicing/components/SlicingPanel.tsx
+msgid "slicing.computeBackend.cuda"
+msgstr ""
+
+#. js-lingui-explicit-id
+#: src/features/slicing/components/SlicingPanel.tsx
+msgid "slicing.cpuFallback"
+msgstr ""

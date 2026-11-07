@@ -1446,6 +1446,7 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
       + '  [--plate <id|n>]                                 the plate to slice, by id or number from 1 (default: the active plate)\n'
       + '  [--printer <profile.json>] [--printer-id <id>]  preset, profile or app-exported bundle; builds the job the app would\n'
       + '  [--material <profile.json>]                      default: the bundle\'s first material, else the app\'s default\n'
+      + '  [--backend cpu|cuda]                            compute backend (default: cpu); CUDA failures restart the entire job on CPU\n'
       + '  [--aa-preset sharp|balanced|smooth|raw]          the panel\'s auto AA preset (default: balanced)\n'
       + '  [--aa-settings <aa.json>]                        AA settings on top of the material\'s, like a session override\n'
       + '  [--lut-curves <curves.json>]                     the curve library a custom LUT is looked up in\n'
@@ -1468,6 +1469,7 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   const materialPath = printerPath ? optionalFlag(args.flags, 'material') : undefined;
   const sliceJob = loadSceneSliceJob();
   const job = sliceJob.resolveSceneSliceJob({
+    computeBackend: optionalFlag(args.flags, 'backend'),
     printer: printerPath ? JSON.parse(readFileSync(resolve(printerPath), 'utf-8')) : undefined,
     printerId: optionalFlag(args.flags, 'printer-id'),
     material: materialPath ? JSON.parse(readFileSync(resolve(materialPath), 'utf-8')) : undefined,
@@ -1711,7 +1713,9 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   const shown = run.args.map((arg, i) => (run.args[i - 1] === '--metadata-json' ? `<${arg.length} bytes>` : arg));
   console.error(`  slicing: ${rustCli} ${shown.join(' ')}`);
   // No shell: the metadata is JSON, and the paths may contain spaces.
-  const result = execFileSync(rustCli, run.args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+  const result = execFileSync(rustCli, run.args, {
+    encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, stdio: ['ignore', 'pipe', 'inherit'],
+  });
 
   // Cleanup temp
   execSync(`rm -rf ${tmpDir}`);

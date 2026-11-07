@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone, Default)]
 pub struct SlicingPerfV3 {
+    /// Backend that produced the complete artifact (CPU after a CUDA restart).
+    pub compute_backend: crate::types::ComputeBackend,
     pub total_ns: u64,
     pub index_build_ns: u64,
     pub render_wall_ns: u64,

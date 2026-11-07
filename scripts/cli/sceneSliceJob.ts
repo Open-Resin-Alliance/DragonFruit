@@ -24,7 +24,7 @@ import {
   type MaterialProfile,
   type PrinterProfile,
 } from '../../src/features/profiles/profileStore';
-import { toNativeMetadataPayload } from '../../src/features/slicing/tauri/nativeSlicerBridge';
+import { toNativeMetadataPayload, type SliceComputeBackend } from '../../src/features/slicing/tauri/nativeSlicerBridge';
 import {
   assembleSliceJob,
   buildNativeSliceJob,
@@ -35,6 +35,7 @@ import {
 } from '../../src/features/slicing/sliceJobAssembly';
 
 export interface SceneSliceJobOptions {
+  computeBackend?: string;
   /** Parsed printer JSON: an official preset, a custom profile, a list of either, or an app-exported bundle. */
   printer?: unknown;
   printerId?: string;
@@ -57,6 +58,7 @@ export interface SceneSliceJobOptions {
 }
 
 export interface SceneSliceJob {
+  computeBackend: SliceComputeBackend;
   /** The printer as the profile store holds it, with `--build-*-mm` applied. */
   printer: PrinterProfile | null;
   /** The material as the profile store holds it, with `--layer-height` applied. */
@@ -162,6 +164,10 @@ function parseLutCurves(raw: unknown): SavedCurve[] {
 }
 
 export function resolveSceneSliceJob(options: SceneSliceJobOptions): SceneSliceJob {
+  const computeBackend = options.computeBackend ?? 'cpu';
+  if (computeBackend !== 'cpu' && computeBackend !== 'cuda') {
+    throw new Error('--backend must be cpu or cuda');
+  }
   const ditherFlag = options.dither; // 'on' | 'off' | undefined
   const dither = {
     ditherEnabled: ditherFlag === 'on' ? true : ditherFlag === 'off' ? false : undefined,
@@ -204,6 +210,7 @@ export function resolveSceneSliceJob(options: SceneSliceJobOptions): SceneSliceJ
     : null;
 
   return {
+    computeBackend,
     printer,
     material,
     antiAliasing,
@@ -254,6 +261,7 @@ export function buildSceneSliceRun(
         '--layer-height', job.layerHeight,
         '--build-width-mm', job.buildWidth,
         '--build-depth-mm', job.buildDepth,
+        '--backend', job.computeBackend,
         '--json',
       ],
       assembled: null,
@@ -266,6 +274,7 @@ export function buildSceneSliceRun(
   const assembled = assembleSliceJob({
     printerProfile: job.printer,
     materialProfile: job.material,
+    computeBackend: job.computeBackend,
     scene: { ...layers, models: geometry.models },
     dither: job.dither,
     antiAliasing: job.antiAliasing ?? undefined,

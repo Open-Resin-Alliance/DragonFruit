@@ -10,8 +10,11 @@ type TauriEventModule = {
 };
 
 export type AntiAliasingLevel = 'Off' | `${number}x`;
+export type SliceComputeBackend = 'cpu' | 'cuda';
+export type NativeSlicerProgressPhase = 'Slicing' | 'Encoding' | 'Finalizing' | 'cpuFallback';
 
 export type NativeSolidSliceJobEnvelope = {
+  computeBackend?: SliceComputeBackend;
   outputFormat: string;
   formatVersion?: string | null;
   outputPath?: string | null;
@@ -71,6 +74,7 @@ export type NativeSolidSliceJobEnvelope = {
 
 /** Metadata-only payload for the binary mesh staging path (no inline triangles). */
 type NativeSolidSliceMetadataPayload = {
+  compute_backend?: SliceComputeBackend;
   output_format: string;
   format_version?: string | null;
   output_path?: string | null;
@@ -128,7 +132,7 @@ type NativeSolidSliceMetadataPayload = {
 type SliceProgressEvent = {
   done: number;
   total: number;
-  phase?: string;
+  phase?: NativeSlicerProgressPhase;
 };
 
 let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
@@ -176,6 +180,7 @@ async function loadTauriEvent(): Promise<TauriEventModule | null> {
  */
 export function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidSliceMetadataPayload {
   return {
+    ...(job.computeBackend === 'cuda' ? { compute_backend: job.computeBackend } : {}),
     output_format: job.outputFormat,
     format_version: job.formatVersion ?? null,
     output_path: job.outputPath?.trim() || null,
@@ -247,7 +252,7 @@ export async function getSlicerEngineVersion(): Promise<string | null> {
   return core.invoke<string>('get_slicer_engine_version');
 }
 
-export type SlicerProgressCallback = (done: number, total: number, phase: string) => void;
+export type SlicerProgressCallback = (done: number, total: number, phase: NativeSlicerProgressPhase) => void;
 
 export type NativeSliceTempPathArtifact = {
   tempPath: string;
@@ -282,6 +287,7 @@ export type NativeSlicerBridgeMetrics = {
 };
 
 export type NativeSlicerPerfMetrics = {
+  computeBackend?: SliceComputeBackend;
   totalNs: number;
   indexBuildNs: number;
   renderWallNs: number;

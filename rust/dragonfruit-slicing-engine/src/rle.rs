@@ -4,11 +4,18 @@
 //! Adjacent same-value runs are merged by `RleAccum`.
 
 /// A single run-length encoded span.
+/// C layout matches DfCudaRun: length at 0, value at 4, three tail padding bytes.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RleRun {
     pub length: u32,
     pub value: u8,
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<RleRun>() == 8);
+    assert!(std::mem::align_of::<RleRun>() == 4);
+};
 
 /// Streaming accumulator that merges adjacent same-value runs.
 pub struct RleAccum {

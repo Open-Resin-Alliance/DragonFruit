@@ -15,6 +15,8 @@ import {
     type AntiAliasingLevel,
     type NativeSlicerPerfMetrics,
     type NativeSlicerRuntimeMetrics,
+    type SliceComputeBackend,
+    type NativeSlicerProgressPhase,
 } from './tauri/nativeSlicerBridge';
 import { invoke } from '@tauri-apps/api/core';
 import { assembleSliceJob, buildNativeSliceJob, resolveSliceRasterSettings } from './sliceJobAssembly';
@@ -97,6 +99,7 @@ export type SliceExportOrchestratorOptions = {
     materialProfile: MaterialProfile;
     filenameBase: string;
     outputPath?: string | null;
+    computeBackend?: SliceComputeBackend;
     /** The user's anti-aliasing choice; without one the job slices with anti-aliasing off. */
     antiAliasing?: SliceJobAntiAliasingRequest;
     ditherEnabled?: boolean;
@@ -554,6 +557,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     const assembled = assembleSliceJob({
         printerProfile: options.printerProfile,
         materialProfile: options.materialProfile,
+        computeBackend: options.computeBackend,
         scene: {
             totalLayers: solidMesh.totalLayers,
             tallestObjectHeightMm: solidMesh.tallestObjectHeightMm,
@@ -602,9 +606,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
     options.onProgress?.(0, solidMesh.totalLayers, 'Slicing');
 
-    const slicerProgressCallback = (done: number, total: number, phase: string) => {
+    const slicerProgressCallback = (done: number, total: number, phase: NativeSlicerProgressPhase) => {
         progressTotal = Math.max(1, total);
-        progressDone = Math.max(0, Math.min(done, progressTotal));
+        progressDone = phase === 'cpuFallback' ? 0 : Math.max(0, Math.min(done, progressTotal));
         options.onProgress?.(
             progressDone,
             progressTotal,

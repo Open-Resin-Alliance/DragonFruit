@@ -11200,3 +11200,23 @@ msgstr "Zig Zag"
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:163
 msgid "Zigzag chains step by their own rise — interval has no effect"
 msgstr "Zigzag chains step by their own rise — interval has no effect"
+
+#. js-lingui-explicit-id
+#: src/features/slicing/components/SlicingPanel.tsx
+msgid "slicing.computeBackend"
+msgstr "Compute backend"
+
+#. js-lingui-explicit-id
+#: src/features/slicing/components/SlicingPanel.tsx
+msgid "slicing.computeBackend.cpu"
+msgstr "CPU"
+
+#. js-lingui-explicit-id
+#: src/features/slicing/components/SlicingPanel.tsx
+msgid "slicing.computeBackend.cuda"
+msgstr "CUDA"
+
+#. js-lingui-explicit-id
+#: src/features/slicing/components/SlicingPanel.tsx
+msgid "slicing.cpuFallback"
+msgstr "CUDA slicing failed. The entire job is restarting on CPU; progress has been reset."

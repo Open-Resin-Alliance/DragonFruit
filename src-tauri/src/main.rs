@@ -632,6 +632,8 @@ struct MeshQuantizationMetadata {
 
 #[derive(Deserialize)]
 struct SliceJobMetadata {
+    #[serde(default)]
+    compute_backend: dragonfruit_slicing_engine::ComputeBackend,
     output_format: String,
     #[serde(default)]
     format_version: Option<String>,
@@ -717,6 +719,7 @@ struct SliceJobMetadata {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeSlicerPerfMetrics {
+    compute_backend: dragonfruit_slicing_engine::ComputeBackend,
     total_ns: u64,
     index_build_ns: u64,
     render_wall_ns: u64,
@@ -757,6 +760,7 @@ fn duration_ns_u64(duration: std::time::Duration) -> u64 {
 
 fn phase_to_label(phase: dragonfruit_slicing_engine::types::SliceProgressPhaseV3) -> &'static str {
     match phase {
+        dragonfruit_slicing_engine::types::SliceProgressPhaseV3::CpuFallback => "cpuFallback",
         dragonfruit_slicing_engine::types::SliceProgressPhaseV3::Slicing => "Slicing",
         dragonfruit_slicing_engine::types::SliceProgressPhaseV3::Encoding => "Encoding",
         dragonfruit_slicing_engine::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
@@ -1648,6 +1652,7 @@ async fn slice_solid_native_to_temp_path(
         let mesh_decode_ns = duration_ns_u64(mesh_decode_start.elapsed());
 
         let job = dragonfruit_slicing_engine::SliceJobV3 {
+            compute_backend: meta.compute_backend,
             output_format: meta.output_format,
             format_version: meta.format_version,
             source_width_px: meta.source_width_px,
@@ -1767,6 +1772,7 @@ async fn slice_solid_native_to_temp_path(
             .map_err(|err| format!("V3 slicing failed: {err}"))?;
 
             let perf = NativeSlicerPerfMetrics {
+                compute_backend: perf_raw.compute_backend,
                 total_ns: perf_raw.total_ns,
                 index_build_ns: perf_raw.index_build_ns,
                 render_wall_ns: perf_raw.render_wall_ns,

@@ -36,6 +36,10 @@ use thiserror::Error;
 pub enum SlicerV3Error {
     #[error("cancelled")]
     Cancelled,
+    #[error(transparent)]
+    Cuda(#[from] crate::cuda::CudaFailure),
+    #[error("host output allocation failed: {0}")]
+    HostAllocation(String),
     #[error("unsupported output format: {0}")]
     UnsupportedOutput(String),
     #[error("invalid dimensions {width}x{height}")]
@@ -3517,9 +3521,31 @@ fn rasterize_vertical_aa_streaming_v3(
     ))
 }
 
+/// Format-dispatched slicing with a whole-job CPU restart on reported CUDA failures.
+pub fn slice_with_progress_v3(
+    job: &SliceJobV3,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<SliceArtifactV3, SlicerV3Error> {
+    validate_job(job)?;
+    let started = std::time::Instant::now();
+    if job.compute_backend == crate::types::ComputeBackend::Cuda {
+        match crate::cuda::slice_attempt(job, None, on_progress.clone(), cancel_flag) {
+            Ok(artifact) => return Ok(artifact),
+            Err(SlicerV3Error::Cuda(_)) => {
+                crate::cuda::announce_fallback(job, &on_progress, cancel_flag)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let mut artifact = slice_with_progress_cpu_v3(job, on_progress, cancel_flag)?;
+    artifact.perf.total_ns = started.elapsed().as_nanos() as u64;
+    Ok(artifact)
+}
+
 /// Clean-room V3 entry point with full pipeline:
 /// parse triangles -> build layer index -> bounded parallel render -> zip archive encode.
-pub fn slice_with_progress_v3(
+fn slice_with_progress_cpu_v3(
     job: &SliceJobV3,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
@@ -4151,7 +4177,7 @@ pub fn slice_and_rasterize_rle_multi_tank_v3(
 /// Accumulate one block's stats into the layer total. Pixel totals/areas and
 /// extents merge exactly; component counts are summed, so an island spanning
 /// a block seam is counted once per block it touches.
-fn accumulate_block_stats(total: &mut LayerAreaStatsV3, part: &LayerAreaStatsV3) {
+pub(crate) fn accumulate_block_stats(total: &mut LayerAreaStatsV3, part: &LayerAreaStatsV3) {
     if part.total_solid_pixels == 0 {
         return;
     }
@@ -5635,11 +5661,34 @@ pub fn dispatch_encode_by_format_to_path(
     )
 }
 
+/// Path slicing shares the encoder lifecycle and restarts only a reported CUDA failure.
+pub fn slice_with_progress_v3_to_path(
+    job: &SliceJobV3,
+    output_path: &Path,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<SlicingPerfV3, SlicerV3Error> {
+    validate_job(job)?;
+    let started = std::time::Instant::now();
+    if job.compute_backend == crate::types::ComputeBackend::Cuda {
+        match crate::cuda::slice_attempt(job, Some(output_path), on_progress.clone(), cancel_flag) {
+            Ok(artifact) => return Ok(artifact.perf),
+            Err(SlicerV3Error::Cuda(_)) => {
+                crate::cuda::announce_fallback(job, &on_progress, cancel_flag)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let mut perf = slice_with_progress_cpu_v3_to_path(job, output_path, on_progress, cancel_flag)?;
+    perf.total_ns = started.elapsed().as_nanos() as u64;
+    Ok(perf)
+}
+
 /// Path-oriented entrypoint that writes final archive bytes directly to disk.
 ///
 /// This avoids materializing the final encoded artifact in-memory at the call
 /// boundary, reducing bridge and copy overhead in desktop/Tauri flows.
-pub fn slice_with_progress_v3_to_path(
+fn slice_with_progress_cpu_v3_to_path(
     job: &SliceJobV3,
     output_path: &Path,
     on_progress: Option<ProgressCallbackV3>,

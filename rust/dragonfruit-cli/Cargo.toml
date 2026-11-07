@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "dragonfruit_cli"
 path = "src/lib.rs"
 
+[features]
+default = []
+cuda = ["dragonfruit-slicing-engine/cuda"]
+
 [dependencies]
 dragonfruit-slicing-engine = { path = "../dragonfruit-slicing-engine" }
 dragonfruit-islands = { path = "../dragonfruit-islands" }
