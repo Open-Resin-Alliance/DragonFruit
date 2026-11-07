@@ -1,4 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
+# Compiler selection happens at project(), before FindCUDAToolkit. Cargo also
+# pins the Visual Studio cuda= toolset and uses a fresh toolchain-specific tree.
+if(DEFINED CUDAToolkit_ROOT AND NOT DEFINED CMAKE_CUDA_COMPILER)
+    set(CMAKE_CUDA_COMPILER "${CUDAToolkit_ROOT}/bin/nvcc.exe" CACHE FILEPATH "CUDA 12.9 compiler")
+endif()
+
 project(dragonfruit_cuda_slicer LANGUAGES CXX CUDA)
 
 if(NOT WIN32)
@@ -7,7 +13,12 @@ endif()
 
 if(NOT CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.9 OR
    CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.10)
-    message(FATAL_ERROR "CUDA 12.9 is required to retain Pascal support")
+    message(FATAL_ERROR "CUDA 12.9 is required to retain Pascal support; selected ${CMAKE_CUDA_COMPILER_VERSION} at ${CMAKE_CUDA_COMPILER}")
+endif()
+
+if(MSVC AND (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19.20 OR
+             NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19.40))
+    message(FATAL_ERROR "CUDA 12.9 requires MSVC 19.2x or 19.3x; selected ${CMAKE_CXX_COMPILER_VERSION}. The Cargo native build uses VS2022 with an installed 19.3x toolset.")
 endif()
 
 find_package(CUDAToolkit 12.9 REQUIRED)

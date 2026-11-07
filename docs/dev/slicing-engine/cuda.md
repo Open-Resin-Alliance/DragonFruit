@@ -4,13 +4,31 @@ The optional CUDA backend places the numerical slicing pipeline in the native C+
 
 ## Build and selection
 
-CUDA support is opt-in:
+CUDA support is opt-in. Install CUDA 12.9 with its **Visual Studio Integration**
+component and **Visual Studio 2022 Build Tools with MSVC 19.3x** (v143 toolset
+14.30–14.39, for example 14.38). A newer default 19.4x VS2022 toolset is not a
+substitute; select an older v143 x64/x86 toolset in the installer's Individual
+components. The Rust application can retain its VS2026 toolchain.
 
-```text
+```powershell
+$env:CUDA_PATH_V12_9 = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9'
 node scripts/tauri-build.mjs --features cuda
 ```
 
-The native build uses CUDA 12.9, C++17, a static `df_cuda_slicer` core and the dynamically linked CUDA runtime. CPU-only builds do not require the CUDA toolkit. The current deployment target is 64-bit Windows with Pascal or newer NVIDIA hardware and at least 6 GiB VRAM. The 6 GiB value is a support floor, not a working-set cap.
+`CUDA_PATH_V12_9` selects the native toolkit; when unset, the build uses the path
+above. Generic `CUDA_PATH`/`CUDACXX` values pointing to newer CUDA versions do not
+override it. The build discovers installed VS2022 instances, selects the newest
+compatible 14.3x toolset, and pins the generator, instance, C++ toolset, `nvcc`
+path and Visual Studio `cuda=` toolkit directory. Both native compilation and
+runtime-DLL staging use that same toolkit.
+
+Native build directories are keyed by the toolkit and host compiler under
+`OUT_DIR/cuda-12.9-<fingerprint>`. They do not reuse an earlier CUDA 13.x/VS2026
+CMake cache, so cleaning the whole Rust target directory is unnecessary. Missing
+toolkit integration or compatible MSVC tools produces an explicit prerequisite
+error instead of silently selecting a newer compiler.
+
+The native build uses CUDA 12.9, C++17, a static `df_cuda_slicer` core and the dynamically linked CUDA runtime. CPU-only builds do not require the CUDA toolkit or native VS2022 discovery. The current deployment target is 64-bit Windows with Pascal or newer NVIDIA hardware and at least 6 GB VRAM. The 6 GB value is a support floor, not a working-set cap.
 
 The desktop slicing panel and the TypeScript scene CLI expose `cpu` and `cuda`. CPU is the default. The native job checks CUDA availability and reports typed failures. A reported CUDA failure discards that attempt's encoder state and restarts the complete job on CPU; layers are never mixed between backends. Cancellation, encoder errors and filesystem errors do not trigger a retry.
 
