@@ -1100,16 +1100,8 @@ fn compute_component_area_stats_from_rle_8_connected(
 
 #[inline]
 fn blur_radius_px(radius_px: u32) -> usize {
-    // Keep UI value simple while ensuring low radii are visibly effective.
-    // Optional override for tuning/experiments:
-    //   DF_3DAA_XY_BLUR_RADIUS_SCALE=<float>
-    let scale = std::env::var("DF_3DAA_XY_BLUR_RADIUS_SCALE")
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .filter(|v| v.is_finite() && *v > 0.0)
-        .unwrap_or(1.5);
-
-    ((radius_px.max(1) as f64 * scale).ceil() as usize).clamp(1, 64)
+    // The UI value is a kernel radius in pixels; use it as-is.
+    (radius_px.max(1) as usize).clamp(1, 64)
 }
 
 #[inline]
@@ -6328,5 +6320,13 @@ mod tests {
             assert_eq!(actual_runs, runs);
             assert_eq!(bounds, Some((0, width - 1, 0, height - 1)));
         }
+    }
+
+    #[test]
+    fn blur_radius_px_uses_the_ui_value_verbatim() {
+        assert_eq!(super::blur_radius_px(0), 1);
+        assert_eq!(super::blur_radius_px(1), 1);
+        assert_eq!(super::blur_radius_px(4), 4);
+        assert_eq!(super::blur_radius_px(64), 64);
     }
 }

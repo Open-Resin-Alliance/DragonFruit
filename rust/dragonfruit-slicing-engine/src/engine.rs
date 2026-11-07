@@ -1001,12 +1001,8 @@ fn effective_xy_blur_radius(radius: usize) -> usize {
         return 0;
     }
 
-    // Small radii felt underpowered in real slices. Keep UX-facing values
-    // simple, but apply a modest internal scale so radius=1 is visibly active.
-    // Optional override for tuning/experiments:
-    //   DF_3DAA_XY_BLUR_RADIUS_SCALE=<float>
-    let scale = env_override_f64("DF_3DAA_XY_BLUR_RADIUS_SCALE").unwrap_or(1.5);
-    ((radius as f64 * scale).ceil() as usize).clamp(1, 64)
+    // The UI value is a kernel radius in pixels; use it as-is.
+    radius.clamp(1, 64)
 }
 
 #[inline]
@@ -1015,10 +1011,9 @@ fn effective_perturb_3daa_rle_xy_blur_radius(radius: usize) -> usize {
         return 0;
     }
 
-    // Aaron's 3DAA branch clamps spatial blur radii to 1..=6 and does not
-    // apply Dragonfruit's generic Blur-mode 1.5x boost.  Keep that behavior
-    // for the low-memory perturbation RLE path so an 8px UI value does not
-    // become a much wider radius-12 box blur.
+    // Aaron's 3DAA branch clamps spatial blur radii to 1..=6.  Keep that
+    // behavior for the low-memory perturbation RLE path so an 8px UI value
+    // does not become a much wider radius-8 box blur.
     radius.clamp(1, 6)
 }
 
@@ -6742,6 +6737,13 @@ mod tests {
             available.is_some_and(|bytes| bytes > 0),
             "available RAM reported as {available:?}; the 3DAA gate would fall back to no budget"
         );
+    }
+    #[test]
+    fn effective_xy_blur_radius_uses_the_ui_value_verbatim() {
+        assert_eq!(super::effective_xy_blur_radius(0), 0);
+        assert_eq!(super::effective_xy_blur_radius(1), 1);
+        assert_eq!(super::effective_xy_blur_radius(4), 4);
+        assert_eq!(super::effective_xy_blur_radius(64), 64);
     }
     #[test]
     fn multi_tank_rle_delivers_one_stream_per_tank() {
