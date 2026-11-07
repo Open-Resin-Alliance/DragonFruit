@@ -72,6 +72,13 @@ std::size_t Memory::owned_bytes() const {
     return owned_;
 }
 
+std::size_t Memory::live_bytes() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto live = owned_;
+    for (const auto &cached : cached_) live -= cached.allocation.capacity;
+    return live;
+}
+
 Allocation Memory::acquire(std::size_t bytes) {
     if (bytes == 0) { return {}; }
     std::lock_guard<std::mutex> lock(mutex_);
@@ -82,7 +89,9 @@ Allocation Memory::acquire(std::size_t bytes) {
 
     std::size_t best = cached_.size();
     for (std::size_t i = 0; i < cached_.size(); ++i) {
-        if (cached_[i].allocation.capacity < bytes) { continue; }
+        // Exact-size reuse keeps the scheduler's scratch/plane reservations
+        // valid: a small image must not inherit a large retired scratch block.
+        if (cached_[i].allocation.capacity != bytes) { continue; }
         const auto state = cudaEventQuery(cached_[i].completion);
         if (state == cudaErrorNotReady) { continue; }
         checked(state, "query retired allocation");
@@ -116,7 +125,7 @@ Allocation Memory::acquire(std::size_t bytes) {
         auto retired = cached_[candidate];
         checked(cudaEventDestroy(retired.completion), "destroy retired allocation event");
         cached_.erase(cached_.begin() + static_cast<std::ptrdiff_t>(candidate));
-        if (retired.allocation.capacity >= bytes) { return retired.allocation; }
+        if (retired.allocation.capacity == bytes) { return retired.allocation; }
         checked(cudaFree(retired.allocation.pointer), "evict cached device allocation");
         owned_ -= retired.allocation.capacity;
         retune_locked();
@@ -166,7 +175,9 @@ void Memory::clear() noexcept {
     cached_.clear();
 }
 
-Runtime::Runtime() {
+Runtime::Runtime()
+    : owned_state_(std::make_unique<State>()), memory(owned_state_->memory),
+      cancelled(owned_state_->cancelled) {
     int count = 0;
     const auto count_status = cudaGetDeviceCount(&count);
     if (count_status != cudaSuccess || count == 0) {
@@ -193,10 +204,26 @@ Runtime::Runtime() {
     try {
         memory.initialize();
         transfer_bytes_ = host_transfer_budget();
+        workspace_limit_ = memory.budget();
         checked(cudaStreamCreateWithFlags(&upload, cudaStreamNonBlocking), "create upload stream");
         checked(cudaStreamCreateWithFlags(&compute, cudaStreamNonBlocking), "create compute stream");
         checked(cudaStreamCreateWithFlags(&pack, cudaStreamNonBlocking), "create RLE packing stream");
         checked(cudaStreamCreateWithFlags(&readback, cudaStreamNonBlocking), "create readback stream");
+    } catch (...) {
+        destroy_stream(readback); destroy_stream(pack); destroy_stream(compute); destroy_stream(upload);
+        throw;
+    }
+}
+
+Runtime::Runtime(Runtime &root, std::size_t workspace_limit)
+    : device(root.device), memory(root.memory), cancelled(root.cancelled),
+      transfer_bytes_(root.transfer_bytes()), workspace_limit_(workspace_limit) {
+    activate();
+    try {
+        checked(cudaStreamCreateWithFlags(&upload, cudaStreamNonBlocking), "create worker upload stream");
+        checked(cudaStreamCreateWithFlags(&compute, cudaStreamNonBlocking), "create worker compute stream");
+        checked(cudaStreamCreateWithFlags(&pack, cudaStreamNonBlocking), "create worker pack stream");
+        checked(cudaStreamCreateWithFlags(&readback, cudaStreamNonBlocking), "create worker readback stream");
     } catch (...) {
         destroy_stream(readback); destroy_stream(pack); destroy_stream(compute); destroy_stream(upload);
         throw;
@@ -208,7 +235,7 @@ Runtime::~Runtime() {
     for (auto stream : {upload, compute, pack, readback}) {
         if (stream != nullptr) { cleanup_status(cudaStreamSynchronize(stream), "drain CUDA stream"); }
     }
-    memory.clear();
+    if (owned_state_) memory.clear();
     destroy_stream(readback); destroy_stream(pack); destroy_stream(compute); destroy_stream(upload);
 }
 

@@ -18,6 +18,7 @@ int read_runs_async(DfCudaJob *, std::uint64_t, std::uint64_t, std::uint64_t,
 int wait_transfer(DfCudaJob *, std::uint64_t);
 int release_output(DfCudaJob *, std::uint64_t);
 void cancel(DfCudaJob *) noexcept;
+void abort(DfCudaJob *) noexcept;
 void destroy(DfCudaJob *) noexcept;
 }
 
@@ -39,20 +40,24 @@ void set_error(DfCudaError *error, DfCudaStatus status, const char *message) noe
 
 DfCudaStatus exception_status(const dfcuda::Error &error) noexcept { return error.status; }
 
-template<class F> int invoke(F &&function, DfCudaError *error) noexcept {
+template<class F> int invoke(F &&function, DfCudaError *error, DfCudaJob *job = nullptr) noexcept {
     clear_error(error);
     try {
         return function();
     } catch (const dfcuda::Error &failure) {
+        dfcuda_native::abort(job);
         set_error(error, exception_status(failure), failure.what());
         return static_cast<int>(failure.status);
     } catch (const std::bad_alloc &failure) {
+        dfcuda_native::abort(job);
         set_error(error, DF_CUDA_OUT_OF_MEMORY, failure.what());
         return DF_CUDA_OUT_OF_MEMORY;
     } catch (const std::exception &failure) {
+        dfcuda_native::abort(job);
         set_error(error, DF_CUDA_EXECUTION_ERROR, failure.what());
         return DF_CUDA_EXECUTION_ERROR;
     } catch (...) {
+        dfcuda_native::abort(job);
         set_error(error, DF_CUDA_EXECUTION_ERROR, "unknown native CUDA exception");
         return DF_CUDA_EXECUTION_ERROR;
     }
@@ -85,7 +90,7 @@ extern "C" int32_t df_cuda_next_output(DfCudaJob *job, DfCudaOutput *output,
         set_error(error, DF_CUDA_INVALID_ARGUMENT, "null CUDA job");
         return DF_CUDA_INVALID_ARGUMENT;
     }
-    return invoke([&]() { return dfcuda_native::next_output(job, output); }, error);
+    return invoke([&]() { return dfcuda_native::next_output(job, output); }, error, job);
 }
 
 extern "C" int32_t df_cuda_read_runs_async(DfCudaJob *job, uint64_t output_token,
@@ -100,7 +105,7 @@ extern "C" int32_t df_cuda_read_runs_async(DfCudaJob *job, uint64_t output_token
     return invoke([&]() {
         return dfcuda_native::read_runs_async(job, output_token, first_run, run_count,
                                               destination, destination_capacity, transfer_token);
-    }, error);
+    }, error, job);
 }
 
 extern "C" int32_t df_cuda_wait_transfer(DfCudaJob *job, uint64_t transfer_token,
@@ -110,7 +115,7 @@ extern "C" int32_t df_cuda_wait_transfer(DfCudaJob *job, uint64_t transfer_token
         set_error(error, DF_CUDA_INVALID_ARGUMENT, "null CUDA job");
         return DF_CUDA_INVALID_ARGUMENT;
     }
-    return invoke([&]() { return dfcuda_native::wait_transfer(job, transfer_token); }, error);
+    return invoke([&]() { return dfcuda_native::wait_transfer(job, transfer_token); }, error, job);
 }
 
 extern "C" int32_t df_cuda_release_output(DfCudaJob *job, uint64_t output_token,
@@ -120,7 +125,7 @@ extern "C" int32_t df_cuda_release_output(DfCudaJob *job, uint64_t output_token,
         set_error(error, DF_CUDA_INVALID_ARGUMENT, "null CUDA job");
         return DF_CUDA_INVALID_ARGUMENT;
     }
-    return invoke([&]() { return dfcuda_native::release_output(job, output_token); }, error);
+    return invoke([&]() { return dfcuda_native::release_output(job, output_token); }, error, job);
 }
 
 extern "C" void df_cuda_cancel(DfCudaJob *job) { dfcuda_native::cancel(job); }

@@ -1,13 +1,14 @@
 #include "raster.h"
 #include <cub/cub.cuh>
 #include <thrust/iterator/reverse_iterator.h>
+#include <thrust/iterator/counting_iterator.h>
 #include <cmath>
 #include <climits>
 
 namespace dfcuda {
 namespace {
 
-constexpr std::uint32_t launch_items = 16384;
+constexpr std::uint32_t launch_items = 1u << 22;
 constexpr std::uint32_t serial_items = 4096;
 constexpr std::uint32_t index_block_size = 256;
 
@@ -40,6 +41,35 @@ template<class F> void primitive(Runtime &r, Buffer<std::uint8_t> &scratch, F f)
     scratch.mark_used(r.compute);
 }
 
+template<class F> void bounded_primitive(Runtime &r, Buffer<std::uint8_t> &scratch, F f) {
+    // CUB validates the supplied capacity. Do not repeat its null-storage
+    // query for every queued row; all primitives reuse the admitted reserve.
+    std::size_t bytes = scratch.capacity();
+    checked(f(scratch.data(), bytes), "execute bounded raster primitive");
+    scratch.mark_used(r.compute);
+}
+
+struct RasterControlPin {
+    Runtime &runtime;
+    HostPin pin;
+    bool complete = false;
+    RasterControlPin(Runtime &r, void *p, std::size_t bytes) : runtime(r), pin(p, bytes) {}
+    ~RasterControlPin() {
+        // Exception unwinding must not release host storage still read by DMA.
+        if (!complete) (void)cudaStreamSynchronize(runtime.compute);
+    }
+    void joined() { complete = true; pin.unregister(); }
+};
+
+struct RasterControlEvent {
+    cudaEvent_t completion = nullptr;
+    RasterControlEvent() {
+        checked(cudaEventCreateWithFlags(&completion, cudaEventDisableTiming | cudaEventBlockingSync),
+                "create raster descriptor copy event");
+    }
+    ~RasterControlEvent() { (void)cudaEventDestroy(completion); }
+};
+
 template<class T> void metadata(Runtime &r, T *destination, const T *source, std::size_t count) {
     const auto chunk = std::max<std::size_t>(1, r.transfer_bytes() / sizeof(T));
     for (std::size_t offset = 0; offset < count; offset += chunk) {
@@ -64,9 +94,56 @@ void launched(Runtime &r) {
     r.check_cancelled();
 }
 
+__device__ void scene_rows(const RasterTriangle &tri, std::uint32_t *bounds,
+                           DfCudaConfig cfg, std::uint32_t factor) {
+    float low = tri.y[0], high = tri.y[0];
+    bool finite = true;
+    for (int a = 0; a < 3; ++a) {
+        const int b = (a + 1) % 3;
+        const float delta = sub(tri.y[b], tri.y[a]);
+        const float endpoint = add(tri.y[a], delta);
+        // intersection() has no explicit t clamp. Finite Z endpoints and
+        // their finite rounded difference make any accepted crossing's t
+        // lie in [0,1]. Rounded Y lerp is monotone, but its t=1 endpoint
+        // need not equal b; include that reconstructed endpoint too.
+        finite = finite && isfinite(tri.z[a]) && isfinite(sub(tri.z[b], tri.z[a]))
+            && isfinite(tri.y[a]) && isfinite(delta) && isfinite(endpoint);
+        low = fminf(low, fminf(tri.y[a], endpoint));
+        high = fmaxf(high, fmaxf(tri.y[a], endpoint));
+    }
+    std::uint32_t first = 0, last = cfg.height;
+    const auto height = cfg.height * factor;
+    if (finite) {
+        // Match the raster's rounded ceil/clamp operations, bounding every
+        // binary/perturbation subrow phase in [0,1]. One extra physical row
+        // covers the interleaved terminal phase before render() rounds up.
+        first = clamp_row(ceilf(sub(low, 1.0f)), height) / factor;
+        const auto end = clamp_row(ceilf(high), height);
+        last = static_cast<std::uint32_t>(min(static_cast<std::uint64_t>(cfg.height),
+            (static_cast<std::uint64_t>(end) + factor - 1) / factor + 1));
+        if (cfg.dense_raster_semantics == 1 && cfg.raster_mode == DF_CUDA_COVERAGE && cfg.aa_samples > 1) {
+            const auto rows = static_cast<std::uint64_t>(height) * cfg.aa_samples;
+            const auto divisor = static_cast<std::uint64_t>(factor) * cfg.aa_samples;
+            if (rows > INT_MAX) { first = 0; last = cfg.height; }
+            else {
+                // Analytic Coverage multiplies Y before rounding. Repeating
+                // those f32 operations also bounds their rounding at 16K+.
+                const auto begin = clamp_row(ceilf(sub(mul(low, static_cast<float>(cfg.aa_samples)), 0.5f)),
+                                             static_cast<std::uint32_t>(rows));
+                const auto finish = clamp_row(ceilf(sub(mul(high, static_cast<float>(cfg.aa_samples)), 0.5f)),
+                                              static_cast<std::uint32_t>(rows));
+                first = min(first, static_cast<std::uint32_t>(begin / divisor));
+                last = max(last, static_cast<std::uint32_t>((finish + divisor - 1) / divisor));
+            }
+        }
+    }
+    // Never use an X vertex hull: incremental f32 edge X can drift outside it.
+    atomicMin(bounds, first); atomicMax(bounds + 1, last);
+}
+
 __global__ void parse_geometry(const float *raw, const std::uint32_t *tanks,
-                               RasterTriangle *triangles, DfCudaConfig cfg,
-                               std::uint32_t first, std::uint32_t count,
+                               RasterTriangle *triangles, std::uint32_t *row_bounds,
+                               DfCudaConfig cfg, std::uint32_t first, std::uint32_t count,
                                std::uint32_t factor, bool have_tanks) {
     const auto i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= count) return;
@@ -111,6 +188,7 @@ __global__ void parse_geometry(const float *raw, const std::uint32_t *tanks,
     const bool support = cfg.model_triangle_count > 0 && id >= cfg.model_triangle_count;
     t.tank = support || !have_tanks ? 0 : min(tanks[i], cfg.tank_count - 1);
     triangles[id] = t;
+    scene_rows(t, row_bounds, cfg, factor);
 }
 
 __global__ void index_keys(const RasterTriangle *tri, std::uint32_t *keys,
@@ -277,222 +355,7 @@ __device__ bool make_span(float x0, float x1, std::uint32_t width, bool snap, Ra
     return s.end >= s.start;
 }
 
-// These stateful walks deliberately stay on the device. A launch visits at
-// most 4096 crossings; row history is never approximated or reset at a batch.
-__global__ void naive_spans(const RasterEdge *edges, std::uint32_t n, RasterSpan *spans,
-                            RasterState *state, std::uint32_t limit, std::uint32_t width, bool snap) {
-    auto s = *state;
-    const auto end = min(n, s.cursor + limit);
-    for (; s.cursor < end; ++s.cursor) {
-        const auto e = edges[s.cursor];
-        if (!isfinite(e.x)) { s.cursor = n; break; }
-        s.winding += e.wind;
-        s.minimum_winding = min(s.minimum_winding, s.winding);
-        s.maximum_winding = max(s.maximum_winding, s.winding);
-        if (s.cursor + 1 < n && s.winding != 0 && isfinite(edges[s.cursor + 1].x)) {
-            RasterSpan span;
-            if (make_span(e.x, edges[s.cursor + 1].x, width, snap, span)) spans[s.count++] = span;
-        }
-    }
-    *state = s;
-}
-
-__global__ void collapse_edges(const RasterEdge *edges, std::uint32_t n, RasterEdge *output,
-                               RasterState *state, std::uint32_t limit) {
-    auto s = *state;
-    const auto end = min(n, s.cursor + limit);
-    for (; s.cursor < end; ++s.cursor) {
-        const auto e = edges[s.cursor];
-        const bool cancel = s.count && isfinite(e.x) && isfinite(output[s.count - 1].x)
-            && output[s.count - 1].wind + e.wind == 0 && sub(e.x, output[s.count - 1].x) < 1.0f;
-        if (cancel) --s.count;
-        else output[s.count++] = e;
-    }
-    *state = s;
-}
-
-__global__ void exit_indices(const RasterEdge *edges, std::uint32_t *indices,
-                             std::uint32_t first, std::uint32_t n, std::int32_t orientation) {
-    const auto i = first + blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) indices[i] = isfinite(edges[i].x) && edges[i].wind * orientation < 0 ? i : UINT_MAX;
-}
-
-__global__ void match_pairs(const RasterEdge *edges, const std::uint32_t *next_exit,
-                            std::uint32_t n, float *open, RasterPair *pairs,
-                            RasterOrphan *orphans, RasterState *state,
-                            std::uint32_t limit, std::int32_t orientation) {
-    auto s = *state;
-    const auto end = min(n, s.cursor + limit);
-    while (s.cursor < end) {
-        const auto e = edges[s.cursor];
-        if (!isfinite(e.x)) { s.cursor = n; break; }
-        int w = e.wind * orientation;
-        if (w == -1 && s.open_count == 0 && s.cursor + 2 < n) {
-            const auto entry = edges[s.cursor + 1];
-            const auto exit = next_exit[s.cursor + 2];
-            if (isfinite(entry.x) && entry.wind * orientation == 1 && entry.x > e.x
-                && exit < n && sub(entry.x, e.x) < sub(edges[exit].x, entry.x)) {
-                s.cursor += 2;
-                continue;
-            }
-        }
-        while (w > 0) { open[s.open_count++] = e.x; --w; }
-        while (w < 0) {
-            ++w;
-            if (s.open_count) {
-                const float x = open[--s.open_count];
-                if (e.x > x) pairs[s.pair_count++] = {x, e.x};
-            } else orphans[s.orphan_count++] = {e.x, -1};
-        }
-        ++s.cursor;
-    }
-    *state = s;
-}
-
-__global__ void finish_orphans(const float *open, RasterOrphan *orphans, RasterState *state,
-                               std::uint32_t first, std::uint32_t n, std::uint32_t offset) {
-    const auto i = first + blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) orphans[offset + i] = {open[i], 1};
-    if (i == 0) state->orphan_count = offset + n;
-}
-
-__global__ void orphan_keys(const RasterOrphan *orphans, float *keys,
-                            std::uint32_t first, std::uint32_t n) {
-    const auto i = first + blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) keys[i] = orphans[i].x;
-}
-
-__global__ void pair_endpoints(const RasterPair *pairs, float *endpoints,
-                               std::uint32_t first, std::uint32_t n) {
-    const auto i = first + blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) { endpoints[i * 2] = pairs[i].a; endpoints[i * 2 + 1] = pairs[i].b; }
-}
-
-__global__ void append_orphan_pairs(const RasterOrphan *orphans, std::uint32_t n,
-                                   const float *endpoints, std::uint32_t endpoint_count,
-                                   RasterPair *pairs, RasterState *state, std::uint32_t limit) {
-    auto s = *state;
-    const auto end = min(n / 2, s.cursor + limit);
-    for (; s.cursor < end; ++s.cursor) {
-        const auto a = orphans[s.cursor * 2], b = orphans[s.cursor * 2 + 1];
-        std::uint32_t lo = 0, hi = endpoint_count;
-        while (lo < hi) {
-            const auto mid = lo + (hi - lo) / 2;
-            if (endpoints[mid] <= a.x) lo = mid + 1; else hi = mid;
-        }
-        const bool crosses = lo < endpoint_count && endpoints[lo] < b.x;
-        if (!(a.wind < 0 && b.wind > 0) && !crosses && b.x > a.x)
-            pairs[s.pair_count++] = {a.x, b.x};
-    }
-    *state = s;
-}
-
-__global__ void pair_keys(const RasterPair *pairs, float *keys,
-                          std::uint32_t first, std::uint32_t n) {
-    const auto i = first + blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) keys[i] = pairs[i].a;
-}
-
-__global__ void merge_pairs(const RasterPair *pairs, std::uint32_t n, RasterSpan *output,
-                            RasterState *state, std::uint32_t limit, std::uint32_t width, bool snap) {
-    auto s = *state;
-    const auto end = min(n, s.cursor + limit);
-    for (; s.cursor < end; ++s.cursor) {
-        const auto p = pairs[s.cursor];
-        if (!s.merge_live) { s.merge_a = p.a; s.merge_b = p.b; s.merge_live = 1; }
-        else if (p.a <= s.merge_b) s.merge_b = fmaxf(s.merge_b, p.b);
-        else {
-            RasterSpan span;
-            if (make_span(s.merge_a, s.merge_b, width, snap, span)) output[s.count++] = span;
-            s.merge_a = p.a; s.merge_b = p.b;
-        }
-    }
-    if (s.cursor == n && s.merge_live) {
-        RasterSpan span;
-        if (make_span(s.merge_a, s.merge_b, width, snap, span)) output[s.count++] = span;
-        s.merge_live = 0;
-    }
-    *state = s;
-}
-
-__global__ void span_evidence(const RasterSpan *a, std::uint32_t n, const RasterSpan *previous,
-                              std::uint32_t prev_n, std::uint64_t *result, std::uint32_t first) {
-    const auto i = first + blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    const auto s = a[i];
-    std::uint64_t overlap = 0;
-    std::uint32_t lo = 0, hi = prev_n;
-    while (lo < hi) {
-        const auto mid = lo + (hi - lo) / 2;
-        if (previous[mid].end < s.start) lo = mid + 1; else hi = mid;
-    }
-    for (auto j = lo; j < prev_n && previous[j].start <= s.end; ++j) {
-        const auto left = max(s.start, previous[j].start), right = min(s.end, previous[j].end);
-        if (right >= left) overlap += static_cast<std::uint64_t>(right) - left + 1;
-    }
-    atomicAdd(reinterpret_cast<unsigned long long *>(result), static_cast<unsigned long long>(overlap));
-    atomicAdd(reinterpret_cast<unsigned long long *>(result + 1),
-              static_cast<unsigned long long>(s.end) - s.start + 1);
-}
-
-__global__ void accumulate_spans(const RasterSpan *spans, std::uint32_t n, float *accum,
-                                 std::int32_t *delta, std::uint32_t *lit,
-                                 RasterState *state, std::uint32_t limit,
-                                 std::uint32_t width, std::uint32_t factor, bool coverage) {
-    auto s = *state;
-    const auto end = min(n, s.cursor + limit);
-    for (; s.cursor < end; ++s.cursor) {
-        const auto span = spans[s.cursor];
-        if (coverage) {
-            const auto left = static_cast<std::uint32_t>(floorf(span.a));
-            const auto right = static_cast<std::uint32_t>(ceilf(span.b)) - 1;
-            if (left == right) accum[left] = add(accum[left], mul(clampf(sub(span.b, span.a), 0.0f, 1.0f), 255.0f));
-            else {
-                accum[left] = add(accum[left], mul(clampf(sub(add(static_cast<float>(left), 1.0f), span.a), 0.0f, 1.0f), 255.0f));
-                if (right > left + 1) { delta[left + 1] += 255; delta[right] -= 255; }
-                accum[right] = add(accum[right], mul(clampf(sub(span.b, static_cast<float>(right)), 0.0f, 1.0f), 255.0f));
-            }
-        } else {
-            // Binary spans partition half-open center intervals. Clipping the
-            // running cursor also guarantees their union under repeated walls.
-            const auto begin = max(span.start, s.open_count);
-            const auto finish = span.end + 1;
-            if (begin >= finish) continue;
-            s.open_count = finish;
-            const auto left = begin / factor, right = (finish - 1) / factor;
-            if (left == right) lit[left] += finish - begin;
-            else {
-                lit[left] += (left + 1) * factor - begin;
-                lit[right] += finish - right * factor;
-                if (right > left + 1) { delta[left + 1] += factor; delta[right] -= factor; }
-            }
-        }
-    }
-    *state = s;
-}
-
-__global__ void resolve_row(PlaneView plane, std::uint32_t global_y, float *accum,
-                            std::int32_t *delta, const std::int32_t *prefix,
-                            std::uint32_t *lit, std::uint32_t first,
-                            std::uint32_t steps, std::uint32_t factor,
-                            bool coverage, bool raw_supports) {
-    const auto x = first + blockIdx.x * blockDim.x + threadIdx.x;
-    if (x >= plane.width) return;
-    std::uint32_t value;
-    if (coverage) {
-        const float total = prefix[x] > 0 ? add(accum[x], static_cast<float>(prefix[x])) : accum[x];
-        value = total <= 0.0f ? 0 : static_cast<std::uint32_t>(clampf(roundf(div(total, static_cast<float>(steps))), 0.0f, 255.0f));
-        accum[x] = 0.0f;
-    } else {
-        const auto count = static_cast<std::uint64_t>(lit[x]) + max(prefix[x], 0);
-        const auto maximum = factor * factor;
-        value = static_cast<std::uint32_t>(min((count * 255 + maximum / 2) / maximum, static_cast<std::uint64_t>(255)));
-        if (raw_supports && value < 255) value = 0;
-        lit[x] = 0;
-    }
-    delta[x] = 0;
-    plane.data[static_cast<std::size_t>(global_y - plane.y0) * plane.width + x] = static_cast<std::uint8_t>(value);
-}
+#include "raster_band.cuh"
 
 } // namespace
 
@@ -556,32 +419,6 @@ Bounds union_bounds(Bounds a, Bounds b) {
 }
 
 
-__global__ void record_source_spans(const RasterSpan *spans, std::uint32_t n, PostBasic *basic,
-                                   std::int32_t *hit_delta, RasterState *state,
-                                   std::uint32_t y, std::uint32_t limit) {
-    auto s = *state;
-    auto b = *basic;
-    const auto end = min(n, s.cursor + limit);
-    for (; s.cursor < end; ++s.cursor) {
-        const auto span = spans[s.cursor];
-        b.pixels = min(b.pixels + static_cast<unsigned long long>(span.end) - span.start + 1,
-                       static_cast<unsigned long long>(UINT_MAX));
-        b.min_x = min(b.min_x, span.start); b.max_x = max(b.max_x, span.end);
-        b.min_y = min(b.min_y, y); b.max_y = max(b.max_y, y);
-        if (hit_delta) { ++hit_delta[span.start]; --hit_delta[span.end + 1]; }
-    }
-    *basic = b;
-    *state = s;
-}
-
-__global__ void resolve_source_hits(PlaneView occupancy, std::uint32_t y,
-                                   std::int32_t *delta, const std::int32_t *prefix,
-                                   std::uint32_t first) {
-    const auto x = first + blockIdx.x * blockDim.x + threadIdx.x;
-    if (x >= occupancy.width) return;
-    occupancy.data[static_cast<std::size_t>(y - occupancy.y0) * occupancy.width + x] = prefix[x] > 0 ? 255 : 0;
-    delta[x] = 0;
-}
 }
 
 Rasterizer::Rasterizer(Runtime &runtime, const DfCudaConfig &config,
@@ -591,6 +428,15 @@ Rasterizer::Rasterizer(Runtime &runtime, const DfCudaConfig &config,
     runtime_.activate();
     if (float_count % 9 != 0 || float_count / 9 > static_cast<std::size_t>(INT_MAX))
         throw Error(DF_CUDA_INVALID_ARGUMENT, "CUDA triangle count exceeds indexed range");
+    auto geometry = std::make_shared<RasterGeometry>();
+    geometry_ = geometry;
+    auto &triangle_count_ = geometry->triangle_count;
+    auto &ssaa_factor_ = geometry->ssaa_factor;
+    auto &model_first_layer_ = geometry->model_first_layer;
+    auto &model_last_layer_ = geometry->model_last_layer;
+    auto &triangles_ = geometry->triangles;
+    auto &index_ = geometry->index;
+    auto &index_blocks_ = geometry->index_blocks;
     triangle_count_ = static_cast<std::uint32_t>(float_count / 9);
     model_last_layer_ = config_.total_layers - 1;
     ssaa_factor_ = config_.raster_mode == DF_CUDA_COVERAGE && config_.dense_raster_semantics == 0
@@ -598,18 +444,28 @@ Rasterizer::Rasterizer(Runtime &runtime, const DfCudaConfig &config,
     if (static_cast<std::uint64_t>(config_.width) * ssaa_factor_ > INT_MAX
         || static_cast<std::uint64_t>(config_.height) * ssaa_factor_ > INT_MAX)
         throw Error(DF_CUDA_OUT_OF_MEMORY, "CUDA supersampled dimensions exceed indexed range");
-    initialize(runtime_, triangles_, index_, index_blocks_, temporary_, keys_, keys_out_,
-               ids_, candidates_, counts_, event_keys_, event_keys_out_, events_, events_out_,
-               row_edges_, collapsed_, spans_, positive_, negative_, previous_, pairs_, pairs_out_,
-               orphans_, orphans_out_, float_keys_, float_keys_out_, open_, endpoints_, endpoints_out_,
-               row_accum_, row_delta_, row_prefix_, state_, evidence_);
-    state_.resize(1);
-    evidence_.resize(4);
-    counts_.resize(2);
+    const auto steps = config_.aa_samples > 1 && (config_.raster_mode == DF_CUDA_PERTURBATION
+        || (config_.raster_mode == DF_CUDA_COVERAGE && config_.dense_raster_semantics == 1)) ? config_.aa_samples : 1;
+    const auto events = checked_bytes(triangle_count_, config_.raster_mode == DF_CUDA_PERTURBATION ? steps : 1);
+    const auto rows = checked_bytes(checked_bytes(config_.height, ssaa_factor_), steps);
+    // Worst candidate set, all active lanes, and one subrow with exact carry.
+    // At most 272 bytes/crossing holds both orientation candidates; 256 more
+    // reserves CUB scan/segmented-sort temporaries without row allocations.
+    // The 60-byte fixed triangle reserve includes keys/keys_out/ids/candidates
+    // (16 bytes), row_edges (24 bytes) and previous spans (16 bytes).
+    geometry->minimum_workspace_bytes = checked_bytes(events, 100)
+        + checked_bytes(triangle_count_, 60) + checked_bytes(rows + steps + 1, 8)
+        + checked_bytes(triangle_count_, 528) + sizeof(RasterBandRow) + 2 * sizeof(RasterState)
+        + (steps * ssaa_factor_ > 1 ? checked_bytes(config_.width, 2 * sizeof(RasterCarry)) : 0)
+        + checked_bytes(std::max(events, checked_bytes(triangle_count_, 2)), 128) + 16 * 1024 * 1024 + 512;
+    initialize_scratch();
+    if (source_statistics_) {
+        const auto raw = geometry->minimum_workspace_bytes;
+        geometry->minimum_workspace_bytes = std::max(raw + (raw + 6) / 7,
+            checked_bytes(source_statistics_->minimum_workspace_bytes(), 8));
+    }
+    initialize(runtime_, triangles_, index_, index_blocks_);
     triangles_.resize(triangle_count_);
-    if (config_.dense_raster_semantics == 1 && config_.raster_mode == DF_CUDA_COVERAGE
-        && config_.aa_samples > 1 && config_.compute_area_stats)
-        source_statistics_.emplace(runtime_, config_);
     if (!triangle_count_) return;
     Buffer<float> upload_xyz;
     Buffer<std::uint32_t> upload_tanks;
@@ -619,6 +475,8 @@ Rasterizer::Rasterizer(Runtime &runtime, const DfCudaConfig &config,
     upload_xyz.resize(static_cast<std::size_t>(chunk) * 9);
     upload_tanks.resize(chunk);
     const bool have_tanks = host_tanks != nullptr && tank_count >= triangle_count_;
+    checked(cudaMemsetAsync(counts_.data(), 255, sizeof(std::uint32_t), runtime_.compute), "initialize scene first row");
+    checked(cudaMemsetAsync(counts_.data() + 1, 0, sizeof(std::uint32_t), runtime_.compute), "initialize scene last row");
     for (std::uint32_t first = 0; first < triangle_count_; first += chunk) {
         runtime_.check_cancelled();
         const auto n = std::min(chunk, triangle_count_ - first);
@@ -630,11 +488,20 @@ Rasterizer::Rasterizer(Runtime &runtime, const DfCudaConfig &config,
         if (have_tanks)
             runtime_.upload_bytes(upload_tanks.data(), host_tanks + first, checked_bytes(n, sizeof(std::uint32_t)));
         parse_geometry<<<(n + 255) / 256, 256, 0, runtime_.compute>>>(upload_xyz.data(), upload_tanks.data(),
-            triangles_.data(), config_, first, n, ssaa_factor_, have_tanks);
+            triangles_.data(), counts_.data(), config_, first, n, ssaa_factor_, have_tanks);
         launched(runtime_);
         upload_xyz.mark_used(runtime_.compute);
         upload_tanks.mark_used(runtime_.compute);
     }
+    std::uint32_t scene[2];
+    metadata(runtime_, scene, counts_.data(), 2);
+    // All tanks, supports and Z neighbors share this global Y interval.
+    // Raw/full-width/cropped planes fit inside it; spatial and legacy work
+    // frames expand raw bounds by at most 64 rows, and Z/support unions
+    // cannot escape it. Preserve global origins and denominator frames.
+    const auto scene_first = scene[0] > 64 ? scene[0] - 64 : 0;
+    const auto scene_last = std::min<std::uint64_t>(config_.height, static_cast<std::uint64_t>(scene[1]) + 64);
+    geometry->max_plane_bytes = checked_bytes(config_.width, scene_last - scene_first);
     keys_.resize(triangle_count_);
     ids_.resize(triangle_count_);
     keys_out_.resize(triangle_count_);
@@ -671,138 +538,124 @@ Rasterizer::Rasterizer(Runtime &runtime, const DfCudaConfig &config,
         metadata(runtime_, window, counts_.data() + 2, 2);
         model_first_layer_ = window[0]; model_last_layer_ = window[1];
     }
+    checked(cudaStreamSynchronize(runtime_.compute), "publish immutable raster geometry");
 }
 
-std::uint32_t Rasterizer::repair(RasterEdge *edges, std::uint32_t n, std::uint32_t width,
-                                 bool snap, std::int32_t orientation, Buffer<RasterSpan> &output) {
-    keys_.resize(n);
-    keys_out_.resize(n);
-    for (std::uint32_t first = 0; first < n; first += launch_items) {
-        const auto count = std::min(launch_items, n - first);
-        exit_indices<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(edges, keys_.data(), first, n, orientation);
-        launched(runtime_);
-    }
-    primitive(runtime_, temporary_, [&](void *p, std::size_t &bytes) {
-        return cub::DeviceScan::InclusiveScan(p, bytes, thrust::make_reverse_iterator(keys_.data() + n),
-            thrust::make_reverse_iterator(keys_out_.data() + n), cub::Min(), static_cast<int>(n), runtime_.compute);
+Rasterizer::Rasterizer(Runtime &runtime, const DfCudaConfig &config, RasterGeometryPtr geometry)
+    : runtime_(runtime), config_(config), geometry_(std::move(geometry)) {
+    runtime_.activate();
+    if (!geometry_) throw Error(DF_CUDA_INVALID_ARGUMENT, "null shared CUDA raster geometry");
+    initialize_scratch();
+}
+
+void Rasterizer::initialize_scratch() {
+    initialize(runtime_, temporary_, keys_, keys_out_, ids_, candidates_, counts_,
+        event_keys_, event_keys_out_, events_, events_out_, row_edges_, band_edges_,
+        collapsed_, spans_, positive_, negative_, previous_, pairs_, pairs_out_,
+        orphans_, orphans_out_, float_keys_, float_keys_out_, open_, endpoints_, endpoints_out_,
+        winding_, winding_prefix_, state_, band_rows_, carry_a_, carry_b_, span_flags_, span_prefix_, frontier_, evidence_);
+    state_.resize(1); evidence_.resize(4); counts_.resize(2); frontier_.resize(1);
+    if (config_.dense_raster_semantics == 1 && config_.raster_mode == DF_CUDA_COVERAGE
+        && config_.aa_samples > 1 && config_.compute_area_stats)
+        source_statistics_.emplace(runtime_, config_);
+}
+
+void Rasterizer::process_band(const RasterBandRow *host_rows, std::uint32_t rows,
+                              std::uint32_t maximum, std::uint32_t first_row,
+                              std::uint32_t divisor, bool coverage, bool raw_supports,
+                              Plane &output, Plane &occupancy, PostBasic *source_basic) {
+    BandPointers p{band_rows_.data(), band_edges_.data(), collapsed_.data(), spans_.data(),
+        positive_.data(), negative_.data(), previous_.data(), pairs_.data(), pairs_out_.data(),
+        orphans_.data(), orphans_out_.data(), open_.data(), endpoints_.data(), endpoints_out_.data(),
+        float_keys_.data(), span_flags_.data(), span_prefix_.data(), span_prefix_.data(),
+        winding_.data(), winding_prefix_.data(), frontier_.data(), state_.data()};
+    const auto width = config_.width * geometry_->ssaa_factor;
+    const auto items = host_rows[rows - 1].offset + host_rows[rows - 1].n;
+    p.items = items;
+    auto index = thrust::make_counting_iterator(std::uint32_t{0});
+    const auto begins = cub::TransformInputIterator<std::uint32_t, BandOffset, decltype(index)>(index, BandOffset{band_rows_.data(), rows, items, 1, false});
+    const auto ends = cub::TransformInputIterator<std::uint32_t, BandOffset, decltype(index)>(index, BandOffset{band_rows_.data(), rows, items, 1, true});
+    const auto endpoint_begins = cub::TransformInputIterator<std::uint32_t, BandOffset, decltype(index)>(index, BandOffset{band_rows_.data(), rows, items, 2, false});
+    const auto endpoint_ends = cub::TransformInputIterator<std::uint32_t, BandOffset, decltype(index)>(index, BandOffset{band_rows_.data(), rows, items, 2, true});
+    const dim3 crossing_grid(std::max(1u, (maximum + 255) / 256), rows);
+    const dim3 candidate_grid(crossing_grid.x, rows, 2);
+    const dim3 candidate_walk(rows, 1, 2);
+    band_winds<<<crossing_grid, 256, 0, runtime_.compute>>>(p); launched(runtime_);
+    if (items) bounded_primitive(runtime_, temporary_, [&](void *scratch, std::size_t &bytes) {
+        return cub::DeviceScan::InclusiveScan(scratch, bytes, winding_.data(), winding_prefix_.data(),
+            BandSum{}, static_cast<int>(items), runtime_.compute);
     });
-    checked(cudaMemsetAsync(state_.data(), 0, sizeof(RasterState), runtime_.compute), "reset matched row state");
-    for (std::uint32_t first = 0; first < n; first += serial_items) {
-        match_pairs<<<1, 1, 0, runtime_.compute>>>(edges, keys_out_.data(), n, open_.data(), pairs_.data(),
-                                                orphans_.data(), state_.data(), serial_items, orientation);
-        launched(runtime_);
+    band_naive<<<crossing_grid, 256, 0, runtime_.compute>>>(p, width, !coverage); launched(runtime_);
+    if (items) bounded_primitive(runtime_, temporary_, [&](void *scratch, std::size_t &bytes) {
+        return cub::DeviceScan::InclusiveScan(scratch, bytes, span_flags_.data(), span_prefix_.data(),
+            BandSum{}, static_cast<int>(items), runtime_.compute);
+    });
+    band_compact<<<crossing_grid, 256, 0, runtime_.compute>>>(p); launched(runtime_);
+    checked(cudaMemsetAsync(state_.data(), 0, checked_bytes(rows, sizeof(RasterState)), runtime_.compute), "reset band collapse state");
+    for (std::uint32_t i = 0; i < maximum; i += serial_items) {
+        band_repair_step<<<rows, 1, 0, runtime_.compute>>>(p, 0, 1, width, !coverage); launched(runtime_);
     }
-    const auto matched = metadata(runtime_, state_.data());
-    checked(cudaMemcpyAsync(counts_.data() + 1, &state_.data()->pair_count, sizeof(std::uint32_t),
-                            cudaMemcpyDeviceToDevice, runtime_.compute), "retain matched orientation evidence");
-    for (std::uint32_t first = 0; first < matched.open_count; first += launch_items) {
-        const auto count = std::min(launch_items, matched.open_count - first);
-        finish_orphans<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(open_.data(), orphans_.data(), state_.data(),
-            first, matched.open_count, matched.orphan_count);
-        launched(runtime_);
+    band_repair_prepare<<<crossing_grid, 256, 0, runtime_.compute>>>(p, 4, 1); launched(runtime_);
+    checked(cudaMemsetAsync(state_.data(), 0, checked_bytes(rows, 2 * sizeof(RasterState)), runtime_.compute), "reset both band pair states");
+    band_repair_prepare<<<candidate_grid, 256, 0, runtime_.compute>>>(p, 0, 0); launched(runtime_);
+    if (items) bounded_primitive(runtime_, temporary_, [&](void *scratch, std::size_t &bytes) {
+        return cub::DeviceScan::InclusiveScan(scratch, bytes,
+            thrust::make_reverse_iterator(span_flags_.data() + items * 2),
+            thrust::make_reverse_iterator(span_prefix_.data() + items * 2), BandMin{},
+            static_cast<int>(items * 2), runtime_.compute);
+    });
+    for (std::uint32_t i = 0; i < maximum; i += serial_items) {
+        band_repair_step<<<candidate_walk, 1, 0, runtime_.compute>>>(p, 1, 0, width, !coverage); launched(runtime_);
     }
-    const auto orphan_count = matched.orphan_count + matched.open_count;
-    if (orphan_count > 1) {
-        for (std::uint32_t first = 0; first < orphan_count; first += launch_items) {
-            const auto count = std::min(launch_items, orphan_count - first);
-            orphan_keys<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(orphans_.data(), float_keys_.data(), first, orphan_count);
-            launched(runtime_);
-        }
-        primitive(runtime_, temporary_, [&](void *p, std::size_t &bytes) {
-            return cub::DeviceRadixSort::SortPairs(p, bytes, float_keys_.data(), float_keys_out_.data(),
-                orphans_.data(), orphans_out_.data(), static_cast<int>(orphan_count), 0, 32, runtime_.compute);
+    band_repair_prepare<<<candidate_grid, 256, 0, runtime_.compute>>>(p, 1, 0); launched(runtime_);
+    if (items) {
+        bounded_primitive(runtime_, temporary_, [&](void *scratch, std::size_t &bytes) {
+            return cub::DeviceSegmentedRadixSort::SortPairs(scratch, bytes, float_keys_.data(), float_keys_out_.data(),
+                orphans_.data(), orphans_out_.data(), static_cast<int>(items * 2), static_cast<int>(rows * 2),
+                begins, ends, 0, 32, runtime_.compute);
         });
-        const auto endpoint_count = matched.pair_count * 2;
-        if (endpoint_count) {
-            for (std::uint32_t first = 0; first < matched.pair_count; first += launch_items) {
-                const auto count = std::min(launch_items, matched.pair_count - first);
-                pair_endpoints<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(pairs_.data(), endpoints_.data(), first, matched.pair_count);
-                launched(runtime_);
-            }
-            primitive(runtime_, temporary_, [&](void *p, std::size_t &bytes) {
-                return cub::DeviceRadixSort::SortKeys(p, bytes, endpoints_.data(), endpoints_out_.data(),
-                                                    static_cast<int>(endpoint_count), 0, 32, runtime_.compute);
-            });
-        }
-        checked(cudaMemsetAsync(&state_.data()->cursor, 0, sizeof(std::uint32_t), runtime_.compute), "restart orphan row cursor");
-        for (std::uint32_t first = 0; first < orphan_count / 2; first += serial_items) {
-            append_orphan_pairs<<<1, 1, 0, runtime_.compute>>>(orphans_out_.data(), orphan_count,
-                endpoints_out_.data(), endpoint_count, pairs_.data(), state_.data(), serial_items);
-            launched(runtime_);
-        }
+        bounded_primitive(runtime_, temporary_, [&](void *scratch, std::size_t &bytes) {
+            return cub::DeviceSegmentedRadixSort::SortKeys(scratch, bytes, endpoints_.data(), endpoints_out_.data(),
+                static_cast<int>(items * 4), static_cast<int>(rows * 2), endpoint_begins, endpoint_ends, 0, 32, runtime_.compute);
+        });
     }
-    const auto pair_count = metadata(runtime_, &state_.data()->pair_count);
-    if (!pair_count) return 0;
-    for (std::uint32_t first = 0; first < pair_count; first += launch_items) {
-        const auto count = std::min(launch_items, pair_count - first);
-        pair_keys<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(pairs_.data(), float_keys_.data(), first, pair_count);
-        launched(runtime_);
+    for (std::uint32_t i = 0; i < maximum; i += serial_items) {
+        band_repair_step<<<candidate_walk, 1, 0, runtime_.compute>>>(p, 2, 0, width, !coverage); launched(runtime_);
     }
-    primitive(runtime_, temporary_, [&](void *p, std::size_t &bytes) {
-        return cub::DeviceRadixSort::SortPairs(p, bytes, float_keys_.data(), float_keys_out_.data(), pairs_.data(),
-                                             pairs_out_.data(), static_cast<int>(pair_count), 0, 32, runtime_.compute);
+    band_repair_prepare<<<candidate_grid, 256, 0, runtime_.compute>>>(p, 2, 0); launched(runtime_);
+    if (items) bounded_primitive(runtime_, temporary_, [&](void *scratch, std::size_t &bytes) {
+        return cub::DeviceSegmentedRadixSort::SortPairs(scratch, bytes, float_keys_.data(), float_keys_out_.data(),
+            pairs_.data(), pairs_out_.data(), static_cast<int>(items * 2), static_cast<int>(rows * 2),
+            begins, ends, 0, 32, runtime_.compute);
     });
-    checked(cudaMemsetAsync(state_.data(), 0, sizeof(RasterState), runtime_.compute), "reset merged row state");
-    for (std::uint32_t first = 0; first < pair_count; first += serial_items) {
-        merge_pairs<<<1, 1, 0, runtime_.compute>>>(pairs_out_.data(), pair_count, output.data(), state_.data(), serial_items, width, snap);
+    checked(cudaMemsetAsync(state_.data(), 0, checked_bytes(rows, 2 * sizeof(RasterState)), runtime_.compute), "reset both band merge states");
+    for (std::uint32_t i = 0; i < maximum; i += serial_items) {
+        band_repair_step<<<candidate_walk, 1, 0, runtime_.compute>>>(p, 3, 0, width, !coverage); launched(runtime_);
+    }
+    band_repair_prepare<<<candidate_grid, 256, 0, runtime_.compute>>>(p, 3, 0); launched(runtime_);
+    band_evidence<<<crossing_grid, 256, 0, runtime_.compute>>>(p); launched(runtime_);
+    for (std::uint32_t i = 0; i < rows; i += serial_items) {
+        band_frontier<<<1, 1, 0, runtime_.compute>>>(p, rows, i); launched(runtime_);
+    }
+    if (source_basic) {
+        band_source<<<crossing_grid, 256, 0, runtime_.compute>>>(p, source_basic, first_row, divisor); launched(runtime_);
+    }
+    const auto pixels = checked_bytes(output.width, (first_row % divisor + rows + divisor - 1) / divisor);
+    const auto steps = divisor / geometry_->ssaa_factor;
+    for (std::size_t first = 0; first < pixels; first += launch_items) {
+        const auto count = std::min<std::size_t>(launch_items, pixels - first);
+        band_pixels<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(p, output.view(), occupancy.view(), rows,
+            first_row, divisor, steps, geometry_->ssaa_factor, coverage, raw_supports,
+            carry_a_.data(), carry_b_.data(), first, pixels);
         launched(runtime_);
     }
-    return metadata(runtime_, &state_.data()->count);
+    std::swap(carry_a_, carry_b_);
+    band_save_frontier<<<std::max(1u, (maximum + 255) / 256), 256, 0, runtime_.compute>>>(p, rows); launched(runtime_);
 }
 
-std::uint32_t Rasterizer::build_spans(RasterEdge *edges, std::uint32_t n, std::uint32_t width,
-                                      bool snap, std::uint32_t previous_count) {
-    if (n < 2) return 0;
-    checked(cudaMemsetAsync(state_.data(), 0, sizeof(RasterState), runtime_.compute), "reset winding row state");
-    for (std::uint32_t first = 0; first < n; first += serial_items) {
-        naive_spans<<<1, 1, 0, runtime_.compute>>>(edges, n, spans_.data(), state_.data(), serial_items, width, snap);
-        launched(runtime_);
-    }
-    const auto winding = metadata(runtime_, state_.data());
-    if (winding.winding == 0 && !(winding.minimum_winding < 0 && winding.maximum_winding > 0)) return winding.count;
-    const auto capacity = row_edges_.size();
-    collapsed_.resize(capacity); positive_.resize(capacity); negative_.resize(capacity);
-    pairs_.resize(capacity); pairs_out_.resize(capacity);
-    orphans_.resize(capacity); orphans_out_.resize(capacity);
-    float_keys_.resize(capacity); float_keys_out_.resize(capacity); open_.resize(capacity);
-    endpoints_.resize(checked_bytes(capacity, 2)); endpoints_out_.resize(checked_bytes(capacity, 2));
-    checked(cudaMemsetAsync(state_.data(), 0, sizeof(RasterState), runtime_.compute), "reset defective collapse state");
-    for (std::uint32_t first = 0; first < n; first += serial_items) {
-        collapse_edges<<<1, 1, 0, runtime_.compute>>>(edges, n, collapsed_.data(), state_.data(), serial_items);
-        launched(runtime_);
-    }
-    const auto collapsed_count = metadata(runtime_, &state_.data()->count);
-    if (!collapsed_count) return 0;
-    const auto positive_count = repair(collapsed_.data(), collapsed_count, width, snap, 1, positive_);
-    const auto positive_matches = metadata(runtime_, counts_.data() + 1);
-    const auto negative_count = repair(collapsed_.data(), collapsed_count, width, snap, -1, negative_);
-    const auto negative_matches = metadata(runtime_, counts_.data() + 1);
-    checked(cudaMemsetAsync(evidence_.data(), 0, evidence_.bytes(), runtime_.compute), "reset vertical orientation evidence");
-    for (std::uint32_t first = 0; first < positive_count; first += launch_items) {
-        const auto count = std::min(launch_items, positive_count - first);
-        span_evidence<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(positive_.data(), positive_count,
-            previous_.data(), previous_count, evidence_.data(), first);
-        launched(runtime_);
-    }
-    for (std::uint32_t first = 0; first < negative_count; first += launch_items) {
-        const auto count = std::min(launch_items, negative_count - first);
-        span_evidence<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(negative_.data(), negative_count,
-            previous_.data(), previous_count, evidence_.data() + 2, first);
-        launched(runtime_);
-    }
-    std::uint64_t evidence[4];
-    metadata(runtime_, evidence, evidence_.data(), 4);
-    const bool choose_positive = evidence[0] != evidence[2] ? evidence[0] > evidence[2]
-        : positive_matches != negative_matches ? positive_matches > negative_matches : evidence[1] <= evidence[3];
-    const auto count = choose_positive ? positive_count : negative_count;
-    if (count)
-        checked(cudaMemcpyAsync(spans_.data(), choose_positive ? positive_.data() : negative_.data(),
-            checked_bytes(count, sizeof(RasterSpan)), cudaMemcpyDeviceToDevice, runtime_.compute), "select repaired row orientation");
-    return count;
-}
 bool Rasterizer::applies_model_aa(std::uint32_t layer) const {
-    if (config_.model_triangle_count == 0 || config_.model_triangle_count >= triangle_count_) return true;
-    return layer >= model_first_layer_ && layer <= model_last_layer_;
+    if (config_.model_triangle_count == 0 || config_.model_triangle_count >= geometry_->triangle_count) return true;
+    return layer >= geometry_->model_first_layer && layer <= geometry_->model_last_layer;
 }
 
 
@@ -811,6 +664,11 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
     runtime_.check_cancelled();
     if (layer >= config_.total_layers || tank >= config_.tank_count)
         throw Error(DF_CUDA_INVALID_ARGUMENT, "CUDA raster layer or tank is out of range");
+    const auto triangle_count_ = geometry_->triangle_count;
+    const auto ssaa_factor_ = geometry_->ssaa_factor;
+    const auto &triangles_ = geometry_->triangles;
+    const auto &index_ = geometry_->index;
+    const auto &index_blocks_ = geometry_->index_blocks;
     if (!triangle_count_) return {};
     const auto split = config_.model_triangle_count > 0 && config_.model_triangle_count < triangle_count_
         ? config_.model_triangle_count : 0;
@@ -867,6 +725,7 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
         return combined;
     }
     keys_.resize(triangle_count_);
+    keys_out_.resize(triangle_count_);
     candidates_.resize(triangle_count_);
     ids_.resize(triangle_count_);
     counts_.resize(2);
@@ -931,37 +790,52 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
     const auto y1 = (last_row + divisor - 1) / divisor;
     Plane output(runtime_, 0, y0, config_.width, y1 - y0);
     checked(cudaMemsetAsync(output.pixels.data(), 0, output.bytes(), runtime_.compute), "clear cropped raster output");
+    const auto maximum_steps = config_.aa_samples > 1 && (config_.raster_mode == DF_CUDA_PERTURBATION
+        || (config_.raster_mode == DF_CUDA_COVERAGE && config_.dense_raster_semantics == 1)) ? config_.aa_samples : 1;
+    const auto maximum_divisor = maximum_steps * factor;
+    const auto maximum_events = checked_bytes(triangle_count_, config_.raster_mode == DF_CUDA_PERTURBATION ? maximum_steps : 1);
+    const auto maximum_rows = checked_bytes(height, maximum_steps);
+    const auto primitive_bytes = checked_bytes(std::max(maximum_events, checked_bytes(triangle_count_, 2)), 128) + 16 * 1024 * 1024;
+    const auto fixed_bytes = checked_bytes(maximum_events, 100) + checked_bytes(triangle_count_, 60)
+        + checked_bytes(maximum_rows + maximum_steps + 1, 8) + primitive_bytes
+        + (maximum_divisor > 1 ? checked_bytes(config_.width, 2 * sizeof(RasterCarry)) : 0) + 512;
+    const auto budget = runtime_.workspace_budget();
+    if (budget < minimum_workspace_bytes())
+        throw Error(DF_CUDA_OUT_OF_MEMORY, "CUDA raster worker budget cannot hold one subrow and its frontier");
+    const bool statistics_helper = source_statistics_.has_value();
+    const auto raster_budget = budget - (statistics_helper ? budget / 8 : 0);
+    const auto remaining = raster_budget - fixed_bytes;
+    const auto row_bytes = sizeof(RasterBandRow) + 2 * sizeof(RasterState);
+    const auto pin_rows = runtime_.transfer_bytes() / sizeof(RasterBandRow);
+    const auto row_capacity64 = std::min<std::size_t>(65535, std::min(pin_rows,
+        std::min(maximum_rows, remaining / (checked_bytes(triangle_count_, 528) + row_bytes))));
+    const auto row_capacity = static_cast<std::uint32_t>(row_capacity64);
+    const auto item_capacity = std::min(checked_bytes(triangle_count_, row_capacity),
+        std::min<std::size_t>(INT_MAX / 4, (remaining - checked_bytes(row_capacity, row_bytes)) / 528));
+    temporary_.resize(primitive_bytes + checked_bytes(item_capacity, 256));
+    row_edges_.resize(triangle_count_); previous_.resize(triangle_count_);
+    band_edges_.resize(item_capacity); collapsed_.resize(item_capacity);
+    spans_.resize(item_capacity); positive_.resize(item_capacity); negative_.resize(item_capacity);
+    pairs_.resize(checked_bytes(item_capacity, 2)); pairs_out_.resize(checked_bytes(item_capacity, 2));
+    orphans_.resize(checked_bytes(item_capacity, 2)); orphans_out_.resize(checked_bytes(item_capacity, 2));
+    float_keys_.resize(checked_bytes(item_capacity, 2)); float_keys_out_.resize(checked_bytes(item_capacity, 2)); open_.resize(checked_bytes(item_capacity, 2));
+    endpoints_.resize(checked_bytes(item_capacity, 4)); endpoints_out_.resize(checked_bytes(item_capacity, 4));
+    winding_.resize(item_capacity); winding_prefix_.resize(item_capacity);
+    span_flags_.resize(checked_bytes(item_capacity, 2)); span_prefix_.resize(checked_bytes(item_capacity, 2));
+    band_rows_.resize(row_capacity); state_.resize(checked_bytes(row_capacity, 2));
+    carry_a_.resize(maximum_divisor > 1 ? config_.width : 0);
+    carry_b_.resize(maximum_divisor > 1 ? config_.width : 0);
+    checked(cudaMemsetAsync(frontier_.data(), 0, sizeof(std::uint32_t), runtime_.compute), "reset layer orientation frontier");
     const auto lane_count = perturb ? steps : 1;
-    std::vector<std::uint32_t> maximum(lane_count, 0), active_count(lane_count, 0);
-    for (std::uint32_t y = first_row; y < last_row; ++y) {
-        const auto lane = perturb ? y % steps : 0;
-        active_count[lane] -= control[row_count + y];
-        active_count[lane] += control[y];
-        maximum[lane] = std::max(maximum[lane], active_count[lane]);
-    }
-    std::vector<Buffer<RasterEdge>> active(lane_count);
-    std::fill(active_count.begin(), active_count.end(), 0);
-    std::uint32_t capacity = 0;
+    if (active_.size() < lane_count) active_.resize(lane_count);
+    std::vector<std::uint32_t> active_count(lane_count, 0);
     for (std::uint32_t lane = 0; lane < lane_count; ++lane) {
-        active[lane].initialize(runtime_.memory, runtime_.compute);
-        active[lane].resize(maximum[lane]);
-        capacity = std::max(capacity, maximum[lane]);
+        active_[lane].initialize(runtime_.memory, runtime_.compute);
+        active_[lane].resize(triangle_count_);
     }
-    row_edges_.resize(capacity);
-    spans_.resize(capacity); previous_.resize(capacity);
-    keys_.resize(capacity); keys_out_.resize(capacity);
-    counts_.resize(2);
-    Buffer<std::uint32_t> lit(runtime_.memory, coverage ? 0 : config_.width, runtime_.compute);
-    row_accum_.resize(coverage ? config_.width : 0);
-    row_delta_.resize(static_cast<std::size_t>(config_.width) + 1);
-    row_prefix_.resize(config_.width);
-    if (!coverage) checked(cudaMemsetAsync(lit.data(), 0, lit.bytes(), runtime_.compute), "clear supersample row counts");
-    if (coverage) checked(cudaMemsetAsync(row_accum_.data(), 0, row_accum_.bytes(), runtime_.compute), "clear fractional row accumulation");
-    checked(cudaMemsetAsync(row_delta_.data(), 0, row_delta_.bytes(), runtime_.compute), "clear row difference accumulation");
     const bool source_stats = analytic || (config_.dense_raster_semantics == 1 && config_.raster_mode == DF_CUDA_PERTURBATION);
     Buffer<PostBasic> source_basic;
-    Buffer<std::int32_t> hit_delta, hit_prefix;
-    initialize(runtime_, source_basic, hit_delta, hit_prefix);
+    source_basic.initialize(runtime_.memory, runtime_.compute);
     Plane occupancy;
     if (source_stats) {
         source_basic.resize(1);
@@ -970,96 +844,93 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
         if (analytic && config_.compute_area_stats) {
             occupancy = Plane(runtime_, output.x0, output.y0, output.width, output.height);
             checked(cudaMemsetAsync(occupancy.pixels.data(), 0, occupancy.bytes(), runtime_.compute), "clear source occupancy plane");
-            hit_delta.resize(static_cast<std::size_t>(config_.width) + 1);
-            hit_prefix.resize(config_.width);
-            checked(cudaMemsetAsync(hit_delta.data(), 0, hit_delta.bytes(), runtime_.compute), "clear source occupancy differences");
         }
     }
-    std::uint32_t event_offset = 0, previous_count = 0;
-    for (std::uint32_t y = first_row; y < last_row; ++y) {
-        runtime_.check_cancelled();
+    // Counts are read once per layer. All row cardinalities and event offsets
+    // are then known without reading healthy or defective row state back.
+    std::vector<RasterBandRow> descriptors((y1 - y0) * divisor);
+    for (std::uint32_t y = y0 * divisor; y < y1 * divisor; ++y) {
         const auto lane = perturb ? y % steps : 0;
-        const auto old_count = active_count[lane];
-        const auto retained = old_count - control[row_count + y];
-        if (old_count) {
-            primitive(runtime_, temporary_, [&](void *p, std::size_t &bytes) {
-                return cub::DeviceSelect::If(p, bytes, active[lane].data(), row_edges_.data(), counts_.data(),
-                                             static_cast<int>(old_count), Alive{y}, runtime_.compute);
-            });
+        if (y < row_count) {
+            active_count[lane] -= control[row_count + y];
+            active_count[lane] += control[y];
+        } else active_count[lane] = 0;
+        descriptors[y - y0 * divisor].n = active_count[lane];
+    }
+    struct Band { std::uint32_t begin, rows, maximum; };
+    std::vector<Band> bands;
+    for (std::uint32_t begin = 0; begin < descriptors.size();) {
+        std::uint32_t rows = 0, maximum = 0;
+        std::size_t items = 0;
+        while (begin + rows < descriptors.size() && rows < row_capacity) {
+            auto &r = descriptors[begin + rows];
+            if (items + r.n > item_capacity) break;
+            r.offset = static_cast<std::uint32_t>(items);
+            items += r.n; maximum = std::max(maximum, r.n);
+            ++rows;
         }
-        const auto starting = control[y];
-        for (std::uint32_t first = 0; first < starting; first += launch_items) {
-            const auto count = std::min(launch_items, starting - first);
-            append_events<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(row_edges_.data(), events_out_.data() + event_offset,
-                                                                         retained, first, starting);
-            launched(runtime_);
-        }
-        event_offset += starting;
-        const auto n = retained + starting;
-        active_count[lane] = n;
-        for (std::uint32_t first = 0; first < n; first += launch_items) {
-            const auto count = std::min(launch_items, n - first);
-            row_keys<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(row_edges_.data(), keys_.data(), first, n, y, steps, perturb);
-            launched(runtime_);
-        }
-        if (n) {
-            primitive(runtime_, temporary_, [&](void *p, std::size_t &bytes) {
-                return cub::DeviceRadixSort::SortPairs(p, bytes, keys_.data(), keys_out_.data(), row_edges_.data(),
-                                                     active[lane].data(), static_cast<int>(n), 0, 32, runtime_.compute);
-            });
-        }
-        const auto span_count = build_spans(active[lane].data(), n, config_.width * factor, !coverage, previous_count);
-        checked(cudaMemsetAsync(state_.data(), 0, sizeof(RasterState), runtime_.compute), "reset raster span accumulation cursor");
-        for (std::uint32_t first = 0; first < span_count; first += serial_items) {
-            accumulate_spans<<<1, 1, 0, runtime_.compute>>>(spans_.data(), span_count, row_accum_.data(), row_delta_.data(),
-                lit.data(), state_.data(), serial_items, config_.width, factor, coverage);
-            launched(runtime_);
-        }
-        if (source_stats) {
-            checked(cudaMemsetAsync(state_.data(), 0, sizeof(RasterState), runtime_.compute), "reset source raster cursor");
-            for (std::uint32_t first = 0; first < span_count; first += serial_items) {
-                record_source_spans<<<1, 1, 0, runtime_.compute>>>(spans_.data(), span_count, source_basic.data(),
-                    hit_delta.data(), state_.data(), y / divisor, serial_items);
-                launched(runtime_);
+        if (!rows) throw Error(DF_CUDA_OUT_OF_MEMORY, "CUDA raster row exceeds worker crossing workspace");
+        bands.push_back({begin, rows, maximum}); begin += rows;
+    }
+    // Register only each band's original vector range, not the full layer.
+    // One reusable event ends its DMA lease before that band's GPU work;
+    // no host descriptor staging copy or healthy-row completion wait.
+    RasterControlEvent descriptor_copy;
+    std::fill(active_count.begin(), active_count.end(), 0);
+    std::uint32_t event_offset = 0;
+    for (const auto band : bands) {
+        const auto band_first = y0 * divisor + band.begin;
+        RasterControlPin descriptor_pin(runtime_, descriptors.data() + band.begin,
+                                        checked_bytes(band.rows, sizeof(RasterBandRow)));
+        checked(cudaMemcpyAsync(band_rows_.data(), descriptors.data() + band.begin,
+            checked_bytes(band.rows, sizeof(RasterBandRow)), cudaMemcpyHostToDevice, runtime_.compute), "upload raster band descriptors");
+        checked(cudaEventRecord(descriptor_copy.completion, runtime_.compute), "record raster descriptor copy");
+        for (std::uint32_t row = 0; row < band.rows; ++row) {
+            runtime_.check_cancelled();
+            const auto y = band_first + row;
+            if (y >= row_count) continue;
+            const auto lane = perturb ? y % steps : 0;
+            const auto old_count = active_count[lane];
+            const auto retained = old_count - control[row_count + y];
+            if (old_count) {
+                bounded_primitive(runtime_, temporary_, [&](void *p, std::size_t &bytes) {
+                    return cub::DeviceSelect::If(p, bytes, active_[lane].data(), row_edges_.data(), counts_.data(),
+                        static_cast<int>(old_count), Alive{y}, runtime_.compute);
+                });
             }
-        }
-        if (span_count)
-            checked(cudaMemcpyAsync(previous_.data(), spans_.data(), checked_bytes(span_count, sizeof(RasterSpan)),
-                                    cudaMemcpyDeviceToDevice, runtime_.compute), "retain previous scanline orientation");
-        previous_count = span_count;
-        if (!perturb) {
+            const auto starting = control[y];
+            for (std::uint32_t first = 0; first < starting; first += launch_items) {
+                const auto count = std::min(launch_items, starting - first);
+                append_events<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(row_edges_.data(), events_out_.data() + event_offset,
+                    retained, first, starting); launched(runtime_);
+            }
+            event_offset += starting;
+            const auto n = retained + starting;
+            active_count[lane] = n;
             for (std::uint32_t first = 0; first < n; first += launch_items) {
                 const auto count = std::min(launch_items, n - first);
-                advance_edges<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(active[lane].data(), first, n);
+                row_keys<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(row_edges_.data(), keys_.data(), first, n, y, steps, perturb);
                 launched(runtime_);
             }
-        }
-        if ((y + 1) % divisor == 0 || y + 1 == last_row) {
-            primitive(runtime_, temporary_, [&](void *p, std::size_t &bytes) {
-                return cub::DeviceScan::InclusiveSum(p, bytes, row_delta_.data(), row_prefix_.data(),
-                                                    static_cast<int>(config_.width), runtime_.compute);
-            });
-            for (std::uint32_t first = 0; first < config_.width; first += launch_items) {
-                const auto count = std::min(launch_items, config_.width - first);
-                resolve_row<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(output.view(), y / divisor, row_accum_.data(),
-                    row_delta_.data(), row_prefix_.data(), lit.data(), first, steps, factor, coverage, raw_supports);
-                launched(runtime_);
-            }
-            checked(cudaMemsetAsync(row_delta_.data() + config_.width, 0, sizeof(std::int32_t), runtime_.compute), "clear closing row sentinel");
-            if (!occupancy.empty()) {
-                primitive(runtime_, temporary_, [&](void *p, std::size_t &bytes) {
-                    return cub::DeviceScan::InclusiveSum(p, bytes, hit_delta.data(), hit_prefix.data(),
-                                                        static_cast<int>(config_.width), runtime_.compute);
+            if (n) {
+                bounded_primitive(runtime_, temporary_, [&](void *p, std::size_t &bytes) {
+                    return cub::DeviceRadixSort::SortPairs(p, bytes, keys_.data(), keys_out_.data(), row_edges_.data(),
+                        active_[lane].data(), static_cast<int>(n), 0, 32, runtime_.compute);
                 });
-                for (std::uint32_t first = 0; first < config_.width; first += launch_items) {
-                    const auto count = std::min(launch_items, config_.width - first);
-                    resolve_source_hits<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(occupancy.view(), y / divisor,
-                                                                                      hit_delta.data(), hit_prefix.data(), first);
-                    launched(runtime_);
+                checked(cudaMemcpyAsync(band_edges_.data() + descriptors[band.begin + row].offset, active_[lane].data(),
+                    checked_bytes(n, sizeof(RasterEdge)), cudaMemcpyDeviceToDevice, runtime_.compute), "retain sorted band crossings");
+                if (!perturb) {
+                    for (std::uint32_t first = 0; first < n; first += launch_items) {
+                        const auto count = std::min(launch_items, n - first);
+                        advance_edges<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(active_[lane].data(), first, n); launched(runtime_);
+                    }
                 }
-                checked(cudaMemsetAsync(hit_delta.data() + config_.width, 0, sizeof(std::int32_t), runtime_.compute), "clear source occupancy sentinel");
             }
         }
+        process_band(descriptors.data() + band.begin, band.rows, band.maximum, band_first,
+            divisor, coverage, raw_supports, output, occupancy, source_basic.data());
+        checked(cudaEventSynchronize(descriptor_copy.completion), "finish raster descriptor DMA");
+        descriptor_pin.joined();
     }
     if (source_stats) {
         const auto basic = metadata(runtime_, source_basic.data());

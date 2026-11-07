@@ -2,6 +2,7 @@
 #define DF_CUDA_POST_H
 
 #include "common.h"
+#include <memory>
 
 namespace dfcuda {
 
@@ -16,10 +17,18 @@ struct PostTables {
     std::uint32_t palette_count;
 };
 
-struct PostSpan { std::uint32_t start, end, component; };
-struct PostNode { std::uint32_t parent, pixels, active, next; };
+struct SharedPostTables {
+    SharedPostTables(Runtime &runtime, const PostTables &tables);
+    const PostTables *data() const noexcept { return device_.data(); }
+    std::uint32_t z_weight(std::uint32_t distance) const noexcept { return z_weights_[distance]; }
+private:
+    Buffer<PostTables> device_;
+    std::uint32_t z_weights_[9]{};
+};
+using SharedPostTablesPtr = std::shared_ptr<const SharedPostTables>;
+
+struct PostNode { std::uint32_t parent, pixels, next; };
 struct PostComponents {
-    std::uint32_t previous_count, node_count, parity;
     std::uint32_t total_pixels, area_count, largest_pixels, smallest_pixels;
 };
 struct PostBasic {
@@ -30,6 +39,10 @@ struct PostBasic {
 class Postprocessor {
 public:
     Postprocessor(Runtime &runtime, const DfCudaConfig &config);
+    Postprocessor(Runtime &runtime, const DfCudaConfig &config, SharedPostTablesPtr tables);
+    ~Postprocessor();
+    SharedPostTablesPtr shared_tables() const noexcept { return tables_; }
+    std::size_t minimum_workspace_bytes() const;
     Postprocessor(const Postprocessor &) = delete;
     Postprocessor &operator=(const Postprocessor &) = delete;
     Plane spatial(Plane input);
@@ -40,22 +53,22 @@ public:
     std::uint32_t xy_radius() const noexcept { return xy_radius_; }
     std::uint32_t z_radius() const noexcept { return z_radius_; }
 private:
+    void initialize();
+    std::size_t small_workspace_bytes() const noexcept;
     void refresh_bounds(Plane &plane);
     Runtime &runtime_;
     const DfCudaConfig &config_;
     std::uint32_t xy_radius_ = 0;
     std::uint32_t z_radius_ = 0;
-    std::uint32_t z_weights_[9]{};
     bool gaussian_xy_ = false;
     bool tail_enabled_ = false;
     bool dither_enabled_ = false;
-    Buffer<PostTables> tables_;
+    SharedPostTablesPtr tables_;
     Buffer<std::uint32_t> horizontal_;
     Buffer<WindowPlane> window_;
     Buffer<PostBasic> basic_;
-    Buffer<PostSpan> spans_a_, spans_b_;
     Buffer<PostNode> nodes_;
-    Buffer<std::uint32_t> root_pixels_;
+    Buffer<std::uint32_t> frontier_labels_, frontier_pixels_;
     Buffer<PostComponents> components_;
     Buffer<std::uint32_t> numerical_error_;
 };

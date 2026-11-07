@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -56,6 +57,7 @@ public:
     void retire(Allocation allocation, cudaStream_t last_use) noexcept;
     std::size_t budget();
     std::size_t owned_bytes() const;
+    std::size_t live_bytes() const;
     void clear() noexcept;
 private:
     struct Cached {
@@ -127,8 +129,15 @@ private:
 };
 
 class Runtime {
+private:
+    struct State {
+        Memory memory;
+        std::atomic<bool> cancelled{false};
+    };
+    std::unique_ptr<State> owned_state_;
 public:
     Runtime();
+    Runtime(Runtime &root, std::size_t workspace_limit);
     ~Runtime();
     Runtime(const Runtime &) = delete;
     Runtime &operator=(const Runtime &) = delete;
@@ -136,15 +145,17 @@ public:
     void check_cancelled() const;
     void upload_bytes(void *device_destination, const void *host_source, std::size_t bytes);
     std::size_t transfer_bytes() const noexcept { return transfer_bytes_; }
+    std::size_t workspace_budget() const noexcept { return workspace_limit_; }
     int device = -1;
-    Memory memory;
+    Memory &memory;
     cudaStream_t upload = nullptr;
     cudaStream_t compute = nullptr;
     cudaStream_t pack = nullptr;
     cudaStream_t readback = nullptr;
-    std::atomic<bool> cancelled{false};
+    std::atomic<bool> &cancelled;
 private:
     std::size_t transfer_bytes_ = 0;
+    std::size_t workspace_limit_ = 0;
 };
 
 class HostPin {

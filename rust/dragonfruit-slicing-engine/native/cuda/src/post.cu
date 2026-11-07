@@ -196,91 +196,7 @@ __global__ void basic_statistics(PlaneView output, PostBasic *stats, std::uint8_
     }
 }
 
-__device__ std::uint32_t root(PostNode *nodes, std::uint32_t index) {
-    auto r = index;
-    while (nodes[r].parent != r) r = nodes[r].parent;
-    while (nodes[index].parent != index) {
-        const auto next = nodes[index].parent;
-        nodes[index].parent = r;
-        index = next;
-    }
-    return r;
-}
-
-__device__ std::uint32_t join(PostNode *nodes, std::uint32_t a, std::uint32_t b) {
-    a = root(nodes, a); b = root(nodes, b);
-    if (a == b) return a;
-    if (a > b) { const auto t = a; a = b; b = t; }
-    nodes[b].parent = a;
-    nodes[a].pixels = sat_add(nodes[a].pixels, nodes[b].pixels);
-    return a;
-}
-
-__device__ void close_component(PostComponents *state, std::uint32_t pixels) {
-    state->total_pixels = sat_add(state->total_pixels, pixels);
-    state->area_count = sat_add(state->area_count, 1);
-    state->largest_pixels = max(state->largest_pixels, pixels);
-    state->smallest_pixels = min(state->smallest_pixels, pixels);
-}
-
-// A component can reconnect only through the previous row. Compact that exact
-// frontier after EVERY row, finalizing roots that leave it. Thus scratch stays
-// O(ROI width), even for a checkerboard with O(frame pixels) components. Batches
-// bound a single launch's work; no host pixels, iterative convergence or full
-// frame label/visited array is needed. Diagonal span adjacency is 8-connectivity.
-__global__ void component_rows(PlaneView output, std::uint32_t first_row,
-                               std::uint32_t row_count, PostSpan *a, PostSpan *b,
-                               PostNode *nodes, std::uint32_t *root_pixels,
-                               PostComponents *state) {
-    if (threadIdx.x != 0 || blockIdx.x != 0) return;
-    for (std::uint32_t row = first_row; row < first_row + row_count; ++row) {
-        auto *previous = state->parity == 0 ? a : b;
-        auto *current = state->parity == 0 ? b : a;
-        std::uint32_t current_count = 0;
-        const auto *pixels = output.data + static_cast<std::size_t>(row) * output.width;
-        std::uint32_t x = 0;
-        while (x < output.width) {
-            if (pixels[x] == 0) { ++x; continue; }
-            const auto start = x;
-            while (x < output.width && pixels[x] != 0) ++x;
-            const auto label = state->node_count++;
-            nodes[label] = {label, x - start, 0, UINT32_MAX};
-            current[current_count++] = {start, x - 1, label};
-        }
-        std::uint32_t first = 0;
-        for (std::uint32_t i = 0; i < current_count; ++i) {
-            const auto lo = current[i].start == 0 ? 0 : current[i].start - 1;
-            const auto hi = current[i].end + 1;
-            while (first < state->previous_count && previous[first].end < lo) ++first;
-            for (auto j = first; j < state->previous_count && previous[j].start <= hi; ++j) {
-                current[i].component = join(nodes, current[i].component, previous[j].component);
-            }
-        }
-        for (std::uint32_t i = 0; i < current_count; ++i) {
-            current[i].component = root(nodes, current[i].component);
-            nodes[current[i].component].active = 1;
-        }
-        std::uint32_t live = 0;
-        for (std::uint32_t i = 0; i < state->node_count; ++i) {
-            if (nodes[i].parent != i) continue;
-            if (nodes[i].active == 0) close_component(state, nodes[i].pixels);
-            else { nodes[i].next = live; root_pixels[live++] = nodes[i].pixels; }
-        }
-        for (std::uint32_t i = 0; i < current_count; ++i) {
-            current[i].component = nodes[current[i].component].next;
-        }
-        for (std::uint32_t i = 0; i < live; ++i) nodes[i] = {i, root_pixels[i], 0, UINT32_MAX};
-        state->node_count = live;
-        state->previous_count = current_count;
-        state->parity ^= 1;
-    }
-}
-
-__global__ void component_tail(PostNode *nodes, PostComponents *state) {
-    if (threadIdx.x != 0 || blockIdx.x != 0) return;
-    for (std::uint32_t i = 0; i < state->node_count; ++i) close_component(state, nodes[i].pixels);
-    state->node_count = state->previous_count = 0;
-}
+#include "post_components.cuh"
 
 template<class T> T download_control(Runtime &runtime, const Buffer<T> &source) {
     T result{};
@@ -302,29 +218,44 @@ void union_bounds(PlaneView view, bool &present, std::uint32_t &x0, std::uint32_
 
 } // namespace
 
+SharedPostTables::SharedPostTables(Runtime &runtime, const PostTables &tables)
+    : device_(runtime.memory, 1, runtime.compute) {
+    for (std::uint32_t d = 0; d < 9; ++d) z_weights_[d] = tables.z_weights[d];
+    runtime.upload_bytes(device_.data(), &tables, sizeof(tables));
+}
+
+void Postprocessor::initialize() {
+    runtime_.activate();
+    basic_.initialize(runtime_.memory, runtime_.compute);
+    nodes_.initialize(runtime_.memory, runtime_.compute);
+    frontier_labels_.initialize(runtime_.memory, runtime_.compute);
+    frontier_pixels_.initialize(runtime_.memory, runtime_.compute);
+    components_.initialize(runtime_.memory, runtime_.compute);
+    horizontal_.initialize(runtime_.memory, runtime_.compute);
+    window_.initialize(runtime_.memory, runtime_.compute);
+    numerical_error_.initialize(runtime_.memory, runtime_.compute);
+    // Direct RLE-PNG and statistics-only contexts allocate no tables.
+    if (config_.dense_raster_semantics == 2) return;
+    const bool perturb = config_.raster_mode == DF_CUDA_PERTURBATION;
+    const bool dense = config_.dense_raster_semantics != 0;
+    if (perturb) xy_radius_ = std::min(config_.xy_blur_radius, dense ? 64u : 6u);
+    else if (config_.raster_mode == DF_CUDA_BLUR) {
+        xy_radius_ = dense ? std::min(std::max(config_.xy_blur_radius, 1u), 64u)
+                           : std::min(config_.xy_blur_radius, 64u);
+    }
+    z_radius_ = perturb ? std::min(config_.z_blur_radius, dense ? 8u : 6u) : 0;
+    gaussian_xy_ = perturb && dense && config_.xy_blur_gaussian != 0;
+    tail_enabled_ = perturb || xy_radius_ != 0 ||
+        (!dense && config_.raster_mode == DF_CUDA_COVERAGE && config_.aa_samples > 1);
+    dither_enabled_ = perturb && config_.dither_bit_depth != 0 && config_.dither_bit_depth < 8;
+}
+
 Postprocessor::Postprocessor(Runtime &runtime, const DfCudaConfig &config)
     : runtime_(runtime), config_(config) {
-    runtime_.activate();
-    basic_.initialize(runtime.memory, runtime.compute);
-    spans_a_.initialize(runtime.memory, runtime.compute); spans_b_.initialize(runtime.memory, runtime.compute);
-    nodes_.initialize(runtime.memory, runtime.compute); root_pixels_.initialize(runtime.memory, runtime.compute);
-    components_.initialize(runtime.memory, runtime.compute);
-    // Direct RLE-PNG mode is already normalized to the CPU binary route by
-    // NativeJob. Statistics remain available, but no post tables are needed.
-    if (config.dense_raster_semantics == 2) return;
+    initialize();
+    if (xy_radius_ == 0 && z_radius_ == 0 && !tail_enabled_ && !dither_enabled_) return;
     const bool perturb = config.raster_mode == DF_CUDA_PERTURBATION;
     const bool dense = config.dense_raster_semantics != 0;
-    if (perturb) xy_radius_ = std::min(config.xy_blur_radius, dense ? 64u : 6u);
-    else if (config.raster_mode == DF_CUDA_BLUR) {
-        xy_radius_ = dense ? std::min(std::max(config.xy_blur_radius, 1u), 64u)
-                           : std::min(config.xy_blur_radius, 64u);
-    }
-    z_radius_ = perturb ? std::min(config.z_blur_radius, dense ? 8u : 6u) : 0;
-    gaussian_xy_ = perturb && dense && config.xy_blur_gaussian != 0;
-    tail_enabled_ = perturb || xy_radius_ != 0 ||
-        (!dense && config.raster_mode == DF_CUDA_COVERAGE && config.aa_samples > 1);
-    dither_enabled_ = perturb && config.dither_bit_depth != 0 && config.dither_bit_depth < 8;
-    if (xy_radius_ == 0 && z_radius_ == 0 && !tail_enabled_ && !dither_enabled_) return;
     PostTables tables{};
     auto weights = [](std::uint32_t *values, std::uint32_t radius, double sigma, bool gaussian) {
         sigma = std::fmax(sigma, 0.05);
@@ -344,7 +275,6 @@ Postprocessor::Postprocessor(Runtime &runtime, const DfCudaConfig &config)
         tables.z_weights[0] = static_cast<std::uint32_t>(std::max(1.0,
             std::round(static_cast<double>(tables.z_weights[0]) * scale)));
     }
-    for (std::uint32_t d = 0; d <= z_radius_; ++d) z_weights_[d] = tables.z_weights[d];
     const auto minimum_percent = perturb ? config.z_blend_minimum_alpha_percent : config.minimum_aa_alpha_percent;
     const auto clamped_percent = std::isnan(minimum_percent) ? 0.0f
         : std::min(std::max(minimum_percent, 0.0f), 100.0f);
@@ -374,11 +304,47 @@ Postprocessor::Postprocessor(Runtime &runtime, const DfCudaConfig &config)
             tables.palette_energy[i] = std::pow(static_cast<double>(tables.palette[i]) / 255.0, config.dither_gamma);
         }
     }
-    tables_.initialize(runtime.memory, runtime.compute); tables_.resize(1);
-    runtime_.upload_bytes(tables_.data(), &tables, sizeof(tables));
-    horizontal_.initialize(runtime.memory, runtime.compute);
-    window_.initialize(runtime.memory, runtime.compute);
-    numerical_error_.initialize(runtime.memory, runtime.compute);
+    tables_ = std::make_shared<SharedPostTables>(runtime_, tables);
+}
+
+Postprocessor::Postprocessor(Runtime &runtime, const DfCudaConfig &config, SharedPostTablesPtr tables)
+    : runtime_(runtime), config_(config), tables_(std::move(tables)) {
+    initialize();
+    if ((xy_radius_ != 0 || z_radius_ != 0 || tail_enabled_ || dither_enabled_) && !tables_) {
+        throw Error(DF_CUDA_INVALID_ARGUMENT, "CUDA post worker requires its job's shared tables");
+    }
+}
+
+Postprocessor::~Postprocessor() {
+    // Retain the immutable holder through this worker's queued GPU readers,
+    // even when an exception exits before the scheduler's normal stage join.
+    if (tables_ && runtime_.compute != nullptr) {
+        cudaSetDevice(runtime_.device);
+        cudaStreamSynchronize(runtime_.compute);
+    }
+}
+
+std::size_t Postprocessor::small_workspace_bytes() const noexcept {
+    const auto window = z_radius_ == 0 ? 0
+        : (2 * z_radius_ + 1) * sizeof(WindowPlane);
+    return 2 * sizeof(PostBasic) + window +
+        (dither_enabled_ ? sizeof(std::uint32_t) : 0);
+}
+
+std::size_t Postprocessor::minimum_workspace_bytes() const {
+    const auto horizontal_rows = xy_radius_ == 0 ? 0u
+        : std::min(config_.height, blur_rows + 2 * xy_radius_);
+    const auto horizontal = checked_bytes(checked_bytes(config_.width, horizontal_rows), sizeof(std::uint32_t));
+    // Charge labels only when component statistics are requested. Include
+    // every retained small buffer inside the same one-eighth workspace share.
+    const auto small = small_workspace_bytes();
+    const auto statistics = config_.compute_area_stats == 0 ? small
+        : checked_bytes(checked_bytes(config_.width,
+            2 * sizeof(PostNode) + 2 * sizeof(std::uint32_t)) + sizeof(PostComponents) + small, 8u);
+    if (horizontal > std::numeric_limits<std::size_t>::max() - statistics) {
+        throw Error(DF_CUDA_OUT_OF_MEMORY, "CUDA post workspace size overflow");
+    }
+    return horizontal + statistics;
 }
 
 void Postprocessor::refresh_bounds(Plane &plane) {
@@ -525,15 +491,15 @@ Plane Postprocessor::spatial(Plane input) {
                 static_cast<std::uint64_t>(y) + rows + xy_radius_));
             horizontal_blur<<<blocks_for(checked_bytes(roi.width, end - first)), threads, 0, runtime_.compute>>>(
                 input.view(), roi, first, end - first, frame.x0, frame.width, xy_radius_,
-                tables_.data(), gaussian_xy_, horizontal_.data());
+                tables_->data(), gaussian_xy_, horizontal_.data());
             checked(cudaGetLastError(), "launching CUDA horizontal blur");
             vertical_blur<<<blocks_for(checked_bytes(roi.width, rows)), threads, 0, runtime_.compute>>>(
                 output.view(), roi, first, end - first, y, rows, frame.x0, frame.y0, frame.width, frame.height,
-                xy_radius_, tables_.data(), gaussian_xy_, horizontal_.data());
+                xy_radius_, tables_->data(), gaussian_xy_, horizontal_.data());
             checked(cudaGetLastError(), "launching CUDA vertical blur");
             y += rows;
         }
-        horizontal_.mark_used(runtime_.compute); tables_.mark_used(runtime_.compute);
+        horizontal_.mark_used(runtime_.compute);
     }
     input.pixels.mark_used(runtime_.compute);
     output.pixels.mark_used(runtime_.compute);
@@ -558,7 +524,7 @@ Plane Postprocessor::blend_z(const WindowPlane *sources, std::size_t count) {
         seen[distance + z_radius_] = true;
         center = center || distance == 0;
         union_bounds(sources[i].plane, present, x0, y0, x1, y1);
-        denominator += z_weights_[d];
+        if (z_radius_ != 0) denominator += tables_->z_weight(d);
     }
     if (!center) throw Error(DF_CUDA_INVALID_ARGUMENT, "CUDA Z window has no center layer");
     if (!present) return Plane{};
@@ -575,10 +541,9 @@ Plane Postprocessor::blend_z(const WindowPlane *sources, std::size_t count) {
     window_.resize(count);
     runtime_.upload_bytes(window_.data(), sources, checked_bytes(count, sizeof(WindowPlane)));
     blend_planes<<<blocks_for(output.bytes()), threads, 0, runtime_.compute>>>(
-        output.view(), window_.data(), count, tables_.data(), z_radius_, denominator);
+        output.view(), window_.data(), count, tables_->data(), z_radius_, denominator);
     checked(cudaGetLastError(), "launching CUDA Z blur");
     output.pixels.mark_used(runtime_.compute); window_.mark_used(runtime_.compute);
-    tables_.mark_used(runtime_.compute);
     return output;
 }
 
@@ -606,23 +571,68 @@ DfCudaAreaStats Postprocessor::statistics(const Plane &output) {
         stats.area_count = 1;
         return stats;
     }
-    const auto max_spans = (static_cast<std::size_t>(output.width) + 1) / 2;
-    spans_a_.resize(max_spans); spans_b_.resize(max_spans);
-    nodes_.resize(2 * max_spans); root_pixels_.resize(max_spans); components_.resize(1);
-    const PostComponents initial_components{0, 0, 0, 0, 0, 0, UINT32_MAX};
+    // Keep components and all retained small post buffers within one eighth
+    // of the admitted worker workspace. Frontier capacities use the job width
+    // so varying ROI widths cannot grow retained scratch beyond that share.
+    // A 1024-row ceiling bounds latency and prevents default full-frame labels.
+    const auto share = runtime_.workspace_budget() / 8;
+    const auto small = small_workspace_bytes();
+    if (share <= small) {
+        throw Error(DF_CUDA_OUT_OF_MEMORY, "CUDA component workspace cannot hold its metadata");
+    }
+    const auto component_budget = share - small;
+    const auto frontier_bytes = checked_bytes(config_.width, 2 * sizeof(std::uint32_t));
+    const auto fixed_bytes = frontier_bytes + sizeof(PostComponents);
+    if (component_budget <= fixed_bytes) {
+        throw Error(DF_CUDA_OUT_OF_MEMORY, "CUDA component workspace cannot hold its frontier");
+    }
+    const auto node_capacity = std::min((component_budget - fixed_bytes) / sizeof(PostNode),
+        checked_bytes(config_.width, 1025u));
+    const auto row_capacity = node_capacity / output.width;
+    const auto label_rows = static_cast<std::size_t>(UINT32_MAX - 1) / output.width;
+    if (row_capacity < 2 || label_rows < 2) {
+        throw Error(DF_CUDA_OUT_OF_MEMORY, "CUDA component workspace cannot hold one band row");
+    }
+    const auto band_rows = static_cast<std::uint32_t>(std::min<std::size_t>(output.height,
+        std::min<std::size_t>(1024, std::min(row_capacity - 1, label_rows - 1))));
+    nodes_.resize(checked_bytes(output.width, static_cast<std::size_t>(band_rows) + 1));
+    frontier_labels_.resize(config_.width); frontier_pixels_.resize(config_.width);
+    components_.resize(1);
+    const PostComponents initial_components{0, 0, 0, UINT32_MAX};
     runtime_.upload_bytes(components_.data(), &initial_components, sizeof(initial_components));
+    checked(cudaMemsetAsync(frontier_labels_.data(), 0xff, frontier_labels_.bytes(), runtime_.compute),
+            "clearing CUDA initial component frontier labels");
+    checked(cudaMemsetAsync(frontier_pixels_.data(), 0, frontier_pixels_.bytes(), runtime_.compute),
+            "clearing CUDA initial component frontier counts");
     for (std::uint32_t row = 0; row < output.height;) {
         runtime_.check_cancelled();
-        const auto rows = std::min(8u, output.height - row);
-        component_rows<<<1, 1, 0, runtime_.compute>>>(output.view(), row, rows,
-            spans_a_.data(), spans_b_.data(), nodes_.data(), root_pixels_.data(), components_.data());
-        checked(cudaGetLastError(), "launching CUDA connected component frontier");
+        const auto rows = std::min(band_rows, output.height - row);
+        const auto count = checked_bytes(output.width, static_cast<std::size_t>(rows) + 1);
+        component_initialize<<<blocks_for(count), threads, 0, runtime_.compute>>>(
+            output.view(), row, rows, nodes_.data(), frontier_pixels_.data());
+        checked(cudaGetLastError(), "launching CUDA parallel component initialization");
+        component_edges<<<blocks_for(checked_bytes(output.width, rows)), threads, 0, runtime_.compute>>>(
+            output.view(), row, rows, nodes_.data(), frontier_labels_.data());
+        checked(cudaGetLastError(), "launching CUDA parallel component edges");
+        component_compress<<<blocks_for(count), threads, 0, runtime_.compute>>>(nodes_.data(), count);
+        checked(cudaGetLastError(), "launching CUDA parallel component counts");
+        checked(cudaMemsetAsync(frontier_labels_.data(), 0xff, frontier_labels_.bytes(), runtime_.compute),
+                "clearing CUDA next component frontier labels");
+        checked(cudaMemsetAsync(frontier_pixels_.data(), 0, frontier_pixels_.bytes(), runtime_.compute),
+                "clearing CUDA next component frontier counts");
+        const bool last_band = rows == output.height - row;
+        if (!last_band) {
+            component_frontier<<<blocks_for(output.width), threads, 0, runtime_.compute>>>(
+                output.view(), row + rows - 1, rows, nodes_.data());
+            checked(cudaGetLastError(), "launching CUDA parallel component frontier");
+        }
+        component_collect<<<blocks_for(count), threads, 0, runtime_.compute>>>(nodes_.data(), count,
+            output.width, last_band, frontier_labels_.data(), frontier_pixels_.data(), components_.data());
+        checked(cudaGetLastError(), "launching CUDA parallel component finalization");
         row += rows;
     }
-    component_tail<<<1, 1, 0, runtime_.compute>>>(nodes_.data(), components_.data());
-    checked(cudaGetLastError(), "launching CUDA connected component tail");
-    spans_a_.mark_used(runtime_.compute); spans_b_.mark_used(runtime_.compute);
-    nodes_.mark_used(runtime_.compute); root_pixels_.mark_used(runtime_.compute);
+    nodes_.mark_used(runtime_.compute);
+    frontier_labels_.mark_used(runtime_.compute); frontier_pixels_.mark_used(runtime_.compute);
     components_.mark_used(runtime_.compute);
     const auto result = download_control(runtime_, components_);
     stats.total_solid_pixels = result.total_pixels;

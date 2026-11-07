@@ -48,9 +48,60 @@ Input geometry and final RLE destinations use `cudaHostRegister` plus asynchrono
 
 ## Memory admission
 
-At job creation, the CUDA allocator budgets up to 90% of currently free device memory, including the job's already-owned allocations. Cached device allocations remain charged and are recycled only after their last-use event. Pinned host transfer ranges are bounded separately. Larger GPUs therefore admit more resident geometry, Z-window data and concurrent layer work; the scheduler still preserves the layer window and encoder backpressure.
+The job-wide CUDA allocator budgets up to 90% of currently available device memory, including the job's already-owned allocations. Cached device allocations remain charged and are recycled only after their last-use event. Worker execution contexts share that allocator and the cancellation state; they do not each acquire a separate device budget. Pinned host transfer ranges are bounded separately. Larger GPUs admit more useful in-flight work and wider scratch bands; the scheduler still reserves indispensable neighbor data and ordered RLE output resources.
 
 Large 4K–16K layers are transferred in bounded chunks. No full-frame worst-case RLE buffer is reserved merely because the image is high resolution.
+
+Dependency-plane admission uses a conservative scene-covered physical-row
+envelope, including rounded interpolation, phase conversion and the clipped
+XY/work-frame halo. The estimate retains full printer width for raster
+intermediates; it does not charge full printer height for every empty or sparse
+Z-neighbor plane. This avoids rejecting compact high-resolution scenes solely
+because their nominal frame is 16K.
+
+## Parallel execution
+
+Parallelism has two axes. Raster crossing/span and pixel work run in budget-sized
+row/subrow bands; component initialization, unions, counts and frontier stitching
+run in parallel GPU bands. Normal raster rows do not read their control state
+back to the host. Ordered edge advancement and the narrow defect-orientation
+frontier retain their actual numerical dependencies, including partial AA rows
+at band seams. Component bands preserve exact 8-connectivity and carry each
+bottom-frontier component once.
+
+A native readiness coordinator queues raw, spatial/model and final layer tasks
+onto worker-private non-default CUDA streams. GPU slots derive from shared VRAM
+admission and GPU concurrency capabilities, **not CPU-core count**. The number
+of retained later outputs is bounded, so they cannot consume the resources needed
+by the next ordered output. Workers receive dependency-ready tasks; they never
+wait for prerequisites queued behind them in the same pool.
+
+`RasterGeometryPtr` and `SharedPostTablesPtr` retain immutable geometry/indexes
+and post tables uploaded once by the root. Worker constructors initialize only
+private mutable scratch. `Runtime(root, workspace_limit)` shares job memory and
+cancellation but owns its own streams; destroying it never clears shared memory.
+The root geometry builder's upload/sort scratch is retired before pool admission,
+while immutable assets remain alive through every worker's teardown.
+
+Each `(tank, layer)` raw result is cached for reuse rather than rendering and
+discarding lookahead planes. Ordinary modes have no topology prefill; preferred
+perturbation requires its Z radius, and generic models require complete raw
+`look_back` context before spatial processing, followed by the actual Z-model
+neighborhood. A worker joins only its own stage stream before publishing a result.
+Other admitted workers and root RLE pack/readback streams can continue operating.
+
+Cancellation updates condition-variable predicates under their mutex, wakes
+coordinating/worker waits, and drains all tasks and registered DMA before returning
+caller-buffer ownership. Exclusively transferred planes acquire the consuming
+stream's retirement ownership before a potentially throwing model operation.
+
+GPU consumer tests in `src/cuda/conformance.rs` are explicitly opt-in/ignored.
+They cover sloped multi-layer/subrow seams, component merges/splits and extrema,
+tank/support isolation, cancellation/input reuse, palette membership, and exposure
+bounds in actual merged border regions. The dither case uses active 3DAA mode,
+not ordinary Blur where dithering is disabled. Run numerical and throughput
+validation only on an approved Windows CUDA machine; source patch applicability
+does not establish runtime parity or speedup.
 
 ## Raster and post stages
 

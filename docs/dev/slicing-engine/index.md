@@ -10,10 +10,18 @@ An optional Windows CUDA 12.9 backend implements native C++/CUDA rasterization,
 active 3DAA post-processing, deterministic regional dithering, GPU RLE
 compaction and pinned-buffer DMA. CPU remains the default and is the complete
 fallback after a reported CUDA failure; output layers are never mixed between
-backends. The backend targets Pascal or newer NVIDIA GPUs with a 6 GiB minimum
+backends. The backend targets Pascal or newer NVIDIA GPUs with a 6 GB minimum
 VRAM floor and admits up to 90% of currently free device memory. See [CUDA
 Backend](cuda.md) for the ABI, route semantics, memory ownership and build
 contract.
+
+The CUDA execution path now batches raster and component work within layers and
+uses a dependency-ready native layer pool across layers. Geometry/tables are
+shared once, each worker owns its scratch/streams, and GPU in-flight admission
+is memory/hardware-bound rather than CPU-core-bound. Cached lookahead avoids
+repeated raw rendering; ordered RLE/DMA, cancellation and numerical contracts
+remain the integration boundary. Runtime throughput must be measured on an
+approved validation machine; source changes alone are not a speedup result.
 
 ## What changed in v3.3.2
 

@@ -7,12 +7,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -78,15 +81,17 @@ struct DfCudaJob {
     std::uint64_t host_tank_count = 0;
     std::vector<DfCudaBlock> blocks;
     std::unique_ptr<dfcuda::Runtime> runtime;
+    dfcuda::RasterGeometryPtr geometry;
     std::unique_ptr<dfcuda::Rasterizer> raster;
     std::unique_ptr<dfcuda::Postprocessor> post;
     std::unique_ptr<dfcuda::RleReader> rle;
     std::mutex mutex;
     std::uint32_t tank = 0, layer = 0;
     std::uint64_t next_token = 1, next_transfer = 1;
-    std::deque<LayerSource> history, queue;
     OutputLease output;
     Transfer transfer;
+
+#include "job_pool.inc"
 
     DfCudaJob(const DfCudaConfig &cfg, const float *xyz, std::uint64_t float_count,
               const std::uint32_t *tanks, std::uint64_t tank_count,
@@ -113,11 +118,9 @@ struct DfCudaJob {
             static_cast<std::size_t>(host_tank_count));
         post = std::make_unique<dfcuda::Postprocessor>(*runtime, config);
         rle = std::make_unique<dfcuda::RleReader>(*runtime, config);
+        initialize_pool();
     }
-    ~DfCudaJob() noexcept {
-        runtime->cancelled.store(true, std::memory_order_relaxed);
-        drain_transfer_noexcept();
-    }
+    ~DfCudaJob() noexcept { stop_and_drain(); }
     DfCudaJob(const DfCudaJob &) = delete;
     DfCudaJob &operator=(const DfCudaJob &) = delete;
 
@@ -133,63 +136,51 @@ struct DfCudaJob {
         return config.dense_raster_semantics == 1 && config.raster_mode == DF_CUDA_COVERAGE &&
                config.aa_samples > 1;
     }
-    std::size_t topology_depth() const noexcept {
-        return std::max<std::size_t>(config.look_back, post->z_radius());
-    }
-    static void append_metadata(std::deque<LayerSource> &destination,
-                                const LayerSource &source) {
-        LayerSource metadata;
-        metadata.layer = source.layer;
-        metadata.topology = source.topology;
-        destination.push_back(std::move(metadata));
-    }
     bool stats_non_empty(const Plane &plane) const noexcept {
         return plane.raster_stats_valid ? plane.raster_area_stats.total_solid_pixels != 0 : !plane.empty();
     }
 
-    LayerInput render_input(std::uint32_t layer_index, std::uint32_t tank_index) {
-        runtime->check_cancelled();
+    LayerInput render_input(dfcuda::Runtime &execution, dfcuda::Rasterizer &renderer,
+                            dfcuda::Postprocessor &processor,
+                            std::uint32_t layer_index, std::uint32_t tank_index) {
+        execution.check_cancelled();
         LayerInput input;
         const bool generic = generic_legacy();
         const bool dense_blur = config.dense_raster_semantics == 1 &&
             config.raster_mode == DF_CUDA_BLUR && has_split() && config.aa_on_supports == 0;
         const bool dense_cov_split = dense_coverage() && has_split() && config.aa_on_supports == 0;
-        if (generic || dense_blur || dense_cov_split) {
-            Plane model = raster->render(layer_index, tank_index, RasterSelection::ModelForTank);
-            input.model_non_empty = stats_non_empty(model);
-            input.source_stats_valid = model.raster_stats_valid;
-            input.source_stats = model.raster_area_stats;
-            input.topology = model.bounds_valid ? model.topology_bounds : Bounds{};
-            if (dense_blur) {
-                input.combined = std::move(model);
-                input.supports = raster->render(layer_index, tank_index, RasterSelection::BinarySupports);
-                return input;
-            }
-            input.combined = raster->render(layer_index, tank_index, RasterSelection::AllForTank);
-            if (has_split() && config.aa_on_supports == 0)
-                input.supports = raster->render(layer_index, tank_index, RasterSelection::BinarySupports);
-            if (dense_cov_split) input.source_stats_valid = false;
+        if (dense_blur) {
+            input.combined = renderer.render(layer_index, tank_index, RasterSelection::ModelForTank);
+            input.model_non_empty = stats_non_empty(input.combined);
+            input.source_stats_valid = input.combined.raster_stats_valid;
+            input.source_stats = input.combined.raster_area_stats;
+            input.topology = input.combined.bounds_valid ? input.combined.topology_bounds : Bounds{};
+            input.supports = renderer.render(layer_index, tank_index, RasterSelection::BinarySupports);
             return input;
         }
-        input.combined = raster->render(layer_index, tank_index, RasterSelection::AllForTank);
+        input.combined = renderer.render(layer_index, tank_index, RasterSelection::AllForTank);
         input.model_non_empty = stats_non_empty(input.combined);
         input.source_stats_valid = input.combined.raster_stats_valid;
         input.source_stats = input.combined.raster_area_stats;
         input.topology = input.combined.bounds_valid ? input.combined.topology_bounds : Bounds{};
+        if ((generic || dense_cov_split) && has_split() && config.aa_on_supports == 0)
+            input.supports = renderer.render(layer_index, tank_index, RasterSelection::BinarySupports);
+        if (generic) {
+            // The CPU pump gates topology from the ORIGINAL all-geometry raw
+            // source count, before support removal. Do not re-rasterize a model
+            // merely to obtain a different gate or discard raw support pixels.
+            input.model_non_empty = input.source_stats.total_solid_pixels != 0;
+            const bool apply_model_aa = renderer.applies_model_aa(layer_index);
+            processor.prepare_legacy(input.combined, &input.supports,
+                apply_model_aa && input.model_non_empty);
+            input.topology = input.combined.bounds_valid ? input.combined.topology_bounds : Bounds{};
+        }
         return input;
     }
 
-    std::vector<Bounds> prior_bounds(const std::deque<LayerSource> &local_history) const {
-        std::vector<Bounds> result;
-        const auto depth = static_cast<std::size_t>(config.look_back);
-        const auto first = local_history.size() > depth ? local_history.size() - depth : 0;
-        for (std::size_t i = first; i < local_history.size(); ++i)
-            result.push_back(local_history[i].topology);
-        return result;
-    }
-
-    LayerSource prepare_input(LayerInput input, std::uint32_t layer_index,
-                              const std::deque<LayerSource> &local_history,
+    LayerSource prepare_input(dfcuda::Rasterizer &renderer, dfcuda::Postprocessor &processor,
+                              LayerInput input, std::uint32_t layer_index,
+                              const std::vector<Bounds> &prior,
                               const std::vector<Bounds> &future_bounds) {
         LayerSource source;
         source.layer = layer_index;
@@ -197,18 +188,9 @@ struct DfCudaJob {
         source.model_non_empty = input.model_non_empty;
         source.source_stats_valid = input.source_stats_valid;
         source.source_stats = input.source_stats;
-        const bool apply_model_aa = raster->applies_model_aa(layer_index);
+        const bool apply_model_aa = renderer.applies_model_aa(layer_index);
         if (generic_legacy()) {
-            if (apply_model_aa && input.model_non_empty)
-                post->prepare_legacy(input.combined, &input.supports, true);
-            else if (apply_model_aa)
-                post->prepare_legacy(input.combined, nullptr, false);
-            else
-                input.supports = Plane{};
-            if (input.combined.bounds_valid) source.topology = input.combined.topology_bounds;
-
             bool prior_has_topology = false;
-            const auto prior = prior_bounds(local_history);
             for (const auto &bounds : prior) prior_has_topology |= !empty_bounds(bounds);
             const bool backward_applied = apply_model_aa &&
                 (input.model_non_empty || prior_has_topology);
@@ -234,20 +216,20 @@ struct DfCudaJob {
                 for (const auto &bounds : future_bounds) blur_seed = merge_bounds(blur_seed, bounds);
             }
             if (should_blur) active = merge_bounds(active,
-                expand_bounds(blur_seed, post->xy_radius(), config.width, config.height));
+                expand_bounds(blur_seed, processor.xy_radius(), config.width, config.height));
             if (!empty_bounds(active)) {
                 dfcuda::WorkFrame frame;
                 frame.x0 = static_cast<std::uint32_t>(active.x0);
                 frame.y0 = static_cast<std::uint32_t>(active.y0);
                 frame.width = static_cast<std::uint32_t>(active.x1 - active.x0 + 1);
                 frame.height = static_cast<std::uint32_t>(active.y1 - active.y0 + 1);
-                frame.blur_bounds = should_blur ? expand_bounds(blur_seed, post->xy_radius(),
+                frame.blur_bounds = should_blur ? expand_bounds(blur_seed, processor.xy_radius(),
                                                                   config.width, config.height) : Bounds{};
                 frame.configured = true;
                 frame.apply_blur = should_blur;
                 input.combined.work_frame = frame;
             }
-            source.model = post->spatial(std::move(input.combined));
+            source.model = processor.spatial(std::move(input.combined));
             source.supports = std::move(input.supports);
             return source;
         }
@@ -256,80 +238,23 @@ struct DfCudaJob {
             source.supports = std::move(input.supports);
             return source;
         }
-        source.model = post->spatial(std::move(input.combined));
+        source.model = processor.spatial(std::move(input.combined));
         source.supports = std::move(input.supports);
         return source;
     }
 
-    void build_queue_initial() {
-        const auto depth = topology_depth();
-        std::vector<LayerInput> raw;
-        raw.reserve(depth + 1);
-        const auto available = static_cast<std::size_t>(config.total_layers - layer);
-        const auto count = std::min(depth + 1, available);
-        for (std::size_t i = 0; i < count; ++i)
-            raw.push_back(render_input(layer + static_cast<std::uint32_t>(i), tank));
-        std::deque<LayerSource> local_history;
-        for (const auto &source : history) append_metadata(local_history, source);
-        for (std::size_t i = 0; i < raw.size(); ++i) {
-            std::vector<Bounds> future;
-            const auto last = std::min(raw.size(), i + depth + 1);
-            for (std::size_t j = i + 1; j < last; ++j) future.push_back(raw[j].topology);
-            queue.push_back(prepare_input(std::move(raw[i]),
-                layer + static_cast<std::uint32_t>(i), local_history, future));
-            append_metadata(local_history, queue.back());
-        }
-    }
-
-    void append_queue_tail() {
-        const auto depth = topology_depth();
-        if (queue.empty()) return;
-        const auto next_layer = queue.back().layer + 1;
-        if (next_layer >= config.total_layers) return;
-        LayerInput input = render_input(next_layer, tank);
-        std::vector<LayerInput> extra;
-        extra.reserve(depth);
-        const auto last = std::min<std::uint64_t>(config.total_layers,
-            static_cast<std::uint64_t>(next_layer) + depth + 1);
-        for (std::uint64_t index = static_cast<std::uint64_t>(next_layer) + 1; index < last; ++index)
-            extra.push_back(render_input(static_cast<std::uint32_t>(index), tank));
-        std::vector<Bounds> future;
-        for (const auto &value : extra) future.push_back(value.topology);
-        std::deque<LayerSource> local_history;
-        for (const auto &source : history) append_metadata(local_history, source);
-        for (const auto &value : queue) append_metadata(local_history, value);
-        queue.push_back(prepare_input(std::move(input), next_layer, local_history, future));
-    }
-
     void finalize_current() {
-        if (queue.empty()) build_queue_initial();
-        if (queue.empty()) throw dfcuda::Error(DF_CUDA_NUMERICAL_ERROR, "native layer queue is empty");
-        LayerSource &center = queue.front();
-        Plane final_plane;
-        if (config.raster_mode == DF_CUDA_PERTURBATION && post->z_radius() != 0) {
-            std::vector<dfcuda::WindowPlane> windows;
-            windows.reserve(history.size() + queue.size());
-            for (const auto &prior : history) {
-                const auto distance = static_cast<std::int64_t>(prior.layer) - center.layer;
-                if (distance >= -static_cast<std::int64_t>(post->z_radius()))
-                    windows.push_back({prior.model.view(), static_cast<std::int32_t>(distance)});
-            }
-            for (const auto &future : queue) {
-                const auto distance = static_cast<std::int64_t>(future.layer) - center.layer;
-                if (distance <= static_cast<std::int64_t>(post->z_radius()))
-                    windows.push_back({future.model.view(), static_cast<std::int32_t>(distance)});
-            }
-            final_plane = post->blend_z(windows.data(), windows.size());
-        } else {
-            final_plane = std::move(center.model);
-        }
-        const Plane *supports = center.supports.empty() ? nullptr : &center.supports;
-        if (!dense_coverage() && config.dense_raster_semantics != 2)
-            post->finish(final_plane, supports);
-        if (dense_coverage() && center.source_stats_valid) output.stats = center.source_stats;
-        else output.stats = post->statistics(final_plane);
-        output.plane = std::move(final_plane);
-        output.layer = center.layer;
+        std::unique_lock<std::mutex> lock(pool_mutex);
+        pool_changed.wait(lock, [&] {
+            const auto center = pipeline_tank == tank ? cached(layer) : nullptr;
+            return runtime->cancelled.load(std::memory_order_acquire) ||
+                   (center && center->final_ready);
+        });
+        check_failure_locked();
+        auto center = cached(layer);
+        output.stats = center->final_stats;
+        output.plane = std::move(center->final_plane);
+        output.layer = center->layer;
         output.tank = tank;
         output.block = 0;
         output.token = next_token++;
@@ -353,7 +278,7 @@ struct DfCudaJob {
     int next_output(DfCudaOutput *descriptor) {
         std::lock_guard<std::mutex> lock(mutex);
         runtime->activate();
-        runtime->check_cancelled();
+        check_job();
         if (descriptor == nullptr) throw dfcuda::Error(DF_CUDA_INVALID_ARGUMENT, "null output descriptor");
         if (transfer.active) throw dfcuda::Error(DF_CUDA_INVALID_ARGUMENT, "transfer is still outstanding");
         if (output.active) throw dfcuda::Error(DF_CUDA_INVALID_ARGUMENT, "output lease is still outstanding");
@@ -362,17 +287,17 @@ struct DfCudaJob {
             output.token = next_token++;
             if (output.token == 0) output.token = next_token++;
             rle->reset(output.plane.view(), blocks[output.block].start_column, blocks[output.block].width);
+            output.plane.pixels.mark_used(runtime->pack);
+            check_job();
             output.active = true;
             fill_descriptor(descriptor);
             return DF_CUDA_OK;
         }
-        while (tank < config.tank_count) {
-            if (layer >= config.total_layers) {
-                ++tank; layer = 0; queue.clear(); history.clear(); output.token = 0; continue;
-            }
-            if (blocks.empty()) { ++tank; layer = 0; continue; }
+        if (tank < config.tank_count) {
             finalize_current();
             rle->reset(output.plane.view(), blocks[0].start_column, blocks[0].width);
+            output.plane.pixels.mark_used(runtime->pack);
+            check_job();
             output.active = true;
             fill_descriptor(descriptor);
             return DF_CUDA_OK;
@@ -384,7 +309,7 @@ struct DfCudaJob {
                         std::uint64_t run_count, DfCudaRun *destination,
                         std::uint64_t destination_capacity, std::uint64_t *token) {
         std::lock_guard<std::mutex> lock(mutex);
-        runtime->activate(); runtime->check_cancelled();
+        runtime->activate(); check_job();
         if (token == nullptr) throw dfcuda::Error(DF_CUDA_INVALID_ARGUMENT, "null transfer token");
         *token = 0;
         if (!output.active || output.token != output_token)
@@ -405,6 +330,7 @@ struct DfCudaJob {
             dfcuda::checked(cudaEventCreateWithFlags(&pending.event,
                 cudaEventDisableTiming | cudaEventBlockingSync), "create RLE transfer event");
             dfcuda::checked(cudaEventRecord(pending.event, runtime->readback), "record RLE transfer event");
+            check_job();
             pending.active = true;
             transfer = std::move(pending);
             *token = transfer.token;
@@ -439,11 +365,14 @@ struct DfCudaJob {
         if (transfer.event) cudaEventDestroy(transfer.event);
         transfer = {};
         if (failure) throw *failure;
+        check_job();
         return DF_CUDA_OK;
     }
 
     int release_output(std::uint64_t token) {
         std::lock_guard<std::mutex> lock(mutex);
+        runtime->activate();
+        check_job();
         if (!output.active || output.token != token)
             throw dfcuda::Error(DF_CUDA_INVALID_ARGUMENT, "invalid output lease");
         if (transfer.active) throw dfcuda::Error(DF_CUDA_INVALID_ARGUMENT, "transfer is still outstanding");
@@ -451,13 +380,14 @@ struct DfCudaJob {
         if (output.block + 1 < blocks.size()) return DF_CUDA_OK;
         output.plane = Plane{};
         output.token = 0;
-        if (!queue.empty()) { history.push_back(std::move(queue.front())); queue.pop_front(); }
-        const auto keep = std::max<std::size_t>(topology_depth(), post->z_radius()) + 1;
-        while (history.size() > keep) history.pop_front();
         ++layer;
-        if (layer >= config.total_layers) {
-            ++tank; layer = 0; queue.clear(); history.clear();
-        } else append_queue_tail();
+        if (layer >= config.total_layers) { ++tank; layer = 0; }
+        {
+            std::lock_guard<std::mutex> pool_lock(pool_mutex);
+            ordered_layer = layer;
+            requested_tank = tank;
+            changed_locked();
+        }
         return DF_CUDA_OK;
     }
 
@@ -532,7 +462,8 @@ int read_runs_async(DfCudaJob *job, std::uint64_t output_token, std::uint64_t fi
 int wait_transfer(DfCudaJob *job, std::uint64_t token) { return job->wait_transfer(token); }
 int release_output(DfCudaJob *job, std::uint64_t token) { return job->release_output(token); }
 void cancel(DfCudaJob *job) noexcept {
-    if (job != nullptr && job->runtime) job->runtime->cancelled.store(true, std::memory_order_relaxed);
+    if (job != nullptr) job->cancel_pool();
 }
+void abort(DfCudaJob *job) noexcept { if (job != nullptr) job->stop_and_drain(); }
 void destroy(DfCudaJob *job) noexcept { delete job; }
 }

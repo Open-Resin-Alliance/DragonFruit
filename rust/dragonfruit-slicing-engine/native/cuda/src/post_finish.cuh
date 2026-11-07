@@ -35,12 +35,11 @@ void Postprocessor::finish(Plane &output, const Plane *raw_supports) {
             }
             const auto region_count = static_cast<std::size_t>(columns) * rows;
             dither_regions<<<blocks_for(region_count), threads, 0, runtime_.compute>>>(
-                output.view(), tables_.data(), config_.width, config_.height,
+                output.view(), tables_->data(), config_.width, config_.height,
                 regions_x, regions_y, first_x, first_y, columns, region_count,
                 numerical_error_.data());
             checked(cudaGetLastError(), "launching CUDA regional exposure quantizer");
             output.pixels.mark_used(runtime_.compute);
-            tables_.mark_used(runtime_.compute);
             numerical_error_.mark_used(runtime_.compute);
             const auto error = download_control(runtime_, numerical_error_);
             runtime_.check_cancelled();
@@ -50,10 +49,9 @@ void Postprocessor::finish(Plane &output, const Plane *raw_supports) {
         } else if (tail_enabled_) {
             output.raster_stats_valid = false;
             output.bounds_valid = false;
-            map_lut<<<blocks_for(output.bytes()), threads, 0, runtime_.compute>>>(output.view(), tables_.data());
+            map_lut<<<blocks_for(output.bytes()), threads, 0, runtime_.compute>>>(output.view(), tables_->data());
             checked(cudaGetLastError(), "launching CUDA cure LUT");
             output.pixels.mark_used(runtime_.compute);
-            tables_.mark_used(runtime_.compute);
         }
     }
     if (raw_supports == nullptr || raw_supports->empty() ||
