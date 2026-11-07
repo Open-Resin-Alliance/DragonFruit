@@ -1,5 +1,8 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { invokeWithChunkedMesh } from '@/utils/meshChunkUpload';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { CONSERVATIVE_P_SIGMA } from '@/supports/autoSupport/poseStability';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -382,8 +385,6 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     // (plain-browser context).
     if (sourcePath && geom) {
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { listen } = await import('@tauri-apps/api/event');
 
         if (!geom.geometry.boundingBox) {
           geom.geometry.computeBoundingBox();
@@ -401,22 +402,16 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         const centerCoords = [center.x, center.y, center.z];
 
         // Overhang is classified on the exact soup the overlay draws, so its
-        // triangle ids index `geom.geometry`. Staging it also keeps the mesh
-        // off the JSON path: the command reads raw f32 bytes.
+        // triangle ids index `geom.geometry`. Native receives an exact upload handle.
         let world: { positions: Float32Array; bbox: THREE.Box3 } | null = null;
         try {
           world = prepareWorldGeom();
         } catch (err) {
-          console.warn('[Islands] world soup prep failed; overhang will use the file mesh', err);
+          console.warn('[Islands] world soup prep failed; indexed overhang scan cannot proceed', err);
         }
-        if (world) {
-          const { positions } = world;
-          await invoke(
-            'stage_mesh_binary_set',
-            new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
-            { headers: { 'Content-Type': 'application/octet-stream' } },
-          );
-        }
+        if (!world) throw new Error('Cannot classify indexed overhangs without the rendered mesh.');
+        const { positions } = world;
+        const meshBytes = new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength);
 
         // The combined Rust scan emits phase progress — wire it into the
         // progress modal so the bar moves immediately (the overhang pass runs
@@ -433,7 +428,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         setScanProgress({ done: 0, total: 100 });
 
         console.log(`[Islands] Sideloading combined island scan from path: ${sourcePath}`);
-        const combined = await invoke<{
+        const combined = await invokeWithChunkedMesh<{
           voxelIslands: Array<{
             id: string;
             contact: { x: number; y: number; z: number };
@@ -450,8 +445,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
           overhangIslands: OverhangRegion[];
           stability?: PoseStabilityWire | null;
         }>(
-          'scan_islands_from_path',
-          {
+          invoke, 'scan_islands_from_path', meshBytes, { args: {
             filePath: sourcePath,
             matrix: matrixElements,
             center: centerCoords,
@@ -465,9 +459,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             overhangSelfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
               ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
             overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
-            overhangFromStaged: world !== null,
             hasRaft,
-          },
+          } },
         ).finally(() => unlisten());
 
         // The model may have been deleted/replaced while the command ran —
@@ -539,8 +532,6 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       // scan here first: voxel islands, minima and overhang in one pass, with
       // no JSON geometry and no second mesh weld.
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { listen } = await import('@tauri-apps/api/event');
         const unlisten = await listen<{ done: number; total: number }>(
           'island-scan-progress',
           (e) => {
@@ -549,12 +540,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
           },
         );
         const { positions } = world;
-        await invoke(
-          'stage_mesh_binary_set',
-          new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
-          { headers: { 'Content-Type': 'application/octet-stream' } },
-        );
-        const combined = await invoke<{
+        const meshBytes = new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength);
+        const combined = await invokeWithChunkedMesh<{
           voxelIslands: Array<{
             id: string;
             contact: { x: number; y: number; z: number };
@@ -570,7 +557,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
           }>;
           overhangIslands: OverhangRegion[];
           stability?: PoseStabilityWire | null;
-        }>('scan_islands_staged', {
+        }>(invoke, 'scan_islands_staged', meshBytes, { args: {
           layerHeightMm,
           pxMm,
           supportBufferMm: supportBufMm,
@@ -580,7 +567,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
           overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
           hasRaft,
-        }).finally(() => unlisten());
+        } }).finally(() => unlisten());
         if (scanEpochRef.current !== epoch) return;
 
         const voxelMapped: DetectedIsland[] = combined.voxelIslands
@@ -622,20 +609,15 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       // Last resort: the client-side detectors. Overhang still goes through
       // the binary staged command below; only voxel/minima are JS here.
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
         const { positions } = world;
-        await invoke(
-          'stage_mesh_binary_set',
-          new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
-          { headers: { 'Content-Type': 'application/octet-stream' } },
-        );
-        const scan = await invoke<OverhangScan>('scan_overhangs_staged', {
+        const meshBytes = new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength);
+        const scan = await invokeWithChunkedMesh<OverhangScan>(invoke, 'scan_overhangs_staged', meshBytes, { args: {
           selfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
             ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
           pxMm: OVERHANG_FOOTPRINT_PX_MM,
           label: sourcePath ?? null,
           hasRaft,
-        });
+        } });
         if (scanEpochRef.current !== epoch) return;
         setToppleCoverage(scanNeedsCoverage(scan.stability));
         setDragTotalMm3(scan.stability?.dragMomentMm3 ?? 0);

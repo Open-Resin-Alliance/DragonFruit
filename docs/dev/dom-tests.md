@@ -81,8 +81,9 @@ cover is the state, effects and handlers around it.
 2. Compiles every `.ts`/`.tsx` under `src/` and `plugins/` in three steps: the
    React Compiler (`babel-plugin-react-compiler`), then the Lingui macro
    (`@lingui/babel-plugin-lingui-macro`), then esbuild to strip types and
-   emit CommonJS. Source maps are chained, so stack traces point at the
-   original lines.
+   emit CommonJS. `import.meta.url` is defined as the original source-file URL,
+   so module-worker constructors resolve under the CommonJS test loader. Source
+   maps are chained, so stack traces point at the original lines.
 3. Resolves CSS imports to nothing.
 
 ### Why the React Compiler is required

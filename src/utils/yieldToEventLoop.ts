@@ -16,6 +16,10 @@ let channel: MessageChannel | null = null;
 let pending: Array<() => void> = [];
 
 export function yieldToEventLoop(): Promise<void> {
+    if ('setImmediate' in globalThis && typeof globalThis.setImmediate === 'function') {
+        const schedule = globalThis.setImmediate;
+        return new Promise<void>((resolve) => { schedule(resolve); });
+    }
     if (typeof MessageChannel === 'undefined') {
         // Non-browser contexts (tests, SSR): the timer is fine, nothing is hidden.
         return new Promise((resolve) => { setTimeout(resolve, 0); });

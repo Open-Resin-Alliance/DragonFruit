@@ -15,6 +15,7 @@ import {
   decodeF32,
   loadTauriCore,
   stageGeometryToStagedMesh,
+  runExclusiveNativeMesh,
 } from '@/utils/tauriMeshBridge';
 import type { TenonPreviewFrame, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutReport, OrganicCutResult } from './types';
 
@@ -74,17 +75,19 @@ export async function stageCutSource(
   const core = await loadTauriCore();
   if (!core) return false;
 
-  // Re-stage if either the tenon OR the geometry object changed (same id can carry
-  // new geometry after a cut/undo).
-  if (stagedCutSourceKey === sourceKey && stagedCutSourceGeometry === geometry) {
-    return true;
-  }
+  return runExclusiveNativeMesh(async () => {
+    // Re-stage if either the tenon OR the geometry object changed (same id can carry
+    // new geometry after a cut/undo).
+    if (stagedCutSourceKey === sourceKey && stagedCutSourceGeometry === geometry) {
+      return true;
+    }
 
-  await stageGeometryToStagedMesh(core.invoke, geometry);
-  await core.invoke('mesh_organic_cut_capture_staged_source');
-  stagedCutSourceKey = sourceKey;
-  stagedCutSourceGeometry = geometry;
-  return true;
+    await stageGeometryToStagedMesh(core.invoke, geometry);
+    await core.invoke('mesh_organic_cut_capture_staged_source');
+    stagedCutSourceKey = sourceKey;
+    stagedCutSourceGeometry = geometry;
+    return true;
+  });
 }
 
 /**
@@ -98,11 +101,13 @@ export async function cutFromCapturedSource(
   const core = await loadTauriCore();
   if (!core) return null;
 
-  const optionsJson = JSON.stringify(options);
-  const reportJson = await core.invoke<string>('mesh_organic_cut_from_captured_source', { optionsJson });
-  const report = JSON.parse(reportJson) as OrganicCutReport;
-  const parts = await readAllParts(core.invoke, report.partCount ?? 0);
-  return { report, parts };
+  return runExclusiveNativeMesh(async () => {
+    const optionsJson = JSON.stringify(options);
+    const reportJson = await core.invoke<string>('mesh_organic_cut_from_captured_source', { optionsJson });
+    const report = JSON.parse(reportJson) as OrganicCutReport;
+    const parts = await readAllParts(core.invoke, report.partCount ?? 0);
+    return { report, parts };
+  });
 }
 
 /**
@@ -116,15 +121,17 @@ export async function cutFromGeometry(
   const core = await loadTauriCore();
   if (!core) return null;
 
-  await stageGeometryToStagedMesh(core.invoke, geometry);
-  stagedCutSourceKey = null;
-  stagedCutSourceGeometry = null;
+  return runExclusiveNativeMesh(async () => {
+    await stageGeometryToStagedMesh(core.invoke, geometry);
+    stagedCutSourceKey = null;
+    stagedCutSourceGeometry = null;
 
-  const optionsJson = JSON.stringify(options);
-  const reportJson = await core.invoke<string>('mesh_organic_cut_staged', { optionsJson });
-  const report = JSON.parse(reportJson) as OrganicCutReport;
-  const parts = await readAllParts(core.invoke, report.partCount ?? 0);
-  return { report, parts };
+    const optionsJson = JSON.stringify(options);
+    const reportJson = await core.invoke<string>('mesh_organic_cut_staged', { optionsJson });
+    const report = JSON.parse(reportJson) as OrganicCutReport;
+    const parts = await readAllParts(core.invoke, report.partCount ?? 0);
+    return { report, parts };
+  });
 }
 
 /**

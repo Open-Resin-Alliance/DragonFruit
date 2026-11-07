@@ -1,5 +1,6 @@
 import { isTauriRuntime } from '@/utils/tauriRuntime';
 import { bakeAndAttachOcclusionForGeometry, rememberLoadedMeshMesh } from '@/features/scene/bakedOcclusion';
+import { rememberImportedSliceMesh, inheritImportedSliceMesh, centerImportedSliceMesh, retainImportedSliceMesh, forgetImportedSliceMesh } from '@/utils/loadedSliceMesh';
 import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
 import { useEffect, useState } from 'react';
 import * as THREE from 'three';
@@ -405,12 +406,14 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
     }
   }
 
+  if (geometry !== bufferGeometry) inheritImportedSliceMesh(bufferGeometry, geometry);
   stripEmbeddedColorAttributes(geometry);
 
   // Sanitize any non-finite position values before any Three.js computation
   // to prevent NaN bbox/sphere and subsequent renderer crashes.
   let meshDefects = sanitizePositionAttribute(geometry);
   if (meshDefects.hasDefects) {
+    forgetImportedSliceMesh(geometry);
     console.warn(
       `[processGeometry] Defective mesh detected: ${meshDefects.repairedFloats} non-finite position` +
       ` values (out of ${meshDefects.totalVertices * 3} floats) replaced with 0.`,
@@ -546,7 +549,9 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         }
 
         if (shouldApplyPositions) {
+          forgetImportedSliceMesh(geometry);
           applyRepairedPositions(geometry, effectiveResult.positions);
+          if (effectiveResult.meshToken) rememberImportedSliceMesh(geometry, effectiveResult.meshToken);
           nativeModifiedGeometry = true;
         }
 
@@ -636,7 +641,9 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
 
   // Normalize: center X/Z at 0 and set bottom (minY) to 0 in local space
   if (options.center) {
-    geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);
+    centerImportedSliceMesh(geometry, [-preCenter.x, -preBBox.min.y, -preCenter.z], () => {
+      geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);
+    });
   }
   geometry.computeBoundingBox();
   const prepMs = performance.now() - startPrep;
@@ -718,6 +725,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
     console.log(`[${new Date().toISOString()}] [processGeometry] Edge Geometry finished. Took ${(performance.now() - startEdges).toFixed(2)}ms`);
   }
 
+  await retainImportedSliceMesh(geometry, meshDefects.nativeRepairReport?.model_triangle_count);
   const shouldSurfaceDefects = meshDefects.hasDefects || meshDefects.nativeRepairReport != null;
   // The model is not added to the scene until this resolves, so its first frame
   // already carries the occlusion, and the import's progress modal is still up
@@ -1089,6 +1097,7 @@ export async function decodeDfmx(payload: Uint8Array | ArrayBuffer): Promise<Dec
   const previewTriangleCount = table.reduce((sum, body) => sum + body.triangleCount, 0);
 
   const meshToken = header.getUint32(28, true);
+  if (meshToken > 0 && bodies.length === 1) rememberImportedSliceMesh(bodies[0], meshToken);
   const modelTriangleCount = header.getUint32(20, true);
   const metadataLength = header.getUint32(24, true);
   let report: MeshHealthReport | undefined;

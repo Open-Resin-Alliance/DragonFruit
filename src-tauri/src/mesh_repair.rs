@@ -510,8 +510,9 @@ pub async fn mesh_repair_from_path(
     .map_err(|e| format!("repair task panicked: {e}"))??;
     release_cancel(progress_token.as_ref());
     report.source_path = Some(source_path);
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+    tauri::async_runtime::spawn_blocking(move || stage_import_mesh_result(mesh, &report))
+        .await
+        .map_err(|e| format!("repair result task panicked: {e}"))?
 }
 
 /// Repairs a plate part by part: the shells that meet stay together as one object, each object is
@@ -566,11 +567,14 @@ pub async fn mesh_repair_parts_from_path(
         .map(|flag| flag.load(Ordering::SeqCst))
         .unwrap_or(false);
     release_cancel(progress_token.as_ref());
-    let mesh = parts.combined_mesh();
-    let mut report = parts.report(Some(source_path));
-    report.cancelled = cancelled;
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        let mesh = parts.combined_mesh();
+        let mut report = parts.report(Some(source_path));
+        report.cancelled = cancelled;
+        stage_import_mesh_result(mesh, &report)
+    })
+        .await
+        .map_err(|e| format!("repair parts result task panicked: {e}"))?
 }
 
 /// Loads a mesh from a path and stages it, repairing nothing.
@@ -642,8 +646,9 @@ pub async fn mesh_repair_staged(
     .map_err(|e| format!("repair task panicked: {e}"))??;
     release_cancel(progress_token.as_ref());
 
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+    tauri::async_runtime::spawn_blocking(move || stage_import_mesh_result(mesh, &report))
+        .await
+        .map_err(|e| format!("repair result task panicked: {e}"))?
 }
 
 /// Runs a lightweight model/support section classifier over the current staged
@@ -660,8 +665,9 @@ pub async fn mesh_classify_staged(options_json: Option<String>) -> Result<String
     .await
     .map_err(|e| format!("classify task panicked: {e}"))??;
 
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+    tauri::async_runtime::spawn_blocking(move || stage_import_mesh_result(mesh, &report))
+        .await
+        .map_err(|e| format!("classify result task panicked: {e}"))?
 }
 
 /// Analyses the current staged positions buffer without modifying it.
@@ -1918,12 +1924,11 @@ fn stl_special_case_response(
                 budget.budget_tris,
                 outcome.achieved_error
             );
-            return encode_mesh_bodies(
-                std::slice::from_ref(&preview),
+            return encode_loaded_mesh_bodies(
+                vec![preview],
                 triangle_count as u32,
                 true,
                 Some(outcome.model_triangle_count as u32),
-                None,
                 None,
             )
             .map(Some);
@@ -1956,40 +1961,44 @@ fn stl_special_case_response(
 /// the caller will repair instead: that pass classifies too.
 #[tauri::command]
 pub async fn load_mesh_file(file_path: String, classify: Option<bool>) -> Result<Response, String> {
-    let path = std::path::Path::new(&file_path);
-    log::info!("[load_mesh_file] Starting native mesh load: {file_path}");
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        let path = std::path::Path::new(&file_path);
+        log::info!("[load_mesh_file] Starting native mesh load: {file_path}");
 
-    let is_stl = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("stl"));
-    if is_stl {
-        if let Some(bytes) = stl_special_case_response(path, &file_path, None)? {
-            return Ok(Response::new(bytes));
+        let is_stl = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("stl"));
+        if is_stl {
+            if let Some(bytes) = stl_special_case_response(path, &file_path, None)? {
+                return Ok(bytes);
+            }
         }
-    }
 
-    // Through the dispatcher, not a format loader: `load_mesh_bodies_from_path`
-    // refines coarse faces per body before anything derives data from the mesh,
-    // and resolves a 3MF's build items into one body each.
-    let bodies = io::load_mesh_bodies_from_path(path)
-        .map_err(|e| format!("Failed to load mesh '{file_path}': {e}"))?;
+        // Through the dispatcher, not a format loader: `load_mesh_bodies_from_path`
+        // refines coarse faces per body before anything derives data from the mesh,
+        // and resolves a 3MF's build items into one body each.
+        let bodies = io::load_mesh_bodies_from_path(path)
+            .map_err(|e| format!("Failed to load mesh '{file_path}': {e}"))?;
 
-    // Classify a single-body load here, when the caller asks, and ship the report
-    // in the payload: the frontend then has nothing to stage or round-trip, the
-    // geometry arrives section-ordered, and the report it would have produced is
-    // already in hand. A caller that will repair passes `classify: false` — the
-    // repair pass classifies too, and that report is the one that matters.
-    let want_classify = classify.unwrap_or(true) && bodies.len() == 1;
-    let (bodies, metadata_json) = if want_classify {
-        classify_single_body(bodies.into_iter().next().expect("length checked above"))
-    } else {
-        (bodies, None)
-    };
+        // Classify a single-body load here, when the caller asks, and ship the report
+        // in the payload: the frontend then has nothing to stage or round-trip, the
+        // geometry arrives section-ordered, and the report it would have produced is
+        // already in hand. A caller that will repair passes `classify: false` — the
+        // repair pass classifies too, and that report is the one that matters.
+        let want_classify = classify.unwrap_or(true) && bodies.len() == 1;
+        let (bodies, metadata_json) = if want_classify {
+            classify_single_body(bodies.into_iter().next().expect("length checked above"))
+        } else {
+            (bodies, None)
+        };
 
-    let tri_count: usize = bodies.iter().map(|body| body.triangles.len()).sum();
-    encode_mesh_bodies(&bodies, tri_count as u32, false, None, metadata_json.as_deref(), None)
-        .map(Response::new)
+        let tri_count: usize = bodies.iter().map(|body| body.triangles.len()).sum();
+        encode_loaded_mesh_bodies(bodies, tri_count as u32, false, None, metadata_json.as_deref())
+    })
+    .await
+    .map_err(|e| format!("mesh file task panicked: {e}"))??;
+    Ok(Response::new(bytes))
 }
 
 /// Parse a mesh's bytes with the native loader, for a source that has no on-disk
@@ -2023,7 +2032,10 @@ pub async fn load_mesh_bytes(request: tauri::ipc::Request<'_>) -> Result<Respons
         "[load_mesh_bytes] Starting native mesh load from {} bytes",
         bytes.len()
     );
-    load_mesh_bytes_response(&bytes, classify, refine).map(Response::new)
+    tauri::async_runtime::spawn_blocking(move || load_mesh_bytes_response(&bytes, classify, refine))
+        .await
+        .map_err(|e| format!("mesh bytes task panicked: {e}"))?
+        .map(Response::new)
 }
 
 /// Parse a mesh that sits at a known offset inside a file on disk.
@@ -2083,34 +2095,29 @@ pub async fn load_mesh_range(
     .await
     .map_err(|e| format!("mesh range task panicked: {e}"))??;
 
-    let started_parse = std::time::Instant::now();
-    let (bodies, metadata_json) = mesh_bodies(
-        &bytes,
-        classify.unwrap_or(true),
-        refine.unwrap_or(true),
-    )?;
+    let encoded = tauri::async_runtime::spawn_blocking(move || {
+        let started_parse = std::time::Instant::now();
+        let (bodies, metadata_json) = mesh_bodies(
+            &bytes,
+            classify.unwrap_or(true),
+            refine.unwrap_or(true),
+        )?;
 
-    // Keep the mesh for its AO bake. The bake needs exactly this mesh, and sending
-    // one back costs 36 bytes a triangle; a single body is the VOXL case, and only a
-    // single body can be named by one token.
-    let token = if bodies.len() == 1 {
-        // One copy, and only of a welded mesh (13 MB for a 726k-triangle model): the
-        // payload below must encode the same mesh the registry holds.
-        Some(registry::register(bodies[0].clone()))
-    } else {
-        None
-    };
-    let tri_count: usize = bodies.iter().map(|body| body.triangles.len()).sum();
-    log::info!(
-        "[load_mesh_range] {} bytes at {offset} in {}ms (read+inflate), parsed in {}ms,          of {}ms total{}",
-        bytes.len(),
-        read_ms,
-        started_parse.elapsed().as_millis(),
-        started.elapsed().as_millis(),
-        if token.is_some() { ", mesh kept for the bake" } else { "" },
-    );
-    encode_mesh_bodies(&bodies, tri_count as u32, false, None, metadata_json.as_deref(), token)
-        .map(Response::new)
+        let single_body = bodies.len() == 1;
+        let tri_count: usize = bodies.iter().map(|body| body.triangles.len()).sum();
+        log::info!(
+            "[load_mesh_range] {} bytes at {offset} in {}ms (read+inflate), parsed in {}ms,          of {}ms total{}",
+            bytes.len(),
+            read_ms,
+            started_parse.elapsed().as_millis(),
+            started.elapsed().as_millis(),
+            if single_body { ", mesh kept for reuse" } else { "" },
+        );
+        encode_loaded_mesh_bodies(bodies, tri_count as u32, false, None, metadata_json.as_deref())
+    })
+    .await
+    .map_err(|e| format!("mesh range parse task panicked: {e}"))??;
+    Ok(Response::new(encoded))
 }
 
 /// Parse a file's bytes, refine its coarse faces when asked, and classify when asked.
@@ -2151,7 +2158,7 @@ fn load_mesh_bytes_response(
     let (bodies, metadata_json) = mesh_bodies(bytes, classify, refine)?;
 
     let tri_count: usize = bodies.iter().map(|body| body.triangles.len()).sum();
-    let encoded = encode_mesh_bodies(&bodies, tri_count as u32, false, None, metadata_json.as_deref(), None)?;
+    let encoded = encode_loaded_mesh_bodies(bodies, tri_count as u32, false, None, metadata_json.as_deref())?;
     // The other half of the import's per-model time: the frontend logs its own
     // round trip for the same call, and the wire between them measures 110-135
     // MB/s, so this line and that one together say where a model's load went.
@@ -2230,8 +2237,8 @@ fn classify_single_body(mesh: IndexedMesh) -> (Vec<IndexedMesh>, Option<String>)
 /// to produce the identical vertex set and a bit-identical field (rms 0.00000 over
 /// 2.18M values on a real model), so the weld it currently pays for is redundant too.
 ///
-/// Bounded: the oldest entry is dropped past `MESH_REGISTRY_CAP`, which a load never
-/// reaches (a mesh is registered by its load and taken by its bake moments later).
+/// AO lookup preserves its eight-entry FIFO. Retained slicing sources clone the
+/// Arc, not the mesh, and have their own explicit byte and entry budgets.
 mod registry {
     use dragonfruit_mesh_core::mesh::IndexedMesh;
     use std::collections::VecDeque;
@@ -2275,6 +2282,11 @@ mod registry {
     }
 }
 
+/// Share the loader/AO registry allocation with retained slicing sources.
+pub(crate) fn loaded_mesh(token: u32) -> Option<Arc<IndexedMesh>> {
+    registry::get(token)
+}
+
 /// The mesh a bake token names, checked against the corner count the caller has.
 ///
 /// The check is the guard that makes the token safe: a caller's geometry is the mesh
@@ -2315,6 +2327,24 @@ const MESH_RESPONSE_BODY_ENTRY_BYTES: usize = 8;
 const MESH_RESPONSE_FLAG_PREVIEW: u32 = 1;
 /// Positions plus normals, both 9 f32 per triangle.
 const SOUP_BYTES_PER_TRIANGLE: usize = 9 * std::mem::size_of::<f32>() * 2;
+
+// Register the exact finalized payload, moving rather than copying the indexed
+// mesh. A preview token therefore never names the original full-resolution mesh.
+fn encode_loaded_mesh_bodies(
+    mut bodies: Vec<IndexedMesh>,
+    original_triangle_count: u32,
+    is_preview: bool,
+    model_triangle_count: Option<u32>,
+    metadata_json: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    let mut encoded = encode_mesh_bodies(&bodies, original_triangle_count, is_preview,
+        model_triangle_count, metadata_json, None)?;
+    if bodies.len() == 1 {
+        let token = registry::register(bodies.pop().expect("single body"));
+        encoded[28..32].copy_from_slice(&token.to_le_bytes());
+    }
+    Ok(encoded)
+}
 
 fn encode_mesh_bodies(
     bodies: &[IndexedMesh],
@@ -2781,6 +2811,24 @@ fn read_staging_bytes() -> Result<Vec<u8>, String> {
     }
 }
 
+// Ephemeral IPC envelope: the engine report itself never stores a process-local
+// token, so saving a normalized report cannot persist one into a VOXL scene.
+#[derive(serde::Serialize)]
+struct ImportMeshReport<'a, T: serde::Serialize> {
+    #[serde(flatten)]
+    report: &'a T,
+    slice_mesh_token: u32,
+}
+
+fn stage_import_mesh_result(mesh: IndexedMesh, report: &impl serde::Serialize) -> Result<String, String> {
+    replace_staging_with_mesh(&mesh)?;
+    // Register the exact final mesh whose soup was staged, transferring ownership
+    // rather than reloading, re-welding, or cloning its vertex/index storage.
+    let slice_mesh_token = registry::register(mesh);
+    serde_json::to_string(&ImportMeshReport { report, slice_mesh_token })
+        .map_err(|e| format!("serialize report: {e}"))
+}
+
 fn replace_staging_with_mesh(mesh: &IndexedMesh) -> Result<(), String> {
     let soup = mesh.to_triangle_soup();
     let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
@@ -2808,6 +2856,16 @@ fn replace_staging_with_mesh(mesh: &IndexedMesh) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final_import_token_is_ephemeral_top_level_report_metadata() {
+        let report = serde_json::json!({"version": 1, "post": {"triangle_count": 2}});
+        let response = serde_json::to_value(ImportMeshReport { report: &report, slice_mesh_token: 37 }).unwrap();
+        assert_eq!(response, serde_json::json!({
+            "version": 1, "post": {"triangle_count": 2}, "slice_mesh_token": 37
+        }));
+        assert!(report.get("slice_mesh_token").is_none());
+    }
 
     /// Parse the first body of an encoded `DFMX` response into (positions,
     /// normals) as f32 triples. These fixtures carry one body, so the soup
@@ -3055,6 +3113,12 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()) & 1, 1, "preview flag");
         assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 10, "original count");
         assert_eq!(u32::from_le_bytes(bytes[20..24].try_into().unwrap()), 6, "model count");
+        let token = u32::from_le_bytes(bytes[28..32].try_into().unwrap());
+        assert_ne!(token, 0, "preview gets a loader token");
+        let retained = loaded_mesh(token).expect("preview registered");
+        let (positions, _) = decode_positions_and_normals(&bytes);
+        assert_eq!(retained.to_triangle_soup(), positions.iter().flatten().copied().collect::<Vec<_>>(),
+            "token names actual rendered preview, not its full-resolution input");
     }
 
     #[test]
@@ -3108,6 +3172,8 @@ mod tests {
         assert_eq!(u32_at(&stl, 4), MESH_RESPONSE_VERSION, "DFMX version");
         assert_eq!(bodies(&stl), 1);
         assert_eq!(body_triangles(&stl, 0), 3);
+        assert_ne!(u32_at(&stl, 28), 0, "single-body path payload has a token");
+        assert_eq!(mesh_for_bake(u32_at(&stl, 28), 9).unwrap().triangles.len(), 3);
         assert_eq!(stl.len(), described_len(&stl));
         // A single-body load is classified natively, so its report rides the tail
         // and the frontend has nothing to stage back.
@@ -3254,6 +3320,11 @@ mod tests {
         // invalidates the classification it carries and grows on every reload.
         let as_stored = load_mesh_bytes_response(&stl, false, false).unwrap();
         assert_eq!(triangle_count(&as_stored), 1);
+        let token = u32::from_le_bytes(as_stored[28..32].try_into().unwrap());
+        assert_ne!(token, 0, "VOXL byte payload gets a loader token");
+        let retained = loaded_mesh(token).expect("byte payload registered");
+        let (positions, _) = decode_positions_and_normals(&as_stored);
+        assert_eq!(retained.to_triangle_soup(), positions.iter().flatten().copied().collect::<Vec<_>>());
     }
 
     #[test]

@@ -294,12 +294,23 @@ export function SliceMetricsDebugModal({
                   Raw Counters
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-0.5 text-xs max-h-[28vh] overflow-auto custom-scrollbar pr-1">
-                  <RuntimeStat label="Stage file path" value={benchmark.jobConfig.meshStageFilePath ?? '—'} />
                   <RuntimeStat label="artifactDir" value={runtime?.artifactDir ?? '—'} />
                   <RuntimeStat label="meshStageDir" value={runtime?.meshStageDir ?? '—'} />
                   <RuntimeStat label="bridgePayloadChars" value={benchmark.nativePerf.bridgePayloadChars != null ? benchmark.nativePerf.bridgePayloadChars.toLocaleString() : '—'} />
                   <RuntimeStat label="triangleFloatCount" value={benchmark.nativePerf.triangleFloatCount != null ? benchmark.nativePerf.triangleFloatCount.toLocaleString() : '—'} />
                   <RuntimeStat label="meshBytesLen" value={benchmark.nativePerf.meshBytesLen != null ? benchmark.nativePerf.meshBytesLen.toLocaleString() : '—'} />
+                  {Object.entries({
+                    bridgePayloadUploadedBytes: benchmark.nativePerf.bridgePayloadUploadedBytes,
+                    bridgePayloadReusedBytes: benchmark.nativePerf.bridgePayloadReusedBytes,
+                    bridgePayloadCacheMs: benchmark.nativePerf.bridgePayloadCacheMs,
+                  }).map(([key, value]) => (
+                    <RuntimeStat key={key} label={key} value={value == null ? '—' : value.toLocaleString()} />
+                  ))}
+                  {Object.entries(benchmark.nativePerf.bridgePayloadContributors ?? {}).flatMap(([field, size]) =>
+                    Object.entries(size).map(([unit, value]) => (
+                      <RuntimeStat key={`${field}.${unit}`} label={`payloadContributors.${field}.${unit}`} value={value.toLocaleString()} />
+                    )),
+                  )}
                   <RuntimeStat label="stageMeshChunkCount" value={benchmark.nativePerf.stageMeshChunkCount != null ? benchmark.nativePerf.stageMeshChunkCount.toLocaleString() : '—'} />
                   <RuntimeStat label="stageMeshAvgChunkBytes" value={benchmark.nativePerf.stageMeshAvgChunkBytes != null ? Math.round(benchmark.nativePerf.stageMeshAvgChunkBytes).toLocaleString() : '—'} />
                   <RuntimeStat label="stageMeshAckAppendMs" value={benchmark.nativePerf.stageMeshAckAppendMs != null ? benchmark.nativePerf.stageMeshAckAppendMs.toFixed(3) : '—'} />
@@ -417,7 +428,7 @@ function MetricCard({
 function RuntimeStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 py-1 border-b last:border-b-0" style={{ borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 35%)' }}>
-      <span className="min-w-0 text-xs" style={{ color: 'var(--text-muted)' }}>{label}</span>
+      <span className="min-w-0 text-xs" title={label} style={{ color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{label}</span>
       <span className="font-mono text-right text-xs break-all leading-tight" style={{ color: 'var(--text-strong)' }}>{value}</span>
     </div>
   );

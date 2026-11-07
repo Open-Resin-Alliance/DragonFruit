@@ -125,15 +125,18 @@ the next save. Both loaders take `refine: false` (`x-mesh-refine: 0` on
 `load_mesh_bytes`, the `refine` argument on `load_mesh_range`), and the VOXL loaders
 pass it whenever the caller holds a classification for that payload.
 
-**The staged passes are serialised on the JS side.** `stage_mesh_binary_set` and the
-`*_read_positions` commands share one process-wide buffer, so a stage/read window is
-only meaningful while nothing else stages. The VOXL import builds four models
-concurrently, and a model whose stored classification does not address its payload runs
-`classifyFromGeometry` inside its own build; two of those interleaved and each read back
-the other's soup, which rendered as one model's geometry standing in another's place.
-`withStagedMesh` (`src/utils/meshRepair.ts`) is the single queue every staged pass goes
-through — classify, analyze, both path repairs and the path load. It does not serialise
-the AO bake, which sends its soup in the request body precisely to avoid this buffer.
+**The staged passes are serialised on the JS side.** Publishing a cached mesh upload
+and the `*_read_positions` commands share one process-wide buffer, so a stage/read
+window is only meaningful while nothing else stages. The VOXL import builds four
+models concurrently, and a model whose stored classification does not address its
+payload runs `classifyFromGeometry` inside its own build; interleaved passes once
+read back the other's soup and rendered the wrong geometry.
+`runExclusiveNativeMesh` (`src/utils/tauriMeshBridge.ts`) now guards upload,
+processing and readback across repair, hollowing, punching, remeshing, organic cut
+and slicing, including path-based stage writers. Slicing acquires it after modifier
+baking. AO and geometry-indexed scans instead consume immutable named upload
+snapshots; they never borrow the anonymous stage. The lazy worker/chunk cache
+protocol and lifetime rules are in [Tauri IPC and Native Bridge](tauri-ipc-bridge.md).
 
 ## What DFMX deliberately drops
 

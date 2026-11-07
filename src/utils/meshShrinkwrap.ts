@@ -4,6 +4,7 @@ import {
   readPositionsFromCommand,
   solidRemeshStagedMesh,
   stageGeometryToStagedMesh,
+  runExclusiveNativeMesh,
   tetSurfaceStagedMesh,
   type SolidRemeshOptions,
   type SolidRemeshProgress,
@@ -73,31 +74,33 @@ export async function solidRemeshFromGeometry(
   const core = await loadTauriCore();
   if (!core) return null;
 
-  const wantsProgress = Boolean(sink?.onProgress || sink?.onToken);
-  const token = wantsProgress ? crypto.randomUUID() : null;
-  let unlisten: (() => void) | null = null;
-  if (token && sink) {
-    sink.onToken?.(token);
-    unlisten = await core.listen<SolidRemeshProgress>('mesh-solid-remesh-progress', (event) => {
-      const progress = event.payload;
-      if (progress && progress.token === token) sink.onProgress?.(progress);
-    });
-  }
+  return runExclusiveNativeMesh(async () => {
+    const wantsProgress = Boolean(sink?.onProgress || sink?.onToken);
+    const token = wantsProgress ? crypto.randomUUID() : null;
+    let unlisten: (() => void) | null = null;
+    if (token && sink) {
+      sink.onToken?.(token);
+      unlisten = await core.listen<SolidRemeshProgress>('mesh-solid-remesh-progress', (event) => {
+        const progress = event.payload;
+        if (progress && progress.token === token) sink.onProgress?.(progress);
+      });
+    }
 
-  try {
-    await stageGeometryToStagedMesh(core.invoke, geometry);
-    const report = await solidRemeshStagedMesh(core.invoke, options, token);
-    const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
+    try {
+      await stageGeometryToStagedMesh(core.invoke, geometry);
+      const report = await solidRemeshStagedMesh(core.invoke, options, token);
+      const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
 
-    const next = new THREE.BufferGeometry();
-    next.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    next.computeVertexNormals();
-    next.computeBoundingBox();
-    next.computeBoundingSphere();
-    return { report, geometry: next };
-  } finally {
-    unlisten?.();
-  }
+      const next = new THREE.BufferGeometry();
+      next.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      next.computeVertexNormals();
+      next.computeBoundingBox();
+      next.computeBoundingSphere();
+      return { report, geometry: next };
+    } finally {
+      unlisten?.();
+    }
+  });
 }
 
 export async function tetSurfaceFromGeometry(
@@ -108,29 +111,31 @@ export async function tetSurfaceFromGeometry(
   const core = await loadTauriCore();
   if (!core) return null;
 
-  const wantsProgress = Boolean(sink?.onProgress || sink?.onToken);
-  const token = wantsProgress ? crypto.randomUUID() : null;
-  let unlisten: (() => void) | null = null;
-  if (token && sink) {
-    sink.onToken?.(token);
-    unlisten = await core.listen<TetWrapProgress>('mesh-tet-surface-progress', (event) => {
-      const progress = event.payload;
-      if (progress && progress.token === token) sink.onProgress?.(progress);
-    });
-  }
+  return runExclusiveNativeMesh(async () => {
+    const wantsProgress = Boolean(sink?.onProgress || sink?.onToken);
+    const token = wantsProgress ? crypto.randomUUID() : null;
+    let unlisten: (() => void) | null = null;
+    if (token && sink) {
+      sink.onToken?.(token);
+      unlisten = await core.listen<TetWrapProgress>('mesh-tet-surface-progress', (event) => {
+        const progress = event.payload;
+        if (progress && progress.token === token) sink.onProgress?.(progress);
+      });
+    }
 
-  try {
-    await stageGeometryToStagedMesh(core.invoke, geometry);
-    const report = await tetSurfaceStagedMesh(core.invoke, options, token);
-    const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
+    try {
+      await stageGeometryToStagedMesh(core.invoke, geometry);
+      const report = await tetSurfaceStagedMesh(core.invoke, options, token);
+      const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
 
-    const next = new THREE.BufferGeometry();
-    next.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    next.computeVertexNormals();
-    next.computeBoundingBox();
-    next.computeBoundingSphere();
-    return { report, geometry: next };
-  } finally {
-    unlisten?.();
-  }
+      const next = new THREE.BufferGeometry();
+      next.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      next.computeVertexNormals();
+      next.computeBoundingBox();
+      next.computeBoundingSphere();
+      return { report, geometry: next };
+    } finally {
+      unlisten?.();
+    }
+  });
 }

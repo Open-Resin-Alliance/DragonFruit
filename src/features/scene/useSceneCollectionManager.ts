@@ -2004,6 +2004,7 @@ export function useSceneCollectionManager(options?: {
     return () => installExtraRetainedGeometries(null);
   }, [modelClipboard]);
   const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>([]);
+  const [pendingImportCount, setPendingImportCount] = useState(0);
   const [importProgress, setImportProgress] = useState<ImportProgressState>({
     active: false,
     type: null,
@@ -3262,6 +3263,7 @@ export function useSceneCollectionManager(options?: {
       return;
     }
 
+    setPendingImportCount((count) => count + 1);
     setImportProgress({
       active: true,
       type: 'mesh',
@@ -3615,6 +3617,7 @@ export function useSceneCollectionManager(options?: {
         }
       }
     } finally {
+      setPendingImportCount((count) => count - 1);
       setImportProgress({
         active: false,
         type: null,
@@ -5597,7 +5600,6 @@ export function useSceneCollectionManager(options?: {
     if (!source) return false;
 
     const supportClipboard = captureModelSupportsToClipboard(source.id);
-
     setModelClipboard([
       {
         sourceId: source.id,
@@ -6435,6 +6437,7 @@ export function useSceneCollectionManager(options?: {
       trackRecentOpenedFiles([file], 'scene', { sourcePaths: [options?.sourcePath] });
     }
 
+    setPendingImportCount((count) => count + 1);
     if (!options?.suppressProgress) {
       setImportProgress({
         active: true,
@@ -6948,6 +6951,7 @@ export function useSceneCollectionManager(options?: {
       }
       return false;
     } finally {
+      setPendingImportCount((count) => count - 1);
       if (!options?.suppressProgress) {
         setImportProgress({
           active: false,
@@ -6965,6 +6969,7 @@ export function useSceneCollectionManager(options?: {
       trackRecentOpenedFiles([file], 'scene', { sourcePaths: [options?.sourcePath] });
     }
 
+    setPendingImportCount((count) => count + 1);
     if (!options?.suppressProgress) {
       setImportProgress({
         active: true,
@@ -7197,7 +7202,6 @@ export function useSceneCollectionManager(options?: {
 
         try {
           const bytes = meshDataBytes;
-
           // Dedup key: the file's own SHA when present, else the content hash
           // (also the integrity value). Compute once; reused as the cache key.
           const declaredSha =
@@ -7625,6 +7629,7 @@ export function useSceneCollectionManager(options?: {
       }
       return false;
     } finally {
+      setPendingImportCount((count) => count - 1);
       if (!options?.suppressProgress) {
         setImportProgress({
           active: false,
@@ -9078,6 +9083,7 @@ export function useSceneCollectionManager(options?: {
 
     // Scene context
     sceneBounds,
+    isImporting: pendingImportCount > 0,
     importProgress,
     sceneImportReport,
     clearSceneImportReport,

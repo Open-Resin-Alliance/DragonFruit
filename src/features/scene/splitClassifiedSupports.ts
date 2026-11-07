@@ -4,6 +4,7 @@ import { buildModelEdgeGeometry } from '@/hooks/useStlGeometry';
 import type { LoadedModel } from './useSceneCollectionManager';
 import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
+import type { LoadedSliceMeshPartitions, SliceMeshBounds } from '@/utils/loadedSliceMesh';
 
 export type ClassifiedSupportGeometrySplit = {
   modelGeometry: GeometryWithBounds;
@@ -20,11 +21,19 @@ function buildGeometryWithBounds(
   triangleCount: number,
   interactive: boolean,
   computeEdgeGeometry: boolean,
+  retainedBounds?: SliceMeshBounds,
 ): GeometryWithBounds {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   if (interactive) geometry.computeVertexNormals();
-  geometry.computeBoundingBox();
+  if (retainedBounds) {
+    geometry.boundingBox = new THREE.Box3(
+      new THREE.Vector3(retainedBounds.minX, retainedBounds.minY, retainedBounds.minZ),
+      new THREE.Vector3(retainedBounds.maxX, retainedBounds.maxY, retainedBounds.maxZ),
+    );
+  } else {
+    geometry.computeBoundingBox();
+  }
   const bbox = geometry.boundingBox?.clone() ?? new THREE.Box3();
   const center = bbox.getCenter(new THREE.Vector3());
   const size = bbox.getSize(new THREE.Vector3());
@@ -44,7 +53,7 @@ function buildGeometryWithBounds(
 
 export function splitClassifiedSupportGeometry(
   source: LoadedModel,
-  options: { interactive?: boolean; computeEdgeGeometry?: boolean } = {},
+  options: { interactive?: boolean; computeEdgeGeometry?: boolean; retainedBounds?: LoadedSliceMeshPartitions } = {},
 ): ClassifiedSupportGeometrySplit | null {
   const modelTriangleCount = Math.floor(
     source.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? 0,
@@ -69,8 +78,10 @@ export function splitClassifiedSupportGeometry(
   // Native classification rewrites the position soup model-first. The
   // context-menu behavior that is known to work slices this storage directly;
   // an index may be attached later and must not redefine this boundary.
-  const modelPositions = positions.slice(0, modelFloatEnd);
-  const supportPositions = positions.slice(modelFloatEnd);
+  // Native-retained, unmodified output uses read-only views with already-computed bounds.
+  const retainedBounds = options.interactive ? undefined : options.retainedBounds;
+  const modelPositions = retainedBounds ? positions.subarray(0, modelFloatEnd) : positions.slice(0, modelFloatEnd);
+  const supportPositions = retainedBounds ? positions.subarray(modelFloatEnd) : positions.slice(modelFloatEnd);
   const interactive = options.interactive === true;
   const computeEdgeGeometry = options.computeEdgeGeometry === true;
   const modelGeometry = buildGeometryWithBounds(
@@ -78,12 +89,14 @@ export function splitClassifiedSupportGeometry(
     modelTriangleCount,
     interactive,
     computeEdgeGeometry,
+    retainedBounds?.modelBounds,
   );
   const supportGeometry = buildGeometryWithBounds(
     supportPositions,
     supportTriangleCount,
     interactive,
     computeEdgeGeometry,
+    retainedBounds?.supportBounds,
   );
 
   const originalCenter = source.geometry.center;

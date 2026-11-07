@@ -371,6 +371,8 @@ export type UseSceneAutosaveOptions = {
    * later ticks stop re-attempting — and never downgrade — the now-3.1 file.
    */
   onSceneFormatUpgraded?: () => void;
+  /** Real content notifications are independent of autosave enablement and persistence. */
+  onSceneContentChanged?: (revision: number) => void;
 };
 
 export type UseSceneAutosaveResult = {
@@ -405,6 +407,7 @@ export function useSceneAutosave({
   preferredSavePath = null,
   sceneFormatChunked = true,
   onSceneFormatUpgraded,
+  onSceneContentChanged,
 }: UseSceneAutosaveOptions): UseSceneAutosaveResult {
   const [isAutosaving, setIsAutosaving] = React.useState(false);
   const [lastAutosaveAt, setLastAutosaveAt] = React.useState<string | null>(null);
@@ -442,6 +445,8 @@ export function useSceneAutosave({
   sceneFormatChunkedRef.current = sceneFormatChunked;
   const onSceneFormatUpgradedRef = React.useRef(onSceneFormatUpgraded);
   onSceneFormatUpgradedRef.current = onSceneFormatUpgraded;
+  const onSceneContentChangedRef = React.useRef(onSceneContentChanged);
+  onSceneContentChangedRef.current = onSceneContentChanged;
 
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const capRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -724,6 +729,7 @@ export function useSceneAutosave({
     // Every trigger advances the content revision; the gate compares this to the
     // revision of the last committed write to skip idle/duplicate ticks.
     revisionRef.current += 1;
+    onSceneContentChangedRef.current?.(revisionRef.current);
     if (!enabledRef.current) return;
     if (Date.now() < cooldownUntilRef.current) {
       if (debounceRef.current !== null) {

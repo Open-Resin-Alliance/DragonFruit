@@ -251,10 +251,13 @@ fn scan_minima_internal(mesh: &IndexedMesh, k: Option<usize>) -> Vec<LocalMinimu
 /// in the original only served the dropped brush-proposal feature).
 #[tauri::command]
 pub async fn scan_mesh_minima(
-    positions: Vec<f32>,
+    mesh_upload_id: String,
+    expected_bytes: usize,
     k: Option<usize>,
 ) -> Result<Vec<LocalMinimum>, String> {
+    let bytes = crate::mesh_chunk_upload::take_snapshot(&mesh_upload_id, expected_bytes)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let positions = crate::bytes_to_f32_vec(&bytes)?;
         let mesh = IndexedMesh::from_triangle_soup(&positions, 1e-5);
         let tri_count = mesh.triangle_count();
         let vert_count = mesh.vertex_count();
@@ -949,28 +952,13 @@ pub async fn scan_islands_from_path(
     k: Option<usize>,
     overhang_self_support_angle_deg: Option<f32>,
     overhang_px_mm: Option<f32>,
-    overhang_from_staged: Option<bool>,
+    mesh_upload_id: String,
+    expected_bytes: usize,
     has_raft: Option<bool>,
 ) -> Result<CombinedIslandScanResult, String> {
-    // The frontend stages the soup it renders so overhang ids index the
-    // overlay geometry. A missing buffer falls back to the file mesh.
-    let staged_overhang_soup: Option<Vec<f32>> = if overhang_from_staged.unwrap_or(false) {
-        let bytes = crate::staged_mesh()
-            .lock()
-            .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
-            .take();
-        match bytes {
-            Some(bytes) => Some(crate::bytes_to_f32_vec(&bytes)?),
-            None => {
-                log::warn!(
-                    "[islands-combined] overhang_from_staged was set but no mesh was staged; using the file mesh"
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // Indexed overhang output always uses this request's exact rendered soup.
+    let bytes = crate::mesh_chunk_upload::take_snapshot(&mesh_upload_id, expected_bytes)?;
+    let staged_overhang_soup = Some(crate::bytes_to_f32_vec(&bytes)?);
 
     tauri::async_runtime::spawn_blocking(move || {
         let mesh = load_and_transform_mesh(&file_path, matrix, center)?;
@@ -999,10 +987,12 @@ pub async fn scan_islands_from_path(
 ///
 /// This is the pathless-model entrypoint (a VOXL has no source file): the
 /// frontend stages exactly the positions it renders, so every returned
-/// `triangleId` indexes the rendered geometry. It consumes the staged buffer.
+/// `triangleId` indexes the rendered geometry. It consumes a named upload snapshot.
 #[tauri::command]
 pub async fn scan_islands_staged(
     app: crate::DragonFruitAppHandle,
+    mesh_upload_id: String,
+    expected_bytes: usize,
     layer_height_mm: f64,
     px_mm: f64,
     support_buffer_mm: f64,
@@ -1012,12 +1002,8 @@ pub async fn scan_islands_staged(
     overhang_px_mm: Option<f32>,
     has_raft: Option<bool>,
 ) -> Result<CombinedIslandScanResult, String> {
+    let bytes = crate::mesh_chunk_upload::take_snapshot(&mesh_upload_id, expected_bytes)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = crate::staged_mesh()
-            .lock()
-            .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
-            .take()
-            .ok_or("No staged mesh binary — call stage_mesh_binary_set first")?;
         let soup = crate::bytes_to_f32_vec(&bytes)?;
         if soup.is_empty() || soup.len() % 9 != 0 {
             return Err(format!(

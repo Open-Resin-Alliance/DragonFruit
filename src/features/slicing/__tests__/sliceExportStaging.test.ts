@@ -7,6 +7,7 @@ import { storeModelMeshModifiers, getStoredMeshModifiers, deleteStoredMeshModifi
 import { clearPreparedGeometryCacheForModel } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { runSliceExportOrchestrator } from '../sliceExportOrchestrator';
 import { installFakeWindow } from '@/utils/__tests__/helpers/fakeWindow';
+import { installFakeMeshChunkUpload } from '@/utils/__tests__/helpers/fakeMeshChunkUpload';
 import { getSnapshot, setSnapshot } from '@/supports/state';
 import { createEmptySupportCollections } from '@/supports/supportTypeRegistry';
 
@@ -28,14 +29,11 @@ function modelFromPositions(id: string, positions: Float32Array): LoadedModel {
   };
 }
 
-test('streamed slice input excludes raw hollowing output and preserves the model/support partition', async () => {
-  const original = new Float32Array([-2, -2, 0, 2, -2, 0, 0, 2, 0]);
+test('slice input excludes raw hollowing output and preserves the model/support partition', async () => {
+  const original = new Float32Array([-2.125, -2.25, 0.03125, 2.25, -2.125, 0.03125, 0.0625, 2.125, 0.03125]);
   const hollowed = new Float32Array([...original, -1, -1, 0, 1, -1, 0, 0, 1, 0]);
   const support = new Float32Array([3, 3, 0, 4, 3, 0, 3, 4, 0]);
   const model = modelFromPositions('pending-hollow', original);
-  // The transport planner uses this estimate. Force streaming without allocating
-  // a multi-million-triangle fixture; the collector reads the actual geometry.
-  model.polygonCount = 16_000_000;
   const hollowing = {
     enabled: true, bakedIntoGeometry: false, mode: 'cavity', voxelSizeMm: 0.5,
     shellThicknessMm: 1, openFace: 'z_max',
@@ -44,42 +42,26 @@ test('streamed slice input excludes raw hollowing output and preserves the model
   } as const;
   storeModelMeshModifiers(model.id, { hollowing });
   const redoneModel = modelFromPositions(model.id, hollowed);
-  redoneModel.polygonCount = model.polygonCount;
   const supportModel = modelFromPositions('support', support);
   supportModel.isSupportGeometry = true;
 
-  let staged = new Uint8Array(0);
-  let streamedChunks = 0;
   let hollowCalls = 0;
   let captured: { bytes: Uint8Array; modelCount: number } | undefined;
   const reachedSlicer = new Error('captured native slice input');
   const invoke = async (command: string, args?: unknown): Promise<unknown> => {
     switch (command) {
-      case 'stage_mesh_binary_start':
-        staged = new Uint8Array(0);
-        return;
-      case 'stage_mesh_binary_set':
-        staged = new Uint8Array(args as Uint8Array);
-        return {};
       case 'mesh_hollow_staged':
         hollowCalls += 1;
+        const source = upload.readStaged();
+        assert.deepEqual(new Float32Array(source.buffer), original, 'hollowing receives the restored source, before scene assembly');
         // Native hollowing replaces the shared stage with raw f32 output.
-        staged = new Uint8Array(hollowed.buffer.slice(0));
+        upload.replaceStaged(new Uint8Array(hollowed.buffer));
         return JSON.stringify({ removedVoxels: 1 });
       case 'mesh_repair_read_positions':
         // Reading positions copies, rather than consumes, that shared buffer.
-        return staged.slice();
+        return upload.readStaged();
       case 'mesh_hollow_staged_read_cavity_positions':
         return new Uint8Array(0);
-      case 'stage_mesh_binary_chunk': {
-        const chunk = args as Uint8Array;
-        const next = new Uint8Array(staged.length + chunk.length);
-        next.set(staged);
-        next.set(chunk, staged.length);
-        staged = next;
-        streamedChunks += 1;
-        return {};
-      }
       case 'plugin:event|listen':
         return 1;
       case 'plugin:event|unlisten':
@@ -87,16 +69,17 @@ test('streamed slice input excludes raw hollowing output and preserves the model
       case 'slice_solid_native_to_temp_path': {
         const metadata = JSON.parse((args as { jobJson: string }).jobJson);
         assert.equal(metadata.mesh_encoding, 'raw_f32');
-        captured = { bytes: staged.slice(), modelCount: metadata.model_triangle_count };
+        captured = { bytes: upload.readStaged(), modelCount: metadata.model_triangle_count };
         throw reachedSlicer;
       }
       default:
         throw new Error(`Unexpected native command: ${command}`);
     }
   };
+  const upload = installFakeMeshChunkUpload(invoke);
   const restoreWindow = installFakeWindow({
     dispatchEvent: () => true,
-    __TAURI_INTERNALS__: { invoke, transformCallback: () => 1 },
+    __TAURI_INTERNALS__: { invoke: upload.invoke, transformCallback: () => 1 },
     __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
   });
   const stage = async (currentModel: LoadedModel) => {
@@ -121,7 +104,6 @@ test('streamed slice input excludes raw hollowing output and preserves the model
   try {
     const first = await stage(model);
 
-    assert.ok(streamedChunks > 0, 'exercise the streamed transport, not single-shot replacement');
     assert.equal(hollowCalls, 1);
     assert.equal(first.modelCount, hollowed.length / 9);
     assert.equal(first.bytes.length / 36, (hollowed.length + support.length) / 9,
@@ -164,6 +146,7 @@ test('streamed slice input excludes raw hollowing output and preserves the model
     assert.equal(hollowCalls, 1, 'enabled/unbaked flags without a source must not invoke native hollowing');
   } finally {
     restoreWindow();
+    upload.restore();
     model.geometry.geometry.dispose();
     supportModel.geometry.geometry.dispose();
     redoneModel.geometry.geometry.dispose();
@@ -184,14 +167,10 @@ test('slice input excludes models marked outside the build volume', async () => 
     14, 2, 15,
   ]));
 
-  let staged = new Uint8Array(0);
   let captured: { bytes: Uint8Array; modelCount: number; totalLayers: number } | undefined;
   const reachedSlicer = new Error('captured filtered native slice input');
   const invoke = async (command: string, args?: unknown): Promise<unknown> => {
     switch (command) {
-      case 'stage_mesh_binary_set':
-        staged = new Uint8Array(args as Uint8Array);
-        return {};
       case 'plugin:event|listen':
         return 1;
       case 'plugin:event|unlisten':
@@ -199,7 +178,7 @@ test('slice input excludes models marked outside the build volume', async () => 
       case 'slice_solid_native_to_temp_path': {
         const metadata = JSON.parse((args as { jobJson: string }).jobJson);
         captured = {
-          bytes: staged.slice(),
+          bytes: upload.readStaged(),
           modelCount: metadata.model_triangle_count,
           totalLayers: metadata.total_layers,
         };
@@ -209,9 +188,10 @@ test('slice input excludes models marked outside the build volume', async () => 
         throw new Error(`Unexpected native command: ${command}`);
     }
   };
+  const upload = installFakeMeshChunkUpload(invoke);
   const restoreWindow = installFakeWindow({
     dispatchEvent: () => true,
-    __TAURI_INTERNALS__: { invoke, transformCallback: () => 1 },
+    __TAURI_INTERNALS__: { invoke: upload.invoke, transformCallback: () => 1 },
     __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
   });
 
@@ -235,6 +215,7 @@ test('slice input excludes models marked outside the build volume', async () => 
     assert.equal(captured.bytes.length, 36, 'only the selected model reaches the native slicer');
   } finally {
     restoreWindow();
+    upload.restore();
     inside.geometry.geometry.dispose();
     outside.geometry.geometry.dispose();
   }
@@ -268,16 +249,11 @@ test('native staged 3DAA contact geometry shrinks only generated contact faces',
     },
   };
   const previousSupportState = getSnapshot();
-  let staged = new Uint8Array(0);
   let captured: { bytes: Uint8Array; modelCount: number } | undefined;
   const getCaptured = () => captured;
   const reachedSlicer = new Error('captured staged tip geometry');
   const invoke = async (command: string, args?: unknown): Promise<unknown> => {
     switch (command) {
-      case 'stage_mesh_binary_set':
-        assert.ok(args instanceof Uint8Array);
-        staged = args.slice();
-        return {};
       case 'plugin:event|listen':
         return 1;
       case 'plugin:event|unlisten':
@@ -288,16 +264,17 @@ test('native staged 3DAA contact geometry shrinks only generated contact faces',
         assert.equal(job.mesh_encoding, 'raw_f32');
         assert.equal(Object.hasOwn(job, 'support_tip_shrink_percent'), false, 'tip shrink is geometry, not native metadata');
         assert.equal(Object.hasOwn(job, 'supportTipShrinkPercent'), false);
-        captured = { bytes: staged.slice(), modelCount: job.model_triangle_count };
+        captured = { bytes: upload.readStaged(), modelCount: job.model_triangle_count };
         throw reachedSlicer;
       }
       default:
         throw new Error(`Unexpected native command: ${command}`);
     }
   };
+  const upload = installFakeMeshChunkUpload(invoke);
   const restoreWindow = installFakeWindow({
     dispatchEvent: () => true,
-    __TAURI_INTERNALS__: { invoke, transformCallback: () => 1 },
+    __TAURI_INTERNALS__: { invoke: upload.invoke, transformCallback: () => 1 },
     __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
   });
   try {
@@ -307,9 +284,8 @@ test('native staged 3DAA contact geometry shrinks only generated contact faces',
       hoveredCategory: 'none', interactionWarning: null,
     });
     const authoredAnchor = structuredClone(getSnapshot().stumps[anchor.id]);
-    // The staged transport is raw f32 now, so this is only a tolerance: it bounds
-    // float32 rounding in the generated support geometry.
-    const step = printerProfile.buildVolumeMm.width / 65535;
+    // Allow float32 rounding, not a build-volume-dependent quantization step.
+    const coordinateTolerance = 1e-6;
     // Only 3DAA shrinks the tips; the material's 10 % applies when the override
     // does not set its own.
     const cases = [
@@ -323,7 +299,6 @@ test('native staged 3DAA contact geometry shrinks only generated contact faces',
     let baselineOtherSupport: number[] | undefined;
     let baselineContactZ: number | undefined;
     for (const { mode, level, percent, diameter } of cases) {
-      staged = new Uint8Array(0);
       captured = undefined;
       await assert.rejects(runSliceExportOrchestrator({
         models: [model], printerProfile, materialProfile,
@@ -353,9 +328,9 @@ test('native staged 3DAA contact geometry shrinks only generated contact faces',
         else otherSupport.push(supportCoordinates[i], supportCoordinates[i + 1], supportCoordinates[i + 2]);
       }
       assert.ok(contactX.length > 0, 'contact-plane vertices are staged');
-      assert.ok(Math.abs(contactZ - 5) <= step, 'measured plane belongs to the contact face');
-      assert.ok(Math.abs(Math.max(...contactX) - Math.min(...contactX) - diameter) <= 2 * step,
-        `${mode}/${level}/${percent}: contact diameter ${diameter} mm within a step per coordinate`);
+      assert.ok(Math.abs(contactZ - 5) <= coordinateTolerance, 'measured plane belongs to the contact face');
+      assert.ok(Math.abs(Math.max(...contactX) - Math.min(...contactX) - diameter) <= 2 * coordinateTolerance,
+        `${mode}/${level}/${percent}: contact diameter ${diameter} mm within float32 rounding`);
       if (baselineModel) {
         assert.deepEqual(modelCoordinates, baselineModel, 'model triangles stay unchanged');
         assert.deepEqual(otherSupport, baselineOtherSupport, 'root, shaft and socket-ring geometry stays unchanged');
@@ -365,7 +340,7 @@ test('native staged 3DAA contact geometry shrinks only generated contact faces',
         baselineOtherSupport = otherSupport;
         baselineContactZ = contactZ;
         for (const z of [0, 1, 1.1, 2.5, 2.8]) {
-          assert.ok(otherSupport.some((_, i) => i % 3 === 2 && Math.abs(otherSupport[i] - z) <= step),
+          assert.ok(otherSupport.some((_, i) => i % 3 === 2 && Math.abs(otherSupport[i] - z) <= coordinateTolerance),
             `root, shaft and socket ring include z=${z} mm`);
         }
       }
@@ -374,6 +349,7 @@ test('native staged 3DAA contact geometry shrinks only generated contact faces',
   } finally {
     setSnapshot(previousSupportState);
     restoreWindow();
+    upload.restore();
     model.geometry.geometry.dispose();
   }
 });
