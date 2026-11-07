@@ -303,6 +303,9 @@ export function SliceMetricsDebugModal({
                     bridgePayloadUploadedBytes: benchmark.nativePerf.bridgePayloadUploadedBytes,
                     bridgePayloadReusedBytes: benchmark.nativePerf.bridgePayloadReusedBytes,
                     bridgePayloadCacheMs: benchmark.nativePerf.bridgePayloadCacheMs,
+                    meshPrepSharedWaitMs: benchmark.nativePerf.meshPrepSharedWaitMs,
+                    meshPrepStageQueueMs: benchmark.nativePerf.meshPrepStageQueueMs,
+                    meshUploadQueueWaitMs: benchmark.nativePerf.meshUploadQueueWaitMs,
                   }).map(([key, value]) => (
                     <RuntimeStat key={key} label={key} value={value == null ? '—' : value.toLocaleString()} />
                   ))}

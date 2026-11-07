@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import type { InvokeArgs } from '@tauri-apps/api/core';
-import { createMeshChunkUpload, type MeshChunkUploadSession } from '../meshChunkUpload';
+import { createMeshChunkUpload, invokeWithChunkedMesh, restoreCachedSliceMesh, stageMeshBytes, type MeshChunkUploadSession } from '../meshChunkUpload';
+import { installFakeMeshChunkUpload } from './helpers/fakeMeshChunkUpload';
 import type { TauriInvoke } from '../tauriMeshBridge';
 import { runExclusiveNativeMesh } from '../tauriMeshBridge';
 import {
@@ -270,5 +271,42 @@ test('cancelling a queued native mesh pass never takes the active pass ownership
   } finally {
     release.resolve();
     await first;
+  }
+});
+
+
+test('retained slice restore does not wait for an unrelated native analysis computation', { timeout: 5000 }, async (t) => {
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const abort = new AbortController();
+  t.signal.addEventListener('abort', () => { abort.abort(); release.resolve(undefined); }, { once: true });
+  const sliceBytes = new Uint8Array(new Float32Array([0,0,0, 1,0,0, 0,1,0]).buffer);
+  const analysisBytes = new Uint8Array(new Float32Array([0,0,0, 2,0,0, 0,3,0]).buffer);
+  const backend = installFakeMeshChunkUpload(async (command, args) => {
+    assert.equal(command, 'long_analysis');
+    const received = backend.readUpload(args);
+    entered.resolve(undefined);
+    await release.promise;
+    assert.deepEqual(received, analysisBytes, 'restoring slice data must not replace the analysis input');
+    const p = new Float32Array(received.buffer, received.byteOffset, received.byteLength / 4);
+    return Math.abs((p[3]-p[0])*(p[7]-p[1])-(p[4]-p[1])*(p[6]-p[0]))/2;
+  });
+  let analysis: Promise<number> | undefined;
+  try {
+    const cached = await stageMeshBytes(backend.invoke, sliceBytes, { retainForSlice: true });
+    assert.ok(cached.sliceSnapshotId);
+    analysis = invokeWithChunkedMesh<number>(backend.invoke, 'long_analysis', analysisBytes);
+    await entered.promise;
+    const restored = await runExclusiveNativeMesh(() => restoreCachedSliceMesh(backend.invoke, cached.sliceSnapshotId!, abort.signal));
+    assert.ok(restored);
+    assert.equal(restored.uploadedBytes, 0);
+    assert.equal(restored.uploadQueueWaitMs, 0);
+    assert.deepEqual(backend.readStaged(), sliceBytes);
+    release.resolve(undefined);
+    assert.equal(await analysis, 3);
+  } finally {
+    abort.abort(); release.resolve(undefined);
+    await analysis?.catch(() => undefined);
+    backend.restore();
   }
 });

@@ -2004,6 +2004,8 @@ export function useSceneCollectionManager(options?: {
     return () => installExtraRetainedGeometries(null);
   }, [modelClipboard]);
   const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>([]);
+  // Progress text belongs to the latest producer; readiness covers overlapping imports.
+  const [pendingImportCount, setPendingImportCount] = useState(0);
   const [importProgress, setImportProgress] = useState<ImportProgressState>({
     active: false,
     type: null,
@@ -3262,6 +3264,7 @@ export function useSceneCollectionManager(options?: {
       return;
     }
 
+    setPendingImportCount((count) => count + 1);
     setImportProgress({
       active: true,
       type: 'mesh',
@@ -3615,6 +3618,7 @@ export function useSceneCollectionManager(options?: {
         }
       }
     } finally {
+      setPendingImportCount((count) => count - 1);
       setImportProgress({
         active: false,
         type: null,
@@ -6435,6 +6439,7 @@ export function useSceneCollectionManager(options?: {
       trackRecentOpenedFiles([file], 'scene', { sourcePaths: [options?.sourcePath] });
     }
 
+    setPendingImportCount((count) => count + 1);
     if (!options?.suppressProgress) {
       setImportProgress({
         active: true,
@@ -6916,7 +6921,13 @@ export function useSceneCollectionManager(options?: {
           arrangeImportedModels();
         };
         if (typeof window !== 'undefined') {
-          requestAnimationFrame(applySupports);
+          // Import readiness includes the deferred support merge and arrangement.
+          await new Promise<void>((resolve, reject) => {
+            requestAnimationFrame(() => {
+              try { applySupports(); resolve(); }
+              catch (error) { reject(error); }
+            });
+          });
         } else {
           applySupports();
         }
@@ -6948,6 +6959,7 @@ export function useSceneCollectionManager(options?: {
       }
       return false;
     } finally {
+      setPendingImportCount((count) => count - 1);
       if (!options?.suppressProgress) {
         setImportProgress({
           active: false,
@@ -6965,6 +6977,7 @@ export function useSceneCollectionManager(options?: {
       trackRecentOpenedFiles([file], 'scene', { sourcePaths: [options?.sourcePath] });
     }
 
+    setPendingImportCount((count) => count + 1);
     if (!options?.suppressProgress) {
       setImportProgress({
         active: true,
@@ -7625,6 +7638,7 @@ export function useSceneCollectionManager(options?: {
       }
       return false;
     } finally {
+      setPendingImportCount((count) => count - 1);
       if (!options?.suppressProgress) {
         setImportProgress({
           active: false,
@@ -9078,6 +9092,7 @@ export function useSceneCollectionManager(options?: {
 
     // Scene context
     sceneBounds,
+    isImporting: pendingImportCount > 0,
     importProgress,
     sceneImportReport,
     clearSceneImportReport,

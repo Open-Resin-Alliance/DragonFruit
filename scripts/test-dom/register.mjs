@@ -26,7 +26,7 @@ import fs from 'node:fs';
 import Module, { createRequire } from 'node:module';
 import path from 'node:path';
 import { after } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import babel from '@babel/core';
 import linguiMacro from '@lingui/babel-plugin-lingui-macro';
 import esbuild from 'esbuild';
@@ -93,6 +93,8 @@ function compile(filename, source) {
         format: 'cjs',
         jsx: 'automatic',
         target: 'node24',
+        // CJS tests still need the real module URL for the production module-worker constructor.
+        define: { 'import.meta.url': JSON.stringify(pathToFileURL(filename).href) },
         sourcefile: filename,
         sourcemap: 'inline',
     }).code;

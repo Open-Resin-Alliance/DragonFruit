@@ -162,8 +162,6 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
       }
       case 'restore_cached_slice_mesh':
         stats.restoreCalls += 1;
-        assert.equal(pending, undefined, 'restoring while an upload is pending');
-        assert.equal(ready, undefined, 'restoring while a snapshot awaits consumption');
         if (!retained || retained.snapshotId !== fields?.snapshotId) {
           result = null;
         } else {

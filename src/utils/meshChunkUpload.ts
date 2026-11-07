@@ -21,6 +21,9 @@ export interface MeshChunkUploadResult extends MeshChunkUploadAck {
   ipcMs: number;
   /** Upload session wall time after acquiring its turn. */
   wallMs: number;
+  uploadQueueWaitMs: number;
+  stageQueueWaitMs?: number;
+  preparationWaitMs?: number;
 }
 
 export interface MeshChunkUploadSession {
@@ -87,6 +90,7 @@ class ChunkUploadSession implements MeshChunkUploadSession {
     private readonly invoke: TauriInvoke,
     private readonly release: () => void,
     private readonly signal?: AbortSignal,
+    private readonly uploadQueueWaitMs = 0,
   ) {
     this.worker = new Worker(new URL('./meshChunkUpload.worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (event: MessageEvent<MeshChunkWorkerOutput>) => this.onMessage(event.data);
@@ -203,7 +207,7 @@ class ChunkUploadSession implements MeshChunkUploadSession {
         this.uploadId = undefined;
         this.release();
       }
-      return { ...ack, ipcMs: this.ipcMs, wallMs: performance.now() - this.startedAt };
+      return { ...ack, ipcMs: this.ipcMs, wallMs: performance.now() - this.startedAt, uploadQueueWaitMs: this.uploadQueueWaitMs };
     });
   }
 
@@ -254,11 +258,13 @@ export async function createMeshChunkUpload(
   invoke: TauriInvoke,
   options: MeshChunkUploadOptions = {},
 ): Promise<MeshChunkUploadSession> {
+  const queuedAt = performance.now();
   const release = await acquireUploadTurn(options.signal);
+  const uploadQueueWaitMs = performance.now() - queuedAt;
   let session: ChunkUploadSession;
   try {
     throwIfAborted(options.signal);
-    session = new ChunkUploadSession(invoke, release, options.signal);
+    session = new ChunkUploadSession(invoke, release, options.signal, uploadQueueWaitMs);
   } catch (error) {
     release();
     throw error;
@@ -315,15 +321,12 @@ export async function restoreCachedSliceMesh(
   snapshotId: string,
   signal?: AbortSignal,
 ): Promise<MeshChunkUploadResult | null> {
-  const release = await acquireUploadTurn(signal);
+  // This immutable retained input does not use the pending/ready upload slot.
+  // In particular, do not wait for an AO consumer's entire computation to finish.
+  throwIfAborted(signal);
   const started = performance.now();
-  try {
-    throwIfAborted(signal);
-    const ack = await invoke<MeshChunkUploadAck | null>('restore_cached_slice_mesh', { snapshotId });
-    const elapsed = performance.now() - started;
-    throwIfAborted(signal);
-    return ack ? { ...ack, ipcMs: elapsed, wallMs: elapsed } : null;
-  } finally {
-    release();
-  }
+  const ack = await invoke<MeshChunkUploadAck | null>('restore_cached_slice_mesh', { snapshotId });
+  const elapsed = performance.now() - started;
+  throwIfAborted(signal);
+  return ack ? { ...ack, ipcMs: elapsed, wallMs: elapsed, uploadQueueWaitMs: 0 } : null;
 }

@@ -21,9 +21,11 @@ export class SliceMeshWarmup {
   private readonly unsubscribe: () => void;
   private disposed = false;
   private imminentSlice = false;
+  private ready = true;
+  private paused = false;
 
   constructor(private readonly host: Window) {
-    this.unsubscribe = subscribeSliceMeshInputChanges(() => this.update(this.options, this.imminentSlice));
+    this.unsubscribe = subscribeSliceMeshInputChanges(() => this.update(this.options, this.imminentSlice, this.ready, this.paused));
     host.addEventListener('pointerdown', this.onPointerDown, true);
     host.addEventListener('pointerup', this.onPointerUp, true);
     host.addEventListener('pointercancel', this.onPointerUp, true);
@@ -34,8 +36,15 @@ export class SliceMeshWarmup {
     host.document.addEventListener('visibilitychange', this.onVisibility);
   }
 
-  update(options: SliceMeshPrewarmOptions | null, imminentSlice = false): void {
+  update(options: SliceMeshPrewarmOptions | null, imminentSlice = false, ready = true, paused = false): void {
     if (this.disposed) return;
+    const wasReady = this.ready;
+    const wasPaused = this.paused;
+    this.ready = ready;
+    this.paused = paused;
+    // Foreground startup can spend time on thumbnails/save before joining preparation.
+    // Stop new work while busy, but keep the matching background lease available to it.
+    if (paused) this.cancelScheduled();
     const becameImminent = imminentSlice && !this.imminentSlice;
     this.imminentSlice = imminentSlice;
     this.options = options;
@@ -48,9 +57,19 @@ export class SliceMeshWarmup {
       this.preparing = null;
       return;
     }
+    if (!ready) {
+      this.cancelScheduled();
+      // A settled retry is allowed only for work interrupted here, not a user cancel.
+      if (this.preparing) {
+        this.preparing.abort();
+        this.preparing = null;
+        this.attempted = null;
+      }
+      return;
+    }
     const signature = getSliceMeshInputSignature(options);
     if (this.signature && equalSliceMeshInputSignatures(this.signature, signature)) {
-      if (becameImminent) this.schedule(true);
+      if (becameImminent || !wasReady || (wasPaused && !paused)) this.schedule(becameImminent);
       return;
     }
     const initialContext = this.signature === null;
@@ -95,7 +114,7 @@ export class SliceMeshWarmup {
   }
 
   private schedule(initialContext = false): void {
-    if (this.disposed || !this.options || !this.signature || this.pointers.size > 0
+    if (this.disposed || !this.ready || this.paused || !this.options || !this.signature || this.pointers.size > 0
       || this.host.document.hidden || (this.attempted
         && equalSliceMeshInputSignatures(this.signature, this.attempted))) return;
     this.cancelScheduled();
@@ -115,11 +134,11 @@ export class SliceMeshWarmup {
   }
 
   private start(): void {
-    if (this.disposed || !this.options || !this.signature || this.pointers.size > 0
+    if (this.disposed || !this.ready || this.paused || !this.options || !this.signature || this.pointers.size > 0
       || this.host.document.hidden) return;
     const signature = getSliceMeshInputSignature(this.options);
     if (!equalSliceMeshInputSignatures(signature, this.signature)) {
-      this.update(this.options, this.imminentSlice);
+      this.update(this.options, this.imminentSlice, this.ready, this.paused);
       return;
     }
     this.attempted = signature;

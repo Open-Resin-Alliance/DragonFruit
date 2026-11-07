@@ -190,6 +190,9 @@ export type SliceExportResult = {
             meshBytesLen: number | null;
             stageMeshMs: number | null;
             stageMeshWallMs: number;
+            meshPrepSharedWaitMs?: number;
+            meshPrepStageQueueMs?: number;
+            meshUploadQueueWaitMs?: number;
             stageMeshBytes: number | null;
             stageMeshUploadedBytes: number;
             stageMeshReusedBytes: number;
@@ -473,6 +476,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                     meshBytesLen: encodedArtifact.bridge?.meshBytesLen ?? null,
                     stageMeshMs: stageMeshIpcMs,
                     stageMeshWallMs: chunkAck.wallMs,
+                    meshPrepSharedWaitMs: chunkAck.preparationWaitMs ?? 0,
+                    meshPrepStageQueueMs: chunkAck.stageQueueWaitMs ?? 0,
+                    meshUploadQueueWaitMs: chunkAck.uploadQueueWaitMs,
                     stageMeshBytes: cumulativeBytesStage > 0 ? cumulativeBytesStage : null,
                     stageMeshUploadedBytes,
                     stageMeshReusedBytes,
