@@ -125,9 +125,16 @@ requirement.
 
 | machine | what runs |
 | --- | --- |
-| any GPU wgpu can make a device for (Vulkan, Metal, DX12, GL, integrated) | the compute bake; measured 9–14× the CPU (0.14 s against 1.78 s at 32 rays on the 384,324-vertex model) |
+| a discrete GPU (Vulkan, Metal, DX12, GL) | the compute bake; measured 9–14× the CPU (0.14 s against 1.78 s at 32 rays on the 384,324-vertex model) |
 | an adapter that fails or disappears mid-bake | the CPU recipe, with the failure logged |
-| no adapter at all | the CPU recipe |
+| no discrete GPU (integrated-only or software) | AO is disabled; no bake runs |
+
+**AO is only baked when a discrete GPU is present.** The IPC boundary checks
+`dragonfruit_ao_gpu::has_discrete_adapter()` before the request is sent, and
+`bake_vertex_occlusion` refuses without one, so integrated-only machines render
+unoccluded instead of spending bake time. The crate itself can still bake on an
+integrated adapter if called directly; the policy lives at the boundary, not in
+the accelerator.
 
 **Hardware ray tracing is not required and not used.** wgpu exposes ray query
 only on Vulkan (on this development machine: true on Vulkan, false on DX12 and
