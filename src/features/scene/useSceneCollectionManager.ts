@@ -50,7 +50,7 @@ import {
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { runWithConcurrency } from '@/utils/runWithConcurrency';
 import { logToNativeFile } from '@/utils/nativeLog';
-import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeAndAttachOcclusionForGeometry, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
+import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeAndAttachOcclusionForGeometry, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, isOcclusionUnavailable, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
 import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
 import { shelfPack, type ShelfItem } from '@/features/scene/arrange/shelfPack';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -4612,6 +4612,9 @@ export function useSceneCollectionManager(options?: {
       .filter((model) => {
         const geometry = model.geometry.geometry;
         if (!geometry.getAttribute('position')) return false;
+        // A geometry the hardware check skipped has no attribute by design; it
+        // must not be re-queued on every model change.
+        if (isOcclusionUnavailable(geometry)) return false;
         // Re-bake when the geometry was replaced (repair, boolean cut, hole
         // punch): the attribute lives on the old geometry, so without this the
         // new shape would be shaded with the old shape's occlusion.
