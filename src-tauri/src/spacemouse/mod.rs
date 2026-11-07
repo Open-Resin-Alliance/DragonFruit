@@ -58,6 +58,8 @@ macro_rules! nav_warn {
 /// navlib, whose default layout matches.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+// Only navlib reads most fields; elsewhere `spacemouse_native_sync` just echoes the input.
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 pub struct CameraInput {
     pub affine: [f64; 16],
     pub fov: f32,

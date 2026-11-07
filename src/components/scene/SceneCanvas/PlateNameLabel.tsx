@@ -114,6 +114,8 @@ export function PlateNameLabel({
   /** Set once the editor is being taken down. Unmounting the focused input raises a
    * blur of its own, and that blur must not commit a draft Escape just threw away. */
   const tearingDownRef = React.useRef(false);
+  /** Set by a double-click on the label, and spent by the next focus of the field. */
+  const selectAllOnFocusRef = React.useRef(false);
   const isEditing = draft !== null;
   const colors = usePlateWidgetColors();
   const worldPerCssPixel = widgetWorldPerCssPixel(labelScale);
@@ -163,6 +165,7 @@ export function PlateNameLabel({
 
   const openEditor = () => {
     tearingDownRef.current = false;
+    selectAllOnFocusRef.current = false;
     setDraft(name);
   };
 
@@ -203,6 +206,16 @@ export function PlateNameLabel({
             if (isEditing) return;
             openEditor();
           }}
+          // The input never sees the pointer, so a double-click cannot select the word
+          // under it the way a field would. It selects the whole name instead, once the
+          // press above has handed the focus back. On a closed label the first click
+          // has only just opened the editor, and `Html` mounts its input after the
+          // double-click, so the selection waits for that input's focus.
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            selectAllOnFocusRef.current = true;
+            window.setTimeout(() => inputRef.current?.focus(), 0);
+          }}
         >
           <planeGeometry args={[label.widthCss * worldPerCssPixel, label.heightCss * worldPerCssPixel]} />
           <meshBasicMaterial
@@ -238,7 +251,13 @@ export function PlateNameLabel({
             }}
             onSelect={readSelection}
             onKeyUp={readSelection}
-            onFocus={readSelection}
+            onFocus={(event) => {
+              if (selectAllOnFocusRef.current) {
+                selectAllOnFocusRef.current = false;
+                event.currentTarget.select();
+              }
+              readSelection();
+            }}
             onBlur={() => {
               if (keepEditingRef.current || tearingDownRef.current) return;
               commitDraft();

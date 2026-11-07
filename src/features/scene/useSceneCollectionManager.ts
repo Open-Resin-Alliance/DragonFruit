@@ -20,6 +20,7 @@ import {
 import {
   computePlateFrames,
   modelsOnPlate,
+  plateCanBeRemoved,
   plateLocalRect,
   relaidPlateShifts,
   resolveModelPlateId as plateIdForModel,
@@ -8836,16 +8837,14 @@ export function useSceneCollectionManager(options?: {
   }, []);
 
   /**
-   * Delete a plate and the models standing on it. The first plate is the scene's
-   * floor and stays, and so does the last one — a scene with no bed has nowhere
-   * to build — so both are refused rather than half-done.
+   * Delete a plate and the models standing on it. Any plate can go, the first one
+   * included, but not the last: a scene with no bed has nowhere to build, so that
+   * is refused rather than half-done (`plateCanBeRemoved`).
    */
   const removePlate = useCallback((plateId: string): boolean => {
     const current = platesRef.current;
+    if (!plateCanBeRemoved(current, plateId)) return false;
     const remaining = current.filter((plate) => plate.id !== plateId);
-    if (remaining.length === 0 || remaining.length === current.length || current[0]?.id === plateId) {
-      return false;
-    }
 
     const doomed = modelsOnPlate(modelsRef.current, plateId, plateFramesRef.current);
     const nextActivePlateId = activePlateIdRef.current === plateId ? remaining[0].id : activePlateIdRef.current;

@@ -32,6 +32,12 @@ for working with it.
    Shift+M twin), and the flags come from the key event (`e.ctrlKey`, `e.metaKey`,
    `e.shiftKey`, `e.altKey`), so a modifier held while the window was unfocused is
    accounted for too.
+
+   Firefox on macOS sends no `keyup` for a key released before Cmd, which left
+   the V of a Cmd+V pressed: every later Cmd press pasted again. The store
+   therefore releases every key pressed under Cmd when Cmd itself is released
+   (`metaHeldKeys`). A key still physically held comes back with its next
+   auto-repeat `keydown`.
 7. **Escape in a modal goes through `useEscapeToClose`**: dialogs do not wire
    their own `app-hotkey-keydown` listener. `useEscapeToClose(open, onClose)`
    (`src/hotkeys/useEscapeToClose.ts`) registers the dialog while it is open;

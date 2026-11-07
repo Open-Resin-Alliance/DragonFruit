@@ -12,7 +12,16 @@
  * CEF-only failures were invisible locally — which is how the blank build
  * plate in #606 reached users. See #614.
  *
- * Keep the feature list here identical to the one in tauri-build.mjs.
+ * Unlike tauri-build.mjs, leave custom-protocol out: it turns off Tauri's
+ * `dev` cfg, so the app embeds frontend-dist instead of loading devUrl, and
+ * the build panics on a fresh clone where frontend-dist doesn't exist yet.
+ * `tauri dev` strips it from the default features itself, but only when we
+ * don't pass --no-default-features.
+ *
+ * The app also gets --no-first-run, as flatpak/launcher.sh does: Chromium 151
+ * runs its first-run EULA check on a fresh CEF profile and exits with code 28
+ * (CHROME_RESULT_CODE_EULA_REFUSED), which Tauri reports as
+ * WebviewRuntimeNotInstalled.
  */
 import { spawnSync } from "node:child_process";
 
@@ -22,7 +31,7 @@ const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
 const cmdArgs = ["tauri", "dev", ...process.argv.slice(2)];
 
 if (isLinux) {
-  cmdArgs.push("--", "--no-default-features", "--features", "custom-protocol,tauri-cef");
+  cmdArgs.push("--", "--no-default-features", "--features", "tauri-cef", "--", "--no-first-run");
 }
 
 console.log(`[tauri-dev] ${npxCmd} ${cmdArgs.join(" ")}`);

@@ -1,7 +1,6 @@
 import { isTauriRuntime } from '@/utils/tauriRuntime';
 import { bakeAndAttachOcclusionForGeometry, rememberLoadedMeshMesh } from '@/features/scene/bakedOcclusion';
 import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
-import { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
@@ -1816,49 +1815,4 @@ export async function loadMeshGeometry(fileUrlOrBuffer: string | Uint8Array, fil
     return loadObjGeometry(fileUrl, opts);
   }
   return loadStlGeometry(fileUrl, opts);
-}
-
-export function useStlGeometry(fileUrl: string | null, directGeometry?: THREE.BufferGeometry | null): GeometryWithBounds | null {
-  const [geom, setGeom] = useState<GeometryWithBounds | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    // Case 1: Direct Geometry (e.g. from LYS import)
-    if (directGeometry) {
-      console.log(`[${new Date().toISOString()}] [useStlGeometry] Processing direct geometry`);
-      processGeometry(directGeometry)
-        .then((data) => {
-          if (!cancelled) setGeom(data);
-        })
-        .catch((err) => {
-          console.error("Failed to process direct geometry", err);
-          if (!cancelled) setGeom(null);
-        });
-      return () => { cancelled = true; };
-    }
-
-    // Case 2: File URL (mesh import)
-    if (fileUrl) {
-      loadStlGeometry(fileUrl)
-        .then((data) => {
-          if (!cancelled) {
-            console.log(`[${new Date().toISOString()}] [useStlGeometry] Calling setGeom`);
-            setGeom(data);
-          }
-        })
-        .catch((err) => {
-          console.error("Failed to load STL", err);
-          if (!cancelled) setGeom(null);
-        });
-
-      return () => { cancelled = true; };
-    }
-
-    // Case 3: No input
-    setGeom(null);
-    return;
-  }, [fileUrl, directGeometry]);
-
-  return geom;
 }
