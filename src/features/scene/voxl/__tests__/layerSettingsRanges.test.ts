@@ -95,6 +95,48 @@ test('stored ranges retain equal-span priority and wider motion inheritance', as
   assert.equal(new DataView(bytes.buffer).getUint16(4, true), 2);
 });
 
+test('millimetre ranges reopen as physical bounds and follow the selected layer height', async () => {
+  const stored: LayerSettingsRange[] = [
+    { id: 'legacy', startLayer: 1, endLayer: 100, settings: { waitTimeAfterLiftSec: 0 } },
+    { id: 'A-mm', unit: 'mm', startMm: 0.15, endMm: 0.5, settings: { exposureSec: 4, liftHeightMm: 8 } },
+    { id: 'B-mm', unit: 'mm', startMm: 0.25, endMm: 0.3, settings: { exposureSec: 7 } },
+    { id: 'C-mm', unit: 'mm', startMm: 0.3, endMm: 0.35, settings: { exposureSec: 9 } },
+  ];
+  const bytes = await serializeVoxlDocumentV2({ ...testInput(['m1']), layerSettingsRanges: stored }, new Map());
+  const reopened = (await parseVoxlBinaryV2(bytes)).document.scene.layerSettingsRanges!;
+  assert.deepEqual(reopened, stored);
+  assert.deepEqual(JSON.parse(readVoxlChunkText(bytes, 'SCNE')).layerSettingsRanges, stored);
+  for (const range of reopened) {
+    if (range.unit !== 'mm') continue;
+    assert.equal(Object.hasOwn(range, 'startLayer'), false);
+    assert.equal(Object.hasOwn(range, 'endLayer'), false);
+  }
+  const at = (height: number, layer: number) => compileLayerSettingsRanges(reopened, 24, height)
+    .find((segment) => segment.startLayer <= layer && layer <= segment.endLayer)?.settings;
+  assert.deepEqual(at(0.05, 6), { exposureSec: 9, waitTimeAfterLiftSec: 0, liftHeightMm: 8 });
+  assert.deepEqual(at(0.025, 6), { exposureSec: 4, waitTimeAfterLiftSec: 0, liftHeightMm: 8 });
+  assert.deepEqual(at(0.025, 12), { exposureSec: 9, waitTimeAfterLiftSec: 0, liftHeightMm: 8 });
+  assert.deepEqual(reopened, stored, 'resolving another grid never rewrites physical bounds');
+});
+
+test('a raw millimetre-bound edit cannot be skipped merely because the current grid is unchanged', async () => {
+  await withFrozenClock(async () => {
+    const chunkCache = new VoxlChunkCache();
+    const original: LayerSettingsRange[] = [{ id: 'mm', unit: 'mm', startMm: 0.15, endMm: 0.5, settings: { exposureSec: 4 } }];
+    const edited: LayerSettingsRange[] = [{ id: 'mm', unit: 'mm', startMm: 0.149, endMm: 0.5, settings: { exposureSec: 4 } }];
+    assert.deepEqual(compileLayerSettingsRanges(original, 12, 0.05), compileLayerSettingsRanges(edited, 12, 0.05));
+    const first = await streamSerialize({ ...testInput(['m1']), layerSettingsRanges: original }, { chunkCache });
+    const changed = await streamSerialize({ ...testInput(['m1']), layerSettingsRanges: edited }, {
+      chunkCache,
+      previousFingerprint: first.fingerprint,
+    });
+    assert.equal(changed.skipped, false);
+    assert.notEqual(changed.fingerprint, first.fingerprint);
+    assert.deepEqual(changed.chunkReport.filter((chunk) => chunk.changed).map((chunk) => chunk.type), ['SCNE']);
+    assert.deepEqual((await parseVoxlBinaryV2(changed.bytes)).document.scene.layerSettingsRanges, edited);
+  });
+});
+
 test('a legacy absent schedule stays absent while an explicit cleared schedule survives reopening', async () => {
   const legacy = await serializeVoxlDocumentV2(testInput(['m1']), new Map());
   const cleared = await serializeVoxlDocumentV2(

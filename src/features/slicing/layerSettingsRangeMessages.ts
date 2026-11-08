@@ -1,7 +1,7 @@
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
-import type { Unit } from '@/utils/unitFormatting';
-import type { LayerSettingField } from './layerSettingsRanges';
+import type { Unit, UnitFormat } from '@/utils/unitFormatting';
+import type { LayerSettingField, LayerSettingsRange } from './layerSettingsRanges';
 
 type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
 
@@ -40,7 +40,15 @@ export const LAYER_SETTING_UNITS = {
 } satisfies Record<LayerSettingField, Unit | null>;
 
 // Keep interpolated messages outside React Compiler's component/hook transforms.
-export function formatLayerSettingsRangeBounds(translate: Translate, start: string, end: string): string {
+export function formatLayerSettingsRangeBounds(translate: Translate, fmt: UnitFormat, range: LayerSettingsRange): string {
+  if (range.unit === 'mm') {
+    const start = fmt.number(range.startMm, { maximumFractionDigits: 6 });
+    const end = fmt.number(range.endMm, { maximumFractionDigits: 6 });
+    const heights = fmt.unit('mm', `${start}–${end}`);
+    return translate(msg`Height ${heights}`);
+  }
+  const start = fmt.number(range.startLayer);
+  const end = fmt.number(range.endLayer);
   return translate(msg`Layers ${start}–${end}`);
 }
 

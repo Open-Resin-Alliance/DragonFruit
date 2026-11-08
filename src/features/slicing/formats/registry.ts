@@ -1,5 +1,4 @@
 import type { PrinterOutputFormat } from '@/features/profiles/profileStore';
-import type { LayerSettingField } from '../layerSettingsRanges';
 import type { ResolveSlicingFormatContext, SlicingFormatDefinition } from './types';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
@@ -147,19 +146,6 @@ export function resolveSlicingFormatDefinitionByOutput(
     resolveBuiltinPluginSlicingFormat(outputFormat, preferredPluginId)
     ?? resolveSideloadedSlicingFormat(outputFormat)
   );
-}
-
-/** Version capabilities replace the format list; absent capabilities mean unsupported. */
-export function resolveLayerSettingsFields(
-  definition: SlicingFormatDefinition,
-  formatVersion?: string,
-): readonly LayerSettingField[] {
-  const normalized = normalizeFormatVersion(formatVersion);
-  const versions = definition.formatVersions ?? [];
-  const version = versions.find((entry) => normalized && entry.value.toLowerCase() === normalized.toLowerCase())
-    ?? versions.find((entry) => entry.isDefault)
-    ?? versions[0];
-  return version?.layerSettingsFields ?? definition.layerSettingsFields ?? [];
 }
 
 export function getAvailableFormatVersionOptions(

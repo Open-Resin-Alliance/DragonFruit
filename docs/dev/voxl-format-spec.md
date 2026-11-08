@@ -168,7 +168,8 @@ written before plates existed has neither, and readers must treat a missing one
 as a single unnamed plate.
 
 `SCNE.layerSettingsRanges` is an optional scene-wide encoded-print schedule.
-Its ranges use inclusive printed layer numbers, stable ids and sparse settings;
+Its ranges use either inclusive printed layer numbers or persisted physical
+height bounds (`unit: "mm"`, `startMm`, `endMm`), plus stable ids and sparse settings;
 see [Slice Job Assembly](slice-job-assembly.md#layer-settings-range-resolution)
 for validation, units and overlap precedence. This additive field does not
 raise the binary container floor. A present key is validated before model/mesh
@@ -178,8 +179,10 @@ The writer retains present `[]` as an explicit cleared schedule. On successful
 scene import a present schedule replaces the current one, including `[]`;
 an absent key preserves the live schedule when appending/merging an older file.
 Failed/cancelled imports and non-native mesh imports leave ranges unchanged.
-Printed numbers are not rebased by model transforms, scope-specific exports,
-plates, Z offsets or later layer-height changes. Manual save, autosave/recovery
+Printed numbers and mm heights are not rebased by model transforms,
+scope-specific exports, plates or Z offsets. Layer-number ranges stay fixed
+when layer height changes; mm ranges retain their raw heights and resolve
+against the new grid. No converted layer endpoints are written into an mm range. Manual save, autosave/recovery
 and both bundled/grouped Export panel VOXL paths carry the same scene array.
 SCNE content participates in the existing cached content fingerprint, so a
 range-only edit or clear cannot authorize skipping a changed disk write.

@@ -79,7 +79,7 @@ import { compileLayerSettingsRanges, fingerprintLayerSettingsRanges, parseLayerS
 import { LayerSettingsRangeEditor } from '@/features/slicing/components/LayerSettingsRangeEditor';
 import { useLayerSettingsRangeColors } from '@/features/slicing/useLayerSettingsRangeColors';
 import { formatLayerSettingsRangeBounds } from '@/features/slicing/layerSettingsRangeMessages';
-import type { LocaleFormat } from '@/utils/localeNumber';
+import type { UnitFormat } from '@/utils/unitFormatting';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { joinSliceOutputPath, sliceFileBaseName } from '@/features/slicing/plateSliceNaming';
@@ -800,13 +800,14 @@ function buildLayerSettingsRangeBands(
   colors: ReadonlyMap<string, string>,
   totalLayers: number,
   printing: boolean,
+  layerHeightMm: number,
   translate: (descriptor: MessageDescriptor) => string,
-  fmt: LocaleFormat,
+  fmt: UnitFormat,
 ): LayerSliderRangeBand[] {
   if (totalLayers === 0) return [];
   const originals = new Map(ranges.map((range) => [range.id, range]));
   const bands: LayerSliderRangeBand[] = [];
-  for (const segment of compileLayerSettingsRanges(ranges, totalLayers)) {
+  for (const segment of compileLayerSettingsRanges(ranges, totalLayers, layerHeightMm)) {
     const color = colors.get(segment.rangeId);
     if (!color) continue;
     const original = originals.get(segment.rangeId)!;
@@ -821,7 +822,7 @@ function buildLayerSettingsRangeBands(
       bottomPercent,
       topPercent,
       color,
-      label: formatLayerSettingsRangeBounds(translate, fmt.number(original.startLayer), fmt.number(original.endLayer)),
+      label: formatLayerSettingsRangeBounds(translate, fmt, original),
     });
   }
   return bands;
@@ -7212,11 +7213,11 @@ export default function Home() {
   }, [activePrinterProfile?.buildVolumeMm.height, crossSectionLayerHeightMm, sceneZRange.max, slicingModels.length]);
 
   const sceneLayerSettingsBands = React.useMemo(() => buildLayerSettingsRangeBands(
-    scene.layerSettingsRanges, layerSettingsRangeColors, slicing.numLayers, false, _, fmt,
-  ), [scene.layerSettingsRanges, layerSettingsRangeColors, slicing.numLayers, _, fmt]);
+    scene.layerSettingsRanges, layerSettingsRangeColors, slicing.numLayers, false, slicing.layerHeightMm, _, fmt,
+  ), [scene.layerSettingsRanges, layerSettingsRangeColors, slicing.numLayers, slicing.layerHeightMm, _, fmt]);
   const printingLayerSettingsBands = React.useMemo(() => buildLayerSettingsRangeBands(
-    scene.layerSettingsRanges, layerSettingsRangeColors, printingPreviewTotalLayers, true, _, fmt,
-  ), [scene.layerSettingsRanges, layerSettingsRangeColors, printingPreviewTotalLayers, _, fmt]);
+    scene.layerSettingsRanges, layerSettingsRangeColors, printingPreviewTotalLayers, true, crossSectionLayerHeightMm, _, fmt,
+  ), [scene.layerSettingsRanges, layerSettingsRangeColors, printingPreviewTotalLayers, crossSectionLayerHeightMm, _, fmt]);
   const handleSceneRangeContextMenu = React.useCallback((value: number, position: { x: number; y: number }) => {
     const total = slicing.numLayers;
     setLayerSettingsMenuRequest({ layerNumber: total > 0 ? Math.max(1, Math.min(total, Math.ceil(value))) : null, position });
@@ -10714,6 +10715,7 @@ export default function Home() {
         ranges={scene.layerSettingsRanges}
         rangeColors={layerSettingsRangeColors}
         totalLayers={scene.mode === 'printing' ? printingPreviewTotalLayers : slicing.numLayers}
+        layerHeightMm={scene.mode === 'printing' ? crossSectionLayerHeightMm : slicing.layerHeightMm}
         format={layerSettingsFormat}
         formatVersion={activePrinterProfile?.display.formatVersion}
         normalExposureSec={activeMaterialProfile?.normalExposureSec ?? 0}

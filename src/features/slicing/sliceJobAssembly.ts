@@ -1,11 +1,11 @@
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
 import {
-  resolveLayerSettingsFields,
   resolveOutputFormatVersion,
   resolveOutputSettingsMode,
   resolveSlicingFormatDefinition,
 } from '@/features/slicing/formats/registry';
+import { resolveLayerSettingsFields } from '@/features/slicing/formats/layerSettingsFields';
 import type { PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import { resolveEffectiveDitherPolicy, type DitherPolicyInput } from '@/features/slicing/resolveEffectiveDitherPolicy';
 import type { SlicingFormatDefinition } from '@/features/slicing/formats/types';
@@ -422,9 +422,12 @@ export function assertSliceLayerSettingsSupported(
   const unsupported = findUnsupportedLayerSetting(ranges, resolveLayerSettingsFields(format, formatVersion));
   if (!unsupported) return;
   const range = ranges.find((entry) => entry.id === unsupported.rangeId)!;
+  const bounds = range.unit === 'mm'
+    ? `height ${range.startMm}..${range.endMm} mm`
+    : `layers ${range.startLayer}..${range.endLayer}`;
   throw new Error(
     `${format.displayName} (${format.outputFormat}, version ${formatVersion ?? 'default'}) cannot encode layer setting `
-    + `"${unsupported.field}" in layer settings range "${range.id}" (layers ${range.startLayer}..${range.endLayer}). `
+    + `"${unsupported.field}" in layer settings range "${range.id}" (${bounds}). `
     + 'Remove the override or select a supported printer.',
   );
 }

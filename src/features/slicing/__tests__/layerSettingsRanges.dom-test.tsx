@@ -11,7 +11,7 @@ import { LUMEN_FORMAT_DEFINITION } from '../../../../plugins/lumen/slicing/lumen
 import { LayerSettingsRangeEditor } from '../components/LayerSettingsRangeEditor';
 import type { SlicingFormatDefinition } from '../formats/types';
 import { formatLayerSettingsRangeBounds } from '../layerSettingsRangeMessages';
-import { compileLayerSettingsRanges, parseLayerSettingsRanges, type LayerSettingsRange } from '../layerSettingsRanges';
+import { compileLayerSettingsRanges, parseLayerSettingsRanges, resolveLayerSettingsRangeBounds, type LayerSettingsRange } from '../layerSettingsRanges';
 import { useLayerSettingsRangeColors } from '../useLayerSettingsRangeColors';
 
 const initialRanges: LayerSettingsRange[] = [
@@ -28,18 +28,21 @@ type HarnessState = {
   upper: number;
   applies: number;
   setRanges(next: readonly LayerSettingsRange[]): void;
+  setLayerHeightMm(next: number): void;
   setProfile(format: SlicingFormatDefinition | null, version?: string): void;
 };
 
 async function mountHarness({
   ranges = initialRanges,
   totalLayers = 12,
+  layerHeightMm = 0.05,
   preview = false,
   format = GOO_FORMAT_DEFINITION as SlicingFormatDefinition | null,
-}: { ranges?: readonly LayerSettingsRange[]; totalLayers?: number; preview?: boolean; format?: SlicingFormatDefinition | null } = {}) {
+}: { ranges?: readonly LayerSettingsRange[]; totalLayers?: number; layerHeightMm?: number; preview?: boolean; format?: SlicingFormatDefinition | null } = {}) {
   const bridge: { current: HarnessState | null } = { current: null };
   function Harness() {
     const [ownedRanges, setRanges] = useState(() => parseLayerSettingsRanges(ranges));
+    const [height, setLayerHeightMm] = useState(layerHeightMm);
     const [profile, setProfile] = useState({ format, version: undefined as string | undefined });
     const [lower, setLower] = useState(preview ? 1 : 0);
     const [upper, setUpper] = useState(Math.max(preview ? 1 : 0, totalLayers));
@@ -48,7 +51,7 @@ async function mountHarness({
     const colors = useLayerSettingsRangeColors(ownedRanges);
     const fmt = useLocaleFormat();
     const { _ } = useLingui();
-    const segments = compileLayerSettingsRanges(ownedRanges, totalLayers);
+    const segments = compileLayerSettingsRanges(ownedRanges, totalLayers, height);
     const bands: LayerSliderRangeBand[] = segments.flatMap((segment) => {
       const color = colors.get(segment.rangeId);
       if (!color || totalLayers === 0) return [];
@@ -59,7 +62,7 @@ async function mountHarness({
         bottomPercent: preview ? (totalLayers === 1 ? 0 : 100 * (Math.max(1, segment.startLayer - 0.5) - 1) / span) : 100 * (segment.startLayer - 1) / totalLayers,
         topPercent: preview ? (totalLayers === 1 ? 100 : 100 * (Math.min(totalLayers, segment.endLayer + 0.5) - 1) / span) : 100 * segment.endLayer / totalLayers,
         color,
-        label: formatLayerSettingsRangeBounds(_, fmt.number(original.startLayer), fmt.number(original.endLayer)),
+        label: formatLayerSettingsRangeBounds(_, fmt, original),
       }];
     });
     useLayoutEffect(() => {
@@ -70,6 +73,7 @@ async function mountHarness({
         upper,
         applies: applies.current,
         setRanges: (next) => setRanges(parseLayerSettingsRanges(next)),
+        setLayerHeightMm,
         setProfile: (next, version) => setProfile({ format: next, version }),
       };
     });
@@ -98,6 +102,7 @@ async function mountHarness({
           ranges={ownedRanges}
           rangeColors={colors}
           totalLayers={totalLayers}
+          layerHeightMm={height}
           format={profile.format}
           formatVersion={profile.version}
           normalExposureSec={2}
@@ -194,7 +199,13 @@ async function manage(tree: Awaited<ReturnType<typeof mountHarness>>) {
 
 async function escape(target: EventTarget = document) {
   await act(async () => {
-    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
+    const event = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true });
+    target.dispatchEvent(event);
+    // This owned-state harness has no Home keyboard bridge. Deliver the same
+    // application event consumed by the shared dialog/menu Escape stack.
+    if (!event.defaultPrevented) {
+      window.dispatchEvent(new CustomEvent('app-hotkey-keydown', { detail: { key: 'Escape' } }));
+    }
   });
 }
 
@@ -228,6 +239,7 @@ test('bare scene track adds layers 5–6 without moving either clip thumb, inher
     await typeValue('Exposure', '7');
     await click(button(dialog(), 'Apply'));
     const added = tree.state().ranges.at(-1)!;
+    assert.ok(added.unit !== 'mm');
     assert.equal(added.startLayer, 5);
     assert.equal(added.endLayer, 6);
     assert.deepEqual(added.settings, { exposureSec: 7 });
@@ -307,7 +319,7 @@ test('Cancel, Escape and backdrop discard drafts; invalid bounds, empty patches 
     await click(button(menu(), 'Add range'));
     await toggle('Exposure');
     await escape();
-    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(document.querySelector('[role="dialog"]') === null, true, 'the dialog is dismissed');
     await tree.rightClick(5);
     await click(button(menu(), 'Add range'));
     await toggle('Exposure');
@@ -316,7 +328,7 @@ test('Cancel, Escape and backdrop discard drafts; invalid bounds, empty patches 
     await act(async () => {
       backdrop.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     });
-    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(document.querySelector('[role="dialog"]') === null, true, 'the dialog is dismissed');
     assert.deepEqual(tree.state().ranges, []);
     assert.equal(tree.state().applies, 0);
   } finally {
@@ -517,5 +529,218 @@ test('real range colors remain distinct and shared across bands, menus and Manag
     else root.setAttribute('style', previousStyle);
     if (previousTheme === null) root.removeAttribute('data-theme');
     else root.setAttribute('data-theme', previousTheme);
+  }
+});
+
+function overrideSwitch(label: string) {
+  const element = dialog().querySelector<HTMLButtonElement>('[role="switch"][aria-label="Override ' + label + '"]');
+  assert.ok(element);
+  return element;
+}
+
+async function selectUnits(unit: 'Layers' | 'mm') {
+  const group = dialog().querySelector<HTMLElement>('[role="group"][aria-label="Range units"]');
+  assert.ok(group);
+  await click(button(group, unit));
+}
+
+function matchingLabels() {
+  return [...menu().querySelectorAll<HTMLButtonElement>('button[aria-haspopup="menu"]')].map((entry) => entry.textContent?.trim() ?? '');
+}
+
+test('typing into inherited fields enables only edited overrides; stepping and wheel do the same, while focus and Cancel do not commit', async () => {
+  const tree = await mountHarness();
+  try {
+    await tree.rightClick(5);
+    await click(button(menu(), 'Add range'));
+    await act(async () => field('Exposure').focus());
+    assert.equal(overrideSwitch('Exposure').getAttribute('aria-checked'), 'false');
+    assert.equal(field('Exposure').disabled, false);
+    assert.equal(button(dialog(), 'Apply').disabled, true, 'focus alone leaves the patch empty');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    assert.ok(setter);
+    await act(async () => {
+      for (const [label, value] of [['Exposure', '7.25'], ['Total lift travel', '9.5']]) {
+        const input = field(label);
+        setter.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
+    assert.equal(overrideSwitch('Exposure').getAttribute('aria-checked'), 'true');
+    assert.equal(field('Exposure').value, '7.25');
+    assert.equal(overrideSwitch('Total lift travel').getAttribute('aria-checked'), 'true');
+    assert.equal(field('Total lift travel').value, '9.5');
+    const speed = field('Lift speed');
+    assert.ok(speed.parentElement);
+    const increase = speed.parentElement.querySelector<HTMLButtonElement>('button[aria-label="Increase value"]');
+    assert.ok(increase);
+    await click(increase);
+    assert.equal(overrideSwitch('Lift speed').getAttribute('aria-checked'), 'true');
+    await act(async () => {
+      field('Light PWM').dispatchEvent(new WheelEvent('wheel', { deltaY: 1, bubbles: true, cancelable: true }));
+    });
+    assert.equal(overrideSwitch('Light PWM').getAttribute('aria-checked'), 'true');
+    await toggle('Total lift travel');
+    assert.equal(overrideSwitch('Total lift travel').getAttribute('aria-checked'), 'false');
+    await click(button(dialog(), 'Apply'));
+    assert.deepEqual(tree.state().ranges.at(-1)?.settings, { exposureSec: 7.25, liftSpeedMmMin: 1, lightPwm: 254 });
+    assert.equal(tree.state().applies, 1);
+    await manage(tree);
+    await click(button(savedRows().at(-1)!, 'Edit'));
+    await typeValue('Exposure', '8');
+    await typeValue('Total lift travel', '12');
+    await click(button(dialog(), 'Cancel'));
+    assert.deepEqual(tree.state().ranges.at(-1)?.settings, { exposureSec: 7.25, liftSpeedMmMin: 1, lightPwm: 254 });
+    assert.equal(tree.state().applies, 1);
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('millimeter bounds persist raw endpoints without layer keys, reopen unchanged, and resolve again when layer height changes', async () => {
+  const tree = await mountHarness({ ranges: [] });
+  try {
+    await tree.rightClick(5);
+    await click(button(menu(), 'Add range'));
+    await selectUnits('mm');
+    await typeValue('Start height', '0.075');
+    await typeValue('End height', '0.15');
+    await typeValue('Exposure', '6');
+    await click(button(dialog(), 'Apply'));
+    const added = tree.state().ranges[0];
+    assert.ok(added.unit === 'mm');
+    assert.deepEqual(added, { id: added.id, unit: 'mm', startMm: 0.075, endMm: 0.15, settings: { exposureSec: 6 } });
+    assert.deepEqual(resolveLayerSettingsRangeBounds(added, 0.05), { startLayer: 2, endLayer: 3 });
+    assert.ok(tree.container.querySelector('[title^="Height "]'), 'the real slider labels mm ranges in mm');
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    assert.equal(field('Start height').value, '0.075');
+    assert.equal(field('End height').value, '0.15');
+    await click(button(dialog(), 'Apply'));
+    assert.equal(tree.state().applies, 1, 'reopening without changes retains raw mm and creates no action');
+    await tree.rightClick(3);
+    assert.match(matchingLabels()[0], /^Height .*0.075.*0.15.*mm/);
+    await escape();
+    await act(async () => tree.state().setLayerHeightMm(0.1));
+    assert.deepEqual(resolveLayerSettingsRangeBounds(tree.state().ranges[0], 0.1), { startLayer: 1, endLayer: 1 });
+    await tree.rightClick(3);
+    assert.deepEqual(matchingLabels(), []);
+    await escape();
+    await tree.rightClick(1);
+    assert.match(matchingLabels()[0], /^Height /);
+    await escape();
+    assert.deepEqual(tree.state().ranges[0], added, 'profile height changes never rewrite stored endpoints');
+    await manage(tree);
+    await click(button(savedRows()[0], 'Delete'));
+    assert.deepEqual(tree.state().ranges, []);
+    assert.equal(tree.state().applies, 2);
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('mixed-unit menus rank resolved spans; inherited values include mm ranges beyond the current print', async () => {
+  const ranges: LayerSettingsRange[] = [
+    { id: 'height-wide', unit: 'mm', startMm: 0.1, endMm: 1, settings: { exposureSec: 4, liftHeightMm: 8 } },
+    { id: 'layer-narrow', startLayer: 3, endLayer: 4, settings: { exposureSec: 7 } },
+    { id: 'height-equal-later', unit: 'mm', startMm: 0.15, endMm: 0.2, settings: { exposureSec: 9 } },
+    { id: 'height-beyond', unit: 'mm', startMm: 1.5, endMm: 2, settings: { liftHeightMm: 11 } },
+  ];
+  const tree = await mountHarness({ ranges });
+  try {
+    await tree.rightClick(3);
+    const labels = matchingLabels();
+    assert.match(labels[0], /^Height /);
+    assert.equal(labels[1], 'Layers 3–4');
+    assert.match(labels[2], /^Height /);
+    await click(button(menu(), 'Add range'));
+    assert.equal(field('Exposure').value, '9');
+    assert.equal(field('Total lift travel').value, '8');
+    await selectUnits('mm');
+    await typeValue('Start height', '1.6');
+    await typeValue('End height', '1.8');
+    assert.equal(field('Total lift travel').value, '11', 'inheritance resolves original mm bounds beyond EOF');
+    await toggle('Total lift travel');
+    await click(button(dialog(), 'Apply'));
+    const added = tree.state().ranges.at(-1)!;
+    assert.ok(added.unit === 'mm');
+    assert.deepEqual(added.settings, { liftHeightMm: 11 });
+    assert.equal(added.startMm, 1.6);
+    await manage(tree);
+    assert.equal(savedRows().length, 5);
+    assert.match(savedRows()[3].textContent ?? '', /Height /);
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('unit switching preserves grid-aligned printed coverage, stable ids, other fields and latest collection edits', async () => {
+  const original: LayerSettingsRange = { id: 'switch-stable-id', startLayer: 3, endLayer: 6, settings: { exposureSec: 4, liftHeightMm: 8 } };
+  const tree = await mountHarness({ ranges: [original] });
+  try {
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    await selectUnits('mm');
+    await typeValue('Exposure', '7');
+    const appended: LayerSettingsRange = { id: 'new-mm-from-props', unit: 'mm', startMm: 2, endMm: 3, settings: { exposureSec: 12 } };
+    await act(async () => tree.state().setRanges([...tree.state().ranges, appended]));
+    await click(button(dialog(), 'Apply'));
+    const asMm = tree.state().ranges[0];
+    assert.ok(asMm.unit === 'mm');
+    assert.equal(asMm.id, original.id);
+    assert.equal(asMm.startMm, 3 * 0.05);
+    assert.equal(asMm.endMm, 6 * 0.05);
+    assert.deepEqual(resolveLayerSettingsRangeBounds(asMm, 0.05), { startLayer: 3, endLayer: 6 });
+    assert.deepEqual(asMm.settings, { exposureSec: 7, liftHeightMm: 8 });
+    assert.deepEqual(tree.state().ranges[1], appended);
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    await selectUnits('Layers');
+    assert.equal(field('Start layer').value, '3');
+    assert.equal(field('End layer').value, '6');
+    await click(button(dialog(), 'Apply'));
+    assert.deepEqual(tree.state().ranges[0], { ...original, settings: { exposureSec: 7, liftHeightMm: 8 } });
+    assert.deepEqual(tree.state().ranges[1], appended);
+    await manage(tree);
+    await click(button(savedRows()[1], 'Edit'));
+    await typeValue('Start height', '2.123456');
+    await selectUnits('Layers');
+    await click(button(dialog(), 'Cancel'));
+    assert.deepEqual(tree.state().ranges[1], appended, 'Cancel discards both bound and unit changes');
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('zero and off-grid mm point ranges stay saved even without matching printed layers', async () => {
+  const tree = await mountHarness({ ranges: [] });
+  try {
+    await tree.rightClick(5);
+    await click(button(menu(), 'Add range'));
+    await selectUnits('mm');
+    await typeValue('Start height', '0');
+    await typeValue('End height', '0');
+    await typeValue('Exposure', '3');
+    const group = dialog().querySelector<HTMLElement>('[role="group"][aria-label="Range units"]');
+    assert.ok(group);
+    assert.equal(button(group, 'Layers').disabled, true, 'an empty physical selection is not fabricated into a layer');
+    await click(button(dialog(), 'Apply'));
+    assert.deepEqual(tree.state().ranges[0], { id: tree.state().ranges[0].id, unit: 'mm', startMm: 0, endMm: 0, settings: { exposureSec: 3 } });
+    assert.deepEqual(compileLayerSettingsRanges(tree.state().ranges, 12, 0.05), []);
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    await typeValue('Start height', '0.075');
+    assert.equal(button(dialog(), 'Apply').disabled, true, 'reversed mm bounds cannot apply');
+    await typeValue('End height', '0.075');
+    await click(button(dialog(), 'Apply'));
+    assert.equal(resolveLayerSettingsRangeBounds(tree.state().ranges[0], 0.05), null);
+    assert.equal(tree.state().ranges.length, 1, 'off-grid ranges are retained for later profile heights');
+    await manage(tree);
+    assert.equal(savedRows().length, 1);
+    await click(button(savedRows()[0], 'Edit'));
+    assert.equal(field('Start height').value, '0.075');
+    await click(button(dialog(), 'Cancel'));
+  } finally {
+    await tree.unmount();
   }
 });

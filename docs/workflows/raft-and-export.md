@@ -32,17 +32,22 @@ Select a supported GOO, CTB or Anycubic printer/material profile, then right-cli
 a handle still opens its exact-value editor. The keyboard Context Menu key or
 Shift+F10 also opens range commands at the current layer.
 
-1. Set inclusive **printed layer numbers** (first layer is 1).
-2. Enable each setting you intend to override, then enter its value. A new range
-   starts with no overrides; unchecked fields inherit rather than copy defaults.
+1. Choose **Layers** or **mm**. Layers use inclusive printed numbers (first is 1).
+   MM uses inclusive printed-layer end heights above the build plate and saves
+   those physical bounds, not converted layer numbers. For example, 0.075–0.15 mm
+   affects layers 3–6 at 0.025 mm/layer, or layers 2–3 at 0.05 mm/layer.
+2. Type into a supported setting box to enable its override automatically, or
+   enable its toggle first. Focusing alone changes nothing. A new range starts
+   with no overrides; unchecked fields inherit rather than copy defaults.
 3. Apply once. Cancel leaves the scene unchanged; undo/redo also applies to ranges.
 4. Use **Manage ranges** to reach every saved range, including fully shadowed or
    beyond-print ranges. Right-click a layer to edit/delete any range matching it.
 
 Ranges have distinct colors shared by bands, menu swatches and Manage. The bands
 sit beside the cross-section fill; moving clip handles does not change settings.
-The narrowest matching original range wins each supplied field; equal widths
-prefer the later-created range, and editing does not reorder that priority. A
+The narrowest original resolved layer span wins each supplied field before
+clipping to this print; equal spans prefer the later-created range, including
+mixed units. Editing does not reorder priority. A
 narrow exposure-only range can inherit lift/wait values from a wider range.
 
 Travel heights are totals: stage 2 is a part of that total, not extra travel.
@@ -53,7 +58,9 @@ when switching printers. LUMEN/NanoDLP ranges are not implemented here.
 
 Ranges belong to the scene and travel in manual saves, autosave/recovery and
 VOXL exports, not material presets. They apply at the same printed numbers on
-each plate and keep their stored numbers when layer height or geometry changes.
+each plate. Layer-number ranges keep their printed numbers; mm ranges keep
+their physical heights and affect different layers when layer height changes.
+Changing geometry does not erase either form.
 Deleting the last model clears them atomically with that undoable deletion.
 They affect the next encoded slice only, not layer height, anti-aliasing,
 dithering, raster geometry or an existing file. Legacy time estimates may not

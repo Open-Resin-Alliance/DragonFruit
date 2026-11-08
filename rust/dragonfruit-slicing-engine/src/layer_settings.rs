@@ -7,6 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
+use std::io::{Cursor, Write};
 
 // Keep the wire whitelist, enum order and patch access in one place.
 macro_rules! setting_fields {
@@ -59,14 +60,103 @@ setting_fields! {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum LayerSettingsRange {
+    Layers(LayerNumberSettingsRange),
+    Millimeters(MillimeterSettingsRange),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LayerSettingsRange {
+pub struct LayerNumberSettingsRange {
     pub id: String,
     #[serde(deserialize_with = "deserialize_layer_number")]
     pub start_layer: u32,
     #[serde(deserialize_with = "deserialize_layer_number")]
     pub end_layer: u32,
     pub settings: LayerPrintSettingsPatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MillimeterSettingsRange {
+    pub id: String,
+    pub unit: MillimeterUnit,
+    pub start_mm: f64,
+    pub end_mm: f64,
+    pub settings: LayerPrintSettingsPatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MillimeterUnit {
+    #[serde(rename = "mm")]
+    Mm,
+}
+
+impl LayerSettingsRange {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Layers(range) => &range.id,
+            Self::Millimeters(range) => &range.id,
+        }
+    }
+
+    pub fn settings(&self) -> &LayerPrintSettingsPatch {
+        match self {
+            Self::Layers(range) => &range.settings,
+            Self::Millimeters(range) => &range.settings,
+        }
+    }
+
+    fn settings_mut(&mut self) -> &mut LayerPrintSettingsPatch {
+        match self {
+            Self::Layers(range) => &mut range.settings,
+            Self::Millimeters(range) => &mut range.settings,
+        }
+    }
+
+    // Resolve original bounds before clipping or ranking. Round n * nominal h
+    // once to f32, like the endpoint; never round n or h before multiplication.
+    // Persisted millimeter values and extrapolated bounds remain f64.
+    fn bounds(&self, layer_height_mm: f64) -> Option<(f64, f64)> {
+        match self {
+            Self::Layers(range) => Some((f64::from(range.start_layer), f64::from(range.end_layer))),
+            Self::Millimeters(range) => {
+                let start_mm = range.start_mm as f32;
+                let end_mm = range.end_mm as f32;
+                let grid_end = (f64::from(u32::MAX) * layer_height_mm) as f32;
+                let beyond = f64::from(u32::MAX) + 1.0;
+                let start = if start_mm > grid_end {
+                    (f64::from(start_mm) / layer_height_mm).ceil().max(beyond)
+                } else {
+                    grid_bound(start_mm, layer_height_mm, false) as f64
+                };
+                let end = if end_mm > grid_end {
+                    (f64::from(end_mm) / layer_height_mm).floor()
+                } else {
+                    (grid_bound(end_mm, layer_height_mm, true) - 1) as f64
+                };
+                (start <= end).then_some((start, end))
+            }
+        }
+    }
+}
+
+// First printed layer whose height is >= endpoint (or > for an upper bound).
+// The u32::MAX + 1 sentinel is never evaluated as a physical layer.
+fn grid_bound(endpoint: f32, layer_height_mm: f64, upper: bool) -> u64 {
+    let mut low = 1u64;
+    let mut high = u64::from(u32::MAX) + 1;
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let height = (middle as f64 * layer_height_mm) as f32;
+        if if upper { height <= endpoint } else { height < endpoint } {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    low
 }
 
 // JSON 1 and 1.0 are the same valid integer at the TS boundary. The subtree
@@ -103,18 +193,24 @@ impl LayerSettingsSchedule {
         job: &SliceJobV3,
         supported_fields: &[LayerSettingField],
     ) -> Result<Self, SlicerV3Error> {
-        let ranges = parse_ranges(&job.metadata_json)?;
+        let metadata = parse_metadata(&job.metadata_json)?;
+        let ranges = parse_ranges(&metadata)?;
         for range in &ranges {
             for field in LayerSettingField::ALL {
-                if range.settings.get(field).is_some() && !supported_fields.contains(&field) {
+                if range.settings().get(field).is_some() && !supported_fields.contains(&field) {
                     return Err(SlicerV3Error::UnsupportedOutput(format!(
                         "{} cannot encode layer setting {}", job.output_format, field.as_str()
                     )));
                 }
             }
         }
+        let nominal_height = if ranges.iter().any(|range| matches!(range, LayerSettingsRange::Millimeters(_))) {
+            nominal_layer_height(&metadata, job.layer_height_mm)?
+        } else {
+            f64::from(job.layer_height_mm)
+        };
         Ok(Self {
-            segments: compile_ranges(&ranges, job.total_layers),
+            segments: compile_ranges(&ranges, job.total_layers, nominal_height),
             originally_nonempty: !ranges.is_empty(),
         })
     }
@@ -146,7 +242,8 @@ pub fn ensure_layer_settings_supported(
     if encoder.supports_layer_settings() {
         return Ok(());
     }
-    if !parse_ranges(&job.metadata_json)?.is_empty() {
+    let metadata = parse_metadata(&job.metadata_json)?;
+    if !parse_ranges(&metadata)?.is_empty() {
         return Err(SlicerV3Error::UnsupportedOutput(format!(
             "{} does not support per-layer settings", job.output_format
         )));
@@ -158,14 +255,42 @@ fn invalid(reason: impl Into<String>) -> SlicerV3Error {
     SlicerV3Error::InvalidLayerSettingsRanges(reason.into())
 }
 
-fn parse_ranges(metadata: &str) -> Result<Vec<LayerSettingsRange>, SlicerV3Error> {
+fn parse_metadata(metadata: &str) -> Result<Value, SlicerV3Error> {
     if metadata.trim().is_empty() {
-        return Ok(Vec::new());
+        return Ok(Value::Object(serde_json::Map::new()));
     }
     let root: Value = serde_json::from_str(metadata)
         .map_err(|error| invalid(format!("metadata must be valid JSON: {error}")))?;
-    let object = root.as_object().ok_or_else(|| invalid("metadata must be an object"))?;
-    let Some(value) = object.get("layerSettingsRanges") else {
+    if !root.is_object() {
+        return Err(invalid("metadata must be an object"));
+    }
+    Ok(root)
+}
+
+fn nominal_layer_height(metadata: &Value, layer_height_mm: f32) -> Result<f64, SlicerV3Error> {
+    if !layer_height_mm.is_finite() || layer_height_mm <= 0.0 {
+        return Err(invalid("millimeter ranges require a finite positive layer height"));
+    }
+    if let Some(value) = metadata.get("effective").and_then(|effective| effective.get("layerHeightMm")) {
+        return value.as_f64().filter(|height| {
+            height.is_finite() && *height > 0.0 && *height as f32 == layer_height_mm
+        }).ok_or_else(|| invalid("effective.layerHeightMm must be finite, positive and match the job layer height as f32"));
+    }
+    // Native callers without nominal metadata use the shortest displayed f32
+    // decimal (0.03, not the widened binary f32), without allocating a String.
+    let mut buffer = [0u8; 64];
+    let length = {
+        let mut cursor = Cursor::new(buffer.as_mut_slice());
+        write!(&mut cursor, "{layer_height_mm}")
+            .map_err(|_| invalid("layer height decimal exceeds the stack buffer"))?;
+        cursor.position() as usize
+    };
+    std::str::from_utf8(&buffer[..length]).ok().and_then(|text| text.parse::<f64>().ok())
+        .ok_or_else(|| invalid("layer height must have a finite decimal representation"))
+}
+
+fn parse_ranges(metadata: &Value) -> Result<Vec<LayerSettingsRange>, SlicerV3Error> {
+    let Some(value) = metadata.get("layerSettingsRanges") else {
         return Ok(Vec::new());
     };
     let array = value.as_array().ok_or_else(|| invalid("expected an array"))?;
@@ -173,12 +298,22 @@ fn parse_ranges(metadata: &str) -> Result<Vec<LayerSettingsRange>, SlicerV3Error
     for (index, value) in array.iter().enumerate() {
         let range = value.as_object()
             .ok_or_else(|| invalid(format!("range {index} must be an object")))?;
+        let millimeters = match range.get("unit") {
+            None => false,
+            Some(Value::String(unit)) if unit == "mm" => true,
+            Some(_) => return Err(invalid(format!("range {index} unit must be mm when supplied"))),
+        };
+        let keys = if millimeters {
+            &["id", "unit", "startMm", "endMm", "settings"][..]
+        } else {
+            &["id", "startLayer", "endLayer", "settings"][..]
+        };
         for key in range.keys() {
-            if !["id", "startLayer", "endLayer", "settings"].contains(&key.as_str()) {
+            if !keys.contains(&key.as_str()) {
                 return Err(invalid(format!("range {index} has unknown key {key}")));
             }
         }
-        for key in ["id", "startLayer", "endLayer", "settings"] {
+        for &key in keys {
             if !range.contains_key(key) {
                 return Err(invalid(format!("range {index} must have own {key}")));
             }
@@ -188,17 +323,23 @@ fn parse_ranges(metadata: &str) -> Result<Vec<LayerSettingsRange>, SlicerV3Error
         if !ids.insert(id) {
             return Err(invalid(format!("duplicate id {id}")));
         }
-        for key in ["startLayer", "endLayer"] {
+        let (start_key, end_key) = if millimeters { ("startMm", "endMm") } else { ("startLayer", "endLayer") };
+        for key in [start_key, end_key] {
             let valid = range[key].as_f64().is_some_and(|number| {
-                number.is_finite() && number.fract() == 0.0
-                    && (1.0..=u32::MAX as f64).contains(&number)
+                if millimeters {
+                    number.is_finite() && (0.0..=f64::from(f32::MAX)).contains(&number)
+                } else {
+                    number.is_finite() && number.fract() == 0.0
+                        && (1.0..=u32::MAX as f64).contains(&number)
+                }
             });
             if !valid {
-                return Err(invalid(format!("range {index} {key} must be an integer in 1..4294967295")));
+                let expected = if millimeters { "a finite number in 0..f32::MAX" } else { "an integer in 1..4294967295" };
+                return Err(invalid(format!("range {index} {key} must be {expected}")));
             }
         }
-        if range["startLayer"].as_f64() > range["endLayer"].as_f64() {
-            return Err(invalid(format!("range {index} startLayer must not exceed endLayer")));
+        if range[start_key].as_f64() > range[end_key].as_f64() {
+            return Err(invalid(format!("range {index} {start_key} must not exceed {end_key}")));
         }
         let settings = range["settings"].as_object()
             .ok_or_else(|| invalid(format!("range {index} settings must be an object")))?;
@@ -226,17 +367,40 @@ fn parse_ranges(metadata: &str) -> Result<Vec<LayerSettingsRange>, SlicerV3Error
     let mut ranges = Vec::<LayerSettingsRange>::deserialize(value)
         .map_err(|error| invalid(error.to_string()))?;
     for range in &mut ranges {
+        if let LayerSettingsRange::Millimeters(range) = range {
+            if range.start_mm == 0.0 { range.start_mm = 0.0; }
+            if range.end_mm == 0.0 { range.end_mm = 0.0; }
+        }
         for field in LayerSettingField::ALL {
-            if range.settings.get(field) == Some(0.0) {
-                range.settings.set(field, 0.0);
+            if range.settings().get(field) == Some(0.0) {
+                range.settings_mut().set(field, 0.0);
             }
         }
     }
     Ok(ranges)
 }
 
+// All spans are positive finite f64, including extrapolated bounds beyond the
+// u32 grid. total_cmp keeps heap ordering deterministic without narrowing them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Span(f64);
+
+impl Eq for Span {}
+
+impl Ord for Span {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl PartialOrd for Span {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 // BinaryHeap is max-first: reverse span, then prefer the later original index.
-type Priority = (Reverse<u64>, usize);
+type Priority = (Reverse<Span>, usize);
 
 fn current(heap: &mut BinaryHeap<Priority>, active: &[bool]) -> Option<usize> {
     while heap.peek().is_some_and(|entry| !active[entry.1]) {
@@ -245,14 +409,16 @@ fn current(heap: &mut BinaryHeap<Priority>, active: &[bool]) -> Option<usize> {
     heap.peek().map(|entry| entry.1)
 }
 
-fn compile_ranges(ranges: &[LayerSettingsRange], total_layers: u32) -> Vec<LayerSettingsSegment> {
+fn compile_ranges(ranges: &[LayerSettingsRange], total_layers: u32, layer_height_mm: f64) -> Vec<LayerSettingsSegment> {
     // End events sort before start events at the same coordinate. u64 represents
     // u32::MAX + 1 without overflowing, even at the last possible printed layer.
     let mut events = Vec::with_capacity(ranges.len() * 2);
     for (index, range) in ranges.iter().enumerate() {
-        if range.start_layer <= total_layers {
-            events.push((u64::from(range.start_layer), true, index));
-            events.push((u64::from(range.end_layer.min(total_layers)) + 1, false, index));
+        let Some((start, end)) = range.bounds(layer_height_mm) else { continue };
+        let span = Span(end - start + 1.0);
+        if start <= f64::from(total_layers) {
+            events.push((start as u64, true, index, span));
+            events.push((end.min(f64::from(total_layers)) as u64 + 1, false, index, span));
         }
     }
     events.sort_unstable();
@@ -264,14 +430,14 @@ fn compile_ranges(ranges: &[LayerSettingsRange], total_layers: u32) -> Vec<Layer
     while cursor < events.len() {
         let coordinate = events[cursor].0;
         while cursor < events.len() && events[cursor].0 == coordinate {
-            let (_, starting, index) = events[cursor];
+            let (_, starting, index, span) = events[cursor];
             active[index] = starting;
             if starting {
                 let range = &ranges[index];
-                let priority = (Reverse(u64::from(range.end_layer) - u64::from(range.start_layer) + 1), index);
+                let priority = (Reverse(span), index);
                 display.push(priority);
                 for (field_index, field) in LayerSettingField::ALL.iter().enumerate() {
-                    if range.settings.get(*field).is_some() {
+                    if range.settings().get(*field).is_some() {
                         fields[field_index].push(priority);
                     }
                 }
@@ -283,7 +449,7 @@ fn compile_ranges(ranges: &[LayerSettingsRange], total_layers: u32) -> Vec<Layer
         let mut settings = LayerPrintSettingsPatch::default();
         for (field_index, field) in LayerSettingField::ALL.iter().enumerate() {
             if let Some(index) = current(&mut fields[field_index], &active) {
-                if let Some(value) = ranges[index].settings.get(*field) {
+                if let Some(value) = ranges[index].settings().get(*field) {
                     settings.set(*field, value);
                 }
             }
@@ -331,6 +497,315 @@ mod tests {
             range("B", 5, 6, json!({"exposureSec": 7})),
             range("C", 6, 7, json!({"exposureSec": 9}))
         ])
+    }
+
+    fn mm_range(id: &str, start: f64, end: f64, settings: Value) -> Value {
+        json!({"id": id, "unit": "mm", "startMm": start, "endMm": end, "settings": settings})
+    }
+
+    fn mm_schedule(ranges: Value, total: u32, height: f32) -> LayerSettingsSchedule {
+        let mut job = job(ranges, total);
+        job.layer_height_mm = height;
+        LayerSettingsSchedule::from_job(&job, &LayerSettingField::ALL).unwrap()
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_abc_fixture_matches_layers_and_inheritance() {
+        let millimeters = mm_schedule(json!([
+            mm_range("A", 0.15, 0.5, json!({"exposureSec": 4, "liftHeightMm": 8})),
+            mm_range("B", 0.25, 0.3, json!({"exposureSec": 7})),
+            mm_range("C", 0.3, 0.35, json!({"exposureSec": 9}))
+        ]), 12, 0.05);
+        assert_eq!(millimeters.segments(), schedule(fixture(), 12).segments());
+        let exposures: Vec<f64> = (0..12).map(|index| {
+            millimeters.patch_at(index).and_then(|patch| patch.exposure_sec)
+                .unwrap_or(if index < 2 { 10.0 } else { 2.0 })
+        }).collect();
+        assert_eq!(exposures, [10., 10., 4., 4., 7., 9., 9., 4., 4., 4., 2., 2.]);
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_f32_boundaries_zero_off_grid_and_raw_storage() {
+        let ranges = json!([
+            mm_range("sixth", 0.3, 0.3, json!({"exposureSec": 6})),
+            mm_range("zero", -0.0, 0.0, json!({"exposureSec": 0})),
+            mm_range("off-grid", 0.301, 0.349, json!({"exposureSec": 99})),
+            mm_range("first", 0.0, 0.05, json!({"exposureSec": 1}))
+        ]);
+        let result = mm_schedule(ranges.clone(), 12, 0.05);
+        assert_eq!(result.segments().len(), 2);
+        assert_eq!(result.patch_at(0).unwrap().exposure_sec, Some(1.0));
+        assert_eq!(result.patch_at(5).unwrap().exposure_sec, Some(6.0));
+        assert!(result.patch_at(4).is_none());
+        assert!(result.patch_at(6).is_none());
+        let parsed = parse_ranges(&json!({"layerSettingsRanges": ranges})).unwrap();
+        let saved = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(saved[0]["startMm"], json!(0.3));
+        assert!(saved[0].get("startLayer").is_none());
+        assert!(saved[0].get("endLayer").is_none());
+        assert_eq!(parsed[0].id(), "sixth");
+        if let LayerSettingsRange::Millimeters(range) = &parsed[1] {
+            assert_eq!(range.start_mm.to_bits(), 0.0f64.to_bits());
+        } else { panic!("expected millimeter range"); }
+        let precise = 0.10000000000000002;
+        let parsed = parse_ranges(&json!({"layerSettingsRanges": [
+            mm_range("precise", precise, precise, json!({"exposureSec": 4}))
+        ]})).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap()[0]["startMm"], json!(precise));
+        assert_eq!(parsed[0].bounds(0.05), Some((2.0, 2.0)));
+        for (start, end) in [(0.0, 0.0), (0.301, 0.349), (20.0, 30.0)] {
+            let result = mm_schedule(json!([mm_range("empty", start, end, json!({"exposureSec": 4}))]), 12, 0.05);
+            assert!(!result.is_empty());
+            assert!(result.segments().is_empty());
+        }
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_mixed_resolved_span_ties_and_original_widths() {
+        let layer = range("layers", 5, 6, json!({"exposureSec": 7, "liftHeightMm": 8}));
+        let mm = mm_range("mm", 0.25, 0.3, json!({"exposureSec": 9}));
+        for (ranges, expected) in [(json!([layer.clone(), mm.clone()]), 9.0), (json!([mm, layer]), 7.0)] {
+            let result = mm_schedule(ranges, 12, 0.05);
+            let patch = result.patch_at(5).unwrap();
+            assert_eq!(patch.exposure_sec, Some(expected));
+            assert_eq!(patch.lift_height_mm, Some(8.0));
+            assert_eq!(result.segments()[0].range_index, 1);
+        }
+        let result = mm_schedule(json!([
+            mm_range("narrow", 0.05, 0.5, json!({"exposureSec": 7})),
+            mm_range("wide", 0.05, 5.0, json!({"exposureSec": 4, "liftHeightMm": 8}))
+        ]), 5, 0.05);
+        assert_eq!(result.patch_at(0).unwrap().exposure_sec, Some(7.0));
+        assert_eq!(result.patch_at(0).unwrap().lift_height_mm, Some(8.0));
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_height_changes_and_invalid_height_even_zero_total() {
+        let ranges = json!([mm_range("point", 0.3, 0.3, json!({"exposureSec": 6}))]);
+        let fine = mm_schedule(ranges.clone(), 12, 0.05);
+        let coarse = mm_schedule(ranges.clone(), 12, 0.1);
+        assert_eq!(fine.segments()[0].start_layer, 6);
+        assert_eq!(coarse.segments()[0].start_layer, 3);
+        for total in [0, 12] {
+            for height in [0.0, -0.05, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut job = job(ranges.clone(), total);
+                job.layer_height_mm = height;
+                assert!(matches!(LayerSettingsSchedule::from_job(&job, &LayerSettingField::ALL),
+                    Err(SlicerV3Error::InvalidLayerSettingsRanges(_))));
+            }
+        }
+        assert!(mm_schedule(ranges, 0, 0.05).segments().is_empty());
+        // Legacy layer-only jobs still require no height, including zero total.
+        assert!(!schedule(fixture(), 0).is_empty());
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_thirty_micron_point_preserves_third_layer() {
+        let ranges = json!([mm_range("third", 3.0 * 0.03, 3.0 * 0.03, json!({"exposureSec": 9}))]);
+        let result = mm_schedule(ranges.clone(), 12, 0.03);
+        assert_eq!(result.segments().len(), 1);
+        assert_eq!((result.segments()[0].start_layer, result.segments()[0].end_layer), (3, 3));
+        assert_eq!(result.patch_at(2).unwrap().exposure_sec, Some(9.0));
+        let mut job = job(ranges.clone(), 12);
+        job.layer_height_mm = 0.03;
+        job.metadata_json = json!({
+            "effective": {"layerHeightMm": 0.03}, "layerSettingsRanges": ranges
+        }).to_string();
+        assert_eq!(LayerSettingsSchedule::from_job(&job, &LayerSettingField::ALL).unwrap().segments(), result.segments());
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_nominal_height_matrix_preserves_points_and_intervals() {
+        for height in [0.015, 0.025, 0.03, 0.035, 0.05, 0.0625] {
+            for layer in [1u32, 3, 7, 30, 1234] {
+                for end in [layer, layer + 2] {
+                    let ranges = json!([mm_range("converted", f64::from(layer) * height,
+                        f64::from(end) * height, json!({"exposureSec": 9}))]);
+                    let expected = schedule(json!([range("converted", layer, end, json!({"exposureSec": 9}))]), end + 1);
+                    for declared in [false, true] {
+                        let mut job = job(ranges.clone(), end + 1);
+                        job.layer_height_mm = height as f32;
+                        if declared {
+                            job.metadata_json = json!({
+                                "effective": {"layerHeightMm": height}, "layerSettingsRanges": ranges
+                            }).to_string();
+                        }
+                        let result = LayerSettingsSchedule::from_job(&job, &LayerSettingField::ALL).unwrap();
+                        assert_eq!(result.segments(), expected.segments(), "h={height}, layers={layer}..{end}, declared={declared}");
+                    }
+                }
+            }
+        }
+        let precise = 0.0300000001;
+        assert_eq!(nominal_layer_height(&json!({"effective": {"layerHeightMm": precise}}), precise as f32).unwrap(), precise);
+        assert_eq!(nominal_layer_height(&json!({}), 0.03).unwrap(), 0.03);
+        assert_eq!(nominal_layer_height(&json!({"effective": {}}), 0.03).unwrap(), 0.03);
+        for height in [f32::from_bits(1), f32::MIN_POSITIVE, f32::MAX] {
+            let nominal = nominal_layer_height(&json!({}), height).unwrap();
+            assert!(nominal.is_finite() && nominal > 0.0);
+            assert_eq!(nominal as f32, height);
+        }
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_invalid_nominal_context_rejected_even_without_matching_layers() {
+        for value in [Value::Null, json!("0.03"), json!(true), json!(0), json!(-0.03),
+            json!(0.05), json!(f64::MAX), json!(1e-100)] {
+            for (start, end) in [(0.09, 0.09), (100.0, 200.0), (0.0, 0.0), (0.091, 0.119)] {
+                for total in [0, 12] {
+                    let mut job = job(json!([]), total);
+                    job.layer_height_mm = 0.03;
+                    job.metadata_json = json!({
+                        "effective": {"layerHeightMm": value},
+                        "layerSettingsRanges": [mm_range("point", start, end, json!({"exposureSec": 9}))]
+                    }).to_string();
+                    assert!(matches!(LayerSettingsSchedule::from_job(&job, &LayerSettingField::ALL),
+                        Err(SlicerV3Error::InvalidLayerSettingsRanges(_))), "context={value}, bounds={start}..{end}, total={total}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn layer_settings_ranges_legacy_ignores_unrelated_nominal_height_context() {
+        for effective in [Value::Null, json!("unrelated"), json!({}),
+            json!({"layerHeightMm": null}), json!({"layerHeightMm": "0.03"}),
+            json!({"layerHeightMm": 0}), json!({"layerHeightMm": 0.05})] {
+            for height in [0.0, f32::NAN, 0.03] {
+                let mut job = job(fixture(), 12);
+                job.layer_height_mm = height;
+                job.metadata_json = json!({"effective": effective, "layerSettingsRanges": fixture()}).to_string();
+                let result = LayerSettingsSchedule::from_job(&job, &LayerSettingField::ALL).unwrap();
+                assert_eq!(result.segments(), schedule(fixture(), 12).segments());
+                job.metadata_json = json!({"effective": effective, "layerSettingsRanges": []}).to_string();
+                assert!(LayerSettingsSchedule::from_job(&job, &[]).unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_invalid_nominal_context_rejected_before_destination_changes() {
+        let mut job = job(json!([]), 12);
+        job.layer_height_mm = 0.03;
+        job.output_format = ".goo".into();
+        job.metadata_json = json!({
+            "effective": {"layerHeightMm": null},
+            "layerSettingsRanges": [mm_range("outside", 100.0, 200.0, json!({"exposureSec": 9}))]
+        }).to_string();
+        let path = std::env::temp_dir().join(format!("layer-settings-invalid-nominal-{}.goo", std::process::id()));
+        std::fs::write(&path, b"existing destination").unwrap();
+        let result = crate::engine::dispatch_encode_by_format_to_path(
+            &job, &crate::types::RenderedLayersV3::default(), &[], &path, None,
+        );
+        assert!(matches!(result, Err(SlicerV3Error::InvalidLayerSettingsRanges(_))));
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing destination");
+        std::fs::remove_file(&path).unwrap();
+        let result = crate::engine::dispatch_encode_by_format_to_path(
+            &job, &crate::types::RenderedLayersV3::default(), &[], &path, None,
+        );
+        assert!(matches!(result, Err(SlicerV3Error::InvalidLayerSettingsRanges(_))));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_u32_plateaus_extrapolation_and_overflow_stay_compact() {
+        let last = f64::from(u32::MAX as f32);
+        let result = mm_schedule(json!([mm_range("last", last, last, json!({"exposureSec": 9}))]), u32::MAX, 1.0);
+        assert_eq!(result.segments().len(), 1);
+        assert_eq!(result.segments()[0].end_layer, u32::MAX);
+        assert!(result.segments()[0].start_layer > u32::MAX - 256);
+        assert_eq!(result.patch_at(u32::MAX - 1).unwrap().exposure_sec, Some(9.0));
+        assert!(result.patch_at(u32::MAX).is_none());
+        // Both cover the whole physical print, but unclipped extrapolated spans
+        // exceed u64 and the earlier narrower range must still win.
+        let height = f32::from_bits(1);
+        let result = mm_schedule(json!([
+            mm_range("narrow", 0.0, 1e20, json!({"exposureSec": 7})),
+            mm_range("wide", 0.0, f64::from(f32::MAX), json!({"exposureSec": 4, "liftHeightMm": 8})),
+            mm_range("beyond", 1e30, 2e30, json!({"exposureSec": 99}))
+        ]), u32::MAX, height);
+        assert_eq!(result.segments().len(), 1);
+        assert_eq!(result.patch_at(u32::MAX - 1).unwrap().exposure_sec, Some(7.0));
+        assert_eq!(result.patch_at(0).unwrap().lift_height_mm, Some(8.0));
+        // A finite endpoint must not match an infinite grid height.
+        let result = mm_schedule(json!([
+            mm_range("finite", f64::from(f32::MAX), f64::from(f32::MAX), json!({"exposureSec": 3}))
+        ]), u32::MAX, f32::MAX);
+        assert_eq!(result.segments().len(), 1);
+        assert_eq!((result.segments()[0].start_layer, result.segments()[0].end_layer), (1, 1));
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_reject_malformed_forms_and_values() {
+        let valid = mm_range("mm", 0.0, 0.3, json!({"exposureSec": 4}));
+        let mut cases = Vec::new();
+        for key in ["id", "unit", "startMm", "endMm", "settings"] {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            cases.push(missing);
+            let mut null = valid.clone();
+            null[key] = Value::Null;
+            cases.push(null);
+        }
+        for unit in [json!("layers"), json!("cm"), json!(true), json!(0)] {
+            let mut invalid = valid.clone();
+            invalid["unit"] = unit;
+            cases.push(invalid);
+        }
+        for key in ["startMm", "endMm"] {
+            for value in [json!(-1), json!("0.1"), json!(true), json!(f64::from(f32::MAX) * 2.0)] {
+                let mut invalid = valid.clone();
+                invalid[key] = value;
+                cases.push(invalid);
+            }
+        }
+        for key in ["startLayer", "endLayer", "extra"] {
+            let mut mixed = valid.clone();
+            mixed[key] = json!(1);
+            cases.push(mixed);
+        }
+        let mut legacy_unit = range("legacy", 1, 2, json!({"exposureSec": 4}));
+        legacy_unit["unit"] = json!("mm");
+        cases.push(legacy_unit);
+        cases.push(mm_range("inverted", 0.3, 0.1, json!({"exposureSec": 4})));
+        for invalid in cases {
+            let mut job = job(json!([invalid.clone()]), 12);
+            job.layer_height_mm = 0.05;
+            assert!(matches!(LayerSettingsSchedule::from_job(&job, &LayerSettingField::ALL),
+                Err(SlicerV3Error::InvalidLayerSettingsRanges(_))), "{invalid}");
+        }
+        for literal in ["NaN", "Infinity", "-Infinity", "1e400"] {
+            let metadata = format!("{{\"layerSettingsRanges\":[{{\"id\":\"mm\",\"unit\":\"mm\",\"startMm\":0,\"endMm\":{literal},\"settings\":{{\"exposureSec\":4}}}}]}}");
+            assert!(parse_metadata(&metadata).and_then(|root| parse_ranges(&root)).is_err());
+        }
+        let duplicate = json!({"layerSettingsRanges": [
+            range("same", 1, 2, json!({"exposureSec": 4})),
+            mm_range("same", 0.0, 0.3, json!({"exposureSec": 4}))
+        ]});
+        assert!(parse_ranges(&duplicate).is_err());
+    }
+
+    #[test]
+    fn layer_settings_ranges_mm_unsupported_outside_or_empty_still_rejected() {
+        for (start, end) in [(20.0, 30.0), (0.0, 0.0), (0.301, 0.349)] {
+            let mut job = job(json!([mm_range("outside", start, end, json!({"liftHeightMm": 8}))]), 12);
+            job.layer_height_mm = 0.05;
+            let error = LayerSettingsSchedule::from_job(&job, &[LayerSettingField::ExposureSec]).unwrap_err();
+            assert_eq!(error.to_string(), "unsupported output format: goo cannot encode layer setting liftHeightMm");
+            let encoder = crate::encoders::registry::find_encoder(".nanodlp").unwrap();
+            // Unsupported formats validate the collection, not irrelevant height
+            // context, even when every range is outside the job or off-grid.
+            job.layer_height_mm = f32::NAN;
+            let mut metadata = parse_metadata(&job.metadata_json).unwrap();
+            metadata["effective"] = json!({"layerHeightMm": null});
+            job.metadata_json = metadata.to_string();
+            assert!(matches!(ensure_layer_settings_supported(encoder, &job),
+                Err(SlicerV3Error::UnsupportedOutput(_))));
+            metadata["layerSettingsRanges"][0]["extra"] = json!(1);
+            job.metadata_json = metadata.to_string();
+            assert!(matches!(ensure_layer_settings_supported(encoder, &job),
+                Err(SlicerV3Error::InvalidLayerSettingsRanges(_))));
+        }
     }
 
     #[test]

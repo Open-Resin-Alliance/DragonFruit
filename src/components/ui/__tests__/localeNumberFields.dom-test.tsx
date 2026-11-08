@@ -82,3 +82,74 @@ test('ScrollableNumberField shows and reads the locale decimal comma', async () 
     await field.unmount();
   }
 });
+
+function PrecisionField({ report, decimalPlaces }: { report(value: number): void; decimalPlaces?: number }) {
+  const [value, setValue] = useState(0.075);
+  return (
+    <NumberInput
+      value={value}
+      min={0}
+      step={0.001}
+      decimalPlaces={decimalPlaces}
+      onChange={(next) => {
+        report(next);
+        setValue(next);
+      }}
+    />
+  );
+}
+
+test('NumberInput precision supports locale editing, blur, stepping and wheel without losing six-digit mm endpoints', async () => {
+  const field = await mountInSpanish((report) => <PrecisionField report={report} decimalPlaces={6} />);
+  try {
+    assert.equal(field.input.value, '0,075');
+    assert.equal(field.input.hasAttribute('decimalPlaces'), false, 'precision is not an input DOM attribute');
+    await act(async () => field.input.focus());
+    await type(field.input, '0,075123');
+    assert.equal(field.changes.at(-1), 0.075123);
+    await type(field.input, '0,0751234');
+    assert.equal(field.input.value, '0,075123', 'digits beyond six are refused');
+    await act(async () => field.input.blur());
+    assert.equal(field.input.value, '0,075123', 'blur formats the committed value at the requested precision');
+    const increase = [...(field.input.parentElement?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+      .find((button) => button.getAttribute('aria-label') === 'Increase value');
+    assert.ok(increase);
+    await act(async () => increase.click());
+    assert.equal(field.changes.at(-1), 0.076123);
+    assert.equal(field.input.value, '0,076123');
+    await act(async () => {
+      field.input.dispatchEvent(new WheelEvent('wheel', { deltaY: 1, bubbles: true, cancelable: true }));
+    });
+    assert.equal(field.changes.at(-1), 0.075123);
+    assert.equal(field.input.value, '0,075123');
+    await type(field.input, '0.123456');
+    assert.equal(field.changes.at(-1), 0.123456, 'dot remains accepted at extended precision');
+  } finally {
+    await field.unmount();
+  }
+});
+
+test('NumberInput retains two-decimal default consumers and bounds the optional precision to zero through six', async () => {
+  const legacy = await mountInSpanish((report) => <PrecisionField report={report} />);
+  try {
+    assert.equal(legacy.input.value, '0,07');
+    await type(legacy.input, '1,25');
+    assert.deepEqual(legacy.changes, [1.25]);
+    await type(legacy.input, '1,251');
+    assert.deepEqual(legacy.changes, [1.25], 'default consumers still accept only two fractional digits');
+    assert.equal(legacy.input.value, '1,25');
+  } finally {
+    await legacy.unmount();
+  }
+  for (const precision of [-2, 20]) {
+    const field = await mountInSpanish((report) => <PrecisionField report={report} decimalPlaces={precision} />);
+    try {
+      await type(field.input, precision < 0 ? '4' : '0,123456');
+      assert.equal(field.changes.at(-1), precision < 0 ? 4 : 0.123456);
+      await type(field.input, precision < 0 ? '4,1' : '0,1234567');
+      assert.equal(field.changes.length, 1, 'out-of-range precision is bounded rather than opening extra digits');
+    } finally {
+      await field.unmount();
+    }
+  }
+});

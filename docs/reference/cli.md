@@ -208,12 +208,15 @@ the material and printer. Without `--printer`, `slice run` gets raw engine
 defaults and no metadata.
 
 **Scene layer settings ranges** travel in the VOXL, not in new CLI editor flags.
-`scene slice` preserves their printed layer numbers and applies the same sparse
-inheritance as the app for GOO, CTB and Anycubic. Nonempty schedules require
+`scene slice` preserves either fixed printed layer numbers or raw physical mm
+bounds and applies the same sparse inheritance as the app for GOO, CTB and
+Anycubic. MM bounds resolve against the selected nominal layer height; a
+`--layer-height` override changes their affected layers without rewriting their
+saved heights. Nonempty schedules require
 `--printer`; unsupported fields/version combinations and malformed schedules
 fail before geometry merging or temporary staging. A legacy absent/empty
 schedule still permits printerless slicing. Scene edit/resave commands retain
-ranges. See [Slice Job Assembly](../dev/slice-job-assembly.md#layer-settings-range-resolution).
+the original range unit and bounds, never replacing mm with derived layer keys. See [Slice Job Assembly](../dev/slice-job-assembly.md#layer-settings-range-resolution).
 The staging directory honors the process's temporary-directory setting
 (`TMPDIR` on Linux), so bounded verification can keep it worktree-private.
 

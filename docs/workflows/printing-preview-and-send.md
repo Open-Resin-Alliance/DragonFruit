@@ -20,7 +20,10 @@ Use the vertical layer slider to inspect layers:
 During scrubbing, DragonFruit can use fast preview rendering paths to keep interaction responsive.
 
 Right-click the slider **track** to configure scene layer-settings ranges; the
-handle's right-click remains its exact-value editor. Colored bands show the
+handle's right-click remains its exact-value editor. Choose Layers or mm in the
+range editor: mm bounds remain physical heights when the selected layer height
+changes. Typing a supported setting enables its override; merely focusing it
+does not. Colored bands show the
 current scene configuration, not a rewrite of the loaded print file. Editing,
 adding, deleting, undoing or redoing a range marks existing plate artifacts stale;
 re-slice before sending the new settings. A run already in flight finishes with

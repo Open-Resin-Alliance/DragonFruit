@@ -132,17 +132,56 @@ in 0..255. A height without `2` is **total** travel, and the corresponding
 change layer height, anti-aliasing, dithering, geometry, masks or tank assignment.
 Explicit zero is an override; absent fields inherit.
 
-Endpoints are inclusive printed layer numbers in 1..4294967295. Uncovered
-layers retain the format baseline. Narrowest original span wins independently
-for each supplied field; equal spans prefer the later array entry. A narrow
-exposure-only patch therefore inherits motion from the highest-priority wider
-range supplying it. Clip compiled/visible segments, never the saved bounds or
-priority widths. Editing preserves id and array position; new ranges append.
-The segment's `rangeId` identifies the overall winning range for display, not
-necessarily the supplier of every inherited field.
+Ranges have two persisted forms. Existing layer ranges remain
+`{ id, startLayer, endLayer, settings }`, with inclusive printed numbers in
+1..4294967295. Physical-height ranges are
+`{ id, unit: 'mm', startMm, endMm, settings }`, with finite nonnegative bounds.
+A millimetre range never stores converted `startLayer`/`endLayer` keys. Mixed
+forms, unknown units, nulls and invalid bounds are errors, not sanitized data.
+
+```ts
+const heights = parseLayerSettingsRanges([
+  { id: 'height', unit: 'mm', startMm: 0.075, endMm: 0.15,
+    settings: { exposureSec: 3 } },
+]);
+compileLayerSettingsRanges(heights, 12, 0.025); // printed layers 3..6
+compileLayerSettingsRanges(heights, 12, 0.05);  // printed layers 2..3
+// heights still contains the original millimetre bounds in both cases.
+```
+
+`compileLayerSettingsRanges` accepts an optional third `layerHeightMm` argument;
+it is required for any mm range, including an empty print. The public
+`resolveLayerSettingsRangeBounds` returns original, unclipped printed bounds
+or null when no grid point matches. Its derived endpoints can lie beyond the
+u32 print domain; they are resolution data, never persisted replacements.
+
+Heights are inclusive nominal printed-layer end heights relative to each build
+plate. Resolution multiplies the integer layer number by the nominal f64 layer
+height, then rounds the resulting height once to binary32; bounds are compared
+in that same binary32 space. This preserves Layers→mm round-trips such as layer
+3 at 0.03 mm/layer becoming 0.09 mm, and includes layer 6 at 0.05 mm/layer in a
+0.3 mm bound, without arbitrary epsilon rules.
+
+The native schedule uses the existing `effective.layerHeightMm` metadata value
+when supplied, after checking that it agrees with the job's f32 layer height.
+Raw jobs without that nominal value use the shortest display-decimal of their
+f32 height. Parsing remains once per outer finalization; no new native job
+field or geometry/raster change is introduced.
+
+A zero or off-grid point may match nothing while remaining saved and originally
+nonempty. A layer-height change re-resolves mm ranges but never changes stored
+mm values; layer-number ranges keep their printed numbers.
+
+Uncovered layers retain the baseline. Narrowest original **resolved layer span**
+wins each supplied field, before clipping to the current print; equal spans
+prefer the later array entry, including mixed units. Beyond-domain mm bounds
+retain extrapolated original spans rather than acquiring clipped priority.
+A narrow exposure-only patch inherits motion from the highest-priority wider
+supplier. Editing preserves id/order; Add appends. Segment `rangeId` is the
+overall display winner, not necessarily every inherited field's supplier.
 
 `fingerprintLayerSettingsRanges` excludes ids and colors, but retains range
-order, bounds and fields in whitelist order. `findUnsupportedLayerSetting`
+order, the raw unit/physical bounds and fields in whitelist order. `findUnsupportedLayerSetting`
 returns the first incompatible supplied field in original range/whitelist
 order, including shadowed and out-of-print ranges; consumers must reject it,
 not silently drop it.
@@ -150,7 +189,8 @@ not silently drop it.
 The native counterpart is
 `rust/dragonfruit-slicing-engine/src/layer_settings.rs`:
 `LayerSettingsSchedule::from_job` validates the root `layerSettingsRanges`
-metadata key and format-owned supported fields; `patch_at` accepts a zero-based
+metadata key and format-owned supported fields, resolving mm against
+`SliceJobV3.layer_height_mm`; `patch_at` accepts a zero-based
 physical layer index. Parsed values remain f64 until record emission. Both
 resolvers sweep endpoints with per-field priority heaps, rather than allocate
 an array proportional to the print's layer count. Native `is_empty()` means
@@ -193,10 +233,19 @@ segment endpoints, since one range can win several separated intervals.
 Call `useLayerSettingsRangeColors` once and share its map across both rails,
 menus and Manage rows. It allocates distinct resolved RGB values in persisted
 array order, observes root/OS theme changes and does not persist colors.
+`formats/layerSettingsFields.ts` owns pure `resolveLayerSettingsFields`, so a
+props-driven editor need not import the runtime profile/plugin registry.
 `layerSettingsRangeMessages.ts` owns shared localized field labels, units and
 module-scope interpolated messages; do not copy the material settings schema
 or put translation dependencies in the pure resolver. The rail's right-click
-track command is separate from the existing handle exact-value editor.
+track command is separate from the existing handle exact-value editor. The
+editor receives `layerHeightMm` from its current slider host and offers
+Layers/mm bounds. Shared controls use one fixed toggle/value/unit grid; the
+blank unit slot is retained for PWM. Supported numeric inputs remain editable
+when their override is off: a committed typed/step/wheel value enables it;
+focus alone does not. MM endpoint fields use six decimal places and a 0.001 mm
+step. Empty or beyond-u32 mm coverage cannot be converted into a fabricated
+layer range; its physical data remains editable/savable as mm.
 
 A single export captures an owned array before its first await; an all-plate
 batch captures once before picking its folder. Both also capture the encoded

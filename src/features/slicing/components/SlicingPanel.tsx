@@ -40,7 +40,8 @@ import {
   type SliceExportArtifact,
   type SliceExportResult,
 } from '@/features/slicing/sliceExportOrchestrator';
-import { resolveLayerSettingsFields, resolveOutputFileExtension, resolveOutputFormatVersion, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { resolveOutputFileExtension, resolveOutputFormatVersion, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { resolveLayerSettingsFields } from '@/features/slicing/formats/layerSettingsFields';
 import { findUnsupportedLayerSetting, fingerprintLayerSettingsRanges, parseLayerSettingsRanges, type LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
 import { sliceProfileFingerprint } from '@/features/printing/slicedPlates';
 import { LAYER_SETTING_LABELS, formatLayerSettingsEncodingError, formatLayerSettingsRangeBounds, formatUnsupportedLayerSetting } from '@/features/slicing/layerSettingsRangeMessages';
@@ -67,6 +68,7 @@ import {
 import { useKeyPressed } from '@/hotkeys/hotkeyStore';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import type { LocaleFormat } from '@/utils/localeNumber';
+import type { UnitFormat } from '@/utils/unitFormatting';
 
 export type SliceIntent = 'file' | 'upload' | 'print' | 'preview' | 'uvtools';
 
@@ -151,7 +153,7 @@ function captureSupportedLayerSettingsRanges(
   printer: PrinterProfile,
   material: MaterialProfile,
   translate: Translate,
-  fmt: LocaleFormat,
+  fmt: UnitFormat,
 ): LayerSettingsRange[] | null {
   try {
     const captured = parseLayerSettingsRanges(input);
@@ -161,7 +163,7 @@ function captureSupportedLayerSettingsRanges(
     if (unsupported) {
       const range = captured.find((entry) => entry.id === unsupported.rangeId)!;
       const selectedFormat = `${format?.displayName ?? printer.display.outputFormat} ${version ?? ''}`.trim();
-      const bounds = formatLayerSettingsRangeBounds(translate, fmt.number(range.startLayer), fmt.number(range.endLayer));
+      const bounds = formatLayerSettingsRangeBounds(translate, fmt, range);
       alert(formatUnsupportedLayerSetting(translate, selectedFormat, bounds, translate(LAYER_SETTING_LABELS[unsupported.field])));
       return null;
     }

@@ -69,6 +69,13 @@ first supplied incompatible field, including shadowed and beyond-EOF ranges.
 
 Each outer finalizer constructs `LayerSettingsSchedule::from_job` once before
 creating a destination. Nested record/container writers borrow the schedule.
+Legacy layer bounds remain valid; `{ unit: 'mm', startMm, endMm }` is resolved
+against nominal printed-layer end heights without rewriting saved mm values.
+The existing `effective.layerHeightMm` metadata retains nominal f64 precision;
+when supplied it must cast to the job's f32 layer height. Raw jobs without it
+use that f32 height's shortest display-decimal. Bounds and computed end heights
+are compared after a single final binary32 rounding, avoiding unit-switch loss
+at heights such as 0.03 mm. This changes neither geometry nor raster settings.
 `patch_at` is indexed by the actual zero-based physical layer index, independent
 of layer arrival order. The record writer selects its existing bottom,
 transition or normal baseline first, then merges the sparse patch. Image

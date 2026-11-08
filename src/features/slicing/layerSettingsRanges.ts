@@ -17,12 +17,21 @@ export const LAYER_SETTING_FIELDS = [
 
 export type LayerSettingField = typeof LAYER_SETTING_FIELDS[number];
 export type LayerPrintSettingsPatch = Partial<Record<LayerSettingField, number>>;
-export type LayerSettingsRange = {
+export type LayerNumberSettingsRange = {
   id: string;
+  unit?: undefined;
   startLayer: number;
   endLayer: number;
   settings: LayerPrintSettingsPatch;
 };
+export type MillimeterSettingsRange = {
+  id: string;
+  unit: 'mm';
+  startMm: number;
+  endMm: number;
+  settings: LayerPrintSettingsPatch;
+};
+export type LayerSettingsRange = LayerNumberSettingsRange | MillimeterSettingsRange;
 export type LayerSettingsSegment = {
   startLayer: number;
   endLayer: number;
@@ -32,7 +41,8 @@ export type LayerSettingsSegment = {
 
 const MAX_LAYER = 4294967295;
 const MAX_F32 = 3.4028234663852886e38;
-const RANGE_KEYS = ['id', 'startLayer', 'endLayer', 'settings'] as const;
+const LAYER_RANGE_KEYS: readonly string[] = ['id', 'startLayer', 'endLayer', 'settings'];
+const MM_RANGE_KEYS: readonly string[] = ['id', 'unit', 'startMm', 'endMm', 'settings'];
 const FIELD_KEYS = new Set<string>(LAYER_SETTING_FIELDS);
 
 function invalid(reason: string): never {
@@ -57,25 +67,43 @@ export function parseLayerSettingsRanges(input: unknown): LayerSettingsRange[] {
     const value: unknown = input[index];
     const label = `range ${index}`;
     if (!isObject(value)) invalid(`${label} must be an object`);
+    const millimeters = hasOwn(value, 'unit');
+    if (millimeters && value.unit !== 'mm') invalid(`${label} unit must be mm when supplied`);
+    const rangeKeys = millimeters ? MM_RANGE_KEYS : LAYER_RANGE_KEYS;
     for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string' || !RANGE_KEYS.some((allowed) => allowed === key)) {
+      if (typeof key !== 'string' || !rangeKeys.includes(key)) {
         invalid(`${label} has unknown key ${String(key)}`);
       }
     }
-    for (const key of RANGE_KEYS) {
+    for (const key of rangeKeys) {
       if (!hasOwn(value, key)) invalid(`${label} must have own ${key}`);
     }
-    const { id, startLayer, endLayer, settings } = value;
+    const { id, settings } = value;
     if (typeof id !== 'string' || id.length === 0) invalid(`${label} id must be a nonempty string`);
     if (ids.has(id)) invalid(`duplicate id ${id}`);
     ids.add(id);
-    if (typeof startLayer !== 'number' || !Number.isInteger(startLayer) || startLayer < 1 || startLayer > MAX_LAYER) {
-      invalid(`${label} startLayer must be an integer in 1..4294967295`);
+    let bounds: { unit: 'mm'; startMm: number; endMm: number } | { startLayer: number; endLayer: number };
+    if (millimeters) {
+      const { startMm, endMm } = value;
+      if (typeof startMm !== 'number' || !Number.isFinite(startMm) || startMm < 0 || startMm > MAX_F32) {
+        invalid(`${label} startMm must be a finite number in 0..f32::MAX`);
+      }
+      if (typeof endMm !== 'number' || !Number.isFinite(endMm) || endMm < 0 || endMm > MAX_F32) {
+        invalid(`${label} endMm must be a finite number in 0..f32::MAX`);
+      }
+      if (startMm > endMm) invalid(`${label} startMm must not exceed endMm`);
+      bounds = { unit: 'mm', startMm: startMm === 0 ? 0 : startMm, endMm: endMm === 0 ? 0 : endMm };
+    } else {
+      const { startLayer, endLayer } = value;
+      if (typeof startLayer !== 'number' || !Number.isInteger(startLayer) || startLayer < 1 || startLayer > MAX_LAYER) {
+        invalid(`${label} startLayer must be an integer in 1..4294967295`);
+      }
+      if (typeof endLayer !== 'number' || !Number.isInteger(endLayer) || endLayer < 1 || endLayer > MAX_LAYER) {
+        invalid(`${label} endLayer must be an integer in 1..4294967295`);
+      }
+      if (startLayer > endLayer) invalid(`${label} startLayer must not exceed endLayer`);
+      bounds = { startLayer, endLayer };
     }
-    if (typeof endLayer !== 'number' || !Number.isInteger(endLayer) || endLayer < 1 || endLayer > MAX_LAYER) {
-      invalid(`${label} endLayer must be an integer in 1..4294967295`);
-    }
-    if (startLayer > endLayer) invalid(`${label} startLayer must not exceed endLayer`);
     if (!isObject(settings)) invalid(`${label} settings must be an object`);
     const keys = Reflect.ownKeys(settings);
     for (const key of keys) {
@@ -96,9 +124,48 @@ export function parseLayerSettingsRanges(input: unknown): LayerSettingsRange[] {
       }
       patch[field] = numeric === 0 ? 0 : numeric;
     }
-    result.push({ id, startLayer, endLayer, settings: patch });
+    result.push({ id, ...bounds, settings: patch });
   }
   return result;
+}
+
+/** Resolve inclusive printed-layer end heights without clipping or changing saved bounds. */
+export function resolveLayerSettingsRangeBounds(
+  range: LayerSettingsRange,
+  layerHeightMm?: number,
+): { startLayer: number; endLayer: number } | null {
+  if (range.unit !== 'mm') return { startLayer: range.startLayer, endLayer: range.endLayer };
+  if (typeof layerHeightMm !== 'number' || !Number.isFinite(layerHeightMm)
+    || layerHeightMm <= 0 || !Number.isFinite(Math.fround(layerHeightMm)) || Math.fround(layerHeightMm) === 0) {
+    invalid('layerHeightMm must be a finite positive f32-representable number for mm ranges');
+  }
+  // Keep the nominal profile/job height and integer layer in f64 until the
+  // single printed-height f32 rounding; pre-rounding either changes the grid.
+  const start = Math.fround(range.startMm);
+  const end = Math.fround(range.endMm);
+  const gridEnd = Math.fround(MAX_LAYER * layerHeightMm);
+  // MAX_LAYER + 1 is an exact sentinel, never a physical layer. Each search
+  // visits at most 32 cells, including f32 plateaus near the end of the grid.
+  const bound = (endpoint: number, upper: boolean): number => {
+    let low = 1;
+    let high = MAX_LAYER + 1;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const printedHeight = Math.fround(middle * layerHeightMm);
+      if (printedHeight < endpoint || (upper && printedHeight === endpoint)) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  };
+  // Preserve priority widths beyond the finite u32 grid using the same nominal
+  // height. Derived f64 bounds may exceed u64; only sweep events are clipped.
+  const startLayer = Number.isFinite(gridEnd) && start > gridEnd
+    ? Math.max(MAX_LAYER + 1, Math.ceil(start / layerHeightMm))
+    : bound(start, false);
+  const endLayer = Number.isFinite(gridEnd) && end > gridEnd
+    ? Math.floor(end / layerHeightMm)
+    : bound(end, true) - 1;
+  return startLayer <= endLayer ? { startLayer, endLayer } : null;
 }
 
 /** Index heap: original narrower span wins, then later original array position. */
@@ -152,19 +219,21 @@ function samePatch(left: LayerPrintSettingsPatch, right: LayerPrintSettingsPatch
 export function compileLayerSettingsRanges(
   ranges: readonly LayerSettingsRange[],
   totalLayers: number,
+  layerHeightMm?: number,
 ): LayerSettingsSegment[] {
   const owned = parseLayerSettingsRanges(ranges);
   if (!Number.isInteger(totalLayers) || totalLayers < 0 || totalLayers > MAX_LAYER) {
     invalid('totalLayers must be an integer in 0..4294967295');
   }
+  const bounds = owned.map((range) => resolveLayerSettingsRangeBounds(range, layerHeightMm));
   if (totalLayers === 0) return [];
-  const spans = owned.map((range) => range.endLayer - range.startLayer + 1);
+  const spans = bounds.map((range) => range ? range.endLayer - range.startLayer + 1 : 0);
   const display = new RangeHeap(spans);
   const fields = LAYER_SETTING_FIELDS.map(() => new RangeHeap(spans));
   const active = owned.map(() => false);
   const events: { layer: number; index: number; starting: boolean }[] = [];
-  owned.forEach((range, index) => {
-    if (range.startLayer > totalLayers) return;
+  bounds.forEach((range, index) => {
+    if (!range || range.startLayer > totalLayers) return;
     events.push({ layer: range.startLayer, index, starting: true });
     // u32::MAX + 1 is still an exact safe integer in JavaScript.
     events.push({ layer: Math.min(range.endLayer, totalLayers) + 1, index, starting: false });
@@ -207,11 +276,16 @@ export function compileLayerSettingsRanges(
 
 /** Printing identity excludes display ids but preserves original priority/order. */
 export function fingerprintLayerSettingsRanges(ranges: readonly LayerSettingsRange[]): string {
-  return JSON.stringify(parseLayerSettingsRanges(ranges).map(({ startLayer, endLayer, settings }) => ({
-    startLayer,
-    endLayer,
-    settings,
-  })));
+  return JSON.stringify(parseLayerSettingsRanges(ranges).map((range) => range.unit === 'mm' ? {
+    unit: 'mm',
+    startMm: range.startMm,
+    endMm: range.endMm,
+    settings: range.settings,
+  } : {
+    startLayer: range.startLayer,
+    endLayer: range.endLayer,
+    settings: range.settings,
+  }));
 }
 
 /** Check every original range, including shadowed and beyond-EOF fields. */
