@@ -875,7 +875,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               }}
             />
 
-            {/* Settings stay beside the clip fill, independently of its window. */}
+            {/* Settings overlay the track, independently of the clip window; thumbs render above them. */}
             {rangeBands?.map((band) => (
               <div
                 key={band.id}
@@ -883,10 +883,8 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 role="img"
                 aria-label={band.label}
                 title={band.label}
-                className="absolute rounded-full pointer-events-none"
+                className="absolute left-1/2 w-1.5 -translate-x-1/2 rounded-full pointer-events-none"
                 style={{
-                  left: 'calc(50% + 5px)',
-                  width: '3px',
                   bottom: `${(band.bottomPercent + band.topPercent) / 2}%`,
                   height: `max(2px, ${band.topPercent - band.bottomPercent}%)`,
                   transform: 'translateY(50%)',

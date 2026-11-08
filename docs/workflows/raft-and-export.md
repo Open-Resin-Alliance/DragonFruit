@@ -44,7 +44,8 @@ Shift+F10 also opens range commands at the current layer.
    beyond-print ranges. Right-click a layer to edit/delete any range matching it.
 
 Ranges have distinct colors shared by bands, menu swatches and Manage. The bands
-sit beside the cross-section fill; moving clip handles does not change settings.
+overlay the slider track above the cross-section fill and below its handles.
+Moving clip handles does not change settings or hide ranges outside the clip window.
 Editable settings follow the selected printer's material-mode definitions,
 intersected with its encoder/version support. Only fields opted into per-layer
 editing appear. Material-declared motion pairs use one toggle per row; missing

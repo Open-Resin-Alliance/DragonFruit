@@ -228,7 +228,10 @@ and `onRangeContextMenu`. The page maps scene boundary coordinates with `ceil`
 coordinates with `round`. Scene bands occupy boundary cells [start−1,end];
 printing bands use half-layer edges over the 1..N rail, with a full strip for
 N=1 and no bands for N=0. Segment keys include range id and both clipped
-segment endpoints, since one range can win several separated intervals.
+segment endpoints, since one range can win several separated intervals. Bands
+share the track centerline and width, render over the clip fill but under the
+thumbs, and remain pointer-transparent. Their vertical coverage does not depend
+on the active cross-section clip window.
 
 Call `useLayerSettingsRangeColors` once and share its map across both rails,
 menus and Manage rows. It allocates distinct resolved RGB values in persisted
