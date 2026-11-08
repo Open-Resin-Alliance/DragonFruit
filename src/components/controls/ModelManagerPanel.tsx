@@ -36,6 +36,7 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import type { UnitFormat } from '@/utils/unitFormatting';
 import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
+import { plateCanBeRemoved } from '@/features/scene/plates/plateLayout';
 
 type SelectMode = 'single' | 'toggle' | 'add';
 
@@ -487,8 +488,8 @@ export function ModelManagerPanel({
         id: 'delete-plate',
         label: <Trans>Delete plate</Trans>,
         icon: Trash2,
-        // The first plate is the scene's floor; the last one has nowhere to go.
-        disabled: (plates?.length ?? 0) <= 1 || plates?.[0]?.id === contextMenu.plateId,
+        // Any plate can go but the last: a scene needs a bed to build on.
+        disabled: !plateCanBeRemoved(plates ?? [], contextMenu.plateId),
       },
     );
   }

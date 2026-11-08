@@ -193,6 +193,40 @@ test('Ctrl+A stays Ctrl+A when Control is released before A', () => {
     cleanup();
 });
 
+// Regression: Firefox on macOS sends no keyup for a key released before Cmd. The
+// V of a Cmd+V stayed pressed, so every later Cmd press (a Cmd+Z) pasted again.
+test('Releasing Cmd releases the keys pressed under it', () => {
+    hotkeyStore.getState().clearKeys();
+    const cleanup = setupHotkeyListeners();
+    const divTarget = new (global as any).HTMLElement('DIV');
+    const keyEvent = (key: string, modifiers: Record<string, boolean> = {}) => ({
+        key,
+        target: divTarget,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        preventDefault() {},
+        ...modifiers,
+    });
+
+    // J is held before Cmd, so its keyup will still come: Cmd must not drop it.
+    dispatchWindowEvent('keydown', keyEvent('j'));
+    dispatchWindowEvent('keydown', keyEvent('Meta', { metaKey: true }));
+    dispatchWindowEvent('keydown', keyEvent('v', { metaKey: true }));
+    // V is released first, and its keyup never arrives.
+    dispatchWindowEvent('keyup', keyEvent('Meta'));
+
+    assert.equal(isKeyPressedSync('v'), false, 'V must not outlive the Cmd it was pressed with');
+    assert.equal(isKeyPressedSync('j'), true, 'a key held before Cmd keeps its own keyup');
+
+    dispatchWindowEvent('keydown', keyEvent('Meta', { metaKey: true }));
+    dispatchWindowEvent('keydown', keyEvent('z', { metaKey: true }));
+    assert.equal(isKeyPressedSync('v'), false, 'a new Cmd press must not bring the old V back');
+
+    cleanup();
+});
+
 // Regression: recording a shortcut in Settings used to leak the captured key into
 // the app, because this manager's capture listener runs before the recorder's and
 // had already dispatched `app-hotkey-keydown` by the time the recorder called

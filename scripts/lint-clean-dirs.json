@@ -28,7 +28,7 @@
             "src/features/support-blockers",
             "src/features/supports",
             "src/history",
-            "src/hooks/__tests__",
+            "src/hooks",
             "src/pages",
             "src/supports/PlacementLogic/Grid",
             "src/supports/PlacementLogicV3",

@@ -209,3 +209,50 @@ test('adding beds in one go moves the supports of every model whose bed moves (#
     saveMultiPlateSettings({ plateOrdering: orderingBefore });
   }
 });
+
+test('deleting the first plate takes its models and moves the other beds up a slot', async () => {
+  const { scene, loadCube, plateOf, positionOf, rootOf, unmount } = await mountScene();
+
+  try {
+    const a = await loadCube('a.stl');
+    const c = await loadCube('c.stl');
+    const d = await loadCube('d.stl');
+    const plate1 = plateOf(a);
+    const plate2 = scene().addPlate();
+    await settle(20);
+    const plate3 = scene().addPlate();
+    await settle(20);
+    scene().moveModelsToPlate([c], plate2);
+    await settle(50);
+    scene().moveModelsToPlate([d], plate3);
+    await settle(50);
+    const kept = { [c]: plate2, [d]: plate3 };
+    assert.equal(plateOf(a), plate1, 'set up as described');
+    for (const [id, plateId] of Object.entries(kept)) assert.equal(plateOf(id), plateId, 'set up as described');
+    resetSupportStore();
+    loadFromImportFormat(rootsUnder([a, c, d].map((id) => ({ id, ...positionOf(id) }))));
+    const rootsBefore = { [a]: rootOf(a), [c]: rootOf(c), [d]: rootOf(d) };
+
+    clearHistory();
+    assert.equal(scene().removePlate(plate1), true, 'the first plate can go');
+    await waitFor(() => scene().plates.length === 2, 'the plate to go');
+    await settle(100);
+
+    assert.deepEqual(scene().plates.map((plate) => plate.id), [plate2, plate3]);
+    assert.deepEqual(scene().models.map((model) => model.id), [c, d], 'its model went with it');
+    assert.equal(getSupportSnapshot().roots[`root-${a}`], undefined, 'and so did its support');
+    for (const [id, plateId] of Object.entries(kept)) assert.equal(plateOf(id), plateId, 'each other model stays on its plate');
+    for (const id of [c, d]) assert.deepEqual(rootOf(id), positionOf(id), 'and its supports with it');
+    assert.notDeepEqual(rootOf(c), rootsBefore[c], 'the beds did move up');
+    assert.notEqual(scene().activePlateId, plate1, 'the active plate is one that still exists');
+
+    undo();
+    await waitFor(() => scene().plates.length === 3, 'undo to bring the plate back');
+    await settle(100);
+    assert.equal(plateOf(a), plate1, 'undo brings the model back onto the first plate');
+    for (const [id, plateId] of Object.entries(kept)) assert.equal(plateOf(id), plateId, 'and the others back onto theirs');
+    for (const id of [a, c, d]) assert.deepEqual(rootOf(id), rootsBefore[id], 'supports included');
+  } finally {
+    await unmount();
+  }
+});

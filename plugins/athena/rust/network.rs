@@ -813,6 +813,7 @@ fn build_ip_candidates_from_prefixes(prefixes: &[String]) -> Vec<String> {
 
 /// Best-effort extract of an IPv4 address from an `arp` output token, which may
 /// be wrapped in parentheses on some platforms.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn looks_like_ipv4(token: &str) -> Option<String> {
     let cleaned: String = token
         .chars()
@@ -825,6 +826,7 @@ fn looks_like_ipv4(token: &str) -> Option<String> {
     }
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn looks_like_mac(token: &str) -> bool {
     let sep = if token.contains('-') { '-' } else { ':' };
     let parts: Vec<&str> = token.split(sep).collect();
