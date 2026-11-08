@@ -45,9 +45,6 @@
       "windows": {
         "installMode": "passive"
       }
-    },
-    "macos-fps": {
-      "enabled": true
     }
   },
   "app": {

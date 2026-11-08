@@ -1674,7 +1674,6 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-log",
- "tauri-plugin-macos-fps",
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
@@ -6393,17 +6392,6 @@ dependencies = [
  "tauri-plugin",
  "thiserror 2.0.18",
  "time",
-]
-
-[[package]]
-name = "tauri-plugin-macos-fps"
-version = "0.1.0"
-dependencies = [
- "log",
- "objc2",
- "objc2-foundation",
- "serde",
- "tauri",
 ]
 
 [[package]]

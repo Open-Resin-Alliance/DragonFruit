@@ -4574,9 +4574,6 @@ fn main() {
         }
     }));
 
-    #[cfg(target_os = "macos")]
-    let builder = builder.plugin(tauri_plugin_macos_fps::init());
-
     // Updater plugin — checks GitHub releases for new versions and handles
     // download + install across all platforms.
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());

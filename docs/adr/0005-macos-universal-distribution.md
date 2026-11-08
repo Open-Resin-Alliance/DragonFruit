@@ -212,10 +212,12 @@ misses:
    that check only runs through the CLI — `cargo build` never sees it. Bumping
    the tag without `package.json` produces a tree that compiles and cannot bundle.
 2. **A bump can break third-party crates that only exist in one platform's graph.**
-   `tauri-plugin-macos-fps` is a `cfg(target_os = "macos")` dependency, so Linux
-   builds cannot see it at all; it broke on the new `PlatformWebview` API and is
-   now vendored under `rust/tauri-plugin-macos-fps/` (see its README). Verifying a
-   bump on Linux alone proves nothing about macOS.
+   The former macOS-only FPS helper broke on the new `PlatformWebview` API and
+   temporarily required vendoring. It has since been removed: its private
+   `WKPreferences` feature selector is unavailable on some macOS versions, so
+   desktop frame pacing now follows WebKit's defaults without private feature
+   overrides. Older WebKit versions may retain their default 60fps cap. Verifying
+   a Tauri bump on Linux alone still proves nothing about macOS.
 3. **Locally the pre-flight cannot cover signing.** The Developer ID identity in
    `tauri.macos.conf.json` and the updater's `TAURI_SIGNING_PRIVATE_KEY` both live
    in CI, so a local run signs ad-hoc and stops before the updater artifact. Real

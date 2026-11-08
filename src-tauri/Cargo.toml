@@ -62,7 +62,6 @@ bytemuck = "1"
 meshopt = "0.6.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-tauri-plugin-macos-fps = { path = "../rust/tauri-plugin-macos-fps" }
 libloading = "0.8"
 # The webview watchdog's reload prompt: a sheet it can close itself, which
 # rfd's blocking modal cannot do.
