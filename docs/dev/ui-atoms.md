@@ -66,7 +66,11 @@ also preserves fractional digits during blur/step/wheel edits:
 ```
 
 Only committed numeric edits call `onChange`; focus and intermediate empty or
-separator-only text are not a new numeric override.
+separator-only text are not a new numeric override. The paired increment/decrement
+buttons share the `ui-number-stepper` styling hook: at a bound or when disabled,
+they retain transparent backgrounds and inherited icon color, with opacity alone
+indicating unavailability. Do not apply the generic disabled action-button fill
+to either arrow.
 
 ### Feedback
 

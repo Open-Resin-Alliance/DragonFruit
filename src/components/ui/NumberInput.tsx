@@ -172,7 +172,7 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
         <div className="absolute inset-y-0 right-0.5 flex w-4 flex-col items-center justify-center gap-0.5">
           <button
             type="button"
-            className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10 disabled:opacity-50"
+            className="ui-number-stepper inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10"
             onClick={() => applyStepDelta(1)}
             disabled={Boolean(disableIncrement)}
             tabIndex={-1}
@@ -182,7 +182,7 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
           </button>
           <button
             type="button"
-            className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10 disabled:opacity-50"
+            className="ui-number-stepper inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10"
             onClick={() => applyStepDelta(-1)}
             disabled={Boolean(disableDecrement)}
             tabIndex={-1}

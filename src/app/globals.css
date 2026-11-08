@@ -494,6 +494,13 @@ button:disabled,
   opacity: 1;
 }
 
+.ui-number-stepper:disabled {
+  background: transparent;
+  border-color: transparent;
+  color: inherit;
+  opacity: 0.5;
+}
+
 .ui-label {
   color: var(--indicator);
   font-size: var(--font-size-sm);
