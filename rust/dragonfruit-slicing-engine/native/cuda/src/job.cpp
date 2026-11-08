@@ -90,6 +90,7 @@ struct DfCudaJob {
     std::uint64_t next_token = 1, next_transfer = 1;
     OutputLease output;
     Transfer transfer;
+    std::uint64_t trace_runs = 0, trace_transfer_runs = 0, trace_transfers = 0;
 
 #include "job_pool.inc"
 
@@ -100,25 +101,40 @@ struct DfCudaJob {
           host_tanks(tanks), host_tank_count(tank_count),
           blocks(),
           runtime(std::make_unique<dfcuda::Runtime>()) {
-        const auto triangle_count = host_float_count / 9;
-        const bool valid_split = config.model_triangle_count > 0 &&
-            static_cast<std::uint64_t>(config.model_triangle_count) < triangle_count;
-        const bool bypass_aa = config.aa_on_supports == 0 && valid_split &&
-            (config.raster_mode == DF_CUDA_BLUR ||
-             (config.raster_mode == DF_CUDA_COVERAGE && config.aa_samples > 1));
-        if (config.dense_raster_semantics == 0 && bypass_aa)
-            config.dense_raster_semantics = 1;
-        if (block_count == 0) {
-            blocks.push_back({0, config.width});
-        } else {
-            blocks.assign(block_data, block_data + static_cast<std::size_t>(block_count));
+        try {
+            const auto triangle_count = host_float_count / 9;
+            const bool valid_split = config.model_triangle_count > 0 &&
+                static_cast<std::uint64_t>(config.model_triangle_count) < triangle_count;
+            const bool bypass_aa = config.aa_on_supports == 0 && valid_split &&
+                (config.raster_mode == DF_CUDA_BLUR ||
+                 (config.raster_mode == DF_CUDA_COVERAGE && config.aa_samples > 1));
+            if (config.dense_raster_semantics == 0 && bypass_aa)
+                config.dense_raster_semantics = 1;
+            if (block_count == 0) {
+                blocks.push_back({0, config.width});
+            } else {
+                blocks.assign(block_data, block_data + static_cast<std::size_t>(block_count));
+            }
+            runtime->trace.event("job.geometry.begin",
+                "triangles=%llu model_triangles=%u width=%u height=%u layers=%u tanks=%u mode=%u samples=%u semantics=%u blocks=%zu",
+                static_cast<unsigned long long>(triangle_count), config.model_triangle_count,
+                config.width, config.height, config.total_layers, config.tank_count,
+                config.raster_mode, config.aa_samples, config.dense_raster_semantics, blocks.size());
+            raster = std::make_unique<dfcuda::Rasterizer>(*runtime, config, host_xyz,
+                static_cast<std::size_t>(host_float_count), host_tanks,
+                static_cast<std::size_t>(host_tank_count));
+            runtime->trace.event("job.tables.begin", "");
+            post = std::make_unique<dfcuda::Postprocessor>(*runtime, config);
+            runtime->trace.event("job.tables.ready", "xy_radius=%u z_radius=%u", post->xy_radius(), post->z_radius());
+            runtime->trace.event("job.rle.init.begin", "");
+            rle = std::make_unique<dfcuda::RleReader>(*runtime, config);
+            runtime->trace.event("job.rle.init.ready", "max_transfer_runs=%llu",
+                static_cast<unsigned long long>(rle->max_transfer_runs()));
+            initialize_pool();
+        } catch (...) {
+            runtime->trace.failure(std::current_exception());
+            throw;
         }
-        raster = std::make_unique<dfcuda::Rasterizer>(*runtime, config, host_xyz,
-            static_cast<std::size_t>(host_float_count), host_tanks,
-            static_cast<std::size_t>(host_tank_count));
-        post = std::make_unique<dfcuda::Postprocessor>(*runtime, config);
-        rle = std::make_unique<dfcuda::RleReader>(*runtime, config);
-        initialize_pool();
     }
     ~DfCudaJob() noexcept { stop_and_drain(); }
     DfCudaJob(const DfCudaJob &) = delete;
@@ -245,6 +261,7 @@ struct DfCudaJob {
 
     void finalize_current() {
         std::unique_lock<std::mutex> lock(pool_mutex);
+        runtime->trace.event("ordered.final.wait.begin", "layer=%u tank=%u", layer, tank);
         pool_changed.wait(lock, [&] {
             const auto center = pipeline_tank == tank ? cached(layer) : nullptr;
             return runtime->cancelled.load(std::memory_order_acquire) ||
@@ -257,6 +274,7 @@ struct DfCudaJob {
         output.layer = center->layer;
         output.tank = tank;
         output.block = 0;
+        runtime->trace.event("ordered.final.wait.done", "layer=%u tank=%u", output.layer, output.tank);
         output.token = next_token++;
         if (output.token == 0) output.token = next_token++;
     }
@@ -274,6 +292,23 @@ struct DfCudaJob {
         descriptor->height = config.height;
         descriptor->area_stats = output.stats;
     }
+    void reset_output_rle() {
+        const auto &block = blocks[output.block];
+        const bool log_count = runtime->trace.enabled() &&
+            (output.block == 0 || output.block + 1 == blocks.size() ||
+             ((output.block + 1) & output.block) == 0);
+        if (log_count) runtime->trace.event("rle.count.begin",
+            "layer=%u tank=%u block=%u start_column=%u width=%u height=%u",
+            output.layer, output.tank, output.block, block.start_column, block.width, config.height);
+        rle->reset(output.plane.view(), block.start_column, block.width);
+        if (runtime->trace.enabled()) trace_runs += rle->count();
+        if (log_count) {
+            runtime->trace.event("rle.count.ready", "layer=%u tank=%u block=%u run_count=%llu bytes=%llu",
+                output.layer, output.tank, output.block,
+                static_cast<unsigned long long>(rle->count()),
+                static_cast<unsigned long long>(rle->count() * sizeof(DfCudaRun)));
+        }
+    }
 
     int next_output(DfCudaOutput *descriptor) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -286,7 +321,7 @@ struct DfCudaJob {
             ++output.block;
             output.token = next_token++;
             if (output.token == 0) output.token = next_token++;
-            rle->reset(output.plane.view(), blocks[output.block].start_column, blocks[output.block].width);
+            reset_output_rle();
             output.plane.pixels.mark_used(runtime->pack);
             check_job();
             output.active = true;
@@ -295,7 +330,7 @@ struct DfCudaJob {
         }
         if (tank < config.tank_count) {
             finalize_current();
-            rle->reset(output.plane.view(), blocks[0].start_column, blocks[0].width);
+            reset_output_rle();
             output.plane.pixels.mark_used(runtime->pack);
             check_job();
             output.active = true;
@@ -321,6 +356,11 @@ struct DfCudaJob {
         if (run_count != 0 && destination == nullptr)
             throw dfcuda::Error(DF_CUDA_INVALID_ARGUMENT, "null RLE destination");
         const auto bytes = dfcuda::checked_bytes(static_cast<std::size_t>(run_count), sizeof(DfCudaRun));
+        const bool log_readback = runtime->trace.enabled() && ((trace_transfers + 1) & trace_transfers) == 0;
+        if (log_readback) runtime->trace.event("readback.begin",
+            "layer=%u tank=%u block=%u first_run=%llu run_count=%llu bytes=%zu",
+            output.layer, output.tank, output.block,
+            static_cast<unsigned long long>(first_run), static_cast<unsigned long long>(run_count), bytes);
         Transfer pending;
         pending.token = next_transfer++;
         if (pending.token == 0) pending.token = next_transfer++;
@@ -334,8 +374,15 @@ struct DfCudaJob {
             pending.active = true;
             transfer = std::move(pending);
             *token = transfer.token;
+            if (runtime->trace.enabled()) {
+                trace_transfer_runs += run_count;
+                ++trace_transfers;
+            }
+            if (log_readback) runtime->trace.event("readback.queued", "transfer_token=%llu",
+                static_cast<unsigned long long>(transfer.token));
             return DF_CUDA_OK;
         } catch (...) {
+            runtime->trace.failure(std::current_exception());
             cudaStreamSynchronize(runtime->readback);
             if (pending.pin) { try { pending.pin->unregister(); } catch (...) {} pending.pin.reset(); }
             if (pending.event != nullptr) cudaEventDestroy(pending.event);
@@ -347,12 +394,19 @@ struct DfCudaJob {
         std::lock_guard<std::mutex> lock(mutex);
         if (!transfer.active || transfer.token != token)
             throw dfcuda::Error(DF_CUDA_INVALID_ARGUMENT, "invalid transfer token");
+        const bool log_wait = runtime->trace.enabled() && (trace_transfers & (trace_transfers - 1)) == 0;
+        if (log_wait) runtime->trace.event("readback.wait.begin", "transfer_token=%llu",
+            static_cast<unsigned long long>(token));
         std::unique_ptr<dfcuda::Error> failure;
         try {
             runtime->activate();
             dfcuda::checked(cudaEventSynchronize(transfer.event), "wait for RLE transfer");
-        } catch (const dfcuda::Error &error) { failure = std::make_unique<dfcuda::Error>(error); }
+        } catch (const dfcuda::Error &error) {
+            runtime->trace.failure(static_cast<int>(error.status), error.what());
+            failure = std::make_unique<dfcuda::Error>(error);
+        }
         catch (...) {
+            runtime->trace.failure(std::current_exception());
             cudaStreamSynchronize(runtime->readback);
             if (transfer.pin) { try { transfer.pin->unregister(); } catch (...) {} transfer.pin.reset(); }
             if (transfer.event) cudaEventDestroy(transfer.event);
@@ -366,6 +420,9 @@ struct DfCudaJob {
         transfer = {};
         if (failure) throw *failure;
         check_job();
+        if (log_wait) {
+            runtime->trace.event("readback.wait.done", "transfer_token=%llu", static_cast<unsigned long long>(token));
+        }
         return DF_CUDA_OK;
     }
 
@@ -378,6 +435,12 @@ struct DfCudaJob {
         if (transfer.active) throw dfcuda::Error(DF_CUDA_INVALID_ARGUMENT, "transfer is still outstanding");
         output.active = false;
         if (output.block + 1 < blocks.size()) return DF_CUDA_OK;
+        if (runtime->trace.enabled()) runtime->trace.event("firstoutput.released",
+            "layer=%u tank=%u blocks=%zu run_count=%llu rle_bytes=%llu transfers=%llu transferred_bytes=%llu",
+            output.layer, output.tank, blocks.size(), static_cast<unsigned long long>(trace_runs),
+            static_cast<unsigned long long>(trace_runs * sizeof(DfCudaRun)),
+            static_cast<unsigned long long>(trace_transfers),
+            static_cast<unsigned long long>(trace_transfer_runs * sizeof(DfCudaRun)));
         output.plane = Plane{};
         output.token = 0;
         ++layer;
@@ -388,6 +451,7 @@ struct DfCudaJob {
             requested_tank = tank;
             changed_locked();
         }
+        runtime->trace.finish();
         return DF_CUDA_OK;
     }
 
@@ -465,5 +529,9 @@ void cancel(DfCudaJob *job) noexcept {
     if (job != nullptr) job->cancel_pool();
 }
 void abort(DfCudaJob *job) noexcept { if (job != nullptr) job->stop_and_drain(); }
+void report_failure(DfCudaJob *job, int status, const char *message) noexcept {
+    if (job != nullptr) job->runtime->trace.failure(status, message);
+    else dfcuda::Trace::unowned_failure(status, message);
+}
 void destroy(DfCudaJob *job) noexcept { delete job; }
 }

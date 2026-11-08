@@ -254,9 +254,25 @@ pub(crate) fn render(job: &SliceJobV3, blocks: &[RleBlockSpec], compute_stats: b
     }
     #[cfg(all(feature = "cuda", target_os = "windows"))]
     {
+        let mut trace_start = (std::env::var("DF_CUDA_TRACE").as_deref() == Ok("1"))
+            .then(std::time::Instant::now);
         let mut native = native::Job::create(job, blocks, compute_stats, dense_raster_semantics)?;
         native.with_cancellation(cancel, |native| {
-            while let Some(output) = native.next()? { consume(output)?; }
+            while let Some(output) = native.next()? {
+                let first_output = trace_start.take();
+                if let Some(start) = first_output {
+                    eprintln!("[DF_CUDA_TRACE] HOST adapter={:p} elapsed_ms={:.3} event=encoder.begin layer={} tank={} block={} runs={}",
+                        job, start.elapsed().as_secs_f64() * 1000.0, output.layer_index,
+                        output.tank_index, output.block_index, output.runs.len());
+                }
+                let result = consume(output);
+                if let Some(start) = first_output {
+                    eprintln!("[DF_CUDA_TRACE] HOST adapter={:p} elapsed_ms={:.3} event=encoder.{}",
+                        job, start.elapsed().as_secs_f64() * 1000.0,
+                        if result.is_ok() { "done" } else { "error" });
+                }
+                result?;
+            }
             Ok(())
         })
     }

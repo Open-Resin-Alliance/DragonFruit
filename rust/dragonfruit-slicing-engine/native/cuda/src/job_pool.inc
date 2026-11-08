@@ -2,6 +2,7 @@
         std::unique_ptr<dfcuda::Runtime> execution;
         std::unique_ptr<dfcuda::Rasterizer> renderer;
         std::unique_ptr<dfcuda::Postprocessor> processor;
+        std::size_t slot = 0;
         std::thread thread;
     };
     struct CachedLayer {
@@ -36,6 +37,10 @@
     std::uint32_t requested_tank = 0, pipeline_tank = 0, ordered_layer = 0;
     std::size_t outstanding = 0, prefetch = 0, admission_bytes = 0;
     bool joined = false;
+    bool trace_first_done[3] = {false, false, false};
+    static const char *stage_name(Stage stage) noexcept {
+        return stage == Stage::Raw ? "raw" : stage == Stage::Model ? "model" : "final";
+    }
 
     static std::size_t add_bytes(std::size_t a, std::size_t b) {
         if (a > std::numeric_limits<std::size_t>::max() - b)
@@ -76,6 +81,7 @@
         cancel_pool_locked();
     }
     void fail_locked(std::exception_ptr failure) noexcept {
+        runtime->trace.failure(failure);
         if (!first_failure && !runtime->cancelled.load(std::memory_order_acquire))
             first_failure = std::move(failure);
         cancel_pool_locked();
@@ -92,7 +98,10 @@
 
     void initialize_pool() {
         // The root has uploaded/projected/indexed immutable geometry exactly once.
+        runtime->trace.event("job.geometry.wait.begin", "");
         dfcuda::checked(cudaStreamSynchronize(runtime->compute), "publish shared CUDA geometry");
+        runtime->trace.event("job.geometry.ready", "triangles=%llu width=%u height=%u",
+            static_cast<unsigned long long>(host_float_count / 9), config.width, config.height);
         const auto plane = std::max<std::size_t>(1, raster->max_plane_bytes());
         geometry = raster->shared_geometry();
         const auto raster_minimum = raster->minimum_workspace_bytes();
@@ -110,7 +119,8 @@
             (generic_legacy() || (config.dense_raster_semantics == 1 &&
              (config.raster_mode == DF_CUDA_BLUR || dense_coverage())));
         const auto slot_bytes = dfcuda::checked_bytes(plane, support_planes ? 2 : 1);
-        const auto fixed = add_bytes(runtime->memory.live_bytes(),
+        const auto shared_live_bytes = runtime->memory.live_bytes();
+        const auto fixed = add_bytes(shared_live_bytes,
             add_bytes(rle_reserve, add_bytes(dfcuda::checked_bytes(layers, slot_bytes), plane)));
         const bool source_statistics = dense_coverage() && config.compute_area_stats != 0;
         const bool post_components = config.compute_area_stats != 0 &&
@@ -165,14 +175,24 @@
         prefetch = std::min<std::size_t>({2 * count, config.total_layers - 1,
                                          (budget - base) / per_ahead});
         admission_bytes = add_bytes(base, dfcuda::checked_bytes(prefetch, per_ahead));
+        runtime->trace.event("pool.plan",
+            "slots=%zu workspace_limit_bytes=%zu fixed_bytes=%zu admitted_bytes=%zu budget_bytes=%zu lead=%zu"
+            " shared_live_bytes=%zu plane_estimate_bytes=%zu slot_plane_bytes=%zu worker_reserve_bytes=%zu"
+            " rle_reserve_bytes=%zu raster_minimum_bytes=%zu post_minimum_bytes=%zu raw_depth=%zu z_depth=%zu gpu_slot_cap=%u",
+            count, workspace, fixed, admission_bytes, budget, prefetch, shared_live_bytes,
+            plane, slot_bytes, per_worker, rle_reserve, raster_minimum, needed_post_minimum,
+            raw_depth(), z_depth(), gpu_slots);
         workers.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
+            runtime->trace.event("workerinit.start", "slot=%zu workspace_limit_bytes=%zu", i, workspace);
             auto worker = std::make_unique<Worker>();
+            worker->slot = i;
             worker->execution = std::make_unique<dfcuda::Runtime>(*runtime, workspace);
             worker->renderer = std::make_unique<dfcuda::Rasterizer>(
                 *worker->execution, config, geometry);
             worker->processor = std::make_unique<dfcuda::Postprocessor>(
                 *worker->execution, config, post->shared_tables());
+            runtime->trace.event("workerinit.ready", "slot=%zu", i);
             workers.push_back(std::move(worker));
         }
         try {
@@ -180,8 +200,10 @@
                 auto *private_worker = worker.get();
                 worker->thread = std::thread([this, private_worker] { worker_loop(*private_worker); });
             }
+            runtime->trace.event("pool.workers.started", "slots=%zu", workers.size());
             coordinator = std::thread([this] { coordinate(); });
         } catch (...) {
+            runtime->trace.failure(std::current_exception());
             cancel_pool();
             if (coordinator.joinable()) coordinator.join();
             for (auto &worker : workers) if (worker->thread.joinable()) worker->thread.join();
@@ -287,6 +309,7 @@
     void coordinate() noexcept {
         try {
             runtime->activate();
+            runtime->trace.event("scheduler.started", "slots=%zu lead=%zu", workers.size(), prefetch);
             std::unique_lock<std::mutex> lock(pool_mutex);
             while (!runtime->cancelled.load(std::memory_order_acquire)) {
                 // Cached allocations remain charged by Memory; its actual admission
@@ -303,6 +326,7 @@
                 });
             }
         } catch (...) {
+            runtime->trace.failure(std::current_exception());
             std::lock_guard<std::mutex> lock(pool_mutex);
             fail_locked(std::current_exception());
         }
@@ -326,6 +350,10 @@
                 Plane final_plane;
                 DfCudaAreaStats stats{};
                 std::exception_ptr failure;
+                const bool ordered_trace = worker.execution->trace.enabled() && task.center->layer == 0 && task.tank == 0;
+                if (ordered_trace) worker.execution->trace.event("stage.start",
+                    "stage=%s slot=%zu layer=%u tank=%u", stage_name(task.stage), worker.slot,
+                    task.center->layer, task.tank);
                 try {
                     if (task.stage == Stage::Raw) {
                         raw = render_input(*worker.execution, *worker.renderer, *worker.processor,
@@ -359,8 +387,14 @@
                     // Retained input references and immutable geometry/tables outlive
                     // this private-stream boundary; publication never relies on root compute.
                     dfcuda::checked(cudaStreamSynchronize(worker.execution->compute), "complete CUDA pool stage");
+                    if (ordered_trace) worker.execution->trace.event("stage.done",
+                        "stage=%s slot=%zu layer=%u tank=%u", stage_name(task.stage), worker.slot,
+                        task.center->layer, task.tank);
                 } catch (...) {
                     failure = std::current_exception();
+                    worker.execution->trace.event("stage.failed", "stage=%s slot=%zu layer=%u tank=%u",
+                        stage_name(task.stage), worker.slot, task.center->layer, task.tank);
+                    worker.execution->trace.failure(failure);
                     for (auto stream : {worker.execution->upload, worker.execution->compute,
                                         worker.execution->pack, worker.execution->readback})
                         if (stream) cudaStreamSynchronize(stream);
@@ -369,6 +403,12 @@
                     std::lock_guard<std::mutex> lock(pool_mutex);
                     if (failure) fail_locked(failure);
                     if (!runtime->cancelled.load(std::memory_order_acquire)) {
+                        const auto stage_index = static_cast<std::size_t>(task.stage);
+                        if (runtime->trace.enabled() && !trace_first_done[stage_index]) {
+                            trace_first_done[stage_index] = true;
+                            runtime->trace.event("stage.first_any.done", "stage=%s slot=%zu layer=%u tank=%u",
+                                stage_name(task.stage), worker.slot, task.center->layer, task.tank);
+                        }
                         if (task.stage == Stage::Raw) {
                             task.center->topology = raw.topology;
                             task.center->raw = std::move(raw);

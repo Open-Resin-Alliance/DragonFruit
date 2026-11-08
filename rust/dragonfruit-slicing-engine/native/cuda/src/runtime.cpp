@@ -81,7 +81,10 @@ std::size_t Memory::live_bytes() const {
 
 Allocation Memory::acquire(std::size_t bytes) {
     if (bytes == 0) { return {}; }
+    const bool tracing = trace_ != nullptr && trace_->enabled();
+    const auto wait_begin = tracing ? trace_->mutex_begin(bytes) : Trace::Clock::time_point{};
     std::lock_guard<std::mutex> lock(mutex_);
+    const auto mutex_wait = tracing ? Trace::Clock::now() - wait_begin : Trace::Clock::duration{};
     retune_locked();
     if (bytes > budget_) {
         throw Error(DF_CUDA_OUT_OF_MEMORY, "required CUDA buffer exceeds the 90-percent VRAM budget");
@@ -103,6 +106,7 @@ Allocation Memory::acquire(std::size_t bytes) {
         auto result = cached_[best].allocation;
         checked(cudaEventDestroy(cached_[best].completion), "destroy allocation completion event");
         cached_.erase(cached_.begin() + static_cast<std::ptrdiff_t>(best));
+        if (tracing) trace_->allocation_request(bytes, true, owned_, mutex_wait);
         return result;
     }
 
@@ -120,20 +124,40 @@ Allocation Memory::acquire(std::size_t bytes) {
         }
         if (candidate == cached_.size()) {
             candidate = 0;
+            const bool log_wait = tracing && trace_retirement_waits_ < 8;
+            if (log_wait) {
+                ++trace_retirement_waits_;
+                trace_->event("memory.retirement.wait.begin", "bytes=%zu", cached_[candidate].allocation.capacity);
+            }
             checked(cudaEventSynchronize(cached_[candidate].completion), "wait for retired allocation");
+            if (log_wait) trace_->event("memory.retirement.wait.done", "bytes=%zu", cached_[candidate].allocation.capacity);
         }
         auto retired = cached_[candidate];
         checked(cudaEventDestroy(retired.completion), "destroy retired allocation event");
         cached_.erase(cached_.begin() + static_cast<std::ptrdiff_t>(candidate));
-        if (retired.allocation.capacity == bytes) { return retired.allocation; }
-        checked(cudaFree(retired.allocation.pointer), "evict cached device allocation");
+        if (retired.allocation.capacity == bytes) {
+            if (tracing) trace_->allocation_request(bytes, true, owned_, mutex_wait);
+            return retired.allocation;
+        }
+        auto free_call = tracing ? trace_->allocation_begin(true, retired.allocation.capacity) : Trace::AllocationCall{};
+        const auto free_status = cudaFree(retired.allocation.pointer);
+        if (free_call.active) free_call.elapsed = Trace::Clock::now() - free_call.start;
+        if (tracing) trace_->allocation_done(true, retired.allocation.capacity, free_call,
+            static_cast<int>(free_status), free_status == cudaSuccess ? owned_ - retired.allocation.capacity : owned_);
+        checked(free_status, "evict cached device allocation");
         owned_ -= retired.allocation.capacity;
         retune_locked();
     }
 
     void *pointer = nullptr;
-    checked(cudaMalloc(&pointer, bytes), "cudaMalloc");
+    auto malloc_call = tracing ? trace_->allocation_begin(false, bytes) : Trace::AllocationCall{};
+    const auto malloc_status = cudaMalloc(&pointer, bytes);
+    if (malloc_call.active) malloc_call.elapsed = Trace::Clock::now() - malloc_call.start;
+    if (tracing) trace_->allocation_done(false, bytes, malloc_call,
+        static_cast<int>(malloc_status), malloc_status == cudaSuccess ? owned_ + bytes : owned_);
+    checked(malloc_status, "cudaMalloc");
     owned_ += bytes;
+    if (tracing) trace_->allocation_request(bytes, false, owned_, mutex_wait);
     return {pointer, bytes};
 }
 
@@ -155,12 +179,17 @@ void Memory::retire(Allocation allocation, cudaStream_t last_use) noexcept {
         cleanup_status(cudaStreamSynchronize(last_use), "drain allocation last-use stream");
     }
     if (completion != nullptr) { cleanup_status(cudaEventDestroy(completion), "destroy failed retirement event"); }
+    const bool tracing = trace_ != nullptr && trace_->enabled();
+    auto free_call = tracing ? trace_->allocation_begin(true, allocation.capacity) : Trace::AllocationCall{};
     const auto freed = cudaFree(allocation.pointer);
+    if (free_call.active) free_call.elapsed = Trace::Clock::now() - free_call.start;
     cleanup_status(freed, "free uncached device allocation");
     if (freed == cudaSuccess) {
         std::lock_guard<std::mutex> lock(mutex_);
         owned_ -= allocation.capacity;
+        if (tracing) trace_->allocation_done(true, allocation.capacity, free_call, static_cast<int>(freed), owned_);
     }
+    else if (tracing) trace_->allocation_done(true, allocation.capacity, free_call, static_cast<int>(freed), 0);
 }
 
 void Memory::clear() noexcept {
@@ -168,40 +197,60 @@ void Memory::clear() noexcept {
     for (auto &cached : cached_) {
         cleanup_status(cudaEventSynchronize(cached.completion), "drain cached allocation");
         cleanup_status(cudaEventDestroy(cached.completion), "destroy cached allocation event");
+        const bool tracing = trace_ != nullptr && trace_->enabled();
+        auto free_call = tracing ? trace_->allocation_begin(true, cached.allocation.capacity) : Trace::AllocationCall{};
         const auto status = cudaFree(cached.allocation.pointer);
+        if (free_call.active) free_call.elapsed = Trace::Clock::now() - free_call.start;
         cleanup_status(status, "free cached allocation");
         if (status == cudaSuccess) { owned_ -= cached.allocation.capacity; }
+        if (tracing) trace_->allocation_done(true, cached.allocation.capacity, free_call, static_cast<int>(status), owned_);
     }
     cached_.clear();
 }
 
 Runtime::Runtime()
     : owned_state_(std::make_unique<State>()), memory(owned_state_->memory),
-      cancelled(owned_state_->cancelled) {
-    int count = 0;
-    const auto count_status = cudaGetDeviceCount(&count);
-    if (count_status != cudaSuccess || count == 0) {
-        throw Error(DF_CUDA_UNAVAILABLE, count_status == cudaSuccess
-            ? "no CUDA device is available" : std::string("CUDA is unavailable: ") + cudaGetErrorString(count_status));
-    }
-    std::size_t best_free = 0;
-    for (int ordinal = 0; ordinal < count; ++ordinal) {
-        cudaDeviceProp properties{};
-        if (cudaGetDeviceProperties(&properties, ordinal) != cudaSuccess
-            || properties.major < 6 || properties.totalGlobalMem < minimum_vram) {
-            continue;
-        }
-        if (cudaSetDevice(ordinal) != cudaSuccess) { continue; }
-        std::size_t free_bytes = 0;
-        std::size_t total_bytes = 0;
-        if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) { continue; }
-        if (device < 0 || free_bytes > best_free) { device = ordinal; best_free = free_bytes; }
-    }
-    if (device < 0) {
-        throw Error(DF_CUDA_UNAVAILABLE, "CUDA requires a Pascal-or-newer GPU with at least 6 GB VRAM");
-    }
-    activate();
+      trace(owned_state_->trace), cancelled(owned_state_->cancelled) {
+    memory.attach_trace(trace);
+    trace.event("runtime.begin", "");
     try {
+        int count = 0;
+        const auto count_status = cudaGetDeviceCount(&count);
+        if (count_status != cudaSuccess || count == 0) {
+            throw Error(DF_CUDA_UNAVAILABLE, count_status == cudaSuccess
+                ? "no CUDA device is available" : std::string("CUDA is unavailable: ") + cudaGetErrorString(count_status));
+        }
+        trace.event("device.enumeration.ready", "count=%d", count);
+        std::size_t best_free = 0;
+        std::size_t selected_total = 0;
+        int selected_major = 0, selected_minor = 0, selected_multiprocessors = 0;
+        for (int ordinal = 0; ordinal < count; ++ordinal) {
+            trace.event("device.inspect.begin", "device=%d", ordinal);
+            cudaDeviceProp properties{};
+            if (cudaGetDeviceProperties(&properties, ordinal) != cudaSuccess
+                || properties.major < 6 || properties.totalGlobalMem < minimum_vram) {
+                continue;
+            }
+            if (cudaSetDevice(ordinal) != cudaSuccess) { continue; }
+            std::size_t free_bytes = 0;
+            std::size_t total_bytes = 0;
+            if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) { continue; }
+            if (device < 0 || free_bytes > best_free) {
+                device = ordinal; best_free = free_bytes;
+                if (trace.enabled()) {
+                    selected_total = properties.totalGlobalMem;
+                    selected_major = properties.major;
+                    selected_minor = properties.minor;
+                    selected_multiprocessors = properties.multiProcessorCount;
+                }
+            }
+        }
+        if (device < 0) {
+            throw Error(DF_CUDA_UNAVAILABLE, "CUDA requires a Pascal-or-newer GPU with at least 6 GB VRAM");
+        }
+        trace.event("device.selected", "device=%d free_bytes=%zu total_bytes=%zu cc=%d.%d multiprocessors=%d",
+            device, best_free, selected_total, selected_major, selected_minor, selected_multiprocessors);
+        activate();
         memory.initialize();
         transfer_bytes_ = host_transfer_budget();
         workspace_limit_ = memory.budget();
@@ -209,14 +258,17 @@ Runtime::Runtime()
         checked(cudaStreamCreateWithFlags(&compute, cudaStreamNonBlocking), "create compute stream");
         checked(cudaStreamCreateWithFlags(&pack, cudaStreamNonBlocking), "create RLE packing stream");
         checked(cudaStreamCreateWithFlags(&readback, cudaStreamNonBlocking), "create readback stream");
+        trace.event("runtime.ready", "device=%d vram_budget_bytes=%zu transfer_cap_bytes=%zu",
+                    device, workspace_limit_, transfer_bytes_);
     } catch (...) {
+        trace.failure(std::current_exception());
         destroy_stream(readback); destroy_stream(pack); destroy_stream(compute); destroy_stream(upload);
         throw;
     }
 }
 
 Runtime::Runtime(Runtime &root, std::size_t workspace_limit)
-    : device(root.device), memory(root.memory), cancelled(root.cancelled),
+    : device(root.device), memory(root.memory), trace(root.trace), cancelled(root.cancelled),
       transfer_bytes_(root.transfer_bytes()), workspace_limit_(workspace_limit) {
     activate();
     try {
@@ -225,6 +277,7 @@ Runtime::Runtime(Runtime &root, std::size_t workspace_limit)
         checked(cudaStreamCreateWithFlags(&pack, cudaStreamNonBlocking), "create worker pack stream");
         checked(cudaStreamCreateWithFlags(&readback, cudaStreamNonBlocking), "create worker readback stream");
     } catch (...) {
+        trace.failure(std::current_exception());
         destroy_stream(readback); destroy_stream(pack); destroy_stream(compute); destroy_stream(upload);
         throw;
     }

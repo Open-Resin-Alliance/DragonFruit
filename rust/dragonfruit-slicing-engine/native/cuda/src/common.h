@@ -2,6 +2,7 @@
 #define DF_CUDA_COMMON_H
 
 #include "df_cuda_slicer.h"
+#include "trace.h"
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <atomic>
@@ -52,6 +53,7 @@ public:
     ~Memory();
     Memory(const Memory &) = delete;
     Memory &operator=(const Memory &) = delete;
+    void attach_trace(Trace &trace) noexcept { trace_ = &trace; }
     void initialize();
     Allocation acquire(std::size_t bytes);
     void retire(Allocation allocation, cudaStream_t last_use) noexcept;
@@ -65,9 +67,11 @@ private:
         cudaEvent_t completion = nullptr;
     };
     mutable std::mutex mutex_;
+    Trace *trace_ = nullptr;
     std::vector<Cached> cached_;
     std::size_t owned_ = 0;
     std::size_t budget_ = 0;
+    std::size_t trace_retirement_waits_ = 0;
     void retune_locked();
 };
 
@@ -131,6 +135,7 @@ private:
 class Runtime {
 private:
     struct State {
+        Trace trace;
         Memory memory;
         std::atomic<bool> cancelled{false};
     };
@@ -148,6 +153,7 @@ public:
     std::size_t workspace_budget() const noexcept { return workspace_limit_; }
     int device = -1;
     Memory &memory;
+    Trace &trace;
     cudaStream_t upload = nullptr;
     cudaStream_t compute = nullptr;
     cudaStream_t pack = nullptr;

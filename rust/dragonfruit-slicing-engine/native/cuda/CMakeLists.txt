@@ -34,6 +34,7 @@ if(NOT DEFINED DF_CUDA_ARCHITECTURES)
 endif()
 
 add_library(df_cuda_slicer STATIC
+    src/trace.cpp
     src/runtime.cpp
     src/job.cpp
     src/shim.cpp

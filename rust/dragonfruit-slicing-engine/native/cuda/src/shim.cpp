@@ -19,6 +19,7 @@ int wait_transfer(DfCudaJob *, std::uint64_t);
 int release_output(DfCudaJob *, std::uint64_t);
 void cancel(DfCudaJob *) noexcept;
 void abort(DfCudaJob *) noexcept;
+void report_failure(DfCudaJob *, int, const char *) noexcept;
 void destroy(DfCudaJob *) noexcept;
 }
 
@@ -45,18 +46,22 @@ template<class F> int invoke(F &&function, DfCudaError *error, DfCudaJob *job = 
     try {
         return function();
     } catch (const dfcuda::Error &failure) {
+        dfcuda_native::report_failure(job, static_cast<int>(failure.status), failure.what());
         dfcuda_native::abort(job);
         set_error(error, exception_status(failure), failure.what());
         return static_cast<int>(failure.status);
     } catch (const std::bad_alloc &failure) {
+        dfcuda_native::report_failure(job, DF_CUDA_OUT_OF_MEMORY, failure.what());
         dfcuda_native::abort(job);
         set_error(error, DF_CUDA_OUT_OF_MEMORY, failure.what());
         return DF_CUDA_OUT_OF_MEMORY;
     } catch (const std::exception &failure) {
+        dfcuda_native::report_failure(job, DF_CUDA_EXECUTION_ERROR, failure.what());
         dfcuda_native::abort(job);
         set_error(error, DF_CUDA_EXECUTION_ERROR, failure.what());
         return DF_CUDA_EXECUTION_ERROR;
     } catch (...) {
+        dfcuda_native::report_failure(job, DF_CUDA_EXECUTION_ERROR, "unknown native CUDA exception");
         dfcuda_native::abort(job);
         set_error(error, DF_CUDA_EXECUTION_ERROR, "unknown native CUDA exception");
         return DF_CUDA_EXECUTION_ERROR;

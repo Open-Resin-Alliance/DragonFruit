@@ -20,6 +20,19 @@ $env:CUDA_PATH_V12_9 = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9
 node scripts/tauri-build.mjs --features cuda
 ```
 
+For a development build with the native console and frontend dev server:
+
+```powershell
+npm run tauri:dev -- --features cuda
+```
+
+`scripts/tauri-dev.mjs` forwards the feature arguments and inherits stdout/stderr.
+CUDA dev launches enable the first-output trace unless `DF_CUDA_TRACE` is already
+set; set `$env:DF_CUDA_TRACE = '0'` before launching to disable it. The engine build
+stages the matching CUDA runtime beside the debug executable, as it does for
+release and test executables. Compiling with CUDA does not select it for a job:
+choose **CUDA** in the slicing panel.
+
 `CUDA_PATH_V12_9` selects the native toolkit; when unset, the build uses the path
 above. Generic `CUDA_PATH`/`CUDACXX` values pointing to newer CUDA versions do not
 override it. The build discovers installed VS2022 instances, selects the newest
@@ -64,6 +77,14 @@ intermediates; it does not charge full printer height for every empty or sparse
 Z-neighbor plane. This avoids rejecting compact high-resolution scenes solely
 because their nominal frame is 16K.
 
+Raster scratch is demand-sized after selected candidates and actual row/subrow
+descriptors are known. Active lanes use their maximum crossing counts; band
+storage uses the largest admitted band actually present in the layer. CUB
+temporary storage uses null-storage queries for the planned operations. The
+workspace quota remains an admission ceiling, not an eager allocation target.
+Buffers retain high-water reuse, so planned bytes in the trace need not equal
+resident VRAM after a larger layer.
+
 ## Parallel execution
 
 Parallelism has two axes. Raster crossing/span and pixel work run in budget-sized
@@ -107,6 +128,34 @@ bounds in actual merged border regions. The dither case uses active 3DAA mode,
 not ordinary Blur where dithering is disabled. Run numerical and throughput
 validation only on an approved Windows CUDA machine; source patch applicability
 does not establish runtime parity or speedup.
+
+## First-output diagnostics
+
+Use the dev-console trace when a CUDA job is stuck before its first completed
+layer. Outside the dev wrapper, set `DF_CUDA_TRACE=1` before launching a
+CUDA-enabled binary. Other builds leave it off by default. The opt-in is read
+when a native job is created; changing it requires a new launch.
+
+`native/cuda/src/trace.h` and `trace.cpp` provide the job-owned host trace shared
+by worker runtimes. Lines beginning `[DF_CUDA_TRACE] HOST` are flushed to stderr.
+They report elapsed **host wall time**, not GPU kernel time, and do not add CUDA
+timing events, synchronization, per-pixel logging, or geometry dumps.
+
+The startup record includes grid dimensions, triangle count, raster mode and AA
+settings. Milestones distinguish device/runtime initialization, geometry and
+table preparation, pool admission and worker initialization, and raw/model/final
+work for ordered layer zero and the first completion of each stage. Raster plan
+records include actual candidates, events, rows, active crossings, bands, CUB
+bytes and desired storage versus quota. Allocation diagnostics identify large
+allocation/reuse activity and host waits before the first output.
+
+Output milestones cover RLE count and readback. Native diagnostics stop after
+the first complete layer's output lease is released, not merely its first block.
+`src/cuda.rs` separately logs the first encoder handoff's `encoder.begin` and
+`encoder.done` or `encoder.error`; that handoff can be a single block, not a
+whole layer. A missing matching completion localizes an outstanding host stage;
+GPU utilization alone does not. These logs do not prove numerical parity or a
+throughput improvement.
 
 ## Raster and post stages
 
