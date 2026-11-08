@@ -226,12 +226,17 @@ last model clears ranges in the same model/plate action so undo restores both.
 and `onRangeContextMenu`. The page maps scene boundary coordinates with `ceil`
 (clamped to printed 1..N, including boundary0→layer1), and printing-preview
 coordinates with `round`. Scene bands occupy boundary cells [start−1,end];
-printing bands use half-layer edges over the 1..N rail, with a full strip for
-N=1 and no bands for N=0. Segment keys include range id and both clipped
+printing bands use half-layer edges over the 1..N rail, with a full logical span
+for N=1 and no bands for N=0. Segment keys include range id and both clipped
 segment endpoints, since one range can win several separated intervals. Bands
 share the track centerline and width, render over the clip fill but under the
-thumbs, and remain pointer-transparent. Their vertical coverage does not depend
-on the active cross-section clip window.
+thumbs, and remain pointer-transparent. Each painted segment has 1px transparent
+end separators: the track/fill underlay is alpha-masked, so the actual backdrop
+shows through instead of a theme-colored paint patch. The colored marker is
+inset by 1px at each end but retains a 2px minimum for tiny spans. Handles are
+outside the mask; an empty range list leaves the underlay unmasked. These are
+visual cuts only: original layer coverage, labels and context-menu hit testing
+stay unchanged and do not depend on the active cross-section clip window.
 
 Call `useLayerSettingsRangeColors` once and share its map across both rails,
 menus and Manage rows. It allocates distinct resolved RGB values in persisted

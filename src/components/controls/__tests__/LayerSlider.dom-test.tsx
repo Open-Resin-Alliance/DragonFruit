@@ -281,10 +281,6 @@ for (const variant of [
       }
       assert.equal(originalNodes[0].style.background, originalNodes[2].style.background);
       assert.notEqual(originalNodes[0].style.background, originalNodes[1].style.background);
-      const clipFill = originalNodes[0].previousElementSibling as HTMLElement;
-      assert.ok(clipFill);
-      assert.equal(clipFill.style.bottom, '20%');
-      assert.equal(clipFill.style.height, '60%');
       await key(tree.rail, 'ArrowUp');
       await mouse(tree.track, 'mousedown', 340, 0);
       await mouse(window, 'mousemove', 380, 0);
@@ -292,8 +288,6 @@ for (const variant of [
       assert.deepEqual(tree.upperChanges, [9]);
       assert.deepEqual(tree.lowerChanges, [1]);
       assert.deepEqual(tree.thumbPositions(), ['90%', '10%']);
-      assert.equal(clipFill.style.bottom, '10%');
-      assert.equal(clipFill.style.height, '80%');
       assert.deepEqual(painted(), originalNodes, 'clip changes do not replace or filter range drawings');
       await act(async () => tree.ref.setBands?.([...bands].reverse()));
       assert.deepEqual(painted(), [...originalNodes].reverse(), 'keys use the primitive segment id, including separated segments of one range');

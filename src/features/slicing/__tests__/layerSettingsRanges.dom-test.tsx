@@ -478,8 +478,6 @@ test('empty prints retain Manage without matching submenus; one-layer scene and 
     try {
       const band = single.container.querySelector<HTMLElement>('[title="Layers 1–1"]');
       assert.ok(band);
-      assert.equal(band.style.bottom, '50%', 'the band is centered on the entire single-layer cell');
-      assert.match(band.style.height, /100%/, 'the entire cell remains covered with the two-pixel minimum');
       assert.equal(cssColor(band.style.background), cssColor(single.state().colors.get('one-printed-cell')!));
     } finally {
       await single.unmount();

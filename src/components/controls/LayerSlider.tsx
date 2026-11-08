@@ -736,6 +736,20 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const hoveredBandLabel = rangeBands?.find((band) => band.id === hoveredBandId)?.label;
   const rangeTrackHint = onRangeContextMenu ? _(RANGE_TRACK_HINT) : null;
   const railClassName = `relative mx-auto ${embedded ? (expandToContainer ? 'flex-1 h-full min-h-[300px]' : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`;
+  const trackCutoutMask = React.useMemo(() => {
+    if (!rangeBands?.length) return undefined;
+    const stops = ['#000 0%'];
+    for (const band of [...rangeBands].sort((a, b) => a.bottomPercent - b.bottomPercent)) {
+      const center = (band.bottomPercent + band.topPercent) / 2;
+      // A 2px marker still needs a 1px transparent cut at each end.
+      const halfHeight = `max(2px, ${(band.topPercent - band.bottomPercent) / 2}%)`;
+      const start = `calc(${center}% - ${halfHeight})`;
+      const end = `calc(${center}% + ${halfHeight})`;
+      stops.push(`#000 ${start}`, `transparent ${start}`, `transparent ${end}`, `#000 ${end}`);
+    }
+    stops.push('#000 100%');
+    return `linear-gradient(to top, ${stops.join(', ')})`;
+  }, [rangeBands]);
 
   return (
     <div
@@ -846,34 +860,40 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               : 'absolute left-0 right-0 top-0 bottom-0'}
           >
 
-            {/* Track */}
+            {/* Mask only the track/fill so cuts reveal the actual backdrop. */}
             <div
-              className="absolute left-1/2 top-0 h-full w-1.5 -translate-x-1/2 rounded-full"
-              style={{
-                background: 'color-mix(in srgb, var(--surface-2), black 8%)',
-                border: '1px solid color-mix(in srgb, var(--border-subtle), transparent 40%)',
-              }}
-            />
+              className="absolute inset-0 pointer-events-none"
+              style={{ maskImage: trackCutoutMask, WebkitMaskImage: trackCutoutMask }}
+            >
+              {/* Track */}
+              <div
+                className="absolute left-1/2 top-0 h-full w-1.5 -translate-x-1/2 rounded-full"
+                style={{
+                  background: 'color-mix(in srgb, var(--surface-2), black 8%)',
+                  border: '1px solid color-mix(in srgb, var(--border-subtle), transparent 40%)',
+                }}
+              />
 
-            {/* Progress fill */}
-            <div
-              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full"
-              style={{
-                bottom: `${lowerPercent ?? 0}%`,
-                height: `${percent - (lowerPercent ?? 0)}%`,
-                // Glides with the thumbs, or it reaches a jump's end while they are still on the way.
-                transition: easesPosition
-                  ? 'bottom 170ms cubic-bezier(0.22, 1, 0.36, 1), height 170ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms, box-shadow 200ms'
-                  : 'background 200ms, box-shadow 200ms',
-                background: crossSectionEnabled
-                  ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))'
-                  : 'linear-gradient(180deg, color-mix(in srgb, var(--text-muted), white 10%), var(--text-muted))',
-                boxShadow: crossSectionEnabled
-                  ? '0 0 10px color-mix(in srgb, var(--accent), transparent 65%)'
-                  : 'none',
-                opacity: crossSectionEnabled ? 1 : 0.45,
-              }}
-            />
+              {/* Progress fill */}
+              <div
+                className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full"
+                style={{
+                  bottom: `${lowerPercent ?? 0}%`,
+                  height: `${percent - (lowerPercent ?? 0)}%`,
+                  // Glides with the thumbs, or it reaches a jump's end while they are still on the way.
+                  transition: easesPosition
+                    ? 'bottom 170ms cubic-bezier(0.22, 1, 0.36, 1), height 170ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms, box-shadow 200ms'
+                    : 'background 200ms, box-shadow 200ms',
+                  background: crossSectionEnabled
+                    ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))'
+                    : 'linear-gradient(180deg, color-mix(in srgb, var(--text-muted), white 10%), var(--text-muted))',
+                  boxShadow: crossSectionEnabled
+                    ? '0 0 10px color-mix(in srgb, var(--accent), transparent 65%)'
+                    : 'none',
+                  opacity: crossSectionEnabled ? 1 : 0.45,
+                }}
+              />
+            </div>
 
             {/* Settings overlay the track, independently of the clip window; thumbs render above them. */}
             {rangeBands?.map((band) => (
@@ -886,7 +906,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 className="absolute left-1/2 w-1.5 -translate-x-1/2 rounded-full pointer-events-none"
                 style={{
                   bottom: `${(band.bottomPercent + band.topPercent) / 2}%`,
-                  height: `max(2px, ${band.topPercent - band.bottomPercent}%)`,
+                  height: `max(2px, calc(${band.topPercent - band.bottomPercent}% - 2px))`,
                   transform: 'translateY(50%)',
                   background: band.color,
                   pointerEvents: 'none',
