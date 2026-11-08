@@ -136,6 +136,23 @@ layer. Outside the dev wrapper, set `DF_CUDA_TRACE=1` before launching a
 CUDA-enabled binary. Other builds leave it off by default. The opt-in is read
 when a native job is created; changing it requires a new launch.
 
+CUDA failure reporting is separate from this opt-in trace. Both public slicing
+entrypoints pass the original failure to `src/cuda/lifecycle.rs`, which prints
+`[CUDA] slicing attempt failed:` with the error kind and full message to stderr,
+then logs the CPU restart before emitting the fallback progress event. These
+messages remain enabled with `DF_CUDA_TRACE=0`, without a progress callback, and
+for failures raised before a native job exists (including a build without the
+CUDA feature). If cancellation prevents the restart, the original failure is
+still logged but the CPU-restart notice is not. Look in the terminal running
+`tauri:dev`, whose stdout/stderr are inherited; the UI notice is intentionally
+only a summary.
+
+The npm argument separator is required: use
+`npm run tauri:dev -- --features cuda`, not
+`npm run tauri:dev --features cuda`. The latter lets npm consume the feature
+option and forwards `cuda` as an application argument; it neither enables the
+Cargo feature nor activates the wrapper's CUDA trace default.
+
 `native/cuda/src/trace.h` and `trace.cpp` provide the job-owned host trace shared
 by worker runtimes. Lines beginning `[DF_CUDA_TRACE] HOST` are flushed to stderr.
 They report elapsed **host wall time**, not GPU kernel time, and do not add CUDA
@@ -149,6 +166,13 @@ records include actual candidates, events, rows, active crossings, bands, CUB
 bytes and desired storage versus quota. Allocation diagnostics identify large
 allocation/reuse activity and host waits before the first output.
 
+For layer zero, the first and last band also report crossing submission and
+band-processing submission boundaries. `raster.bounds.wait.begin/ready` and the
+optional source-statistics wait bracket existing readbacks; descriptor-wait
+events cover only descriptor DMA, not all queued raster work. A long gap before
+`raster.band.crossings.queued` includes host/driver submission time, while a gap
+at the bounds wait includes already-queued GPU work. No new GPU waits are added.
+
 Output milestones cover RLE count and readback. Native diagnostics stop after
 the first complete layer's output lease is released, not merely its first block.
 `src/cuda.rs` separately logs the first encoder handoff's `encoder.begin` and
@@ -156,6 +180,20 @@ the first complete layer's output lease is released, not merely its first block.
 whole layer. A missing matching completion localizes an outstanding host stage;
 GPU utilization alone does not. These logs do not prove numerical parity or a
 throughput improvement.
+
+The first native cancellation transition before trace completion emits
+`cancel.request` with an origin: `host_cancel_request`, `pool_failure`,
+`worker_startup_failure`, or `shutdown_drain`. It includes whether the pool has a
+stored initiating failure. Native error reporting retains that failure rather
+than replacing it with a later cancellation.
+
+The desktop terminal separately logs receipt of `cancel_slicing`. Frontend
+console diagnostics report an `AbortSignal` request with its reason:
+`panel_cleanup` for the slicing panel's cleanup, or `cancel_action` for its
+Cancel handler. A native rejection without a frontend abort is logged before
+the bridge classifies it as cancellation. These boundary logs are not gated by
+`DF_CUDA_TRACE`, so later failures remain visible after the first-output trace
+has stopped. A `cancelled` status alone does not imply the user pressed Cancel.
 
 ## Raster and post stages
 

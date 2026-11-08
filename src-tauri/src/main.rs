@@ -1830,6 +1830,7 @@ async fn slice_solid_native_to_temp_path(
 
 #[tauri::command]
 async fn cancel_slicing() -> Result<(), String> {
+    eprintln!("[Slicing] cancel_slicing command received");
     cancel_flag().store(true, Ordering::SeqCst);
     Ok(())
 }

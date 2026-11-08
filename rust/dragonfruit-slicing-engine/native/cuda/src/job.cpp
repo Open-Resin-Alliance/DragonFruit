@@ -526,7 +526,7 @@ int read_runs_async(DfCudaJob *job, std::uint64_t output_token, std::uint64_t fi
 int wait_transfer(DfCudaJob *job, std::uint64_t token) { return job->wait_transfer(token); }
 int release_output(DfCudaJob *job, std::uint64_t token) { return job->release_output(token); }
 void cancel(DfCudaJob *job) noexcept {
-    if (job != nullptr) job->cancel_pool();
+    if (job != nullptr) job->cancel_pool("host_cancel_request");
 }
 void abort(DfCudaJob *job) noexcept { if (job != nullptr) job->stop_and_drain(); }
 void report_failure(DfCudaJob *job, int status, const char *message) noexcept {

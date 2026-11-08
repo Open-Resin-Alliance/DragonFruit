@@ -3532,8 +3532,8 @@ pub fn slice_with_progress_v3(
     if job.compute_backend == crate::types::ComputeBackend::Cuda {
         match crate::cuda::slice_attempt(job, None, on_progress.clone(), cancel_flag) {
             Ok(artifact) => return Ok(artifact),
-            Err(SlicerV3Error::Cuda(_)) => {
-                crate::cuda::announce_fallback(job, &on_progress, cancel_flag)?;
+            Err(SlicerV3Error::Cuda(failure)) => {
+                crate::cuda::announce_fallback(job, &failure, &on_progress, cancel_flag)?;
             }
             Err(error) => return Err(error),
         }
@@ -5673,8 +5673,8 @@ pub fn slice_with_progress_v3_to_path(
     if job.compute_backend == crate::types::ComputeBackend::Cuda {
         match crate::cuda::slice_attempt(job, Some(output_path), on_progress.clone(), cancel_flag) {
             Ok(artifact) => return Ok(artifact.perf),
-            Err(SlicerV3Error::Cuda(_)) => {
-                crate::cuda::announce_fallback(job, &on_progress, cancel_flag)?;
+            Err(SlicerV3Error::Cuda(failure)) => {
+                crate::cuda::announce_fallback(job, &failure, &on_progress, cancel_flag)?;
             }
             Err(error) => return Err(error),
         }

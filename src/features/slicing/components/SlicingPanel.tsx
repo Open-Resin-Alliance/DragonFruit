@@ -1770,7 +1770,7 @@ export function SlicingPanel({
 
   useEffect(() => {
     return () => {
-      slicingAbortControllerRef.current?.abort();
+      slicingAbortControllerRef.current?.abort('panel_cleanup');
       onSlicingBusyChange?.(false);
     };
   }, [onSlicingBusyChange]);
@@ -2297,7 +2297,7 @@ export function SlicingPanel({
     setCurrentPhase('Cancelling');
     // i18n-ignore: sliceStatus is never rendered
     setSliceStatus('Cancelling');
-    slicingAbortControllerRef.current?.abort();
+    slicingAbortControllerRef.current?.abort('cancel_action');
   }, [isSlicingZip]);
 
   // Close intent dropdown on outside click

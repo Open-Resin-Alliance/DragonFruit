@@ -395,7 +395,10 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
       byteLen: number;
       perf?: NativeSlicerPerfMetrics | null;
       runtime?: NativeSlicerRuntimeMetrics | null;
-    }>('slice_solid_native_to_temp_path', { jobJson: metadataJson });
+    }>('slice_solid_native_to_temp_path', { jobJson: metadataJson }).catch((error) => {
+      if (!abortSignal?.aborted) console.error('[Slicing] Native slicer rejected without an AbortSignal request:', error);
+      throw error;
+    });
 
     const buildResult = (result: {
       tempPath: string;
@@ -433,6 +436,7 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
       const handleAbort = () => {
         if (settled) return;
         settled = true;
+        console.warn('[Slicing] AbortSignal requested native cancellation:', abortSignal.reason);
         core.invoke('cancel_slicing').catch(() => {});
         reject(createAbortError());
       };

@@ -70,21 +70,24 @@
         pool_changed.notify_all();
         work_ready.notify_all();
     }
-    void cancel_pool_locked() noexcept {
+    void cancel_pool_locked(const char *origin) noexcept {
+        if (runtime->trace.enabled() && !runtime->cancelled.load(std::memory_order_acquire))
+            runtime->trace.event("cancel.request", "origin=%s layer=%u tank=%u first_failure=%u outstanding=%zu queued=%zu",
+                origin, ordered_layer, pipeline_tank, first_failure ? 1U : 0U, outstanding, ready_tasks.size());
         runtime->cancelled.store(true, std::memory_order_release);
         pool_changed.notify_all();
         work_ready.notify_all();
     }
-    void cancel_pool() noexcept {
+    void cancel_pool(const char *origin) noexcept {
         // Serialize the predicate with CV waiters; no CUDA work or API lock.
         std::lock_guard<std::mutex> lock(pool_mutex);
-        cancel_pool_locked();
+        cancel_pool_locked(origin);
     }
     void fail_locked(std::exception_ptr failure) noexcept {
         runtime->trace.failure(failure);
         if (!first_failure && !runtime->cancelled.load(std::memory_order_acquire))
             first_failure = std::move(failure);
-        cancel_pool_locked();
+        cancel_pool_locked("pool_failure");
         changed_locked();
     }
     void check_failure_locked() const {
@@ -204,7 +207,7 @@
             coordinator = std::thread([this] { coordinate(); });
         } catch (...) {
             runtime->trace.failure(std::current_exception());
-            cancel_pool();
+            cancel_pool("worker_startup_failure");
             if (coordinator.joinable()) coordinator.join();
             for (auto &worker : workers) if (worker->thread.joinable()) worker->thread.join();
             throw;
@@ -434,7 +437,7 @@
     }
     void stop_and_drain() noexcept {
         std::lock_guard<std::mutex> shutdown_lock(shutdown_mutex);
-        cancel_pool();
+        cancel_pool("shutdown_drain");
         if (!joined) {
             if (coordinator.joinable()) coordinator.join();
             for (auto &worker : workers) if (worker->thread.joinable()) worker->thread.join();

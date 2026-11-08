@@ -967,6 +967,11 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
     std::uint32_t event_offset = 0;
     for (const auto band : bands) {
         const auto band_first = y0 * divisor + band.begin;
+        const bool trace_band = layer == 0 && runtime_.trace.enabled()
+            && (band.begin == 0 || band.begin + band.rows == descriptors.size());
+        if (trace_band)
+            runtime_.trace.event("raster.band.begin", "layer=%u tank=%u selection=%d first_subrow=%u rows=%u max_active=%u",
+                layer, tank, static_cast<int>(selection), band_first, band.rows, band.maximum);
         RasterControlPin descriptor_pin(runtime_, descriptors.data() + band.begin,
                                         checked_bytes(band.rows, sizeof(RasterBandRow)));
         checked(cudaMemcpyAsync(band_rows_.data(), descriptors.data() + band.begin,
@@ -1014,13 +1019,28 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
                 }
             }
         }
+        if (trace_band)
+            runtime_.trace.event("raster.band.crossings.queued", "layer=%u tank=%u first_subrow=%u rows=%u",
+                layer, tank, band_first, band.rows);
         process_band(descriptors.data() + band.begin, band.rows, band.maximum, band_first,
             divisor, coverage, raw_supports, output, occupancy, source_basic.data());
+        if (trace_band) {
+            runtime_.trace.event("raster.band.processing.queued", "layer=%u tank=%u first_subrow=%u rows=%u",
+                layer, tank, band_first, band.rows);
+            runtime_.trace.event("raster.band.descriptors.wait.begin", "layer=%u tank=%u first_subrow=%u",
+                layer, tank, band_first);
+        }
         checked(cudaEventSynchronize(descriptor_copy.completion), "finish raster descriptor DMA");
+        if (trace_band)
+            runtime_.trace.event("raster.band.descriptors.wait.ready", "layer=%u tank=%u first_subrow=%u",
+                layer, tank, band_first);
         descriptor_pin.joined();
     }
     if (source_stats) {
+        const bool trace_stats = layer == 0 && runtime_.trace.enabled();
+        if (trace_stats) runtime_.trace.event("raster.source_stats.wait.begin", "layer=%u tank=%u", layer, tank);
         const auto basic = metadata(runtime_, source_basic.data());
+        if (trace_stats) runtime_.trace.event("raster.source_stats.wait.ready", "layer=%u tank=%u", layer, tank);
         output.raster_area_stats = empty_stats();
         output.raster_stats_valid = analytic;
         const auto count = basic.pixels / steps;
@@ -1052,7 +1072,10 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
         launched(runtime_);
     }
     std::uint32_t bounds[8];
+    const bool trace_bounds = layer == 0 && runtime_.trace.enabled();
+    if (trace_bounds) runtime_.trace.event("raster.bounds.wait.begin", "layer=%u tank=%u", layer, tank);
     metadata(runtime_, bounds, counts_.data(), 8);
+    if (trace_bounds) runtime_.trace.event("raster.bounds.wait.ready", "layer=%u tank=%u", layer, tank);
     output.bounds_valid = true;
     if (bounds[0] != UINT_MAX) output.nonzero_bounds = {static_cast<std::int32_t>(bounds[0]), static_cast<std::int32_t>(bounds[1]),
                                                      static_cast<std::int32_t>(bounds[2]), static_cast<std::int32_t>(bounds[3])};

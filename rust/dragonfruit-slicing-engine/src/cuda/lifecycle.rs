@@ -179,9 +179,11 @@ pub(crate) fn slice_attempt(job: &SliceJobV3, output_path: Option<&Path>,
     Ok(SliceArtifactV3 { bytes, perf })
 }
 
-pub(crate) fn announce_fallback(job: &SliceJobV3, callback: &Option<ProgressCallbackV3>,
-    cancel: Option<&AtomicBool>) -> Result<(), SlicerV3Error> {
+pub(crate) fn announce_fallback(job: &SliceJobV3, failure: &CudaFailure,
+    callback: &Option<ProgressCallbackV3>, cancel: Option<&AtomicBool>) -> Result<(), SlicerV3Error> {
+    eprintln!("[CUDA] slicing attempt failed: {failure}");
     check_cancelled(cancel)?;
+    eprintln!("[CUDA] restarting the complete job on CPU; progress reset");
     progress(callback, 0, job.total_layers.saturating_mul(job.tank_count.max(1)).saturating_add(1),
         SliceProgressPhaseV3::CpuFallback);
     Ok(())
