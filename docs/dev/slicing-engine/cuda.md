@@ -85,6 +85,14 @@ workspace quota remains an admission ceiling, not an eager allocation target.
 Buffers retain high-water reuse, so planned bytes in the trace need not equal
 resident VRAM after a larger layer.
 
+Slot and lookahead planning use a startup budget snapshot. The scheduler does
+not cancel an idle pool merely because a later free-memory reading falls below
+that plan's worst-case total: unused workspace quotas are not resident memory.
+The shared allocator still retunes and enforces the live 90-percent budget on
+every allocation, evicts only safely retired cached buffers, and reports a typed
+out-of-memory failure when an actual buffer cannot fit. This does not bypass
+initial slot admission or change the configured worker count.
+
 ## Parallel execution
 
 Parallelism has two axes. Raster crossing/span and pixel work run in budget-sized
@@ -184,8 +192,11 @@ throughput improvement.
 The first native cancellation transition before trace completion emits
 `cancel.request` with an origin: `host_cancel_request`, `pool_failure`,
 `worker_startup_failure`, or `shutdown_drain`. It includes whether the pool has a
-stored initiating failure. Native error reporting retains that failure rather
-than replacing it with a later cancellation.
+stored initiating failure. Pool catch handlers copy the error status and message
+into the existing bounded native error representation before logging or draining
+streams. The first stored failure takes precedence over subsequent cancellation;
+unknown exceptions become execution failures, not an empty failure pointer that
+is later reported as `cancelled`. This changes no public ABI layout.
 
 The desktop terminal separately logs receipt of `cancel_slicing`. Frontend
 console diagnostics report an `AbortSignal` request with its reason:

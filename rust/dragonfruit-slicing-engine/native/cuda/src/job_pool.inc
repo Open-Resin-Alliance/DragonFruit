@@ -32,10 +32,10 @@
     std::thread coordinator;
     std::deque<Task> ready_tasks;
     std::deque<std::shared_ptr<CachedLayer>> cached_layers;
-    std::exception_ptr first_failure;
+    std::optional<DfCudaError> first_failure;
     std::uint64_t generation = 0;
     std::uint32_t requested_tank = 0, pipeline_tank = 0, ordered_layer = 0;
-    std::size_t outstanding = 0, prefetch = 0, admission_bytes = 0;
+    std::size_t outstanding = 0, prefetch = 0;
     bool joined = false;
     bool trace_first_done[3] = {false, false, false};
     static const char *stage_name(Stage stage) noexcept {
@@ -83,15 +83,37 @@
         std::lock_guard<std::mutex> lock(pool_mutex);
         cancel_pool_locked(origin);
     }
-    void fail_locked(std::exception_ptr failure) noexcept {
-        runtime->trace.failure(failure);
+    // Called only inside a catch: materialize the ABI error before logging or
+    // draining streams, rather than recapturing a nullable exception pointer.
+    static DfCudaError capture_pool_failure() noexcept {
+        DfCudaError error{};
+        const auto record = [&](DfCudaStatus status, const char *message) noexcept {
+            error.code = status;
+            std::snprintf(error.message, sizeof(error.message), "%s", message);
+        };
+        try {
+            throw;
+        } catch (const dfcuda::Error &failure) {
+            record(failure.status, failure.what());
+        } catch (const std::bad_alloc &failure) {
+            record(DF_CUDA_OUT_OF_MEMORY, failure.what());
+        } catch (const std::exception &failure) {
+            record(DF_CUDA_EXECUTION_ERROR, failure.what());
+        } catch (...) {
+            record(DF_CUDA_EXECUTION_ERROR, "unknown native CUDA pool exception");
+        }
+        return error;
+    }
+    void fail_locked(const DfCudaError &failure) noexcept {
         if (!first_failure && !runtime->cancelled.load(std::memory_order_acquire))
-            first_failure = std::move(failure);
+            first_failure = failure;
+        runtime->trace.failure(failure.code, failure.message);
         cancel_pool_locked("pool_failure");
         changed_locked();
     }
     void check_failure_locked() const {
-        if (first_failure) std::rethrow_exception(first_failure);
+        if (first_failure)
+            throw dfcuda::Error(static_cast<DfCudaStatus>(first_failure->code), first_failure->message);
         runtime->check_cancelled();
     }
     void check_job() {
@@ -177,7 +199,7 @@
         base = add_bytes(fixed, dfcuda::checked_bytes(count, per_worker));
         prefetch = std::min<std::size_t>({2 * count, config.total_layers - 1,
                                          (budget - base) / per_ahead});
-        admission_bytes = add_bytes(base, dfcuda::checked_bytes(prefetch, per_ahead));
+        const auto admission_bytes = add_bytes(base, dfcuda::checked_bytes(prefetch, per_ahead));
         runtime->trace.event("pool.plan",
             "slots=%zu workspace_limit_bytes=%zu fixed_bytes=%zu admitted_bytes=%zu budget_bytes=%zu lead=%zu"
             " shared_live_bytes=%zu plane_estimate_bytes=%zu slot_plane_bytes=%zu worker_reserve_bytes=%zu"
@@ -315,23 +337,20 @@
             runtime->trace.event("scheduler.started", "slots=%zu lead=%zu", workers.size(), prefetch);
             std::unique_lock<std::mutex> lock(pool_mutex);
             while (!runtime->cancelled.load(std::memory_order_acquire)) {
-                // Cached allocations remain charged by Memory; its actual admission
-                // evicts only event-complete retirees. Never borrow the RLE/output reserve.
-                if (admission_bytes > runtime->memory.budget()) {
-                    if (outstanding == 0)
-                        throw dfcuda::Error(DF_CUDA_OUT_OF_MEMORY, "CUDA pool VRAM admission was lost");
-                } else {
-                    while (queue_ready_locked()) {}
-                }
+                // The plan sizes slots from a startup budget snapshot. Its
+                // unused workspace ceilings are not live allocations: a later
+                // budget dip must not cancel an idle, otherwise viable pool.
+                // Memory enforces the current 90-percent limit on each acquire.
+                while (queue_ready_locked()) {}
                 const auto observed = generation;
                 pool_changed.wait(lock, [&] {
                     return runtime->cancelled.load(std::memory_order_acquire) || generation != observed;
                 });
             }
         } catch (...) {
-            runtime->trace.failure(std::current_exception());
+            const auto failure = capture_pool_failure();
             std::lock_guard<std::mutex> lock(pool_mutex);
-            fail_locked(std::current_exception());
+            fail_locked(failure);
         }
     }
     void worker_loop(Worker &worker) noexcept {
@@ -352,7 +371,7 @@
                 LayerSource source;
                 Plane final_plane;
                 DfCudaAreaStats stats{};
-                std::exception_ptr failure;
+                std::optional<DfCudaError> failure;
                 const bool ordered_trace = worker.execution->trace.enabled() && task.center->layer == 0 && task.tank == 0;
                 if (ordered_trace) worker.execution->trace.event("stage.start",
                     "stage=%s slot=%zu layer=%u tank=%u", stage_name(task.stage), worker.slot,
@@ -394,17 +413,17 @@
                         "stage=%s slot=%zu layer=%u tank=%u", stage_name(task.stage), worker.slot,
                         task.center->layer, task.tank);
                 } catch (...) {
-                    failure = std::current_exception();
+                    failure = capture_pool_failure();
                     worker.execution->trace.event("stage.failed", "stage=%s slot=%zu layer=%u tank=%u",
                         stage_name(task.stage), worker.slot, task.center->layer, task.tank);
-                    worker.execution->trace.failure(failure);
+                    worker.execution->trace.failure(failure->code, failure->message);
                     for (auto stream : {worker.execution->upload, worker.execution->compute,
                                         worker.execution->pack, worker.execution->readback})
                         if (stream) cudaStreamSynchronize(stream);
                 }
                 {
                     std::lock_guard<std::mutex> lock(pool_mutex);
-                    if (failure) fail_locked(failure);
+                    if (failure) fail_locked(*failure);
                     if (!runtime->cancelled.load(std::memory_order_acquire)) {
                         const auto stage_index = static_cast<std::size_t>(task.stage);
                         if (runtime->trace.enabled() && !trace_first_done[stage_index]) {
@@ -431,8 +450,9 @@
                 }
             }
         } catch (...) {
+            const auto failure = capture_pool_failure();
             std::lock_guard<std::mutex> lock(pool_mutex);
-            fail_locked(std::current_exception());
+            fail_locked(failure);
         }
     }
     void stop_and_drain() noexcept {

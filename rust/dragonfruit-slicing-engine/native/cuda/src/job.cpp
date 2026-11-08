@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdint>
 #include <deque>
 #include <exception>
@@ -15,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <vector>
