@@ -2,17 +2,9 @@
 #define DF_CUDA_RLE_H
 
 #include "common.h"
+#include "rle_control.h"
 
 namespace dfcuda {
-
-/* One record per 4096 logical block pixels, not one record per pixel/run.
- * First/last transition positions are control metadata, never pixel copies. */
-struct RleTileMetadata {
-    std::uint64_t first_start;
-    std::uint64_t last_start;
-    std::uint32_t count;
-    std::uint32_t reserved;
-};
 
 class RleReader {
 public:
@@ -30,6 +22,9 @@ public:
                std::uint32_t block_width);
     std::uint64_t count() const noexcept { return run_count_; }
     std::uint64_t max_transfer_runs() const noexcept { return transfer_runs_; }
+    /* Full-frame high-water reservation, including all hierarchy/control and
+     * the bounded final-run buffer. No device-wide CUB scratch is required. */
+    std::size_t workspace_bytes() const noexcept { return workspace_bytes_; }
 
     /* Destination is the final caller allocation, already registered by the
      * job. No host pixels/runs are allocated or copied. The job records its
@@ -46,20 +41,24 @@ private:
     std::uint64_t transfer_runs_ = 0;
     std::uint64_t total_pixels_ = 0;
     std::uint64_t run_count_ = 0;
+    std::size_t workspace_bytes_ = 0;
+    std::uint32_t grid_limit_ = 1;
+    std::uint32_t pack_grid_limit_ = 1;
     PlaneView plane_{};
     std::uint32_t start_column_ = 0;
     std::uint32_t block_width_ = 0;
     bool ready_ = false;
     Buffer<RleTileMetadata> tiles_;
-    Buffer<std::uint64_t> offsets_;
+    Buffer<rle_detail::Prefix> prefix_;
+    Buffer<rle_detail::Prefix> scan_totals_;
+    Buffer<rle_detail::Control> control_;
+    Buffer<rle_detail::PackRange> range_;
     Buffer<DfCudaRun> runs_;
-    std::vector<RleTileMetadata> host_tiles_;
-    std::vector<std::uint64_t> host_offsets_;
     cudaEvent_t plane_ready_ = nullptr;
     cudaEvent_t packed_ = nullptr;
     cudaEvent_t read_back_ = nullptr;
 
-    void download_metadata();
+    rle_detail::Control download_control();
 };
 
 } // namespace dfcuda

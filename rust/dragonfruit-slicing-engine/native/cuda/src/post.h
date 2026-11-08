@@ -43,6 +43,9 @@ public:
     ~Postprocessor();
     SharedPostTablesPtr shared_tables() const noexcept { return tables_; }
     std::size_t minimum_workspace_bytes() const;
+    // Reserve above minimum_workspace_bytes(); horizontal scratch is retained
+    // separately from the worker's raster/component workspace.
+    std::size_t additional_horizontal_workspace_bytes(std::size_t worker_workspace) const;
     Postprocessor(const Postprocessor &) = delete;
     Postprocessor &operator=(const Postprocessor &) = delete;
     Plane spatial(Plane input);
@@ -55,6 +58,7 @@ public:
 private:
     void initialize();
     std::size_t small_workspace_bytes() const noexcept;
+    std::size_t horizontal_workspace_bytes(std::size_t worker_workspace) const;
     void refresh_bounds(Plane &plane);
     Runtime &runtime_;
     const DfCudaConfig &config_;
@@ -65,7 +69,6 @@ private:
     bool dither_enabled_ = false;
     SharedPostTablesPtr tables_;
     Buffer<std::uint32_t> horizontal_;
-    Buffer<WindowPlane> window_;
     Buffer<PostBasic> basic_;
     Buffer<PostNode> nodes_;
     Buffer<std::uint32_t> frontier_labels_, frontier_pixels_;

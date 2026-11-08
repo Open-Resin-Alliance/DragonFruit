@@ -54,9 +54,14 @@ struct RasterGeometry {
     Buffer<RasterIndexBlock> index_blocks;
     std::uint32_t triangle_count = 0, ssaa_factor = 1;
     std::uint32_t model_first_layer = 0, model_last_layer = 0;
+    // Channel-major GPU prefix summary, stride total_layers + 1. The final
+    // channel holds supports; preceding channels hold each tank's models.
+    std::vector<std::uint32_t> candidate_counts;
+    std::uint32_t peak_candidates = 0;
     // Full-width scene row storage, including rounded phases and XY/work-frame
     // halo across every tank/model/support/Z union; not an X vertex-hull crop.
     std::size_t max_plane_bytes = 0, minimum_workspace_bytes = 0;
+    std::size_t preferred_workspace_bytes = 0;
 };
 using RasterGeometryPtr = std::shared_ptr<const RasterGeometry>;
 
@@ -81,6 +86,9 @@ public:
     RasterGeometryPtr shared_geometry() const { return geometry_; }
     std::size_t max_plane_bytes() const { return geometry_->max_plane_bytes; }
     std::size_t minimum_workspace_bytes() const { return geometry_->minimum_workspace_bytes; }
+    // Preparation floor versus scene-useful sizing; neither promises every
+    // actual event/band fits. Actual retained capacities enforce the quota.
+    std::size_t preferred_workspace_bytes() const { return geometry_->preferred_workspace_bytes; }
     ~Rasterizer() = default;
     Rasterizer(const Rasterizer &) = delete;
     Rasterizer &operator=(const Rasterizer &) = delete;
@@ -95,6 +103,8 @@ private:
     RasterGeometryPtr geometry_;
     std::optional<Plane> cached_supports_;
     std::uint32_t cached_support_layer_ = 0;
+    // The statistics-only postprocessor borrows this configuration.
+    std::optional<DfCudaConfig> source_statistics_config_;
     std::optional<Postprocessor> source_statistics_;
     Buffer<RasterCrossingLane> crossing_lanes_;
     Buffer<std::uint8_t> temporary_;
@@ -113,6 +123,23 @@ private:
     Buffer<std::uint32_t> frontier_;
     Buffer<std::uint64_t> evidence_;
     void initialize_scratch();
+    void plan_workspace(RasterGeometry &);
+    std::size_t retained_workspace_bytes() const;
+    std::size_t raster_workspace_budget() const;
+    // Called only at joined stage boundaries, before any current event/band
+    // contents exist. Buffer::clear retires through the owning stream.
+    void release_band_workspace();
+    void release_event_workspace();
+    template<class T> void resize_workspace(Buffer<T> &buffer, std::size_t count) {
+        const auto requested = checked_bytes(count, sizeof(T));
+        const auto retained = checked_bytes(buffer.capacity(), sizeof(T));
+        const auto growth = requested > retained ? requested - retained : 0;
+        const auto used = retained_workspace_bytes();
+        const auto quota = raster_workspace_budget();
+        if (used > quota || growth > quota - used)
+            throw Error(DF_CUDA_OUT_OF_MEMORY, "CUDA raster retained buffers exceed worker workspace");
+        buffer.resize(count);
+    }
     void process_band(const RasterBandRow *host_rows, std::uint32_t rows,
                       std::uint32_t maximum, std::uint32_t first_row,
                       std::uint32_t divisor, bool coverage, bool raw_supports,

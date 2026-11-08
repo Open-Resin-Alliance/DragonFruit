@@ -130,16 +130,13 @@
         const auto plane = std::max<std::size_t>(1, raster->max_plane_bytes());
         geometry = raster->shared_geometry();
         const auto raster_minimum = raster->minimum_workspace_bytes();
+        const auto raster_preferred = raster->preferred_workspace_bytes();
         // Keep only the immutable assets, not the builder's upload/sort scratch.
         raster.reset();
         const auto post_minimum = post->minimum_workspace_bytes();
         const auto layers = std::min<std::size_t>(config.total_layers,
             add_bytes(add_bytes(2 * z_depth(), raw_depth()), 1));
-        const auto pixels = dfcuda::checked_bytes(config.width, config.height);
-        const auto tiles = pixels / 4096 + (pixels % 4096 != 0);
-        const auto rle_reserve = add_bytes(runtime->transfer_bytes(),
-            add_bytes(dfcuda::checked_bytes(tiles, sizeof(dfcuda::RleTileMetadata)),
-                      dfcuda::checked_bytes(tiles + 1, sizeof(std::uint64_t))));
+        const auto rle_reserve = rle->workspace_bytes();
         const bool support_planes = has_split() && config.aa_on_supports == 0 &&
             (generic_legacy() || (config.dense_raster_semantics == 1 &&
              (config.raster_mode == DF_CUDA_BLUR || dense_coverage())));
@@ -166,9 +163,8 @@
         // A cached-raster-stat final does not allocate a second component band.
         auto worker_bytes = [&](std::size_t w) {
             return add_bytes(add_bytes(w, add_bytes(post_components ? w / 8 : 0, post_fixed)),
-                             transient);
+                add_bytes(transient, post->additional_horizontal_workspace_bytes(w)));
         };
-        auto per_worker = worker_bytes(workspace);
         const auto per_ahead = add_bytes(slot_bytes, plane);
         const auto budget = runtime->memory.budget();
         cudaDeviceProp properties{};
@@ -178,35 +174,23 @@
         const auto gpu_slots = properties.concurrentKernels
             ? std::min<unsigned>(grid_limit, std::max(2, properties.multiProcessorCount * 2)) : 1U;
         const auto cap = std::min<std::size_t>(gpu_slots, config.total_layers);
-        std::size_t count = 0;
-        for (std::size_t n = 1; n <= cap; ++n) {
-            const auto needed = add_bytes(fixed, add_bytes(dfcuda::checked_bytes(n, per_worker),
-                dfcuda::checked_bytes(n - 1, per_ahead)));
-            if (needed > budget) break;
-            count = n;
-        }
-        if (count == 0)
+        const auto plan = dfcuda::plan_pool(budget, fixed, workspace,
+            std::max(workspace, raster_preferred), per_ahead, cap, config.total_layers, worker_bytes);
+        if (plan.slots == 0)
             throw dfcuda::Error(DF_CUDA_OUT_OF_MEMORY,
-                "available VRAM cannot retain the required CUDA topology/Z window and ordered output");
-        auto base = add_bytes(fixed, dfcuda::checked_bytes(count, per_worker));
-        // Preserve one useful lead per admitted slot, then divide the remaining
-        // allowance between wider raster/component bands and bounded layer lead.
-        const auto required_lead = dfcuda::checked_bytes(count - 1, per_ahead);
-        const auto spare = budget - add_bytes(base, required_lead);
-        const auto extra_workspace = spare / (3 * count);
-        workspace = add_bytes(workspace, extra_workspace);
-        per_worker = worker_bytes(workspace);
-        base = add_bytes(fixed, dfcuda::checked_bytes(count, per_worker));
-        prefetch = std::min<std::size_t>({2 * count, config.total_layers - 1,
-                                         (budget - base) / per_ahead});
-        const auto admission_bytes = add_bytes(base, dfcuda::checked_bytes(prefetch, per_ahead));
+                "available VRAM cannot retain the minimum CUDA preparation, topology/Z window and ordered output");
+        const auto count = plan.slots;
+        workspace = plan.workspace;
+        prefetch = plan.lead;
+        const auto per_worker = worker_bytes(workspace);
+        const auto admission_bytes = plan.bytes;
         runtime->trace.event("pool.plan",
             "slots=%zu workspace_limit_bytes=%zu fixed_bytes=%zu admitted_bytes=%zu budget_bytes=%zu lead=%zu"
             " shared_live_bytes=%zu plane_estimate_bytes=%zu slot_plane_bytes=%zu worker_reserve_bytes=%zu"
-            " rle_reserve_bytes=%zu raster_minimum_bytes=%zu post_minimum_bytes=%zu raw_depth=%zu z_depth=%zu gpu_slot_cap=%u",
+            " rle_reserve_bytes=%zu raster_minimum_bytes=%zu raster_preferred_bytes=%zu post_minimum_bytes=%zu post_horizontal_extra_bytes=%zu raw_depth=%zu z_depth=%zu gpu_slot_cap=%u",
             count, workspace, fixed, admission_bytes, budget, prefetch, shared_live_bytes,
-            plane, slot_bytes, per_worker, rle_reserve, raster_minimum, needed_post_minimum,
-            raw_depth(), z_depth(), gpu_slots);
+            plane, slot_bytes, per_worker, rle_reserve, raster_minimum, raster_preferred, needed_post_minimum,
+            post->additional_horizontal_workspace_bytes(workspace), raw_depth(), z_depth(), gpu_slots);
         workers.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
             runtime->trace.event("workerinit.start", "slot=%zu workspace_limit_bytes=%zu", i, workspace);
@@ -403,8 +387,9 @@
                         const Plane *supports = center.supports.empty() ? nullptr : &center.supports;
                         if (!dense_coverage() && config.dense_raster_semantics != 2)
                             worker.processor->finish(final_plane, supports);
-                        stats = dense_coverage() && center.source_stats_valid
-                            ? center.source_stats : worker.processor->statistics(final_plane);
+                        if (config.compute_area_stats != 0)
+                            stats = dense_coverage() && center.source_stats_valid
+                                ? center.source_stats : worker.processor->statistics(final_plane);
                     }
                     // Retained input references and immutable geometry/tables outlive
                     // this private-stream boundary; publication never relies on root compute.

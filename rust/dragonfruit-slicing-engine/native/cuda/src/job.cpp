@@ -3,6 +3,7 @@
 #include "raster.h"
 #include "post.h"
 #include "rle.h"
+#include "pool_plan.h"
 
 #include <algorithm>
 #include <cmath>

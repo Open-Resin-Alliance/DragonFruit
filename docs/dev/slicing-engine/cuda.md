@@ -100,6 +100,23 @@ intermediates; it does not charge full printer height for every empty or sparse
 Z-neighbor plane. This avoids rejecting compact high-resolution scenes solely
 because their nominal frame is 16K.
 
+`RasterGeometry` shares a per-layer/per-tank model/support candidate table built
+with GPU difference counts and prefix scans during geometry initialization.
+That small immutable table is downloaded once; candidate preparation no longer
+downloads a count for every render. Flags still cover the whole mesh, while
+both selected-ID buffers use the exact scene-derived count. Count/emit passes use the same unfused edge
+evaluator and allocate/sort only valid events, with one row-control readback
+including the checked event cardinality. Unique subrow/candidate keys preserve
+the previous sorted order despite parallel event emission.
+
+Raster admission distinguishes `minimum_workspace_bytes()` (mandatory staged
+candidate preparation) from `preferred_workspace_bytes()` (scene-peak useful
+working space). `pool_plan.h` uses the preferred amount for ordinary GPU slot
+selection. If that estimate cannot fit but the true minimum can, it funds a
+lower-concurrency context from the remaining budget instead of rejecting an
+otherwise viable job based on whole-mesh worst cases. Actual event/band/CUB
+allocations still have to fit their quota and the live allocator budget.
+
 Raster scratch is demand-sized after selected candidates and actual row/subrow
 descriptors are known. Active lanes use their maximum crossing counts; band
 storage uses the largest admitted band actually present in the layer. CUB
@@ -107,6 +124,12 @@ temporary storage uses null-storage queries for the planned operations. The
 workspace quota remains an admission ceiling, not an eager allocation target.
 Buffers retain high-water reuse, so planned bytes in the trace need not equal
 resident VRAM after a larger layer.
+Retained capacity, including CUB temporary high-water, stays charged. At joined
+preparation boundaries only, pressure may retire obsolete previous-layer
+event/band buffers and retry demand-sized planning. Current IDs/counts remain
+alive at the event-planning boundary. Fitting renders retain their allocations;
+this is not unconditional per-layer clearing. `raster.workspace.reclaim` records
+the affected stage when tracing is enabled.
 
 Slot and lookahead planning use a startup budget snapshot. The scheduler does
 not cancel an idle pool merely because a later free-memory reading falls below
@@ -137,6 +160,19 @@ selection, radix-sort, copy or advancement submission remains. Downstream band
 repair, orientation evidence, pixel carry and statistics keep their existing
 semantics. Kernels remain bounded by admitted band rows/items, not a whole-job
 persistent loop; cancellation is checked before each band is submitted.
+
+XY blur now batches as many rows as the actual ROI and funded horizontal
+workspace permit, rather than issuing a pair of kernels per fixed 32-row strip.
+The minimum reservation remains `4 * width * min(height, 32 + 2 * radius)`;
+the total horizontal budget is the greater of that amount and one eighth of the
+worker quota. `additional_horizontal_workspace_bytes()` charges the difference
+separately from retained raster/component scratch. Only actual ROI storage is
+allocated. Larger batches preserve BOX/Gaussian sample order, clipped halos,
+denominator frames, saturation and rounding.
+
+Z blending passes at most 17 immutable neighbor descriptors by value in the
+kernel arguments, within Pascal's 4 KiB parameter limit. It needs no reusable
+descriptor buffer, descriptor upload or preceding compute-stream join.
 
 A native readiness coordinator queues raw, spatial/model and final layer tasks
 onto worker-private non-default CUDA streams. GPU slots derive from shared VRAM
@@ -171,6 +207,16 @@ bounds in actual merged border regions. The dither case uses active 3DAA mode,
 not ordinary Blur where dithering is disabled. Run numerical and throughput
 validation only on an approved Windows CUDA machine; source patch applicability
 does not establish runtime parity or speedup.
+
+`RleReader` keeps tile metadata and prefix records on the device. Hierarchical
+GPU scans and validation produce only a 16-byte count/status packet for the
+host; exceptionally small transfer budgets split that packet into bounded
+pieces. No bulk tile download, CPU offset scan, offset reupload or host range
+binary search remains. GPU-selected, occupancy-bounded packing skips empty tile
+intervals while retaining unique CTA ownership and direct caller-buffer DMA.
+`workspace_bytes()` reserves all retained tile/prefix/hierarchy/control storage
+and bounded run scratch before pool admission. This remains per-tile metadata,
+not a per-pixel prefix or worst-case full-frame run allocation.
 
 ## First-output diagnostics
 
@@ -229,6 +275,30 @@ whole layer. A missing matching completion localizes an outstanding host stage;
 GPU utilization alone does not. These logs do not prove numerical parity or a
 throughput improvement.
 
+With `DF_CUDA_TRACE=1`, both public native slicing entrypoints also emit a
+`job.done` line after the complete successful artifact is encoded/finalized.
+`total_ms` includes the backend attempt, layer encoding and finalization; it is
+not the first-output time. `requested` and `backend` distinguish a real CUDA
+completion from a CPU restart. This engine timing excludes frontend/Tauri mesh
+preparation, decoding and UI overhead. For the end-to-end target, use the
+existing `[SlicingPerf] Native slicing summary` console record's `totalElapsedMs`
+(`SliceExportResult.benchmark.totalElapsedMs`), which includes mesh preparation
+and the native bridge operation. Confirm `job.done backend=cuda`; the summary's
+`native-rust-tauri` transport label alone does not distinguish CPU fallback.
+Compare identical jobs/profiles and entrypoints, without adding overlapping
+component counters.
+
+The practical target is at least 2x, with 3x as a stretch, against the same CPU
+job while retaining the current GPU dithering/exposure contract:
+
+| Target | Complete GPU operation for a 19-second CPU baseline |
+| --- | --- |
+| 2x minimum | At most 9.50 seconds |
+| 3x stretch | At most 6.33 seconds |
+
+First-layer traces, host smoke checks and different dithering algorithms do not
+establish that speedup; approved-device timings remain required.
+
 The first native cancellation transition before trace completion emits
 `cancel.request` with an origin: `host_cancel_request`, `pool_failure`,
 `worker_startup_failure`, or `shutdown_drain`. It includes whether the pool has a
@@ -261,7 +331,7 @@ The deterministic dither path uses globally phased 16×16 regions, merges partia
 
 ## Output and lifecycle invariants
 
-RLE output is row-major and canonical: zero prefixes/tails and adjacent equal values are merged, including across chunk and block boundaries. Block streams use global column coordinates. Area statistics are computed once for the final layer/tank result and are not double-counted when a descriptor is split into blocks.
+RLE output is row-major and canonical: zero prefixes/tails and adjacent equal values are merged, including across chunk and block boundaries. Block streams use global column coordinates. Area statistics, when requested, are computed once for the final layer/tank result and are not double-counted when a descriptor is split into blocks. A job with `compute_area_stats=0` skips final area scans and their control readbacks; the encoder lifecycle does not consume those unrequested statistics.
 
 Progress remains layer/tank ordered at the Rust encoder boundary. `cpuFallback` is emitted before the fresh CPU attempt so the UI can reset progress and show the retry. The native backend never silently substitutes a CPU pixel loop for a missing CUDA stage.
 

@@ -3521,6 +3521,24 @@ fn rasterize_vertical_aa_streaming_v3(
     ))
 }
 
+fn trace_completed_slice(job: &SliceJobV3, perf: &SlicingPerfV3) {
+    if std::env::var("DF_CUDA_TRACE").as_deref() != Ok("1") {
+        return;
+    }
+    let backend = |value: &crate::types::ComputeBackend| match value {
+        crate::types::ComputeBackend::Cpu => "cpu",
+        crate::types::ComputeBackend::Cuda => "cuda",
+    };
+    eprintln!(
+        "[DF_CUDA_TRACE] HOST adapter={:p} event=job.done requested={} backend={} layers={} tanks={} width={} height={} aa_mode={} aa_level={} format={} total_ms={:.3} render_and_layer_encode_ms={:.3} layer_encode_ms={:.3} finalize_ms={:.3}",
+        job, backend(&job.compute_backend), backend(&perf.compute_backend), job.total_layers,
+        job.tank_count, job.width_px, job.height_px, job.anti_aliasing_mode,
+        job.anti_aliasing_level, job.output_format, perf.total_ns as f64 / 1_000_000.0,
+        perf.render_wall_ns as f64 / 1_000_000.0, perf.png_encode_ns as f64 / 1_000_000.0,
+        perf.archive_encode_ns as f64 / 1_000_000.0,
+    );
+}
+
 /// Format-dispatched slicing with a whole-job CPU restart on reported CUDA failures.
 pub fn slice_with_progress_v3(
     job: &SliceJobV3,
@@ -3531,7 +3549,11 @@ pub fn slice_with_progress_v3(
     let started = std::time::Instant::now();
     if job.compute_backend == crate::types::ComputeBackend::Cuda {
         match crate::cuda::slice_attempt(job, None, on_progress.clone(), cancel_flag) {
-            Ok(artifact) => return Ok(artifact),
+            Ok(mut artifact) => {
+                artifact.perf.total_ns = started.elapsed().as_nanos() as u64;
+                trace_completed_slice(job, &artifact.perf);
+                return Ok(artifact);
+            }
             Err(SlicerV3Error::Cuda(failure)) => {
                 crate::cuda::announce_fallback(job, &failure, &on_progress, cancel_flag)?;
             }
@@ -3540,6 +3562,7 @@ pub fn slice_with_progress_v3(
     }
     let mut artifact = slice_with_progress_cpu_v3(job, on_progress, cancel_flag)?;
     artifact.perf.total_ns = started.elapsed().as_nanos() as u64;
+    trace_completed_slice(job, &artifact.perf);
     Ok(artifact)
 }
 
@@ -5672,7 +5695,11 @@ pub fn slice_with_progress_v3_to_path(
     let started = std::time::Instant::now();
     if job.compute_backend == crate::types::ComputeBackend::Cuda {
         match crate::cuda::slice_attempt(job, Some(output_path), on_progress.clone(), cancel_flag) {
-            Ok(artifact) => return Ok(artifact.perf),
+            Ok(mut artifact) => {
+                artifact.perf.total_ns = started.elapsed().as_nanos() as u64;
+                trace_completed_slice(job, &artifact.perf);
+                return Ok(artifact.perf);
+            }
             Err(SlicerV3Error::Cuda(failure)) => {
                 crate::cuda::announce_fallback(job, &failure, &on_progress, cancel_flag)?;
             }
@@ -5681,6 +5708,7 @@ pub fn slice_with_progress_v3_to_path(
     }
     let mut perf = slice_with_progress_cpu_v3_to_path(job, output_path, on_progress, cancel_flag)?;
     perf.total_ns = started.elapsed().as_nanos() as u64;
+    trace_completed_slice(job, &perf);
     Ok(perf)
 }
 

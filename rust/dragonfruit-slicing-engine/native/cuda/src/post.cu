@@ -6,7 +6,11 @@ namespace dfcuda {
 namespace {
 
 constexpr std::uint32_t threads = 256;
-constexpr std::uint32_t blur_rows = 32;
+constexpr std::uint32_t minimum_blur_rows = 32;
+
+struct ZWindow { WindowPlane planes[17]; };
+// Leave space for every other argument and its alignment on Pascal's 4 KiB ABI.
+static_assert(sizeof(ZWindow) + 128 <= 4096, "CUDA Z window exceeds Pascal kernel parameter limit");
 
 unsigned blocks_for(std::size_t count) {
     return static_cast<unsigned>(std::min<std::size_t>((count + threads - 1) / threads, 65535));
@@ -99,7 +103,7 @@ __global__ void vertical_blur(PlaneView output, PlaneView roi, std::uint32_t fir
     }
 }
 
-__global__ void blend_planes(PlaneView output, const WindowPlane *sources, std::size_t count,
+__global__ void blend_planes(PlaneView output, const ZWindow window, std::size_t count,
                              const PostTables *tables, std::uint32_t radius,
                              std::uint32_t denominator) {
     const std::size_t pixels = static_cast<std::size_t>(output.width) * output.height;
@@ -108,11 +112,16 @@ __global__ void blend_planes(PlaneView output, const WindowPlane *sources, std::
         const auto x = output.x0 + static_cast<std::uint32_t>(i % output.width);
         const auto y = output.y0 + static_cast<std::uint32_t>(i / output.width);
         std::uint32_t sum = 0;
-        for (std::size_t s = 0; s < count; ++s) {
-            const auto distance = sources[s].layer_distance;
-            const auto d = static_cast<std::uint32_t>(distance < 0 ? -static_cast<std::int64_t>(distance) : distance);
-            if (d <= radius) {
-                sum = sat_add(sum, static_cast<std::uint32_t>(pixel(sources[s].plane, x, y)) * tables->z_weights[d]);
+        // Fixed, unrolled accesses avoid taking the parameter array's address
+        // (which can force a per-thread local copy on Pascal).
+        #pragma unroll
+        for (std::size_t s = 0; s < 17; ++s) {
+            if (s < count) {
+                const auto distance = window.planes[s].layer_distance;
+                const auto d = static_cast<std::uint32_t>(distance < 0 ? -static_cast<std::int64_t>(distance) : distance);
+                if (d <= radius) {
+                    sum = sat_add(sum, static_cast<std::uint32_t>(pixel(window.planes[s].plane, x, y)) * tables->z_weights[d]);
+                }
             }
         }
         auto value = (sum + denominator / 2) / denominator;
@@ -232,7 +241,6 @@ void Postprocessor::initialize() {
     frontier_pixels_.initialize(runtime_.memory, runtime_.compute);
     components_.initialize(runtime_.memory, runtime_.compute);
     horizontal_.initialize(runtime_.memory, runtime_.compute);
-    window_.initialize(runtime_.memory, runtime_.compute);
     numerical_error_.initialize(runtime_.memory, runtime_.compute);
     // Direct RLE-PNG and statistics-only contexts allocate no tables.
     if (config_.dense_raster_semantics == 2) return;
@@ -325,16 +333,23 @@ Postprocessor::~Postprocessor() {
 }
 
 std::size_t Postprocessor::small_workspace_bytes() const noexcept {
-    const auto window = z_radius_ == 0 ? 0
-        : (2 * z_radius_ + 1) * sizeof(WindowPlane);
-    return 2 * sizeof(PostBasic) + window +
+    return 2 * sizeof(PostBasic) +
         (dither_enabled_ ? sizeof(std::uint32_t) : 0);
 }
 
+std::size_t Postprocessor::horizontal_workspace_bytes(std::size_t worker_workspace) const {
+    if (xy_radius_ == 0) return 0;
+    const auto rows = std::min(config_.height, minimum_blur_rows + 2 * xy_radius_);
+    const auto minimum = checked_bytes(checked_bytes(config_.width, rows), sizeof(std::uint32_t));
+    return std::max(minimum, worker_workspace / 8);
+}
+
+std::size_t Postprocessor::additional_horizontal_workspace_bytes(std::size_t worker_workspace) const {
+    return horizontal_workspace_bytes(worker_workspace) - horizontal_workspace_bytes(0);
+}
+
 std::size_t Postprocessor::minimum_workspace_bytes() const {
-    const auto horizontal_rows = xy_radius_ == 0 ? 0u
-        : std::min(config_.height, blur_rows + 2 * xy_radius_);
-    const auto horizontal = checked_bytes(checked_bytes(config_.width, horizontal_rows), sizeof(std::uint32_t));
+    const auto horizontal = horizontal_workspace_bytes(0);
     // Charge labels only when component statistics are requested. Include
     // every retained small buffer inside the same one-eighth workspace share.
     const auto small = small_workspace_bytes();
@@ -482,13 +497,19 @@ Plane Postprocessor::spatial(Plane input) {
         const PlaneView roi{nullptr, static_cast<std::uint32_t>(bounds.x0), static_cast<std::uint32_t>(bounds.y0),
             static_cast<std::uint32_t>(bounds.x1 - bounds.x0 + 1), static_cast<std::uint32_t>(bounds.y1 - bounds.y0 + 1)};
         const auto y1 = roi.y0 + roi.height;
-        horizontal_.resize(checked_bytes(roi.width, std::min(roi.height, blur_rows + 2 * xy_radius_)));
+        const auto row_bytes = checked_bytes(roi.width, sizeof(std::uint32_t));
+        const auto scratch_rows = static_cast<std::uint32_t>(std::min<std::size_t>(roi.height,
+            horizontal_workspace_bytes(runtime_.workspace_budget()) / row_bytes));
+        horizontal_.resize(checked_bytes(roi.width, scratch_rows));
         for (auto y = roi.y0; y < y1;) {
             runtime_.check_cancelled();
-            const auto rows = std::min(blur_rows, y1 - y);
             const auto first = std::max(roi.y0, y > xy_radius_ ? y - xy_radius_ : 0);
             const auto end = static_cast<std::uint32_t>(std::min<std::uint64_t>(y1,
-                static_cast<std::uint64_t>(y) + rows + xy_radius_));
+                static_cast<std::uint64_t>(first) + scratch_rows));
+            // The admission floor fits both halos plus at least 32 output
+            // rows, unless the entire ROI already fits. Reclaim clipped halos
+            // at the top/bottom instead of imposing a host-side row granularity.
+            const auto rows = end == y1 ? y1 - y : end - y - xy_radius_;
             horizontal_blur<<<blocks_for(checked_bytes(roi.width, end - first)), threads, 0, runtime_.compute>>>(
                 input.view(), roi, first, end - first, frame.x0, frame.width, xy_radius_,
                 tables_->data(), gaussian_xy_, horizontal_.data());
@@ -535,15 +556,12 @@ Plane Postprocessor::blend_z(const WindowPlane *sources, std::size_t count) {
         output.pixels.mark_used(runtime_.compute);
         return output;
     }
-    // upload_bytes owns the upload stream. Drain prior compute readers before
-    // overwriting reusable neighbor descriptors on that different stream.
-    checked(cudaStreamSynchronize(runtime_.compute), "joining reusable CUDA Z window");
-    window_.resize(count);
-    runtime_.upload_bytes(window_.data(), sources, checked_bytes(count, sizeof(WindowPlane)));
+    ZWindow window{};
+    for (std::size_t i = 0; i < count; ++i) window.planes[i] = sources[i];
     blend_planes<<<blocks_for(output.bytes()), threads, 0, runtime_.compute>>>(
-        output.view(), window_.data(), count, tables_->data(), z_radius_, denominator);
+        output.view(), window, count, tables_->data(), z_radius_, denominator);
     checked(cudaGetLastError(), "launching CUDA Z blur");
-    output.pixels.mark_used(runtime_.compute); window_.mark_used(runtime_.compute);
+    output.pixels.mark_used(runtime_.compute);
     return output;
 }
 
