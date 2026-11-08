@@ -221,6 +221,10 @@ msgstr "{downloaded} / {total} ({pct} %)"
 msgid "{feature} is Experimental"
 msgstr "{feature} es experimental"
 
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:61
+msgid "{field}: {value}"
+msgstr ""
+
 #: src/app/page.tsx:596
 #: src/components/controls/ModelStatsCard.tsx:214
 msgid "{hours} h {minutes} min"
@@ -286,7 +290,7 @@ msgstr "{modelName} (copia {copyNumber})"
 msgid "{name} — open sponsor profile"
 msgstr "{name}: abrir su perfil de patrocinador"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:61
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:65
 msgid "{name} ({version})"
 msgstr ""
 
@@ -784,8 +788,8 @@ msgstr "Añadir variante de impresora"
 msgid "Add printers"
 msgstr "Añadir impresoras"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:131
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:229
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:155
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:255
 msgid "Add range"
 msgstr ""
 
@@ -955,7 +959,7 @@ msgstr "Se aplica de inmediato en toda la aplicación."
 #: src/components/controls/IslandsPanel.tsx:313
 #: src/features/hole-punching/HolePunchPanel.tsx:253
 #: src/features/hollowing/HollowingPanel.tsx:371
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:258
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:284
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:236
 msgid "Apply"
 msgstr "Aplicar"
@@ -1714,7 +1718,7 @@ msgstr "No se puede abrir esta escena"
 #: src/components/settings/PluginsSettingsTab.tsx:1188
 #: src/components/settings/PluginsSettingsTab.tsx:1309
 #: src/features/printing/components/PrintingPanel.tsx:99
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:257
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:283
 #: src/features/slicing/components/LutCurveEditor.tsx:1500
 #: src/features/slicing/components/LutCurveEditor.tsx:1643
 #: src/features/slicing/components/LutCurveEditor.tsx:1737
@@ -2098,7 +2102,7 @@ msgstr "ID de cliente"
 #: src/components/printers/PrinterVariantPickerModal.tsx:422
 #: src/components/scene/MeshRepairReportModal.tsx:304
 #: src/components/settings/PluginsSettingsTab.tsx:1384
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:257
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:283
 #: src/features/slicing/components/LutCurveEditor.tsx:1269
 msgid "Close"
 msgstr "Cerrar"
@@ -2116,7 +2120,7 @@ msgid "Close delete confirmation"
 msgstr "Cerrar la confirmación de borrado"
 
 #: src/components/controls/AutoSupportPanel.tsx:472
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:251
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:277
 msgid "Close dialog"
 msgstr "Cerrar la ventana"
 
@@ -2931,8 +2935,8 @@ msgstr "Triángulos degenerados"
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:681
 #: src/components/settings/LocalBackupsSettingsTab.tsx:999
 #: src/components/ui/EditorContextMenu.tsx:116
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:141
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:357
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:165
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:412
 #: src/features/slicing/components/LutCurveEditor.tsx:1746
 #: src/supports/Settings/components/PresetSelector.tsx:654
 #: src/supports/Settings/components/PresetSelector.tsx:888
@@ -3432,8 +3436,8 @@ msgstr "Funciones de acceso anticipado que aún están en pruebas. Pueden cambia
 msgid "Edge Fillet"
 msgstr "Redondeo de aristas"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:140
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:356
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:164
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:411
 #: src/features/slicing/components/SlicingPanel.tsx:2682
 msgid "Edit"
 msgstr "Editar"
@@ -3466,7 +3470,7 @@ msgstr "Editar el perfil de material"
 msgid "Edit printer profile"
 msgstr "Editar el perfil de impresora"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:229
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:255
 msgid "Edit range"
 msgstr ""
 
@@ -3492,7 +3496,7 @@ msgctxt "Undo history entry"
 msgid "Edit trunk"
 msgstr "Editar tronco"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:355
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:410
 msgid "Editing"
 msgstr ""
 
@@ -3542,7 +3546,7 @@ msgstr "Activar ratón 3D"
 msgid "Enable and use them at your own risk."
 msgstr "Actívalas y úsalas bajo tu propia responsabilidad."
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:197
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:223
 msgid "Enable at least one setting override."
 msgstr ""
 
@@ -3595,11 +3599,11 @@ msgstr ""
 msgid "Encoding"
 msgstr "Codificando"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:284
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:311
 msgid "End height"
 msgstr ""
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:285
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:312
 msgid "End layer"
 msgstr ""
 
@@ -4288,7 +4292,7 @@ msgstr "Altura"
 msgid "Height {heights}"
 msgstr ""
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:189
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:215
 msgid "Height bounds must be finite, nonnegative numbers within the supported numeric range."
 msgstr ""
 
@@ -5172,7 +5176,7 @@ msgstr "Vista previa de la capa"
 msgid "Layer profile:"
 msgstr "Perfil de capa:"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:236
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:262
 msgid "Layer settings ranges"
 msgstr ""
 
@@ -5186,7 +5190,7 @@ msgstr "Capa:"
 
 #. Sort order for the island list: by layer span. One of three narrow buttons (ID / Volume / Layers).
 #: src/components/controls/IslandListCard.tsx:177
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:275
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:302
 #: src/features/slicing/components/SlicingPanel.tsx:2467
 msgid "Layers"
 msgstr "Capas"
@@ -5271,6 +5275,10 @@ msgstr ""
 msgid "Lift the selected models to this distance so a support can stand under them; off returns them to the height they were at."
 msgstr ""
 
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:87
+msgid "Lift travel"
+msgstr ""
+
 #: src/components/layout/FirstRunOnboarding.tsx:259
 msgid "Light"
 msgstr "Claro"
@@ -5285,7 +5293,7 @@ msgstr "Ligero"
 msgid "Light PWM"
 msgstr ""
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:69
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:73
 msgid "Light PWM must be a whole number from {first} to {last}."
 msgstr ""
 
@@ -5576,8 +5584,8 @@ msgstr "Gestionar las copias"
 msgid "Manage Plugins"
 msgstr ""
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:132
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:229
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:156
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:255
 msgid "Manage ranges"
 msgstr ""
 
@@ -5649,6 +5657,10 @@ msgstr "Material"
 #: src/features/slicing/components/SlicingPanel.tsx:2883
 msgid "Material Anti-Aliasing Settings"
 msgstr "Ajustes de antialiasing del material"
+
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:356
+msgid "Material mode default"
+msgstr ""
 
 #: src/features/slicing/components/SlicingPanel.tsx:2680
 msgid "Material Profile Settings"
@@ -6256,7 +6268,7 @@ msgstr "Sin IP"
 msgid "No islands found."
 msgstr "No se han encontrado islas."
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:350
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:405
 msgid "No layer settings ranges"
 msgstr ""
 
@@ -6376,7 +6388,7 @@ msgstr "No hay un archivo de origen desde el que restaurar este modelo."
 msgid "No sponsors yet — be the first!"
 msgstr "Aún no hay patrocinadores. ¡Sé el primero!"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:112
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:136
 msgid "No supported printer selected"
 msgstr ""
 
@@ -6866,7 +6878,7 @@ msgstr ""
 msgid "Override On"
 msgstr "Anulación activa"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:199
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:225
 msgid "Override values must be finite, nonnegative numbers within the supported numeric range."
 msgstr ""
 
@@ -7569,16 +7581,16 @@ msgstr "Salir sin guardar"
 msgid "Raft"
 msgstr "Balsa"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:264
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:291
 msgid "Range settings"
 msgstr ""
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:269
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:271
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:296
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:298
 msgid "Range units"
 msgstr ""
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:250
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:276
 msgid "Ranges apply to the next slice; existing files are unchanged"
 msgstr ""
 
@@ -8327,6 +8339,10 @@ msgstr "Reanudando…"
 msgid "Retract speed"
 msgstr ""
 
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:89
+msgid "Retract travel"
+msgstr ""
+
 #: src/components/organisms/modals/PrintingModals.tsx:2110
 #: src/components/organisms/modals/PrintingModals.tsx:2293
 #: src/features/updater/UpdateCheckerSection.tsx:481
@@ -8558,8 +8574,8 @@ msgstr "Guardado"
 msgid "Saved by an obsolete DragonFruit version"
 msgstr "Guardado con una versión obsoleta de DragonFruit"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:348
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:349
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:403
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:404
 msgid "Saved ranges"
 msgstr ""
 
@@ -9597,6 +9613,11 @@ msgstr "Anclajes de estabilización"
 msgid "Stage"
 msgstr "Fase"
 
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:88
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:90
+msgid "Stage 1 / Stage 2"
+msgstr ""
+
 #: src/features/slicing/layerSettingsRangeMessages.ts:17
 msgid "Stage 2 lift speed"
 msgstr ""
@@ -9635,11 +9656,11 @@ msgstr "¿Empezar una escena nueva ahora?"
 msgid "Start from Opaque, Clear, or your own custom min/max alpha values."
 msgstr "Parte de Opaca, de Transparente o de tus propios valores alfa mínimo y máximo."
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:284
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:311
 msgid "Start height"
 msgstr ""
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:285
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:312
 msgid "Start layer"
 msgstr ""
 
@@ -10153,7 +10174,7 @@ msgstr "La impresora seleccionada ahora, <0>{currentPrinterName}</0>, tiene un v
 msgid "the printer this scene was built for"
 msgstr "la impresora para la que se creó esta escena"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:213
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:239
 msgid "The range collection is invalid. Correct its layer bounds and overrides before applying."
 msgstr ""
 
@@ -10195,7 +10216,7 @@ msgstr "El importador de escenas rechazó los datos del guardado automático o n
 msgid "The seam while the cursor is over it."
 msgstr "La costura mientras el cursor está encima."
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:262
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:289
 msgid "The selected format does not support per-layer settings. Existing ranges can be inspected or deleted; select a supported printer to edit values."
 msgstr ""
 
@@ -10228,11 +10249,11 @@ msgstr "Las constantes de dimensionado que trae el motor. Se guardan por preajus
 msgid "The spice must flow. The resin must cure."
 msgstr "La especia debe fluir. La resina debe curar."
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:191
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:217
 msgid "The start height must not exceed the end height."
 msgstr ""
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:195
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:221
 msgid "The start layer must not exceed the end layer."
 msgstr ""
 
@@ -10356,7 +10377,7 @@ msgstr "Esta placa"
 msgid "This printer has no setup options."
 msgstr "Esta impresora no tiene opciones de configuración."
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:187
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:213
 msgid "This range no longer exists"
 msgstr ""
 
@@ -10518,6 +10539,11 @@ msgstr "Arriba"
 msgid "Total"
 msgstr "Total"
 
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:87
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:89
+msgid "Total / Stage 2"
+msgstr ""
+
 #: src/components/controls/IslandListCard.tsx:125
 msgid "Total Islands"
 msgstr "Islas en total"
@@ -10605,6 +10631,7 @@ msgstr "Agujeros sin aplicar"
 
 #. Placeholder when the autosave file path could not be resolved.
 #: src/components/settings/SceneAutosaveSettingsTab.tsx:363
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:364
 msgid "Unavailable"
 msgstr "No disponible"
 
@@ -10721,6 +10748,10 @@ msgstr "Hay una escena sin guardar"
 
 #: src/components/settings/PluginsSettingsTab.tsx:1078
 msgid "Unseal and install"
+msgstr ""
+
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:288
+msgid "Unspecified values inherit wider ranges or mode-adjusted material settings. Explicit overrides take precedence over the material mode."
 msgstr ""
 
 #: src/app/page.tsx:11151
@@ -10895,7 +10926,7 @@ msgstr ""
 msgid "Use the plates the scene already has before adding more"
 msgstr "Usar las placas que ya tiene la escena antes de añadir más"
 
-#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:65
+#: src/features/slicing/components/LayerSettingsRangeEditor.tsx:69
 msgid "Use whole printed layer numbers from {first} to {last}."
 msgstr ""
 

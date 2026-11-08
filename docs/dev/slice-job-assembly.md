@@ -240,12 +240,38 @@ module-scope interpolated messages; do not copy the material settings schema
 or put translation dependencies in the pure resolver. The rail's right-click
 track command is separate from the existing handle exact-value editor. The
 editor receives `layerHeightMm` from its current slider host and offers
-Layers/mm bounds. Shared controls use one fixed toggle/value/unit grid; the
-blank unit slot is retained for PWM. Supported numeric inputs remain editable
-when their override is off: a committed typed/step/wheel value enables it;
-focus alone does not. MM endpoint fields use six decimal places and a 0.001 mm
-step. Empty or beyond-u32 mm coverage cannot be converted into a fabricated
-layer range; its physical data remains editable/savable as mm.
+Layers/mm bounds. Lift travel, lift speed, retract travel and retract speed each
+show their two related fields on one row with a shared toggle. Single and paired
+rows keep the same toggle/first-value/second-value/unit columns, retaining blank
+cells for single values and PWM. Travel pairs are **Total / Stage 2**; speed
+pairs are **Stage 1 / Stage 2**. The first travel value is not the material
+profile menu's first-stage distance: total = stage 1 + stage 2.
+
+A pair is checked when either field has an explicit override. Explicitly enabling
+a pair seeds both supported fields; disabling it removes both and leaves other
+settings untouched. Typing/stepping/wheeling one field enables the row but writes
+only that field, so its untouched companion keeps inheriting. Opening, cancelling
+or applying an unchanged partial pair never freezes that companion into the
+patch. Unsupported fields are unavailable rather than added by the shared toggle;
+existing incompatible values remain visible/removable. Where no wider-range
+value is known, the editor labels inheritance as the material-mode default rather
+than claiming its numeric editing seed is the encoded baseline.
+
+Supported numeric inputs remain editable when off; focus alone creates no
+override. MM endpoint fields use six decimal places and a 0.001 mm step. Empty
+or beyond-u32 mm coverage cannot be converted into a fabricated layer range;
+its physical data remains editable/savable as mm.
+
+### Material settings modes
+
+Modes normalize the material baseline before sparse range patches are applied.
+Unset fields inherit wider matching ranges, then the mode-adjusted baseline.
+Explicit range overrides take precedence: Simple/all-fields single-stage defaults
+do not prohibit an explicitly overridden stage 2, and Tilting's baseline motion
+values can likewise be replaced. The range editor currently filters by actual
+format/version capabilities, not mode-specific UI visibility. This is not a new
+per-range mode selector or a silent removal of configured fields. Effective
+height relations and unsupported serialized fields still fail before output.
 
 A single export captures an owned array before its first await; an all-plate
 batch captures once before picking its folder. Both also capture the encoded

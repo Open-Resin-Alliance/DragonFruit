@@ -269,9 +269,9 @@ test('bare scene track adds layers 5–6 without moving either clip thumb, inher
     assert.match(rows[2].textContent ?? '', /Layers 18–20/, 'beyond-EOF range remains manageable');
     rows.forEach((row, index) => assert.equal(swatchColor(row), cssColor(tree.state().colors.get(tree.state().ranges[index].id)!)));
     assert.match(rows.at(-1)?.textContent ?? '', /Editing/);
-    await toggle('Total lift travel');
+    await toggle('Lift travel');
     assert.equal(field('Total lift travel').value, '8', 'enabling a nested motion override seeds the inherited wider value');
-    await toggle('Total lift travel');
+    await toggle('Lift travel');
     await click(button(dialog(), 'Apply'));
     assert.equal(tree.state().applies, 1, 'applying an unchanged edit creates no action');
     await manage(tree);
@@ -394,7 +394,7 @@ test('printer switches preserve incompatible values for repair; unsupported form
     assert.match(warning, /CTB \(V2\)/);
     assert.match(warning, /Layers 3–10/);
     assert.match(warning, /Total lift travel/);
-    await toggle('Total lift travel');
+    await toggle('Lift travel');
     assert.equal(button(dialog(), 'Apply').disabled, false, 'another incompatible range must not prevent this range repair');
     await click(button(dialog(), 'Apply'));
     assert.deepEqual(tree.state().ranges[1].settings, { exposureSec: 4 });
@@ -568,7 +568,7 @@ test('typing into inherited fields enables only edited overrides; stepping and w
     });
     assert.equal(overrideSwitch('Exposure').getAttribute('aria-checked'), 'true');
     assert.equal(field('Exposure').value, '7.25');
-    assert.equal(overrideSwitch('Total lift travel').getAttribute('aria-checked'), 'true');
+    assert.equal(overrideSwitch('Lift travel').getAttribute('aria-checked'), 'true');
     assert.equal(field('Total lift travel').value, '9.5');
     const speed = field('Lift speed');
     assert.ok(speed.parentElement);
@@ -580,8 +580,8 @@ test('typing into inherited fields enables only edited overrides; stepping and w
       field('Light PWM').dispatchEvent(new WheelEvent('wheel', { deltaY: 1, bubbles: true, cancelable: true }));
     });
     assert.equal(overrideSwitch('Light PWM').getAttribute('aria-checked'), 'true');
-    await toggle('Total lift travel');
-    assert.equal(overrideSwitch('Total lift travel').getAttribute('aria-checked'), 'false');
+    await toggle('Lift travel');
+    assert.equal(overrideSwitch('Lift travel').getAttribute('aria-checked'), 'false');
     await click(button(dialog(), 'Apply'));
     assert.deepEqual(tree.state().ranges.at(-1)?.settings, { exposureSec: 7.25, liftSpeedMmMin: 1, lightPwm: 254 });
     assert.equal(tree.state().applies, 1);
@@ -660,11 +660,11 @@ test('mixed-unit menus rank resolved spans; inherited values include mm ranges b
     await typeValue('Start height', '1.6');
     await typeValue('End height', '1.8');
     assert.equal(field('Total lift travel').value, '11', 'inheritance resolves original mm bounds beyond EOF');
-    await toggle('Total lift travel');
+    await toggle('Lift travel');
     await click(button(dialog(), 'Apply'));
     const added = tree.state().ranges.at(-1)!;
     assert.ok(added.unit === 'mm');
-    assert.deepEqual(added.settings, { liftHeightMm: 11 });
+    assert.deepEqual(added.settings, { liftHeightMm: 11, liftHeight2Mm: 0 });
     assert.equal(added.startMm, 1.6);
     await manage(tree);
     assert.equal(savedRows().length, 5);

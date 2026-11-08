@@ -57,6 +57,10 @@ function formatInheritedValue(translate: Translate, value: string): string {
   return translate(msg`Inherited: ${value}`);
 }
 
+function formatFieldNote(translate: Translate, field: string, value: string): string {
+  return translate(msg`${field}: ${value}`);
+}
+
 function formatSelectedFormat(translate: Translate, name: string, version: string): string {
   return translate(msg`${name} (${version})`);
 }
@@ -71,7 +75,27 @@ function formatPwmError(translate: Translate, first: string, last: string): stri
 
 const MAX_LAYER = 4294967295;
 const MAX_F32 = 3.4028234663852886e38;
-const CONTROL_GRID = 'grid shrink-0 grid-cols-[36px_112px_60px] items-center gap-2';
+const CONTROL_GRID = 'grid shrink-0 grid-cols-[36px_112px_12px_112px_60px] items-center gap-2';
+
+type SettingRowDefinition = {
+  fields: readonly [LayerSettingField] | readonly [LayerSettingField, LayerSettingField];
+  label: MessageDescriptor;
+  hint?: MessageDescriptor;
+};
+
+const MOTION_PAIRS = [
+  { fields: ['liftHeightMm', 'liftHeight2Mm'], label: msg`Lift travel`, hint: msg`Total / Stage 2` },
+  { fields: ['liftSpeedMmMin', 'liftSpeed2MmMin'], label: LAYER_SETTING_LABELS.liftSpeedMmMin, hint: msg`Stage 1 / Stage 2` },
+  { fields: ['retractHeightMm', 'retractHeight2Mm'], label: msg`Retract travel`, hint: msg`Total / Stage 2` },
+  { fields: ['retractSpeedMmMin', 'retractSpeed2MmMin'], label: LAYER_SETTING_LABELS.retractSpeedMmMin, hint: msg`Stage 1 / Stage 2` },
+] as const satisfies readonly SettingRowDefinition[];
+
+const SETTING_ROWS: readonly SettingRowDefinition[] = LAYER_SETTING_FIELDS
+  .filter((field) => !MOTION_PAIRS.some((pair) => pair.fields[1] === field))
+  .map((field): SettingRowDefinition => MOTION_PAIRS.find((pair) => pair.fields[0] === field)
+    ?? { fields: [field], label: LAYER_SETTING_LABELS[field] });
+
+
 
 function hasValidBounds(range: LayerSettingsRange): boolean {
   return range.unit === 'mm'
@@ -156,11 +180,13 @@ export function LayerSettingsRangeEditor({
   const updateDraft = (update: (current: LayerSettingsRange) => LayerSettingsRange) => {
     setDialog((current) => current && current.kind !== 'manage' ? { ...current, draft: update(current.draft) } : current);
   };
-  const setFieldEnabled = (field: LayerSettingField, enabled: boolean) => {
+  const setRowEnabled = (row: SettingRowDefinition, enabled: boolean) => {
     updateDraft((current) => {
       const settings = { ...current.settings };
-      if (enabled) settings[field] = inheritedValue(field);
-      else delete settings[field];
+      for (const field of row.fields) {
+        if (!enabled) delete settings[field];
+        else if (supportedFields.includes(field) && settings[field] === undefined) settings[field] = inheritedValue(field);
+      }
       return { ...current, settings };
     });
   };
@@ -259,6 +285,7 @@ export function LayerSettingsRangeEditor({
           </>
         )}
       >
+        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg`Unspecified values inherit wider ranges or mode-adjusted material settings. Explicit overrides take precedence over the material mode.`)}</p>
         {!canEditNumbers ? <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg`The selected format does not support per-layer settings. Existing ranges can be inspected or deleted; select a supported printer to edit values.`)}</p> : null}
         {draft ? (
           <section className="space-y-2" aria-label={_(msg`Range settings`)}>
@@ -303,40 +330,68 @@ export function LayerSettingsRangeEditor({
                         : { ...current, [edge === 'start' ? 'startLayer' : 'endLayer']: next })}
                       className="ui-input w-full pr-5"
                     />
+                    <span aria-hidden="true" />
+                    <span aria-hidden="true" />
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{isMm ? fmt.unit('mm', '') : null}</span>
                   </div>
                 </SettingRow>
               );
             })}
-            {LAYER_SETTING_FIELDS.filter((field) => supportedFields.includes(field) || draft.settings[field] !== undefined).map((field) => {
-              const enabled = draft.settings[field] !== undefined;
-              const supported = supportedFields.includes(field);
-              const label = _(LAYER_SETTING_LABELS[field]);
-              const value = draft.settings[field] ?? inheritedValue(field);
-              const unit = LAYER_SETTING_UNITS[field];
-              const formattedValue = unit ? fmt.quantity(value, 2, unit) : fmt.number(value);
+            {SETTING_ROWS.filter((row) => row.fields.some((field) => supportedFields.includes(field) || draft.settings[field] !== undefined)).map((row) => {
+              const paired = row.fields.length === 2;
+              const enabled = row.fields.some((field) => draft.settings[field] !== undefined);
+              const supported = row.fields.some((field) => supportedFields.includes(field));
+              const label = _(row.label);
+              const unit = LAYER_SETTING_UNITS[row.fields[0]];
+              const notes = row.fields.flatMap((field) => {
+                if (!supportedFields.includes(field) && draft.settings[field] === undefined) return [];
+                const fieldLabel = _(LAYER_SETTING_LABELS[field]);
+                const inherited = inheritedPatch[field];
+                const value = draft.settings[field] ?? inheritedValue(field);
+                const fieldUnit = LAYER_SETTING_UNITS[field];
+                const formatted = fieldUnit ? fmt.quantity(value, 2, fieldUnit) : fmt.number(value);
+                const text = !supportedFields.includes(field)
+                  ? formatUnsupportedLayerSetting(_, selectedFormat, bounds(draft), fieldLabel)
+                  : draft.settings[field] === undefined
+                    ? inherited === undefined ? _(msg`Material mode default`) : formatInheritedValue(_, formatted)
+                    : null;
+                return text ? [{ field, text: paired ? formatFieldNote(_, fieldLabel, text) : text }] : [];
+              });
+              const inputs = row.fields.map((field) => {
+                const fieldLabel = _(LAYER_SETTING_LABELS[field]);
+                const fieldSupported = supportedFields.includes(field);
+                if (!fieldSupported && draft.settings[field] === undefined) {
+                  return <span key={field} aria-label={fieldLabel} className="text-center text-[10px]" style={{ color: 'var(--text-muted)' }} title={formatUnsupportedLayerSetting(_, selectedFormat, bounds(draft), fieldLabel)}>{_(msg`Unavailable`)}</span>;
+                }
+                return (
+                  <NumberInput
+                    key={field}
+                    aria-label={fieldLabel}
+                    value={draft.settings[field] ?? inheritedValue(field)}
+                    min={0}
+                    max={field === 'lightPwm' ? 255 : MAX_F32}
+                    step={field === 'lightPwm' || LAYER_SETTING_UNITS[field] === 'mmPerMin' ? 1 : 0.01}
+                    disabled={!fieldSupported}
+                    onChange={(next) => updateDraft((current) => ({ ...current, settings: { ...current.settings, [field]: next } }))}
+                    className="ui-input w-full pr-5"
+                  />
+                );
+              });
               return (
                 <SettingRow
-                  key={field}
+                  key={row.fields[0]}
+                  role="group"
+                  aria-label={label}
                   label={label}
                   bordered
                   surface="raised"
-                  description={!supported
-                    ? formatUnsupportedLayerSetting(_, selectedFormat, bounds(draft), label)
-                    : !enabled ? formatInheritedValue(_, formattedValue) : undefined}
+                  description={row.hint || notes.length > 0 ? <>{row.hint ? <div>{_(row.hint)}</div> : null}{notes.map((note) => <div key={note.field}>{note.text}</div>)}</> : undefined}
                 >
                   <div className={CONTROL_GRID}>
-                    <Toggle label={formatOverrideLabel(_, label)} checked={enabled} disabled={!supported && !enabled} size="sm" onChange={(checked) => setFieldEnabled(field, checked)} />
-                    <NumberInput
-                      aria-label={label}
-                      value={value}
-                      min={0}
-                      max={field === 'lightPwm' ? 255 : MAX_F32}
-                      step={field === 'lightPwm' || unit === 'mmPerMin' ? 1 : 0.01}
-                      disabled={!supported}
-                      onChange={(next) => updateDraft((current) => ({ ...current, settings: { ...current.settings, [field]: next } }))}
-                      className="ui-input w-full pr-5"
-                    />
+                    <Toggle label={formatOverrideLabel(_, label)} checked={enabled} disabled={!supported && !enabled} size="sm" onChange={(checked) => setRowEnabled(row, checked)} />
+                    {inputs[0]}
+                    <span aria-hidden="true" className="text-center text-xs" style={{ color: 'var(--text-muted)' }}>{paired ? '/' : null}</span>
+                    {paired ? inputs[1] : <span aria-hidden="true" />}
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{unit ? fmt.unit(unit, '') : null}</span>
                   </div>
                 </SettingRow>

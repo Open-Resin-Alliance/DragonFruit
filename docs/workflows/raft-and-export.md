@@ -45,6 +45,11 @@ Shift+F10 also opens range commands at the current layer.
 
 Ranges have distinct colors shared by bands, menu swatches and Manage. The bands
 sit beside the cross-section fill; moving clip handles does not change settings.
+Lift/retract travel and their speeds use paired inputs with one toggle per row.
+Travel is **Total / Stage 2** (not first-stage / second-stage distance); speeds
+are **Stage 1 / Stage 2**. Typing one value leaves its companion inherited;
+turning the shared toggle on explicitly seeds both supported values, and turning
+it off clears both overrides.
 The narrowest original resolved layer span wins each supplied field before
 clipping to this print; equal spans prefer the later-created range, including
 mixed units. Editing does not reorder priority. A
@@ -54,7 +59,11 @@ Travel heights are totals: stage 2 is a part of that total, not extra travel.
 Speeds are mm/min and durations seconds. Available fields depend on the exact
 format/version. Incompatible saved overrides remain visible for repair and block
 slicing before save/file picking/preparation; they are never silently dropped
-when switching printers. LUMEN/NanoDLP ranges are not implemented here.
+when switching printers. Material settings modes supply the inherited baseline;
+explicit range overrides apply afterward and may re-enable stage 2 in Simple
+mode or replace Tilting defaults. Fields are not hidden solely because the
+material menu hides them in that mode. LUMEN/NanoDLP ranges are not implemented
+here.
 
 Ranges belong to the scene and travel in manual saves, autosave/recovery and
 VOXL exports, not material presets. They apply at the same printed numbers on
