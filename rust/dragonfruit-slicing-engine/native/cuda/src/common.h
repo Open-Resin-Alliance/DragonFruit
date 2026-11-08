@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <condition_variable>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -45,8 +46,10 @@ struct Allocation {
     std::size_t capacity = 0;
 };
 
-/* Cached allocations stay charged. A returned allocation is reusable only
- * after its last-use stream event completes, including on cancellation. */
+/* Cached allocations stay charged and become reusable only after their
+ * last-use stream event completes, including on cancellation. acquire() joins
+ * only the private allocator stream, so its pointer is ready on every consumer
+ * stream. Unsupported devices retain the synchronous legacy allocator. */
 class Memory {
 public:
     Memory() = default;
@@ -65,14 +68,22 @@ private:
     struct Cached {
         Allocation allocation;
         cudaEvent_t completion = nullptr;
+        bool waiting = false;
     };
     mutable std::mutex mutex_;
+    std::condition_variable retirement_changed_;
     Trace *trace_ = nullptr;
     std::vector<Cached> cached_;
+    cudaMemPool_t pool_ = nullptr;
+    cudaStream_t allocator_stream_ = nullptr;
+    cudaError_t failure_ = cudaSuccess;
+    Allocation failed_allocation_;
     std::size_t owned_ = 0;
     std::size_t budget_ = 0;
     std::size_t trace_retirement_waits_ = 0;
     void retune_locked();
+    cudaError_t allocate_locked(void **pointer, std::size_t bytes) noexcept;
+    cudaError_t release_locked(Allocation &allocation) noexcept;
 };
 
 template<class T> class Buffer {

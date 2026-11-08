@@ -101,9 +101,9 @@ void Trace::finish() noexcept {
         prefix_locked("trace.finished");
         std::fprintf(stderr,
             " reason=first_complete_layer requests=%zu reuses=%zu reused_bytes=%zu"
-            " cudaMalloc_count=%zu cudaFree_count=%zu allocated_total_bytes=%zu"
+            " allocation_count=%zu free_count=%zu allocated_total_bytes=%zu"
             " allocated_peak_bytes=%zu allocator_mutex_total_ms=%.3f allocator_mutex_max_ms=%.3f",
-            requests_, reuses_, reused_bytes_, mallocs_, frees_, allocated_bytes_, peak_bytes_,
+            requests_, reuses_, reused_bytes_, allocations_, frees_, allocated_bytes_, peak_bytes_,
             mutex_total_ms_, mutex_max_ms_);
         end_line();
     } catch (...) {}
@@ -167,7 +167,7 @@ Trace::AllocationCall Trace::allocation_begin(bool release, std::size_t bytes) n
             if (enabled() && allocation_details_ < allocation_detail_limit) {
                 ++allocation_details_;
                 call.logged = true;
-                prefix_locked(release ? "memory.cudaFree.begin" : "memory.cudaMalloc.begin");
+                prefix_locked(release ? "memory.free.begin" : "memory.allocate.begin");
                 std::fprintf(stderr, " bytes=%zu detail=%zu detail_limit=%zu", bytes,
                              allocation_details_, allocation_detail_limit);
                 end_line();
@@ -187,12 +187,12 @@ void Trace::allocation_done(bool release, std::size_t bytes, AllocationCall call
         if (!enabled()) return;
         if (status == 0) {
             if (release) ++frees_;
-            else { ++mallocs_; allocated_bytes_ += bytes; }
+            else { ++allocations_; allocated_bytes_ += bytes; }
             peak_bytes_ = std::max(peak_bytes_, owned);
         }
         if (call.logged || (elapsed >= slow_call_ms && allocation_details_ < allocation_detail_limit)) {
             if (!call.logged) ++allocation_details_;
-            prefix_locked(release ? "memory.cudaFree.done" : "memory.cudaMalloc.done");
+            prefix_locked(release ? "memory.free.done" : "memory.allocate.done");
             std::fprintf(stderr, " bytes=%zu host_call_ms=%.3f status=%d owned_bytes=%zu peak_bytes=%zu",
                          bytes, elapsed, status, owned, peak_bytes_);
             end_line();

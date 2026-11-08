@@ -28,6 +28,10 @@ struct RasterEdge {
     float base_x, base_y;
 };
 
+struct RasterCrossingLane {
+    std::uint32_t offset, count;
+};
+
 struct RasterSpan {
     float a, b;
     std::uint32_t start, end;
@@ -58,6 +62,7 @@ using RasterGeometryPtr = std::shared_ptr<const RasterGeometry>;
 
 struct RasterBandRow {
     std::uint32_t offset, n, count, defective, selected, collapsed_count;
+    std::uint32_t event_offset, starting;
     std::int32_t minimum, maximum;
     std::uint32_t repaired[2], matches[2];
     std::uint64_t overlap[4], area[2];
@@ -91,11 +96,11 @@ private:
     std::optional<Plane> cached_supports_;
     std::uint32_t cached_support_layer_ = 0;
     std::optional<Postprocessor> source_statistics_;
-    std::vector<Buffer<RasterEdge>> active_;
+    Buffer<RasterCrossingLane> crossing_lanes_;
     Buffer<std::uint8_t> temporary_;
     Buffer<std::uint32_t> keys_, keys_out_, ids_, candidates_, counts_;
     Buffer<std::uint64_t> event_keys_, event_keys_out_;
-    Buffer<RasterEdge> events_, events_out_, row_edges_, band_edges_, collapsed_;
+    Buffer<RasterEdge> events_, events_out_, lane_edges_, lane_scratch_, band_edges_, collapsed_;
     Buffer<RasterSpan> spans_, positive_, negative_, previous_;
     Buffer<RasterPair> pairs_, pairs_out_;
     Buffer<RasterOrphan> orphans_, orphans_out_;

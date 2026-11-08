@@ -40,7 +40,7 @@ private:
     Clock::time_point start_{};
     std::uint64_t job_ = 0;
     std::size_t requests_ = 0, reuses_ = 0, reused_bytes_ = 0;
-    std::size_t mallocs_ = 0, frees_ = 0, allocated_bytes_ = 0, peak_bytes_ = 0;
+    std::size_t allocations_ = 0, frees_ = 0, allocated_bytes_ = 0, peak_bytes_ = 0;
     std::size_t allocation_details_ = 0, mutex_details_ = 0;
     std::size_t activity_details_ = 0;
     double mutex_total_ms_ = 0.0, mutex_max_ms_ = 0.0;

@@ -43,22 +43,117 @@ void destroy_stream(cudaStream_t &stream) noexcept {
 }
 } // namespace
 
-Memory::~Memory() { clear(); }
+Memory::~Memory() {
+    clear();
+    destroy_stream(allocator_stream_);
+    if (pool_ != nullptr) { cleanup_status(cudaMemPoolDestroy(pool_), "destroy job memory pool"); }
+}
 
 void Memory::initialize() {
     std::lock_guard<std::mutex> lock(mutex_);
+    int driver_version = 0, runtime_version = 0, device = -1, pools_supported = 0;
+    checked(cudaDriverGetVersion(&driver_version), "query CUDA driver version");
+    checked(cudaRuntimeGetVersion(&runtime_version), "query CUDA runtime version");
+    checked(cudaGetDevice(&device), "query allocator device");
+    if (driver_version >= 11020 && runtime_version >= 11020) {
+        checked(cudaDeviceGetAttribute(&pools_supported, cudaDevAttrMemoryPoolsSupported, device),
+                "query stream-ordered allocation support");
+    }
+    if (pools_supported != 0) {
+        cudaMemPoolProps properties{};
+        properties.allocType = cudaMemAllocationTypePinned;
+        properties.handleTypes = cudaMemHandleTypeNone;
+        properties.location.type = cudaMemLocationTypeDevice;
+        properties.location.id = device;
+        checked(cudaMemPoolCreate(&pool_, &properties), "create job memory pool");
+        checked(cudaStreamCreateWithFlags(&allocator_stream_, cudaStreamNonBlocking),
+                "create allocator stream");
+        // All pool operations use this stream, and frees follow completed
+        // last-use events. Never let the pool insert a worker-stream wait.
+        int reuse_dependencies = 0;
+        checked(cudaMemPoolSetAttribute(pool_, cudaMemPoolReuseFollowEventDependencies, &reuse_dependencies),
+                "disable pool event-dependency reuse");
+        checked(cudaMemPoolSetAttribute(pool_, cudaMemPoolReuseAllowOpportunistic, &reuse_dependencies),
+                "disable pool opportunistic reuse");
+        checked(cudaMemPoolSetAttribute(pool_, cudaMemPoolReuseAllowInternalDependencies, &reuse_dependencies),
+                "disable pool internal-dependency reuse");
+        // Retain only backing that actual demand has grown. Pointer-ready
+        // joins must not release/reacquire pool backing on every allocation.
+        std::uint64_t release_threshold = std::numeric_limits<std::uint64_t>::max();
+        checked(cudaMemPoolSetAttribute(pool_, cudaMemPoolAttrReleaseThreshold, &release_threshold),
+                "set job pool release threshold");
+    }
+    if (trace_ != nullptr) {
+        trace_->event("memory.allocator.selected",
+            "backend=%s driver_version=%d runtime_version=%d memory_pools_supported=%d allocation_timing=%s",
+            pool_ != nullptr ? "stream_ordered" : "legacy", driver_version, runtime_version, pools_supported,
+            pool_ != nullptr ? "api_and_allocator_stream_join" : "api");
+    }
     retune_locked();
 }
 
 void Memory::retune_locked() {
+    checked(failure_, "CUDA allocator readiness failed");
     std::size_t free_bytes = 0;
     std::size_t total_bytes = 0;
     checked(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo");
-    const auto available = free_bytes > std::numeric_limits<std::size_t>::max() - owned_
-        ? total_bytes : std::min(total_bytes, free_bytes + owned_);
-    // Include our charged allocations when reconstructing available memory;
-    // otherwise every allocation would shrink the job's own allowance.
+    std::uint64_t unused = 0;
+    if (pool_ != nullptr) {
+        std::uint64_t reserved = 0, used = 0;
+        checked(cudaMemPoolGetAttribute(pool_, cudaMemPoolAttrReservedMemCurrent, &reserved),
+                "query job pool reserved memory");
+        checked(cudaMemPoolGetAttribute(pool_, cudaMemPoolAttrUsedMemCurrent, &used),
+                "query job pool used memory");
+        unused = reserved > used ? reserved - used : 0;
+    }
+    // Reconstruct free + charged allocations + pool-reserved-unused bytes.
+    // Adding all reserved bytes would count owned allocations twice. Clamp
+    // each addition before arithmetic so the 90-percent formula cannot wrap.
+    auto available = std::min(total_bytes, free_bytes);
+    available += std::min(owned_, total_bytes - available);
+    available += static_cast<std::size_t>(std::min<std::uint64_t>(unused, total_bytes - available));
     budget_ = (available / 10) * 9 + ((available % 10) * 9) / 10;
+}
+
+cudaError_t Memory::allocate_locked(void **pointer, std::size_t bytes) noexcept {
+    auto status = pool_ != nullptr
+        ? cudaMallocFromPoolAsync(pointer, bytes, pool_, allocator_stream_)
+        : cudaMalloc(pointer, bytes);
+    if (status != cudaSuccess) { return status; }
+    owned_ += bytes;
+    if (pool_ != nullptr) {
+        // Existing callers may immediately use the pointer on ANY job stream.
+        // Joining this nonblocking stream waits for no worker compute.
+        status = cudaStreamSynchronize(allocator_stream_);
+        if (status != cudaSuccess) {
+            failure_ = status;
+            Allocation failed{*pointer, bytes};
+            cleanup_status(release_locked(failed), "release allocation after readiness failure");
+            failed_allocation_ = failed;
+            *pointer = nullptr;
+        }
+    }
+    return status;
+}
+
+cudaError_t Memory::release_locked(Allocation &allocation) noexcept {
+    if (allocation.pointer == nullptr) { return cudaSuccess; }
+    const auto bytes = allocation.capacity;
+    const bool tracing = trace_ != nullptr && trace_->enabled();
+    auto call = tracing ? trace_->allocation_begin(true, bytes) : Trace::AllocationCall{};
+    auto status = pool_ != nullptr ? cudaFreeAsync(allocation.pointer, allocator_stream_)
+                                   : cudaFree(allocation.pointer);
+    if (status == cudaSuccess) {
+        // An accepted asynchronous free consumes the pointer even if its join
+        // reports an error. Never retry that pointer or charge it twice.
+        owned_ -= bytes;
+        allocation = {};
+        if (pool_ != nullptr) { status = cudaStreamSynchronize(allocator_stream_); }
+    }
+    if (status != cudaSuccess && failure_ == cudaSuccess) { failure_ = status; }
+    if (call.active) call.elapsed = Trace::Clock::now() - call.start;
+    if (tracing) trace_->allocation_done(true, bytes, call, static_cast<int>(status), owned_);
+    return status;
 }
 
 std::size_t Memory::budget() {
@@ -83,129 +178,166 @@ Allocation Memory::acquire(std::size_t bytes) {
     if (bytes == 0) { return {}; }
     const bool tracing = trace_ != nullptr && trace_->enabled();
     const auto wait_begin = tracing ? trace_->mutex_begin(bytes) : Trace::Clock::time_point{};
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     const auto mutex_wait = tracing ? Trace::Clock::now() - wait_begin : Trace::Clock::duration{};
-    retune_locked();
-    if (bytes > budget_) {
-        throw Error(DF_CUDA_OUT_OF_MEMORY, "required CUDA buffer exceeds the 90-percent VRAM budget");
-    }
-
-    std::size_t best = cached_.size();
-    for (std::size_t i = 0; i < cached_.size(); ++i) {
-        // Exact-size reuse keeps the scheduler's scratch/plane reservations
-        // valid: a small image must not inherit a large retired scratch block.
-        if (cached_[i].allocation.capacity != bytes) { continue; }
-        const auto state = cudaEventQuery(cached_[i].completion);
-        if (state == cudaErrorNotReady) { continue; }
-        checked(state, "query retired allocation");
-        if (best == cached_.size() || cached_[i].allocation.capacity < cached_[best].allocation.capacity) {
-            best = i;
+    bool evicted = false;
+    for (;;) {
+        retune_locked();
+        if (bytes > budget_) {
+            throw Error(DF_CUDA_OUT_OF_MEMORY, "required CUDA buffer exceeds the 90-percent VRAM budget");
         }
-    }
-    if (best != cached_.size()) {
-        auto result = cached_[best].allocation;
-        checked(cudaEventDestroy(cached_[best].completion), "destroy allocation completion event");
-        cached_.erase(cached_.begin() + static_cast<std::ptrdiff_t>(best));
-        if (tracing) trace_->allocation_request(bytes, true, owned_, mutex_wait);
-        return result;
-    }
 
-    // Evict completed cached buffers only when room is actually needed. Wait
-    // once for a pending retirement when it can satisfy admission, never spin.
-    while (owned_ > budget_ || bytes > budget_ - owned_) {
+        std::size_t best = cached_.size();
+        if (owned_ <= budget_) {
+            for (std::size_t i = 0; i < cached_.size(); ++i) {
+                // Exact-size reuse preserves scratch/plane reservations. A
+                // waiter's event is pinned until it reacquires this mutex.
+                if (cached_[i].waiting || cached_[i].allocation.capacity != bytes) { continue; }
+                const auto state = cached_[i].completion != nullptr
+                    ? cudaEventQuery(cached_[i].completion) : cudaSuccess;
+                if (state == cudaErrorNotReady) { continue; }
+                checked(state, "query retired allocation");
+                best = i;
+                break;
+            }
+        }
+        if (best != cached_.size() || (owned_ <= budget_ && bytes <= budget_ - owned_)) {
+            // Eviction is demand-driven. Trim once after a batch, not after
+            // every pointer-ready join; untouched exact-size cache stays charged.
+            if (evicted && pool_ != nullptr) {
+                checked(cudaMemPoolTrimTo(pool_, 0), "trim evicted job pool backing");
+            }
+            if (best != cached_.size()) {
+                auto result = cached_[best].allocation;
+                if (cached_[best].completion != nullptr) {
+                    checked(cudaEventDestroy(cached_[best].completion), "destroy allocation completion event");
+                }
+                cached_.erase(cached_.begin() + static_cast<std::ptrdiff_t>(best));
+                if (tracing) trace_->allocation_request(bytes, true, owned_, mutex_wait);
+                return result;
+            }
+            void *pointer = nullptr;
+            auto call = tracing ? trace_->allocation_begin(false, bytes) : Trace::AllocationCall{};
+            const auto status = allocate_locked(&pointer, bytes);
+            if (call.active) call.elapsed = Trace::Clock::now() - call.start;
+            if (tracing) trace_->allocation_done(false, bytes, call, static_cast<int>(status), owned_);
+            checked(status, pool_ != nullptr ? "allocate and ready job pool memory" : "cudaMalloc");
+            if (tracing) trace_->allocation_request(bytes, false, owned_, mutex_wait);
+            return {pointer, bytes};
+        }
+
         if (cached_.empty()) {
             throw Error(DF_CUDA_OUT_OF_MEMORY, "live CUDA working set exceeds available VRAM");
         }
-        std::size_t candidate = cached_.size();
+        std::size_t candidate = cached_.size(), pending = cached_.size();
         for (std::size_t i = 0; i < cached_.size(); ++i) {
-            const auto state = cudaEventQuery(cached_[i].completion);
+            if (cached_[i].waiting) { continue; }
+            const auto state = cached_[i].completion != nullptr
+                ? cudaEventQuery(cached_[i].completion) : cudaSuccess;
             if (state == cudaSuccess) { candidate = i; break; }
             if (state != cudaErrorNotReady) { checked(state, "query cached allocation"); }
+            if (pending == cached_.size()) { pending = i; }
         }
         if (candidate == cached_.size()) {
-            candidate = 0;
+            if (pending == cached_.size()) {
+                retirement_changed_.wait(lock);
+                continue;
+            }
+            const auto completion = cached_[pending].completion;
+            const auto capacity = cached_[pending].allocation.capacity;
+            cached_[pending].waiting = true;
             const bool log_wait = tracing && trace_retirement_waits_ < 8;
             if (log_wait) {
                 ++trace_retirement_waits_;
-                trace_->event("memory.retirement.wait.begin", "bytes=%zu", cached_[candidate].allocation.capacity);
+                trace_->event("memory.retirement.wait.begin", "bytes=%zu", capacity);
             }
-            checked(cudaEventSynchronize(cached_[candidate].completion), "wait for retired allocation");
-            if (log_wait) trace_->event("memory.retirement.wait.done", "bytes=%zu", cached_[candidate].allocation.capacity);
+            // Budget pressure may require this specific retirement. Do not
+            // hold the shared allocator lock while its worker is computing.
+            lock.unlock();
+            const auto state = cudaEventSynchronize(completion);
+            lock.lock();
+            if (state != cudaSuccess && failure_ == cudaSuccess) { failure_ = state; }
+            for (auto &cached : cached_) {
+                if (cached.completion == completion) { cached.waiting = false; break; }
+            }
+            retirement_changed_.notify_all();
+            if (log_wait) trace_->event("memory.retirement.wait.done", "bytes=%zu", capacity);
+            checked(state, "wait for retired allocation");
+            continue;
         }
-        auto retired = cached_[candidate];
-        checked(cudaEventDestroy(retired.completion), "destroy retired allocation event");
-        cached_.erase(cached_.begin() + static_cast<std::ptrdiff_t>(candidate));
-        if (retired.allocation.capacity == bytes) {
-            if (tracing) trace_->allocation_request(bytes, true, owned_, mutex_wait);
-            return retired.allocation;
+        auto &retired = cached_[candidate];
+        if (retired.completion != nullptr) {
+            checked(cudaEventDestroy(retired.completion), "destroy retired allocation event");
+            retired.completion = nullptr;
         }
-        auto free_call = tracing ? trace_->allocation_begin(true, retired.allocation.capacity) : Trace::AllocationCall{};
-        const auto free_status = cudaFree(retired.allocation.pointer);
-        if (free_call.active) free_call.elapsed = Trace::Clock::now() - free_call.start;
-        if (tracing) trace_->allocation_done(true, retired.allocation.capacity, free_call,
-            static_cast<int>(free_status), free_status == cudaSuccess ? owned_ - retired.allocation.capacity : owned_);
-        checked(free_status, "evict cached device allocation");
-        owned_ -= retired.allocation.capacity;
-        retune_locked();
+        const auto status = release_locked(retired.allocation);
+        if (retired.allocation.pointer == nullptr) {
+            cached_.erase(cached_.begin() + static_cast<std::ptrdiff_t>(candidate));
+        }
+        checked(status, "evict cached device allocation");
+        evicted = true;
     }
-
-    void *pointer = nullptr;
-    auto malloc_call = tracing ? trace_->allocation_begin(false, bytes) : Trace::AllocationCall{};
-    const auto malloc_status = cudaMalloc(&pointer, bytes);
-    if (malloc_call.active) malloc_call.elapsed = Trace::Clock::now() - malloc_call.start;
-    if (tracing) trace_->allocation_done(false, bytes, malloc_call,
-        static_cast<int>(malloc_status), malloc_status == cudaSuccess ? owned_ + bytes : owned_);
-    checked(malloc_status, "cudaMalloc");
-    owned_ += bytes;
-    if (tracing) trace_->allocation_request(bytes, false, owned_, mutex_wait);
-    return {pointer, bytes};
 }
 
 void Memory::retire(Allocation allocation, cudaStream_t last_use) noexcept {
     if (allocation.pointer == nullptr) { return; }
     cudaEvent_t completion = nullptr;
+    auto drained = cudaSuccess;
     auto status = cudaEventCreateWithFlags(&completion, cudaEventDisableTiming | cudaEventBlockingSync);
     if (status == cudaSuccess) { status = cudaEventRecord(completion, last_use); }
     if (status == cudaSuccess) {
         try {
             std::lock_guard<std::mutex> lock(mutex_);
             cached_.push_back({allocation, completion});
+            retirement_changed_.notify_all();
             return;
         } catch (...) {
-            cleanup_status(cudaEventSynchronize(completion), "wait before uncached allocation release");
+            drained = cudaEventSynchronize(completion);
+            cleanup_status(drained, "wait before uncached allocation release");
         }
     } else {
         cleanup_status(status, "retire device allocation");
-        cleanup_status(cudaStreamSynchronize(last_use), "drain allocation last-use stream");
+        drained = cudaStreamSynchronize(last_use);
+        cleanup_status(drained, "drain allocation last-use stream");
     }
     if (completion != nullptr) { cleanup_status(cudaEventDestroy(completion), "destroy failed retirement event"); }
-    const bool tracing = trace_ != nullptr && trace_->enabled();
-    auto free_call = tracing ? trace_->allocation_begin(true, allocation.capacity) : Trace::AllocationCall{};
-    const auto freed = cudaFree(allocation.pointer);
-    if (free_call.active) free_call.elapsed = Trace::Clock::now() - free_call.start;
-    cleanup_status(freed, "free uncached device allocation");
-    if (freed == cudaSuccess) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        owned_ -= allocation.capacity;
-        if (tracing) trace_->allocation_done(true, allocation.capacity, free_call, static_cast<int>(freed), owned_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (drained == cudaSuccess) {
+        cleanup_status(release_locked(allocation), "free uncached device allocation");
+    } else if (failure_ == cudaSuccess) {
+        // A failed last-use join gives no permission to free on another stream.
+        // Stop new allocation/reuse and retain ownership until job teardown.
+        failure_ = drained;
     }
-    else if (tracing) trace_->allocation_done(true, allocation.capacity, free_call, static_cast<int>(freed), 0);
+    if (allocation.pointer != nullptr) {
+        if (failed_allocation_.pointer == nullptr) {
+            failed_allocation_ = allocation;
+        } else {
+            try { cached_.push_back({allocation, nullptr}); }
+            catch (...) {
+                std::fprintf(stderr, "[CUDA cleanup] cannot retain failed allocation (%zu bytes) for teardown\n",
+                             allocation.capacity);
+            }
+        }
+    }
 }
 
 void Memory::clear() noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
+    const bool released = !cached_.empty() || failed_allocation_.pointer != nullptr;
+    std::size_t retained = 0;
     for (auto &cached : cached_) {
-        cleanup_status(cudaEventSynchronize(cached.completion), "drain cached allocation");
-        cleanup_status(cudaEventDestroy(cached.completion), "destroy cached allocation event");
-        const bool tracing = trace_ != nullptr && trace_->enabled();
-        auto free_call = tracing ? trace_->allocation_begin(true, cached.allocation.capacity) : Trace::AllocationCall{};
-        const auto status = cudaFree(cached.allocation.pointer);
-        if (free_call.active) free_call.elapsed = Trace::Clock::now() - free_call.start;
-        cleanup_status(status, "free cached allocation");
-        if (status == cudaSuccess) { owned_ -= cached.allocation.capacity; }
-        if (tracing) trace_->allocation_done(true, cached.allocation.capacity, free_call, static_cast<int>(status), owned_);
+        if (cached.completion != nullptr) {
+            cleanup_status(cudaEventSynchronize(cached.completion), "drain cached allocation");
+            cleanup_status(cudaEventDestroy(cached.completion), "destroy cached allocation event");
+            cached.completion = nullptr;
+        }
+        cleanup_status(release_locked(cached.allocation), "free cached allocation");
+        if (cached.allocation.pointer != nullptr) cached_[retained++] = cached;
     }
-    cached_.clear();
+    cached_.resize(retained);
+    cleanup_status(release_locked(failed_allocation_), "free failed allocation");
+    if (released && pool_ != nullptr) { cleanup_status(cudaMemPoolTrimTo(pool_, 0), "trim cleared job pool"); }
 }
 
 Runtime::Runtime()

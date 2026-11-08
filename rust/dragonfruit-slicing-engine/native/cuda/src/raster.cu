@@ -1,4 +1,5 @@
 #include "raster.h"
+#include "raster_crossings.h"
 #include <math_constants.h>
 #include <cub/cub.cuh>
 #include <thrust/iterator/reverse_iterator.h>
@@ -24,10 +25,7 @@ __device__ std::uint32_t clamp_row(float x, std::uint32_t height) {
     return static_cast<std::uint32_t>(x);
 }
 __device__ std::uint32_t x_key(float x) {
-    if (!isfinite(x)) return UINT_MAX;
-    if (x == 0.0f) x = 0.0f;
-    const auto bits = __float_as_uint(x);
-    return (bits & 0x80000000u) ? ~bits : bits ^ 0x80000000u;
+    return raster_crossing_detail::x_key(x);
 }
 
 template<class... T> void initialize(Runtime &r, T &...buffers) {
@@ -43,8 +41,8 @@ template<class F> void primitive(Runtime &r, Buffer<std::uint8_t> &scratch, F f)
 }
 
 template<class F> void bounded_primitive(Runtime &r, Buffer<std::uint8_t> &scratch, F f) {
-    // CUB validates the supplied capacity. Do not repeat its null-storage
-    // query for every queued row; all primitives reuse the admitted reserve.
+    // CUB validates the supplied capacity. All downstream band primitives
+    // reuse the admitted reserve without repeating null-storage queries.
     std::size_t bytes = scratch.capacity();
     checked(f(scratch.data(), bytes), "execute bounded raster primitive");
     scratch.mark_used(r.compute);
@@ -316,33 +314,6 @@ __global__ void make_events(const RasterTriangle *triangles, const std::uint32_t
     atomicAdd(counts + static_cast<std::size_t>(rows) * 2 + steps, 1u);
 }
 
-struct Alive {
-    std::uint32_t row;
-    __device__ bool operator()(const RasterEdge &e) const { return e.end_exclusive > row; }
-};
-
-__global__ void append_events(RasterEdge *row, const RasterEdge *events, std::uint32_t offset,
-                              std::uint32_t first, std::uint32_t n) {
-    const auto i = first + blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) row[offset + i] = events[i];
-}
-
-__global__ void row_keys(RasterEdge *edges, std::uint32_t *keys, std::uint32_t first,
-                         std::uint32_t n, std::uint32_t row, std::uint32_t steps, bool perturb) {
-    const auto i = first + blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    if (perturb) {
-        const float phase = div(add(static_cast<float>(row % steps), 0.5f), static_cast<float>(steps));
-        const float y = add(static_cast<float>(row / steps), phase);
-        edges[i].x = add(edges[i].base_x, mul(sub(y, edges[i].base_y), edges[i].dx_dy));
-    }
-    keys[i] = x_key(edges[i].x);
-}
-
-__global__ void advance_edges(RasterEdge *edges, std::uint32_t first, std::uint32_t n) {
-    const auto i = first + blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) edges[i].x = add(edges[i].x, edges[i].dx_dy);
-}
 
 __device__ bool make_span(float x0, float x1, std::uint32_t width, bool snap, RasterSpan &s) {
     s.a = fmaxf(fminf(x0, x1), 0.0f);
@@ -452,12 +423,13 @@ Rasterizer::Rasterizer(Runtime &runtime, const DfCudaConfig &config,
     // Worst candidate set, all active lanes, and one subrow with exact carry.
     // This scheduler admission ceiling is not an eager allocation target;
     // render() sizes private buffers from selected events and actual bands.
-    // At most 272 bytes/crossing holds both orientation candidates; 256 more
-    // reserves CUB scan/segmented-sort temporaries without row allocations.
-    // The 60-byte fixed triangle reserve includes keys/keys_out/ids/candidates
-    // (16 bytes), row_edges (24 bytes) and previous spans (16 bytes).
-    geometry->minimum_workspace_bytes = checked_bytes(events, 100)
-        + checked_bytes(triangle_count_, 60) + checked_bytes(rows + steps + 1, 8)
+    // Both orientation candidates and their primitive reserve retain the
+    // existing 528-byte/item bound. Crossing history and merge ping-pong
+    // reserve two edges per event; row metadata includes event ranges.
+    geometry->minimum_workspace_bytes = checked_bytes(events, 4 * sizeof(RasterEdge) + 2 * sizeof(std::uint64_t))
+        + checked_bytes(triangle_count_, 4 * sizeof(std::uint32_t) + sizeof(RasterSpan))
+        + checked_bytes(config_.raster_mode == DF_CUDA_PERTURBATION ? steps : 1, sizeof(RasterCrossingLane))
+        + checked_bytes(rows + steps + 1, 8)
         + checked_bytes(triangle_count_, 528) + sizeof(RasterBandRow) + 2 * sizeof(RasterState)
         + (steps * ssaa_factor_ > 1 ? checked_bytes(config_.width, 2 * sizeof(RasterCarry)) : 0)
         + checked_bytes(std::max(events, checked_bytes(triangle_count_, 2)), 128) + 16 * 1024 * 1024 + 512;
@@ -553,7 +525,7 @@ Rasterizer::Rasterizer(Runtime &runtime, const DfCudaConfig &config, RasterGeome
 
 void Rasterizer::initialize_scratch() {
     initialize(runtime_, temporary_, keys_, keys_out_, ids_, candidates_, counts_,
-        event_keys_, event_keys_out_, events_, events_out_, row_edges_, band_edges_,
+        event_keys_, event_keys_out_, events_, events_out_, lane_edges_, lane_scratch_, crossing_lanes_, band_edges_,
         collapsed_, spans_, positive_, negative_, previous_, pairs_, pairs_out_,
         orphans_, orphans_out_, float_keys_, float_keys_out_, open_, endpoints_, endpoints_out_,
         winding_, winding_prefix_, state_, band_rows_, carry_a_, carry_b_, span_flags_, span_prefix_, frontier_, evidence_);
@@ -805,19 +777,24 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
     std::vector<RasterBandRow> descriptors((y1 - y0) * divisor);
     std::uint32_t maximum_active = 0;
     std::size_t active_items = 0;
+    std::uint32_t event_offset = 0;
     for (std::uint32_t y = y0 * divisor; y < y1 * divisor; ++y) {
         const auto lane = perturb ? y % steps : 0;
+        auto &r = descriptors[y - y0 * divisor];
+        r.event_offset = event_offset;
+        r.starting = y < row_count ? control[y] : 0;
+        event_offset += r.starting;
         if (y < row_count) {
             active_count[lane] -= control[row_count + y];
             active_count[lane] += control[y];
         } else active_count[lane] = 0;
-        descriptors[y - y0 * divisor].n = active_count[lane];
+        r.n = active_count[lane];
         lane_maximum[lane] = std::max(lane_maximum[lane], active_count[lane]);
         maximum_active = std::max(maximum_active, active_count[lane]);
     }
-    if (active_.size() < lane_count) active_.resize(lane_count);
+    std::vector<RasterCrossingLane> lanes(lane_count);
     for (std::uint32_t lane = 0; lane < lane_count; ++lane) {
-        active_[lane].initialize(runtime_.memory, runtime_.compute);
+        lanes[lane] = {static_cast<std::uint32_t>(active_items), 0};
         active_items += lane_maximum[lane];
     }
     const auto budget = runtime_.workspace_budget();
@@ -831,11 +808,12 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
     const auto item_bytes = 2 * sizeof(RasterEdge) + 3 * sizeof(RasterSpan)
         + 4 * sizeof(RasterPair) + 4 * sizeof(RasterOrphan) + 14 * sizeof(float)
         + 6 * sizeof(std::uint64_t);
-    const auto fixed_bytes = keys_.bytes() + candidates_.bytes() + ids_.bytes()
+    const auto fixed_bytes = keys_.bytes() + keys_out_.bytes() + candidates_.bytes() + ids_.bytes()
         + events_.bytes() + events_out_.bytes() + event_keys_.bytes() + event_keys_out_.bytes()
         + counts_.bytes() + frontier_.bytes() + evidence_.bytes()
-        + checked_bytes(maximum_active, sizeof(std::uint32_t) + sizeof(RasterEdge) + sizeof(RasterSpan))
-        + checked_bytes(active_items, sizeof(RasterEdge))
+        + checked_bytes(maximum_active, sizeof(RasterSpan))
+        + checked_bytes(active_items, 2 * sizeof(RasterEdge))
+        + checked_bytes(lane_count, sizeof(RasterCrossingLane))
         + (divisor > 1 ? checked_bytes(config_.width, 2 * sizeof(RasterCarry)) : 0) + 512;
     // Admission only: retain the established conservative CUB upper bound,
     // now using selected event slots and actual active crossings, not the
@@ -870,21 +848,14 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
         bands.push_back({begin, rows, maximum}); begin += rows;
     }
     // Null-storage CUB queries do not access the device inputs. Query once
-    // for the actual lane/band maxima, then reuse that reserve for every row.
+    // for the actual downstream band maxima; crossing preparation uses no CUB
+    // device primitive or per-row temporary storage.
     std::size_t primitive_bytes = 0;
     const auto query = [&](auto f) {
         std::size_t bytes = 0;
         checked(f(nullptr, bytes), "query planned raster primitive scratch");
         primitive_bytes = std::max(primitive_bytes, bytes);
     };
-    query([&](void *p, std::size_t &bytes) {
-        return cub::DeviceSelect::If(p, bytes, active_[0].data(), row_edges_.data(), counts_.data(),
-            static_cast<int>(maximum_active), Alive{0}, runtime_.compute);
-    });
-    query([&](void *p, std::size_t &bytes) {
-        return cub::DeviceRadixSort::SortPairs(p, bytes, keys_.data(), keys_out_.data(), row_edges_.data(),
-            active_[0].data(), static_cast<int>(maximum_active), 0, 32, runtime_.compute);
-    });
     query([&](void *p, std::size_t &bytes) {
         return cub::DeviceScan::InclusiveScan(p, bytes, winding_.data(), winding_prefix_.data(),
             BandSum{}, static_cast<int>(item_capacity), runtime_.compute);
@@ -931,9 +902,10 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
             layer, tank, static_cast<int>(selection), candidate_count, event_count, descriptors.size(), maximum_active,
             lane_count, active_items, bands.size(), row_capacity, item_capacity, primitive_bytes, desired_bytes, budget, raster_budget);
     temporary_.resize(primitive_bytes);
-    keys_out_.resize(maximum_active);
-    row_edges_.resize(maximum_active); previous_.resize(maximum_active);
-    for (std::uint32_t lane = 0; lane < lane_count; ++lane) active_[lane].resize(lane_maximum[lane]);
+    previous_.resize(maximum_active);
+    lane_edges_.resize(active_items); lane_scratch_.resize(active_items);
+    crossing_lanes_.resize(lane_count);
+    runtime_.upload_bytes(crossing_lanes_.data(), lanes.data(), crossing_lanes_.bytes());
     band_edges_.resize(item_capacity); collapsed_.resize(item_capacity);
     spans_.resize(item_capacity); positive_.resize(item_capacity); negative_.resize(item_capacity);
     pairs_.resize(checked_bytes(item_capacity, 2)); pairs_out_.resize(checked_bytes(item_capacity, 2));
@@ -963,9 +935,8 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
     // One reusable event ends its DMA lease before that band's GPU work;
     // no host descriptor staging copy or healthy-row completion wait.
     RasterControlEvent descriptor_copy;
-    std::fill(active_count.begin(), active_count.end(), 0);
-    std::uint32_t event_offset = 0;
     for (const auto band : bands) {
+        runtime_.check_cancelled();
         const auto band_first = y0 * divisor + band.begin;
         const bool trace_band = layer == 0 && runtime_.trace.enabled()
             && (band.begin == 0 || band.begin + band.rows == descriptors.size());
@@ -977,48 +948,10 @@ Plane Rasterizer::render(std::uint32_t layer, std::uint32_t tank, RasterSelectio
         checked(cudaMemcpyAsync(band_rows_.data(), descriptors.data() + band.begin,
             checked_bytes(band.rows, sizeof(RasterBandRow)), cudaMemcpyHostToDevice, runtime_.compute), "upload raster band descriptors");
         checked(cudaEventRecord(descriptor_copy.completion, runtime_.compute), "record raster descriptor copy");
-        for (std::uint32_t row = 0; row < band.rows; ++row) {
-            runtime_.check_cancelled();
-            const auto y = band_first + row;
-            if (y >= row_count) continue;
-            const auto lane = perturb ? y % steps : 0;
-            const auto old_count = active_count[lane];
-            const auto retained = old_count - control[row_count + y];
-            if (old_count) {
-                bounded_primitive(runtime_, temporary_, [&](void *p, std::size_t &bytes) {
-                    return cub::DeviceSelect::If(p, bytes, active_[lane].data(), row_edges_.data(), counts_.data(),
-                        static_cast<int>(old_count), Alive{y}, runtime_.compute);
-                });
-            }
-            const auto starting = control[y];
-            for (std::uint32_t first = 0; first < starting; first += launch_items) {
-                const auto count = std::min(launch_items, starting - first);
-                append_events<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(row_edges_.data(), events_out_.data() + event_offset,
-                    retained, first, starting); launched(runtime_);
-            }
-            event_offset += starting;
-            const auto n = retained + starting;
-            active_count[lane] = n;
-            for (std::uint32_t first = 0; first < n; first += launch_items) {
-                const auto count = std::min(launch_items, n - first);
-                row_keys<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(row_edges_.data(), keys_.data(), first, n, y, steps, perturb);
-                launched(runtime_);
-            }
-            if (n) {
-                bounded_primitive(runtime_, temporary_, [&](void *p, std::size_t &bytes) {
-                    return cub::DeviceRadixSort::SortPairs(p, bytes, keys_.data(), keys_out_.data(), row_edges_.data(),
-                        active_[lane].data(), static_cast<int>(n), 0, 32, runtime_.compute);
-                });
-                checked(cudaMemcpyAsync(band_edges_.data() + descriptors[band.begin + row].offset, active_[lane].data(),
-                    checked_bytes(n, sizeof(RasterEdge)), cudaMemcpyDeviceToDevice, runtime_.compute), "retain sorted band crossings");
-                if (!perturb) {
-                    for (std::uint32_t first = 0; first < n; first += launch_items) {
-                        const auto count = std::min(launch_items, n - first);
-                        advance_edges<<<(count + 255) / 256, 256, 0, runtime_.compute>>>(active_[lane].data(), first, n); launched(runtime_);
-                    }
-                }
-            }
-        }
+        band_crossings<<<lane_count, crossing_threads, 0, runtime_.compute>>>(band_rows_.data(), band.rows,
+            band_first, row_count, lane_count, steps, perturb, crossing_lanes_.data(),
+            lane_edges_.data(), lane_scratch_.data(), events_out_.data(), band_edges_.data());
+        launched(runtime_);
         if (trace_band)
             runtime_.trace.event("raster.band.crossings.queued", "layer=%u tank=%u first_subrow=%u rows=%u",
                 layer, tank, band_first, band.rows);

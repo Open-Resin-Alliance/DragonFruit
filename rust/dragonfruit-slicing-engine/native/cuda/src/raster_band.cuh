@@ -1,4 +1,90 @@
 // Included inside raster.cu's anonymous namespace, after make_span.
+constexpr std::uint32_t crossing_threads = 256;
+
+struct CrossingKey {
+    __host__ __device__ std::uint32_t operator()(const RasterEdge &edge) const {
+        return raster_crossing_detail::x_key(edge.x);
+    }
+};
+
+// One CTA owns each phase lane for this admitted band. Its two disjoint lane
+// slices retain exact history across launches; neither slice scales with rows.
+// Tiles/runs are strided, so crossing_threads never caps crossing cardinality.
+__global__ void band_crossings(const RasterBandRow *rows, std::uint32_t row_count,
+    std::uint32_t first_row, std::uint32_t total_rows, std::uint32_t lanes,
+    std::uint32_t steps, bool perturb, RasterCrossingLane *lane_state,
+    RasterEdge *active_edges, RasterEdge *scratch_edges, const RasterEdge *events,
+    RasterEdge *band_edges) {
+    using Scan = cub::BlockScan<std::uint32_t, crossing_threads>;
+    __shared__ typename Scan::TempStorage scan;
+    const auto lane = blockIdx.x;
+    auto &state = lane_state[lane];
+    auto *active = active_edges + state.offset;
+    auto *scratch = scratch_edges + state.offset;
+    auto previous_count = state.count;
+    for (auto row = raster_crossing_detail::first_lane_row(first_row, lane, lanes);
+         row < row_count; row += lanes) {
+        const auto y = first_row + row;
+        if (y >= total_rows) continue; // padded terminal physical row
+        const auto r = rows[row];
+        std::uint32_t retained = 0;
+        // Expire before appending, preserving previous sorted-row order.
+        // The shared scan is reused only after every thread has consumed it.
+        for (std::uint32_t first = 0; first < previous_count; first += crossing_threads) {
+            const auto i = first + threadIdx.x;
+            const auto edge = i < previous_count ? active[i] : RasterEdge{};
+            const std::uint32_t keep = i < previous_count
+                && raster_crossing_detail::alive(edge.end_exclusive, y);
+            std::uint32_t rank, kept;
+            Scan(scan).ExclusiveSum(keep, rank, kept);
+            if (keep) scratch[retained + rank] = edge;
+            retained += kept;
+            __syncthreads();
+        }
+        for (auto i = threadIdx.x; i < r.starting; i += crossing_threads)
+            scratch[retained + i] = events[r.event_offset + i];
+        __syncthreads();
+        const auto n = retained + r.starting; // exactly the planned r.n
+        if (perturb) {
+            // Same closed form and unfused operations as the old row_keys.
+            const float phase = div(add(static_cast<float>(y % steps), 0.5f), static_cast<float>(steps));
+            const float sample = add(static_cast<float>(y / steps), phase);
+            for (auto i = threadIdx.x; i < n; i += crossing_threads) {
+                auto &edge = scratch[i];
+                edge.x = add(edge.base_x, mul(sub(sample, edge.base_y), edge.dx_dy));
+            }
+        }
+        __syncthreads();
+        auto *source = scratch;
+        auto *destination = active;
+        // Stable bottom-up parallel merging: every thread scatters to unique
+        // ranks in the other slice, followed by a CTA-wide publication barrier.
+        // Equal keys retain history first, then this row's event insertion order.
+        for (std::uint32_t width = 1; width < n; width *= 2) {
+            const auto run = width * 2;
+            for (auto i = threadIdx.x; i < n; i += crossing_threads) {
+                const auto begin = i / run * run;
+                const auto middle = min(begin + width, n), end = min(begin + run, n);
+                const auto at = raster_crossing_detail::merge_destination(source, i, begin, middle, end, CrossingKey{});
+                destination[at] = source[i];
+            }
+            __syncthreads();
+            auto *swap = source; source = destination; destination = swap;
+        }
+        for (auto i = threadIdx.x; i < n; i += crossing_threads) {
+            auto edge = source[i];
+            band_edges[r.offset + i] = edge;
+            // Advance only AFTER retaining the current sorted row. No FMA or
+            // closed-form replacement is valid for non-perturbation history.
+            if (!perturb) edge.x = add(edge.x, edge.dx_dy);
+            active[i] = edge;
+        }
+        __syncthreads();
+        previous_count = n;
+    }
+    if (!threadIdx.x) state.count = previous_count;
+}
+
 struct BandPointers {
     RasterBandRow *rows;
     RasterEdge *edges, *collapsed;

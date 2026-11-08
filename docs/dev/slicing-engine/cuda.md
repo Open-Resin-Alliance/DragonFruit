@@ -68,6 +68,29 @@ Input geometry and final RLE destinations use `cudaHostRegister` plus asynchrono
 
 The job-wide CUDA allocator budgets up to 90% of currently available device memory, including the job's already-owned allocations. Cached device allocations remain charged and are recycled only after their last-use event. Worker execution contexts share that allocator and the cancellation state; they do not each acquire a separate device budget. Pinned host transfer ranges are bounded separately. Larger GPUs admit more useful in-flight work and wider scratch bands; the scheduler still reserves indispensable neighbor data and ordered RLE output resources.
 
+`Memory::initialize` selects the allocation mechanism once. A supporting CUDA
+driver/runtime and `cudaDevAttrMemoryPoolsSupported` enable a job-private pool
+and nonblocking allocator stream. Other devices use the real legacy allocator;
+unsupported pool capability does not remove Pascal compatibility or move CUDA
+work to the CPU. An error on the selected pool path is reported, not retried
+through the legacy API.
+The `memory.allocator.selected` event reports `backend=stream_ordered` or
+`backend=legacy`, driver/runtime versions, and whether allocation timing includes
+the allocator-stream readiness join.
+
+Pool allocations join only the allocator stream before returning a pointer, so
+the existing upload, compute, pack and readback consumers need no new allocation
+readiness protocol. Pool reuse cannot insert dependencies on worker streams.
+Exact-size cached allocations still require completed last-use events; pressure
+waits pin the relevant event and release the shared allocator mutex while
+waiting. This removes that worker's retirement wait from unrelated allocators.
+
+Budget reconstruction adds `free + owned + max(pool_reserved - pool_used, 0)`,
+clamped to total device memory before taking 90%. Only unused pool reservation is
+restored; adding the entire reservation would double-count live allocations.
+Pool backing grows from demand and survives ordinary pointer-ready joins. It is
+trimmed after eviction batches and final cache cleanup, not filled to the quota.
+
 Large 4K–16K layers are transferred in bounded chunks. No full-frame worst-case RLE buffer is reserved merely because the image is high resolution.
 
 Dependency-plane admission uses a conservative scene-covered physical-row
@@ -102,6 +125,18 @@ back to the host. Ordered edge advancement and the narrow defect-orientation
 frontier retain their actual numerical dependencies, including partial AA rows
 at band seams. Component bands preserve exact 8-connectivity and carry each
 bottom-frontier component once.
+
+Crossing preparation is one GPU launch per admitted band, with one persistent CTA
+per phase lane. Stable compaction expires edges before appending that subrow's
+events; parallel stable merging preserves previous-row order ahead of new-event
+ties. Strided work supports crossing counts larger than the CTA width. Lane
+history and scratch are sized from actual lane maxima and persist across bands.
+Perturbation retains its unfused closed-form X evaluation; other routes retain
+the current sorted row before their exact rounded X increment. No host per-row
+selection, radix-sort, copy or advancement submission remains. Downstream band
+repair, orientation evidence, pixel carry and statistics keep their existing
+semantics. Kernels remain bounded by admitted band rows/items, not a whole-job
+persistent loop; cancellation is checked before each band is submitted.
 
 A native readiness coordinator queues raw, spatial/model and final layer tasks
 onto worker-private non-default CUDA streams. GPU slots derive from shared VRAM
@@ -173,6 +208,11 @@ work for ordered layer zero and the first completion of each stage. Raster plan
 records include actual candidates, events, rows, active crossings, bands, CUB
 bytes and desired storage versus quota. Allocation diagnostics identify large
 allocation/reuse activity and host waits before the first output.
+
+Allocation operations use backend-neutral `memory.allocate.begin/done` and
+`memory.free.begin/done` events; the summary fields are `allocation_count` and
+`free_count`. They describe the selected allocator operation and pointer-readiness
+work, not necessarily calls to the legacy synchronous CUDA allocation API.
 
 For layer zero, the first and last band also report crossing submission and
 band-processing submission boundaries. `raster.bounds.wait.begin/ready` and the
