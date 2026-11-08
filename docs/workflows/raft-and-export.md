@@ -46,7 +46,9 @@ Shift+F10 also opens range commands at the current layer.
 Ranges have distinct colors shared by bands, menu swatches and Manage. The bands
 overlay the slider track above the cross-section fill and below its handles.
 Tiny transparent cuts separate each segment from the rest of the rail, revealing
-the actual background behind it. Small ranges remain visible; these visual gaps
+the actual background behind it. Both the colored segments and the exposed rail
+ends are rounded; the track and handles have no glow. Small ranges remain visible;
+these visual gaps
 do not change their layer bounds. Moving clip handles does not change settings
 or hide ranges outside the clip window.
 Editable settings follow the selected printer's material-mode definitions,

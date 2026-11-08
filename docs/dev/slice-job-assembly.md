@@ -231,10 +231,13 @@ for N=1 and no bands for N=0. Segment keys include range id and both clipped
 segment endpoints, since one range can win several separated intervals. Bands
 share the track centerline and width, render over the clip fill but under the
 thumbs, and remain pointer-transparent. Each painted segment has 1px transparent
-end separators: the track/fill underlay is alpha-masked, so the actual backdrop
-shows through instead of a theme-colored paint patch. The colored marker is
-inset by 1px at each end but retains a 2px minimum for tiny spans. Handles are
-outside the mask; an empty range list leaves the underlay unmasked. These are
+end separators: the track/fill underlay is clipped into rounded remaining rail
+spans, so both sides of a cut have rounded caps and the actual backdrop shows
+through instead of a theme-colored paint patch. The SVG clip geometry uses the
+rail viewport and CSS percentage/pixel math, without layout measurements. The
+colored marker is inset by 1px at each end but retains a 2px minimum for tiny
+spans. Track/handle glows are absent. Handles are outside the clip; an empty
+range list installs no clip geometry. These are
 visual cuts only: original layer coverage, labels and context-menu hit testing
 stay unchanged and do not depend on the active cross-section clip window.
 

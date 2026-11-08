@@ -65,6 +65,9 @@ type LayerSliderProps = {
   onRangeContextMenu?: (value: number, position: { x: number; y: number }) => void;
 };
 
+// SVG geometry properties are supported by browsers but absent from CSSProperties.
+type RailClipRectStyle = React.CSSProperties & Pick<React.SVGProps<SVGRectElement>, 'x' | 'y' | 'rx' | 'ry'>;
+
 export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, currentHeightMm, maxHeightMm, className, showValue = false, docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm, compactMinimalRail = false, allowTrackClickJump = false, rangeBands, onRangeContextMenu }: LayerSliderProps) {
   const { _ } = useLingui();
   const fmt = useLocaleFormat();
@@ -736,19 +739,33 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const hoveredBandLabel = rangeBands?.find((band) => band.id === hoveredBandId)?.label;
   const rangeTrackHint = onRangeContextMenu ? _(RANGE_TRACK_HINT) : null;
   const railClassName = `relative mx-auto ${embedded ? (expandToContainer ? 'flex-1 h-full min-h-[300px]' : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`;
-  const trackCutoutMask = React.useMemo(() => {
-    if (!rangeBands?.length) return undefined;
-    const stops = ['#000 0%'];
+  const railClipId = `layer-slider-rail-${React.useId()}`;
+  const visibleRailSpans = React.useMemo(() => {
+    if (!rangeBands?.length) return null;
+    const holes: { topPercent: number; starts: string[]; ends: string[] }[] = [];
     for (const band of [...rangeBands].sort((a, b) => a.bottomPercent - b.bottomPercent)) {
       const center = (band.bottomPercent + band.topPercent) / 2;
-      // A 2px marker still needs a 1px transparent cut at each end.
       const halfHeight = `max(2px, ${(band.topPercent - band.bottomPercent) / 2}%)`;
       const start = `calc(${center}% - ${halfHeight})`;
       const end = `calc(${center}% + ${halfHeight})`;
-      stops.push(`#000 ${start}`, `transparent ${start}`, `transparent ${end}`, `#000 ${end}`);
+      const previous = holes.at(-1);
+      if (previous && band.bottomPercent <= previous.topPercent) {
+        previous.topPercent = Math.max(previous.topPercent, band.topPercent);
+        previous.starts.push(start);
+        previous.ends.push(end);
+      } else {
+        holes.push({ topPercent: band.topPercent, starts: [start], ends: [end] });
+      }
     }
-    stops.push('#000 100%');
-    return `linear-gradient(to top, ${stops.join(', ')})`;
+    const spans: { bottom: string; top: string }[] = [];
+    let bottom = '0%';
+    for (const hole of holes) {
+      const top = hole.starts.length === 1 ? hole.starts[0] : `min(${hole.starts.join(', ')})`;
+      spans.push({ bottom, top });
+      bottom = hole.ends.length === 1 ? hole.ends[0] : `max(${hole.ends.join(', ')})`;
+    }
+    spans.push({ bottom, top: '100%' });
+    return spans;
   }, [rangeBands]);
 
   return (
@@ -860,10 +877,29 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               : 'absolute left-0 right-0 top-0 bottom-0'}
           >
 
-            {/* Mask only the track/fill so cuts reveal the actual backdrop. */}
+            {/* Clip remaining rail spans to rounded caps; handles remain outside. */}
+            {visibleRailSpans && (
+              <svg className="absolute inset-0 h-full w-full pointer-events-none" aria-hidden="true" focusable="false">
+                <defs>
+                  <clipPath id={railClipId} clipPathUnits="userSpaceOnUse">
+                    {visibleRailSpans.map((span, index) => {
+                      const style: RailClipRectStyle = {
+                        x: 'calc(50% - var(--spacing) * 0.75)',
+                        y: `calc(100% - ${span.top})`,
+                        width: 'calc(var(--spacing) * 1.5)',
+                        height: `max(0px, calc(${span.top} - ${span.bottom}))`,
+                        rx: 'calc(var(--spacing) * 0.75)',
+                        ry: 'calc(var(--spacing) * 0.75)',
+                      };
+                      return <rect key={index} style={style} />;
+                    })}
+                  </clipPath>
+                </defs>
+              </svg>
+            )}
             <div
               className="absolute inset-0 pointer-events-none"
-              style={{ maskImage: trackCutoutMask, WebkitMaskImage: trackCutoutMask }}
+              style={{ clipPath: visibleRailSpans ? `url(#${railClipId})` : undefined }}
             >
               {/* Track */}
               <div
@@ -882,14 +918,11 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                   height: `${percent - (lowerPercent ?? 0)}%`,
                   // Glides with the thumbs, or it reaches a jump's end while they are still on the way.
                   transition: easesPosition
-                    ? 'bottom 170ms cubic-bezier(0.22, 1, 0.36, 1), height 170ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms, box-shadow 200ms'
-                    : 'background 200ms, box-shadow 200ms',
+                    ? 'bottom 170ms cubic-bezier(0.22, 1, 0.36, 1), height 170ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms'
+                    : 'background 200ms',
                   background: crossSectionEnabled
                     ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))'
                     : 'linear-gradient(180deg, color-mix(in srgb, var(--text-muted), white 10%), var(--text-muted))',
-                  boxShadow: crossSectionEnabled
-                    ? '0 0 10px color-mix(in srgb, var(--accent), transparent 65%)'
-                    : 'none',
                   opacity: crossSectionEnabled ? 1 : 0.45,
                 }}
               />
@@ -941,13 +974,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                     </div>
                   )}
                   <div
-                    className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
+                    className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background] duration-150`}
                     style={{
                       borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
                       background: `linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 20%), ${thumbColor}, color-mix(in srgb, ${thumbColor}, white 20%))`,
-                      boxShadow: isDraggingThumb
-                        ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
-                        : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
                       opacity: 0.75,
                     }}
                   />
@@ -1040,13 +1070,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                   </div>
                 )}
             <div
-              className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
+              className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background] duration-150`}
               style={{
                 borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
                 background: `linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 20%), ${thumbColor}, color-mix(in srgb, ${thumbColor}, white 20%))`,
-                boxShadow: isDraggingThumb
-                  ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
-                  : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
               }}
             />
 
@@ -1111,7 +1138,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
             {/* Shift indicator - wifi-style precision arcs centered on thumb */}
             {isShiftHeld && (
               <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-                <svg width="52" height="52" viewBox="0 0 52 52" className="drop-shadow-lg">
+                <svg width="52" height="52" viewBox="0 0 52 52">
                   {/* Outer arc - radius 24px with 7px gap (10 + 7 + 7 spacing) */}
                   <path
                     d="M 9.5 14.5 A 24 24 0 0 0 2 26"
