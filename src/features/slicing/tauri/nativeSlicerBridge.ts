@@ -1,5 +1,6 @@
 import { isTauriRuntime } from '@/utils/tauriRuntime';
 import { clampSliceJobNumber } from '../sliceJobLimits';
+import { prepareJobPayload, type JobPayloadMetrics } from './jobPayloadCache';
 
 type TauriCoreModule = {
   invoke: <T>(cmd: string, args?: Record<string, unknown> | ArrayBuffer | Uint8Array, options?: { headers: HeadersInit }) => Promise<T>;
@@ -54,6 +55,8 @@ export type NativeSolidSliceJobEnvelope = {
   totalLayers: number;
   exportThumbnailPngBase64?: string | null;
   trianglesXYZ: Float32Array;
+  /** Logical streamed/restored mesh size, even when trianglesXYZ is empty. */
+  meshByteLength?: number;
   meshEncoding?: 'raw_f32' | 'quantized_u16';
   meshQuantization?: {
     minX: number;
@@ -269,16 +272,16 @@ export type NativePickedOpenFile = {
   name: string;
 };
 
-export type NativeSlicerBridgeMetrics = {
+export type NativeSlicerBridgeMetrics = JobPayloadMetrics & {
   payloadBuildMs: number;
   invokeRoundTripMs: number;
   bridgeTotalMs: number;
   payloadChars: number;
   triangleFloatCount: number;
-  /** Raw binary mesh size in bytes (Float32Array.byteLength). */
+  /** Logical raw binary mesh size, including streamed/restored geometry. */
   meshBytesLen: number;
-  /** Time to stage mesh binary via IPC (ms). */
-  stageMeshMs: number;
+  /** Supplied by the stage relay, not inferred from worker wall/CPU time. */
+  stageMeshMs?: number;
 };
 
 export type NativeSlicerPerfMetrics = {
@@ -348,7 +351,10 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
     );
   }
 
-  const triangleFloatCount = job.trianglesXYZ.length;
+  const meshBytesLen = job.meshByteLength ?? job.trianglesXYZ.byteLength;
+  const triangleFloatCount = meshBytesLen / Float32Array.BYTES_PER_ELEMENT;
+  let preparedPayload: Awaited<ReturnType<typeof prepareJobPayload>> | undefined;
+  let nativeConsumedPayload = false;
 
   const cleanup = () => {
     if (unlistenProgress) {
@@ -360,10 +366,8 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
   try {
     // --- Step 1: Compute Payload Stats ---
     const payloadBuildStart = performance.now();
-    const metadataJson = JSON.stringify(toNativeMetadataPayload(job));
-
-    const meshBytesLen = job.trianglesXYZ.byteLength;
-    const stageMeshMs = 0; // Handled concurrently by Orchestrator now!
+    preparedPayload = await prepareJobPayload(core.invoke, toNativeMetadataPayload(job), abortSignal);
+    const metadataJson = preparedPayload.jobJson;
 
     // Release the JS-side empty array 
     job.trianglesXYZ = new Float32Array(0);
@@ -389,7 +393,7 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
       byteLen: number;
       perf?: NativeSlicerPerfMetrics | null;
       runtime?: NativeSlicerRuntimeMetrics | null;
-    }>('slice_solid_native_to_temp_path', { jobJson: metadataJson });
+    }>('slice_solid_native_to_temp_path', { jobJson: metadataJson, payloadLeaseId: preparedPayload.leaseId });
 
     const buildResult = (result: {
       tempPath: string;
@@ -408,12 +412,13 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
         payloadChars: metadataJson.length,
         triangleFloatCount,
         meshBytesLen,
-        stageMeshMs,
+        ...preparedPayload!.metrics,
       },
     });
 
     if (!abortSignal) {
       const result = await resultPromise;
+      nativeConsumedPayload = true;
       cleanup();
       return buildResult(result);
     }
@@ -432,6 +437,7 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
       };
 
       abortSignal.addEventListener('abort', handleAbort, { once: true });
+      if (abortSignal.aborted) handleAbort();
 
       resultPromise
         .then((res) => {
@@ -452,11 +458,20 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
         });
     });
 
+    nativeConsumedPayload = true;
     cleanup();
     return buildResult(result);
   } catch (error) {
     cleanup();
     throw error;
+  } finally {
+    // Native expansion also releases pins; this idempotent cleanup covers an
+    // aborted/failed invocation that never reached the command handler.
+    if (preparedPayload) {
+      await preparedPayload.release(nativeConsumedPayload).catch((error) => {
+        console.warn('[NativeSlicerBridge] Failed releasing job payload lease.', error);
+      });
+    }
   }
 }
 

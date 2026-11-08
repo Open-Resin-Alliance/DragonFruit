@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { invoke } from '@tauri-apps/api/core';
 import { expandGeometryToTriangleSoup } from '@/utils/tauriMeshBridge';
 import { logToNativeFile } from '@/utils/nativeLog';
+import { invokeWithChunkedMesh } from '@/utils/meshChunkUpload';
 
 /**
  * Model ambient occlusion, baked per vertex by the native side and attached to
@@ -168,10 +169,8 @@ export async function bakeOcclusionForGeometry(
   console.log(soupTiming);
   void logToNativeFile('info', soupTiming);
 
-  const payload = await invoke<ArrayBuffer | Uint8Array | number[]>(
-    'bake_vertex_occlusion',
-    body,
-    { headers: { 'Content-Type': 'application/octet-stream' } },
+  const payload = await invokeWithChunkedMesh<ArrayBuffer | Uint8Array | number[]>(
+    invoke, 'bake_vertex_occlusion', body,
   );
 
   // One f32 per soup corner. An ArrayBuffer off the IPC channel is ours and

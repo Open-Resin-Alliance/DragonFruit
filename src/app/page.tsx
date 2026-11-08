@@ -260,6 +260,7 @@ import { useSceneCollectionManager, getSceneSnapshotRegistryBytes } from '@/feat
 import { useSupportHistoryHandlers } from '@/supports/history/useSupportHistoryHandlers';
 import { useNativeSpaceMouseLifecycle } from '@/components/scene/camera/useNativeSpaceMouseLifecycle';
 import { useSlicingManager } from '@/features/slicing/useSlicingManager';
+import { useSceneSliceMeshWarmup } from '@/features/slicing/useSceneSliceMeshWarmup';
 import { setSceneClipGate } from '@/features/slicing/sceneClipStore';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
@@ -396,7 +397,6 @@ import { computeSupportAndRaftResinMl } from '@/features/printing/supportResinVo
 import { getSupportsForModel, modelIdOfParentShaft } from '@/supports/PlacementLogic/SupportModelLinker';
 import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayerZipExport';
 import { resolveCompositeMaterialLabel, resolveMaterialFamilyNameLabel } from '@/utils/materialLabel';
-
 import type { ModelTransform, TransformMode } from '@/hooks/useModelTransform';
 import type { Segment, SupportMode } from '@/supports/types';
 import { VoxlSizeLimitError } from '@/features/scene/voxl';
@@ -1401,6 +1401,7 @@ export default function Home() {
   const queuedSceneSavePathOverrideRef = React.useRef<string | null | undefined>(undefined);
   const preferredOverwriteScenePathRef = React.useRef<string | null>(null);
   const [isSlicingBusy, setIsSlicingBusy] = React.useState(false);
+  const [sceneContentRevision, setSceneContentRevision] = React.useState(0);
 
   const sceneAutosaveEnabled = sceneAutosaveSettings.enabled
     && !isSlicingBusy
@@ -1420,6 +1421,7 @@ export default function Home() {
     printer: scene.voxlPrinterBundle ?? undefined,
     plateOrdering: scene.plateOrdering,
     enabled: sceneAutosaveEnabled,
+    onSceneContentChanged: setSceneContentRevision,
     debounceMs: sceneAutosaveSettings.debounceMs,
     cooldownMs: sceneAutosaveSettings.cooldownMs,
     capMs: sceneAutosaveSettings.capMs,
@@ -2795,7 +2797,6 @@ export default function Home() {
     if (!editorContextMenuSupportTarget?.segmentId || !editorContextMenuSupportTarget.point) return false;
     return supportContextMenuSegmentOwner !== null;
   }, [editorContextMenuSupportTarget, scene.mode, supportContextMenuSegmentOwner]);
-
   const supportContextMenuItems = React.useMemo(() => {
     return [
       {
@@ -7195,7 +7196,6 @@ export default function Home() {
   const printingCurrentHeightMm = React.useMemo(() => {
     if (scene.mode !== 'printing') return null;
     if (printingPreviewTotalLayers <= 0) return null;
-
     const clampedLayer = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer));
     const height = clampedLayer * crossSectionLayerHeightMm;
     return Math.min(Math.max(height, 0), Math.max(slicing.heightMm, 0));
@@ -8395,7 +8395,6 @@ export default function Home() {
   }, [isSupportSpotlightHoldActive, scene.mode]);
 
   const isTransitioningOutOfPrinting = scene.mode !== 'printing' && previousSceneModeRef.current === 'printing';
-
   // The scene reads the clip from its own store, so a slider drag does not
   // re-render this page. The switch below is the only thing that gates it.
   React.useEffect(() => {
@@ -10646,6 +10645,35 @@ export default function Home() {
   React.useEffect(() => {
     finalizeMirrorSessionRef.current = mirror.flushPendingBake;
   }, [mirror.flushPendingBake]);
+
+  // One dirty-only producer. Imports/transient tools settle before its independent
+  // 15-second quiet deadline; foreground Slice pauses scheduling, not its subscriber.
+  useSceneSliceMeshWarmup({
+    models: scene.models,
+    plateFrames: scene.plateFrames,
+    activePlateId: scene.activePlateId,
+    excludedModelIds: excludedSliceModelIds,
+    exportMode: scene.mode === 'export',
+    revision: sceneContentRevision,
+    paused: isSlicingBusy,
+    ready: !scene.isImporting
+      && !scene.importProgress.active
+      && !showPluginImportWarningModal
+      && scene.pluginImportPhase !== 'processing'
+      && !nativePickerPreparationState.active
+      && !pendingStartupSceneHandoff
+      // Slice may still be saving before it joins the matching producer.
+      && (!isAutosaving || isSlicingBusy)
+      && scene.mode !== 'printing'
+      && !showModifierApplyBlockingOverlay
+      && !(transformMgr.isTransforming && transformMgr.pendingTransformRef.current)
+      && !isManualRepairing
+      && !autoSupportBusy
+      && !orientationBusy
+      && !isAutoArranging
+      && !isDuplicating
+      && mirror.mirrorSessionRef.current === null,
+  });
 
   return (
     <EditorLayout>

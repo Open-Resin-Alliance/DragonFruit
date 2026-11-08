@@ -7,8 +7,7 @@
  *     positions in the shared staging buffer. We then fetch those bytes back
  *     as a new Float32Array.
  *   - `repairFromGeometry(geometry)` — Uploads the existing
- *     `THREE.BufferGeometry` position buffer via the existing staging IPC
- *     (`stage_mesh_binary_set`) and runs `mesh_repair_staged`.
+ *     `THREE.BufferGeometry` through cached chunk uploads and runs `mesh_repair_staged`.
  *   - `classifyFromGeometry(geometry)` — Uploads geometry and runs
  *     `mesh_classify_staged`, a lightweight model/support section classifier
  *     that does not execute the heavy repair pipeline.
@@ -18,28 +17,12 @@
  */
 import * as THREE from 'three';
 import {
-  expandGeometryToTriangleSoup,
+  stageGeometryToStagedMesh,
+  runExclusiveNativeMesh,
   loadTauriCore,
   readPositionsFromCommand,
 } from './tauriMeshBridge';
 
-/**
- * Runs one staged mesh pass at a time.
- *
- * `stage_mesh_binary_set` — and every command that reads the staged buffer back —
- * is process-wide state, so a stage/consume window is only meaningful while nothing
- * else stages. The VOXL import builds four models concurrently, and a model whose
- * stored classification does not address its payload runs the classify pass from
- * inside its build: two of those interleaved, each read back the *other's* soup, and
- * the viewport showed one model's geometry in another model's place. Serialising the
- * window is the whole fix; each pass is still native work off the main thread.
- */
-let stagedPass: Promise<unknown> = Promise.resolve();
-function withStagedMesh<T>(pass: () => Promise<T>): Promise<T> {
-  const run = stagedPass.then(pass, pass);
-  stagedPass = run.catch(() => undefined);
-  return run;
-}
 
 export interface MeshAnalysisJson {
   triangle_count: number;
@@ -140,6 +123,8 @@ export interface MeshRepairResult {
   report: MeshHealthReport;
   /** Repaired positions buffer — ready to drop into a THREE.BufferGeometry */
   positions: Float32Array;
+  /** Ephemeral native token for exactly these final positions; never persist it. */
+  meshToken?: number;
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -287,6 +272,19 @@ function normalizeMeshHealthReport(input: unknown): MeshHealthReport {
   };
 }
 
+function decodeMeshRepairReport(reportJson: string): Pick<MeshRepairResult, 'report' | 'meshToken'> {
+  const raw = asRecord(JSON.parse(reportJson));
+  const token = raw.slice_mesh_token;
+  // The normalizer deliberately whitelists durable report fields, stripping the
+  // process-local token before any caller stores this report in a VOXL scene.
+  return {
+    report: normalizeMeshHealthReport(raw),
+    meshToken: typeof token === 'number' && Number.isInteger(token) && token > 0 && token <= 0xffffffff
+      ? token
+      : undefined,
+  };
+}
+
 /**
  * Runs the native mesh-repair engine on a file the Rust side can read
  * directly (STL/OBJ/3MF). Returns null if the current runtime isn't Tauri.
@@ -316,15 +314,15 @@ export async function repairFromPath(
   }
 
   try {
-    return await withStagedMesh(async () => {
+    return await runExclusiveNativeMesh(async () => {
       const reportJson = await core.invoke<string>('mesh_repair_from_path', {
         filePath,
         optionsJson,
         progressToken: token,
       });
-      const report = normalizeMeshHealthReport(JSON.parse(reportJson));
+      const result = decodeMeshRepairReport(reportJson);
       const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-      return { report, positions };
+      return { ...result, positions };
     });
   } finally {
     unlisten?.();
@@ -366,15 +364,15 @@ export async function repairPartsFromPath(
   }
 
   try {
-    return await withStagedMesh(async () => {
+    return await runExclusiveNativeMesh(async () => {
       const reportJson = await core.invoke<string>('mesh_repair_parts_from_path', {
         filePath,
         optionsJson,
         progressToken: token,
       });
-      const report = normalizeMeshHealthReport(JSON.parse(reportJson));
+      const result = decodeMeshRepairReport(reportJson);
       const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-      return { report, positions };
+      return { ...result, positions };
     });
   } finally {
     unlisten?.();
@@ -390,7 +388,7 @@ export async function repairPartsFromPath(
 export async function loadMeshFromPath(filePath: string): Promise<Float32Array | null> {
   const core = await loadTauriCore();
   if (!core) return null;
-  return withStagedMesh(async () => {
+  return runExclusiveNativeMesh(async () => {
     await core.invoke<void>('mesh_load_from_path', { filePath });
     return readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
   });
@@ -410,13 +408,8 @@ export async function analyzeFromGeometry(
   const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
   if (!posAttr) throw new Error('analyzeFromGeometry: geometry has no position attribute');
 
-  const soup = expandGeometryToTriangleSoup(geometry);
-  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-
-  return withStagedMesh(async () => {
-    await core.invoke('stage_mesh_binary_set', bytes, {
-      headers: { 'Content-Type': 'application/octet-stream' },
-    });
+  return runExclusiveNativeMesh(async () => {
+    await stageGeometryToStagedMesh(core.invoke, geometry);
     const analysisJson = await core.invoke<string>('mesh_analyze_staged');
     return normalizeMeshAnalysis(JSON.parse(analysisJson));
   });
@@ -494,42 +487,37 @@ export async function repairFromGeometry(
   const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
   if (!posAttr) throw new Error('repairFromGeometry: geometry has no position attribute');
 
-  // Normalize to a contiguous Float32Array (handle indexed geometry by
-  // expanding to triangle soup).
-  const soup = expandGeometryToTriangleSoup(geometry);
-  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
+  return runExclusiveNativeMesh(async () => {
+    await stageGeometryToStagedMesh(core.invoke, geometry);
 
-  await core.invoke('stage_mesh_binary_set', bytes, {
-    headers: { 'Content-Type': 'application/octet-stream' },
+    const optionsPayload = {
+      ...options,
+      assume_support_geometry: options.assumeSupportGeometry,
+    };
+    const optionsJson = JSON.stringify(optionsPayload);
+    const wantsProgress = Boolean(sink?.onProgress || sink?.onToken);
+    const token = wantsProgress ? crypto.randomUUID() : null;
+    let unlisten: (() => void) | null = null;
+    if (token && sink) {
+      sink.onToken?.(token);
+      unlisten = await core.listen<MeshRepairProgress>('mesh-repair-progress', (event) => {
+        const progress = event.payload;
+        if (progress && progress.token === token) sink.onProgress?.(progress);
+      });
+    }
+
+    try {
+      const reportJson = await core.invoke<string>('mesh_repair_staged', {
+        optionsJson,
+        progressToken: token,
+      });
+      const result = decodeMeshRepairReport(reportJson);
+      const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
+      return { ...result, positions };
+    } finally {
+      unlisten?.();
+    }
   });
-
-  const optionsPayload = {
-    ...options,
-    assume_support_geometry: options.assumeSupportGeometry,
-  };
-  const optionsJson = JSON.stringify(optionsPayload);
-  const wantsProgress = Boolean(sink?.onProgress || sink?.onToken);
-  const token = wantsProgress ? crypto.randomUUID() : null;
-  let unlisten: (() => void) | null = null;
-  if (token && sink) {
-    sink.onToken?.(token);
-    unlisten = await core.listen<MeshRepairProgress>('mesh-repair-progress', (event) => {
-      const progress = event.payload;
-      if (progress && progress.token === token) sink.onProgress?.(progress);
-    });
-  }
-
-  try {
-    const reportJson = await core.invoke<string>('mesh_repair_staged', {
-      optionsJson,
-      progressToken: token,
-    });
-    const report = normalizeMeshHealthReport(JSON.parse(reportJson));
-    const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-    return { report, positions };
-  } finally {
-    unlisten?.();
-  }
 }
 
 /**
@@ -547,24 +535,19 @@ export async function classifyFromGeometry(
   const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
   if (!posAttr) throw new Error('classifyFromGeometry: geometry has no position attribute');
 
-  const soup = expandGeometryToTriangleSoup(geometry);
-  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-
   const optionsPayload = {
     ...options,
     assume_support_geometry: options.assumeSupportGeometry,
   };
   const optionsJson = JSON.stringify(optionsPayload);
-  return withStagedMesh(async () => {
-    await core.invoke('stage_mesh_binary_set', bytes, {
-      headers: { 'Content-Type': 'application/octet-stream' },
-    });
+  return runExclusiveNativeMesh(async () => {
+    await stageGeometryToStagedMesh(core.invoke, geometry);
     const reportJson = await core.invoke<string>('mesh_classify_staged', {
       optionsJson,
     });
-    const report = normalizeMeshHealthReport(JSON.parse(reportJson));
+    const result = decodeMeshRepairReport(reportJson);
     const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-    return { report, positions };
+    return { ...result, positions };
   });
 }
 

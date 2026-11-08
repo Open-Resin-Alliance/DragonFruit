@@ -1524,20 +1524,18 @@ pub async fn scan_overhangs(
 /// The frontend stages exactly the positions it renders, so the returned
 /// `triangleIds` index the rendered geometry. This is the binary counterpart
 /// of `scan_overhangs`: no JSON number array crosses the boundary. The command
-/// consumes the staged buffer.
+/// consumes the exact named upload snapshot.
 #[tauri::command]
 pub async fn scan_overhangs_staged(
+    mesh_upload_id: String,
+    expected_bytes: usize,
     self_support_angle_deg: f32,
     px_mm: f32,
     label: Option<String>,
     has_raft: Option<bool>,
 ) -> Result<OverhangScan, String> {
+    let bytes = crate::mesh_chunk_upload::take_snapshot(&mesh_upload_id, expected_bytes)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = crate::staged_mesh()
-            .lock()
-            .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
-            .take()
-            .ok_or("No staged mesh binary — call stage_mesh_binary_set first")?;
         let soup = crate::bytes_to_f32_vec(&bytes)?;
         if soup.is_empty() || soup.len() % 9 != 0 {
             return Err(format!(

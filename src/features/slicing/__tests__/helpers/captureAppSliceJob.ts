@@ -3,6 +3,7 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import { runSliceExportOrchestrator, type SliceExportOrchestratorOptions } from '../../sliceExportOrchestrator';
 import { installFakeWindow } from '@/utils/__tests__/helpers/fakeWindow';
+import { installFakeMeshChunkUpload } from '@/utils/__tests__/helpers/fakeMeshChunkUpload';
 
 /**
  * The job the app hands the native slicer, captured at the Tauri boundary.
@@ -54,8 +55,6 @@ export async function captureAppSliceJob(options: {
   const reachedSlicer = new Error('captured native slice job');
   const invoke = async (command: string, args?: unknown): Promise<unknown> => {
     switch (command) {
-      case 'stage_mesh_binary_set':
-        return {};
       case 'plugin:event|listen':
         return 1;
       case 'plugin:event|unlisten':
@@ -68,9 +67,10 @@ export async function captureAppSliceJob(options: {
     }
   };
 
+  const upload = installFakeMeshChunkUpload(invoke);
   const restoreWindow = installFakeWindow({
     dispatchEvent: () => true,
-    __TAURI_INTERNALS__: { invoke, transformCallback: () => 1 },
+    __TAURI_INTERNALS__: { invoke: upload.invoke, transformCallback: () => 1 },
     __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
   });
   try {
@@ -86,6 +86,7 @@ export async function captureAppSliceJob(options: {
     });
   } finally {
     restoreWindow();
+    upload.restore();
   }
 
   if (!captured) throw new Error('The orchestrator never reached the native slicer.');

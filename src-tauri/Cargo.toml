@@ -27,7 +27,8 @@ percent-encoding = "2"
 # Only to hand the updater's OffsetDateTime to the frontend as RFC 3339.
 time = { version = "0.3", features = ["formatting"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# Native cached transforms must recover the exact f64 matrix/centering values sent by JavaScript.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
 rfd = "0.15"
 flate2 = "1"

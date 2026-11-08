@@ -1,20 +1,20 @@
 import * as THREE from 'three';
+import { inheritLoadedSliceMeshRange, loadedSliceMeshPartitions } from '@/utils/loadedSliceMesh';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import type { ModelHolePunchPlacement, ModelHollowingModifier } from './types';
-import { resolveModelMeshModifiers } from './meshModifierStore';
+import type { ModelHollowingModifier } from './types';
+import { getStoredMeshModifierRevisionToken, resolveModelMeshModifiers } from './meshModifierStore';
 import { hasHollowingToBake } from './unappliedModifiers';
 import {
-  buildRotationSignature,
   computeVoxelResolution,
   getRotationQuatTuple,
   getUniformScaleFactorForThickness,
-  hashBlockedVoxelIndices,
   resolveBlockedVoxelValidity,
   worldMmToLocalMm,
 } from './hollowingGrid';
 import { hollowFromGeometry, type HollowOptions } from '@/utils/meshHollowing';
-import { punchFromGeometry, type PunchOptions } from '@/utils/meshPunching';
+import { loadTauriCore } from '@/utils/tauriMeshBridge';
 import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
+import { PreparedGeometryCache, preparedGeometryDigest, type PreparedGeometryCacheTicket } from './preparedGeometryCache';
 
 export type PreparedModelGeometry = {
   model: LoadedModel;
@@ -28,25 +28,58 @@ export type PreparedLoadedModelsForOutput = {
   dispose: () => void;
 };
 
-const PREPARED_GEOMETRY_CACHE_LIMIT = 8;
-const preparedGeometryCache = new Map<string, Float32Array>();
+export type PrepareModelGeometryOptions = { onBake?: () => void };
+export type PrepareLoadedModelsOptions = PrepareModelGeometryOptions & { signal?: AbortSignal };
+
+const preparedGeometryCache = new PreparedGeometryCache();
+const sourceIdentities = new WeakMap<object, number>();
+let nextSourceIdentity = 1;
+const derivedSources = new WeakMap<THREE.BufferGeometry, {
+  sourceRevision: string;
+  partition: string;
+}>();
+const inFlightBakes = new Map<string, {
+  ticket: PreparedGeometryCacheTicket;
+  promise: Promise<Float32Array>;
+}>();
 
 export function clearPreparedGeometryCacheForModel(modelId: string): void {
-  const prefix = `${modelId}:`;
-  for (const key of preparedGeometryCache.keys()) {
-    if (key.startsWith(prefix)) preparedGeometryCache.delete(key);
+  preparedGeometryCache.clearModel(modelId);
+}
+
+function sourceIdentity(value: object): number {
+  let id = sourceIdentities.get(value);
+  if (id === undefined) {
+    id = nextSourceIdentity++;
+    sourceIdentities.set(value, id);
   }
+  return id;
+}
+
+function attributeSignature(attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute | null | undefined): unknown {
+  if (!attribute) return null;
+  const interleaved = attribute instanceof THREE.InterleavedBufferAttribute ? attribute.data : null;
+  const array = attribute.array;
+  return [
+    sourceIdentity(attribute), sourceIdentity(array), sourceIdentity(array.buffer),
+    array.constructor.name, array.byteOffset, array.byteLength, array.buffer.byteLength,
+    attribute.count, attribute.itemSize, attribute.normalized,
+    interleaved ? interleaved.version : Reflect.get(attribute, 'version'),
+    interleaved ? sourceIdentity(interleaved) : null,
+    interleaved?.stride,
+    attribute instanceof THREE.InterleavedBufferAttribute ? attribute.offset : null,
+  ];
 }
 
 function computeGeometrySignature(geometry: THREE.BufferGeometry): string {
-  const position = geometry.getAttribute('position');
-  const index = geometry.getIndex();
-  const vertexCount = position?.count ?? 0;
-  const positionVersionRaw = position ? Reflect.get(position as object, 'version') : undefined;
-  const positionVersion = typeof positionVersionRaw === 'number' ? positionVersionRaw : 0;
-  const indexVersionRaw = index ? Reflect.get(index as object, 'version') : undefined;
-  const indexVersion = typeof indexVersionRaw === 'number' ? indexVersionRaw : 0;
-  return `${geometry.uuid}:${vertexCount}:${positionVersion}:${indexVersion}`;
+  const derived = derivedSources.get(geometry);
+  if (derived) return JSON.stringify([derived.sourceRevision, derived.partition]);
+  return JSON.stringify([
+    sourceIdentity(geometry),
+    attributeSignature(geometry.getAttribute('position')),
+    attributeSignature(geometry.getIndex()),
+    'whole',
+  ]);
 }
 
 // The blocked voxels forwarded to slice-time hollowing (and folded into the
@@ -68,76 +101,59 @@ function getEffectiveBlockedVoxelIndices(
   return blocked;
 }
 
-function buildModifierSignature(model: LoadedModel): string | null {
+function buildHollowOptions(model: LoadedModel, copyBlockers = true): HollowOptions | null {
   const modifiers = resolveModelMeshModifiers(model);
-  const hollowing = hasHollowingToBake(modifiers) ? modifiers?.hollowing : null;
-  const shouldApplyPunches = !modifiers?.holePunchesBakedIntoGeometry;
-  const punches = shouldApplyPunches
-    ? (modifiers?.holePunches ?? []).filter((placement) => placement.radiusMm > 0 && placement.depthMm > 0)
-    : [];
-
-  if (!hollowing?.enabled && punches.length === 0) {
-    return null;
-  }
-
-  const normalized = {
-    hollowing: hollowing?.enabled ? {
-      mode: hollowing.mode,
-      voxelSizeMm: hollowing.voxelSizeMm,
-      shellThicknessMm: hollowing.shellThicknessMm,
-      infillMode: hollowing.infillMode ?? 'lattice',
-      infillCellMm: hollowing.infillCellMm ?? 4.2426,
-      infillBeamRadiusMm: hollowing.infillBeamRadiusMm ?? 0.35,
-      openFace: hollowing.openFace,
-      // Rotation and scale change the Rust voxel grid; the blocker hash changes
-      // the keep mask. Geometry version does not change on transform (rotation
-      // is a transform, geometry is local-space), so without these the cache
-      // would serve a cavity computed at a stale rotation/scale/blocker set.
-      // Hash (not the raw array) keeps the key O(1)-sized for large lasso
-      // selections (audit #23); it covers the *effective* (validity-filtered)
-      // list so the signature matches what is actually forwarded.
-      rotation: buildRotationSignature(model.transform.rotation),
-      scaleFactor: Number(
-        getUniformScaleFactorForThickness(model.transform.scale).toFixed(6),
-      ),
-      blockedVoxelIndicesHash: hashBlockedVoxelIndices(
-        getEffectiveBlockedVoxelIndices(model, hollowing),
-      ),
-    } : null,
-    holePunches: punches.map((placement) => ({
-      centerNorm: placement.centerNorm,
-      radiusMm: placement.radiusMm,
-      depthMm: placement.depthMm,
-      direction: placement.direction,
-    })),
+  const hollowing = modifiers?.hollowing;
+  if (!hasHollowingToBake(modifiers) || !hollowing) return null;
+  const size = model.geometry.size;
+  const scaleFactor = getUniformScaleFactorForThickness(model.transform.scale);
+  const quat = new THREE.Quaternion().setFromEuler(model.transform.rotation);
+  return {
+    mode: hollowing.mode,
+    voxelResolution: computeVoxelResolution(
+      worldMmToLocalMm(hollowing.voxelSizeMm, scaleFactor),
+      Math.max(size.x, size.y, size.z),
+    ),
+    shellThicknessMm: worldMmToLocalMm(hollowing.shellThicknessMm, scaleFactor),
+    blockedVoxelIndices: copyBlockers
+      ? getEffectiveBlockedVoxelIndices(model, hollowing).slice()
+      : getEffectiveBlockedVoxelIndices(model, hollowing),
+    infillMode: hollowing.infillMode ?? 'lattice',
+    infillCellMm: worldMmToLocalMm(hollowing.infillCellMm ?? 4.2426, scaleFactor),
+    infillBeamRadiusMm: worldMmToLocalMm(hollowing.infillBeamRadiusMm ?? 0.35, scaleFactor),
+    openFace: hollowing.openFace,
+    drainHoles: [],
+    previewCavityOnly: false,
+    smoothInternalSurfaces: true,
+    internalChamferPasses: 2,
+    rotationQuat: [quat.x, quat.y, quat.z, quat.w],
   };
-
-  return JSON.stringify(normalized);
 }
 
-function getPreparedGeometryCacheKey(model: LoadedModel): string | null {
-  const modifierSignature = buildModifierSignature(model);
-  if (!modifierSignature) return null;
-  const geometrySignature = computeGeometrySignature(model.geometry.geometry);
-  return `${model.id}:${geometrySignature}:${modifierSignature}`;
+export type ModelOutputModifierSignature = readonly [string, string];
+const blockerValueSignatures = new WeakMap<object, { source: number[]; value: string }>();
+
+/** Exact effective bake inputs; draft holes and source-storage wrappers are not geometry. */
+export function getModelOutputModifierSignature(model: LoadedModel): ModelOutputModifierSignature | null {
+  const options = buildHollowOptions(model, false);
+  if (!options) return null;
+  const revision = model.meshModifiers ? undefined : getStoredMeshModifierRevisionToken(model.id);
+  const source = options.blockedVoxelIndices ?? [];
+  const cached = revision ? blockerValueSignatures.get(revision) : undefined;
+  const blockers = cached?.source === source ? cached.value : JSON.stringify(source);
+  if (revision && cached?.source !== source) blockerValueSignatures.set(revision, { source, value: blockers });
+  return [JSON.stringify({ ...options, blockedVoxelIndices: undefined }), blockers];
 }
 
-function getCachedPreparedPositions(cacheKey: string): Float32Array | null {
-  const hit = preparedGeometryCache.get(cacheKey);
-  if (!hit) return null;
-  // Refresh LRU order.
-  preparedGeometryCache.delete(cacheKey);
-  preparedGeometryCache.set(cacheKey, hit);
-  return hit;
-}
-
-function setCachedPreparedPositions(cacheKey: string, positions: Float32Array): void {
-  preparedGeometryCache.set(cacheKey, positions);
-  while (preparedGeometryCache.size > PREPARED_GEOMETRY_CACHE_LIMIT) {
-    const oldestKey = preparedGeometryCache.keys().next().value as string | undefined;
-    if (!oldestKey) break;
-    preparedGeometryCache.delete(oldestKey);
-  }
+async function getPreparedGeometryCacheKey(
+  model: LoadedModel,
+  options: HollowOptions,
+): Promise<string | null> {
+  // Hash exactly the effective native options, with no rounded scale/quaternion
+  // or lossy blocker hash. Source identities need no full mesh traversal.
+  const signature = JSON.stringify([computeGeometrySignature(model.geometry.geometry), options]);
+  const digest = await preparedGeometryDigest(new TextEncoder().encode(signature));
+  return digest ? JSON.stringify([model.id, digest]) : null;
 }
 
 function createGeometryFromPositions(positions: Float32Array): THREE.BufferGeometry {
@@ -159,8 +175,26 @@ function splitClassifiedModelForOutput(model: LoadedModel): {
   const totalTriangleCount = Math.floor((geometry.getIndex()?.count ?? position.count) / 3);
   if (modelTriangleCount <= 0 || modelTriangleCount >= totalTriangleCount) return null;
 
-  const split = splitClassifiedSupportGeometry(model);
+  // Capture before copying: later edits of the original must not relabel old partitions.
+  // Classification slices the raw position soup, independently of any BVH index.
+  const sourceRevision = JSON.stringify([sourceIdentity(geometry), attributeSignature(position)]);
+  const partitions = !hasHollowingToBake(resolveModelMeshModifiers(model)) ? loadedSliceMeshPartitions(geometry) : null;
+  const retainedBounds = partitions?.modelTriangleCount === modelTriangleCount ? partitions : undefined;
+  const split = splitClassifiedSupportGeometry(model, { retainedBounds });
   if (!split) return null;
+  inheritLoadedSliceMeshRange(geometry, split.modelGeometry.geometry, 0, split.modelTriangleCount);
+  inheritLoadedSliceMeshRange(geometry, split.supportGeometry.geometry, split.modelTriangleCount, split.totalTriangleCount);
+
+  // Split geometries have fresh UUIDs every export. Their immutable derivation
+  // is the original source storage/revisions plus the classification boundary.
+  derivedSources.set(split.modelGeometry.geometry, {
+    sourceRevision,
+    partition: `model:0:${split.modelTriangleCount}:${split.totalTriangleCount}`,
+  });
+  derivedSources.set(split.supportGeometry.geometry, {
+    sourceRevision,
+    partition: `support:${split.modelTriangleCount}:${split.totalTriangleCount}`,
+  });
 
   const sourceDefects = model.geometry.meshDefects;
   const modelDefects = sourceDefects ? {
@@ -215,151 +249,78 @@ function splitClassifiedModelForOutput(model: LoadedModel): {
   };
 }
 
-function buildPunchOptionsFromPlacements(
-  sourceBounds: { bbox: THREE.Box3; size: THREE.Vector3 },
-  placements: ModelHolePunchPlacement[],
-): PunchOptions {
-  const bbox = sourceBounds.bbox;
-  const size = sourceBounds.size;
-  const toMm = (norm: number, min: number, span: number) => min + (norm * (Math.abs(span) <= 1e-9 ? 0 : span));
+export async function prepareModelGeometryForOutput(
+  model: LoadedModel,
+  options: PrepareModelGeometryOptions = {},
+): Promise<PreparedModelGeometry> {
+  // Hole punches remain explicit Apply-only operations, never output-time work.
+  const hollowOptions = buildHollowOptions(model);
+  if (!hollowOptions) {
+    return { model, geometry: model.geometry.geometry, disposeAfterUse: false };
+  }
 
-  return {
-    punches: placements.map((placement) => {
-      const mmCenterX = toMm(placement.centerNorm[0], bbox.min.x, size.x);
-      const mmCenterY = toMm(placement.centerNorm[1], bbox.min.y, size.y);
-      const mmCenterZ = toMm(placement.centerNorm[2], bbox.min.z, size.z);
-      const centerNorm: [number, number, number] = [
-        size.x <= 1e-9 ? 0.5 : (mmCenterX - bbox.min.x) / size.x,
-        size.y <= 1e-9 ? 0.5 : (mmCenterY - bbox.min.y) / size.y,
-        size.z <= 1e-9 ? 0.5 : (mmCenterZ - bbox.min.z) / size.z,
-      ];
+  // Begin before the first await: synchronous clear also fences key hashing,
+  // queued native work and in-progress disk reads/writes.
+  const ticket = preparedGeometryCache.begin(model.id);
+  try {
+    const cacheKey = await getPreparedGeometryCacheKey(model, hollowOptions);
+    if (cacheKey) {
+      const cached = await preparedGeometryCache.get(cacheKey, ticket);
+      if (cached) return { model, geometry: createGeometryFromPositions(cached), disposeAfterUse: true };
+      const flight = inFlightBakes.get(cacheKey);
+      if (ticket.valid && flight?.ticket.valid) {
+        const positions = await flight.promise;
+        return { model, geometry: createGeometryFromPositions(positions.slice()), disposeAfterUse: true };
+      }
+    }
 
-      return {
-        centerNorm,
-        radiusMm: placement.radiusMm,
-        radiusYMm: placement.radiusYMm,
-        direction: placement.direction,
-        lengthMm: placement.depthMm,
-      };
-    }),
-  };
+    const bake = async (): Promise<Float32Array> => {
+      if (!await loadTauriCore()) {
+        throw new Error(`Hollowing for "${model.name}" is only available in DragonFruit Desktop.`);
+      }
+      options.onBake?.();
+      const result = await hollowFromGeometry(model.geometry.geometry, hollowOptions);
+      if (!result) {
+        throw new Error(`Hollowing for "${model.name}" is only available in DragonFruit Desktop.`);
+      }
+      if (cacheKey && ticket.valid) {
+        const currentOptions = buildHollowOptions(model);
+        if (currentOptions && await getPreparedGeometryCacheKey(model, currentOptions) === cacheKey) {
+          await preparedGeometryCache.put(cacheKey, result.positions, ticket);
+        }
+      }
+      return result.positions;
+    };
+    const promise = bake();
+    const flight = { ticket, promise };
+    if (cacheKey && ticket.valid) inFlightBakes.set(cacheKey, flight);
+    try {
+      const positions = await promise;
+      // Flights may have multiple consumers. No output ever owns a cache/flight
+      // buffer, so modifying or disposing one output cannot poison another.
+      return { model, geometry: createGeometryFromPositions(positions.slice()), disposeAfterUse: true };
+    } finally {
+      if (cacheKey && inFlightBakes.get(cacheKey) === flight) inFlightBakes.delete(cacheKey);
+    }
+  } finally {
+    preparedGeometryCache.end(ticket);
+  }
 }
 
-export async function prepareModelGeometryForOutput(model: LoadedModel): Promise<PreparedModelGeometry> {
-  const cacheKey = getPreparedGeometryCacheKey(model);
-  if (cacheKey) {
-    const cachedPositions = getCachedPreparedPositions(cacheKey);
-    if (cachedPositions) {
-      return {
-        model,
-        geometry: createGeometryFromPositions(cachedPositions),
-        disposeAfterUse: true,
-      };
-    }
-  }
-
-  // Model objects in React state deliberately carry meshModifiers: undefined
-  // (externalized store) — resolve through the store or unbaked hollowing is
-  // silently skipped at slice/export time.
-  const modifiers = resolveModelMeshModifiers(model);
-  const hollowing = modifiers?.hollowing;
-  const shouldApplyHollowing = hasHollowingToBake(modifiers);
-  // Hole punches are never auto-applied during slice/export — the user must
-  // explicitly bake them first (via the hole-punch panel's Apply button or a
-  // pre-slice confirmation dialog). This prevents unapplied LYS-imported holes
-  // from silently corrupting the sliced output, so this list stays empty.
-  const punches: ModelHolePunchPlacement[] = [];
-
-  if (!shouldApplyHollowing && punches.length === 0) {
-    return {
-      model,
-      geometry: model.geometry.geometry,
-      disposeAfterUse: false,
-    };
-  }
-
-  let workingGeometry = model.geometry.geometry;
-  let createdGeometry: THREE.BufferGeometry | null = null;
-  const sourceBounds = {
-    bbox: model.geometry.bbox,
-    size: model.geometry.size,
-  };
-
-  if (shouldApplyHollowing && hollowing) {
-    const maxExtent = Math.max(sourceBounds.size.x, sourceBounds.size.y, sourceBounds.size.z);
-    // The voxel grid lives in the model's local space, so world-space mm params
-    // (voxel size, shell thickness, infill dims) must be converted to local mm
-    // before hollowing — the same conversion the preview (buildHollowingOptions)
-    // and Apply paths already apply. For unscaled models this is an exact no-op
-    // (worldMmToLocalMm(v, 1) === max(1e-4, v)); scaled models now slice against
-    // the same grid the preview showed, so forwarded blockers land on the right
-    // voxels.
-    const scaleFactor = getUniformScaleFactorForThickness(model.transform.scale);
-    const voxelResolution = computeVoxelResolution(
-      worldMmToLocalMm(hollowing.voxelSizeMm, scaleFactor),
-      maxExtent,
-    );
-    const quat = new THREE.Quaternion().setFromEuler(model.transform.rotation);
-    const hollowOptions: HollowOptions = {
-      mode: hollowing.mode,
-      voxelResolution,
-      shellThicknessMm: worldMmToLocalMm(hollowing.shellThicknessMm, scaleFactor),
-      blockedVoxelIndices: getEffectiveBlockedVoxelIndices(model, hollowing),
-      infillMode: hollowing.infillMode ?? 'lattice',
-      infillCellMm: worldMmToLocalMm(hollowing.infillCellMm ?? 4.2426, scaleFactor),
-      infillBeamRadiusMm: worldMmToLocalMm(hollowing.infillBeamRadiusMm ?? 0.35, scaleFactor),
-      openFace: hollowing.openFace,
-      drainHoles: [],
-      previewCavityOnly: false,
-      smoothInternalSurfaces: true,
-      internalChamferPasses: 2,
-      rotationQuat: [quat.x, quat.y, quat.z, quat.w],
-    };
-
-    const hollowResult = await hollowFromGeometry(workingGeometry, hollowOptions);
-    if (!hollowResult) {
-      throw new Error(`Hollowing for "${model.name}" is only available in DragonFruit Desktop.`);
-    }
-
-    createdGeometry = createGeometryFromPositions(hollowResult.positions);
-    workingGeometry = createdGeometry;
-  }
-
-  if (punches.length > 0) {
-    const punchOptions = buildPunchOptionsFromPlacements(sourceBounds, punches);
-    const punchResult = await punchFromGeometry(workingGeometry, punchOptions);
-    if (!punchResult) {
-      if (createdGeometry) createdGeometry.dispose();
-      throw new Error(`Hole punching for "${model.name}" is only available in DragonFruit Desktop.`);
-    }
-
-    if (createdGeometry) {
-      createdGeometry.dispose();
-    }
-    createdGeometry = createGeometryFromPositions(punchResult.positions);
-    workingGeometry = createdGeometry;
-  }
-
-  if (cacheKey && createdGeometry) {
-    const positionAttribute = createdGeometry.getAttribute('position') as THREE.BufferAttribute;
-    if (positionAttribute?.array instanceof Float32Array) {
-      setCachedPreparedPositions(cacheKey, positionAttribute.array);
-    }
-  }
-
-  return {
-    model,
-    geometry: workingGeometry,
-    disposeAfterUse: createdGeometry !== null,
-  };
-}
-
-export async function prepareLoadedModelsForOutput(models: LoadedModel[]): Promise<PreparedLoadedModelsForOutput> {
+export async function prepareLoadedModelsForOutput(
+  models: LoadedModel[],
+  options: PrepareLoadedModelsOptions = {},
+): Promise<PreparedLoadedModelsForOutput> {
   const preparedModels: LoadedModel[] = [];
   const temporaryGeometries: THREE.BufferGeometry[] = [];
   let modifiedModelCount = 0;
 
+  const checkCancelled = () => {
+    if (options.signal?.aborted) throw options.signal.reason instanceof Error
+      ? options.signal.reason : new DOMException('Mesh preparation cancelled', 'AbortError');
+  };
   try {
+    checkCancelled();
     const slicingModels: LoadedModel[] = [];
     for (const model of models) {
       const split = splitClassifiedModelForOutput(model);
@@ -372,12 +333,14 @@ export async function prepareLoadedModelsForOutput(models: LoadedModel[]): Promi
     }
 
     for (const model of slicingModels) {
-      const prepared = await prepareModelGeometryForOutput(model);
+      checkCancelled();
+      const prepared = await prepareModelGeometryForOutput(model, options);
       const geometryChanged = prepared.geometry !== model.geometry.geometry;
 
       if (prepared.disposeAfterUse) {
         temporaryGeometries.push(prepared.geometry);
       }
+      checkCancelled();
 
       if (!geometryChanged) {
         preparedModels.push(model);

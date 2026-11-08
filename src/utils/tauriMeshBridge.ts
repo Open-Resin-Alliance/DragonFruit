@@ -1,11 +1,9 @@
 import * as THREE from 'three';
+import type { invoke as sdkInvoke } from '@tauri-apps/api/core';
 import { isTauriRuntime } from './tauriRuntime';
+import { createMeshChunkUpload, invokeWithChunkedMesh } from './meshChunkUpload';
 
-export type TauriInvoke = <T>(
-  cmd: string,
-  args?: Record<string, unknown> | ArrayBuffer | ArrayBufferView,
-  opts?: { headers?: Record<string, string> },
-) => Promise<T>;
+export type TauriInvoke = typeof sdkInvoke;
 
 /** Subscribe to a backend event. Returns the unsubscribe function. */
 export type TauriListen = <T>(
@@ -19,6 +17,43 @@ export interface TauriCoreModule {
 }
 
 let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
+let nativeMeshPass: Promise<unknown> = Promise.resolve();
+
+/**
+ * Own the shared native mesh stage through upload, processing, and every readback.
+ * Serializing only uploads lets a later pass replace an earlier pass's input.
+ * Bake modifiers before acquiring this guard to avoid nested staged passes.
+ * A signal cancels queued work promptly; an active pass retains ownership for cleanup.
+ */
+export function runExclusiveNativeMesh<T>(pass: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    const run = nativeMeshPass.then(pass);
+    nativeMeshPass = run.catch(() => undefined);
+    return run;
+  }
+  // Older WebKitGTK runtimes require the executor form of the Promise API.
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  let started = false;
+  const onAbort = () => {
+    if (started) return;
+    reject(signal?.reason instanceof Error ? signal.reason : new DOMException('Mesh operation cancelled', 'AbortError'));
+  };
+  const run = nativeMeshPass.then(() => {
+    started = true;
+    signal?.removeEventListener('abort', onAbort);
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new DOMException('Mesh operation cancelled', 'AbortError');
+    }
+    return pass();
+  });
+  nativeMeshPass = run.catch(() => undefined);
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  run.then(resolve, reject);
+  return promise;
+}
 
 /**
  * Resolve the Tauri bindings this bridge needs, or null in the browser. Cached.
@@ -34,7 +69,7 @@ export async function loadTauriCore(): Promise<TauriCoreModule | null> {
       import('@tauri-apps/api/event'),
     ])
       .then(([core, event]) => ({
-        invoke: core.invoke as TauriInvoke,
+        invoke: core.invoke,
         listen: event.listen as TauriListen,
       }))
       .catch(() => null);
@@ -69,7 +104,7 @@ export function expandGeometryToTriangleSoup(geometry: THREE.BufferGeometry): Fl
   return soup;
 }
 
-/** Upload a geometry to the shared Rust staging buffer as a binary triangle soup. */
+/** Upload a soup; caller holds runExclusiveNativeMesh until native processing/readbacks finish. */
 export async function stageGeometryToStagedMesh(
   invoke: TauriInvoke,
   geometry: THREE.BufferGeometry,
@@ -77,9 +112,22 @@ export async function stageGeometryToStagedMesh(
   const soup = expandGeometryToTriangleSoup(geometry);
   const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
 
-  await invoke('stage_mesh_binary_set', bytes, {
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+  const index = geometry.getIndex();
+  const positionVersion = position.version;
+  const indexVersion = index?.version;
+  const upload = await createMeshChunkUpload(invoke, { reserveBytes: bytes.byteLength });
+  try {
+    await upload.append(bytes);
+    if (geometry.getAttribute('position') !== position || position.version !== positionVersion
+      || geometry.getIndex() !== index || index?.version !== indexVersion) {
+      throw new Error('Geometry changed during native mesh upload; retry with the current geometry.');
+    }
+    await upload.finish();
+  } catch (error) {
+    await upload.abort();
+    throw error;
+  }
 }
 
 /**
@@ -388,10 +436,8 @@ export async function refineCoarseFaces(
 
   const soup = expandGeometryToTriangleSoup(geometry);
   const body = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-  const payload = await core.invoke<ArrayBuffer | Uint8Array | number[]>(
-    'refine_mesh_soup',
-    body,
-    { headers: { 'Content-Type': 'application/octet-stream' } },
+  const payload = await invokeWithChunkedMesh<ArrayBuffer | Uint8Array | number[]>(
+    core.invoke, 'refine_mesh_soup', body,
   );
 
   return parseRefinedMesh(payload);

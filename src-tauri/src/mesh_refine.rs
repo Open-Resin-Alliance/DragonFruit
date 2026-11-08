@@ -19,14 +19,11 @@ use dragonfruit_mesh_core::refine::{
     MAX_PASSES,
 };
 use dragonfruit_mesh_repair::io::DEFAULT_MERGE_EPSILON;
-use tauri::ipc::{InvokeBody, Request, Response};
+use tauri::ipc::{Request, Response};
 
 #[tauri::command]
 pub async fn refine_mesh_soup(request: Request<'_>) -> Result<Response, String> {
-    let bytes = match request.body() {
-        InvokeBody::Raw(bytes) => bytes.clone(),
-        InvokeBody::Json(_) => return Err("refine_mesh_soup expects a raw binary body".into()),
-    };
+    let bytes = crate::mesh_chunk_upload::take_request_body(&request)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let soup: &[f32] =

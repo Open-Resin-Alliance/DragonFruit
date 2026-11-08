@@ -1,5 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod job_payload_cache;
+mod job_payload_upload;
+mod mesh_chunk_cache;
+mod mesh_chunk_upload;
+mod mesh_slice_source;
 mod mesh_minima;
 mod mesh_repair;
 mod mesh_refine;
@@ -395,7 +400,6 @@ fn sweep_all_temp_artifacts() -> u32 {
         Ok(entries) => entries,
         Err(_) => return 0,
     };
-
     for entry in entries.flatten() {
         let path = entry.path();
         if !is_dragonfruit_temp_artifact(&path) {
@@ -474,8 +478,6 @@ static STAGED_MESH: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static STAGED_MESH_STATS: OnceLock<Mutex<StageMeshStats>> = OnceLock::new();
 static STAGED_MESH_FILE_PATH: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static STAGED_MESH_FILE_APPENDER: OnceLock<Mutex<Option<StageFileAppender>>> = OnceLock::new();
-const STAGED_MESH_PREALLOC_MIN_BYTES: usize = 16 * 1024 * 1024;
-const STAGED_MESH_PREALLOC_MAX_BYTES: usize = 1024 * 1024 * 1024;
 
 pub(crate) struct StageFileAppender {
     pub path: String,
@@ -488,18 +490,6 @@ pub(crate) struct StageFileAppender {
 pub(crate) struct StageMeshStats {
     pub chunks_received: u64,
     pub append_ns_total: u64,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct StageMeshChunkAck {
-    chunk_bytes: u64,
-    total_bytes: u64,
-    capacity_bytes: u64,
-    reserve_grew: bool,
-    chunks_received: u64,
-    append_ns: u64,
-    append_ns_total: u64,
 }
 
 pub(crate) fn staged_mesh() -> &'static Mutex<Option<Vec<u8>>> {
@@ -543,12 +533,6 @@ fn allocate_mesh_stage_file_path() -> Result<std::path::PathBuf, String> {
         .unwrap_or(0);
     dir.push(format!("dragonfruit-mesh-stage-{stamp}.bin"));
     Ok(dir)
-}
-
-fn normalize_staged_mesh_prealloc_bytes(total_bytes_hint: usize) -> usize {
-    total_bytes_hint
-        .max(STAGED_MESH_PREALLOC_MIN_BYTES)
-        .min(STAGED_MESH_PREALLOC_MAX_BYTES)
 }
 
 fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, String> {
@@ -795,7 +779,6 @@ fn decode_quantized_u16_mesh(
     let mins = [quant.min_x, quant.min_y, quant.min_z];
     let values = bytes.len() / 2;
     let mut floats = Vec::with_capacity(values);
-
     for (index, chunk) in bytes.chunks_exact(2).enumerate() {
         let q = u16::from_le_bytes([chunk[0], chunk[1]]);
         let axis = index % 3;
@@ -1195,36 +1178,10 @@ async fn export_mesh_file(
         "3mf" => write_3mf(&raw, tri_count, &dest_path)?,
         _ => return Err(format!("Unsupported export format: {format}")),
     }
-
     // Clean up staging file
     let _ = std::fs::remove_file(&staging_path);
 
     Ok(dest_path)
-}
-
-/// Receive raw mesh bytes from the frontend via efficient binary IPC in chunks.
-/// The bytes are stored in a pre-allocated memory vector and consumed by the next `slice_solid_native_to_temp_path` call.
-#[tauri::command]
-async fn stage_mesh_binary_start(total_bytes: usize) -> Result<(), String> {
-    let reserve_bytes = normalize_staged_mesh_prealloc_bytes(total_bytes);
-    *staged_mesh()
-        .lock()
-        .map_err(|e| format!("staged mesh lock poisoned: {e}"))? =
-        Some(Vec::with_capacity(reserve_bytes));
-
-    *staged_mesh_stats()
-        .lock()
-        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))? = StageMeshStats::default();
-
-    *staged_mesh_file_path()
-        .lock()
-        .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))? = None;
-
-    *staged_mesh_file_appender()
-        .lock()
-        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))? = None;
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -1480,106 +1437,19 @@ async fn stage_mesh_file_path(mesh_file_path: String) -> Result<u64, String> {
 }
 
 #[tauri::command]
-async fn stage_mesh_binary_set(
-    request: tauri::ipc::Request<'_>,
-) -> Result<StageMeshChunkAck, String> {
-    let bytes = match request.body() {
-        InvokeBody::Raw(bytes) => bytes,
-        InvokeBody::Json(_) => {
-            return Err("stage_mesh_binary_set expects raw binary body, got JSON".into())
-        }
-    };
-
-    let reserve_bytes = normalize_staged_mesh_prealloc_bytes(bytes.len());
-    let append_start = std::time::Instant::now();
-    let mut staged = Vec::with_capacity(reserve_bytes);
-    staged.extend_from_slice(bytes);
-    let append_ns = append_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
-    let capacity_bytes = staged.capacity() as u64;
-    let total_bytes = staged.len() as u64;
-
-    *staged_mesh()
-        .lock()
-        .map_err(|e| format!("staged mesh lock poisoned: {e}"))? = Some(staged);
-
-    *staged_mesh_stats()
-        .lock()
-        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))? = StageMeshStats {
-        chunks_received: 1,
-        append_ns_total: append_ns,
-    };
-
-    *staged_mesh_file_path()
-        .lock()
-        .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))? = None;
-
-    *staged_mesh_file_appender()
-        .lock()
-        .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))? = None;
-
-    Ok(StageMeshChunkAck {
-        chunk_bytes: total_bytes,
-        total_bytes,
-        capacity_bytes,
-        reserve_grew: capacity_bytes > reserve_bytes as u64,
-        chunks_received: 1,
-        append_ns,
-        append_ns_total: append_ns,
-    })
-}
-
-#[tauri::command]
-async fn stage_mesh_binary_chunk(
-    request: tauri::ipc::Request<'_>,
-) -> Result<StageMeshChunkAck, String> {
-    let bytes = match request.body() {
-        InvokeBody::Raw(bytes) => bytes,
-        InvokeBody::Json(_) => {
-            return Err("stage_mesh_binary_chunk expects raw binary body, got JSON".into())
-        }
-    };
-
-    let mut lock = staged_mesh()
-        .lock()
-        .map_err(|e| format!("staged mesh lock poisoned: {e}"))?;
-
-    let vec = lock
-        .as_mut()
-        .ok_or("Staged mesh not started. Call stage_mesh_binary_start first")?;
-
-    let chunk_bytes = bytes.len() as u64;
-    let capacity_before = vec.capacity();
-    let append_start = std::time::Instant::now();
-    vec.extend_from_slice(bytes);
-    let append_ns = append_start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
-    let capacity_after = vec.capacity();
-    let total_bytes = vec.len() as u64;
-
-    drop(lock);
-
-    let mut stats = staged_mesh_stats()
-        .lock()
-        .map_err(|e| format!("staged mesh stats lock poisoned: {e}"))?;
-    stats.chunks_received = stats.chunks_received.saturating_add(1);
-    stats.append_ns_total = stats.append_ns_total.saturating_add(append_ns);
-
-    Ok(StageMeshChunkAck {
-        chunk_bytes,
-        total_bytes,
-        capacity_bytes: capacity_after as u64,
-        reserve_grew: capacity_after > capacity_before,
-        chunks_received: stats.chunks_received,
-        append_ns,
-        append_ns_total: stats.append_ns_total,
-    })
-}
-
-#[tauri::command]
 async fn slice_solid_native_to_temp_path(
     window: DragonFruitWindow,
     job_json: String,
+    payload_lease_id: Option<String>,
 ) -> Result<NativeSliceTempPathResult, String> {
-    // Take the pre-staged mesh bytes (set by stage_mesh_binary)
+    // Resolve/validate every bulk reference and metadata field before consuming
+    // the shared mesh. resolve releases its lease on success and all errors.
+    let metadata_parse_start = std::time::Instant::now();
+    let expanded = job_payload_upload::resolve(&job_json, payload_lease_id.as_deref())?;
+    let meta: SliceJobMetadata = serde_json::from_value(expanded)
+        .map_err(|err| format!("Invalid slice job metadata JSON: {err}"))?;
+    let metadata_parse_ns = duration_ns_u64(metadata_parse_start.elapsed());
+    // Take the completed, atomically published chunk upload.
     let staged_mesh_bytes = staged_mesh()
         .lock()
         .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
@@ -1605,7 +1475,7 @@ async fn slice_solid_native_to_temp_path(
             .lock()
             .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))?
             .take()
-            .ok_or("No staged mesh binary or file path — call stage_mesh_binary_* or stage_mesh_file_path first")?;
+            .ok_or("No completed mesh upload or file path — finish a mesh upload or stage_mesh_file_path first")?;
 
         let path = std::path::PathBuf::from(staged_path.trim());
         if !path.exists() {
@@ -1632,10 +1502,6 @@ async fn slice_solid_native_to_temp_path(
     let result = tauri::async_runtime::spawn_blocking(move || {
         let wrapper_start = std::time::Instant::now();
 
-        let metadata_parse_start = std::time::Instant::now();
-        let meta: SliceJobMetadata = serde_json::from_str(&job_json)
-            .map_err(|err| format!("Invalid slice job metadata JSON: {err}"))?;
-        let metadata_parse_ns = duration_ns_u64(metadata_parse_start.elapsed());
         let requested_output_path = meta
             .output_path
             .as_deref()
@@ -1937,13 +1803,10 @@ struct NativeRleLabels {
 async fn run_island_scan_native(
     window: DragonFruitWindow,
     params_json: String,
+    mesh_upload_id: String,
+    expected_bytes: usize,
 ) -> Result<NativeIslandScanResult, String> {
-    // Take staged mesh bytes
-    let mesh_bytes = staged_mesh()
-        .lock()
-        .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
-        .take()
-        .ok_or("No staged mesh binary — call stage_mesh_binary first")?;
+    let mesh_bytes = mesh_chunk_upload::take_snapshot(&mesh_upload_id, expected_bytes)?;
 
     let win = window.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -4586,7 +4449,18 @@ fn main() {
     builder
         .invoke_handler(tauri::generate_handler![
             webview_watchdog::webview_heartbeat,
-            stage_mesh_binary_start,
+            mesh_chunk_upload::mesh_chunk_upload_begin,
+            mesh_chunk_upload::mesh_chunk_upload_append_cached,
+            mesh_chunk_upload::mesh_chunk_upload_append,
+            mesh_chunk_upload::retain_loaded_slice_mesh,
+            mesh_chunk_upload::mesh_chunk_upload_append_source,
+            mesh_chunk_upload::mesh_chunk_upload_finish,
+            mesh_chunk_upload::mesh_chunk_upload_abort,
+            mesh_chunk_upload::restore_cached_slice_mesh,
+            job_payload_upload::job_payload_begin,
+            job_payload_upload::job_payload_append,
+            job_payload_upload::job_payload_finish,
+            job_payload_upload::job_payload_release,
             allocate_mesh_stage_path,
             append_mesh_stage_chunk,
             finish_mesh_stage_write,
@@ -4594,8 +4468,6 @@ fn main() {
             scene_file_commit_atomic,
             scene_file_discard_atomic_temp,
             stage_mesh_file_path,
-            stage_mesh_binary_set,
-            stage_mesh_binary_chunk,
             slice_solid_native_to_temp_path,
             cancel_slicing,
             run_island_scan_native,

@@ -1,15 +1,14 @@
 /**
  * Native (Rust) island scan bridge via Tauri IPC.
  *
- * Uses the same two-phase IPC pattern as slicing:
- *   1. stage_mesh_binary_set() — send geometry bytes (raw binary, single-shot)
- *   2. run_island_scan_native() — run scan, receive results
+ * Uploads changed mesh chunks and passes an immutable upload reference to the scan.
  *
  * Returns a `ScanResults`-compatible object so all existing overlay/voxel
  * rendering works unchanged.
  */
 
 import * as core from '@tauri-apps/api/core';
+import { invokeWithChunkedMesh } from '@/utils/meshChunkUpload';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import * as THREE from 'three';
 import type { ScanResults, ScanParams, GridRef, ScanLayerResult } from './ScanOrchestrator';
@@ -123,14 +122,9 @@ export async function runIslandScanNative(
   params: ScanParams,
   onProgress?: (done: number, total: number) => void,
 ): Promise<ScanResults> {
-  // Step 1: Stage mesh binary via raw binary IPC.
-  // Uses `stage_mesh_binary_set` (single-shot), which replaced the old `stage_mesh_binary` command in v3.1.
+  // Capture the exact world-space soup this result will be mapped onto.
   const positions = geom.geometry.getAttribute('position').array as Float32Array;
   const meshBytes = new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength);
-
-  await core.invoke('stage_mesh_binary_set', meshBytes, {
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
 
   // Step 2: Listen for progress events
   let unlisten: UnlistenFn | null = null;
@@ -159,9 +153,9 @@ export async function runIslandScanNative(
       bbox_max_z: bb.max.z,
     });
 
-    const native = await core.invoke<NativeIslandScanResult>('run_island_scan_native', {
-      paramsJson,
-    });
+    const native = await invokeWithChunkedMesh<NativeIslandScanResult>(
+      core.invoke, 'run_island_scan_native', meshBytes, { args: { paramsJson } },
+    );
 
     console.log(
       `[native island scan] rasterize=${native.rasterizeMs.toFixed(0)}ms ` +

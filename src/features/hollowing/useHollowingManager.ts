@@ -1678,7 +1678,7 @@ export function useHollowingManager({
     // The warm-up exists so opening the hollowing panel is instant, and it is
     // speculative: nothing reads this cache until the panel asks. Running it on
     // the selection that a model drag produces put a ~300 ms task on that drag's
-    // commit frame (the trace: `stage_mesh_binary_set`, the preview capture, and
+    // commit frame (the trace: mesh staging, the preview capture, and
     // every read-back). Wait for the interaction to finish — a fixed quiet
     // period, then idle — and cancel if the selection moves again.
     let idleHandle: number | null = null;
