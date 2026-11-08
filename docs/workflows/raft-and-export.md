@@ -46,11 +46,12 @@ Shift+F10 also opens range commands at the current layer.
 Ranges have distinct colors shared by bands, menu swatches and Manage. The bands
 overlay the slider track above the cross-section fill and below its handles.
 Tiny transparent cuts separate each segment from the rest of the rail, revealing
-the actual background behind it. Both the colored segments and the exposed rail
-ends are rounded; the track and handles have no glow. Small ranges remain visible;
-these visual gaps
-do not change their layer bounds. Moving clip handles does not change settings
-or hide ranges outside the clip window.
+the actual background behind it. Adjacent PLS ranges share one 1px separator,
+not two gaps. Both the colored segments and exposed rail ends are rounded; the
+track and handles have no glow. Colors and cutouts now follow both clip handles:
+ranges outside the visible interval are hidden and partly visible ranges are
+clipped. Moving the handles back restores them. This changes only the display,
+not saved range bounds or encoded settings.
 Editable settings follow the selected printer's material-mode definitions,
 intersected with its encoder/version support. Only fields opted into per-layer
 editing appear. Material-declared motion pairs use one toggle per row; missing

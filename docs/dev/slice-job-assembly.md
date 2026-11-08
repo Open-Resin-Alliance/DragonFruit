@@ -230,16 +230,20 @@ printing bands use half-layer edges over the 1..N rail, with a full logical span
 for N=1 and no bands for N=0. Segment keys include range id and both clipped
 segment endpoints, since one range can win several separated intervals. Bands
 share the track centerline and width, render over the clip fill but under the
-thumbs, and remain pointer-transparent. Each painted segment has 1px transparent
-end separators: the track/fill underlay is clipped into rounded remaining rail
+thumbs, and remain pointer-transparent. Adjacent colored segments share a
+single 1px separator (0.5px inset per edge), matching a PLS-to-rail separator: the track/fill underlay is clipped into rounded remaining rail
 spans, so both sides of a cut have rounded caps and the actual backdrop shows
 through instead of a theme-colored paint patch. The SVG clip geometry uses the
 rail viewport and CSS percentage/pixel math, without layout measurements. The
-colored marker is inset by 1px at each end but retains a 2px minimum for tiny
-spans. Track/handle glows are absent. Handles are outside the clip; an empty
-range list installs no clip geometry. These are
-visual cuts only: original layer coverage, labels and context-menu hit testing
-stay unchanged and do not depend on the active cross-section clip window.
+colored marker retains a 2px minimum before viewport clipping. Track/handle
+glows are absent. Color paint and its rail cutouts follow the live lower/upper
+thumb interval; fully outside bands are not rendered, partially intersecting
+bands are clipped without extending minimum-size paint beyond that interval,
+and hover hints are tied to the same bounds. Fully hidden bands leave the
+ordinary rail intact. Handles remain outside these clips. An empty visible set
+installs no rail cut geometry; a nonempty singleton-layer rail retains its full
+logical span. These are view-only changes: saved bounds, labels and encoded
+settings remain unchanged, and restoring the clip window restores the colors.
 
 Call `useLayerSettingsRangeColors` once and share its map across both rails,
 menus and Manage rows. It allocates distinct resolved RGB values in persisted

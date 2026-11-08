@@ -55,12 +55,15 @@ async function mountRangeSlider(props: Partial<ComponentProps<typeof LayerSlider
   const scrubs: string[] = [];
   const toggles: boolean[] = [];
   const initialLower = 'lowerValue' in props ? props.lowerValue : 2;
-  const ref: { setBands?: (bands: readonly LayerSliderRangeBand[]) => void } = {};
+  const ref: { setBands?: (bands: readonly LayerSliderRangeBand[]) => void; setBounds?: (lower: number | undefined, upper: number) => void } = {};
   function Probe() {
     const [upper, setUpper] = useState(props.value ?? 8);
     const [lower, setLower] = useState(initialLower);
     const [bands, setBands] = useState(props.rangeBands);
-    useEffect(() => { ref.setBands = setBands; });
+    useEffect(() => {
+      ref.setBands = setBands;
+      ref.setBounds = (nextLower, nextUpper) => { setLower(nextLower); setUpper(nextUpper); };
+    });
     return (
       <LayerSlider
         min={0} max={10} step={1} docked embedded expandToContainer
@@ -260,7 +263,7 @@ for (const variant of [
   { name: 'embedded', embedded: true, docked: false },
   { name: 'floating', embedded: false, docked: false },
 ]) {
-  test(variant.name + ' bands remain independent of both clip handles with stable primitive ids', async () => {
+  test(variant.name + ' surviving bands retain their ids through clip navigation', async () => {
     const bands: readonly LayerSliderRangeBand[] = [
       { id: 'wide:1:3', bottomPercent: 0, topPercent: 30, color: '#123456', label: 'Layers 1–10' },
       { id: 'narrow:4:6', bottomPercent: 30, topPercent: 60, color: '#abcdef', label: 'Layers 4–6' },
@@ -288,7 +291,7 @@ for (const variant of [
       assert.deepEqual(tree.upperChanges, [9]);
       assert.deepEqual(tree.lowerChanges, [1]);
       assert.deepEqual(tree.thumbPositions(), ['90%', '10%']);
-      assert.deepEqual(painted(), originalNodes, 'clip changes do not replace or filter range drawings');
+      assert.deepEqual(painted(), originalNodes, 'expanding the clip window retains existing visible drawings');
       await act(async () => tree.ref.setBands?.([...bands].reverse()));
       assert.deepEqual(painted(), [...originalNodes].reverse(), 'keys use the primitive segment id, including separated segments of one range');
       await mouse(tree.track, 'contextmenu', 220);
@@ -315,4 +318,35 @@ test('a single printed layer remains selectable on its degenerate preview rail w
   } finally {
     await tree.unmount();
   }
+});
+
+
+test('both clip bounds hide outside ranges, retain intersecting ranges and restore them without changing stored data', async () => {
+  const bands: readonly LayerSliderRangeBand[] = Object.freeze([
+    { id: 'below', bottomPercent: 0, topPercent: 10, color: '#123456', label: 'Below' },
+    { id: 'lower-intersection', bottomPercent: 10, topPercent: 30, color: '#abcdef', label: 'Lower intersection' },
+    { id: 'middle', bottomPercent: 40, topPercent: 60, color: '#123456', label: 'Middle' },
+    { id: 'upper-intersection', bottomPercent: 70, topPercent: 90, color: '#abcdef', label: 'Upper intersection' },
+    { id: 'above', bottomPercent: 90, topPercent: 100, color: '#123456', label: 'Above' },
+    { id: 'point', bottomPercent: 50, topPercent: 50, color: '#abcdef', label: 'Point' },
+  ]);
+  const tree = await mountRangeSlider({ rangeBands: bands });
+  const visible = () => [...tree.track.querySelectorAll<HTMLElement>('[data-layer-range-band]')];
+  const ids = () => visible().map((element) => element.dataset.layerRangeBand);
+  try {
+    assert.deepEqual(ids(), ['lower-intersection', 'middle', 'upper-intersection', 'point']);
+    const middle = visible().find((element) => element.dataset.layerRangeBand === 'middle');
+    await act(async () => tree.ref.setBounds?.(4, 6));
+    assert.deepEqual(ids(), ['middle', 'point']);
+    assert.equal(visible()[0], middle, 'a surviving range keeps its node');
+    await act(async () => tree.ref.setBounds?.(7, 9));
+    assert.deepEqual(ids(), ['upper-intersection'], 'touching the clip edge without intersecting does not paint a range');
+    await act(async () => tree.ref.setBounds?.(5, 5));
+    assert.deepEqual(ids(), [], 'a collapsed non-singleton clip window paints no range');
+    await act(async () => tree.ref.setBounds?.(0, 10));
+    assert.deepEqual(ids(), bands.map((band) => band.id));
+    assert.deepEqual(tree.upperChanges, []);
+    assert.deepEqual(tree.lowerChanges, []);
+    assert.deepEqual(bands.map((band) => [band.bottomPercent, band.topPercent]), [[0, 10], [10, 30], [40, 60], [70, 90], [90, 100], [50, 50]]);
+  } finally { await tree.unmount(); }
 });

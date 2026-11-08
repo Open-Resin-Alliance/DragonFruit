@@ -68,6 +68,13 @@ type LayerSliderProps = {
 // SVG geometry properties are supported by browsers but absent from CSSProperties.
 type RailClipRectStyle = React.CSSProperties & Pick<React.SVGProps<SVGRectElement>, 'x' | 'y' | 'rx' | 'ry'>;
 
+function rangeBandIntersectsWindow(band: LayerSliderRangeBand, bottom: number, top: number): boolean {
+  if (top <= bottom) return false;
+  return band.topPercent === band.bottomPercent
+    ? band.bottomPercent >= bottom && band.topPercent <= top
+    : band.topPercent > bottom && band.bottomPercent < top;
+}
+
 export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, currentHeightMm, maxHeightMm, className, showValue = false, docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm, compactMinimalRail = false, allowTrackClickJump = false, rangeBands, onRangeContextMenu }: LayerSliderProps) {
   const { _ } = useLingui();
   const fmt = useLocaleFormat();
@@ -104,7 +111,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const editPopoverRef = React.useRef<HTMLDivElement>(null);
   const openThumbEditRef = React.useRef<((thumb: 'upper' | 'lower') => void) | null>(null);
   const thumbContextMenuHandledRef = React.useRef(false);
-  const [hoveredBandId, setHoveredBandId] = React.useState<string | null>(null);
+  const [hoveredBand, setHoveredBand] = React.useState<{ id: string; bottom: number; top: number } | null>(null);
 
   const formatMm = React.useCallback((mm: number) => {
     if (!Number.isFinite(mm)) return fmt.unit('mm', '0');
@@ -736,25 +743,36 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     const crossSection = onToggleCrossSection ? (crossSectionEnabled ? 'on' : 'off') : 'none';
     return formatMinimalRailTitle(_, Math.round(displayValue), mmLabel, crossSection);
   }, [_, crossSectionEnabled, displayHeightMm, displayValue, formatMm, onToggleCrossSection]);
-  const hoveredBandLabel = rangeBands?.find((band) => band.id === hoveredBandId)?.label;
+  const singletonLayer = min === max && max > 0;
+  const bandWindowBottom = singletonLayer ? 0 : lowerPercent ?? 0;
+  const bandWindowTop = singletonLayer ? 100 : percent;
+  const orderedRangeBands = React.useMemo(() => [...(rangeBands ?? [])].sort((a, b) => a.bottomPercent - b.bottomPercent), [rangeBands]);
+  const visibleRangeBands = React.useMemo(() => (rangeBands ?? []).filter((band) => rangeBandIntersectsWindow(band, bandWindowBottom, bandWindowTop)), [rangeBands, bandWindowBottom, bandWindowTop]);
+  const hoveredBandLabel = hoveredBand && hoveredBand.bottom === bandWindowBottom && hoveredBand.top === bandWindowTop
+    ? visibleRangeBands.find((band) => band.id === hoveredBand.id)?.label
+    : undefined;
   const rangeTrackHint = onRangeContextMenu ? _(RANGE_TRACK_HINT) : null;
   const railClassName = `relative mx-auto ${embedded ? (expandToContainer ? 'flex-1 h-full min-h-[300px]' : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`;
   const railClipId = `layer-slider-rail-${React.useId()}`;
   const visibleRailSpans = React.useMemo(() => {
-    if (!rangeBands?.length) return null;
+    if (!visibleRangeBands.length) return null;
     const holes: { topPercent: number; starts: string[]; ends: string[] }[] = [];
-    for (const band of [...rangeBands].sort((a, b) => a.bottomPercent - b.bottomPercent)) {
+    for (const band of orderedRangeBands) {
+      if (!rangeBandIntersectsWindow(band, bandWindowBottom, bandWindowTop)) continue;
+      const bottomPercent = Math.max(band.bottomPercent, bandWindowBottom);
+      const topPercent = Math.min(band.topPercent, bandWindowTop);
       const center = (band.bottomPercent + band.topPercent) / 2;
-      const halfHeight = `max(2px, ${(band.topPercent - band.bottomPercent) / 2}%)`;
-      const start = `calc(${center}% - ${halfHeight})`;
-      const end = `calc(${center}% + ${halfHeight})`;
+      // Half a pixel per colored edge makes one shared seam; rail edges supply the other half.
+      const halfHeight = `max(2px, calc(${(band.topPercent - band.bottomPercent) / 2}% + 0.5px))`;
+      const start = `max(${bandWindowBottom}%, calc(${center}% - ${halfHeight}))`;
+      const end = `min(${bandWindowTop}%, calc(${center}% + ${halfHeight}))`;
       const previous = holes.at(-1);
-      if (previous && band.bottomPercent <= previous.topPercent) {
-        previous.topPercent = Math.max(previous.topPercent, band.topPercent);
+      if (previous && bottomPercent <= previous.topPercent) {
+        previous.topPercent = Math.max(previous.topPercent, topPercent);
         previous.starts.push(start);
         previous.ends.push(end);
       } else {
-        holes.push({ topPercent: band.topPercent, starts: [start], ends: [end] });
+        holes.push({ topPercent, starts: [start], ends: [end] });
       }
     }
     const spans: { bottom: string; top: string }[] = [];
@@ -766,7 +784,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     }
     spans.push({ bottom, top: '100%' });
     return spans;
-  }, [rangeBands]);
+  }, [orderedRangeBands, visibleRangeBands.length, bandWindowBottom, bandWindowTop]);
 
   return (
     <div
@@ -849,14 +867,20 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           }}
           onContextMenu={onContextMenu}
           onMouseMove={(e) => {
-            if (!rangeBands?.length) return;
+            if (!visibleRangeBands.length) return;
             const rect = containerRef.current?.getBoundingClientRect();
             if (!rect) return;
             const pointerPercent = 100 * (1 - (e.clientY - rect.top) / Math.max(1, rect.height));
-            const band = rangeBands.find((candidate) => pointerPercent >= candidate.bottomPercent && pointerPercent <= candidate.topPercent);
-            setHoveredBandId(band?.id ?? null);
+            const band = pointerPercent >= bandWindowBottom && pointerPercent <= bandWindowTop
+              ? visibleRangeBands.find((candidate) => pointerPercent >= candidate.bottomPercent && pointerPercent <= candidate.topPercent)
+              : undefined;
+            setHoveredBand((previous) => {
+              if (!band) return null;
+              if (previous?.id === band.id && previous.bottom === bandWindowBottom && previous.top === bandWindowTop) return previous;
+              return { id: band.id, bottom: bandWindowBottom, top: bandWindowTop };
+            });
           }}
-          onMouseLeave={() => setHoveredBandId(null)}
+          onMouseLeave={() => setHoveredBand(null)}
           tabIndex={0}
           onKeyDown={onKeyDown}
         >
@@ -928,24 +952,29 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               />
             </div>
 
-            {/* Settings overlay the track, independently of the clip window; thumbs render above them. */}
-            {rangeBands?.map((band) => (
-              <div
-                key={band.id}
-                data-layer-range-band={band.id}
-                role="img"
-                aria-label={band.label}
-                title={band.label}
-                className="absolute left-1/2 w-1.5 -translate-x-1/2 rounded-full pointer-events-none"
-                style={{
-                  bottom: `${(band.bottomPercent + band.topPercent) / 2}%`,
-                  height: `max(2px, calc(${band.topPercent - band.bottomPercent}% - 2px))`,
-                  transform: 'translateY(50%)',
-                  background: band.color,
-                  pointerEvents: 'none',
-                }}
-              />
-            ))}
+            {/* Clip colors to the same interval as the fill; saved ranges remain unchanged. */}
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{ clipPath: `inset(${100 - bandWindowTop}% 0 ${bandWindowBottom}% 0)` }}
+            >
+              {visibleRangeBands.map((band) => (
+                <div
+                  key={band.id}
+                  data-layer-range-band={band.id}
+                  role="img"
+                  aria-label={band.label}
+                  title={band.label}
+                  className="absolute left-1/2 w-1.5 -translate-x-1/2 rounded-full pointer-events-none"
+                  style={{
+                    bottom: `${(band.bottomPercent + band.topPercent) / 2}%`,
+                    height: `max(2px, calc(${band.topPercent - band.bottomPercent}% - 1px))`,
+                    transform: 'translateY(50%)',
+                    background: band.color,
+                    pointerEvents: 'none',
+                  }}
+                />
+              ))}
+            </div>
 
             {/* Lower thumb */}
             {lowerPercent != null && (
