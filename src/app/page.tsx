@@ -321,6 +321,7 @@ import {
 import { openProfileSettingsModal, PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT } from '@/components/settings/profileModalEvents';
 import { FirstRunOnboarding } from '@/components/layout/FirstRunOnboarding';
 import {
+  getProfileLocalMaterialSettingsAdapter,
   getProfileMonitoringUiAdapter,
   getProfileNetworkUiAdapter,
   type PrinterMonitoringSnapshot,
@@ -350,7 +351,7 @@ import { matchSceneMaterialsToTanks, resolveTankMaterialProfiles } from '@/featu
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import { sliceProfileFingerprint } from '@/features/printing/slicedPlates';
 import { useSlicedPlatePreviewLoading, useSlicedPlates } from '@/features/printing/useSlicedPlates';
-import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { resolveOutputFileExtension, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import {
   cleanupStalePrintTempArtifacts,
   deletePrintTempArtifactPath,
@@ -10718,6 +10719,7 @@ export default function Home() {
         layerHeightMm={scene.mode === 'printing' ? crossSectionLayerHeightMm : slicing.layerHeightMm}
         format={layerSettingsFormat}
         formatVersion={activePrinterProfile?.display.formatVersion}
+        materialSettings={activePrinterProfile ? getProfileLocalMaterialSettingsAdapter(activePrinterProfile.display.outputFormat, resolveOutputSettingsMode(activePrinterProfile.display.outputFormat, activePrinterProfile.display.settingsMode)) : null}
         normalExposureSec={activeMaterialProfile?.normalExposureSec ?? 0}
         menuRequest={layerSettingsMenuRequest}
         onCloseMenu={() => setLayerSettingsMenuRequest(null)}

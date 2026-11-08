@@ -75,6 +75,8 @@ function sanitizeField(input: unknown): LocalMaterialFieldSchema | null {
   if (color) field.color = color;
   const splitWithKey = text(value.splitWithKey, 64);
   if (splitWithKey) field.splitWithKey = splitWithKey;
+  const perLayerField = text(value.perLayerField, 64);
+  if (perLayerField) field.perLayerField = perLayerField;
   const description = text(value.description, 240);
   if (description) field.description = description;
   const metadataPath = text(value.metadataPath, 160);
@@ -98,6 +100,7 @@ function sanitizeField(input: unknown): LocalMaterialFieldSchema | null {
   const rowWeight = number(value.rowWeight);
   if (rowWeight !== undefined) field.rowWeight = rowWeight;
   if (typeof value.disabled === 'boolean') field.disabled = value.disabled;
+  if (typeof value.perLayerEditable === 'boolean') field.perLayerEditable = value.perLayerEditable;
 
   const options = sanitizeOptions(value.options);
   if (options) field.options = options;

@@ -80,6 +80,59 @@ Rules:
   app does not translate plugin-supplied text.
 - Limits: 8 output formats, 8 modes per format, 512 fields, 128 KiB per contract.
 
+### Per-layer settings metadata
+
+The per-layer settings (PLS) editor reads the active printer's resolved output-format
+and material-settings mode schema. Both compiled adapters and runtime-installed
+`materialSettings` use these optional `LocalMaterialFieldSchema` properties:
+
+```json
+{
+  "key": "normalExposureSec",
+  "label": "Normal Exposure (s)",
+  "kind": "number",
+  "defaultValue": 2.5,
+  "min": 0,
+  "max": 120,
+  "step": 0.01,
+  "perLayerEditable": true,
+  "perLayerField": "exposureSec"
+}
+```
+
+- Only `perLayerEditable: true` opts in. Missing, `false`, or non-boolean values
+  do not opt in. Disabled fields and kinds other than `number` or `integer` never
+  become editable PLS controls, even when flagged.
+- `perLayerField` binds the source field to a canonical `LayerSettingField` from
+  `src/features/slicing/layerSettingsRanges.ts`. Omit it when `key` is already
+  canonical; otherwise supply the binding explicitly. Runtime sanitization trims
+  the string and bounds it to 64 characters, dropping empty/non-string bindings.
+  Unknown canonical bindings are not controls.
+- Mode inheritance resolves **before** eligibility is evaluated. A `$remove`
+  removes the PLS control too; an inherited field keeps its metadata until a mode
+  overrides it (for example with `perLayerEditable: false` or `disabled: true`).
+  Flags must not resurrect removed motion controls in a tilting-vat mode.
+- Pairing remains `splitWithKey`, using source field keys. Both halves must be
+  eligible in the resolved mode; a flag does not implicitly opt in its partner.
+- A binding selects a canonical control, not a source-value conversion. Canonical
+  timing is in seconds, travel in millimeters, speed in millimeters per minute,
+  and `lightPwm` is an integer byte in **0–255**, not a percentage. Total lift and
+  retract travel (`liftHeightMm`, `retractHeightMm`) retain total semantics;
+  stage-two travel has separate canonical fields. Core retains canonical labels
+  and bounds where source units or stage-one labels would misrepresent them.
+  Thus CTB's `projectorPwmPercent` may bind to `lightPwm`, but PLS edits byte PWM,
+  not the material pane's 1–100 percent. GOO uses the same canonical byte control.
+- Metadata is an eligibility declaration, **not encoder support**. Controls are
+  intersected with the selected format/version's existing `layerSettingsFields`.
+  Do not flag global layer height, anti-aliasing, raster/geometry settings, layer
+  counts, burn-in-only duplicates, or values absent from physical layer records.
+  Anycubic currently supports only exposure, lift travel and first lift speed in
+  its layer records; other advanced-mode settings remain material-only.
+
+Built-in schema data lives in `plugins/ctb/materialSettings/`,
+`plugins/elegoo/materialSettings/` and `plugins/anycubic/materialSettings/`; add
+metadata there rather than maintaining a second per-layer field list in UI code.
+
 ## Why not remote JavaScript
 
 The tier exists so a closed-source plugin stays a separate program

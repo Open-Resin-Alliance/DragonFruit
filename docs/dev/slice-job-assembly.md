@@ -233,17 +233,27 @@ segment endpoints, since one range can win several separated intervals.
 Call `useLayerSettingsRangeColors` once and share its map across both rails,
 menus and Manage rows. It allocates distinct resolved RGB values in persisted
 array order, observes root/OS theme changes and does not persist colors.
-`formats/layerSettingsFields.ts` owns pure `resolveLayerSettingsFields`, so a
-props-driven editor need not import the runtime profile/plugin registry.
-`layerSettingsRangeMessages.ts` owns shared localized field labels, units and
-module-scope interpolated messages; do not copy the material settings schema
-or put translation dependencies in the pure resolver. The rail's right-click
+`formats/layerSettingsFields.ts` owns pure `resolveLayerSettingsFields` for
+encoder/version capabilities. The page resolves the active printer's material
+adapter through the same `resolveOutputSettingsMode` and
+`getProfileLocalMaterialSettingsAdapter` path as the material editor and passes
+it as `materialSettings`; the range editor does not hydrate the registry itself.
+`layerSettingsMaterialFields.ts` owns pure `resolveLayerSettingsMaterialRows`: it
+selects explicitly `perLayerEditable: true`, enabled numeric fields from that
+resolved adapter, binds `perLayerField ?? key` to an existing canonical setting,
+and intersects with encoder capabilities. Missing/false eligibility, disabled
+fields, unknown bindings and unsupported versions produce no editable control.
+Existing material placement ordering and `splitWithKey` determine the rows;
+there is no separate per-format or four-pair display list.
+`layerSettingsRangeMessages.ts` owns shared localized canonical labels, units and
+module-scope interpolated messages. Keep translations out of the pure resolver.
+See [Plugin UI metadata](plugins-sdk/ui.md) for JSON eligibility and binding examples. The rail's right-click
 track command is separate from the existing handle exact-value editor. The
 editor receives `layerHeightMm` from its current slider host and offers
-Layers/mm bounds. Lift travel, lift speed, retract travel and retract speed each
-show their two related fields on one row with a shared toggle. Single and paired
-rows keep the same toggle/first-value/second-value/unit columns, retaining blank
-cells for single values and PWM. Travel pairs are **Total / Stage 2**; speed
+Layers/mm bounds. Material-declared motion pairs share one row and toggle when
+both members are eligible and encodable; absent companions are not invented.
+Single-value controls, bounds and PWM align with the far (second-value) column,
+retaining blank first-value/separator cells and an aligned toggle column. Travel pairs are **Total / Stage 2**; speed
 pairs are **Stage 1 / Stage 2**. The first travel value is not the material
 profile menu's first-stage distance: total = stage 1 + stage 2.
 
@@ -252,8 +262,12 @@ a pair seeds both supported fields; disabling it removes both and leaves other
 settings untouched. Typing/stepping/wheeling one field enables the row but writes
 only that field, so its untouched companion keeps inheriting. Opening, cancelling
 or applying an unchanged partial pair never freezes that companion into the
-patch. Unsupported fields are unavailable rather than added by the shared toggle;
-existing incompatible values remain visible/removable. Where no wider-range
+patch. Unsupported or mode-hidden fields are not added by the shared toggle. Explicit
+stored values outside the current editable field set remain disabled in a
+separate **Unavailable stored overrides** section, with per-field removal; a
+profile/mode switch never deletes or materializes sparse values. Existing
+format-compatible hidden overrides can be preserved by an unchanged Apply;
+format-incompatible values still require repair before Apply/output. Where no wider-range
 value is known, the editor labels inheritance as the material-mode default rather
 than claiming its numeric editing seed is the encoded baseline.
 
@@ -266,12 +280,13 @@ its physical data remains editable/savable as mm.
 
 Modes normalize the material baseline before sparse range patches are applied.
 Unset fields inherit wider matching ranges, then the mode-adjusted baseline.
-Explicit range overrides take precedence: Simple/all-fields single-stage defaults
-do not prohibit an explicitly overridden stage 2, and Tilting's baseline motion
-values can likewise be replaced. The range editor currently filters by actual
-format/version capabilities, not mode-specific UI visibility. This is not a new
-per-range mode selector or a silent removal of configured fields. Effective
-height relations and unsupported serialized fields still fail before output.
+New editable range controls follow the active printer/material-mode JSON, not
+just the format's possible serialized fields. Simple does not invent a stage-2
+control, and Tilting's removed motion fields stay out of the editable list.
+Already-stored explicit overrides still apply after baseline normalization;
+switching modes does not rewrite scene data. This is not a per-range mode selector
+or a change to the encoder contract. Effective height relations and unsupported
+serialized fields still fail before output.
 
 A single export captures an owned array before its first await; an all-plate
 batch captures once before picking its folder. Both also capture the encoded

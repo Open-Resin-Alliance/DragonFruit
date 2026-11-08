@@ -267,6 +267,10 @@ export type LocalMaterialFieldSchema = {
     color?: string;
     /** Optional key to render as a two-stage paired input row with this field. */
     splitWithKey?: string;
+    /** Explicit true opts an enabled numeric field into per-layer settings, within encoder capabilities. */
+    perLayerEditable?: boolean;
+    /** Canonical LayerSettingField binding; defaults to key. Uses canonical units, not source units. */
+    perLayerField?: string;
     /**
      * Render the field greyed out and non-interactive without taking it out of the
      * settings: its value merges into the job metadata like any other field, so a

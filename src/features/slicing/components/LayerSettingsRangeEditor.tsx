@@ -12,9 +12,11 @@ import { Toggle } from '@/components/atoms/Toggle';
 import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import type { LocalMaterialFieldSchema } from '@/features/plugins/complexPluginContracts';
 import { normalizeFormatVersion } from '@/features/profiles/outputFormatUtils';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import { resolveLayerSettingsFields } from '../formats/layerSettingsFields';
+import { resolveLayerSettingsMaterialRows } from '../layerSettingsMaterialFields';
 import type { SlicingFormatDefinition } from '../formats/types';
 import {
   compileLayerSettingsRanges,
@@ -43,6 +45,7 @@ export type LayerSettingsRangeEditorProps = {
   layerHeightMm: number;
   format: SlicingFormatDefinition | null;
   formatVersion?: string;
+  materialSettings: { fields: LocalMaterialFieldSchema[] } | null;
   normalExposureSec: number;
   menuRequest: { layerNumber: number | null; position: { x: number; y: number } } | null;
   onCloseMenu(): void;
@@ -78,22 +81,25 @@ const MAX_F32 = 3.4028234663852886e38;
 const CONTROL_GRID = 'grid shrink-0 grid-cols-[36px_112px_12px_112px_60px] items-center gap-2';
 
 type SettingRowDefinition = {
-  fields: readonly [LayerSettingField] | readonly [LayerSettingField, LayerSettingField];
+  fields: readonly LayerSettingField[];
   label: MessageDescriptor;
   hint?: MessageDescriptor;
 };
 
-const MOTION_PAIRS = [
-  { fields: ['liftHeightMm', 'liftHeight2Mm'], label: msg`Lift travel`, hint: msg`Total / Stage 2` },
-  { fields: ['liftSpeedMmMin', 'liftSpeed2MmMin'], label: LAYER_SETTING_LABELS.liftSpeedMmMin, hint: msg`Stage 1 / Stage 2` },
-  { fields: ['retractHeightMm', 'retractHeight2Mm'], label: msg`Retract travel`, hint: msg`Total / Stage 2` },
-  { fields: ['retractSpeedMmMin', 'retractSpeed2MmMin'], label: LAYER_SETTING_LABELS.retractSpeedMmMin, hint: msg`Stage 1 / Stage 2` },
-] as const satisfies readonly SettingRowDefinition[];
-
-const SETTING_ROWS: readonly SettingRowDefinition[] = LAYER_SETTING_FIELDS
-  .filter((field) => !MOTION_PAIRS.some((pair) => pair.fields[1] === field))
-  .map((field): SettingRowDefinition => MOTION_PAIRS.find((pair) => pair.fields[0] === field)
-    ?? { fields: [field], label: LAYER_SETTING_LABELS[field] });
+function materialRowDefinition(fields: readonly LayerSettingField[]): SettingRowDefinition {
+  const first = fields[0];
+  const paired = fields.length === 2;
+  const totalTravel = first === 'liftHeightMm' || first === 'retractHeightMm';
+  return {
+    fields,
+    label: paired && totalTravel
+      ? first === 'liftHeightMm' ? msg`Lift travel` : msg`Retract travel`
+      : LAYER_SETTING_LABELS[first],
+    hint: paired && fields[1] === first.replace(/(MmMin|Mm)$/, '2$1')
+      ? totalTravel ? msg`Total / Stage 2` : msg`Stage 1 / Stage 2`
+      : undefined,
+  };
+}
 
 
 
@@ -114,6 +120,7 @@ export function LayerSettingsRangeEditor({
   layerHeightMm,
   format,
   formatVersion,
+  materialSettings,
   normalExposureSec,
   menuRequest,
   onCloseMenu,
@@ -124,7 +131,11 @@ export function LayerSettingsRangeEditor({
   const [dialog, setDialog] = React.useState<DialogState | null>(null);
   const draft = dialog && dialog.kind !== 'manage' ? dialog.draft : null;
   const supportedFields = format ? resolveLayerSettingsFields(format, formatVersion) : [];
-  const canEditNumbers = supportedFields.length > 0;
+  const settingRows = resolveLayerSettingsMaterialRows(materialSettings, supportedFields)
+    .map((row) => materialRowDefinition(row.controls.map((control) => control.field)));
+  const editableFields = settingRows.flatMap((row) => row.fields);
+  const unavailableFields = LAYER_SETTING_FIELDS.filter((field) => draft?.settings[field] !== undefined && !editableFields.includes(field));
+  const canEditNumbers = editableFields.length > 0;
   const layerNumber = menuRequest?.layerNumber ?? null;
   const canAdd = canEditNumbers && totalLayers > 0 && layerNumber !== null;
   const normalizedVersion = normalizeFormatVersion(formatVersion);
@@ -185,7 +196,7 @@ export function LayerSettingsRangeEditor({
       const settings = { ...current.settings };
       for (const field of row.fields) {
         if (!enabled) delete settings[field];
-        else if (supportedFields.includes(field) && settings[field] === undefined) settings[field] = inheritedValue(field);
+        else if (editableFields.includes(field) && settings[field] === undefined) settings[field] = inheritedValue(field);
       }
       return { ...current, settings };
     });
@@ -286,7 +297,7 @@ export function LayerSettingsRangeEditor({
         )}
       >
         <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg`Unspecified values inherit wider ranges or mode-adjusted material settings. Explicit overrides take precedence over the material mode.`)}</p>
-        {!canEditNumbers ? <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg`The selected format does not support per-layer settings. Existing ranges can be inspected or deleted; select a supported printer to edit values.`)}</p> : null}
+        {!canEditNumbers ? <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg`The selected printer and material mode have no editable per-layer settings. Existing ranges can be inspected or deleted.`)}</p> : null}
         {draft ? (
           <section className="space-y-2" aria-label={_(msg`Range settings`)}>
             <div className="flex items-center gap-2 text-sm font-semibold">
@@ -317,6 +328,8 @@ export function LayerSettingsRangeEditor({
                 <SettingRow key={edge} label={label} bordered surface="raised">
                   <div className={CONTROL_GRID}>
                     <span aria-hidden="true" />
+                    <span aria-hidden="true" />
+                    <span aria-hidden="true" />
                     <NumberInput
                       aria-label={label}
                       value={value}
@@ -330,39 +343,29 @@ export function LayerSettingsRangeEditor({
                         : { ...current, [edge === 'start' ? 'startLayer' : 'endLayer']: next })}
                       className="ui-input w-full pr-5"
                     />
-                    <span aria-hidden="true" />
-                    <span aria-hidden="true" />
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{isMm ? fmt.unit('mm', '') : null}</span>
                   </div>
                 </SettingRow>
               );
             })}
-            {SETTING_ROWS.filter((row) => row.fields.some((field) => supportedFields.includes(field) || draft.settings[field] !== undefined)).map((row) => {
+            {settingRows.map((row) => {
               const paired = row.fields.length === 2;
               const enabled = row.fields.some((field) => draft.settings[field] !== undefined);
-              const supported = row.fields.some((field) => supportedFields.includes(field));
               const label = _(row.label);
               const unit = LAYER_SETTING_UNITS[row.fields[0]];
               const notes = row.fields.flatMap((field) => {
-                if (!supportedFields.includes(field) && draft.settings[field] === undefined) return [];
                 const fieldLabel = _(LAYER_SETTING_LABELS[field]);
                 const inherited = inheritedPatch[field];
                 const value = draft.settings[field] ?? inheritedValue(field);
                 const fieldUnit = LAYER_SETTING_UNITS[field];
                 const formatted = fieldUnit ? fmt.quantity(value, 2, fieldUnit) : fmt.number(value);
-                const text = !supportedFields.includes(field)
-                  ? formatUnsupportedLayerSetting(_, selectedFormat, bounds(draft), fieldLabel)
-                  : draft.settings[field] === undefined
-                    ? inherited === undefined ? _(msg`Material mode default`) : formatInheritedValue(_, formatted)
-                    : null;
+                const text = draft.settings[field] === undefined
+                  ? inherited === undefined ? _(msg`Material mode default`) : formatInheritedValue(_, formatted)
+                  : null;
                 return text ? [{ field, text: paired ? formatFieldNote(_, fieldLabel, text) : text }] : [];
               });
               const inputs = row.fields.map((field) => {
                 const fieldLabel = _(LAYER_SETTING_LABELS[field]);
-                const fieldSupported = supportedFields.includes(field);
-                if (!fieldSupported && draft.settings[field] === undefined) {
-                  return <span key={field} aria-label={fieldLabel} className="text-center text-[10px]" style={{ color: 'var(--text-muted)' }} title={formatUnsupportedLayerSetting(_, selectedFormat, bounds(draft), fieldLabel)}>{_(msg`Unavailable`)}</span>;
-                }
                 return (
                   <NumberInput
                     key={field}
@@ -371,7 +374,6 @@ export function LayerSettingsRangeEditor({
                     min={0}
                     max={field === 'lightPwm' ? 255 : MAX_F32}
                     step={field === 'lightPwm' || LAYER_SETTING_UNITS[field] === 'mmPerMin' ? 1 : 0.01}
-                    disabled={!fieldSupported}
                     onChange={(next) => updateDraft((current) => ({ ...current, settings: { ...current.settings, [field]: next } }))}
                     className="ui-input w-full pr-5"
                   />
@@ -388,15 +390,36 @@ export function LayerSettingsRangeEditor({
                   description={row.hint || notes.length > 0 ? <>{row.hint ? <div>{_(row.hint)}</div> : null}{notes.map((note) => <div key={note.field}>{note.text}</div>)}</> : undefined}
                 >
                   <div className={CONTROL_GRID}>
-                    <Toggle label={formatOverrideLabel(_, label)} checked={enabled} disabled={!supported && !enabled} size="sm" onChange={(checked) => setRowEnabled(row, checked)} />
-                    {inputs[0]}
+                    <Toggle label={formatOverrideLabel(_, label)} checked={enabled} size="sm" onChange={(checked) => setRowEnabled(row, checked)} />
+                    {paired ? inputs[0] : <span aria-hidden="true" />}
                     <span aria-hidden="true" className="text-center text-xs" style={{ color: 'var(--text-muted)' }}>{paired ? '/' : null}</span>
-                    {paired ? inputs[1] : <span aria-hidden="true" />}
+                    {paired ? inputs[1] : inputs[0]}
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{unit ? fmt.unit(unit, '') : null}</span>
                   </div>
                 </SettingRow>
               );
             })}
+            {unavailableFields.length > 0 ? (
+              <section className="space-y-2" aria-label={_(msg`Unavailable stored overrides`)}>
+                <h3 className="text-xs font-semibold">{_(msg`Unavailable stored overrides`)}</h3>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{_(msg`These stored overrides are not editable for the selected printer and material mode. They are preserved until you remove them.`)}</p>
+                {unavailableFields.map((field) => {
+                  const label = _(LAYER_SETTING_LABELS[field]);
+                  const unit = LAYER_SETTING_UNITS[field];
+                  return (
+                    <SettingRow key={field} role="group" aria-label={label} label={label} bordered surface="raised">
+                      <div className={CONTROL_GRID}>
+                        <Toggle label={formatOverrideLabel(_, label)} checked size="sm" onChange={() => setRowEnabled({ fields: [field], label: LAYER_SETTING_LABELS[field] }, false)} />
+                        <span aria-hidden="true" />
+                        <span aria-hidden="true" />
+                        <NumberInput aria-label={label} value={draft.settings[field]!} disabled className="ui-input w-full pr-5" />
+                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{unit ? fmt.unit(unit, '') : null}</span>
+                      </div>
+                    </SettingRow>
+                  );
+                })}
+              </section>
+            ) : null}
             {error ? <p role="alert" className="text-xs" style={{ color: 'var(--danger)' }}>{error}</p> : null}
           </section>
         ) : null}

@@ -13,6 +13,7 @@ import type { SlicingFormatDefinition } from '../formats/types';
 import { formatLayerSettingsRangeBounds } from '../layerSettingsRangeMessages';
 import { compileLayerSettingsRanges, parseLayerSettingsRanges, resolveLayerSettingsRangeBounds, type LayerSettingsRange } from '../layerSettingsRanges';
 import { useLayerSettingsRangeColors } from '../useLayerSettingsRangeColors';
+import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
 
 const initialRanges: LayerSettingsRange[] = [
   { id: 'hidden-arbitrary-id', startLayer: 3, endLayer: 10, settings: { exposureSec: 3 } },
@@ -105,6 +106,7 @@ async function mountHarness({
           layerHeightMm={height}
           format={profile.format}
           formatVersion={profile.version}
+          materialSettings={profile.format ? getProfileLocalMaterialSettingsAdapter(profile.format.outputFormat, 'twostage') : null}
           normalExposureSec={2}
           menuRequest={menuRequest}
           onCloseMenu={() => setMenuRequest(null)}
@@ -394,7 +396,7 @@ test('printer switches preserve incompatible values for repair; unsupported form
     assert.match(warning, /CTB \(V2\)/);
     assert.match(warning, /Layers 3–10/);
     assert.match(warning, /Total lift travel/);
-    await toggle('Lift travel');
+    await toggle('Total lift travel');
     assert.equal(button(dialog(), 'Apply').disabled, false, 'another incompatible range must not prevent this range repair');
     await click(button(dialog(), 'Apply'));
     assert.deepEqual(tree.state().ranges[1].settings, { exposureSec: 4 });

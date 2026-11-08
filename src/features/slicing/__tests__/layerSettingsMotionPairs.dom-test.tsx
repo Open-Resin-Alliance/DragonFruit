@@ -8,15 +8,24 @@ import { ANYCUBIC_AFF_FORMAT_DEFINITION } from '../../../../plugins/anycubic/sli
 import { LayerSettingsRangeEditor } from '../components/LayerSettingsRangeEditor';
 import { parseLayerSettingsRanges, type LayerPrintSettingsPatch, type LayerSettingsRange } from '../layerSettingsRanges';
 import type { SlicingFormatDefinition } from '../formats/types';
+import GOO_PLUGIN from '../../../../plugins/elegoo/pluginDefinition';
+import CTB_PLUGIN from '../../../../plugins/ctb/pluginDefinition';
+import ANYCUBIC_PLUGIN from '../../../../plugins/anycubic/pluginDefinition';
+
+function materialSettings(format: SlicingFormatDefinition, mode: string) {
+  const plugin = format.outputFormat === GOO_FORMAT_DEFINITION.outputFormat ? GOO_PLUGIN
+    : format.outputFormat === CTB_FORMAT_DEFINITION.outputFormat ? CTB_PLUGIN : ANYCUBIC_PLUGIN;
+  return plugin.localMaterialSettingsByOutputAndMode?.[format.outputFormat]?.[mode]
+    ?? plugin.localMaterialSettingsByOutput?.[format.outputFormat] ?? null;
+}
 
 const MOTION = {
   liftHeightMm: 8, liftHeight2Mm: 2, liftSpeedMmMin: 60, liftSpeed2MmMin: 180,
-  retractHeightMm: 8, retractHeight2Mm: 2, retractSpeedMmMin: 180, retractSpeed2MmMin: 60,
+  retractSpeedMmMin: 180, retractSpeed2MmMin: 60,
 };
 const PAIRS = [
   ['Lift travel', 'Total lift travel', 'Stage 2 lift travel', '8', '2'],
   ['Lift speed', 'Lift speed', 'Stage 2 lift speed', '60', '180'],
-  ['Retract travel', 'Total retract travel', 'Stage 2 retract travel', '8', '2'],
   ['Retract speed', 'Retract speed', 'Stage 2 retract speed', '180', '60'],
 ] as const;
 
@@ -59,8 +68,8 @@ async function type(label: string, value: string) {
   });
 }
 
-async function mountEditor(settings: LayerPrintSettingsPatch = { exposureSec: 7 }, format: SlicingFormatDefinition = GOO_FORMAT_DEFINITION) {
-  let bridge: { ranges: LayerSettingsRange[]; applies: number; request(): void } | undefined;
+async function mountEditor(settings: LayerPrintSettingsPatch = { exposureSec: 7 }, format: SlicingFormatDefinition = GOO_FORMAT_DEFINITION, mode = 'twostage') {
+  let bridge: { ranges: LayerSettingsRange[]; applies: number; request(): void; setProfile(format: SlicingFormatDefinition, mode: string): void } | undefined;
   function Harness() {
     const [ranges, setRanges] = useState(() => parseLayerSettingsRanges([
       { id: 'wide', startLayer: 1, endLayer: 100, settings: { ...MOTION, exposureSec: 4 } },
@@ -68,10 +77,11 @@ async function mountEditor(settings: LayerPrintSettingsPatch = { exposureSec: 7 
     ]));
     const [request, setRequest] = useState<{ layerNumber: number; position: { x: number; y: number } } | null>({ layerNumber: 5, position: { x: 10, y: 10 } });
     const [applies, setApplies] = useState(0);
+    const [profile, setProfile] = useState({ format, mode });
     useLayoutEffect(() => {
-      bridge = { ranges, applies, request: () => setRequest({ layerNumber: 5, position: { x: 10, y: 10 } }) };
+      bridge = { ranges, applies, request: () => setRequest({ layerNumber: 5, position: { x: 10, y: 10 } }), setProfile: (next, nextMode) => setProfile({ format: next, mode: nextMode }) };
     });
-    return <LayerSettingsRangeEditor ranges={ranges} rangeColors={new Map([['wide', '#123456'], ['narrow', '#abcdef']])} totalLayers={12} layerHeightMm={0.05} format={format} normalExposureSec={2} menuRequest={request} onCloseMenu={() => setRequest(null)} onApply={(next) => {
+    return <LayerSettingsRangeEditor ranges={ranges} rangeColors={new Map([['wide', '#123456'], ['narrow', '#abcdef']])} totalLayers={12} layerHeightMm={0.05} format={profile.format} materialSettings={materialSettings(profile.format, profile.mode)} normalExposureSec={2} menuRequest={request} onCloseMenu={() => setRequest(null)} onApply={(next) => {
       setRanges(parseLayerSettingsRanges(next));
       setApplies((count) => count + 1);
     }} />;
@@ -152,13 +162,13 @@ test('opening and cancelling a partial motion pair never materializes its inheri
   } finally { await tree.unmount(); }
 });
 
-test('shared toggles never add unsupported companion fields', async (t) => {
-  for (const [format, label, supportedField, unsupportedLabel, expected] of [
-    [CTB_FORMAT_DEFINITION, 'Retract travel', 'Stage 2 retract travel', 'Total retract travel', { exposureSec: 7, retractHeight2Mm: 2 }],
-    [ANYCUBIC_AFF_FORMAT_DEFINITION, 'Lift travel', 'Total lift travel', 'Stage 2 lift travel', { exposureSec: 7, liftHeightMm: 8 }],
+test('profile modes and encoder capabilities both prevent unsupported companions', async (t) => {
+  for (const [format, mode, label, supportedField, unsupportedLabel, expected] of [
+    [CTB_FORMAT_DEFINITION, 'simple', 'Lift speed', 'Lift speed', 'Stage 2 lift speed', { exposureSec: 7, liftSpeedMmMin: 60 }],
+    [ANYCUBIC_AFF_FORMAT_DEFINITION, 'twostage', 'Total lift travel', 'Total lift travel', 'Stage 2 lift travel', { exposureSec: 7, liftHeightMm: 8 }],
   ] as const) {
     await t.test(format.displayName, async () => {
-      const tree = await mountEditor({ exposureSec: 7 }, format);
+      const tree = await mountEditor({ exposureSec: 7 }, format, mode);
       try {
         assert.equal([...row(label).querySelectorAll('input')].some((entry) => entry.getAttribute('aria-label') === unsupportedLabel), false);
         assert.equal(input(supportedField).disabled, false);
@@ -170,14 +180,54 @@ test('shared toggles never add unsupported companion fields', async (t) => {
   }
 });
 
-test('an incompatible stored pair can be removed with its shared toggle without dropping other fields', async () => {
+test('incompatible stored fields are read-only and independently removable without dropping other fields', async () => {
   const v2: SlicingFormatDefinition = { ...CTB_FORMAT_DEFINITION, formatVersions: [{ value: 'v2', label: 'V2', isDefault: true, layerSettingsFields: ['exposureSec', 'lightOffDelaySec'] }] };
   const tree = await mountEditor({ exposureSec: 7, liftHeightMm: 8, liftHeight2Mm: 2 }, v2);
   try {
     assert.equal(input('Total lift travel').disabled, true);
     assert.equal(input('Stage 2 lift travel').disabled, true);
-    await click(toggle('Lift travel'));
+    await click(toggle('Total lift travel'));
+    await click(toggle('Stage 2 lift travel'));
     await click(button(dialog(), 'Apply'));
     assert.deepEqual(tree.current().settings, { exposureSec: 7 });
+  } finally { await tree.unmount(); }
+});
+
+
+test('changing material mode updates editable controls without rewriting sparse stored values', async () => {
+  const stored = { exposureSec: 7, liftHeight2Mm: 3, liftSpeedMmMin: 90 };
+  const tree = await mountEditor(stored);
+  try {
+    assert.equal(input('Stage 2 lift travel').disabled, false);
+    await act(async () => tree.state().setProfile(GOO_FORMAT_DEFINITION, 'simple'));
+    assert.equal(input('Stage 2 lift travel').disabled, true);
+    assert.equal(input('Stage 2 lift travel').value, '3');
+    assert.equal(input('Lift speed').disabled, false);
+    assert.deepEqual(tree.current().settings, stored);
+    await click(button(dialog(), 'Apply'));
+    assert.equal(tree.state().applies, 0);
+    await tree.edit();
+    await act(async () => tree.state().setProfile(GOO_FORMAT_DEFINITION, 'tilting'));
+    assert.equal(input('Lift speed').disabled, true);
+    assert.equal(input('Exposure').disabled, false);
+    assert.equal([...dialog().querySelectorAll('input')].some((entry) => entry.getAttribute('aria-label') === 'Total lift travel'), false);
+    await act(async () => tree.state().setProfile(GOO_FORMAT_DEFINITION, 'twostage'));
+    assert.equal(input('Stage 2 lift travel').disabled, false);
+    assert.equal(input('Stage 2 lift travel').value, '3');
+    await click(button(dialog(), 'Apply'));
+    assert.deepEqual(tree.current().settings, stored);
+    assert.equal(tree.state().applies, 0);
+  } finally { await tree.unmount(); }
+});
+
+test('mode-hidden overrides can be removed without clearing other sparse fields', async () => {
+  const tree = await mountEditor({ exposureSec: 7, liftHeight2Mm: 3, liftSpeedMmMin: 90 }, GOO_FORMAT_DEFINITION, 'simple');
+  try {
+    assert.equal(input('Stage 2 lift travel').disabled, true);
+    await click(toggle('Stage 2 lift travel'));
+    assert.equal([...dialog().querySelectorAll('input')].some((entry) => entry.getAttribute('aria-label') === 'Stage 2 lift travel'), false);
+    await click(button(dialog(), 'Apply'));
+    assert.deepEqual(tree.current().settings, { exposureSec: 7, liftSpeedMmMin: 90 });
+    assert.equal(tree.state().applies, 1);
   } finally { await tree.unmount(); }
 });

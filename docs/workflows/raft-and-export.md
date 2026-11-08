@@ -45,7 +45,11 @@ Shift+F10 also opens range commands at the current layer.
 
 Ranges have distinct colors shared by bands, menu swatches and Manage. The bands
 sit beside the cross-section fill; moving clip handles does not change settings.
-Lift/retract travel and their speeds use paired inputs with one toggle per row.
+Editable settings follow the selected printer's material-mode definitions,
+intersected with its encoder/version support. Only fields opted into per-layer
+editing appear. Material-declared motion pairs use one toggle per row; missing
+companions are not displayed. Rest/wait fields, other single values, bounds and
+PWM align with the far value column.
 Travel is **Total / Stage 2** (not first-stage / second-stage distance); speeds
 are **Stage 1 / Stage 2**. Typing one value leaves its companion inherited;
 turning the shared toggle on explicitly seeds both supported values, and turning
@@ -56,14 +60,14 @@ mixed units. Editing does not reorder priority. A
 narrow exposure-only range can inherit lift/wait values from a wider range.
 
 Travel heights are totals: stage 2 is a part of that total, not extra travel.
-Speeds are mm/min and durations seconds. Available fields depend on the exact
-format/version. Incompatible saved overrides remain visible for repair and block
-slicing before save/file picking/preparation; they are never silently dropped
-when switching printers. Material settings modes supply the inherited baseline;
-explicit range overrides apply afterward and may re-enable stage 2 in Simple
-mode or replace Tilting defaults. Fields are not hidden solely because the
-material menu hides them in that mode. LUMEN/NanoDLP ranges are not implemented
-here.
+Speeds are mm/min and durations seconds; PLS Light PWM is a byte value (0–255),
+not a material-menu percentage. Simple/Two-stage/Tilting choose the editable
+fields through their existing definitions. Previously stored overrides hidden by
+a printer/mode switch appear separately as read-only values that can be removed;
+they are never silently dropped. Format-incompatible overrides also block slicing
+before save/file picking/preparation. Modes supply the inherited baseline, and
+retained explicit overrides apply afterward. LUMEN/NanoDLP ranges are not
+implemented here.
 
 Ranges belong to the scene and travel in manual saves, autosave/recovery and
 VOXL exports, not material presets. They apply at the same printed numbers on
