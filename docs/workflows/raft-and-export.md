@@ -25,6 +25,41 @@ Rafts improve adhesion and support stability, especially in resin workflows.
 2. Export scene/model assets.
 3. Re-open output in downstream workflow for final validation.
 
+## Per-layer print settings
+
+Select a supported GOO, CTB or Anycubic printer/material profile, then right-click
+**the layer slider track**, not a handle, and choose **Add range**. Right-clicking
+a handle still opens its exact-value editor. The keyboard Context Menu key or
+Shift+F10 also opens range commands at the current layer.
+
+1. Set inclusive **printed layer numbers** (first layer is 1).
+2. Enable each setting you intend to override, then enter its value. A new range
+   starts with no overrides; unchecked fields inherit rather than copy defaults.
+3. Apply once. Cancel leaves the scene unchanged; undo/redo also applies to ranges.
+4. Use **Manage ranges** to reach every saved range, including fully shadowed or
+   beyond-print ranges. Right-click a layer to edit/delete any range matching it.
+
+Ranges have distinct colors shared by bands, menu swatches and Manage. The bands
+sit beside the cross-section fill; moving clip handles does not change settings.
+The narrowest matching original range wins each supplied field; equal widths
+prefer the later-created range, and editing does not reorder that priority. A
+narrow exposure-only range can inherit lift/wait values from a wider range.
+
+Travel heights are totals: stage 2 is a part of that total, not extra travel.
+Speeds are mm/min and durations seconds. Available fields depend on the exact
+format/version. Incompatible saved overrides remain visible for repair and block
+slicing before save/file picking/preparation; they are never silently dropped
+when switching printers. LUMEN/NanoDLP ranges are not implemented here.
+
+Ranges belong to the scene and travel in manual saves, autosave/recovery and
+VOXL exports, not material presets. They apply at the same printed numbers on
+each plate and keep their stored numbers when layer height or geometry changes.
+Deleting the last model clears them atomically with that undoable deletion.
+They affect the next encoded slice only, not layer height, anti-aliasing,
+dithering, raster geometry or an existing file. Legacy time estimates may not
+reflect overrides. See [Printing Preview and Send](./printing-preview-and-send.md)
+and the [range contract](../dev/slice-job-assembly.md#layer-settings-range-resolution).
+
 ## Export quality checks
 
 - Model/support alignment preserved.

@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Card } from '@/components/atoms';
-import { LayerSlider } from '@/components/controls/LayerSlider';
+import { LayerSlider, type LayerSliderRangeBand } from '@/components/controls/LayerSlider';
 
 type CrossSliderPanelProps = {
   layerIndex: number;
@@ -18,6 +18,8 @@ type CrossSliderPanelProps = {
   crossSectionEnabled?: boolean;
   onToggleCrossSection?: () => void;
   layerHeightMm?: number;
+  rangeBands?: readonly LayerSliderRangeBand[];
+  onRangeContextMenu?: (value: number, position: { x: number; y: number }) => void;
 };
 
 export function CrossSliderPanel({
@@ -34,6 +36,8 @@ export function CrossSliderPanel({
   crossSectionEnabled,
   onToggleCrossSection,
   layerHeightMm,
+  rangeBands,
+  onRangeContextMenu,
 }: CrossSliderPanelProps) {
   const handleLayerChange = React.useCallback((nextValue: number) => {
     onLayerIndexChange(Math.round(nextValue));
@@ -60,6 +64,8 @@ export function CrossSliderPanel({
             crossSectionEnabled={crossSectionEnabled}
             onToggleCrossSection={onToggleCrossSection}
             layerHeightMm={layerHeightMm}
+            rangeBands={rangeBands}
+            onRangeContextMenu={onRangeContextMenu}
             compactMinimalRail
             docked
             embedded

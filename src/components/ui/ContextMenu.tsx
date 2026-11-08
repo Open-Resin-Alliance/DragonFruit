@@ -328,6 +328,8 @@ export function ContextMenu({
                   <MenuRow
                     label={entry.label}
                     icon={entry.icon}
+                    iconNode={entry.iconNode}
+                    iconBare={entry.iconBare}
                     disabled={disabled}
                     hasPopup
                     expanded={expanded}

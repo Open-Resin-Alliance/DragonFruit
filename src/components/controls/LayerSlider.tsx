@@ -11,6 +11,7 @@ import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 
 /** min-width 136px + 10px offset + margin. */
 const THUMB_EDIT_POPOVER_WIDTH = 156;
+const RANGE_TRACK_HINT = msg`Right-click the track for layer settings ranges`;
 
 type Translate = (descriptor: MessageDescriptor) => string;
 
@@ -27,6 +28,14 @@ function formatMinimalRailTitle(translate: Translate, layer: number, height: str
   }
   return translate(msg`Layer ${layer} • ${height} • Right-click a handle to type an exact value`);
 }
+
+export type LayerSliderRangeBand = {
+  id: string;
+  bottomPercent: number;
+  topPercent: number;
+  color: string;
+  label: string;
+};
 
 type LayerSliderProps = {
   min: number;
@@ -52,9 +61,11 @@ type LayerSliderProps = {
   layerHeightMm?: number;
   compactMinimalRail?: boolean;
   allowTrackClickJump?: boolean;
+  rangeBands?: readonly LayerSliderRangeBand[];
+  onRangeContextMenu?: (value: number, position: { x: number; y: number }) => void;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, currentHeightMm, maxHeightMm, className, showValue = false, docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm, compactMinimalRail = false, allowTrackClickJump = false }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, currentHeightMm, maxHeightMm, className, showValue = false, docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm, compactMinimalRail = false, allowTrackClickJump = false, rangeBands, onRangeContextMenu }: LayerSliderProps) {
   const { _ } = useLingui();
   const fmt = useLocaleFormat();
   const isMinimalRail = embedded && docked;
@@ -89,6 +100,8 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const editInputRef = React.useRef<HTMLInputElement>(null);
   const editPopoverRef = React.useRef<HTMLDivElement>(null);
   const openThumbEditRef = React.useRef<((thumb: 'upper' | 'lower') => void) | null>(null);
+  const thumbContextMenuHandledRef = React.useRef(false);
+  const [hoveredBandId, setHoveredBandId] = React.useState<string | null>(null);
 
   const formatMm = React.useCallback((mm: number) => {
     if (!Number.isFinite(mm)) return fmt.unit('mm', '0');
@@ -312,6 +325,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const onPointerDown = React.useCallback((e: React.MouseEvent) => {
     // Right-click: open the thumb popover if near a thumb, then let onContextMenu handle the rest
     if (e.button === 2) {
+      thumbContextMenuHandledRef.current = false;
       const el = containerRef.current;
       if (el) {
         const rect = el.getBoundingClientRect();
@@ -324,15 +338,25 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           const lowerDistance = Math.abs(clickInv - lowerPos);
           const upperDistance = Math.abs(clickInv - upperPos);
           if (lowerDistance <= thumbGrabThreshold || upperDistance <= thumbGrabThreshold) {
-            openThumbEditRef.current?.(lowerDistance < upperDistance ? 'lower' : 'upper');
+            if (openThumbEditRef.current) {
+              openThumbEditRef.current(lowerDistance < upperDistance ? 'lower' : 'upper');
+              thumbContextMenuHandledRef.current = true;
+            }
             e.preventDefault();
             e.stopPropagation();
           }
         } else if (Math.abs(clickInv - upperPos) <= thumbGrabThreshold) {
-          openThumbEditRef.current?.('upper');
+          if (openThumbEditRef.current) {
+            openThumbEditRef.current('upper');
+            thumbContextMenuHandledRef.current = true;
+          }
           e.preventDefault();
           e.stopPropagation();
         }
+      }
+      if (onRangeContextMenu) {
+        e.preventDefault();
+        e.stopPropagation();
       }
       return;
     }
@@ -530,7 +554,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     window.addEventListener('blur', settleDrag);
-  }, [allowTrackClickJump, dragBatchMode, emitWindowChange, getThumbHitThresholds, lowerValue, max, min, onLowerChange, onScrubEnd, onScrubStart, setByClientY, setLowerByClientY]);
+  }, [allowTrackClickJump, dragBatchMode, emitWindowChange, getThumbHitThresholds, lowerValue, max, min, onLowerChange, onRangeContextMenu, onScrubEnd, onScrubStart, setByClientY, setLowerByClientY]);
 
   const nudge = React.useCallback((dir: 1 | -1) => {
     const s = step || 1;
@@ -560,15 +584,41 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     return () => container.removeEventListener('wheel', handleWheel);
   }, [emitChange, nudge, step]);
 
+  const onContextMenu = React.useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Contextmenu may precede or follow mouseup; only consume here or reset on
+    // the next right mousedown, never on mouseup.
+    const handledByThumb = thumbContextMenuHandledRef.current;
+    thumbContextMenuHandledRef.current = false;
+    if (handledByThumb || !onRangeContextMenu) return;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const inverted = 1 - (e.clientY - rect.top) / Math.max(1, rect.height);
+    const next = clamp(min + inverted * (max - min));
+    setEditingThumb(null);
+    onRangeContextMenu(next, { x: e.clientX, y: e.clientY });
+  }, [clamp, max, min, onRangeContextMenu]);
+
   const onKeyDown = React.useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
+    if (onRangeContextMenu && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) {
+      e.preventDefault();
+      e.stopPropagation();
+      thumbContextMenuHandledRef.current = false;
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const current = clamp(valueRef.current);
+      const position = (current - min) / Math.max(1, max - min);
+      setEditingThumb(null);
+      onRangeContextMenu(current, { x: rect.right, y: rect.bottom - position * rect.height });
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
       e.preventDefault();
       nudge(1);
     } else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
       e.preventDefault();
       nudge(-1);
     }
-  }, [nudge]);
+  }, [clamp, max, min, nudge, onRangeContextMenu]);
 
   const handleInputChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value;
@@ -683,6 +733,8 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     const crossSection = onToggleCrossSection ? (crossSectionEnabled ? 'on' : 'off') : 'none';
     return formatMinimalRailTitle(_, Math.round(displayValue), mmLabel, crossSection);
   }, [_, crossSectionEnabled, displayHeightMm, displayValue, formatMm, onToggleCrossSection]);
+  const hoveredBandLabel = rangeBands?.find((band) => band.id === hoveredBandId)?.label;
+  const rangeTrackHint = onRangeContextMenu ? _(RANGE_TRACK_HINT) : null;
   const railClassName = `relative mx-auto ${embedded ? (expandToContainer ? 'flex-1 h-full min-h-[300px]' : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`;
 
   return (
@@ -745,7 +797,13 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
         )}
 
         <Tooltip
-          content={isMinimalRail ? <span className="whitespace-pre-line">{minimalRailTitle}</span> : undefined}
+          content={isMinimalRail || rangeTrackHint || hoveredBandLabel ? (
+            <span className="whitespace-pre-line">
+              {(isMinimalRail || rangeTrackHint) && minimalRailTitle}
+              {rangeTrackHint && <span className="block">{rangeTrackHint}</span>}
+              {hoveredBandLabel && <span className="block">{hoveredBandLabel}</span>}
+            </span>
+          ) : undefined}
           wrapperClassName={railClassName}
         >
         <div
@@ -753,15 +811,21 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           className={railClassName}
           onMouseDown={onPointerDown}
           onDoubleClick={(e) => {
-            if (!onToggleCrossSection) return;
+            if (e.button !== 0 || !onToggleCrossSection) return;
             e.preventDefault();
             e.stopPropagation();
             onToggleCrossSection();
           }}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
+          onContextMenu={onContextMenu}
+          onMouseMove={(e) => {
+            if (!rangeBands?.length) return;
+            const rect = containerRef.current?.getBoundingClientRect();
+            if (!rect) return;
+            const pointerPercent = 100 * (1 - (e.clientY - rect.top) / Math.max(1, rect.height));
+            const band = rangeBands.find((candidate) => pointerPercent >= candidate.bottomPercent && pointerPercent <= candidate.topPercent);
+            setHoveredBandId(band?.id ?? null);
           }}
+          onMouseLeave={() => setHoveredBandId(null)}
           tabIndex={0}
           onKeyDown={onKeyDown}
         >
@@ -810,6 +874,27 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 opacity: crossSectionEnabled ? 1 : 0.45,
               }}
             />
+
+            {/* Settings stay beside the clip fill, independently of its window. */}
+            {rangeBands?.map((band) => (
+              <div
+                key={band.id}
+                data-layer-range-band={band.id}
+                role="img"
+                aria-label={band.label}
+                title={band.label}
+                className="absolute rounded-full pointer-events-none"
+                style={{
+                  left: 'calc(50% + 5px)',
+                  width: '3px',
+                  bottom: `${(band.bottomPercent + band.topPercent) / 2}%`,
+                  height: `max(2px, ${band.topPercent - band.bottomPercent}%)`,
+                  transform: 'translateY(50%)',
+                  background: band.color,
+                  pointerEvents: 'none',
+                }}
+              />
+            ))}
 
             {/* Lower thumb */}
             {lowerPercent != null && (

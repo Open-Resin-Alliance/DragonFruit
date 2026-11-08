@@ -150,6 +150,11 @@ pub trait FormatEncoder: Send + Sync {
     /// Canonical output extension handled by this encoder.
     fn output_format(&self) -> &'static str;
 
+    /// Whether finalization validates and applies scene-owned physical-layer overrides.
+    fn supports_layer_settings(&self) -> bool {
+        false
+    }
+
     /// Whether this encoder requires per-layer connected-component area stats.
     ///
     /// Keep false by default to avoid paying component-analysis overhead for

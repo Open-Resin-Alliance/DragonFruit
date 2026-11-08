@@ -23,6 +23,7 @@ import {
   getActivePrinterProfile,
   DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
   type MaterialProfile,
+  type PrinterProfile,
   getProfileStoreServerSnapshot,
   getProfileStoreSnapshot,
   subscribeToProfileStore,
@@ -39,7 +40,10 @@ import {
   type SliceExportArtifact,
   type SliceExportResult,
 } from '@/features/slicing/sliceExportOrchestrator';
-import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { resolveLayerSettingsFields, resolveOutputFileExtension, resolveOutputFormatVersion, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { findUnsupportedLayerSetting, fingerprintLayerSettingsRanges, parseLayerSettingsRanges, type LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
+import { sliceProfileFingerprint } from '@/features/printing/slicedPlates';
+import { LAYER_SETTING_LABELS, formatLayerSettingsEncodingError, formatLayerSettingsRangeBounds, formatUnsupportedLayerSetting } from '@/features/slicing/layerSettingsRangeMessages';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import {
@@ -68,6 +72,7 @@ export type SliceIntent = 'file' | 'upload' | 'print' | 'preview' | 'uvtools';
 
 interface SlicingPanelProps {
   models: LoadedModel[];
+  layerSettingsRanges?: readonly LayerSettingsRange[];
   /**
    * The plates a slice can cover, in cascade order. Without them the panel
    * slices every visible model, which is what a single-plate scene means. With
@@ -92,7 +97,7 @@ interface SlicingPanelProps {
   }) => void;
   onSliceArtifactReady?: (
     artifact: SliceExportArtifact,
-    context?: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string },
+    context: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string; profileFingerprint: string },
   ) => void;
   /**
    * A batch's plate, as soon as it is sliced — before the batch ends and the app walks into the
@@ -101,7 +106,7 @@ interface SlicingPanelProps {
    */
   onSlicePlateSliced?: (
     artifact: SliceExportArtifact,
-    context: { plateId?: string; totalLayers: number; savedPath?: string },
+    context: { plateId?: string; totalLayers: number; savedPath?: string; profileFingerprint: string },
   ) => void;
   onBenchmarkComplete?: (benchmark: SliceBenchmarkSnapshot) => void;
   onSliceTriggerRef?: React.MutableRefObject<(() => void) | null>;
@@ -140,6 +145,33 @@ type RemoteMaterialProfile = {
 };
 
 type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
+
+function captureSupportedLayerSettingsRanges(
+  input: unknown,
+  printer: PrinterProfile,
+  material: MaterialProfile,
+  translate: Translate,
+  fmt: LocaleFormat,
+): LayerSettingsRange[] | null {
+  try {
+    const captured = parseLayerSettingsRanges(input);
+    const format = resolveSlicingFormatDefinition({ printerProfile: printer, materialProfile: material });
+    const version = resolveOutputFormatVersion(printer.display.outputFormat, printer.display.formatVersion, format?.pluginId);
+    const unsupported = findUnsupportedLayerSetting(captured, format ? resolveLayerSettingsFields(format, version) : []);
+    if (unsupported) {
+      const range = captured.find((entry) => entry.id === unsupported.rangeId)!;
+      const selectedFormat = `${format?.displayName ?? printer.display.outputFormat} ${version ?? ''}`.trim();
+      const bounds = formatLayerSettingsRangeBounds(translate, fmt.number(range.startLayer), fmt.number(range.endLayer));
+      alert(formatUnsupportedLayerSetting(translate, selectedFormat, bounds, translate(LAYER_SETTING_LABELS[unsupported.field])));
+      return null;
+    }
+    return captured;
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    alert(formatLayerSettingsEncodingError(translate, details));
+    return null;
+  }
+}
 
 // Interpolated messages live in module-level formatters: React Compiler renames
 // locals before the Lingui macro computes the id, so interpolating inside a
@@ -780,6 +812,7 @@ const AUTO_AA_PRESET_OPTIONS: ReadonlyArray<{
 
 export function SlicingPanel({
   models,
+  layerSettingsRanges,
   plateSliceScopes,
   activePlateSliceIndex = 0,
   excludedModelIds = [],
@@ -1831,8 +1864,11 @@ export function SlicingPanel({
      */
     batch?: {
       destinationDirectory: string;
+      layerSettingsRanges: readonly LayerSettingsRange[];
+      profileFingerprint: string;
       completed: Array<{
         artifact: SliceExportArtifact;
+        profileFingerprint: string;
         plateId?: string;
         totalLayers: number;
         /** Where the run wrote it, so the plate is not saved again on the way past. */
@@ -1862,6 +1898,11 @@ export function SlicingPanel({
       alert(_(msg`Select a material profile first.`));
       return false;
     }
+
+    const capturedRanges = batch?.layerSettingsRanges
+      ?? captureSupportedLayerSettingsRanges(layerSettingsRanges, activePrinterProfile, materialProfileForSlicing, _, fmt);
+    if (!capturedRanges) return false;
+    const capturedProfileFingerprint = batch?.profileFingerprint ?? `${sliceProfileFingerprint(activePrinterProfile.id, activeMaterialProfile?.id)}::layer-settings:${fingerprintLayerSettingsRanges(capturedRanges)}`;
 
     if (visibleModels.length === 0) {
       alert(excludedVisibleModelCount > 0
@@ -1949,6 +1990,7 @@ export function SlicingPanel({
 
       const result = await runSliceExportOrchestrator({
         models: scopeModels,
+        layerSettingsRanges: capturedRanges,
         excludedModelIds,
         ...(scope
           ? {
@@ -2130,14 +2172,20 @@ export function SlicingPanel({
             ...(scope ? { plateId: scope.plateId } : {}),
             ...(result.artifact.nativeTempPath ? { savedPath: result.artifact.nativeTempPath } : {}),
             totalLayers: plateTotalLayers,
+            profileFingerprint: capturedProfileFingerprint,
           });
           onSlicePlateSliced?.(result.artifact, {
             ...(scope ? { plateId: scope.plateId } : {}),
             ...(result.artifact.nativeTempPath ? { savedPath: result.artifact.nativeTempPath } : {}),
             totalLayers: plateTotalLayers,
+            profileFingerprint: capturedProfileFingerprint,
           });
         } else {
-          onSliceArtifactReady?.(result.artifact, scope ? { plateId: scope.plateId } : undefined);
+          onSliceArtifactReady?.(result.artifact, {
+            ...(scope ? { plateId: scope.plateId } : {}),
+            totalLayers: Math.max(1, completedTotalLayersFromResult, result.benchmark.totalLayers ?? 0),
+            profileFingerprint: capturedProfileFingerprint,
+          });
         }
       }
       if (result.benchmark) {
@@ -2151,7 +2199,11 @@ export function SlicingPanel({
         setSlicingModalStage('cancelled');
       } else {
         console.error('Slice ZIP export failed:', error);
-        const message = error instanceof Error ? error.message : 'Unknown slicing error.';
+        const message = error instanceof Error ? error.message : typeof error === 'string' ? error : 'Unknown slicing error.';
+        const normalizedRangeError = message.toLowerCase();
+        if (normalizedRangeError.includes('invalid layer settings ranges:') || normalizedRangeError.includes('cannot encode layer setting')) {
+          alert(formatLayerSettingsEncodingError(_, message));
+        }
 
         // If disk space error, aggressively clean ALL temp files to recover space
         if (message.includes('not enough space') || message.includes('os error 112') || message.includes('disk full')) {
@@ -2190,6 +2242,17 @@ export function SlicingPanel({
     // The beds that hold something, in cascade order. An empty bed has no file of its own, and
     // asking for one would stop the batch on a bed there is nothing to slice.
     if (populatedPlateScopes.length < 2) return;
+    if (!activePrinterProfile) {
+      alert(_(msg`Select a printer profile first.`));
+      return;
+    }
+    if (!materialProfileForSlicing) {
+      alert(_(msg`Select a material profile first.`));
+      return;
+    }
+    const capturedRanges = captureSupportedLayerSettingsRanges(layerSettingsRanges, activePrinterProfile, materialProfileForSlicing, _, fmt);
+    if (!capturedRanges) return;
+    const capturedProfileFingerprint = `${sliceProfileFingerprint(activePrinterProfile.id, activeMaterialProfile?.id)}::layer-settings:${fingerprintLayerSettingsRanges(capturedRanges)}`;
 
     // One folder for the run, the way a per-plate export picks one: the plates are sliced one
     // after another into it, each file named for its plate, and nothing asks again.
@@ -2221,12 +2284,13 @@ export function SlicingPanel({
 
     const completed: Array<{
       artifact: SliceExportArtifact;
+      profileFingerprint: string;
       plateId?: string;
       totalLayers: number;
       savedPath?: string;
     }> = [];
     for (const scope of populatedPlateScopes) {
-      const sliced = await handleSliceZipExport(scope, { destinationDirectory, completed });
+      const sliced = await handleSliceZipExport(scope, { destinationDirectory, completed, layerSettingsRanges: capturedRanges, profileFingerprint: capturedProfileFingerprint });
       if (!sliced) break;
     }
 
@@ -2244,6 +2308,7 @@ export function SlicingPanel({
         ...(entry.savedPath ? { savedPath: entry.savedPath } : {}),
         savedDirectory: destinationDirectory,
         totalLayers: entry.totalLayers,
+        profileFingerprint: entry.profileFingerprint,
       });
     }
   };

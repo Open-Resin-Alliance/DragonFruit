@@ -31,6 +31,7 @@
 
 import { unzlibSync, zlib as zlibAsync } from 'fflate';
 import { runWithConcurrency } from '@/utils/runWithConcurrency';
+import { parseLayerSettingsRanges } from '@/features/slicing/layerSettingsRanges';
 import { logToNativeFile } from '@/utils/nativeLog';
 import {
   VOXL_MAGIC,
@@ -498,6 +499,9 @@ async function prepareVoxlDocumentV2(
   sha256Map?: Map<number, string>,
   options?: VoxlSerializeOptions,
 ): Promise<PreparedDocument> {
+  const layerSettingsRanges = input.layerSettingsRanges === undefined
+    ? undefined
+    : parseLayerSettingsRanges(input.layerSettingsRanges);
   const precompressed = options?.precompressed;
   const precompressedOriginal = options?.precompressedOriginal;
   const originalMeshBytes = options?.originalMeshBytes;
@@ -521,6 +525,7 @@ async function prepareVoxlDocumentV2(
   const scene: VoxlSceneState = {
     activeModelId: input.activeModelId,
     selectedModelIds: [...input.selectedModelIds],
+    ...(layerSettingsRanges !== undefined ? { layerSettingsRanges } : {}),
     ...(plates && plates.length > 0 ? { plates } : {}),
     ...(input.activePlateId ? { activePlateId: input.activePlateId } : {}),
     // One plate is still expressible as the older shorthand, so a reader that
@@ -1295,6 +1300,9 @@ export async function parseVoxlBinaryV2(
   if (!meta) throw new Error('VOXL V2: missing META chunk.');
 
   const scene = readJsonChunk<VoxlSceneState>(CHUNK_SCNE) ?? { activeModelId: null, selectedModelIds: [] };
+  if (Object.prototype.hasOwnProperty.call(scene, 'layerSettingsRanges')) {
+    scene.layerSettingsRanges = parseLayerSettingsRanges(scene.layerSettingsRanges);
+  }
   const models = readJsonChunk<VoxlModelEntry[]>(CHUNK_MODL) ?? [];
   const supports = readJsonChunk<DragonfruitImportFormat>(CHUNK_SUPP);
   if (!supports) throw new Error('VOXL V2: missing SUPP chunk.');

@@ -16,6 +16,7 @@ pub mod encoders;
 pub mod engine;
 pub mod geometry;
 pub mod index;
+pub mod layer_settings;
 pub mod metrics;
 pub mod pipeline;
 mod pulp_simd;

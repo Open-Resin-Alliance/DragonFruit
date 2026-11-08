@@ -25,8 +25,11 @@ import {
   type PrinterProfile,
 } from '../../src/features/profiles/profileStore';
 import { toNativeMetadataPayload } from '../../src/features/slicing/tauri/nativeSlicerBridge';
+import { resolveOutputFormatVersion, resolveSlicingFormatDefinition } from '../../src/features/slicing/formats/registry';
+import { parseLayerSettingsRanges, type LayerSettingsRange } from '../../src/features/slicing/layerSettingsRanges';
 import {
   assembleSliceJob,
+  assertSliceLayerSettingsSupported,
   buildNativeSliceJob,
   resolveSliceLayerCount,
   resolveSliceRasterSettings,
@@ -214,10 +217,27 @@ export function resolveSceneSliceJob(options: SceneSliceJobOptions): SceneSliceJ
   };
 }
 
+/** Validate scene settings before loading geometry or creating temporary slice files. */
+export function preflightSceneLayerSettings(job: SceneSliceJob, ranges: unknown): LayerSettingsRange[] {
+  const owned = parseLayerSettingsRanges(ranges);
+  if (owned.length === 0) return owned;
+  if (!job.printer || !job.material) {
+    throw new Error('Scene layer settings ranges require --printer');
+  }
+  const format = resolveSlicingFormatDefinition({ printerProfile: job.printer, materialProfile: job.material });
+  if (!format) {
+    throw new Error(`No encoder is installed for "${job.printer.display.outputFormat}".`);
+  }
+  const formatVersion = resolveOutputFormatVersion(format.outputFormat, job.printer.display.formatVersion, format.pluginId);
+  assertSliceLayerSettingsSupported(owned, format, formatVersion);
+  return owned;
+}
+
 /** What the CLI knows about the scene once it has merged the models. */
 export type SceneSliceGeometry = {
   maxZMm: number;
   models: SliceJobManifestModel[];
+  layerSettingsRanges?: readonly LayerSettingsRange[];
   /**
    * Model-only triangle count, the split point before baked support/raft
    * triangles in `positions.bin`. Omitted (or 0) means the whole mesh is model
@@ -246,6 +266,7 @@ export function buildSceneSliceRun(
   outputPath: string,
   jobPath: string,
 ): SceneSliceRun {
+  const layerSettingsRanges = preflightSceneLayerSettings(job, geometry.layerSettingsRanges);
   if (!job.printer || !job.material) {
     // No printer: raw engine defaults, as `slice run` itself would use.
     return {
@@ -266,7 +287,7 @@ export function buildSceneSliceRun(
   const assembled = assembleSliceJob({
     printerProfile: job.printer,
     materialProfile: job.material,
-    scene: { ...layers, models: geometry.models },
+    scene: { ...layers, models: geometry.models, layerSettingsRanges },
     dither: job.dither,
     antiAliasing: job.antiAliasing ?? undefined,
   });

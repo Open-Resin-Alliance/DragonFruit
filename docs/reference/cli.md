@@ -207,6 +207,16 @@ the bundle's first material, else the app's default for a new material.
 the material and printer. Without `--printer`, `slice run` gets raw engine
 defaults and no metadata.
 
+**Scene layer settings ranges** travel in the VOXL, not in new CLI editor flags.
+`scene slice` preserves their printed layer numbers and applies the same sparse
+inheritance as the app for GOO, CTB and Anycubic. Nonempty schedules require
+`--printer`; unsupported fields/version combinations and malformed schedules
+fail before geometry merging or temporary staging. A legacy absent/empty
+schedule still permits printerless slicing. Scene edit/resave commands retain
+ranges. See [Slice Job Assembly](../dev/slice-job-assembly.md#layer-settings-range-resolution).
+The staging directory honors the process's temporary-directory setting
+(`TMPDIR` on Linux), so bounded verification can keep it worktree-private.
+
 **A slice covers one plate**, as in the app. `--plate` picks it by id or by its
 number from 1; without it, the scene's active plate. Only the models standing
 on that plate are sliced, shifted back by the plate's offset so they land where

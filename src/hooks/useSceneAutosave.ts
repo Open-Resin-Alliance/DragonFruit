@@ -4,6 +4,7 @@ import React from 'react';
 import { subscribeHistory } from '@/history/historyStore';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { buildSceneSaveContext } from '@/features/export/logic/sceneSaveContext';
+import { parseLayerSettingsRanges, type LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
 import { VoxlChunkCache } from '@/features/scene/voxl';
 import type { VoxlPrinterBundle } from '@/features/scene/voxl';
 import type { PlateOrdering } from '@/features/scene/plates/plateCascade';
@@ -343,6 +344,7 @@ export type UseSceneAutosaveOptions = {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  layerSettingsRanges: readonly LayerSettingsRange[];
   /** The scene's plates, carried into the saved scene's plate list. */
   plates?: ScenePlate[];
   /** Which plate was active. */
@@ -393,6 +395,7 @@ export function useSceneAutosave({
   models,
   activeModelId,
   selectedModelIds,
+  layerSettingsRanges,
   plates,
   activePlateId,
   plateName,
@@ -418,6 +421,8 @@ export function useSceneAutosave({
   activeModelIdRef.current = activeModelId;
   const selectedModelIdsRef = React.useRef(selectedModelIds);
   selectedModelIdsRef.current = selectedModelIds;
+  const layerSettingsRangesRef = React.useRef(layerSettingsRanges);
+  layerSettingsRangesRef.current = layerSettingsRanges;
   const platesRef = React.useRef(plates);
   platesRef.current = plates;
   const activePlateIdRef = React.useRef(activePlateId);
@@ -507,6 +512,7 @@ export function useSceneAutosave({
 
     const run = async () => {
       const currentModels = modelsRef.current;
+      const currentLayerSettingsRanges = parseLayerSettingsRanges(layerSettingsRangesRef.current);
 
       // Snapshot the revision BEFORE the gate/write: edits that land while this
       // tick is in flight bump `revisionRef` past this value, so committing this
@@ -592,6 +598,7 @@ export function useSceneAutosave({
             },
             buildSceneSaveContext({
               models: currentModels,
+              layerSettingsRanges: currentLayerSettingsRanges,
               activeModelId: activeModelIdRef.current,
               selectedModelIds: selectedModelIdsRef.current,
               plates: platesRef.current,

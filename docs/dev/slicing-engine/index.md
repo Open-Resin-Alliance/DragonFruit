@@ -4,6 +4,15 @@ The native Rust slicing backend for DragonFruit Desktop (Tauri), in `rust/dragon
 
 This crate is the production slicing engine that converts triangle geometry into printer-ready layer containers. Format output is dispatched through a plugin-driven encoder registry (currently `.nanodlp`, `.ctb`, `.goo`, and others).
 
+## What changed in v3.4
+
+Scene-owned sparse physical-layer print settings are validated and applied by
+GOO, CTB and Anycubic record writers. Unsupported formats/fields are rejected,
+and schedules are validated before output destinations are created. Raster,
+compression and legacy estimate formulas are unchanged. See [Encoders](encoders.md#scene-owned-layer-settings-ranges)
+and [Slice Job Assembly](../slice-job-assembly.md#layer-settings-range-resolution)
+for capability, inheritance and metadata contracts.
+
 ## What changed in v3.3.2
 
 Binary rasterization now samples pixel centers consistently on X and Y, removing

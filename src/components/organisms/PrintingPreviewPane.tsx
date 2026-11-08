@@ -4,7 +4,7 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
-import { LayerSlider } from '@/components/controls/LayerSlider';
+import { LayerSlider, type LayerSliderRangeBand } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import type { PrinterProfile } from '@/features/profiles/profileStore';
 
@@ -23,6 +23,8 @@ export type PrintingPreviewPaneProps = {
   handlePrintingLayerScrubEnd: () => void;
   printingCurrentHeightMm: number | null;
   slicingHeightMm: number;
+  rangeBands?: readonly LayerSliderRangeBand[];
+  onRangeContextMenu?: (value: number, position: { x: number; y: number }) => void;
 
   printingPreviewViewportRef: React.RefObject<HTMLDivElement | null>;
   printingPreviewCursor: React.CSSProperties['cursor'];
@@ -70,6 +72,8 @@ export function PrintingPreviewPane({
   handlePrintingLayerScrubEnd,
   printingCurrentHeightMm,
   slicingHeightMm,
+  rangeBands,
+  onRangeContextMenu,
   printingPreviewViewportRef,
   printingPreviewCursor,
   handlePrintingPreviewWheel,
@@ -108,6 +112,8 @@ export function PrintingPreviewPane({
           onChange={handlePrintingLayerChange}
           onScrubStart={handlePrintingLayerScrubStart}
           onScrubEnd={handlePrintingLayerScrubEnd}
+          rangeBands={rangeBands}
+          onRangeContextMenu={onRangeContextMenu}
           allowTrackClickJump
           currentHeightMm={printingCurrentHeightMm ?? undefined}
           maxHeightMm={slicingHeightMm}

@@ -1,6 +1,7 @@
 import type { DragonfruitImportFormat } from '@/supports/types';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import type { MeshHealthReport } from '@/utils/meshRepair';
+import type { LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
 
 export const VOXL_MAGIC = 'VOXL' as const;
 export const VOXL_VERSION = 1 as const;
@@ -178,6 +179,8 @@ export type VoxlPlate = {
 export type VoxlSceneState = {
   activeModelId: string | null;
   selectedModelIds: string[];
+  /** Absent preserves a merged scene's schedule; [] explicitly clears it. */
+  layerSettingsRanges?: LayerSettingsRange[];
   /**
    * The scene's build plates, in display order. Optional and additive: a reader
    * that ignores it sees every model as belonging to one plate, which is what a
@@ -260,6 +263,8 @@ export type BuildVoxlDocumentInput = {
   models: VoxlModelRuntimeLike[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  /** Omitted writes no schedule key; [] writes an explicit cleared schedule. */
+  layerSettingsRanges?: LayerSettingsRange[];
   /** The scene's plates. Omitted writes a scene with no plate list at all. */
   plates?: VoxlPlate[];
   /** Which plate was active. Omitted writes no cursor. */

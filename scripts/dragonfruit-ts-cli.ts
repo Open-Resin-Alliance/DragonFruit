@@ -20,8 +20,9 @@
 // stubs `npm test` loads for the same reason. The CLI runs as CommonJS under tsx,
 // so the imports below are resolved one after another, after this has run.
 import './test-unit/register.mjs';
-import { readFileSync, writeFileSync, statSync } from 'fs';
-import { basename, resolve, dirname } from 'path';
+import { readFileSync, writeFileSync, statSync, mkdtempSync } from 'fs';
+import { basename, resolve, dirname, join } from 'path';
+import { tmpdir } from 'os';
 import { execFileSync, execSync } from 'child_process';
 import { createRequire } from 'module';
 import { v4 as uuidv4 } from 'uuid';
@@ -95,6 +96,7 @@ function toBuildInput(doc: VoxlDocumentV1): { input: BuildVoxlDocumentInput; mes
     selectedModelIds: doc.scene.selectedModelIds,
     plates: doc.scene.plates,
     activePlateId: doc.scene.activePlateId,
+    layerSettingsRanges: doc.scene.layerSettingsRanges,
     supports: doc.supports,
     extensions: doc.extensions,
     meta: {
@@ -1482,6 +1484,7 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
     ditherDeviceGamma: optionalFlag(args.flags, 'dither-device-gamma'),
   });
   const doc = await loadVoxl(voxlPath);
+  const layerSettingsRanges = sliceJob.preflightSceneLayerSettings(job, doc.scene.layerSettingsRanges);
   const plate = resolveSlicePlate(doc, {
     widthMm: job.printer?.buildVolumeMm.width ?? parseFloat(job.buildWidth),
     depthMm: job.printer?.buildVolumeMm.depth ?? parseFloat(job.buildDepth),
@@ -1661,8 +1664,7 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   releaseHeap();
 
   // Phase 3: Write positions.bin
-  const tmpDir = `/tmp/df-scene-slice-${Date.now()}`;
-  execSync(`mkdir -p ${tmpDir}`);
+  const tmpDir = mkdtempSync(join(tmpdir(), 'df-scene-slice-'));
   const mergedPath = resolve(tmpDir, 'positions.bin');
   const totalTriangles = meshPositions.length / 9;
   writePositionsBin(mergedPath, meshPositions);
@@ -1680,6 +1682,7 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   const run = sliceJob.buildSceneSliceRun(job, {
     maxZMm,
     modelTriangleCount,
+    layerSettingsRanges,
     models: visibleModels.map((model) => ({
       id: model.id,
       name: model.name,

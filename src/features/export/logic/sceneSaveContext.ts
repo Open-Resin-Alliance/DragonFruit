@@ -1,4 +1,5 @@
 import type { ExportSceneContext } from '@/features/export/logic/ExportManager';
+import { parseLayerSettingsRanges } from '@/features/slicing/layerSettingsRanges';
 
 type SceneSaveKey = Exclude<keyof ExportSceneContext, 'exportThumbnailPng'>;
 
@@ -22,6 +23,7 @@ export function buildSceneSaveContext(
     models: source.models,
     activeModelId: source.activeModelId,
     selectedModelIds: source.selectedModelIds,
+    layerSettingsRanges: parseLayerSettingsRanges(source.layerSettingsRanges),
     plates: source.plates,
     activePlateId: source.activePlateId,
     plateName: source.plateName,

@@ -6,6 +6,7 @@ import { msg, plural } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { parseLayerSettingsRanges, type LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
 import { ExportManager, ExportOptions } from '../logic/ExportManager';
 import { normalizeExportBaseName, resolvePlateOutputBaseName } from '../logic/exportFileNaming';
 import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
@@ -25,6 +26,7 @@ import { Tooltip } from '@/components/ui/Tooltip';
 
 interface ExportPanelProps {
   models: LoadedModel[];
+  layerSettingsRanges: readonly LayerSettingsRange[];
   activeModel: LoadedModel | null;
   activeModelId: string | null;
   selectedModelIds?: string[];
@@ -165,6 +167,7 @@ function joinNativePath(directory: string, fileName: string): string {
 
 export function ExportPanel({
   models,
+  layerSettingsRanges,
   activeModel,
   activeModelId,
   selectedModelIds,
@@ -333,6 +336,7 @@ export function ExportPanel({
   ), [options]);
 
   const handleExport = async () => {
+    const capturedRanges = parseLayerSettingsRanges(layerSettingsRanges);
     const effectiveOptions = resolveEffectiveOptions();
 
     if (effectiveOptions.includeModel && scopeModels.length === 0) {
@@ -378,6 +382,7 @@ export function ExportPanel({
           },
           {
             models: scopeModels,
+            layerSettingsRanges: capturedRanges,
             activeModelId: scopedActiveModelId,
             selectedModelIds: scopedSelectedModelIds.length > 0
               ? scopedSelectedModelIds
@@ -410,6 +415,7 @@ export function ExportPanel({
    * path names each file for the plate it holds.
    */
   const exportGroupsToDirectory = async (groups: Array<{ name: string; models: LoadedModel[] }>) => {
+    const capturedRanges = parseLayerSettingsRanges(layerSettingsRanges);
     const effectiveOptions = resolveEffectiveOptions();
     const exportableGroups = groups.filter((group) => group.models.length > 0);
     if (effectiveOptions.includeModel && exportableGroups.length === 0) return;
@@ -458,6 +464,7 @@ export function ExportPanel({
           },
           {
             models: group.models,
+            layerSettingsRanges: capturedRanges,
             activeModelId: scopedActiveModelId,
             selectedModelIds: scopedModelIds,
             exportThumbnailPng: null,

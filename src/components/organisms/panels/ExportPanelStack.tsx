@@ -2,7 +2,7 @@ import React from 'react';
 import * as THREE from 'three';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
-import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
+import type { SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import { modelsOnPlate, plateSliceScope } from '@/features/scene/plates/plateLayout';
 import type { useSlicingManager } from '@/features/slicing/useSlicingManager';
@@ -27,15 +27,9 @@ export type ExportPanelStackProps = {
    * The sliced plate, handed on with the bed it came from: the printing workspace shows the
    * slice of the bed being worked on, so a batch of beds needs to say which is which.
    */
-  handleSliceArtifactReady: (
-    artifact: SliceExportArtifact,
-    context?: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string },
-  ) => void;
+  handleSliceArtifactReady: NonNullable<React.ComponentProps<typeof SlicingPanel>['onSliceArtifactReady']>;
   /** A batch's plate, as soon as it is sliced, so its previews can be read ahead of the batch. */
-  handleSlicePlateSliced: (
-    artifact: SliceExportArtifact,
-    context: { plateId?: string; totalLayers: number; savedPath?: string },
-  ) => void;
+  handleSlicePlateSliced: NonNullable<React.ComponentProps<typeof SlicingPanel>['onSlicePlateSliced']>;
   handleSlicingBenchmarkComplete: (benchmark: SliceExportResult['benchmark']) => void;
   triggerSliceExportRef: React.MutableRefObject<(() => void) | null>;
   shouldAutoSliceOnExportEntry: boolean;
@@ -119,6 +113,7 @@ export function ExportPanelStack({
       <ExportPanel
         key="export-main"
         models={scene.models}
+        layerSettingsRanges={scene.layerSettingsRanges}
         activeModel={scene.activeModel}
         activeModelId={scene.activeModelId}
         selectedModelIds={scene.selectedModelIds}
@@ -135,6 +130,7 @@ export function ExportPanelStack({
       <SlicingPanel
         key="export-slicing"
         models={scene.models}
+        layerSettingsRanges={scene.layerSettingsRanges}
         plateSliceScopes={plateSliceScopes}
         activePlateSliceIndex={activePlateSliceIndex}
         excludedModelIds={excludedSliceModelIds}

@@ -19,6 +19,14 @@ Use the vertical layer slider to inspect layers:
 
 During scrubbing, DragonFruit can use fast preview rendering paths to keep interaction responsive.
 
+Right-click the slider **track** to configure scene layer-settings ranges; the
+handle's right-click remains its exact-value editor. Colored bands show the
+current scene configuration, not a rewrite of the loaded print file. Editing,
+adding, deleting, undoing or redoing a range marks existing plate artifacts stale;
+re-slice before sending the new settings. A run already in flight finishes with
+its captured schedule and stays stale if the scene changed meanwhile. All plates
+in a batch use one captured schedule. See [Per-layer print settings](./raft-and-export.md#per-layer-print-settings).
+
 ## 3) Review print summary
 
 In the Printing panel, confirm:

@@ -18,6 +18,7 @@ files with the wrong exposure or the wrong size.
 
 | Symbol | What it does |
 | --- | --- |
+| `assertSliceLayerSettingsSupported` | Rejects an incompatible supplied field using resolved format/version capabilities, before preparation or final assembly. |
 | `assembleSliceJob` | The whole profile-driven part of a job: returns an `AssembledSliceJob` with the job fields, the anti-aliasing fields (`antiAliasing`) and the final `metadataJson`. |
 | `buildNativeSliceJob` | Turns an `AssembledSliceJob` into the native job's fields, short of the mesh, the thumbnail and the output path; the PNG and container compression rules live here. The app's export and `scene slice` both send its output. |
 | `describeSliceJobModel` | Turns a model (anything with `id`, `name`, `polygonCount` and a position/rotation/scale transform) into the plain `SliceJobManifestModel` the metadata lists. Use it instead of passing THREE objects, which serialize their internals. |
@@ -73,6 +74,7 @@ const job = assembleSliceJob({
     totalLayers,                  // from the prepared geometry
     tallestObjectHeightMm,
     models: models.map(describeSliceJobModel),
+    layerSettingsRanges,           // captured scene-wide printed-layer overrides
   },
   dither: { ditherEnabled: userChoice },   // optional
 });
@@ -98,6 +100,123 @@ const job = assembleSliceJob({
   no such adapter and keeps the profile's values.
 - **Not here:** mesh transport, thumbnails and plugin metadata payloads
   (`attachJobMetadataPayloads`). The caller adds those.
+
+## Layer settings range resolution
+
+`src/features/slicing/layerSettingsRanges.ts` is the pure scene-range contract. Use
+`parseLayerSettingsRanges` at input boundaries to validate and own an array;
+`compileLayerSettingsRanges` returns compact inclusive printed-layer segments.
+It imports no React, THREE, storage or translation runtime.
+
+```ts
+import {
+  parseLayerSettingsRanges,
+  compileLayerSettingsRanges,
+} from '@/features/slicing/layerSettingsRanges';
+
+const ranges = parseLayerSettingsRanges([
+  { id: 'wide', startLayer: 3, endLayer: 10,
+    settings: { exposureSec: 4, liftHeightMm: 8 } },
+  { id: 'narrow', startLayer: 5, endLayer: 6,
+    settings: { exposureSec: 7 } },
+]);
+const segments = compileLayerSettingsRanges(ranges, 12);
+// Printed layer 5 has exposureSec=7 and inherits liftHeightMm=8.
+```
+
+The `LAYER_SETTING_FIELDS` whitelist defines `LayerSettingField` and
+`LayerPrintSettingsPatch`: exposure, light-off and cure/lift waits in seconds;
+lift/retract travel in mm; lift/retract speeds in mm/min; and integer `lightPwm`
+in 0..255. A height without `2` is **total** travel, and the corresponding
+`*Height2Mm` is the part assigned to stage 2, not extra travel. No patch may
+change layer height, anti-aliasing, dithering, geometry, masks or tank assignment.
+Explicit zero is an override; absent fields inherit.
+
+Endpoints are inclusive printed layer numbers in 1..4294967295. Uncovered
+layers retain the format baseline. Narrowest original span wins independently
+for each supplied field; equal spans prefer the later array entry. A narrow
+exposure-only patch therefore inherits motion from the highest-priority wider
+range supplying it. Clip compiled/visible segments, never the saved bounds or
+priority widths. Editing preserves id and array position; new ranges append.
+The segment's `rangeId` identifies the overall winning range for display, not
+necessarily the supplier of every inherited field.
+
+`fingerprintLayerSettingsRanges` excludes ids and colors, but retains range
+order, bounds and fields in whitelist order. `findUnsupportedLayerSetting`
+returns the first incompatible supplied field in original range/whitelist
+order, including shadowed and out-of-print ranges; consumers must reject it,
+not silently drop it.
+
+The native counterpart is
+`rust/dragonfruit-slicing-engine/src/layer_settings.rs`:
+`LayerSettingsSchedule::from_job` validates the root `layerSettingsRanges`
+metadata key and format-owned supported fields; `patch_at` accepts a zero-based
+physical layer index. Parsed values remain f64 until record emission. Both
+resolvers sweep endpoints with per-field priority heaps, rather than allocate
+an array proportional to the print's layer count. Native `is_empty()` means
+the original array was empty: a beyond-EOF schedule still requests the format's
+per-layer activation policy even when `patch_at` never matches.
+
+The scene supplies `SliceJobScene.layerSettingsRanges`; assembly validates and
+owns it, then writes the root metadata key after material/plugin overrides.
+Absent/empty schedules omit that key. The opaque `metadataJson` to native
+`metadata_json` transport is unchanged. The orchestrator validates its captured
+array at format resolution before asynchronous preparation/baking/staging.
+The slicing panel performs localized preflight before confirmations, pickers,
+save/start callbacks or preparation; native encoding failures remain visible.
+
+The CLI boundary `preflightSceneLayerSettings` in
+`scripts/cli/sceneSliceJob.ts` runs immediately after VOXL loading and also guards
+direct `buildSceneSliceRun` callers. Empty schedules preserve the legacy
+printerless path. Nonempty schedules require resolved printer/material data
+(`Scene layer settings ranges require --printer`) and compatible capabilities.
+CLI scene modifications/resaves retain the optional SCNE field.
+
+## Slider editor and captured artifacts
+
+`LayerSettingsRangeEditor` is mounted once at page/root lifetime. Its menu request
+contains a printed layer (or `null` for an empty print) and the anchor position;
+its durable data is the scene manager's `layerSettingsRanges`, changed through
+`updateLayerSettingsRanges`. That updater records one lightweight typed undo
+entry per applied change. Model-only snapshots leave ranges alone; deleting the
+last model clears ranges in the same model/plate action so undo restores both.
+
+`LayerSliderRangeBand` is drawing data, not another settings store.
+`LayerSlider`, `CrossSliderPanel` and `PrintingPreviewPane` accept `rangeBands`
+and `onRangeContextMenu`. The page maps scene boundary coordinates with `ceil`
+(clamped to printed 1..N, including boundary0→layer1), and printing-preview
+coordinates with `round`. Scene bands occupy boundary cells [start−1,end];
+printing bands use half-layer edges over the 1..N rail, with a full strip for
+N=1 and no bands for N=0. Segment keys include range id and both clipped
+segment endpoints, since one range can win several separated intervals.
+
+Call `useLayerSettingsRangeColors` once and share its map across both rails,
+menus and Manage rows. It allocates distinct resolved RGB values in persisted
+array order, observes root/OS theme changes and does not persist colors.
+`layerSettingsRangeMessages.ts` owns shared localized field labels, units and
+module-scope interpolated messages; do not copy the material settings schema
+or put translation dependencies in the pure resolver. The rail's right-click
+track command is separate from the existing handle exact-value editor.
+
+A single export captures an owned array before its first await; an all-plate
+batch captures once before picking its folder. Both also capture the encoded
+input fingerprint:
+
+```ts
+const encodedFingerprint = `${sliceProfileFingerprint(printerId, materialId)}::layer-settings:${fingerprintLayerSettingsRanges(capturedRanges)}`;
+```
+
+Keep `sliceProfileFingerprint` unchanged. The page compares artifacts with the
+live schedule's composed fingerprint, but records each result with the captured
+fingerprint supplied by `onSliceArtifactReady` / `onSlicePlateSliced`. Their
+callback context is required when the optional callback is invoked. A batch
+retains that fingerprint with every completed artifact, including its repeated
+end-of-batch handover. Never substitute live settings when a late result lands.
+
+Range edits/undo/redo stale encoded plate artifacts through existing history
+notifications, without changing geometry/prepared-mesh identities or launching
+background raster work. The old preview/file remains unchanged until re-sliced.
+Legacy time/volume/weight/cost estimates are not recalculated for overrides.
 
 ## Tests
 
