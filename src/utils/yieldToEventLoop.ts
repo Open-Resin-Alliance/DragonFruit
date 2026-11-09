@@ -40,6 +40,20 @@ export function yieldToEventLoop(): Promise<void> {
 }
 
 /**
+ * Releases the yield channel so a host process can finish.
+ *
+ * A `MessageChannel` with a listener holds the Node event loop open, so a CLI
+ * that scans and then stops would never exit: the scan's last yield leaves a
+ * live port behind. Nothing in the app disposes the channel — it is meant to
+ * live as long as the page — and calling this in a browser is harmless.
+ */
+export function disposeEventLoopChannel(): void {
+    channel?.port1.close();
+    channel?.port2.close();
+    channel = null;
+}
+
+/**
  * Rate limiter for progress callbacks.
  *
  * Yielding is cheap; telling React about it is not. A progress report is a

@@ -13,6 +13,7 @@ import {
     resetStore,
     setSnapshot,
 } from '@/supports/state';
+import { createEmptySupportCollections } from '@/supports/supportTypeRegistry';
 import {
     clearSupportSelection,
     getResolvedPrimarySelection,
@@ -44,15 +45,9 @@ function makeRoot(trunkId: string): Roots {
 
 function seedTrunks(...ids: string[]) {
     const snapshot: SupportState = {
+        ...createEmptySupportCollections(),
         roots: Object.fromEntries(ids.map((id) => [`root-${id}`, makeRoot(id)])),
         trunks: Object.fromEntries(ids.map((id) => [id, makeTrunk(id)])),
-        branches: {},
-        leaves: {},
-        twigs: {},
-        sticks: {},
-        braces: {},
-        anchors: {},
-        knots: {},
         selectedId: null,
         hoveredId: null,
         selectedCategory: null,
@@ -115,7 +110,7 @@ test('a settings edit changes every Shift-click-selected support in one undo ste
         applySettingsToSelectedSupports(settings);
 
         const after = captureSupportEditSnapshot();
-        pushSupportEditHistory('Adjust selected support settings', before, after);
+        pushSupportEditHistory({ id: 'Adjust selected support settings' }, before, after);
         await new Promise((resolve) => setTimeout(resolve, 0));
 
         assert.equal(getSnapshot().trunks['trunk-a'].baseDiameterMm, 2.75);

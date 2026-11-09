@@ -1,43 +1,38 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { useActionActive } from './hotkeyStore';
+import { hotkeyStore, isActionActiveSync } from './hotkeyStore';
 import { setActivePreset, getPresetForPinnedSlot, subscribeToPresets } from '@/supports/Settings/presets';
 
+/** The preset hotkey slots, in the order the config binds them. */
+const PRESET_SLOTS = [1, 2, 3, 4, 5, 6] as const;
+
 export function usePresetHotkeys() {
-    // Subscribe to preset changes so pinned slots are always current
+    // Both stores are subscribed with a snapshot that never changes, so a keypress
+    // does not re-render whatever this hook lives in. It lives in the settings
+    // sidebar, which holds the anatomy preview canvas, and re-rendering that on
+    // every preset key is a hitch on the way to the preview it redraws anyway. The
+    // rising edge is read inside the callback instead, where noticing it is free.
     useSyncExternalStore(subscribeToPresets, () => null, () => null);
 
-    const active1 = useActionActive('PRESETS', 'SLOT_1');
-    const active2 = useActionActive('PRESETS', 'SLOT_2');
-    const active3 = useActionActive('PRESETS', 'SLOT_3');
-    const active4 = useActionActive('PRESETS', 'SLOT_4');
-    const active5 = useActionActive('PRESETS', 'SLOT_5');
-    const active6 = useActionActive('PRESETS', 'SLOT_6');
-
-    const wasActive1 = useRef(false);
-    const wasActive2 = useRef(false);
-    const wasActive3 = useRef(false);
-    const wasActive4 = useRef(false);
-    const wasActive5 = useRef(false);
-    const wasActive6 = useRef(false);
+    const wasActiveRef = useRef<Record<number, boolean>>({});
 
     useEffect(() => {
-        const slots = [
-            { active: active1, wasActive: wasActive1, slot: 1 },
-            { active: active2, wasActive: wasActive2, slot: 2 },
-            { active: active3, wasActive: wasActive3, slot: 3 },
-            { active: active4, wasActive: wasActive4, slot: 4 },
-            { active: active5, wasActive: wasActive5, slot: 5 },
-            { active: active6, wasActive: wasActive6, slot: 6 },
-        ];
-
-        for (const { active, wasActive, slot } of slots) {
-            if (active && !wasActive.current) {
-                const preset = getPresetForPinnedSlot(slot);
-                if (preset) {
-                    setActivePreset(preset.id);
+        const applyRisingEdges = () => {
+            const wasActive = wasActiveRef.current;
+            for (const slot of PRESET_SLOTS) {
+                const active = isActionActiveSync('PRESETS', `SLOT_${slot}`);
+                if (active && !wasActive[slot]) {
+                    const preset = getPresetForPinnedSlot(slot);
+                    if (preset) {
+                        setActivePreset(preset.id);
+                    }
                 }
+                wasActive[slot] = active;
             }
-            wasActive.current = active;
-        }
-    }, [active1, active2, active3, active4, active5, active6]);
+        };
+
+        // The key may already be down when this mounts, so read once before
+        // listening.
+        applyRisingEdges();
+        return hotkeyStore.subscribe(applyRisingEdges);
+    }, []);
 }

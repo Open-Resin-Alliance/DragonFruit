@@ -1,10 +1,18 @@
 {
+  "build": {
+    "beforeBundleCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-windows-runtime.ps1"
+  },
   "bundle": {
     "licenseFile": "nsis/assets/license.txt",
     "resources": {
-      "windows-resources/dragonfruit_voxl_thumbnail_com.dll": "dragonfruit_voxl_thumbnail_com.dll"
+      "windows-resources/dragonfruit_voxl_thumbnail_com.dll": "dragonfruit_voxl_thumbnail_com.dll",
+      "windows-resources/nsis-plugins/InetC.txt": "licenses/InetC.txt"
     },
     "windows": {
+      "wix": {
+        "fragmentPaths": ["wix/runtime-prerequisite.wxs"],
+        "componentGroupRefs": ["DfRuntimePrerequisite"]
+      },
       "nsis": {
         "installerHooks": "nsis/thumbnail-hooks.nsh",
         "headerImage": "nsis/assets/header.bmp",

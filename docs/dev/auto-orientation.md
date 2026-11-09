@@ -1,8 +1,11 @@
 # Auto-Orientation (Pre-Plan)
 
 Design pre-plan for automatic build-orientation of models, tuned for
-masked-resin (MSLA) printing. This is a plan, not a shipped feature: the
-phases below are sequenced so each lands as a usable improvement. It
+masked-resin (MSLA) printing. M1 has shipped (`suggestOrientation` in
+`src/supports/autoSupport/orientationAdvisor.ts`, sweeping
+`generateM1Candidates` plus `restingPoseCandidates` with coordinate-descent
+refinement), as has M2 (support blockers — see below); M3–M5 are still
+planned, sequenced so each lands as a usable improvement. It
 absorbs the intent of the closed WIP attempt (#224: Fibonacci sweep with
 protected-face painting) while discarding its implementation, which did
 not work well in practice and was never merged. Designed to interlock
@@ -69,42 +72,70 @@ cheap geometric proxies computed once per candidate:
 All terms are weighted; weights start calibrated, exposed as advanced
 sliders later only if the calibration proves insufficient.
 
-### "No supports" painted faces (hard constraint)
+### Pose stability, and why the plate contact is not an overhang
 
-Users paint faces that must never carry supports — a figurine's face is
-the canonical case. Painted areas are a HARD CONSTRAINT on the
-orientation search, not a weighted term: every painted normal must point
-up, away from the build plate, in the chosen orientation. A weighted
-"protected exposure" term can still sacrifice the face when other terms
-dominate; a constraint cannot be violated.
+The sweep ranks by support contact. Two things it was getting wrong, and both
+showed up as a cube coming back oriented onto a corner:
 
-The mask reuses the mesh-smoothing painter's infrastructure
-(`src/features/mesh-smoothing/`):
+- **The plate contact was double-charged.** A face-down cube's base is
+  down-facing area, so it counted as overhang *and* as a cup — 300 mm² for a
+  pose needing the least support of any — while a corner-down pose keeps every
+  face just above the self-support angle and scored 0. The search was therefore
+  paid to balance parts on a corner, which is exactly the pose the
+  stabilization pass then has to patch. The base stays charged as overhang,
+  scar and blocked contact: the app auto-lifts models off the plate by a few
+  millimetres, so that face really does need supports bridging the gap (the
+  island scan reports it — a face-down cube: one overhang region, its base).
+  What it is not is a suction cup: resin flows under a sparse support forest,
+  and there is no enclosed pocket to trap it. `measurePoseStability` reports
+  the down-facing area inside the 2 mm contact band and `netSupportAreas`
+  subtracts it from the **cup** term only.
+- **Nothing scored whether the pose could stand at all.** `stabilityWeight`
+  (default 1, `AdvisorOptions`) charges an unstable pose its whole footprint —
+  the contact the stabilization pass would otherwise have to manufacture.
+  Unstable is the constant-free part of the report: no bearing polygon (a point
+  or edge contact), or the volume centroid outside the base. Finite on purpose,
+  so the search still returns the least bad pose when every candidate is
+  unstable, and `stabilityWeight: 0` restores ranking on contact area alone.
 
-- `topologyCache.ts` — spatial hash over unique vertices for radius
-  queries (already tuned for a 5 mm brush radius);
-- `brushController.ts` — stroke handling, hover point/normal, preview
-  buffers;
-- `meshSmoothingEngine.ts` — per-vertex application with before/after
-  snapshots for undo.
+`measurePoseStability` is the same model `compute_stability_report`
+(`src-tauri/src/overhang.rs`) logs for the placed pose — driving moment
+`Σ A·(n_xy·u)·z` about a bearing-hull edge, restoring `ρg·V·d_e` and
+`σ·A_contact·d̄_e` — reported as geometry so the two constants stay in the
+report. The implementations are separate on purpose: the report is Rust, on the
+posed mesh the scan already holds, and the advisor is a synchronous pure
+function over triangle soup that must stay testable without IPC. They are
+pinned to the same closed-form fixtures — a flat 10 mm cube reads
+`bearing 100 mm² over 4 edges, depth 5` on both sides. `OrientationCost`
+carries the terms (`bearingAreaMm2`, `bearingEdges`, `centroidDepthMm`,
+`marginMm`, `adhesionRatio`, `stabilityPenaltyMm2`) so the suggestion surface
+can show why a pose lost.
 
-Mask model: a `Uint8Array` over the same unique-vertex list the
-smoothing engine uses. A "No Supports" paint mode writes the mask; the
-brush cursor and bindings patterns carry over directly.
+### "No supports" painted faces (shipped as support blockers)
 
-Search integration: painted vertex normals are precomputed once in
-model space. Per candidate the check is a handful of dot products —
-rotate each painted normal by the candidate rotation and require
-`n'.z >= cos(maxTilt)` (maxTilt ~45°). Candidates violating the mask
-are pruned BEFORE scoring, so the constraint is nearly free and the
-scorer never trades a painted face away. Infeasible masks (painted
-faces on opposite sides of the model) are reported at paint time with a
-stroke-time conflict warning, and the search falls back to best-effort
-with a visible warning rather than silently ignoring the mask.
+Users paint surface regions that must never carry supports — a figurine's
+face is the canonical case — with the Blockers button (secondary, next to
+Orient Model) entering a paint mode with a fixed-radius brush, red overlay,
+and Clear. The mask is a per-model set of model-space triangle indices
+(`src/supports/autoSupport/supportBlockers.ts`), so it rotates with the
+model and stays valid across orientation changes — unlike the hollowing
+voxel blockers, which index a rotation-aligned grid and are cleared on
+rotation. Out-of-range indices (geometry swapped underneath, e.g. by
+hollowing) are ignored by every consumer.
 
-The support pipeline honors the mask too: the auto-support candidate
-filter extends its already-supported check to skip contacts on painted
-faces, so the guarantee holds after orientation as well.
+Deliberate deviation from the pre-plan: blocked down-facing contact
+carries a heavy FINITE weight (`blockedWeight`, default 10, in
+`evaluateOrientationCost` and the sweep's `scoreFull`) under every
+objective instead of pre-scoring hard pruning. A hard prune breaks the
+never-regress invariant on infeasible masks (paint on opposite sides) and
+needs the stroke-time conflict machinery; the weight keeps the result
+never-worse than identity while still turning blocked faces away from the
+plate whenever a better pose exists. The generator side IS a hard refusal:
+`generateCandidates` and `generateGridCandidates` drop contacts resolving
+to a blocked face (triangle sampler face carried through, upward-raycast
+fallback otherwise), so the guarantee holds after orientation as well.
+Strokes are single history entries (`support:blocker-stroke`) via the
+typed support-history façade.
 
 ### Feedback into the support engine: peel exposure
 
@@ -118,7 +149,7 @@ heuristics currently approximate:
   carries almost nothing. This measured value replaces the empirical
   height factor (a buckling proxy guessing at load) and the
   suction-area term (guessing peel from region area) as the modulation
-  on top of the sizing tier band.
+  on top of the settings' sizing band.
 - **Anchor identification**: L(z) combined with the island scanner's
   per-layer regions pinpoints the layers where new disconnected islands
   start — the principled first-printed-surface set.
@@ -128,7 +159,7 @@ heuristics currently approximate:
 Caveats: L(z) is whole-model area; per-region attribution layers the
 region scan on top (it exists). Buffer resolution bounds accuracy —
 fine for a smooth modulation term, not for exact contact sizing. The
-tier band remains the base; peel exposure modulates it.
+sizing band remains the base; peel exposure modulates it.
 
 ### Integration points
 
@@ -157,11 +188,17 @@ tier band remains the base; peel exposure modulates it.
 
 ## Phases
 
-1. **M1 — Sweep and score**: Fibonacci + resting-pose candidates,
-   CPU scoring (overhang, height, footprint), apply-to-transform UX with
-   before/after scores.
-2. **M2 — "No supports" painted faces**: vertex mask via the smoothing
-   painter infrastructure, hard-constraint pruning in the search, brush UX.
+1. **M1 — Sweep and score** (shipped): Fibonacci + resting-pose candidates,
+   CPU scoring (overhang primary with an anchoring margin that trades up to ~5%
+   contact for the widest base; height/footprint tie-breakers, or height
+   objective rank, one-click apply with optimize-for dropdown (Fewest Supports /
+   Shortest Print Time / Least Scarring), auto-lift reseat above the plate,
+   destructive-transform confirm clearing placed supports first, and toast
+   receipts (applied / already-optimal).
+2. **M2 — "No supports" painted faces** (shipped): triangle mask with
+   paint mode (Blockers button), red overlay, Clear, stroke history;
+   heavy finite blocked-contact weight in the search, hard refusal in the
+   candidate generators.
 3. **M3 — GPU peel proxy**: orthographic coverage rendering, max/integral
    cross-section terms replacing the CPU proxies.
 4. **M4 — Drainage**: trapped-volume term and drain-path viability for

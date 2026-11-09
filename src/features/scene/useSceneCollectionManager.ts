@@ -1,28 +1,166 @@
-import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { loadMeshGeometry, load3mfGeometryMergedWithSplitData, processGeometry, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
-import type { MeshHealthReport, MeshAnalysisJson } from '@/utils/meshRepair';
-import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
-import { isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, parseVoxlDocument, readSidecarFileBytes, resolveOriginalRefSidecar, type VoxlDocumentV1, type VoxlMeshRef, type PrecompressedChunk } from '@/features/scene/voxl';
+import { loadTauriCore, refineCoarseFaces, shouldRefineCoarseFaces } from '@/utils/tauriMeshBridge';
+import { solidRemeshFromGeometry, tetSurfaceFromGeometry, type SolidRemeshProgressSink, type SolidRemeshOptions, type TetSurfaceProgressSink, type TetWrapOptions } from '@/utils/meshShrinkwrap';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+import { loadMeshGeometry, loadMeshGeometryFromRange, load3mfGeometryMergedWithSplitData, processGeometry, skipsNativePassForModelOnly, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
+import type { MeshHealthReport, MeshAnalysisJson, MeshRepairProgressSink } from '@/utils/meshRepair';
+import { loadMeshFromPath } from '@/utils/meshRepair';
+import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
+import {
+  DYNAMIC_PLATE_ORDERING,
+  VOXL_PLATE_ORDERING_EXTENSION,
+  plateCascadeOffsetMm,
+  readPlateOrdering,
+  type PlateOrdering,
+} from '@/features/scene/plates/plateCascade';
+import {
+  computePlateFrames,
+  modelsOnPlate,
+  plateCanBeRemoved,
+  plateLocalRect,
+  relaidPlateShifts,
+  resolveModelPlateId as plateIdForModel,
+  withPlateMembership,
+  type PlateFootprint,
+  type PlateFrame,
+} from '@/features/scene/plates/plateLayout';
+import { decodeVoxlBodyChunk, detectObsoleteVoxlVersion, isVoxlBinaryV2, meshChunkStore, parseVoxlBinaryV2, readScenePlates, readSidecarFileBytes, resolveOriginalRefSidecar, VoxlObsoleteVersionError, type VoxlDocumentV1, type VoxlMeshRef, type VoxlMeshRange } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
+import { countSupportEntities, getSnapshot, loadFromImportFormat, mergeFromImportFormat, reassignAllSupportModelIds, removeSupportEntitiesForModels, resetStore, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
+import { peekUndo } from '@/history/historyStore';
 import { createTypedHistory } from '@/history/typedHistory';
 import type { ModelTransform } from '@/hooks/useModelTransform';
+import { forgetCenteredPositions } from '@/utils/modelBounds';
+import { releasePrepareMergedSupportsFor } from '@/supports/prepare/mergedSupportCache';
+import { releaseGeometryStorage as releaseGeometryStorageBase } from '@/utils/releaseGeometry';
+import { disposeSpilledSceneSnapshot, hasSpilledSceneSnapshot, pruneSpilledSceneSnapshots, rehydrateSceneSnapshotPair, spillSceneSnapshotPair, spilledSceneSnapshotBytes } from './sceneSnapshotSpill';
 import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/supports/types';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/builtinComplexPluginFileTypeHandlers';
 import type { PluginFileTypeDefinition } from '@/features/plugins/complexPluginContracts';
 import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
+import {
+  createSideloadedFileTypeHandler,
+  getSideloadedFileTypesSnapshot,
+  refreshSideloadedContributions,
+  subscribeSideloadedFileTypes,
+} from '@/features/plugins/sideloadedFileTypes';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
+import { runWithConcurrency } from '@/utils/runWithConcurrency';
+import { logToNativeFile } from '@/utils/nativeLog';
+import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeAndAttachOcclusionForGeometry, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, isOcclusionUnavailable, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
+import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
+import { shelfPack, type ShelfItem } from '@/features/scene/arrange/shelfPack';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  importDetailAutoRepairingFile,
+  importDetailAutoRepairingMesh,
+  importDetailClassifyingFile,
+  importDetailClassifyingMesh,
+  importDetailFinalizing,
+  importDetailFinalizingModel,
+  importDetailIndexedFile,
+  importDetailInspectingFile,
+  importDetailInspectingMesh,
+  importDetailLoadingFile,
+  importDetailPreparing,
+  importDetailPreparingGeometry,
+  importDetailProcessedCount,
+  importDetailRecombiningGeometry,
+  importDetailSeparatingGeometry,
+  importDetailVoxlModel,
+  importLabelAutoRepairing,
+  importLabelClassifying,
+  importLabelFileType,
+  importLabelInspecting,
+  importLabelLoadingMesh,
+  importLabelMergingSupports,
+  importLabelScanningSupports,
+  importLabelScenes,
+  importLabelSplittingSupports,
+  importLabelVoxlScene,
+  alertSceneImportFailed,
+  reportAutoRepaired,
+  reportImportedScene,
+  reportMergeSupportsFailed,
+  reportNoSceneImportHandler,
+  reportRestoredModel,
+  reportScanFailed,
+  reportScanned,
+  reportSceneFilesAllFailed,
+  reportSceneFilesImported,
+  reportSceneFilesPartlyImported,
+  reportSceneImportFailed,
+  reportSplitSupportsFailed,
+  reportSupportJsonFailed,
+  reportSupportJsonImported,
+  reportSupportJsonUnsupported,
+  reportUnsupportedSceneFile,
+  reportVoxlImportFailed,
+  reportVoxlNoMeshes,
+  reportVoxlUnsupportedVersion,
+} from '@/features/scene/sceneImportMessages';
+import { duplicatedModelName, pastedModelName } from '@/features/scene/modelCopyNames';
+import {
+  repairCancelledMessage,
+  repairedModelsMessage,
+  remeshedMessage,
+  repairFailedForModelMessage,
+  repairFailedMessage,
+  repairStoppedMessage,
+  tetSurfacedMessage,
+  shrinkWrappedMessage,
+} from '@/features/scene/meshRepairMessages';
+import {
+  addPlateLabel,
+  colorModelLabel,
+  DELETE_MODELS_AND_PLATES_LABEL,
+  deleteModelLabel,
+  deleteModelsLabel,
+  deletePlateLabel,
+  deleteSupportsForModelLabel,
+  deleteSupportsForModelsLabel,
+  duplicateModelLabel,
+  duplicateModelsLabel,
+  hideModelLabel,
+  linkModelsLabel,
+  MARK_AS_MODEL_LABEL,
+  ASSIGN_MATERIAL_LABEL,
+  MARK_AS_SUPPORT_LABEL,
+  mergeSupportsLabel,
+  pasteModelLabel,
+  pasteModelsLabel,
+  renameLabel,
+  repairModelLabel,
+  repairModelsLabel,
+  SCENE_CHANGE_LABEL,
+  showModelLabel,
+  shrinkWrapModelLabel,
+  splitModelLabel,
+  splitSupportsLabel,
+  SWITCH_PRINTER_LABEL,
+  switchPrinterLabel,
+  tetSurfaceModelLabel,
+  solidRemeshModelLabel,
+  transformModelLabel,
+  transformModelsLabel,
+  unlinkModelsLabel,
+} from '@/features/scene/sceneHistoryLabels';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
-import { getKickstandSnapshot, setKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
-import type { KickstandState } from '@/supports/SupportTypes/Kickstand/types';
-import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
-import { getSavedThemeCustomColors } from '@/components/settings/themeCustomizations';
+import { MODEL_EDGE_OVERLAY_ENABLED, buildModelEdgeGeometry } from '@/hooks/useStlGeometry';
+import { MESH_SHADER_TYPES, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
+import {
+  getSavedWorkspaceCameraSettings,
+  getWorkspaceCameraSettingsServerSnapshot,
+  getWorkspaceCameraSettingsSnapshot,
+  subscribeToWorkspaceCameraSettings,
+} from '@/components/settings/workspaceCameraPreferences';
 import {
   DEFAULT_VIEW3D_SETTINGS,
   getSavedView3DSettings,
@@ -30,18 +168,41 @@ import {
   saveView3DSettings,
   type View3DSettings,
 } from '@/components/settings/view3dPreferences';
+import { followedPlateIdForMove, rectStandsOnAnyBed } from '@/features/scene/plates/plateInteractivity';
+import {
+  getMultiPlateSettingsServerSnapshot,
+  getMultiPlateSettingsSnapshot,
+  plateOrderingFor,
+  subscribeToMultiPlateSettings,
+} from '@/components/settings/multiPlatePreferences';
 import {
   getActivePrinterProfile,
+  getMaterialProfilesForPrinter,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
+  addPrinterProfileFromPresetIfAvailable,
+  importPrinterBundle,
+  importSceneMaterials,
+  setActivePrinterProfile,
+  updatePrinterProfile,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
-import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
+import {
+  buildVolumeIsSmaller,
+  findPrinterProfileForBundle,
+  toVoxlPrinterBundle,
+} from '@/features/profiles/voxlPrinterBundle';
+import type { VoxlPrinterBundle } from '@/features/scene/voxl/types';
+import { base64ToBytes } from '@/utils/base64';
+import { snapshotGeometryPositions } from '@/utils/geometrySnapshot';
+import type { ModelMeshModifiers, ModelMeshModifiersHistoryOptions } from '@/features/mesh-modifiers/types';
+import { countTriangles } from '@/utils/geometry';
 import {
   deleteStoredMeshModifiers,
   getStoredMeshModifiers,
   storeModelMeshModifiers,
 } from '@/features/mesh-modifiers/meshModifierStore';
+import { clearPreparedGeometryCacheForModel } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
 import {
   applyModelGrouping,
@@ -52,31 +213,73 @@ import { performModelCut, selectModelsForClipboard } from '@/features/scene/mode
 
 type PersistedMeshAppearance = {
   v: 1;
+  /** The view mode the camera dropdown shows, which is also the shader the viewport renders. */
   shaderType: MeshShaderType;
+  /** The type the Mesh settings tab is configuring. Independent of what the viewport renders. */
+  configuredShaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
   flatUseVertexColors: boolean;
-  toonSteps: number;
   ambientIntensity: number;
   directionalIntensity: number;
   materialRoughness: number;
+  /** Multiplier on the baked occlusion's strength; 0 disables the bake. */
+  bakedAoIntensity: number;
   wireframeThicknessPx: number;
   xrayOpacity: number;
   heatmapMinAngle: number;
   heatmapMaxAngle: number;
   heatmapColors: string[];
   meshColor: string;
-  selectionColor: string;
-  hoverColor: string;
   hoverTintStrength: number;
   selectedTintStrength: number;
 };
 
+/**
+ * Ambient-occlusion bakes in flight at once (see the scheduling comment in the
+ * bake effect). Each command is internally parallel across vertices, so this is
+ * about hiding the serial phases — weld, tree build, IPC — of one model behind
+ * another model's ray pass, not about using more cores per model.
+ */
+const AO_BAKE_CONCURRENCY = 2;
+
+/**
+ * VOXL meshes built at once.
+ *
+ * Was two, on the reasoning that each build is a native round trip whose serial
+ * phases want overlapping. Measured on the 13-model scene, two left both workers
+ * stalled: the native load is only 0.17-0.25 s (`[load_mesh_bytes] parsed, refined
+ * and encoded in …`) while the round trip a build waits on is 1.4-2.3 s, because
+ * the wire (65-81 MB a model at ~125 MB/s) and the *single main thread* that
+ * decodes, accelerates and computes planes for each model are shared resources. A
+ * build's own work is ~1.2 s of that, so the rest is one worker waiting for the
+ * other's turn. Four in flight keeps the wire busy and gives the main thread a
+ * queue to work through instead of handing it one model at a time. The cost is
+ * memory: each in-flight build holds its payload (52-81 MB here) and its geometry.
+ */
+const VOXL_BUILD_CONCURRENCY = 4;
+
+/**
+ * How many beds a paste will add for the copies that do not fit the plate being worked
+ * on. A run adds a bed only when the previous one could not take anything, so this is a
+ * guard against a copy larger than a bed rather than a real limit.
+ */
+const MAX_PASTE_PLATES = 32;
+
+/** The same guard for an import: a bed per spill, never an unbounded run of them. */
+const MAX_IMPORT_PLATES = 32;
+
+/** Gap between imported models, wider than arrange's own so a rough plate is
+ *  easier to pick apart by hand. */
+const IMPORT_ARRANGE_SPACING_MM = 10;
+
 const MESH_APPEARANCE_STORAGE_KEY = 'mesh-appearance-settings';
 
 const DEFAULT_MESH_COLOR = '#a3a3a3';
-const DEFAULT_AMBIENT_INTENSITY = 0.6;
-const DEFAULT_DIRECTIONAL_INTENSITY = 0.8;
-const DEFAULT_MATERIAL_ROUGHNESS = 0.65;
+// Split so the Mesh tab's derived sliders read Lightness 1.40, Contrast 0.80
+// (contrast = directional / (ambient + directional)).
+const DEFAULT_AMBIENT_INTENSITY = 0.28;
+const DEFAULT_DIRECTIONAL_INTENSITY = 1.12;
+const DEFAULT_MATERIAL_ROUGHNESS = 0.55;
 const DEFAULT_WIREFRAME_THICKNESS_PX = 1.5;
 const DEFAULT_XRAY_OPACITY = 0.25;
 const DEFAULT_HEATMAP_MIN_ANGLE = 0;
@@ -85,84 +288,103 @@ export const DEFAULT_HEATMAP_COLORS = ['#E55959', '#E5A559', '#D9D959', '#73D973
 const DEFAULT_SHADER_TYPE: MeshShaderType = 'soft_clay';
 const DEFAULT_MATCAP_VARIANT: MatcapVariant = 'neutral';
 const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
-const DEFAULT_TOON_STEPS = 5;
-export const DEFAULT_SELECTION_COLOR = '#ec2a77';
-export const DEFAULT_HOVER_COLOR = '#ec2a77';
-export function getThemedDefaultSelectionColor(): string {
-  try {
-    if (typeof window === 'undefined') return DEFAULT_SELECTION_COLOR;
-    const c = getSavedThemeCustomColors()?.accent;
-    if (typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c)) return c.toLowerCase();
-  } catch {}
-  return DEFAULT_SELECTION_COLOR;
-}
-export function getThemedDefaultHoverColor(): string {
-  try {
-    if (typeof window === 'undefined') return DEFAULT_HOVER_COLOR;
-    const c = getSavedThemeCustomColors()?.accent;
-    if (typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c)) return c.toLowerCase();
-  } catch {}
-  return DEFAULT_HOVER_COLOR;
-}
 export const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
-export const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
+export const DEFAULT_SELECTED_TINT_STRENGTH = 0.70;
 const RECENT_OPENED_FILES_STORAGE_KEY = 'app-recent-opened-files';
 const RECENT_OPENED_FILES_LIMIT = 10;
 const RECENT_FILES_DB_NAME = 'dragonfruit-recent-files';
 const RECENT_FILES_DB_VERSION = 1;
 const RECENT_FILES_STORE_NAME = 'files';
-const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply' as const;
-// A marker pushed after a slice so change-detection can tell whether the scene
-// was edited since. It carries no undo behaviour, but it still lands on the undo
-// stack, so it must have a (pass-through) handler — otherwise undoing onto it
-// would strand the stack. Exported so the push site keys off the same constant.
-export const SCENE_SLICED = 'SCENE_SLICED' as const;
+export const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply' as const;
 const SCENE_HISTORY_MAX_SNAPSHOTS = 200;
 // Belt-and-suspenders alongside the count cap above: a handful of
 // full-resolution geometry swaps (e.g. repeated hollowing on a large model)
 // can retain far more memory per snapshot than typical small edits, so the
 // flat count cap alone can leave a lot of stale geometry pinned alive.
 const SCENE_HISTORY_MAX_ESTIMATED_GEOMETRY_BYTES = 300 * 1024 * 1024;
+// A clear spills the scene's whole geometry — hundreds of MB to a few GB — so
+// the scratch store needs its own ceiling: the RAM budget above never sees a
+// spilled snapshot's bytes, and a long session would otherwise fill the disk.
+const SCENE_HISTORY_MAX_SPILLED_BYTES = 4 * 1024 * 1024 * 1024;
+// Modifier edits of the same kind on the same model this close together are one
+// step: the panels' number fields report every keystroke and every wheel notch.
+const MODIFIER_HISTORY_MERGE_WINDOW_MS = 1000;
 
-type SceneSnapshotPayload = { key: string };
+type SceneSnapshotPayload = { key: string; modelId?: string };
 
 /** Action→payload map for the scene history domain. */
 type SceneHistoryPayloadMap = {
   [SCENE_MODELS_SNAPSHOT_APPLY]: SceneSnapshotPayload;
-  [SCENE_SLICED]: Record<string, never>;
 };
-const sceneHistory = createTypedHistory<SceneHistoryPayloadMap>();
+const sceneHistory = createTypedHistory<SceneHistoryPayloadMap>({
+  [SCENE_MODELS_SNAPSHOT_APPLY]: SCENE_CHANGE_LABEL,
+});
 
-/** Push the post-slice marker used to detect edits made after a slice. */
-export function pushSceneSlicedMarker(): void {
-  sceneHistory.push({ type: SCENE_SLICED, description: 'Scene sliced for printing', payload: {} });
-}
-
-type SceneSnapshot = {
+export type SceneSnapshot = {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
   supportState?: SupportState;
-  kickstandState?: KickstandState;
+  modifierRecord?: { modelId: string; modifiers: ModelMeshModifiers | undefined };
+  /**
+   * The beds, on the entries that add or remove one. Optional: a snapshot without
+   * them leaves the plate list exactly as it is, which is what every entry that
+   * only touches models wants.
+   */
+  plates?: ScenePlate[];
+  activePlateId?: string;
+  /**
+   * The printer the scene was made under. On every snapshot, not only the ones that switch
+   * it: the beds are spaced by the build volume, so an entry taken under one printer and
+   * undone under another lands its models against frames that never applied to them.
+   * `null` is no printer — "use without Printer" — and `undefined` is a snapshot taken
+   * before this was recorded, which leaves the profile alone.
+   */
+  printerProfileId?: string | null;
 };
 
 type SceneSnapshotCaptureOptions = {
   includeSupportState?: boolean;
   supportStateOverride?: SupportState;
-  kickstandStateOverride?: KickstandState;
+  /** The override is already an owned snapshot and must not be cloned again. */
+  supportStateOwned?: boolean;
+  /** Record the plate list on this snapshot, for the entries that change it. */
+  plates?: ScenePlate[];
+  activePlateId?: string;
+  /**
+   * The printer this snapshot belongs to. Defaults to the active one, which is right for
+   * every entry but the "before" of a printer switch: by the time that entry is pushed the
+   * store already holds the new profile.
+   */
+  printerProfileId?: string | null;
 };
 
 type TransformHistorySupportSnapshotOptions = {
   supportBefore?: SupportState;
   supportAfter?: SupportState;
-  kickstandBefore?: KickstandState;
-  kickstandAfter?: KickstandState;
   includeSupportState?: boolean;
 };
 
-type SceneSnapshotPair = {
+/**
+ * One model whose supports were moved with it, recorded instead of a copy of the
+ * whole support store. A transform rewrites positions by a delta, so undo is the
+ * same call with the ends swapped; cloning ~20k entities twice per drag bell was
+ * the single biggest cost of committing a move.
+ */
+export type SupportTransformMove = {
+  modelId: string;
+  from: ModelTransform;
+  to: ModelTransform;
+};
+
+export type SceneSnapshotPair = {
   before: SceneSnapshot;
   after: SceneSnapshot;
+  /**
+   * Present on a pure transform step: the pair carries no support state, and the
+   * history handler replays these transforms instead (inverse on undo).
+   */
+  supportMoves?: SupportTransformMove[];
 };
 
 const sceneSnapshotRegistry = new Map<string, SceneSnapshotPair>();
@@ -215,6 +437,26 @@ function cloneMeshModifiersShallow(modifiers: ModelMeshModifiers): ModelMeshModi
   };
 }
 
+function cloneMeshModifiersForHistory(modifiers: ModelMeshModifiers | null | undefined): ModelMeshModifiers | undefined {
+  if (!modifiers) return undefined;
+  const hollowing = modifiers.hollowing;
+  const clonePlacements = (placements: typeof modifiers.holePunches) => placements?.map((placement) => ({
+    ...placement,
+    centerNorm: placement.centerNorm.slice() as typeof placement.centerNorm,
+    direction: placement.direction.slice() as typeof placement.direction,
+  }));
+  return {
+    ...modifiers,
+    hollowing: hollowing ? {
+      ...hollowing,
+      blockedVoxelIndices: hollowing.blockedVoxelIndices?.slice(),
+      blockedVoxelRotationQuat: hollowing.blockedVoxelRotationQuat?.slice() as typeof hollowing.blockedVoxelRotationQuat,
+    } : hollowing,
+    holePunches: clonePlacements(modifiers.holePunches),
+    holePunchAppliedPlacements: clonePlacements(modifiers.holePunchAppliedPlacements),
+  };
+}
+
 // ── External Mesh Modifier Store ─────────────────────────────────────────
 //
 // Model mesh modifiers (especially the MB-scale cavityPositionsBase64 /
@@ -236,13 +478,6 @@ function schedulePostPaint(callback: () => void): void {
 
 // ─────────────────────────────────────────────────────────────────────────
 
-function clonePlainObject<T>(value: T): T {
-  if (typeof structuredClone === 'function') {
-    return structuredClone(value) as T;
-  }
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
 function captureSceneSnapshot(
   models: LoadedModel[],
   activeModelId: string | null,
@@ -251,37 +486,136 @@ function captureSceneSnapshot(
 ): SceneSnapshot {
   const includeSupportState = options?.includeSupportState ?? false;
   const supportStateOverride = options?.supportStateOverride;
-  const kickstandStateOverride = options?.kickstandStateOverride;
+  const printerProfileId = options?.printerProfileId !== undefined
+    ? options.printerProfileId
+    : (getActivePrinterProfile()?.id ?? null);
 
   return {
     models: models.map(cloneLoadedModel),
     activeModelId,
     selectedModelIds: [...selectedModelIds],
+    printerProfileId,
     ...(includeSupportState
       ? {
-          supportState: clonePlainObject(supportStateOverride ?? getSnapshot()),
-          kickstandState: clonePlainObject(kickstandStateOverride ?? getKickstandSnapshot()),
+          supportState: options?.supportStateOwned && supportStateOverride
+            ? supportStateOverride
+            : clonePlainData(supportStateOverride ?? getSnapshot()),
+        }
+      : {}),
+    ...(options?.plates
+      ? {
+          plates: options.plates.map((plate) => ({ ...plate })),
+          activePlateId: options.activePlateId,
         }
       : {}),
   };
 }
 
-function hasSupportsOrKickstandsForModel(
-  modelId: string,
-  supportState: SupportState,
-  kickstandState: KickstandState,
-): boolean {
-  const supportIds = getSupportsForModel(supportState, modelId);
-  const hasMainSupports = supportIds.roots.length > 0
-    || supportIds.trunks.length > 0
-    || supportIds.branches.length > 0
-    || supportIds.braces.length > 0
-    || supportIds.leaves.length > 0
-    || supportIds.twigs.length > 0
-    || supportIds.sticks.length > 0;
-  if (hasMainSupports) return true;
+/**
+ * `BODY` chunk (VOXL V3.4) → one geometry per split 3MF body, in the merged
+ * model's own space. The binary layout lives in `decodeVoxlBodyChunk`; this adds
+ * what the scene needs from a geometry.
+ */
+async function decodeBodyChunk(bytes: Uint8Array, targetCenter: { x: number; y: number; z: number }): Promise<GeometryWithBounds[]> {
+  const decoded = decodeVoxlBodyChunk(bytes);
+  // The bodies were captured in the merged mesh's space at save time. Loading
+  // re-processes that mesh (centring, normalising Y), which translates it; the
+  // bodies carry no such pass, so they move by the same delta.
+  const dx = targetCenter.x - decoded.center.x;
+  const dy = targetCenter.y - decoded.center.y;
+  const dz = targetCenter.z - decoded.center.z;
+  const bodies: GeometryWithBounds[] = [];
+  for (const body of decoded.bodies) {
+    if (dx !== 0 || dy !== 0 || dz !== 0) {
+      for (let i = 0; i + 2 < body.positions.length; i += 3) {
+        body.positions[i] += dx;
+        body.positions[i + 1] += dy;
+        body.positions[i + 2] += dz;
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(body.positions, 3));
+    if (body.index) geometry.setIndex(new THREE.BufferAttribute(body.index, 1));
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    // The occlusion bake is geometry state, not container state. Without it the
+    // shader reads an empty attribute as 0 and every body renders darker than it
+    // did when it was imported; a plain web build cannot bake, so it gets a flat
+    // 1 (no occlusion) rather than black.
+    const baked = await bakeAndAttachOcclusionForGeometry(geometry);
+    if (!baked && !geometry.getAttribute(BAKED_OCCLUSION_ATTRIBUTE)) {
+      const flat = new Float32Array(geometry.getAttribute('position')?.count ?? 0).fill(1);
+      geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, new THREE.BufferAttribute(flat, 1));
+    }
+    const bbox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
+    bodies.push({
+      geometry,
+      bbox,
+      center: bbox.getCenter(new THREE.Vector3()),
+      size: bbox.getSize(new THREE.Vector3()),
+      flatteningPlanes: [],
+    });
+  }
+  return bodies;
+}
 
-  return Object.values(kickstandState.kickstands).some((kickstand) => kickstand.modelId === modelId);
+/**
+ * The material an imported model starts with on a multi-tank printer: the resin in
+ * Tank 1. A model must always name a material there — an unassigned one would print
+ * in no tank at all.
+ */
+function resolveMultiTankImportDefault(): { materialProfileId: string; materialColor?: string } | null {
+  const printer = getActivePrinterProfile();
+  if (printer?.materialMode !== 'multiTank') return null;
+
+  const tankMaterialId = (printer.tankMaterials ?? []).find((id) => typeof id === 'string' && id.length > 0);
+  if (!tankMaterialId) return null;
+
+  const material = getMaterialProfilesForPrinter(printer.id).find((entry) => entry.id === tankMaterialId);
+  if (!material) return null;
+  return { materialProfileId: material.id, materialColor: material.color };
+}
+
+/** Repaints a model's vertex colours, when it has any, to a flat `color`. */
+function paintModelBaseColor(model: LoadedModel, color: string): void {
+  if (!model.geometry.geometry.getAttribute('color')) return;
+  try {
+    clearPaintToBase(model.geometry.geometry, new THREE.Color(color));
+  } catch (err) {
+    console.error('[SceneCollection] Failed to apply mesh color to geometry:', err);
+  }
+}
+
+/** Whether any support entity of any type belongs to this model. */
+function hasSupportsForModel(modelId: string, supportState: SupportState): boolean {
+  const supportIds = getSupportsForModel(supportState, modelId);
+  return Object.values(supportIds).some((ids) => ids.length > 0);
+}
+
+/** What the beds were laid out with, when it is not the current footprint or ordering. */
+interface PlateRelayoutOptions {
+  laidOut?: PlateFootprint;
+  wasOrdering?: PlateOrdering;
+}
+
+/**
+ * Supports are kept in world space, apart from their model, so a relayout of the beds that
+ * slides a model has to slide its supports by the same move, or they stay standing where the
+ * bed used to be. A model the relayout left alone keeps its transform object, and is skipped.
+ */
+function shiftSupportsWithModels(before: readonly LoadedModel[], after: readonly LoadedModel[]): void {
+  if (before === after) return;
+  const previous = new Map(before.map((model) => [model.id, model.transform]));
+  for (const model of after) {
+    const was = previous.get(model.id);
+    if (was && was !== model.transform) transformSupportsForModel(model.id, was, model.transform);
+  }
+}
+
+/** The support store, for a snapshot of `models`, when any of them has supports to restore. */
+function supportStateFor(models: readonly LoadedModel[]): SupportState | undefined {
+  const supportState = getSnapshot();
+  return models.some((model) => hasSupportsForModel(model.id, supportState)) ? supportState : undefined;
 }
 
 function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
@@ -298,6 +632,180 @@ function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
   return total;
 }
 
+let liveModelsProvider: (() => LoadedModel[]) | null = null;
+let extraRetainedGeometriesProvider: (() => Iterable<THREE.BufferGeometry>) | null = null;
+
+function installLiveModelsProvider(provider: (() => LoadedModel[]) | null): void {
+  liveModelsProvider = provider;
+}
+
+function installExtraRetainedGeometries(provider: (() => Iterable<THREE.BufferGeometry>) | null): void {
+  extraRetainedGeometriesProvider = provider;
+}
+
+function modelGeometries(model: Pick<LoadedModel, 'geometry'>): THREE.BufferGeometry[] {
+  const geometries: THREE.BufferGeometry[] = [model.geometry.geometry];
+  if (model.geometry.edgeGeometry) geometries.push(model.geometry.edgeGeometry);
+  const defects = model.geometry.meshDefects;
+  if (defects?.supportSectionGeometry) geometries.push(defects.supportSectionGeometry);
+  if (defects?.modelSectionGeometry) geometries.push(defects.modelSectionGeometry);
+  return geometries;
+}
+
+/**
+ * Releases everything a geometry owns, not just its GPU buffers. `dispose()`
+ * alone leaves the typed arrays reachable while any stale fiber, render list or
+ * module cache still points at the geometry — which is what kept a cleared scene
+ * resident. Attributes are dropped too, so those references become cheap.
+ */
+function releaseGeometryStorage(geometry: THREE.BufferGeometry): void {
+  forgetCenteredPositions(geometry);
+  releaseGeometryStorageBase(geometry);
+}
+
+/**
+ * Disposes the geometry a history pair owned once no snapshot, live model or
+ * clipboard still references it. Deleting a registry entry alone leaves the
+ * renderer's attribute buffers and the mesh arrays resident for the rest of the
+ * session, which is why an emptied scene used to keep its whole RAM footprint.
+ *
+ * The release runs on an idle callback and re-checks the retained set there:
+ * the frame that stopped drawing these geometries must finish first, and an
+ * undo that lands in between puts one of them back in the scene.
+ */
+function disposeEvictedSnapshot(pair: SceneSnapshotPair): void {
+  const candidates = new Set<THREE.BufferGeometry>();
+  for (const model of pair.before.models) modelGeometries(model).forEach((geometry) => candidates.add(geometry));
+  for (const model of pair.after.models) modelGeometries(model).forEach((geometry) => candidates.add(geometry));
+  if (candidates.size === 0) return;
+
+  const release = () => {
+    const retained = retainedSnapshotGeometries('');
+    for (const geometry of candidates) {
+      if (retained.has(geometry)) continue;
+      releaseGeometryStorage(geometry);
+    }
+  };
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(release, { timeout: 500 });
+  } else {
+    setTimeout(release, 50);
+  }
+}
+
+/** Geometry another snapshot, a live model or the clipboard still needs. */
+function retainedSnapshotGeometries(
+  excludeKey: string,
+  liveModels?: readonly LoadedModel[],
+  includeSceneProvider = true,
+): Set<THREE.BufferGeometry> {
+  const retained = new Set<THREE.BufferGeometry>();
+  for (const [key, pair] of sceneSnapshotRegistry) {
+    if (key === excludeKey) continue;
+    pair.before.models.forEach((model) => modelGeometries(model).forEach((geometry) => retained.add(geometry)));
+    pair.after.models.forEach((model) => modelGeometries(model).forEach((geometry) => retained.add(geometry)));
+  }
+  // The caller's list is the scene the action is about to commit; the provider
+  // is whatever is drawn RIGHT NOW. A spill awaits disk writes, so an undo can
+  // land in between — both sets have to be treated as live.
+  for (const model of liveModels ?? []) {
+    modelGeometries(model).forEach((geometry) => retained.add(geometry));
+  }
+  if (includeSceneProvider) {
+    for (const model of liveModelsProvider?.() ?? []) {
+      modelGeometries(model).forEach((geometry) => retained.add(geometry));
+    }
+  }
+  for (const geometry of extraRetainedGeometriesProvider?.() ?? []) retained.add(geometry);
+  return retained;
+}
+
+/**
+ * Moves a snapshot's geometry to the scratch store. `liveModels` is the set that
+ * will be standing after the action that pushed the pair; pass it explicitly when
+ * the ref has not committed yet (a delete), or the deleted meshes still look live
+ * and nothing is released.
+ *
+ * Selection uses that list ALONE: React has not committed the delete when the
+ * pair is pushed, so the scene provider still reports the deleted models as
+ * live. The release predicate is a different question — by the time the arrays
+ * are dropped the commit has landed, and an undo may have restored them — so it
+ * asks the live scene again.
+ */
+async function spillSceneSnapshotKey(key: string, liveModels?: readonly LoadedModel[]): Promise<boolean> {
+  const pair = sceneSnapshotRegistry.get(key);
+  if (!pair || hasSpilledSceneSnapshot(key)) return false;
+  const retainedAtSpill = retainedSnapshotGeometries(key, liveModels, liveModels === undefined);
+  const spilled = await spillSceneSnapshotPair(
+    key,
+    pair,
+    (geometry) => !retainedAtSpill.has(geometry),
+    (geometry) => !retainedSnapshotGeometries(key).has(geometry),
+  );
+  if (spilled && !sceneSnapshotRegistry.has(key)) disposeSpilledSceneSnapshot(key);
+  if (spilled) trimSpilledSnapshots();
+  return spilled;
+}
+
+let spillingSnapshots = false;
+
+/**
+ * Evicts the oldest spilled snapshot while the scratch store is over its
+ * ceiling. Its file goes with it; the history entry that pointed at it becomes
+ * unrecoverable, exactly like a RAM eviction.
+ */
+function trimSpilledSnapshots(): void {
+  while (sceneSnapshotOrder.length > 1 && spilledSceneSnapshotBytes() > SCENE_HISTORY_MAX_SPILLED_BYTES) {
+    const key = sceneSnapshotOrder.find((candidate) => hasSpilledSceneSnapshot(candidate));
+    if (!key) return;
+    const index = sceneSnapshotOrder.indexOf(key);
+    if (index >= 0) sceneSnapshotOrder.splice(index, 1);
+    sceneSnapshotRegistry.delete(key);
+    disposeSpilledSceneSnapshot(key);
+  }
+}
+
+/**
+ * Keeps the in-RAM history inside its budget by moving the oldest snapshots to
+ * the scratch store. Undo remains available; the geometry is re-read on demand.
+ */
+async function spillSnapshotsOverBudget(): Promise<void> {
+  if (spillingSnapshots) return;
+  spillingSnapshots = true;
+  try {
+    while (
+      sceneSnapshotOrder.length > 1
+      && estimateSceneSnapshotRegistryBytes() > SCENE_HISTORY_MAX_ESTIMATED_GEOMETRY_BYTES
+    ) {
+      const key = sceneSnapshotOrder.find((candidate) => (
+        sceneSnapshotRegistry.has(candidate) && !hasSpilledSceneSnapshot(candidate)
+      ));
+      if (!key) break;
+      const spilled = await spillSceneSnapshotKey(key);
+      if (!spilled) break;
+    }
+  } finally {
+    spillingSnapshots = false;
+  }
+  trimSpilledSnapshots();
+}
+
+/**
+ * Rough bytes of a snapshot's support state.
+ *
+ * The pair owns a deep copy (`clonePlainData`), and a supported plate is tens of
+ * thousands of entities — measured at ~14 MB for the 20-model VFX scene. Without
+ * this the ~300 MB budget never sees them: 200 entries of a supported plate are
+ * retained with nothing accounting for their cost. Spilling a pair clears its
+ * support states too, so the budget drives them out rather than destroying undo.
+ */
+const SUPPORT_ENTITY_BYTES = 700;
+function estimateSnapshotSupportBytes(snapshot: SceneSnapshot): number {
+  const state = snapshot.supportState;
+  if (!state) return 0;
+  return countSupportEntities(state) * SUPPORT_ENTITY_BYTES;
+}
+
 // Counts each distinct BufferGeometry ONCE, because that is what the process
 // actually holds: cloneLoadedModel is a shallow clone, so every snapshot that
 // didn't change the mesh shares the same geometry object. A move stores two
@@ -308,18 +816,31 @@ function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
 // threw away undo entries that cost nothing -- their scene snapshots went with
 // them, and undoing those actions was silently declined and discarded. Only
 // geometry a step genuinely creates (a cut, a hollow) adds to the total now.
+//
+// Support states are the exception: each pair owns its own copy, so they count
+// once per half.
 function estimateSceneSnapshotRegistryBytes(): number {
   const counted = new Set<THREE.BufferGeometry>();
+  const live = new Set<THREE.BufferGeometry>();
+  for (const model of liveModelsProvider?.() ?? []) {
+    for (const geometry of modelGeometries(model)) live.add(geometry);
+  }
   let total = 0;
   const add = (model: LoadedModel) => {
-    const geometry = model.geometry.geometry;
-    if (counted.has(geometry)) return;
-    counted.add(geometry);
-    total += estimateGeometryBytes(geometry);
+    for (const geometry of modelGeometries(model)) {
+      // A mesh the scene is drawing right now is not history cost: the budget is
+      // there to bound what only the undo stack holds. Counting the live plate
+      // kept the estimate permanently over budget, so every commit tried to spill
+      // and none of it could ever be released.
+      if (counted.has(geometry) || live.has(geometry)) continue;
+      counted.add(geometry);
+      total += estimateGeometryBytes(geometry);
+    }
   };
   for (const pair of sceneSnapshotRegistry.values()) {
     pair.before.models.forEach(add);
     pair.after.models.forEach(add);
+    total += estimateSnapshotSupportBytes(pair.before) + estimateSnapshotSupportBytes(pair.after);
   }
   return total;
 }
@@ -340,7 +861,12 @@ function storeSceneSnapshotPair(pair: SceneSnapshotPair): string {
 
   while (sceneSnapshotOrder.length > SCENE_HISTORY_MAX_SNAPSHOTS) {
     const removed = sceneSnapshotOrder.shift();
-    if (removed) sceneSnapshotRegistry.delete(removed);
+    if (removed) {
+      const evicted = sceneSnapshotRegistry.get(removed);
+      sceneSnapshotRegistry.delete(removed);
+      disposeSpilledSceneSnapshot(removed);
+      if (evicted) disposeEvictedSnapshot(evicted);
+    }
   }
 
   // Always keep at least one snapshot so undo of the most recent action
@@ -350,9 +876,15 @@ function storeSceneSnapshotPair(pair: SceneSnapshotPair): string {
     && estimateSceneSnapshotRegistryBytes() > SCENE_HISTORY_MAX_ESTIMATED_GEOMETRY_BYTES
   ) {
     const removed = sceneSnapshotOrder.shift();
-    if (removed) sceneSnapshotRegistry.delete(removed);
+    if (removed) {
+      const evicted = sceneSnapshotRegistry.get(removed);
+      sceneSnapshotRegistry.delete(removed);
+      disposeSpilledSceneSnapshot(removed);
+      if (evicted) disposeEvictedSnapshot(evicted);
+    }
   }
 
+  void spillSnapshotsOverBudget();
   return key;
 }
 
@@ -397,12 +929,8 @@ function clampMatcapVariant(input: unknown, fallback: MatcapVariant): MatcapVari
 }
 
 function clampPersistedMeshShaderType(input: unknown, fallback: MeshShaderType): MeshShaderType {
-  return input === 'soft_clay'
-    || input === 'toon'
-    || input === 'normal_debug'
-    || input === 'wireframe'
-    || input === 'xray'
-    ? input
+  return typeof input === 'string' && (MESH_SHADER_TYPES as readonly string[]).includes(input)
+    ? (input as MeshShaderType)
     : fallback;
 }
 
@@ -429,20 +957,19 @@ function readMeshAppearanceFromLocalStorage(): PersistedMeshAppearance | null {
     return {
       v: 1,
       shaderType,
+      configuredShaderType: clampPersistedMeshShaderType(parsed.configuredShaderType ?? parsed.shaderType, DEFAULT_SHADER_TYPE),
       matcapVariant: clampMatcapVariant(parsed.matcapVariant, DEFAULT_MATCAP_VARIANT),
       flatUseVertexColors: clampBoolean(parsed.flatUseVertexColors, DEFAULT_FLAT_USE_VERTEX_COLORS),
-      toonSteps: clampInt(parsed.toonSteps, 2, 16, DEFAULT_TOON_STEPS),
       ambientIntensity: clampNumber(parsed.ambientIntensity, 0, 4, DEFAULT_AMBIENT_INTENSITY),
       directionalIntensity: clampNumber(parsed.directionalIntensity, 0, 4, DEFAULT_DIRECTIONAL_INTENSITY),
       materialRoughness: clampNumber(parsed.materialRoughness, 0, 1, DEFAULT_MATERIAL_ROUGHNESS),
+      bakedAoIntensity: clampNumber(parsed.bakedAoIntensity, 0, 2, DEFAULT_BAKED_OCCLUSION_INTENSITY),
       wireframeThicknessPx: clampNumber(parsed.wireframeThicknessPx, 0.5, 6, DEFAULT_WIREFRAME_THICKNESS_PX),
       xrayOpacity: clampNumber(parsed.xrayOpacity, 0.02, 0.85, DEFAULT_XRAY_OPACITY),
       heatmapMinAngle: clampNumber(parsed.heatmapMinAngle, 0, 90, DEFAULT_HEATMAP_MIN_ANGLE),
       heatmapMaxAngle: clampNumber(parsed.heatmapMaxAngle, 0, 90, DEFAULT_HEATMAP_MAX_ANGLE),
       heatmapColors: Array.isArray(parsed.heatmapColors) && parsed.heatmapColors.length === 5 ? parsed.heatmapColors : DEFAULT_HEATMAP_COLORS,
       meshColor: clampHexColor(parsed.meshColor, DEFAULT_MESH_COLOR),
-      selectionColor: clampHexColor(parsed.selectionColor, getThemedDefaultSelectionColor()),
-      hoverColor: clampHexColor(parsed.hoverColor, getThemedDefaultHoverColor()),
       hoverTintStrength: clampNumber(parsed.hoverTintStrength, 0, 1, DEFAULT_HOVER_TINT_STRENGTH),
       selectedTintStrength: clampNumber(parsed.selectedTintStrength, 0, 1, DEFAULT_SELECTED_TINT_STRENGTH),
     };
@@ -626,74 +1153,6 @@ function writeRecentOpenedFilesToLocalStorage(entries: RecentOpenedFileEntry[]):
   }
 }
 
-function decodeBase64ToUint8Array(base64: string): Uint8Array {
-  if (typeof atob !== 'function') {
-    throw new Error('Base64 decoding is unavailable in this environment.');
-  }
-
-  const normalized = base64.replace(/\s+/g, '');
-  const binary = atob(normalized);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-function decodeRleU8(encoded: Uint8Array, expectedSize: number): Uint8Array {
-  if (!Number.isFinite(expectedSize) || expectedSize <= 0 || !Number.isInteger(expectedSize)) {
-    throw new Error('Invalid VOXL RLE expected size.');
-  }
-
-  if (encoded.length % 2 !== 0) {
-    throw new Error('Invalid VOXL RLE payload: expected count/value byte pairs.');
-  }
-
-  const out = new Uint8Array(expectedSize);
-  let outIndex = 0;
-
-  for (let i = 0; i < encoded.length; i += 2) {
-    const count = encoded[i];
-    const value = encoded[i + 1];
-    if (count <= 0) {
-      throw new Error('Invalid VOXL RLE payload: zero-length run.');
-    }
-
-    const next = outIndex + count;
-    if (next > expectedSize) {
-      throw new Error('Invalid VOXL RLE payload: run length exceeds expected output size.');
-    }
-
-    out.fill(value, outIndex, next);
-    outIndex = next;
-  }
-
-  if (outIndex !== expectedSize) {
-    throw new Error('Invalid VOXL RLE payload: decoded size mismatch.');
-  }
-
-  return out;
-}
-
-function decodeVoxlEmbeddedMeshBytes(meshRef: VoxlMeshRef): Uint8Array {
-  if (!meshRef.dataBase64) {
-    throw new Error('VOXL embedded mesh is missing dataBase64.');
-  }
-
-  const encoded = decodeBase64ToUint8Array(meshRef.dataBase64);
-  const dataEncoding = meshRef.dataEncoding ?? 'base64-raw';
-
-  if (dataEncoding === 'base64-raw') {
-    return encoded;
-  }
-
-  if (dataEncoding === 'base64-rle-u8') {
-    return decodeRleU8(encoded, meshRef.uncompressedSizeBytes ?? 0);
-  }
-
-  throw new Error(`Unsupported VOXL embedded mesh encoding: ${String(dataEncoding)}`);
-}
-
 function sanitizeImportedModelDisplayName(rawName: string): string {
   const trimmed = rawName.trim();
   if (!trimmed) return 'model';
@@ -749,30 +1208,20 @@ function remapModelIdsInPayload<T>(value: T, idMap: Map<string, string>): T {
   return visit(value) as T;
 }
 
+/** Whether a serialized scene carries any support at all. */
 function voxlSupportsContainData(document: VoxlDocumentV1): boolean {
-  const supports = document.supports;
-  return supports.roots.length > 0
-    || supports.trunks.length > 0
-    || supports.branches.length > 0
-    || supports.leaves.length > 0
-    || (supports.twigs?.length ?? 0) > 0
-    || (supports.sticks?.length ?? 0) > 0
-    || supports.braces.length > 0
-    || supports.knots.length > 0
-    || (supports.kickstands?.length ?? 0) > 0;
+  return payloadCollections(document.supports).some((entities) => entities.length > 0);
+}
+
+/** A payload's collections as arrays, keyed by the registry's collection names. */
+function payloadCollections(payload: DragonfruitImportFormat): unknown[][] {
+  const record = payload as unknown as Record<string, unknown[] | undefined>;
+  return SUPPORT_COLLECTION_KEYS.map((key) => record[key] ?? []);
 }
 
 function countSupportEntries(payload: DragonfruitImportFormat | null | undefined): number {
   if (!payload) return 0;
-  return payload.roots.length
-    + payload.trunks.length
-    + payload.branches.length
-    + payload.leaves.length
-    + (payload.twigs?.length ?? 0)
-    + (payload.sticks?.length ?? 0)
-    + payload.braces.length
-    + payload.knots.length
-    + (payload.kickstands?.length ?? 0);
+  return payloadCollections(payload).reduce((total, entities) => total + entities.length, 0);
 }
 
 function applyImportDefaultsToRaftState() {
@@ -792,8 +1241,17 @@ type PluginSceneImportPayload = {
     scale: THREE.Vector3;
   };
   modelId?: string;
+  /**
+   * Display name from the SOURCE file, where the format carries one (LYS object
+   * `name`, Chitubox per-model filename). Preferred over deriving a name from
+   * the imported filename, which cannot distinguish models inside one container
+   * and falls back to numeric suffixes ("project (2)", "project (3)").
+   */
+  objName?: string;
   supportData?: DragonfruitImportFormat | null;
   meshModifiers?: ModelMeshModifiers;
+  /** The plugin built a model-only mesh and supplied supports separately. */
+  skipClassification?: boolean;
 };
 
 function toFiniteNumber(value: unknown): number | null {
@@ -845,9 +1303,13 @@ function asDragonfruitImportFormat(value: unknown): DragonfruitImportFormat | nu
     return null;
   }
 
-  if (candidate.twigs != null && !Array.isArray(candidate.twigs)) return null;
-  if (candidate.sticks != null && !Array.isArray(candidate.sticks)) return null;
-  if (candidate.kickstands != null && !Array.isArray(candidate.kickstands)) return null;
+  // Every optional collection the registry declares; the required ones are
+  // checked above.
+  const collections = candidate as unknown as Record<string, unknown>;
+  for (const key of SUPPORT_COLLECTION_KEYS) {
+    const value = collections[key];
+    if (value != null && !Array.isArray(value)) return null;
+  }
 
   return candidate as DragonfruitImportFormat;
 }
@@ -859,8 +1321,10 @@ function normalizePluginSceneImportPayload(payload: unknown): PluginSceneImportP
     geometry?: unknown;
     transform?: unknown;
     modelId?: unknown;
+    objName?: unknown;
     supportData?: unknown;
     meshModifiers?: unknown;
+    skipClassification?: unknown;
   };
 
   if (!(source.geometry instanceof THREE.BufferGeometry)) return null;
@@ -894,10 +1358,26 @@ function normalizePluginSceneImportPayload(payload: unknown): PluginSceneImportP
     modelId: typeof source.modelId === 'string' && source.modelId.trim().length > 0
       ? source.modelId
       : undefined,
+    objName: typeof source.objName === 'string' && source.objName.trim().length > 0
+      ? source.objName.trim()
+      : undefined,
     supportData: asDragonfruitImportFormat(source.supportData),
     meshModifiers,
+    skipClassification: source.skipClassification === true,
   };
 }
+
+/**
+ * One build plate in the scene. `name` is '' when the user has not named it, so
+ * the widget falls back to its own wording rather than showing an empty label.
+ */
+export type ScenePlate = {
+  id: string;
+  name: string;
+};
+
+/** Where a plate is in the world, and the build volume it holds there. */
+export type { PlateFrame };
 
 export interface LoadedModel {
   id: string;
@@ -905,6 +1385,12 @@ export interface LoadedModel {
   groupId?: string;
   groupName?: string;
   fileUrl: string;
+  /**
+   * The plate this model stands on. Absent means the scene's first plate, which
+   * is what a scene written before plates meant by it; new models are stamped
+   * with the plate they were imported onto.
+   */
+  plateId?: string;
   /** Original on-disk mesh retained when `geometry` is a reduced native preview. */
   sourcePath?: string | null;
   /** Original mesh sidecar reference when not embedded in ORIG chunk. */
@@ -920,27 +1406,44 @@ export interface LoadedModel {
    *  models for each entry — instant, no reprocessing needed. */
   splitBodies?: GeometryWithBounds[];
   meshModifiers?: ModelMeshModifiers;
-  ignoreAutoLift?: boolean;
-  manualZMoveOverride?: boolean;
+  /**
+   * The model follows the scene's lift distance after transforms. Off means the
+   * model keeps the bottom it was placed at, which is what a project saved before
+   * this flag existed restores to.
+   */
+  autoLift?: boolean;
+  /** The bottom auto-lift returns this model to when it is turned off. */
+  liftRestoreMm?: number;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
+  /**
+   * The material this model prints in, when the printer has more than one tank.
+   * Absent means the plate's own material (the single active profile).
+   */
+  materialProfileId?: string;
+  /**
+   * The mesh colour the model had before a material assignment recoloured it, so
+   * clearing the assignment can give that colour back.
+   */
+  materialBaseColor?: string;
+  /**
+   * Material assigned to each body of a multi-body 3MF, aligned with
+   * `splitBodies`. `undefined` at an index means the body prints in the model's
+   * own material. Bodies stay in the model — assigning does not split it.
+   */
+  bodyMaterialProfileIds?: Array<string | undefined>;
+  /** Resolved colour per body, aligned with `splitBodies`. */
+  bodyColors?: Array<string | undefined>;
 }
 
-type DebugPrimitiveType =
-  | 'pillar'
-  | 'merge_y'
-  | 'split_y'
-  | 'earlobe'
-  | 'bridge'
-  | 'finger_palm_arm';
-
-type DebugPrimitiveSizePreset = 'small' | 'medium' | 'large';
-
-import { deleteSupportsForModel, getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
+import { getSupportsForModel, type ModelSupportIds } from '@/supports/PlacementLogic/SupportModelLinker';
+import { contactEndpointsFor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import { beginSupportStateBatch, endSupportStateBatch } from '@/supports/state';
 import {
   captureModelSupportsToClipboard,
+  estimateRaftBoundsForModel,
   estimateSupportBoundsForModel,
+  pasteModelSupports,
   pasteModelSupportsFromClipboard,
   type SupportClipboardPayload,
 } from '@/supports/PlacementLogic/supportClipboard';
@@ -949,9 +1452,10 @@ import { getRaftSettings, updateRaftSettings, applyImportDefaultRaftSettings, re
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
-import { beginKickstandStoreBatch, endKickstandStoreBatch } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getImportDefaultsRaftPatch, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import { readNativeFileSize } from '@/utils/pluginNetworkBridge';
+import { perfMark, perfMeasure } from '@/utils/perfProbe';
+import { clonePlainData } from '@/utils/plainDataClone';
 
 type ImportProgressState = {
   active: boolean;
@@ -977,6 +1481,11 @@ export type MeshRepairReportEntry = {
   report: MeshHealthReport;
 };
 
+/** A repair run's progress sink, told also when each model of the run starts. */
+export interface ModelsRepairProgressSink extends MeshRepairProgressSink {
+  onModelStart?: (modelId: string, index: number, total: number) => void;
+}
+
 type MeshRepairReportPresentation = 'default' | 'optimistic';
 
 function repairReportNeedsAttention(report: MeshHealthReport): boolean {
@@ -1000,12 +1509,152 @@ export type SceneImportPlacementPrompt = {
   offPlateModelCount: number;
 };
 
+export type SceneImportHollowingChoice = 'bake' | 'keep_solid';
+
+export type SceneImportHollowingPrompt = {
+  source: string;
+  fileName: string;
+  modelCount: number;
+  hollowedModelCount: number;
+};
+
+/**
+ * Joins a pre-baked cavity to its outer shell as one hollow solid.
+ *
+ * A slicer that hollows before export (Lychee) ships the outer surface and the
+ * cavity as two meshes, so the model alone slices filled. The cavity is stored
+ * wound inward, which is what a shell's inner surface needs, making this a
+ * concatenation rather than a repair.
+ *
+ * Positions only: geometry prep recomputes normals, and every other attribute
+ * would have to be invented for the cavity's vertices.
+ */
+function mergeCavityIntoShell(
+  shell: THREE.BufferGeometry,
+  cavityPositions: Float32Array,
+): THREE.BufferGeometry {
+  const shellPositions = geometryPositionsAsSoup(shell);
+  if (!shellPositions) return shell;
+
+  const merged = new Float32Array(shellPositions.length + cavityPositions.length);
+  merged.set(shellPositions, 0);
+  merged.set(cavityPositions, shellPositions.length);
+
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(merged, 3));
+  return out;
+}
+
+/**
+ * A payload's pre-baked cavity positions, or `null` when it carries none.
+ *
+ * The cavity rides in the hollowing modifier as base64 rather than as geometry,
+ * so this is also the test for "was this model hollowed before export".
+ */
+function readPayloadCavity(payload: PluginSceneImportPayload): Float32Array | null {
+  const hollowing = (payload.meshModifiers as ModelMeshModifiers | undefined)?.hollowing;
+  if (!hollowing?.enabled) return null;
+  if (!hollowing.cavityPositionsBase64 || !hollowing.cavityPositionCount) return null;
+
+  try {
+    const bytes = base64ToBytes(hollowing.cavityPositionsBase64);
+    if (bytes.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) return null;
+    const view = new Float32Array(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength / Float32Array.BYTES_PER_ELEMENT,
+    );
+    if (view.length !== hollowing.cavityPositionCount * 3) return null;
+    // Copy: the decoded buffer is not guaranteed to outlive this call.
+    const positions = new Float32Array(view.length);
+    positions.set(view);
+    return positions;
+  } catch {
+    return null;
+  }
+}
+
+/** Positions as a flat triangle soup, resolving an index when one is present. */
+function geometryPositionsAsSoup(geometry: THREE.BufferGeometry): Float32Array | null {
+  const attr = geometry.getAttribute('position');
+  if (!attr) return null;
+  const src = attr.array as ArrayLike<number>;
+  const index = geometry.getIndex();
+  if (!index) return src instanceof Float32Array ? src : Float32Array.from(src);
+
+  const idx = index.array as ArrayLike<number>;
+  const soup = new Float32Array(idx.length * 3);
+  for (let i = 0; i < idx.length; i += 1) {
+    const s = idx[i] * 3;
+    const d = i * 3;
+    soup[d] = src[s];
+    soup[d + 1] = src[s + 1];
+    soup[d + 2] = src[s + 2];
+  }
+  return soup;
+}
+
 export type MeshRepairConfirmPrompt = {
   fileName: string;
   analysis: MeshAnalysisJson;
+  /**
+   * Whether the file can be repaired part by part. A plate imports as one model with many
+   * components, and repairing it whole returns one verdict for all of them; the parts flow returns
+   * a verdict per object instead. Offered only when the import has a file behind it, since the
+   * parts flow reads the source.
+   */
+  canRepairParts: boolean;
 };
 
-type MeshRepairConfirmChoice = 'repair' | 'load_as_is' | 'cancel_import';
+/** A scene refused because it was saved by a VOXL generation we no longer read. */
+export type ObsoleteVoxlScenePrompt = {
+  fileName: string;
+  detected: 'v1-json' | 'v1-binary';
+};
+
+/**
+ * A scene written for a printer other than the one selected. Raised on import so
+ * the user can switch before the scene is dropped into a machine its beds were
+ * not laid out for: the plate pitch comes from the build volume, so a scene
+ * packed for another printer lands on the wrong ones, and if that printer is the
+ * bigger the plates do not fit here at all.
+ */
+export type MissingPrinterPluginPrompt = {
+  printerName?: string;
+  pluginName: string;
+};
+
+export type PrinterMismatchPrompt = {
+  /** The printer the scene carries, whole, so switching can add it when it is missing here. */
+  bundle: VoxlPrinterBundle;
+  /** Material profiles the scene references, adopted once its printer is chosen. */
+  materials?: unknown[];
+  /** The scene names a tank material for models or bodies. */
+  sceneUsesMultiTankMaterials?: boolean;
+  /** Material mode of the profile selected now, so the dialog can warn about losing it. */
+  currentMaterialMode?: string;
+  /** The printer's name as the bundle carries it; absent when it has none. */
+  recordedName?: string;
+  recordedBuildVolumeMm: { width: number; depth: number; height: number };
+  /** The selected profile at the moment of the import. */
+  currentName: string;
+  currentBuildVolumeMm: { width: number; depth: number; height: number };
+  /**
+   * The installed profile the scene's printer resolves to, or null when this
+   * machine has none and switching will add it from the bundle.
+   */
+  installedProfileId: string | null;
+  /** Whether the selected printer is smaller on some axis, so nothing fits as packed. */
+  currentIsSmaller: boolean;
+  /** Whether the selected printer already has every material the scene references. */
+  currentHasRequiredMaterials: boolean;
+  /** The plugin that contributes the recorded printer, when it is not installed. */
+  missingPlugin?: { id: string; name: string };
+  /** Models this import created, so a geometry-only answer can strip their material refs. */
+  importedModelIds: string[];
+};
+
+type MeshRepairConfirmChoice = 'repair' | 'repair_parts' | 'load_as_is' | 'cancel_import';
 
 type ModelClipboardEntry = {
   sourceId: string;
@@ -1019,6 +1668,10 @@ type ModelClipboardEntry = {
   supportClipboard: SupportClipboardPayload | null;
   isSupportGeometry?: boolean;
   linkGroupId?: string;
+  materialProfileId?: string;
+  materialBaseColor?: string;
+  bodyMaterialProfileIds?: Array<string | undefined>;
+  bodyColors?: Array<string | undefined>;
 };
 
 // ---------------------------------------------------------------------------
@@ -1100,7 +1753,31 @@ function scheduleChunkStoreSweep(getModels: () => LoadedModel[]): void {
   }, 1_500);
 }
 
-export function useSceneCollectionManager() {
+
+export function useSceneCollectionManager(options?: {
+  /**
+   * Called when the plate's lock refuses a gesture, so the caller can say so. The
+   * plate that refused arrives with it: a refusal can be about a plate that is not
+   * the active one (a row for another bed, a drag landing on a locked bed), and
+   * saying "the plate" about the wrong bed is worse than saying nothing.
+   */
+  onBlockedByLock?: (plateId?: string) => void;
+}) {
+  const { _ } = useLingui();
+  const fmt = useLocaleFormat();
+
+  // Extensions contributed by installed .dfplugin packages. Empty in the web
+  // build, and refreshed after an install or removal in Settings.
+  const sideloadedFileTypes = useSyncExternalStore(
+    subscribeSideloadedFileTypes,
+    getSideloadedFileTypesSnapshot,
+    getSideloadedFileTypesSnapshot,
+  );
+
+  useEffect(() => {
+    void refreshSideloadedContributions();
+  }, []);
+
   type ScenePluginImportEntry = {
     pluginId: string;
     fileType: PluginFileTypeDefinition;
@@ -1125,8 +1802,13 @@ export function useSceneCollectionManager() {
         }
       }
     }
+    for (const fileType of sideloadedFileTypes) {
+      if (fileType.isSceneFile && normalized.endsWith(fileType.extension)) {
+        return fileType.extension;
+      }
+    }
     return null;
-  }, []);
+  }, [sideloadedFileTypes]);
 
   const scenePluginImportHandlersByExtension = useMemo(() => {
     const handlersByPluginId = new Map(
@@ -1151,8 +1833,23 @@ export function useSceneCollectionManager() {
       }
     }
 
+    // Sideloaded packages register at runtime, so they are appended after the
+    // generated entries and never shadow a compiled-in extension.
+    for (const fileType of sideloadedFileTypes) {
+      if (!fileType.isSceneFile || out.has(fileType.extension)) continue;
+      out.set(fileType.extension, {
+        pluginId: fileType.pluginId,
+        fileType: {
+          fileExtension: fileType.extension,
+          displayName: fileType.displayName,
+          isSceneFile: true,
+        },
+        handler: createSideloadedFileTypeHandler(fileType),
+      });
+    }
+
     return out;
-  }, []);
+  }, [sideloadedFileTypes]);
 
   const waitForUiYield = useCallback(
     () => new Promise<void>((resolve) => {
@@ -1162,17 +1859,131 @@ export function useSceneCollectionManager() {
   );
 
   const [models, setModels] = useState<LoadedModel[]>([]);
+  useEffect(() => {
+    installLiveModelsProvider(() => modelsRef.current);
+    return () => installLiveModelsProvider(null);
+  }, []);
+  useEffect(() => {
+    void pruneSpilledSceneSnapshots(new Set(sceneSnapshotRegistry.keys()));
+  }, []);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  /**
+   * The scene's build plates, in cascade order. Deliberately not part of the
+   * model-grouping snapshot machinery: a plate is a document fact, not a model
+   * state, and undoing a rename is not something the history is for.
+   */
+  const [plates, setPlates] = useState<ScenePlate[]>(() => [{ id: uuidv4(), name: '' }]);
+  /** Which plate is being worked on. */
+  const [activePlateId, setActivePlateId] = useState<string>(() => plates[0].id);
+  /**
+   * Bumped when the plate being worked on is switched deliberately — by clicking a bed or
+   * picking one in the Models panel. The view comes along: a plate you picked may be half
+   * off screen. A drag that lands a model on another bed sets the active plate without
+   * this, because the camera must not jump out from under the drag.
+   */
+  const [plateViewRunId, setPlateViewRunId] = useState(0);
+  const activePlateIdRef = useRef(activePlateId);
+  activePlateIdRef.current = activePlateId;
+
+  const activePlate = plates.find((plate) => plate.id === activePlateId) ?? plates[0];
+  /**
+   * The active plate's name, which is what the plate widget edits and what a
+   * save records as the single-plate shorthand.
+   */
+  const plateName = activePlate?.name ?? '';
+  const setPlateName = useCallback((name: string) => {
+    const target = activePlateIdRef.current;
+    setPlates((prev) => prev.map((plate) => (plate.id === target ? { ...plate, name } : plate)));
+  }, []);
+  /**
+   * Which plates refuse edits. A lock, not a document field: it is about the
+   * session you are working in, so it is not written to the file and it does not
+   * travel with the scene. Per plate, because locking one bed says nothing about
+   * the next. A ref mirrors it for the guards below, which are stable callbacks
+   * and must read the current value rather than the one they closed over.
+   */
+  const [lockedPlateIds, setLockedPlateIds] = useState<string[]>([]);
+  const lockedPlateIdsRef = useRef<string[]>([]);
+  lockedPlateIdsRef.current = lockedPlateIds;
+  const plateLocked = lockedPlateIds.includes(activePlateId);
+  const setPlateLocked = useCallback((locked: boolean) => {
+    const target = activePlateIdRef.current;
+    setLockedPlateIds((prev) => {
+      if (locked) return prev.includes(target) ? prev : [...prev, target];
+      return prev.filter((id) => id !== target);
+    });
+  }, []);
+
+  const platesRef = useRef<ScenePlate[]>(plates);
+  platesRef.current = plates;
+  /**
+   * The plate frames, in a ref because the guards and transform writers are
+   * declared above them and must read the live ones rather than a stale closure.
+   * The rules that read them are plateLayout's; until the frames are computed, a
+   * model keeps whatever membership it already had.
+   */
+  const plateFramesRef = useRef<readonly PlateFrame[]>([]);
+  /**
+   * The plate a model stands on. A model with no membership is on the scene's
+   * first plate, which is what a scene written before plates meant by it.
+   */
+  const modelPlateId = useCallback(
+    (model: LoadedModel) => plateIdForModel(model, plateFramesRef.current),
+    [],
+  );
+  /** Whether the plate a model stands on refuses edits. */
+  const isModelPlateLocked = useCallback((model: LoadedModel) => {
+    const locked = lockedPlateIdsRef.current;
+    if (locked.length === 0) return false;
+    return locked.includes(modelPlateId(model));
+  }, [modelPlateId]);
+  /** Whether the plate new work would land on refuses edits. */
+  const isActivePlateLocked = useCallback(
+    () => lockedPlateIdsRef.current.includes(activePlateIdRef.current),
+    [],
+  );
+  /** Whether one named plate refuses edits. */
+  const isPlateLocked = useCallback(
+    (plateId: string) => lockedPlateIdsRef.current.includes(plateId),
+    [],
+  );
+  // Told, not shown: the manager has no UI, so a refused gesture reports through this
+  // callback and the page decides what that looks like.
+  const onBlockedByLockRef = useRef<((plateId?: string) => void) | undefined>(undefined);
+
+  /**
+   * The plate whose lock refused a gesture about `model`: the bed it would land on
+   * when that one is locked, the one it stands on otherwise. Only called once a
+   * guard has already refused, so it always names a bed that really is locked.
+   */
+  const lockedPlateIdFor = useCallback((model: LoadedModel, landedTransform?: LoadedModel['transform']) => {
+    if (landedTransform) {
+      const landedPlateId = modelPlateId({ ...model, transform: landedTransform });
+      if (isPlateLocked(landedPlateId)) return landedPlateId;
+    }
+    return modelPlateId(model);
+  }, [isPlateLocked, modelPlateId]);
+  // An empty plate has no name: deleting the last model, or starting a new scene,
+  // clears it, and the widget falls back to its default wording. Scoped to a
+  // single-plate scene, so a plate you add and name is not emptied out from under
+  // you by the first plate happening to be bare.
+  useEffect(() => {
+    if (models.length > 0) return;
+    if (plates.length > 1) return;
+    setPlates((prev) => (prev[0]?.name ? [{ ...prev[0], name: '' }] : prev));
+  }, [models.length, plates.length]);
+
   const modelsRef = useRef<LoadedModel[]>([]);
   const activeModelIdRef = useRef<string | null>(null);
   const selectedModelIdsRef = useRef<string[]>([]);
-  // Whether the most recently loaded .voxl was the chunked 2.2 layout. Read by
+  // Whether the most recently loaded .voxl was the chunked 3.1 layout. Read by
   // the import/export manager right after a load to seed the scene's save-format
-  // so autosave preserves an old file's format without ever downgrading a 2.2
+  // so autosave preserves an old file's format without ever downgrading a 3.1
   // one. Defaults to true (newest) for non-voxl / fresh scenes.
   const lastLoadedVoxlFormatChunkedRef = useRef<boolean>(true);
   modelsRef.current = models;
+  onBlockedByLockRef.current = options?.onBlockedByLock;
   activeModelIdRef.current = activeModelId;
   selectedModelIdsRef.current = selectedModelIds;
 
@@ -1180,11 +1991,27 @@ export function useSceneCollectionManager() {
   // Coalesced and idle-scheduled, so a burst of imports or an Auto-Arrange
   // sweeps once. See `scheduleChunkStoreSweep` for why this is a sweep rather
   // than a hook on every model-producing path.
+  //
+  // The sweep must also run when the scene EMPTIES: the store is keyed by model
+  // id, and skipping the empty case retained every deleted model's compressed
+  // mesh (~150-200 MB on a loaded scene) for the rest of the session. The first
+  // mount is skipped so an empty app does not pay the export module's load.
+  const hasHadModelsRef = useRef(false);
   useEffect(() => {
-    if (models.length === 0) return;
+    if (models.length > 0) hasHadModelsRef.current = true;
+    else if (!hasHadModelsRef.current) return;
     scheduleChunkStoreSweep(() => modelsRef.current);
   }, [models]);
   const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry[]>([]);
+
+  useEffect(() => {
+    installExtraRetainedGeometries(() => {
+      const geometries: THREE.BufferGeometry[] = [];
+      for (const entry of modelClipboard) modelGeometries(entry).forEach((geometry) => geometries.push(geometry));
+      return geometries;
+    });
+    return () => installExtraRetainedGeometries(null);
+  }, [modelClipboard]);
   const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>([]);
   const [importProgress, setImportProgress] = useState<ImportProgressState>({
     active: false,
@@ -1195,23 +2022,46 @@ export function useSceneCollectionManager() {
   });
   const [sceneImportReport, setSceneImportReport] = useState<SceneImportReport | null>(null);
   const [sceneImportPlacementPrompt, setSceneImportPlacementPrompt] = useState<SceneImportPlacementPrompt | null>(null);
+  const [obsoleteVoxlScene, setObsoleteVoxlScene] = useState<ObsoleteVoxlScenePrompt | null>(null);
+  const [printerMismatch, setPrinterMismatch] = useState<PrinterMismatchPrompt | null>(null);
+  const [missingPrinterPluginPrompt, setMissingPrinterPluginPrompt] = useState<MissingPrinterPluginPrompt | null>(null);
+  const [sceneImportHollowingPrompt, setSceneImportHollowingPrompt] = useState<SceneImportHollowingPrompt | null>(null);
   const [meshRepairConfirmPrompt, setMeshRepairConfirmPrompt] = useState<MeshRepairConfirmPrompt | null>(null);
   const [meshRepairReports, setMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
+  // Which models the user repaired here, as opposed to the import pass repairing them at load.
+  // Every imported model carries a `nativeRepairReport`, so that field alone cannot say whether the
+  // repair menu should offer "Auto-Repair Again" and the report.
+  const [manuallyRepairedModelIds, setManuallyRepairedModelIds] = useState<string[]>([]);
   const [meshRepairReportPresentation, setMeshRepairReportPresentation] = useState<MeshRepairReportPresentation>('default');
   const [pendingMeshRepairReports, setPendingMeshRepairReports] = useState<MeshRepairReportEntry[]>([]);
   const sceneImportReportTimeoutRef = useRef<number | null>(null);
   const sceneImportPlacementResolveRef = useRef<((choice: SceneImportPlacementChoice) => void) | null>(null);
+  const sceneImportHollowingResolveRef = useRef<((choice: SceneImportHollowingChoice) => void) | null>(null);
   const meshRepairConfirmResolveRef = useRef<((choice: MeshRepairConfirmChoice) => void) | null>(null);
+  const missingPrinterPluginResolveRef = useRef<((choice: 'geometry' | 'manage') => void) | null>(null);
 
-  const isDebugModelName = useCallback((name: string) => name.startsWith('[Debug]'), []);
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
   const deferredAccelerationProcessingRef = useRef(false);
-  const deferredAccelerationPausedRef = useRef(false);
+  // Reasons, not a boolean: the camera and a pointer gesture can each pause this
+  // queue, and the first one to resume must not restart it under the other.
+  const deferredAccelerationPauseReasonsRef = useRef<Set<string>>(new Set());
   const deferredDisposalQueueRef = useRef<THREE.BufferGeometry[]>([]);
   const deferredDisposalProcessingRef = useRef(false);
   // Count of scheduled-but-unfinished flattening-plane computations (idle
   // callbacks after geometry swaps). Part of hasPendingBackgroundGeometryWork.
   const pendingFlatteningPlanesRef = useRef(0);
+  // Models whose AO volume bake is queued or awaiting the native round trip.
+  // Part of hasPendingBackgroundGeometryWork.
+  const pendingAoBakeRef = useRef(0);
+  /** The AO sweep's remaining work, replaced wholesale on every run. */
+  const pendingAoQueueRef = useRef<string[]>([]);
+  // Geometries with a bake in flight. The attribute lands only when the bake
+  // resolves, so without this the queue rebuilt on a later `models` change would
+  // send the same soup a second time — measured as 25 bakes of one mesh in three
+  // seconds under a models-change storm, and as the one-second pair on a restored
+  // model. Keyed on the geometry, so a repair that swaps in a new one is not
+  // skipped.
+  const pendingAoGeometriesRef = useRef<Set<THREE.BufferGeometry>>(new Set());
   const trackedGeometriesRef = useRef<Set<THREE.BufferGeometry>>(new Set());
 
   const tryRevokeObjectUrl = useCallback((url: string) => {
@@ -1265,6 +2115,153 @@ export function useSceneCollectionManager() {
     setMeshRepairReportPresentation('default');
   }, []);
 
+  const dismissObsoleteVoxlScene = useCallback(() => {
+    setObsoleteVoxlScene(null);
+  }, []);
+
+  /**
+   * Answer the printer-mismatch prompt. Switching selects the scene's printer
+   * when this machine already has it, and otherwise adds it from the bundle the
+   * scene carries, which is the point of shipping it whole.
+   */
+
+
+  const requestMissingPrinterPluginChoice = useCallback(async (
+    prompt: MissingPrinterPluginPrompt,
+  ): Promise<'geometry' | 'manage'> => {
+    if (typeof window === 'undefined') return 'geometry';
+    if (missingPrinterPluginResolveRef.current) {
+      missingPrinterPluginResolveRef.current('geometry');
+      missingPrinterPluginResolveRef.current = null;
+    }
+    setMissingPrinterPluginPrompt(prompt);
+    return await new Promise<'geometry' | 'manage'>((resolve) => {
+      missingPrinterPluginResolveRef.current = resolve;
+    });
+  }, []);
+
+  const resolveMissingPrinterPluginChoice = useCallback((choice: 'geometry' | 'manage') => {
+    missingPrinterPluginResolveRef.current?.(choice);
+    missingPrinterPluginResolveRef.current = null;
+    setMissingPrinterPluginPrompt(null);
+  }, []);
+
+  const clearImportedMaterialAssignments = useCallback((modelIds: string[]) => {
+    const ids = new Set(modelIds);
+    if (ids.size === 0) return;
+    setModels((prev) => prev.map((model) => (
+      ids.has(model.id)
+        ? {
+          ...model,
+          color: model.materialBaseColor
+            ?? (model.materialProfileId
+              || model.bodyMaterialProfileIds?.some(Boolean)
+              || model.bodyColors?.some(Boolean)
+              ? DEFAULT_MESH_COLOR
+              : model.color),
+          materialProfileId: undefined,
+          materialBaseColor: undefined,
+          bodyMaterialProfileIds: undefined,
+          bodyColors: undefined,
+        }
+        : model
+    )));
+  }, []);
+
+  const remapImportedMaterialReferences = useCallback((modelIds: string[], remap: Map<string, string>) => {
+    if (remap.size === 0 || modelIds.length === 0) return;
+    const ids = new Set(modelIds);
+    setModels((prev) => prev.map((model) => {
+      if (!ids.has(model.id)) return model;
+      const materialProfileId = model.materialProfileId
+        ? remap.get(model.materialProfileId) ?? model.materialProfileId
+        : model.materialProfileId;
+      const bodyMaterialProfileIds = model.bodyMaterialProfileIds?.map((id) => (
+        id ? remap.get(id) ?? id : id
+      ));
+      if (materialProfileId === model.materialProfileId
+        && bodyMaterialProfileIds === model.bodyMaterialProfileIds) {
+        return model;
+      }
+      return {
+        ...model,
+        materialProfileId,
+        ...(bodyMaterialProfileIds ? { bodyMaterialProfileIds } : {}),
+      };
+    }));
+  }, []);
+
+  const applyBundleTankAssignments = useCallback((
+    printerId: string,
+    bundle: VoxlPrinterBundle,
+    remap: Map<string, string>,
+  ) => {
+    const sourceTankMaterials = bundle.printer.tankMaterials;
+    if (!Array.isArray(sourceTankMaterials) || sourceTankMaterials.length === 0) return;
+    const tankMaterials = sourceTankMaterials
+      .map((id) => (typeof id === 'string' ? remap.get(id) ?? id : ''))
+      .filter((id) => id.length > 0);
+    if (tankMaterials.length === 0) return;
+    const bundleTankCount = Number(bundle.printer.tankCount);
+    updatePrinterProfile(printerId, {
+      materialMode: 'multiTank',
+      tankCount: Number.isFinite(bundleTankCount)
+        ? Math.max(2, Math.round(bundleTankCount))
+        : Math.max(2, tankMaterials.length),
+      tankMaterials,
+    });
+  }, []);
+
+  const resolvePrinterMismatch = useCallback((choice: 'switch' | 'keep') => {
+    if (!printerMismatch) return;
+
+    // A printer whose plugin is gone cannot be restored from a scene bundle: the
+    // app has no definition for its format or material pane. Keep only geometry.
+    if (printerMismatch.missingPlugin) {
+      clearImportedMaterialAssignments(printerMismatch.importedModelIds);
+      setPrinterMismatch(null);
+      return;
+    }
+
+    if (choice === 'keep') {
+      if (!printerMismatch.currentHasRequiredMaterials) {
+        clearImportedMaterialAssignments(printerMismatch.importedModelIds);
+      }
+      setPrinterMismatch(null);
+      return;
+    }
+
+    const installedId = printerMismatch.installedProfileId;
+    // A scene written on an official machine recreates that official profile from
+    // the installed preset, not as a custom copy with a blank thumbnail.
+    const officialPresetId = printerMismatch.bundle.printer.officialPresetId;
+    const resolvedId = installedId
+      ?? addPrinterProfileFromPresetIfAvailable(officialPresetId)
+      ?? importPrinterBundle(printerMismatch.bundle);
+    setActivePrinterProfile(resolvedId);
+    const remap = printerMismatch.materials && printerMismatch.materials.length > 0
+      ? importSceneMaterials(resolvedId, printerMismatch.materials)
+      : new Map<string, string>();
+    remapImportedMaterialReferences(printerMismatch.importedModelIds, remap);
+    applyBundleTankAssignments(resolvedId, printerMismatch.bundle, remap);
+    setPrinterMismatch(null);
+  }, [applyBundleTankAssignments, clearImportedMaterialAssignments, printerMismatch, remapImportedMaterialReferences]);
+
+  /**
+   * Show the report a model already carries, from its recorded repair.
+   *
+   * The record lives on the model (`meshDefects.nativeRepairReport`) and survives everything the
+   * scene does to it, so a model repaired earlier in the session can still say what was done.
+   */
+  const openMeshRepairReportForModel = useCallback((modelId: string) => {
+    const model = models.find((entry) => entry.id === modelId);
+    const report = model?.geometry.meshDefects?.nativeRepairReport;
+    if (!model || !report) return;
+    // The same dialog a repair just showed: the wins, the follow-up notes and the technical details.
+    setMeshRepairReportPresentation('optimistic');
+    setMeshRepairReports([{ id: `model-${modelId}`, modelName: model.name, report }]);
+  }, [models]);
+
   const openPendingMeshRepairReports = useCallback(() => {
     if (pendingMeshRepairReports.length === 0) {
       return;
@@ -1279,6 +2276,13 @@ export function useSceneCollectionManager() {
     const resolve = sceneImportPlacementResolveRef.current;
     sceneImportPlacementResolveRef.current = null;
     setSceneImportPlacementPrompt(null);
+    resolve?.(choice);
+  }, []);
+
+  const resolveSceneImportHollowingPrompt = useCallback((choice: SceneImportHollowingChoice) => {
+    const resolve = sceneImportHollowingResolveRef.current;
+    sceneImportHollowingResolveRef.current = null;
+    setSceneImportHollowingPrompt(null);
     resolve?.(choice);
   }, []);
 
@@ -1327,6 +2331,27 @@ export function useSceneCollectionManager() {
     });
   }, []);
 
+  const requestSceneImportHollowingChoice = useCallback(async (
+    prompt: SceneImportHollowingPrompt,
+  ): Promise<SceneImportHollowingChoice> => {
+    // Headless: take the file at its word and keep the authored hollow.
+    if (typeof window === 'undefined') {
+      return 'bake';
+    }
+
+    if (sceneImportHollowingResolveRef.current) {
+      // Fail-safe: resolve previous unresolved prompt so imports never deadlock.
+      sceneImportHollowingResolveRef.current('bake');
+      sceneImportHollowingResolveRef.current = null;
+    }
+
+    setSceneImportHollowingPrompt(prompt);
+
+    return await new Promise<SceneImportHollowingChoice>((resolve) => {
+      sceneImportHollowingResolveRef.current = resolve;
+    });
+  }, []);
+
   useEffect(() => {
     return () => {
       if (sceneImportPlacementResolveRef.current) {
@@ -1334,207 +2359,63 @@ export function useSceneCollectionManager() {
         sceneImportPlacementResolveRef.current = null;
         resolve('load_as_is');
       }
-    };
-  }, []);
-
-  const getDebugPresetDims = useCallback((preset: DebugPrimitiveSizePreset) => {
-    switch (preset) {
-      case 'small':
-        return { height: 20, radius: 2.5, span: 10 };
-      case 'large':
-        return { height: 60, radius: 6, span: 25 };
-      case 'medium':
-      default:
-        return { height: 40, radius: 4, span: 16 };
-    }
-  }, []);
-
-  const buildDebugGeometry = useCallback((type: DebugPrimitiveType, preset: DebugPrimitiveSizePreset): GeometryWithBounds => {
-    const { height, radius, span } = getDebugPresetDims(preset);
-
-    const parts: THREE.BufferGeometry[] = [];
-
-    const makeCylinderZ = (r: number, h: number, radialSegments = 24) => {
-      const g = new THREE.CylinderGeometry(r, r, h, radialSegments, 1, false);
-      // CylinderGeometry is Y-up; rotate so height is Z-up
-      g.rotateX(Math.PI / 2);
-      return g;
-    };
-
-    const makeBox = (x: number, y: number, z: number) => new THREE.BoxGeometry(x, y, z);
-    const makeSphere = (r: number, segments = 24) => new THREE.SphereGeometry(r, segments, segments);
-
-    const applyTransform = (g: THREE.BufferGeometry, position: THREE.Vector3, rotation: THREE.Euler) => {
-      const m = new THREE.Matrix4().makeRotationFromEuler(rotation);
-      m.setPosition(position);
-      g.applyMatrix4(m);
-      return g;
-    };
-
-    if (type === 'pillar') {
-      parts.push(makeCylinderZ(radius, height));
-    }
-
-    if (type === 'merge_y') {
-      const branchH = height * 0.7;
-      const topH = height * 0.5;
-      const tilt = 0.45;
-      const xOff = span * 0.35;
-      const mergeZ = -height * 0.05;
-
-      parts.push(applyTransform(makeCylinderZ(radius, branchH), new THREE.Vector3(-xOff, 0, -branchH * 0.25), new THREE.Euler(0, +tilt, 0)));
-      parts.push(applyTransform(makeCylinderZ(radius, branchH), new THREE.Vector3(+xOff, 0, -branchH * 0.25), new THREE.Euler(0, -tilt, 0)));
-      parts.push(applyTransform(makeCylinderZ(radius, topH), new THREE.Vector3(0, 0, mergeZ + topH * 0.35), new THREE.Euler(0, 0, 0)));
-    }
-
-    if (type === 'split_y') {
-      const trunkH = height * 0.6;
-      const branchH = height * 0.55;
-      const tilt = 0.45;
-      const xOff = span * 0.35;
-      const splitZ = height * 0.05;
-
-      parts.push(applyTransform(makeCylinderZ(radius, trunkH), new THREE.Vector3(0, 0, -trunkH * 0.15), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeCylinderZ(radius, branchH), new THREE.Vector3(-xOff, 0, splitZ + branchH * 0.15), new THREE.Euler(0, -tilt, 0)));
-      parts.push(applyTransform(makeCylinderZ(radius, branchH), new THREE.Vector3(+xOff, 0, splitZ + branchH * 0.15), new THREE.Euler(0, +tilt, 0)));
-    }
-
-    if (type === 'earlobe') {
-      const massR = radius * 2.0;
-      const nubR = radius * 0.8;
-      parts.push(applyTransform(makeSphere(massR), new THREE.Vector3(0, 0, 0), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeSphere(nubR), new THREE.Vector3(span * 0.55, 0, -height * 0.1), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeCylinderZ(radius * 1.2, height * 0.6), new THREE.Vector3(0, 0, -height * 0.55), new THREE.Euler(0, 0, 0)));
-    }
-
-    if (type === 'bridge') {
-      const block = span * 0.6;
-      const blockH = height * 0.5;
-      const gap = span * 0.2;
-      const bridgeW = gap + radius * 1.2;
-      const bridgeT = radius * 0.5;
-      parts.push(applyTransform(makeBox(block, block, blockH), new THREE.Vector3(-(block + gap) * 0.5, 0, 0), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeBox(block, block, blockH), new THREE.Vector3(+(block + gap) * 0.5, 0, 0), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeBox(bridgeW, bridgeT, bridgeT), new THREE.Vector3(0, 0, 0), new THREE.Euler(0, 0, 0)));
-    }
-
-    if (type === 'finger_palm_arm') {
-      const fingerR = radius * 0.7;
-      const palmW = span * 0.9;
-      const palmT = radius * 2;
-      const armR = radius * 1.2;
-
-      parts.push(applyTransform(makeCylinderZ(fingerR, height * 0.6), new THREE.Vector3(-span * 0.35, 0, -height * 0.25), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeCylinderZ(fingerR, height * 0.6), new THREE.Vector3(0, 0, -height * 0.25), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeCylinderZ(fingerR, height * 0.6), new THREE.Vector3(+span * 0.35, 0, -height * 0.25), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeBox(palmW, palmW * 0.5, palmT), new THREE.Vector3(0, 0, height * 0.05), new THREE.Euler(0, 0, 0)));
-      parts.push(applyTransform(makeCylinderZ(armR, height * 0.9), new THREE.Vector3(0, 0, height * 0.55), new THREE.Euler(0, 0, 0)));
-    }
-
-    const merged = mergeGeometries(parts, false);
-    if (!merged) {
-      throw new Error('Failed to merge debug primitive geometry');
-    }
-
-    const geometry = new THREE.BufferGeometry().copy(merged);
-
-    geometry.computeVertexNormals();
-    geometry.computeBoundingBox();
-
-    // Match STL normalization approach so all downstream logic behaves the same.
-    const preBBox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
-    const preCenter = preBBox.getCenter(new THREE.Vector3());
-    geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);
-    geometry.computeBoundingBox();
-
-    accelerateGeometry(geometry);
-
-    const bbox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
-    const center = bbox.getCenter(new THREE.Vector3());
-    const size = bbox.getSize(new THREE.Vector3());
-    const flatteningPlanes = computeFlatteningPlanes(geometry);
-
-    return { geometry, bbox, center, size, flatteningPlanes };
-  }, [getDebugPresetDims]);
-
-  const addDebugPrimitive = useCallback((type: DebugPrimitiveType, preset: DebugPrimitiveSizePreset) => {
-    const typeLabelMap: Record<DebugPrimitiveType, string> = {
-      pillar: 'Pillar',
-      merge_y: 'Merge Y',
-      split_y: 'Split Y',
-      earlobe: 'Earlobe',
-      bridge: 'Bridge',
-      finger_palm_arm: 'Finger → Palm → Arm'
-    };
-
-    const geom = buildDebugGeometry(type, preset);
-
-    const color = '#a3a3a3';
-    clearPaintToBase(geom.geometry, new THREE.Color(color));
-
-    const heightOffset = geom.center.z - geom.bbox.min.z;
-    const initialZ = heightOffset;
-
-    const id = uuidv4();
-    const model: LoadedModel = {
-      id,
-      name: `[Debug] ${typeLabelMap[type]}`,
-      fileUrl: '',
-      geometry: geom,
-      transform: {
-        position: new THREE.Vector3(0, 0, initialZ),
-        rotation: new THREE.Euler(0, 0, 0),
-        scale: new THREE.Vector3(1, 1, 1)
-      },
-      visible: true,
-      color,
-      polygonCount: geom.geometry.getAttribute('position').count / 3
-    };
-
-    setModels(prev => [...prev, model]);
-    setActiveModelId(id);
-  }, [buildDebugGeometry]);
-
-  const clearDebugModels = useCallback(() => {
-    setModels(prev => {
-      for (const m of prev) {
-        if (isDebugModelName(m.name)) {
-          tryRevokeObjectUrl(m.fileUrl);
-        }
+      if (sceneImportHollowingResolveRef.current) {
+        const resolve = sceneImportHollowingResolveRef.current;
+        sceneImportHollowingResolveRef.current = null;
+        resolve('bake');
       }
-      return prev.filter(m => !isDebugModelName(m.name));
-    });
-
-    setActiveModelId(prevId => {
-      if (!prevId) return prevId;
-      const stillExists = models.some(m => m.id === prevId && !isDebugModelName(m.name));
-      return stillExists ? prevId : null;
-    });
-  }, [isDebugModelName, models, tryRevokeObjectUrl]);
+    };
+  }, []);
 
   // Lighting controls (Global)
   const [ambientIntensity, setAmbientIntensity] = useState<number>(DEFAULT_AMBIENT_INTENSITY);
   const [directionalIntensity, setDirectionalIntensity] = useState<number>(DEFAULT_DIRECTIONAL_INTENSITY);
   const [materialRoughness, setMaterialRoughness] = useState<number>(DEFAULT_MATERIAL_ROUGHNESS);
+  const [bakedAoIntensity, setBakedAoIntensity] = useState<number>(DEFAULT_BAKED_OCCLUSION_INTENSITY);
+
+  // Geometry prep runs outside React and bakes before a model reaches the scene,
+  // so it reads the intensity from the module rather than from this state.
+  useEffect(() => {
+    setBakedOcclusionIntensity(bakedAoIntensity);
+  }, [bakedAoIntensity]);
 
   // Shader-specific settings (Global)
   const [shaderType, setShaderType] = useState<MeshShaderType>(DEFAULT_SHADER_TYPE);
+  // What the Mesh settings tab edits. Deliberately separate from shaderType:
+  // the camera dropdown owns what the viewport renders, the settings tab owns
+  // which type's options it is showing.
+  const [configuredShaderType, setConfiguredShaderType] = useState<MeshShaderType>(DEFAULT_SHADER_TYPE);
   const [matcapVariant, setMatcapVariant] = useState<MatcapVariant>(DEFAULT_MATCAP_VARIANT);
   const [flatUseVertexColors, setFlatUseVertexColors] = useState<boolean>(DEFAULT_FLAT_USE_VERTEX_COLORS);
-  const [toonSteps, setToonSteps] = useState<number>(DEFAULT_TOON_STEPS);
   const [wireframeThicknessPx, setWireframeThicknessPx] = useState<number>(DEFAULT_WIREFRAME_THICKNESS_PX);
   const [xrayOpacity, setXrayOpacity] = useState<number>(DEFAULT_XRAY_OPACITY);
   const [heatmapMinAngle, setHeatmapMinAngle] = useState<number>(DEFAULT_HEATMAP_MIN_ANGLE);
   const [heatmapMaxAngle, setHeatmapMaxAngle] = useState<number>(DEFAULT_HEATMAP_MAX_ANGLE);
   const [heatmapColors, setHeatmapColors] = useState<string[]>(DEFAULT_HEATMAP_COLORS);
   const [preferredMeshColor, setPreferredMeshColor] = useState<string>(DEFAULT_MESH_COLOR);
-  const [selectionColor, setSelectionColor] = useState<string>(() => getThemedDefaultSelectionColor());
-  const [hoverColor, setHoverColor] = useState<string>(() => getThemedDefaultHoverColor());
   const [hoverTintStrength, setHoverTintStrength] = useState<number>(DEFAULT_HOVER_TINT_STRENGTH);
   const [selectedTintStrength, setSelectedTintStrength] = useState<number>(DEFAULT_SELECTED_TINT_STRENGTH);
   const [storedView3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => DEFAULT_VIEW3D_SETTINGS);
   const profileState = useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  /**
+   * Read at drop time rather than only at render: the follow decision is made inside
+   * callbacks with empty dependency lists, so a ref carries the live value.
+   */
+  const multiPlateSettings = useSyncExternalStore(
+    subscribeToMultiPlateSettings,
+    getMultiPlateSettingsSnapshot,
+    getMultiPlateSettingsServerSnapshot,
+  );
+  const followLandedPlateRef = useRef(multiPlateSettings.followLandedPlate);
+  followLandedPlateRef.current = multiPlateSettings.followLandedPlate;
+  /** The grid the beds are laid out on, in the shape the cascade reads. */
+  const plateOrdering = useMemo<PlateOrdering>(() => plateOrderingFor(multiPlateSettings), [multiPlateSettings]);
+  /** Read inside callbacks that must not be rebuilt when the layout changes. */
+  const plateOrderingRef = useRef(plateOrdering);
+  plateOrderingRef.current = plateOrdering;
+  /** The ordering the models' positions were last laid out under. */
+  const appliedPlateOrderingRef = useRef(plateOrdering);
 
   const view3dSettings = useMemo(() => {
     if (!activePrinterProfile) {
@@ -1558,24 +2439,36 @@ export function useSceneCollectionManager() {
     });
   }, [activePrinterProfile, storedView3dSettings]);
 
+  // What a save embeds as the printer this scene was built for: the profile
+  // whole, plus the materials that belong to it. Memoized on the store snapshot
+  // so an unchanged selection does not re-render the autosave options.
+  const voxlPrinterBundle = useMemo(
+    () => (activePrinterProfile
+      ? toVoxlPrinterBundle(
+          activePrinterProfile,
+          getMaterialProfilesForPrinter(activePrinterProfile.id, profileState),
+        )
+      : null),
+    [activePrinterProfile, profileState],
+  );
+
   useEffect(() => {
     const persistedAppearance = readMeshAppearanceFromLocalStorage();
     if (persistedAppearance) {
       setShaderType(persistedAppearance.shaderType);
+      setConfiguredShaderType(persistedAppearance.configuredShaderType);
       setMatcapVariant(persistedAppearance.matcapVariant);
       setFlatUseVertexColors(persistedAppearance.flatUseVertexColors);
-      setToonSteps(persistedAppearance.toonSteps);
       setAmbientIntensity(persistedAppearance.ambientIntensity);
       setDirectionalIntensity(persistedAppearance.directionalIntensity);
       setMaterialRoughness(persistedAppearance.materialRoughness);
+      setBakedAoIntensity(persistedAppearance.bakedAoIntensity);
       setWireframeThicknessPx(persistedAppearance.wireframeThicknessPx);
       setXrayOpacity(persistedAppearance.xrayOpacity);
       setHeatmapMinAngle(persistedAppearance.heatmapMinAngle ?? DEFAULT_HEATMAP_MIN_ANGLE);
       setHeatmapMaxAngle(persistedAppearance.heatmapMaxAngle ?? DEFAULT_HEATMAP_MAX_ANGLE);
       setHeatmapColors(persistedAppearance.heatmapColors ?? DEFAULT_HEATMAP_COLORS);
       setPreferredMeshColor(persistedAppearance.meshColor);
-      setSelectionColor(persistedAppearance.selectionColor ?? getThemedDefaultSelectionColor());
-      setHoverColor(persistedAppearance.hoverColor ?? getThemedDefaultHoverColor());
       setHoverTintStrength(persistedAppearance.hoverTintStrength);
       setSelectedTintStrength(persistedAppearance.selectedTintStrength);
     }
@@ -1584,34 +2477,47 @@ export function useSceneCollectionManager() {
     setView3dSettingsState(getSavedView3DSettings());
   }, []);
 
+  // The whole appearance record is persisted whenever any of it changes, so
+  // settings survive a reload: the view mode the camera dropdown picks, the
+  // type the Mesh tab is configuring, and every parameter either of them edits.
   useEffect(() => {
-    const prev = readMeshAppearanceFromLocalStorage();
-    if (!prev) {
-      writeMeshAppearanceToLocalStorage({
-        v: 1,
-        shaderType,
-        matcapVariant,
-        flatUseVertexColors,
-        toonSteps,
-        ambientIntensity,
-        directionalIntensity,
-        materialRoughness,
-        wireframeThicknessPx,
-        xrayOpacity,
-        heatmapMinAngle,
-        heatmapMaxAngle,
-        heatmapColors,
-        meshColor: preferredMeshColor,
-        hoverTintStrength,
-        selectedTintStrength,
-        selectionColor,
-        hoverColor,
-      });
-      return;
-    }
-    if (prev.selectionColor === selectionColor && prev.hoverColor === hoverColor) return;
-    writeMeshAppearanceToLocalStorage({ ...prev, selectionColor, hoverColor });
-  }, [selectionColor, hoverColor]);
+    writeMeshAppearanceToLocalStorage({
+      v: 1,
+      shaderType,
+      configuredShaderType,
+      matcapVariant,
+      flatUseVertexColors,
+      ambientIntensity,
+      directionalIntensity,
+      materialRoughness,
+      bakedAoIntensity,
+      wireframeThicknessPx,
+      xrayOpacity,
+      heatmapMinAngle,
+      heatmapMaxAngle,
+      heatmapColors,
+      meshColor: preferredMeshColor,
+      hoverTintStrength,
+      selectedTintStrength,
+    });
+  }, [
+    shaderType,
+    configuredShaderType,
+    matcapVariant,
+    flatUseVertexColors,
+    ambientIntensity,
+    directionalIntensity,
+    materialRoughness,
+    bakedAoIntensity,
+    wireframeThicknessPx,
+    xrayOpacity,
+    heatmapMinAngle,
+    heatmapMaxAngle,
+    heatmapColors,
+    preferredMeshColor,
+    hoverTintStrength,
+    selectedTintStrength,
+  ]);
 
   const setView3dSettings = useCallback((next: View3DSettings) => {
     const normalized = normalizeView3DSettings(next);
@@ -1622,12 +2528,28 @@ export function useSceneCollectionManager() {
   // Global application mode
   const [mode, setMode] = useState<SupportMode>('prepare');
 
+  /**
+   * Where new work goes: the middle of the **active** plate, in world
+   * coordinates. The plate's own frame is what the app's rect maths speaks, so
+   * the cascade offset is added here and in `isRectInsidePlate` rather than at
+   * every caller.
+   */
   const defaultImportCenterXY = useMemo(() => {
-    if (view3dSettings.originMode === 'front_left') {
-      return new THREE.Vector2(view3dSettings.widthMm * 0.5, view3dSettings.depthMm * 0.5);
-    }
-    return new THREE.Vector2(0, 0);
-  }, [view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+    const { centerX: localX, centerY: localY } = plateLocalRect(view3dSettings);
+    const index = Math.max(0, plates.findIndex((plate) => plate.id === activePlateId));
+    const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
+      widthMm: view3dSettings.widthMm,
+      depthMm: view3dSettings.depthMm,
+    }, plates.length, plateOrdering);
+    return new THREE.Vector2(localX + dxMm, localY + dyMm);
+  }, [
+    activePlateId,
+    plateOrdering,
+    plates,
+    view3dSettings.depthMm,
+    view3dSettings.originMode,
+    view3dSettings.widthMm,
+  ]);
 
   type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
@@ -1635,38 +2557,46 @@ export function useSceneCollectionManager() {
     return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
   }, []);
 
-  const isRectInsidePlate = useCallback((rect: Rect2D) => {
-    const minX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
-    const maxX = minX + view3dSettings.widthMm;
-    const minY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
-    const maxY = minY + view3dSettings.depthMm;
-
-    return (
-      rect.minX >= minX
-      && rect.maxX <= maxX
-      && rect.minY >= minY
-      && rect.maxY <= maxY
-    );
-  }, [view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
-
-  const footprintForTransform = useCallback((size: THREE.Vector3, transform: ModelTransform) => {
-    const baseW = Math.max(2, Math.abs(size.x * transform.scale.x));
-    const baseD = Math.max(2, Math.abs(size.y * transform.scale.y));
-    const rz = transform.rotation.z;
-    const c = Math.abs(Math.cos(rz));
-    const s = Math.abs(Math.sin(rz));
+  /** The active plate's build volume in world coordinates. */
+  const activePlateRect = useMemo<Rect2D>(() => {
+    const index = Math.max(0, plates.findIndex((plate) => plate.id === activePlateId));
+    const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
+      widthMm: view3dSettings.widthMm,
+      depthMm: view3dSettings.depthMm,
+    }, plates.length, plateOrdering);
+    const local = plateLocalRect(view3dSettings);
+    const minX = local.minX + dxMm;
+    const minY = local.minY + dyMm;
     return {
-      width: (baseW * c) + (baseD * s),
-      depth: (baseW * s) + (baseD * c),
+      minX,
+      maxX: minX + view3dSettings.widthMm,
+      minY,
+      maxY: minY + view3dSettings.depthMm,
     };
-  }, []);
+  }, [activePlateId, plateOrdering, plates, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+
+  const isRectInsidePlate = useCallback((rect: Rect2D) => {
+    return (
+      rect.minX >= activePlateRect.minX
+      && rect.maxX <= activePlateRect.maxX
+      && rect.minY >= activePlateRect.minY
+      && rect.maxY <= activePlateRect.maxY
+    );
+  }, [activePlateRect]);
+
+  // Projected through the whole rotation: a model tipped on X or Y does not stand
+  // on the footprint its unrotated XY size describes.
+  const footprintForTransform = useCallback((
+    geometry: Pick<GeometryWithBounds, 'geometry' | 'center'>,
+    transform: ModelTransform,
+  ) => computeProjectedFootprintSize(geometry, transform.rotation, transform.scale), []);
 
   const buildMeshPlacementOffsets = useCallback((
     center: { x: number; y: number },
-    size: THREE.Vector3,
+    geometry: Pick<GeometryWithBounds, 'geometry' | 'center'>,
     transform: ModelTransform,
   ) => {
-    const footprint = footprintForTransform(size, transform);
+    const footprint = footprintForTransform(geometry, transform);
     const meshRect: Rect2D = {
       minX: center.x - (footprint.width * 0.5),
       maxX: center.x + (footprint.width * 0.5),
@@ -1684,24 +2614,27 @@ export function useSceneCollectionManager() {
     };
   }, [footprintForTransform]);
 
-  const isModelFootprintInsidePlate = useCallback((
+  /** A model's footprint where it stands, as a world rect. Every bed test starts from it. */
+  const modelFootprintRect = useCallback((
     model: Pick<LoadedModel, 'geometry' | 'transform'>,
-  ) => {
+  ): Rect2D => {
     const placement = buildMeshPlacementOffsets(
       { x: model.transform.position.x, y: model.transform.position.y },
-      model.geometry.size,
+      model.geometry,
       model.transform,
     );
 
-    const modelRect: Rect2D = {
+    return {
       minX: model.transform.position.x + placement.minXOffset,
       maxX: model.transform.position.x + placement.maxXOffset,
       minY: model.transform.position.y + placement.minYOffset,
       maxY: model.transform.position.y + placement.maxYOffset,
     };
+  }, [buildMeshPlacementOffsets]);
 
-    return isRectInsidePlate(modelRect);
-  }, [buildMeshPlacementOffsets, isRectInsidePlate]);
+  const isModelFootprintInsidePlate = useCallback((
+    model: Pick<LoadedModel, 'geometry' | 'transform'>,
+  ) => isRectInsidePlate(modelFootprintRect(model)), [isRectInsidePlate, modelFootprintRect]);
 
   const findFreeSpotCentersForModels = useCallback((
     incomingModels: Array<Pick<LoadedModel, 'geometry' | 'transform'>>,
@@ -1711,14 +2644,14 @@ export function useSceneCollectionManager() {
 
     const centerX = defaultImportCenterXY.x;
     const centerY = defaultImportCenterXY.y;
-    const minX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
-    const maxX = minX + view3dSettings.widthMm;
-    const minY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
-    const maxY = minY + view3dSettings.depthMm;
+    const activePlateOffset = plateOffsetForRef.current(activePlateIdRef.current);
+    // The search runs in world coordinates over the ACTIVE plate's volume, so a
+    // model imported onto the second plate lands on the second plate.
+    const { minX, maxX, minY, maxY } = activePlateRect;
 
     const placementOffsets = incomingModels.map((model) => buildMeshPlacementOffsets(
       { x: model.transform.position.x, y: model.transform.position.y },
-      model.geometry.size,
+      model.geometry,
       model.transform,
     ));
 
@@ -1732,7 +2665,7 @@ export function useSceneCollectionManager() {
       .map((model) => {
         const meshPlacement = buildMeshPlacementOffsets(
           { x: model.transform.position.x, y: model.transform.position.y },
-          model.geometry.size,
+          model.geometry,
           model.transform,
         );
 
@@ -1820,6 +2753,13 @@ export function useSceneCollectionManager() {
         maxY: y + placement.maxYOffset,
       });
 
+      // Larger than a bed, it fits on none of them, and the column beside the plates sits
+      // metres out of view. Centred on the bed being worked on, it is on screen, flagged as
+      // out of bounds, and one scale away from fitting.
+      if (placement.width > maxX - minX || placement.depth > maxY - minY) {
+        return { x: centerX, y: centerY };
+      }
+
       for (const candidate of candidateCenters) {
         const rect = makeRectAt(candidate.x, candidate.y);
         if (!isRectInsidePlate(rect)) continue;
@@ -1828,11 +2768,30 @@ export function useSceneCollectionManager() {
         return { x: candidate.x, y: candidate.y };
       }
 
-      for (const candidate of candidateCenters) {
-        const rect = makeRectAt(candidate.x, candidate.y);
-        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) continue;
-        blockedRects.push(rect);
-        return { x: candidate.x, y: candidate.y };
+      // Then the scene's other beds, in cascade order, each checked in its own frame. A paste has
+      // always filled the beds that exist before adding one; an import used to give up after the
+      // active plate and set the model down beside the plates.
+      for (const plate of platesRef.current) {
+        if (plate.id === activePlateIdRef.current) continue;
+        const { dxMm, dyMm } = plateOffsetForRef.current(plate.id);
+        const bedRect: Rect2D = {
+          minX: activePlateRect.minX - activePlateOffset.dxMm + dxMm,
+          maxX: activePlateRect.maxX - activePlateOffset.dxMm + dxMm,
+          minY: activePlateRect.minY - activePlateOffset.dyMm + dyMm,
+          maxY: activePlateRect.maxY - activePlateOffset.dyMm + dyMm,
+        };
+        const fitsBed = (rect: Rect2D) => (
+          rect.minX >= bedRect.minX && rect.maxX <= bedRect.maxX
+          && rect.minY >= bedRect.minY && rect.maxY <= bedRect.maxY
+        );
+
+        for (const candidate of candidateCenters) {
+          const rect = makeRectAt(candidate.x, candidate.y);
+          if (!fitsBed(rect)) continue;
+          if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) continue;
+          blockedRects.push(rect);
+          return { x: candidate.x, y: candidate.y };
+        }
       }
 
       const fallbackX = centerX + (maxRing + 2 + blockedRects.length) * stepX;
@@ -1847,19 +2806,67 @@ export function useSceneCollectionManager() {
     });
 
     return assignedCenters;
-  }, [buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, estimateSupportBoundsForModel, intersectsRect, isRectInsidePlate, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+  }, [activePlateRect, buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, estimateSupportBoundsForModel, intersectsRect, isRectInsidePlate]);
 
   const applySceneSnapshot = useCallback((snapshot: SceneSnapshot) => {
+    if (snapshot.modifierRecord) {
+      storeModelMeshModifiers(snapshot.modifierRecord.modelId, cloneMeshModifiersForHistory(snapshot.modifierRecord.modifiers));
+      clearPreparedGeometryCacheForModel(snapshot.modifierRecord.modelId);
+    }
+    // A colour change also repaints the vertex colours, and the geometry is shared with the
+    // snapshot rather than copied, so the colour being restored has to be painted back.
+    const currentColorById = new Map(modelsRef.current.map((model) => [model.id, model.color]));
+    snapshot.models.forEach((model) => {
+      const currentColor = currentColorById.get(model.id);
+      if (currentColor !== undefined && currentColor !== model.color) paintModelBaseColor(model, model.color);
+    });
     setModels(snapshot.models.map(cloneLoadedModel));
     setActiveModelId(snapshot.activeModelId);
     setSelectedModelIds([...snapshot.selectedModelIds]);
 
-    if (snapshot.supportState) {
-      setSupportSnapshot(clonePlainObject(snapshot.supportState));
+    // The printer is part of the scene: the beds are spaced by its build volume, so an entry
+    // taken under one printer and undone under another would put every model back against
+    // frames that never applied to it. The layout memory moves with it, or restoring a
+    // snapshot would look like a printer switch to the effect that shifts models with their
+    // beds.
+    if (snapshot.printerProfileId !== undefined) {
+      const printerId = snapshot.printerProfileId;
+      if (printerId && printerId !== (getActivePrinterProfile()?.id ?? null)) {
+        setActivePrinterProfile(printerId);
+      }
+      const restoredPrinter = printerId
+        ? getProfileStoreSnapshot().printerProfiles.find((profile) => profile.id === printerId)
+        : undefined;
+      if (restoredPrinter) {
+        laidOutFootprintRef.current = {
+          printerId,
+          widthMm: restoredPrinter.buildVolumeMm.width,
+          depthMm: restoredPrinter.buildVolumeMm.depth,
+        };
+      }
     }
 
-    if (snapshot.kickstandState) {
-      setKickstandSnapshot(clonePlainObject(snapshot.kickstandState));
+    // A snapshot that carries beds also carries which one was being worked on,
+    // falling back to the first when that plate is one of the ones that went.
+    if (snapshot.plates) {
+      const plates = snapshot.plates.map((plate) => ({ ...plate }));
+      const active = snapshot.activePlateId;
+      setPlates(plates);
+      setActivePlateId((prev) => (active && plates.some((plate) => plate.id === active)
+        ? active
+        : (plates[0]?.id ?? prev)));
+    }
+
+    // Supports cannot outlive the models that own them. A snapshot taken while
+    // the scene was empty can still carry a support state from an earlier step;
+    // restoring it would leave unselectable supports on the plate.
+    if (snapshot.models.length === 0) {
+      resetStore();
+    } else if (snapshot.supportState) {
+      // setSupportSnapshot restores kickstands with everything else -- they are
+      // ordinary SupportState collections, and their roots and host knots ride in
+      // `roots` and `knots`.
+      setSupportSnapshot(clonePlainData(snapshot.supportState));
     }
   }, []);
 
@@ -1872,29 +2879,52 @@ export function useSceneCollectionManager() {
         const pair = sceneSnapshotRegistry.get(payload.key);
         if (!pair) return false;
 
+        const moveSupports = () => {
+          if (!pair.supportMoves || pair.supportMoves.length === 0) return;
+          for (const move of pair.supportMoves) {
+            // Undo puts the supports back where they were; redo moves them again.
+            if (direction === 'undo') transformSupportsForModel(move.modelId, move.to, move.from);
+            else transformSupportsForModel(move.modelId, move.from, move.to);
+          }
+        };
+
+        if (hasSpilledSceneSnapshot(payload.key)) {
+          void rehydrateSceneSnapshotPair(payload.key, pair)
+            .then((restored) => {
+              if (!restored) {
+                console.warn('[UndoSpill] Scene snapshot scratch data is missing; undo was not applied.');
+                return;
+              }
+              moveSupports();
+              applySceneSnapshot(direction === 'undo' ? pair.before : pair.after);
+            })
+            .catch((error) => console.warn('[UndoSpill] Failed restoring scene snapshot.', error));
+          return true;
+        }
+
+        moveSupports();
         applySceneSnapshot(direction === 'undo' ? pair.before : pair.after);
         return true;
       },
     );
 
-    // Pass-through: the slice marker carries no undo behaviour, but registering
-    // it keeps undo/redo moving it between stacks instead of stranding an entry
-    // with no handler.
-    const unregisterSceneSliced = sceneHistory.register(SCENE_SLICED, () => true);
-
     return () => {
       unregisterSceneModelsHistory();
-      unregisterSceneSliced();
     };
   }, [applySceneSnapshot]);
 
-  const pushSceneSnapshotHistory = useCallback((before: SceneSnapshot, after: SceneSnapshot, description?: string) => {
-    const key = storeSceneSnapshotPair({ before, after });
+  const pushSceneSnapshotHistory = useCallback((before: SceneSnapshot, after: SceneSnapshot, description?: MessageDescriptor, modelId?: string, supportMoves?: SupportTransformMove[]): string => {
+    const key = storeSceneSnapshotPair({
+      before,
+      after,
+      ...(supportMoves && supportMoves.length > 0 ? { supportMoves } : {}),
+    });
     sceneHistory.push({
       type: SCENE_MODELS_SNAPSHOT_APPLY,
       description,
-      payload: { key },
+      payload: { key, ...(modelId ? { modelId } : {}) },
     });
+    return key;
   }, []);
 
   const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds, options?: { accelerate?: boolean; shared?: boolean }): GeometryWithBounds => {
@@ -1917,6 +2947,12 @@ export function useSceneCollectionManager() {
           center: plane.center.clone(),
         })),
         meshDefects: source.meshDefects,
+        // A duplicate shares the source's vertex data, so it shares the edge
+        // overlay derived from it. Leaving this out made every duplicated model
+        // look like it had never been edged: the idle edge pass rebuilt the
+        // overlay for each copy, which is O(triangles) and blocked the main
+        // thread for most of a second on an 8-model duplicate.
+        ...(source.edgeGeometry ? { edgeGeometry: source.edgeGeometry } : {}),
       };
     }
 
@@ -1953,7 +2989,7 @@ export function useSceneCollectionManager() {
 
   const processDeferredAccelerationQueue = useCallback(() => {
     if (deferredAccelerationProcessingRef.current) return;
-    if (deferredAccelerationPausedRef.current) return;
+    if (deferredAccelerationPauseReasonsRef.current.size > 0) return;
     if (deferredAccelerationQueueRef.current.length === 0) return;
 
     deferredAccelerationProcessingRef.current = true;
@@ -1967,7 +3003,7 @@ export function useSceneCollectionManager() {
     };
 
     const step = () => {
-      if (deferredAccelerationPausedRef.current) {
+      if (deferredAccelerationPauseReasonsRef.current.size > 0) {
         deferredAccelerationProcessingRef.current = false;
         return;
       }
@@ -1998,16 +3034,19 @@ export function useSceneCollectionManager() {
     processDeferredAccelerationQueue();
   }, [processDeferredAccelerationQueue]);
 
-  const setBackgroundGeometryWorkPaused = useCallback((paused: boolean) => {
-    deferredAccelerationPausedRef.current = paused;
-    if (!paused) {
+  const setBackgroundGeometryWorkPaused = useCallback((paused: boolean, reason = 'camera') => {
+    const reasons = deferredAccelerationPauseReasonsRef.current;
+    if (paused) reasons.add(reason);
+    else reasons.delete(reason);
+    if (reasons.size === 0) {
       processDeferredAccelerationQueue();
     }
   }, [processDeferredAccelerationQueue]);
 
   /**
    * True while deferred post-swap geometry work (BVH acceleration builds,
-   * deferred geometry disposals, flattening-plane computation) is queued or
+   * deferred geometry disposals, flattening-plane computation, AO bakes) is
+   * queued or
    * running. Lets the UI keep a blocking "finalizing" indicator visible
    * until the app is genuinely responsive again after a large geometry swap
    * — the swap itself resolves long before this work drains.
@@ -2018,6 +3057,8 @@ export function useSceneCollectionManager() {
     || deferredDisposalQueueRef.current.length > 0
     || deferredDisposalProcessingRef.current
     || pendingFlatteningPlanesRef.current > 0
+    || pendingAoBakeRef.current > 0
+    || pendingAoQueueRef.current.length > 0
   ), []);
 
   const processDeferredDisposalQueue = useCallback(() => {
@@ -2176,6 +3217,14 @@ export function useSceneCollectionManager() {
   }, [activeModelId, models]);
 
   const selectModel = useCallback((id: string, mode: 'single' | 'toggle' | 'add' = 'single') => {
+    // The lock's whole point: nothing on a locked plate can be selected. Guarded at
+    // the gesture rather than at the setter, because the internal writers (import,
+    // duplicate, split) call the setter directly and must keep working.
+    const lockedTarget = modelsRef.current.find((model) => model.id === id);
+    if (lockedTarget && isModelPlateLocked(lockedTarget)) {
+      onBlockedByLockRef.current?.(lockedPlateIdFor(lockedTarget));
+      return;
+    }
     setActiveModelId(id);
 
     setSelectedModelIds((prev) => {
@@ -2186,6 +3235,14 @@ export function useSceneCollectionManager() {
       return prev.includes(id) ? prev.filter((sid) => sid !== id) : [...prev, id];
     });
   }, []);
+
+  // Locking a plate drops any selection with it: the models are no longer
+  // selectable, so a selection left standing would have the panels acting on models
+  // the plate refuses to touch.
+  useEffect(() => {
+    if (!plateLocked) return;
+    setSelectedModelIds((prev) => (prev.length > 0 ? [] : prev));
+  }, [plateLocked]);
 
   const clearModelSelection = useCallback(() => {
     setSelectedModelIds((prev) => (prev.length > 0 ? [] : prev));
@@ -2201,6 +3258,13 @@ export function useSceneCollectionManager() {
 
   // File handling - support multiple files
   const loadFiles = useCallback(async (filesInput: FileList | File[]) => {
+    // One door for every way a mesh arrives — picker, drop, the panel's plus — so the
+    // lock is enforced here rather than at each of them. New meshes land on the
+    // active plate, so that is the plate whose lock matters.
+    if (isActivePlateLocked()) {
+      onBlockedByLockRef.current?.(activePlateIdRef.current);
+      return;
+    }
     const files = Array.from(filesInput).filter((file) => getMeshExtension(file.name) !== null);
 
     if (files.length === 0) {
@@ -2210,8 +3274,8 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'mesh',
-      label: files.length > 1 ? 'Loading Mesh Files…' : 'Loading Mesh…',
-      detail: files.length > 1 ? `Preparing 0/${files.length}` : 'Preparing Geometry…',
+      label: importLabelLoadingMesh(files.length, _),
+      detail: files.length > 1 ? importDetailPreparing(0, files.length, _) : importDetailPreparingGeometry(_),
       progress: null,
     });
 
@@ -2236,23 +3300,56 @@ export function useSceneCollectionManager() {
     }
     trackRecentOpenedFiles(files, 'mesh', { sourcePaths: meshSourcePaths, fileSizes: meshFileSizes });
 
-    // Read auto-lift settings from storage (mirroring useTransformManager logic)
-    let autoLift = false;
-    let liftDistance = 5;
     let preferredMeshColor = DEFAULT_MESH_COLOR;
     if (typeof window !== 'undefined') {
       try {
-        const savedLift = window.localStorage.getItem('autoLift');
-        if (savedLift) autoLift = JSON.parse(savedLift);
-        const savedDist = window.localStorage.getItem('liftDistance');
-        if (savedDist) liftDistance = parseFloat(savedDist);
-
         const savedAppearance = readMeshAppearanceFromLocalStorage();
         if (savedAppearance?.meshColor) preferredMeshColor = savedAppearance.meshColor;
       } catch { }
     }
 
     const stagedNewModels: LoadedModel[] = [];
+
+    /**
+     * Puts a model on a bed of its own when the search could not seat it on one.
+     *
+     * The search fills the beds the scene has, and its last resort is a column beside the plates,
+     * which is where an over-sized model used to end up. A paste adds a bed for an overflow copy
+     * instead, and an import does the same here. A model larger than a bed has nowhere to go
+     * either way and keeps the search's fallback.
+     */
+    const seatModelOnNewBedIfNeeded = (
+      model: LoadedModel,
+      assignedCenter: { x: number; y: number } | undefined,
+    ): void => {
+      if (!assignedCenter) return;
+
+      const { minX: localMinX, minY: localMinY } = plateLocalRect(view3dSettings);
+      const insideAnyBed = platesRef.current.some((plate) => {
+        const { dxMm, dyMm } = plateOffsetForRef.current(plate.id);
+        const minX = localMinX + dxMm;
+        const minY = localMinY + dyMm;
+        return assignedCenter.x >= minX && assignedCenter.x <= minX + view3dSettings.widthMm
+          && assignedCenter.y >= minY && assignedCenter.y <= minY + view3dSettings.depthMm;
+      });
+      if (insideAnyBed) return;
+
+      const placement = buildMeshPlacementOffsets(
+        { x: model.transform.position.x, y: model.transform.position.y },
+        model.geometry,
+        model.transform,
+      );
+      if (placement.width > view3dSettings.widthMm || placement.depth > view3dSettings.depthMm) return;
+
+      const reserved = addPlatesRef.current(1);
+      const plate = reserved.added[0];
+      if (!plate) return;
+
+      const { dxMm, dyMm } = reserved.offsets.get(plate.id) ?? { dxMm: 0, dyMm: 0 };
+      const { centerX: localCenterX, centerY: localCenterY } = plateLocalRect(view3dSettings);
+      model.transform.position.set(localCenterX + dxMm, localCenterY + dyMm, model.transform.position.z);
+      model.plateId = plate.id;
+    };
     const repairReports: MeshRepairReportEntry[] = [];
     const hadActiveModelAtStart = Boolean(activeModelIdRef.current);
     let firstLoadedModelId: string | null = null;
@@ -2260,16 +3357,17 @@ export function useSceneCollectionManager() {
     try {
       // Process sequentially to avoid freezing UI too much
       for (let i = 0; i < files.length; i++) {
+        const multiTankImportDefault = resolveMultiTankImportDefault();
         const file = files[i];
         const url = URL.createObjectURL(file);
 
         setImportProgress({
           active: true,
           type: 'mesh',
-          label: files.length > 1 ? 'Loading Mesh Files…' : 'Loading Mesh…',
+          label: importLabelLoadingMesh(files.length, _),
           detail: files.length > 1
-            ? `${i + 1}/${files.length}: ${file.name}`
-            : `Loading ${file.name}`,
+            ? importDetailIndexedFile(i + 1, files.length, file.name, _)
+            : importDetailLoadingFile(file.name, _),
           progress: null,
         });
 
@@ -2287,10 +3385,10 @@ export function useSceneCollectionManager() {
                 setImportProgress({
                   active: true,
                   type: 'mesh',
-                  label: files.length > 1 ? 'Auto-Repairing Meshes…' : 'Auto-Repairing Mesh…',
+                  label: importLabelAutoRepairing(files.length, _),
                   detail: files.length > 1
-                    ? `${i + 1}/${files.length}: ${file.name}`
-                    : `Auto-Repairing ${file.name}`,
+                    ? importDetailIndexedFile(i + 1, files.length, file.name, _)
+                    : importDetailAutoRepairingFile(file.name, _),
                   progress: null,
                 });
                 return;
@@ -2300,10 +3398,10 @@ export function useSceneCollectionManager() {
                 setImportProgress({
                   active: true,
                   type: 'mesh',
-                  label: files.length > 1 ? 'Inspecting Meshes…' : 'Inspecting Mesh…',
+                  label: importLabelInspecting(files.length, _),
                   detail: files.length > 1
-                    ? `${i + 1}/${files.length}: ${file.name}`
-                    : `Inspecting ${file.name}`,
+                    ? importDetailIndexedFile(i + 1, files.length, file.name, _)
+                    : importDetailInspectingFile(file.name, _),
                   progress: null,
                 });
                 return;
@@ -2313,31 +3411,47 @@ export function useSceneCollectionManager() {
                 setImportProgress({
                   active: true,
                   type: 'mesh',
-                  label: files.length > 1 ? 'Classifying Mesh Shells…' : 'Classifying Mesh Shell…',
+                  label: importLabelClassifying(files.length, _),
                   detail: files.length > 1
-                    ? `${i + 1}/${files.length}: ${file.name}`
-                    : `Classifying ${file.name}`,
+                    ? importDetailIndexedFile(i + 1, files.length, file.name, _)
+                    : importDetailClassifyingFile(file.name, _),
                   progress: null,
                 });
               }
             },
             onConfirmHeavyRepair: async (analysis: MeshAnalysisJson) => {
-              const choice = await requestMeshRepairConfirmation({ fileName: file.name, analysis });
+              const choice = await requestMeshRepairConfirmation({
+                fileName: file.name,
+                analysis,
+                canRepairParts: Boolean((file as File & { filePath?: string }).filePath),
+              });
               if (choice === 'cancel_import') {
                 throw new Error('MESH_IMPORT_CANCELLED_BY_USER');
+              }
+              if (choice === 'repair_parts') {
+                setImportProgress({
+                  active: true,
+                  type: 'mesh',
+                  label: importLabelAutoRepairing(files.length, _),
+                  detail: files.length > 1
+                    ? importDetailIndexedFile(i + 1, files.length, file.name, _)
+                    : importDetailAutoRepairingFile(file.name, _),
+                  progress: null,
+                });
+                return 'repair_parts';
               }
               if (choice === 'repair') {
                 setImportProgress({
                   active: true,
                   type: 'mesh',
-                  label: files.length > 1 ? 'Auto-Repairing Meshes…' : 'Auto-Repairing Mesh…',
+                  label: importLabelAutoRepairing(files.length, _),
                   detail: files.length > 1
-                    ? `${i + 1}/${files.length}: ${file.name}`
-                    : `Auto-Repairing ${file.name}`,
+                    ? importDetailIndexedFile(i + 1, files.length, file.name, _)
+                    : importDetailAutoRepairingFile(file.name, _),
                   progress: null,
                 });
               }
-              return choice === 'repair';
+              return choice === 'load_as_is' ? 'skip' : choice;
             },
           } satisfies ProcessGeometryOptions;
 
@@ -2354,8 +3468,7 @@ export function useSceneCollectionManager() {
 
             const bbox = merged.bbox;
             const center = merged.center;
-            const heightOffset = center.z - bbox.min.z;
-            const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
+            const initialZ = center.z - bbox.min.z;
 
             const model: LoadedModel = {
               id: uuidv4(),
@@ -2363,6 +3476,9 @@ export function useSceneCollectionManager() {
               fileUrl: url,
               fileSizeBytes: file.size,
               sourcePath: (file as File & { filePath?: string }).filePath,
+              // Imported meshes land on the plate being worked on, which is also
+              // the plate the placement search above was run against.
+              plateId: activePlateIdRef.current,
               geometry: merged,
               splitBodies: splitBodies.length > 1 ? splitBodies : undefined,
               transform: {
@@ -2371,15 +3487,29 @@ export function useSceneCollectionManager() {
                 scale: new THREE.Vector3(1, 1, 1),
               },
               visible: true,
-              color,
+              color: multiTankImportDefault?.materialColor ?? color,
+              ...(multiTankImportDefault
+                ? {
+                  materialProfileId: multiTankImportDefault.materialProfileId,
+                  materialBaseColor: color,
+                  // Each body starts in Tank 1 too, so every body names a material.
+                  ...(splitBodies.length > 1
+                    ? {
+                      bodyMaterialProfileIds: splitBodies.map(() => multiTankImportDefault.materialProfileId),
+                      bodyColors: splitBodies.map(() => multiTankImportDefault.materialColor),
+                    }
+                    : {}),
+                }
+                : {}),
               polygonCount: merged.nativePreview?.originalTriangleCount
-                ?? merged.geometry.getAttribute('position').count / 3,
+                ?? countTriangles(merged.geometry),
             };
 
             const assignedCenter = findFreeSpotCentersForModels([...stagedNewModels, model], 5).at(-1);
             if (assignedCenter) {
               model.transform.position.set(assignedCenter.x, assignedCenter.y, model.transform.position.z);
             }
+            seatModelOnNewBedIfNeeded(model, assignedCenter);
 
             stagedNewModels.push(model);
             if (!firstLoadedModelId) firstLoadedModelId = model.id;
@@ -2396,8 +3526,7 @@ export function useSceneCollectionManager() {
             const geom = await loadMeshGeometry(url, file.name, loadOptions);
             const bbox = geom.bbox;
             const center = geom.center;
-            const heightOffset = center.z - bbox.min.z;
-            const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
+            const initialZ = center.z - bbox.min.z;
 
             const model: LoadedModel = {
               id: uuidv4(),
@@ -2405,6 +3534,7 @@ export function useSceneCollectionManager() {
               fileUrl: url,
               fileSizeBytes: file.size,
               sourcePath: (file as File & { filePath?: string }).filePath,
+              plateId: activePlateIdRef.current,
               geometry: geom,
               transform: {
                 position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
@@ -2412,15 +3542,22 @@ export function useSceneCollectionManager() {
                 scale: new THREE.Vector3(1, 1, 1),
               },
               visible: true,
-              color,
+              color: multiTankImportDefault?.materialColor ?? color,
+              ...(multiTankImportDefault
+                ? {
+                  materialProfileId: multiTankImportDefault.materialProfileId,
+                  materialBaseColor: color,
+                }
+                : {}),
               polygonCount: geom.nativePreview?.originalTriangleCount
-                ?? geom.geometry.getAttribute('position').count / 3,
+                ?? countTriangles(geom.geometry),
             };
 
             const assignedCenter = findFreeSpotCentersForModels([...stagedNewModels, model], 5).at(-1);
             if (assignedCenter) {
               model.transform.position.set(assignedCenter.x, assignedCenter.y, model.transform.position.z);
             }
+            seatModelOnNewBedIfNeeded(model, assignedCenter);
 
             stagedNewModels.push(model);
             if (!firstLoadedModelId) firstLoadedModelId = model.id;
@@ -2449,10 +3586,10 @@ export function useSceneCollectionManager() {
         setImportProgress({
           active: true,
           type: 'mesh',
-          label: files.length > 1 ? 'Loading Mesh Files…' : 'Loading Mesh…',
+          label: importLabelLoadingMesh(files.length, _),
           detail: files.length > 1
-            ? `${Math.min(i + 1, files.length)}/${files.length} processed`
-            : 'Finalizing Model…',
+            ? importDetailProcessedCount(Math.min(i + 1, files.length), files.length, _)
+            : importDetailFinalizingModel(_),
           progress: null,
         });
       }
@@ -2477,7 +3614,7 @@ export function useSceneCollectionManager() {
             const anyResidual = attentionReports.some(({ report }) => !report.fully_repaired);
             setPendingMeshRepairReports(attentionReports);
             emitSceneImportReport(
-              'Auto Repaired - Click for Details',
+              reportAutoRepaired(_),
               anyResidual ? 'warning' : 'success',
               { durationMs: 10_000, clickAction: 'openMeshRepairReport' },
             );
@@ -2495,7 +3632,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, requestMeshRepairConfirmation, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, requestMeshRepairConfirmation, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -2511,16 +3648,62 @@ export function useSceneCollectionManager() {
   // (e.g. mirror, which reflects supports about the model bbox center via
   // `transformSupportsForModel` rather than through a delta-matrix).
   const setModelTransformRaw = useCallback((id: string, transform: ModelTransform) => {
-    setModels((prev) => prev.map((m) => (m.id === id ? { ...m, transform } : m)));
+    // Resolved before the state update rather than inside it: a setter is not a
+    // place for a side effect, and the active plate is a second piece of state.
+    const current = modelsRef.current.find((m) => m.id === id);
+    if (current) {
+      const plateId = plateIdForModel({ ...current, transform }, plateFramesRef.current);
+      if (plateId && plateId !== current.plateId && followLandedPlateRef.current) {
+        setActivePlateId((active) => (active === plateId ? active : plateId));
+      }
+    }
+
+    setModels((prev) => prev.map((m) => {
+      if (m.id !== id) return m;
+      // Membership follows the model: it stands on whichever plate it now does.
+      return withPlateMembership({ ...m, transform }, plateFramesRef.current);
+    }));
   }, []);
 
-  const updateModelTransform = useCallback((id: string, transform: ModelTransform, previousTransformOverride?: ModelTransform) => {
+  const updateModelTransform = useCallback((
+    id: string,
+    transform: ModelTransform,
+    previousTransformOverride?: ModelTransform,
+    options?: {
+      /**
+       * The plate this move lands on, when the caller made it in the same step. The
+       * plate list this render still holds does not include a bed created moments
+       * ago, so resolving the position against it would put the model on the old
+       * plate and leave the new one empty.
+       */
+      landedPlateId?: string;
+    },
+  ) => {
+    // Every move lands here — drag, gizmo, the transform panel, the nudge hotkeys —
+    // so a locked plate refuses them all at the one place that writes a transform.
+    //
+    // Both beds are checked: the one the model leaves, and the one it would land on. A model
+    // dragged from an unlocked bed onto a locked one is refused there, and refusing the write
+    // leaves it where it started.
     const currentModel = modelsRef.current.find((m) => m.id === id);
+    if (currentModel && (
+      isModelPlateLocked(currentModel)
+      || isModelPlateLocked({ ...currentModel, transform })
+    )) {
+      onBlockedByLockRef.current?.(lockedPlateIdFor(currentModel, transform));
+      return {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+        supportLocalFramePreserved: false,
+      };
+    }
     if (!currentModel) {
       return {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
 
@@ -2534,8 +3717,26 @@ export function useSceneCollectionManager() {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
+
+    const deltaRotationEqual = Math.abs(beforeTransform.rotation.x - transform.rotation.x) <= 1e-8
+      && Math.abs(beforeTransform.rotation.y - transform.rotation.y) <= 1e-8
+      && Math.abs(beforeTransform.rotation.z - transform.rotation.z) <= 1e-8
+      && beforeTransform.rotation.order === transform.rotation.order;
+    const deltaScaleEqual = Math.abs(beforeTransform.scale.x - transform.scale.x) <= 1e-8
+      && Math.abs(beforeTransform.scale.y - transform.scale.y) <= 1e-8
+      && Math.abs(beforeTransform.scale.z - transform.scale.z) <= 1e-8;
+    /**
+     * A pure XY translation moves the world support data and the model frame by
+     * the same delta, so the supports' model-local coordinates are unchanged.
+     * Z is not rigid (roots stay on the plate) and rotation/scale move the
+     * contacts relative to the frame, so both must re-merge.
+     */
+    const supportLocalFramePreserved = deltaRotationEqual
+      && deltaScaleEqual
+      && Math.abs(beforeTransform.position.z - transform.position.z) <= 1e-8;
 
     let supportsChanged = false;
     let kickstandsChanged = false;
@@ -2588,15 +3789,42 @@ export function useSceneCollectionManager() {
       }
     }
 
+    // Which plate the moved models land on, resolved before the state update: a
+    // setter is not a place for a side effect, and the active plate is state too.
+    const landedPlateIds = new Set<string>();
+    for (const model of modelsRef.current) {
+      const nextTransform = updateMap.get(model.id);
+      if (!nextTransform) continue;
+      const plateId = plateIdForModel({ ...model, transform: nextTransform }, plateFramesRef.current);
+      if (plateId) landedPlateIds.add(plateId);
+    }
+    // A drag that lands on another bed makes that bed the one you are working on,
+    // which the Multi-Plate setting can turn off.
+    const followedPlateId = followedPlateIdForMove({
+      followLandedPlate: followLandedPlateRef.current,
+      explicitPlateId: options?.landedPlateId,
+      landedPlateIds,
+    });
+
     setModels(prev => prev.map(m => {
       const nextTransform = updateMap.get(m.id);
-      return nextTransform ? { ...m, transform: nextTransform } : m;
+      if (!nextTransform) return m;
+      // Membership follows the model: it stands on whichever plate it now does.
+      return withPlateMembership({ ...m, transform: nextTransform }, plateFramesRef.current, options?.landedPlateId);
     }));
+
+    if (followedPlateId && activePlateIdRef.current !== followedPlateId) {
+      setActivePlateId(followedPlateId);
+      // The drop brings the view with it, the way picking a bed does. The drop, not
+      // the pointer moving: the camera must not jump out from under the drag.
+      setPlateViewRunId((id) => id + 1);
+    }
 
     return {
       updated: true,
       supportsChanged,
       kickstandsChanged,
+      supportLocalFramePreserved,
     };
   }, []);
 
@@ -2604,8 +3832,15 @@ export function useSceneCollectionManager() {
     id: string,
     beforeTransform: ModelTransform,
     afterTransform: ModelTransform,
-    description?: string,
-    supportSnapshotOptions?: TransformHistorySupportSnapshotOptions,
+    description?: MessageDescriptor,
+    supportSnapshotOptions?: TransformHistorySupportSnapshotOptions & {
+      /**
+       * Set when the same gesture created the plate the model landed on. The bed
+       * is then part of this step, so one undo takes the model back and the empty
+       * bed with it rather than leaving it behind.
+       */
+      plateSpawn?: { platesBefore: ScenePlate[]; activePlateIdBefore: string };
+    },
   ) => {
     if (transformsEqual(beforeTransform, afterTransform)) return false;
 
@@ -2650,38 +3885,49 @@ export function useSceneCollectionManager() {
       return m;
     });
 
+    // A transform moves supports by the same delta as the model; the store already
+    // holds them at the "after" position, so the undo step only needs the two
+    // transforms. An explicit support state (a caller that also changed support
+    // content) still takes the snapshot path.
     const includeSupportByOption = supportSnapshotOptions?.includeSupportState === true
       || !!supportSnapshotOptions?.supportBefore
-      || !!supportSnapshotOptions?.supportAfter
-      || !!supportSnapshotOptions?.kickstandBefore
-      || !!supportSnapshotOptions?.kickstandAfter;
-
-    const includeSupportByState = (() => {
+      || !!supportSnapshotOptions?.supportAfter;
+    const supportMoves: SupportTransformMove[] = [];
+    if (!includeSupportByOption) {
       const supportStateNow = getSnapshot();
-      const kickstandStateNow = getKickstandSnapshot();
-      return hasSupportsOrKickstandsForModel(id, supportStateNow, kickstandStateNow);
-    })();
+      if (hasSupportsForModel(id, supportStateNow)) {
+        supportMoves.push({ modelId: id, from: beforeTransform, to: afterTransform });
+      }
+      for (const model of beforeModels) {
+        if (model.id === id) continue;
+        const current = currentModels.find((candidate) => candidate.id === model.id);
+        if (!current || transformsEqual(model.transform, current.transform)) continue;
+        if (!hasSupportsForModel(model.id, supportStateNow)) continue;
+        supportMoves.push({ modelId: model.id, from: model.transform, to: current.transform });
+      }
+    }
 
-    const includeSupportHistory = includeSupportByOption || includeSupportByState;
-
+    const spawn = supportSnapshotOptions?.plateSpawn;
     const before = captureSceneSnapshot(beforeModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
+      includeSupportState: includeSupportByOption,
       supportStateOverride: supportSnapshotOptions?.supportBefore,
-      kickstandStateOverride: supportSnapshotOptions?.kickstandBefore,
+      supportStateOwned: !!supportSnapshotOptions?.supportBefore,
+      ...(spawn ? { plates: spawn.platesBefore, activePlateId: spawn.activePlateIdBefore } : {}),
     });
     const after = captureSceneSnapshot(afterModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
+      includeSupportState: includeSupportByOption,
       supportStateOverride: supportSnapshotOptions?.supportAfter,
-      kickstandStateOverride: supportSnapshotOptions?.kickstandAfter,
+      supportStateOwned: !!supportSnapshotOptions?.supportAfter,
+      ...(spawn ? { plates: platesRef.current, activePlateId: activePlateIdRef.current } : {}),
     });
     const targetModelName = targetModel.name ?? id;
-    pushSceneSnapshotHistory(before, after, description ?? `Transform Model ${targetModelName}`);
+    pushSceneSnapshotHistory(before, after, description ?? transformModelLabel(targetModelName), undefined, supportMoves);
     return true;
   }, [pushSceneSnapshotHistory]);
 
   const commitModelTransformsHistory = useCallback((
     beforeTransforms: Array<{ id: string; transform: ModelTransform }>,
-    description?: string,
+    description?: MessageDescriptor,
     supportSnapshotOptions?: TransformHistorySupportSnapshotOptions,
   ) => {
     const currentModels = modelsRef.current;
@@ -2704,39 +3950,70 @@ export function useSceneCollectionManager() {
     });
     const includeSupportByOption = supportSnapshotOptions?.includeSupportState === true
       || !!supportSnapshotOptions?.supportBefore
-      || !!supportSnapshotOptions?.supportAfter
-      || !!supportSnapshotOptions?.kickstandBefore
-      || !!supportSnapshotOptions?.kickstandAfter;
-    const supportStateNow = getSnapshot();
-    const kickstandStateNow = getKickstandSnapshot();
-    const includeSupportByState = changedIds.some((id) => (
-      hasSupportsOrKickstandsForModel(id, supportStateNow, kickstandStateNow)
-    ));
-    const includeSupportHistory = includeSupportByOption || includeSupportByState;
+      || !!supportSnapshotOptions?.supportAfter;
+    const supportMoves: SupportTransformMove[] = [];
+    if (!includeSupportByOption) {
+      const supportStateNow = getSnapshot();
+      for (const model of currentModels) {
+        const beforeTransform = beforeTransformMap.get(model.id);
+        if (!beforeTransform || transformsEqual(beforeTransform, model.transform)) continue;
+        if (!hasSupportsForModel(model.id, supportStateNow)) continue;
+        supportMoves.push({ modelId: model.id, from: beforeTransform, to: model.transform });
+      }
+    }
 
     const before = captureSceneSnapshot(beforeModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
+      includeSupportState: includeSupportByOption,
       supportStateOverride: supportSnapshotOptions?.supportBefore,
-      kickstandStateOverride: supportSnapshotOptions?.kickstandBefore,
     });
     const after = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
+      includeSupportState: includeSupportByOption,
       supportStateOverride: supportSnapshotOptions?.supportAfter,
-      kickstandStateOverride: supportSnapshotOptions?.kickstandAfter,
     });
-    pushSceneSnapshotHistory(before, after, description ?? 'Update Model Transforms');
+    pushSceneSnapshotHistory(before, after, description ?? transformModelsLabel(beforeTransforms.length), undefined, supportMoves);
     return true;
   }, [pushSceneSnapshotHistory]);
 
   const updateModelTransforms = useCallback((
-    updates: Array<{ id: string; transform: ModelTransform }>,
-    options?: { pushHistory?: boolean },
+    updates: Array<{ id: string; transform: ModelTransform; autoLift?: boolean; liftRestoreMm?: number | null }>,
+    options?: {
+      pushHistory?: boolean;
+      /**
+       * Set when the same action added the plates these models land on. The beds are
+       * then part of this step, so one undo takes the models back and the beds with
+       * them rather than leaving empty beds behind.
+       */
+      platesBefore?: { plates: ScenePlate[]; activePlateId: string };
+      /** The beds as they stand after the addition. Defaults to the hook's own list. */
+      platesAfter?: { plates: ScenePlate[]; activePlateId: string };
+    },
   ) => {
+    const lockedMove = updates.find((update) => {
+      const model = modelsRef.current.find((candidate) => candidate.id === update.id);
+      if (!model) return false;
+      // The bed it is leaving, and the bed it would land on: a model dragged onto a locked bed is
+      // refused there, even though the bed it came from takes edits. Refusing the commit leaves
+      // the model where it started, which is what the drag should have done.
+      if (isModelPlateLocked(model)) return true;
+      return isModelPlateLocked({ ...model, transform: update.transform });
+    });
+    if (lockedMove) {
+      // Say so: a transform that silently does nothing reads as a broken tool.
+      const refused = modelsRef.current.find((candidate) => candidate.id === lockedMove.id);
+      onBlockedByLockRef.current?.(refused ? lockedPlateIdFor(refused, lockedMove.transform) : undefined);
+      return {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+        supportLocalFramePreserved: false,
+      };
+    }
     if (updates.length === 0) {
       return {
         updated: false,
         supportsChanged: false,
         kickstandsChanged: false,
+        supportLocalFramePreserved: false,
       };
     }
 
@@ -2745,7 +4022,13 @@ export function useSceneCollectionManager() {
     const currentSelectedModelIds = selectedModelIdsRef.current;
 
     const updateMap = new Map<string, ModelTransform>();
-    updates.forEach((entry) => updateMap.set(entry.id, entry.transform));
+    const autoLiftMap = new Map<string, boolean>();
+    const liftRestoreMap = new Map<string, number | null>();
+    updates.forEach((entry) => {
+      updateMap.set(entry.id, entry.transform);
+      if (entry.autoLift !== undefined) autoLiftMap.set(entry.id, entry.autoLift);
+      if (entry.liftRestoreMm !== undefined) liftRestoreMap.set(entry.id, entry.liftRestoreMm);
+    });
 
     updates.forEach((entry) => {
       const model = currentModels.find((m) => m.id === entry.id);
@@ -2780,71 +4063,144 @@ export function useSceneCollectionManager() {
     });
 
     const supportStateBefore = getSnapshot();
-    const kickstandStateBefore = getKickstandSnapshot();
     const allUpdatedIds = Array.from(updateMap.keys());
-    const includeSupportHistory = allUpdatedIds.some((id) => hasSupportsOrKickstandsForModel(id, supportStateBefore, kickstandStateBefore));
+    const includeSupportHistory = allUpdatedIds.some((id) => hasSupportsForModel(id, supportStateBefore));
 
     const shouldPushHistory = options?.pushHistory !== false;
+    const platesBefore = options?.platesBefore;
     const before = shouldPushHistory
       ? captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
           includeSupportState: includeSupportHistory,
           supportStateOverride: includeSupportHistory ? supportStateBefore : undefined,
-          kickstandStateOverride: includeSupportHistory ? kickstandStateBefore : undefined,
+          ...(platesBefore ? { plates: platesBefore.plates, activePlateId: platesBefore.activePlateId } : {}),
         })
       : null;
 
     let supportsChanged = false;
     let kickstandsChanged = false;
     let updated = false;
+    let supportLocalFramePreserved = true;
+    const perfStoreStart = perfMark();
     updateMap.forEach((nextTransform, id) => {
       const currentModel = currentModels.find((model) => model.id === id);
       if (!currentModel) return;
-      if (transformsEqual(currentModel.transform, nextTransform)) return;
-      const commit = transformSupportsForModel(id, currentModel.transform, nextTransform);
+      const nextAutoLift = autoLiftMap.get(id);
+      const autoLiftChanged = nextAutoLift !== undefined && currentModel.autoLift !== nextAutoLift;
+      const nextRestore = liftRestoreMap.get(id);
+      const restoreChanged = nextRestore !== undefined
+        && (currentModel.liftRestoreMm ?? null) !== nextRestore;
+      if (transformsEqual(currentModel.transform, nextTransform)) {
+        if (autoLiftChanged || restoreChanged) updated = true;
+        return;
+      }
+      const before = currentModel.transform;
+      if (Math.abs(before.rotation.x - nextTransform.rotation.x) > 1e-8
+        || Math.abs(before.rotation.y - nextTransform.rotation.y) > 1e-8
+        || Math.abs(before.rotation.z - nextTransform.rotation.z) > 1e-8
+        || before.rotation.order !== nextTransform.rotation.order
+        || Math.abs(before.scale.x - nextTransform.scale.x) > 1e-8
+        || Math.abs(before.scale.y - nextTransform.scale.y) > 1e-8
+        || Math.abs(before.scale.z - nextTransform.scale.z) > 1e-8
+        || Math.abs(before.position.z - nextTransform.position.z) > 1e-8) {
+        supportLocalFramePreserved = false;
+      }
+      const commit = transformSupportsForModel(id, before, nextTransform);
       supportsChanged = supportsChanged || commit.supportsChanged;
       kickstandsChanged = kickstandsChanged || commit.kickstandsChanged;
       updated = true;
     });
+
+    perfMeasure('store:transform', perfStoreStart);
 
     if (!updated) {
       return {
         updated: false,
         supportsChanged,
         kickstandsChanged,
+        supportLocalFramePreserved: false,
       };
     }
 
     const nextModels = currentModels.map((m) => {
       const nextTransform = updateMap.get(m.id);
-      return nextTransform ? { ...m, transform: nextTransform } : m;
+      const nextAutoLift = autoLiftMap.get(m.id);
+      const nextRestore = liftRestoreMap.get(m.id);
+      if (!nextTransform && nextAutoLift === undefined && nextRestore === undefined) return m;
+      const nextModel = {
+        ...m,
+        ...(nextTransform ? { transform: nextTransform } : {}),
+        ...(nextAutoLift !== undefined ? { autoLift: nextAutoLift } : {}),
+        ...(nextRestore !== undefined
+          ? { liftRestoreMm: nextRestore === null ? undefined : nextRestore }
+          : {}),
+      };
+      // Membership follows the model, folded into the same update so a drag does
+      // not cost a second render.
+      return withPlateMembership(nextModel, plateFramesRef.current);
     });
+
+    // Follow the moved set when it lands wholly on one plate, which is a drag of one or a
+    // few models onto another bed. The Multi-Plate setting can turn the following off.
+    const movedPlateIds = new Set(
+      nextModels
+        .filter((model) => updateMap.has(model.id) && model.plateId)
+        .map((model) => model.plateId as string),
+    );
+    const followedPlateId = followedPlateIdForMove({
+      followLandedPlate: followLandedPlateRef.current,
+      landedPlateIds: movedPlateIds,
+    });
+    if (followedPlateId && activePlateIdRef.current !== followedPlateId) {
+      setActivePlateId(followedPlateId);
+      // A drag that lands on another bed makes that bed the one you are on, and the view
+      // comes with it — after the drop, never during it, which is why this is the commit
+      // rather than the pointer moving.
+      setPlateViewRunId((id) => id + 1);
+    }
 
     if (!shouldPushHistory) modelsRef.current = nextModels;
     setModels(nextModels);
 
     if (shouldPushHistory && before) {
       const supportStateAfter = includeSupportHistory ? getSnapshot() : undefined;
-      const kickstandStateAfter = includeSupportHistory ? getKickstandSnapshot() : undefined;
       const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
         includeSupportState: includeSupportHistory,
         supportStateOverride: supportStateAfter,
-        kickstandStateOverride: kickstandStateAfter,
+        ...(platesBefore
+          ? {
+              plates: options?.platesAfter?.plates ?? platesRef.current,
+              activePlateId: options?.platesAfter?.activePlateId ?? activePlateIdRef.current,
+            }
+          : {}),
       });
-      pushSceneSnapshotHistory(before, after, updates.length === 1 ? 'Update Model Transform' : 'Update Model Transforms');
+      pushSceneSnapshotHistory(before, after, transformModelsLabel(updates.length));
     }
 
     return {
       updated,
       supportsChanged,
       kickstandsChanged,
+      supportLocalFramePreserved,
     };
   }, [pushSceneSnapshotHistory]);
 
   const replaceModelGeometry = useCallback((
     id: string,
     nextBufferGeometry: THREE.BufferGeometry,
-    historyDescription: string,
-    options?: { includeSupportState?: boolean; deferPostProcessing?: boolean },
+    historyDescription: MessageDescriptor,
+    options?: {
+      includeSupportState?: boolean;
+      deferPostProcessing?: boolean;
+      meshModifiersAfter?: ModelMeshModifiers | null;
+      meshModifiersBefore?: ModelMeshModifiers | null;
+      /** Lands with the geometry, in the same update and history step. */
+      transformAfter?: ModelTransform;
+      /**
+       * Records a history step whose before-state differs from the live scene: a tool
+       * that previewed its change on the model (Mirror) passes the state from before it.
+       */
+      historyBefore?: { transform?: ModelTransform; supportState?: SupportState };
+    },
   ) => {
     const currentModels = modelsRef.current;
     const currentActiveModelId = activeModelIdRef.current;
@@ -2859,33 +4215,12 @@ export function useSceneCollectionManager() {
     const center = bbox.getCenter(new THREE.Vector3());
     const size = bbox.getSize(new THREE.Vector3());
 
-    // Recompute edge geometry for the Higher Contrast Model Edges overlay when
-    // the geometry has changed (e.g. after hole punch / hollowing).  Compute it
-    // only if the old geometry had one (i.e. the user has edge lines enabled),
-    // and skip during deferred post-processing to avoid blocking the UI.
-    // Skip for very large meshes — EdgesGeometry uses `for...in` over a hash map
-    // of unique edges and V8 throws "Too many properties to enumerate" beyond ~2M entries.
-    const hadEdgeGeometry = !!target.geometry.edgeGeometry;
-    let nextEdgeGeometry: THREE.EdgesGeometry | undefined;
-    if (hadEdgeGeometry && !options?.deferPostProcessing) {
-      const triCount = (nextBufferGeometry.getIndex()?.count ?? nextBufferGeometry.getAttribute('position')?.count ?? 0) / 3;
-      if (triCount < 800_000) {
-        try {
-          nextEdgeGeometry = new THREE.EdgesGeometry(nextBufferGeometry, 30);
-        } catch (edgeError) {
-          console.warn(
-            '[SceneCollection] Edge geometry recompute failed for large mesh',
-            edgeError,
-          );
-        }
-      } else {
-        console.warn(
-          `[SceneCollection] Skipping edge geometry recompute for large mesh (${Math.round(triCount).toLocaleString()} triangles).`,
-        );
-      }
-    } else {
-      nextEdgeGeometry = target.geometry.edgeGeometry;
-    }
+    // Rebuild the edge overlay for the swapped geometry, but only when the model
+    // had one — i.e. when the user has the overlay enabled (`buildModelEdgeGeometry`
+    // is never called otherwise, so presence is the enable signal).
+    const nextEdgeGeometry = target.geometry.edgeGeometry
+      ? buildModelEdgeGeometry(nextBufferGeometry)
+      : undefined;
 
     const nextGeometry: GeometryWithBounds = {
       geometry: nextBufferGeometry,
@@ -2922,19 +4257,31 @@ export function useSceneCollectionManager() {
       });
     }
 
-    const polygonCount = (() => {
-      const idx = nextBufferGeometry.getIndex();
-      if (idx) return Math.floor(idx.count / 3);
-      const pos = nextBufferGeometry.getAttribute('position');
-      return pos ? Math.floor(pos.count / 3) : target.polygonCount;
-    })();
+    const polygonCount = nextBufferGeometry.getAttribute('position')
+      ? countTriangles(nextBufferGeometry)
+      : target.polygonCount;
 
-    const includeSupportHistory = options?.includeSupportState
-      ?? hasSupportsOrKickstandsForModel(id, getSnapshot(), getKickstandSnapshot());
-
-    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
-    });
+    const modifierAfter = options?.meshModifiersAfter;
+    const historyBefore = options?.historyBefore;
+    const recordHistory = modifierAfter !== undefined || historyBefore !== undefined;
+    const includeSupportHistory = recordHistory
+      ? (options?.includeSupportState ?? hasSupportsForModel(id, getSnapshot()))
+      : false;
+    const modelsBefore = historyBefore?.transform
+      ? currentModels.map((m) => (m.id === id ? { ...m, transform: historyBefore.transform as ModelTransform } : m))
+      : currentModels;
+    const before = recordHistory
+      ? captureSceneSnapshot(modelsBefore, currentActiveModelId, currentSelectedModelIds, {
+          includeSupportState: includeSupportHistory,
+          supportStateOverride: historyBefore?.supportState,
+        })
+      : null;
+    if (before && modifierAfter !== undefined) {
+      before.modifierRecord = {
+        modelId: id,
+        modifiers: cloneMeshModifiersForHistory(options?.meshModifiersBefore !== undefined ? options.meshModifiersBefore : getStoredMeshModifiers(id)),
+      };
+    }
 
     const nextModels = currentModels.map((m) => (
       m.id === id
@@ -2942,16 +4289,27 @@ export function useSceneCollectionManager() {
             ...m,
             geometry: nextGeometry,
             polygonCount,
+            ...(options?.transformAfter ? { transform: cloneTransform(options.transformAfter) } : {}),
             isSupportGeometry: target.isSupportGeometry,
             linkGroupId: target.linkGroupId,
           }
         : m
     ));
+    if (modifierAfter !== undefined) {
+      storeModelMeshModifiers(id, modifierAfter);
+      clearPreparedGeometryCacheForModel(id);
+    }
     setModels(nextModels);
 
-    const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
-      includeSupportState: includeSupportHistory,
-    });
+    if (before) {
+      const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds, {
+        includeSupportState: includeSupportHistory,
+      });
+      if (modifierAfter !== undefined) {
+        after.modifierRecord = { modelId: id, modifiers: cloneMeshModifiersForHistory(modifierAfter) };
+      }
+      pushSceneSnapshotHistory(before, after, historyDescription, id);
+    }
     // COW chunk-store bake (Ph0.1 sub-phase C3). This is the VERIFIED sole
     // finalization point for hollow, hole-punch, mirror and repair, so baking
     // here moves the encode+SHA+zlib-6 onto the operation the user is already
@@ -2975,7 +4333,7 @@ export function useSceneCollectionManager() {
     bufferGeometry: THREE.BufferGeometry,
     baseModelId: string,
     name: string,
-    historyDescription: string,
+    historyDescription: MessageDescriptor,
   ): string | null => {
     const currentModels = modelsRef.current;
     const base = currentModels.find((m) => m.id === baseModelId);
@@ -2996,12 +4354,7 @@ export function useSceneCollectionManager() {
       flatteningPlanes: [],
     };
 
-    const polygonCount = (() => {
-      const idx = bufferGeometry.getIndex();
-      if (idx) return Math.floor(idx.count / 3);
-      const pos = bufferGeometry.getAttribute('position');
-      return pos ? Math.floor(pos.count / 3) : 0;
-    })();
+    const polygonCount = countTriangles(bufferGeometry);
 
     const id = uuidv4();
     const newModel: LoadedModel = {
@@ -3020,7 +4373,7 @@ export function useSceneCollectionManager() {
       visible: true,
       color: base.color,
       polygonCount,
-      meshModifiers: base.meshModifiers ? clonePlainObject(base.meshModifiers) : undefined,
+      meshModifiers: base.meshModifiers ? clonePlainData(base.meshModifiers) : undefined,
     };
 
     const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current, { includeSupportState: false });
@@ -3060,7 +4413,7 @@ export function useSceneCollectionManager() {
   const splitModelIntoParts = useCallback((
     sourceId: string,
     partGeometries: THREE.BufferGeometry[],
-    historyDescription: string,
+    historyDescription: MessageDescriptor,
   ): string[] | null => {
     const currentModels = modelsRef.current;
     const source = currentModels.find((m) => m.id === sourceId);
@@ -3112,12 +4465,6 @@ export function useSceneCollectionManager() {
       return { geometry: g, bbox, center, size, flatteningPlanes: [] };
     };
 
-    const polyCount = (g: THREE.BufferGeometry): number => {
-      const idx = g.getIndex();
-      if (idx) return Math.floor(idx.count / 3);
-      const pos = g.getAttribute('position');
-      return pos ? Math.floor(pos.count / 3) : 0;
-    };
 
     // The source becomes the FIRST part; every other part is appended as a new
     // model. (A multi-loop cut can free several pieces, so there may be >2 parts.)
@@ -3146,8 +4493,8 @@ export function useSceneCollectionManager() {
       },
       visible: true,
       color: source.color,
-      polygonCount: polyCount(pg.geometry),
-      meshModifiers: source.meshModifiers ? clonePlainObject(source.meshModifiers) : undefined,
+      polygonCount: countTriangles(pg.geometry),
+      meshModifiers: source.meshModifiers ? clonePlainData(source.meshModifiers) : undefined,
     }));
 
     // ONE atomic update: source becomes part 0 (geometry swapped + position
@@ -3158,7 +4505,7 @@ export function useSceneCollectionManager() {
           ? {
               ...m,
               geometry: part0,
-              polygonCount: polyCount(part0.geometry),
+              polygonCount: countTriangles(part0.geometry),
               transform: {
                 position: part0Position,
                 rotation: m.transform.rotation.clone(),
@@ -3195,6 +4542,177 @@ export function useSceneCollectionManager() {
     return extraIds;
   }, [pushSceneSnapshotHistory]);
 
+  /**
+   * The Higher Contrast Model Edges setting can be enabled after models are
+   * already loaded, and those models have no overlay geometry — import only
+   * builds one while the setting is on. Fill them in here, one model per idle
+   * callback: each build is ~2 s for a 500k-triangle mesh, so a batch would
+   * freeze the app, and the overlay is worth nothing until it is looked at.
+   * The result is cached on the geometry, so it is built exactly once.
+   */
+  const higherContrastModelEdges = useSyncExternalStore(
+    subscribeToWorkspaceCameraSettings,
+    getWorkspaceCameraSettingsSnapshot,
+    getWorkspaceCameraSettingsServerSnapshot,
+  ).higherContrastModelEdges;
+
+  useEffect(() => {
+    if (!MODEL_EDGE_OVERLAY_ENABLED || !higherContrastModelEdges) return;
+
+    const queue = modelsRef.current
+      .filter((model) => !model.geometry.edgeGeometry && model.geometry.geometry.getAttribute('position'))
+      .map((model) => model.id);
+    if (queue.length === 0) return;
+
+    let cancelled = false;
+    const scheduleIdle = (cb: () => void) => {
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(cb, { timeout: 500 });
+      } else {
+        setTimeout(cb, 16);
+      }
+    };
+
+    const step = () => {
+      if (cancelled) return;
+      const id = queue.shift();
+      if (!id) return;
+
+      const model = modelsRef.current.find((m) => m.id === id);
+      if (model) {
+        const edges = buildModelEdgeGeometry(model.geometry.geometry);
+        if (edges) {
+          setModels((prev) => prev.map((m) => (
+            m.id === id && m.geometry === model.geometry
+              ? { ...m, geometry: { ...m.geometry, edgeGeometry: edges } }
+              : m
+          )));
+        }
+      }
+      if (queue.length > 0) scheduleIdle(step);
+    };
+
+    scheduleIdle(step);
+    return () => { cancelled = true; };
+  }, [higherContrastModelEdges, setModels]);
+
+  /**
+   * Baked ambient occlusion.
+   *
+   * One native bake per model, on an idle callback, off the main thread:
+   * `dragonfruit-mesh-core::vertex_occlusion` fires a hemisphere fan per vertex
+   * from the mesh's own normal, which measures 12-263 ms for 40k-640k triangle
+   * meshes. The result is attached to the geometry as `aBakedAo`, so nothing is
+   * paid per frame afterwards.
+   */
+  useEffect(() => {
+    // Whatever the last run left, this one owns the queue from here: cleared
+    // before any early return, because a stale one keeps
+    // `hasPendingBackgroundGeometryWork()` true for work nobody will do (the
+    // modifier-apply overlay polls it to clear its spinner).
+    pendingAoQueueRef.current = [];
+
+    // Zero intensity means off, so there is nothing to bake for: raising the
+    // slider later re-runs this and the geometries that never got an attribute
+    // are the ones that get baked.
+    if (!canBakeOcclusion() || bakedAoIntensity <= 0) return;
+
+    const queue = modelsRef.current
+      .filter((model) => {
+        const geometry = model.geometry.geometry;
+        if (!geometry.getAttribute('position')) return false;
+        // A geometry the hardware check skipped has no attribute by design; it
+        // must not be re-queued on every model change.
+        if (isOcclusionUnavailable(geometry)) return false;
+        // Re-bake when the geometry was replaced (repair, boolean cut, hole
+        // punch): the attribute lives on the old geometry, so without this the
+        // new shape would be shaded with the old shape's occlusion.
+        if (geometry.getAttribute(BAKED_OCCLUSION_ATTRIBUTE) !== undefined) return false;
+        // A bake already in flight for this geometry has not attached yet, so it
+        // would look identical to "never baked" and be sent a second time.
+        return !pendingAoGeometriesRef.current.has(geometry);
+      })
+      .map((model) => model.id);
+    if (queue.length === 0) return;
+
+    // What this run still has to bake, as a ref as well as a local: the workers
+    // below shift the same array, so the ref is the live remainder and
+    // `hasPendingBackgroundGeometryWork` can read it without the run's own
+    // bookkeeping. Re-derived on every run, so a superseded run cannot leave
+    // anything counted.
+    pendingAoQueueRef.current = queue;
+
+    let cancelled = false;
+
+    const scheduleIdle = (cb: () => void) => {
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(cb, { timeout: 500 });
+      } else {
+        setTimeout(cb, 16);
+      }
+    };
+
+    const bakeOne = async () => {
+      if (cancelled) return;
+      const id = queue.shift();
+      if (!id) return;
+      // Taken, so in flight: the counter rides the take, not the whole queue. It
+      // used to be `+= queue.length` at the top of the run and decremented per
+      // bake, so the items a superseded run never took stayed counted — and every
+      // `models` change while a bake was queued (a hollowing apply patches them,
+      // the idle plane pass patches them again) leaked one. The "finalizing"
+      // overlay then waited out its 20 s cap after every hollow, with all the
+      // work done in the first 200 ms.
+      pendingAoBakeRef.current += 1;
+      const model = modelsRef.current.find((m) => m.id === id);
+      const geometry = model?.geometry.geometry;
+      if (geometry) pendingAoGeometriesRef.current.add(geometry);
+      try {
+        if (geometry) {
+          const occlusion = await bakeOcclusionForGeometry(geometry);
+          // Attach whatever came back even if this run was superseded: the
+          // values belong to this geometry, and discarding them is what left
+          // it looking unbaked and re-queueable on the next `models` change.
+          if (occlusion) {
+            const attribute = new THREE.BufferAttribute(occlusion, 1);
+            attribute.setUsage(THREE.StaticDrawUsage);
+            geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, attribute);
+            // The store, not the `models` array: replacing that array here
+            // invalidated everything derived from it — the clearance map and
+            // the raft rebuilt on every bake that landed. See
+            // `bumpBakedOcclusionVersion`.
+            bumpBakedOcclusionVersion(geometry);
+          }
+        }
+      } catch (error) {
+        // A failed bake is not worth surfacing: the model simply keeps the
+        // unoccluded look it has today.
+        console.warn('[ao] bake failed', error);
+      } finally {
+        if (geometry) pendingAoGeometriesRef.current.delete(geometry);
+        pendingAoBakeRef.current = Math.max(0, pendingAoBakeRef.current - 1);
+        // One model per idle callback, not a loop over the queue. The soup copy
+        // and the attribute attach are main-thread work, so chaining bakes back to
+        // back is what made a fifteen-model scene stutter for the whole drain
+        // rather than between models. Interaction always outranks this.
+        scheduleIdle(() => void bakeOne());
+      }
+    };
+
+    // Two bakes in flight, not one. The ray pass saturates the pool on its own,
+    // but the weld, the tree build and the IPC transfer of each model are serial
+    // phases — on a print-sized model that is about a quarter of its bake, and in
+    // a loaded scene it is a quarter of *every* model's bake spent with fifteen
+    // cores idle. Both commands share one rayon pool, so overlapping them lets
+    // one model's serial phase run during another's ray pass. Two rather than
+    // more: each in-flight bake holds its soup and its output, and past a couple
+    // the pool is oversubscribed for no further gain.
+    for (let worker = 0; worker < Math.min(AO_BAKE_CONCURRENCY, queue.length); worker += 1) {
+      scheduleIdle(() => void bakeOne());
+    }
+    return () => { cancelled = true; };
+  }, [models, bakedAoIntensity]);
+
   const finalizeModelGeometryPostProcessing = useCallback((id: string) => {
     const target = modelsRef.current.find((m) => m.id === id);
     if (!target) return;
@@ -3225,14 +4743,68 @@ export function useSceneCollectionManager() {
   }, [deferAccelerateGeometry]);
 
   const setModelVisibility = useCallback((id: string, visible: boolean) => {
-    setModels(prev => prev.map(m =>
-      m.id === id ? { ...m, visible } : m
-    ));
-  }, []);
+    const currentModels = modelsRef.current;
+    const target = currentModels.find((model) => model.id === id);
+    if (!target || target.visible === visible) return;
 
-  const setModelMeshModifiers = useCallback((id: string, meshModifiers: ModelMeshModifiers | undefined) => {
+    const nextModels = currentModels.map((model) => (
+      model.id === id ? { ...model, visible } : model
+    ));
+    const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelIdRef.current, selectedModelIdsRef.current);
+    pushSceneSnapshotHistory(before, after, visible ? showModelLabel(target.name) : hideModelLabel(target.name));
+  }, [pushSceneSnapshotHistory]);
+
+  const lastModifierHistoryRef = useRef<{ key: string; modelId: string; description: MessageDescriptor; at: number } | null>(null);
+
+  /**
+   * Stores a model's mesh modifiers. With `historyDescription` the change is an undo step: the
+   * modifiers ride on a scene snapshot's `modifierRecord`, and the hollowing and hole-punch
+   * panels resync from them on undo. With `merge` as well, a run of edits with the same
+   * description on the same model, each within the merge window of the last and with nothing
+   * pushed in between, stays one step whose after-state follows the latest edit.
+   */
+  const setModelMeshModifiers = useCallback((
+    id: string,
+    meshModifiers: ModelMeshModifiers | undefined,
+    options?: ModelMeshModifiersHistoryOptions,
+  ) => {
+    const description = options?.historyDescription;
+    const modifiersBefore = description ? cloneMeshModifiersForHistory(getStoredMeshModifiers(id)) : undefined;
     // Store externally — model objects never carry meshModifiers directly.
     storeModelMeshModifiers(id, meshModifiers);
+
+    if (description) {
+      const now = Date.now();
+      const last = lastModifierHistoryRef.current;
+      const top = peekUndo();
+      const mergeInto = options?.merge
+        && last
+        && last.modelId === id
+        && last.description.id === description.id
+        && now - last.at <= MODIFIER_HISTORY_MERGE_WINDOW_MS
+        && top?.type === SCENE_MODELS_SNAPSHOT_APPLY
+        && (top.payload as SceneSnapshotPayload | undefined)?.key === last.key
+        ? sceneSnapshotRegistry.get(last.key)
+        : undefined;
+      if (mergeInto && last) {
+        mergeInto.after.modifierRecord = { modelId: id, modifiers: cloneMeshModifiersForHistory(meshModifiers) };
+        last.at = now;
+      } else {
+        const currentModels = modelsRef.current;
+        const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current);
+        before.modifierRecord = { modelId: id, modifiers: modifiersBefore };
+        const after = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current);
+        after.modifierRecord = { modelId: id, modifiers: cloneMeshModifiersForHistory(meshModifiers) };
+        const key = storeSceneSnapshotPair({ before, after });
+        // No `modelId` on the payload: that is the geometry-swap marker the hollowing manager
+        // drops its caches on, and a draft edit leaves the geometry alone.
+        sceneHistory.push({ type: SCENE_MODELS_SNAPSHOT_APPLY, description, payload: { key } });
+        lastModifierHistoryRef.current = { key, modelId: id, description, at: now };
+      }
+    }
+
     // Still trigger a shallow React update so consumers that derive from
     // the store can re-render.
     setModels(prev => prev.map((model) => (
@@ -3242,23 +4814,37 @@ export function useSceneCollectionManager() {
     )));
   }, []);
 
-  const setModelManualZMoveOverride = useCallback((id: string, manualZMoveOverride: boolean) => {
-    setModels(prev => prev.map((model) => (
-      model.id === id
-        ? (
-            model.manualZMoveOverride === manualZMoveOverride
-              ? model
-              : { ...model, manualZMoveOverride }
-          )
-        : model
-    )));
+  /** Sets the auto-lift mode without moving anything; the transform is the geometry. */
+  const setModelsAutoLift = useCallback((ids: readonly string[], autoLift: boolean) => {
+    const idSet = new Set(ids);
+    const currentModels = modelsRef.current;
+    const nextModels = currentModels.map((model) => {
+      if (!idSet.has(model.id)) return model;
+      if (model.autoLift === autoLift && (autoLift || model.liftRestoreMm === undefined)) return model;
+      return {
+        ...model,
+        autoLift,
+        ...(autoLift ? {} : { liftRestoreMm: undefined }),
+      };
+    });
+    if (nextModels.every((model, index) => model === currentModels[index])) return;
+    modelsRef.current = nextModels;
+    setModels(nextModels);
   }, []);
 
   const renameModel = useCallback((id: string, name: string) => {
-    setModels(prev => prev.map(m =>
-      m.id === id ? { ...m, name } : m
+    const currentModels = modelsRef.current;
+    const target = currentModels.find((model) => model.id === id);
+    if (!target || target.name === name) return;
+
+    const nextModels = currentModels.map((model) => (
+      model.id === id ? { ...model, name } : model
     ));
-  }, []);
+    const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelIdRef.current, selectedModelIdsRef.current);
+    pushSceneSnapshotHistory(before, after, renameLabel(target.name));
+  }, [pushSceneSnapshotHistory]);
 
   const groupModels = useCallback((modelIds: string[], groupName?: string) => {
     const currentModels = modelsRef.current;
@@ -3342,22 +4928,33 @@ export function useSceneCollectionManager() {
         scale: source.transform.scale.clone(),
       },
       visible: source.visible,
-      color: source.color,
+      // A body that already carries its own material keeps it when it becomes a model.
+      color: source.bodyColors?.[i] ?? source.color,
+      ...(source.bodyMaterialProfileIds?.[i]
+        ? { materialProfileId: source.bodyMaterialProfileIds[i] }
+        : {}),
       polygonCount: bodyGeom.nativePreview?.originalTriangleCount
-        ?? bodyGeom.geometry.getAttribute('position').count / 3,
+        ?? countTriangles(bodyGeom.geometry),
     }));
 
+    const currentModels = modelsRef.current;
+    const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current);
+
     // Remove the merged source, add individual models
-    setModels((prev) => [
-      ...prev.filter((m) => m.id !== modelId),
+    const nextModels = [
+      ...currentModels.filter((m) => m.id !== modelId),
       ...newModels,
-    ]);
+    ];
+    setModels(nextModels);
 
     // Select all new bodies
     const newIds = newModels.map((m) => m.id);
     setActiveModelId(newIds[0]);
     setSelectedModelIds(newIds);
-  }, []);
+
+    const after = captureSceneSnapshot(nextModels, newIds[0], newIds);
+    pushSceneSnapshotHistory(before, after, splitModelLabel(source.name));
+  }, [pushSceneSnapshotHistory]);
 
   /** Splits a model that has a classified model/support triangle split
    *  (from the native repair engine) into two independent models:
@@ -3367,8 +4964,8 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'mesh',
-      label: 'Splitting Supports…',
-      detail: 'Separating model and support geometry…',
+      label: importLabelSplittingSupports(_),
+      detail: importDetailSeparatingGeometry(_),
       progress: null,
     });
     await waitForUiYield();
@@ -3377,7 +4974,10 @@ export function useSceneCollectionManager() {
     const source = modelsRef.current.find((m) => m.id === modelId);
     if (!source) return;
 
-    const split = splitClassifiedSupportGeometry(source, { interactive: true });
+    const split = splitClassifiedSupportGeometry(source, {
+      interactive: true,
+      computeEdgeGeometry: getSavedWorkspaceCameraSettings().higherContrastModelEdges,
+    });
     if (!split) return;
     const {
       modelGeometry: modelGeom,
@@ -3389,7 +4989,7 @@ export function useSceneCollectionManager() {
       totalTriangleCount: totalTris,
     } = split;
 
-    setImportProgress((p) => ({ ...p, detail: 'Finalizing…' }));
+    setImportProgress((p) => ({ ...p, detail: importDetailFinalizing(_) }));
     await waitForUiYield();
 
     // Tag the support geometry so the renderer uses orange hover/select tints
@@ -3437,6 +5037,8 @@ export function useSceneCollectionManager() {
         likely_support_geometry: true,
         residual_issues: [],
         fully_repaired: true,
+        rebuilt: false,
+        cancelled: false,
         total_ms: 0,
       },
     };
@@ -3470,8 +5072,8 @@ export function useSceneCollectionManager() {
       visible: source.visible,
       color: source.color,
       polygonCount: modelTriCount,
-      ignoreAutoLift: source.ignoreAutoLift,
-      manualZMoveOverride: source.manualZMoveOverride,
+      autoLift: source.autoLift,
+      liftRestoreMm: source.liftRestoreMm,
       isSupportGeometry: false,
     };
 
@@ -3491,8 +5093,8 @@ export function useSceneCollectionManager() {
       visible: source.visible,
       color: source.color,
       polygonCount: supportTriCount,
-      ignoreAutoLift: source.ignoreAutoLift,
-      manualZMoveOverride: source.manualZMoveOverride,
+      autoLift: source.autoLift,
+      liftRestoreMm: source.liftRestoreMm,
       isSupportGeometry: true,
     };
 
@@ -3512,14 +5114,14 @@ export function useSceneCollectionManager() {
       [modelModel.id, supportModel.id],
       { includeSupportState: true },
     );
-    pushSceneSnapshotHistory(before, after, `Split Supports from ${source.name}`);
+    pushSceneSnapshotHistory(before, after, splitSupportsLabel(source.name));
     } catch (e) {
       console.error(e);
-      emitSceneImportReport('Failed to split supports', 'error');
+      emitSceneImportReport(reportSplitSupportsFailed(_), 'error');
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
     }
-  }, [pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
+  }, [_, pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
 
   /** Re-combines split model and support geometries back into a single model,
    *  transforming the supports to align with any model movement/rotation. */
@@ -3527,8 +5129,8 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'mesh',
-      label: 'Merging Supports…',
-      detail: 'Recombining model and support geometry…',
+      label: importLabelMergingSupports(_),
+      detail: importDetailRecombiningGeometry(_),
       progress: null,
     });
     await waitForUiYield();
@@ -3661,6 +5263,8 @@ export function useSceneCollectionManager() {
           model_triangle_count: modelTriangleCount,
           residual_issues: [],
           fully_repaired: true,
+          rebuilt: false,
+          cancelled: false,
           total_ms: 0,
         },
       };
@@ -3693,8 +5297,8 @@ export function useSceneCollectionManager() {
         visible: modelModel.visible,
         color: modelModel.color,
         polygonCount: modelTriangleCount + supportTriangleCount,
-        ignoreAutoLift: modelModel.ignoreAutoLift,
-        manualZMoveOverride: modelModel.manualZMoveOverride,
+        autoLift: modelModel.autoLift,
+        liftRestoreMm: modelModel.liftRestoreMm,
         isSupportGeometry: undefined,
       };
 
@@ -3713,14 +5317,14 @@ export function useSceneCollectionManager() {
         [mergedModel.id],
         { includeSupportState: true },
       );
-      pushSceneSnapshotHistory(before, after, `Merge Supports for ${mergedModel.name}`);
+      pushSceneSnapshotHistory(before, after, mergeSupportsLabel(mergedModel.name));
     } catch (e) {
       console.error(e);
-      emitSceneImportReport('Failed to merge supports', 'error');
+      emitSceneImportReport(reportMergeSupportsFailed(_), 'error');
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
     }
-  }, [pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
+  }, [_, pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
 
   const scanModelForSupportsInPlace = useCallback(async (modelId: string): Promise<boolean> => {
     const model = modelsRef.current.find(m => m.id === modelId);
@@ -3729,8 +5333,8 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'mesh',
-      label: 'Scanning for Supports…',
-      detail: `Classifying ${model.name}`,
+      label: importLabelScanningSupports(_),
+      detail: importDetailClassifyingFile(model.name, _),
       progress: null,
     });
     await waitForUiYield();
@@ -3742,8 +5346,9 @@ export function useSceneCollectionManager() {
         assumeSupportGeometry: undefined,
         _nativeModelTriangleCount: model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? undefined,
       });
-      const posAttr = processed.geometry.getAttribute('position') as THREE.BufferAttribute | null;
-      const polygonCount = posAttr ? Math.floor(posAttr.count / 3) : model.polygonCount;
+      const polygonCount = processed.geometry.getAttribute('position')
+        ? countTriangles(processed.geometry)
+        : model.polygonCount;
       const repairReport = processed.meshDefects?.nativeRepairReport ?? null;
 
       setModels(prev => prev.map(m =>
@@ -3762,7 +5367,7 @@ export function useSceneCollectionManager() {
         setMeshRepairReports([reportEntry]);
       } else {
         setPendingMeshRepairReports([]);
-        emitSceneImportReport(`Scanned ${model.name}.`, 'success');
+        emitSceneImportReport(reportScanned(model.name, _), 'success');
       }
 
       return true;
@@ -3770,23 +5375,31 @@ export function useSceneCollectionManager() {
       console.error('[scanModelForSupportsInPlace] Scan failed:', err);
       setPendingMeshRepairReports([]);
       const message = err instanceof Error ? err.message : String(err);
-      emitSceneImportReport(`Scan failed: ${message}`, 'error', { durationMs: 6_000 });
+      emitSceneImportReport(reportScanFailed(message, _), 'error', { durationMs: 6_000 });
       return false;
     } finally {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
     }
-  }, [clearSceneImportReport, emitSceneImportReport, setImportProgress, waitForUiYield]);
+  }, [_, clearSceneImportReport, emitSceneImportReport, setImportProgress, waitForUiYield]);
 
   const renameGroup = useCallback((groupId: string, nextName: string) => {
     const trimmed = nextName.trim();
     if (!trimmed) return;
 
-    setModels((prev) => prev.map((model) => (
+    const currentModels = modelsRef.current;
+    const members = currentModels.filter((model) => model.groupId === groupId);
+    if (members.length === 0 || members.every((model) => model.groupName === trimmed)) return;
+
+    const nextModels = currentModels.map((model) => (
       model.groupId === groupId
         ? { ...model, groupName: trimmed }
         : model
-    )));
-  }, []);
+    ));
+    const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelIdRef.current, selectedModelIdsRef.current);
+    pushSceneSnapshotHistory(before, after, renameLabel(members[0].groupName ?? trimmed));
+  }, [pushSceneSnapshotHistory]);
 
   const selectGroup = useCallback((groupId: string, mode: 'single' | 'add' = 'single') => {
     const groupIds = models.filter((model) => model.groupId === groupId).map((model) => model.id);
@@ -3801,7 +5414,7 @@ export function useSceneCollectionManager() {
     });
   }, [models]);
 
-  const deleteModels = useCallback(async (idsInput: string[]) => {
+  const deleteModels = useCallback(async (idsInput: string[], options?: { pushHistory?: boolean }) => {
     const ids = new Set(idsInput);
     if (ids.size === 0) return;
 
@@ -3821,30 +5434,16 @@ export function useSceneCollectionManager() {
       });
 
     const supportStateBeforeDelete = getSnapshot();
-    const kickstandSnapshotBefore = getKickstandSnapshot();
-
-    const kickstandCountByModel = new Map<string, number>();
-    for (const kickstand of Object.values(kickstandSnapshotBefore.kickstands)) {
-      const current = kickstandCountByModel.get(kickstand.modelId) ?? 0;
-      kickstandCountByModel.set(kickstand.modelId, current + 1);
-    }
-
-    const supportsByModel = new Map<string, ReturnType<typeof getSupportsForModel>>();
+    const supportsByModel = new Map<string, ModelSupportIds>();
     const supportPrimitiveCountByModel = new Map<string, number>();
 
     for (const model of existing) {
       const supportIds = getSupportsForModel(supportStateBeforeDelete, model.id);
       supportsByModel.set(model.id, supportIds);
 
-      const kickstandCount = kickstandCountByModel.get(model.id) ?? 0;
-      const supportPrimitiveCount = supportIds.roots.length
-        + supportIds.trunks.length
-        + supportIds.branches.length
-        + supportIds.braces.length
-        + supportIds.leaves.length
-        + supportIds.twigs.length
-        + supportIds.sticks.length
-        + kickstandCount;
+      // Every modelId-bearing collection `getSupportsForModel` fills.
+      const supportPrimitiveCount = MODEL_ID_COLLECTION_KEYS
+        .reduce((total, key) => total + supportIds[key].length, 0);
 
       supportPrimitiveCountByModel.set(model.id, supportPrimitiveCount);
     }
@@ -3862,17 +5461,7 @@ export function useSceneCollectionManager() {
         supportsByModel.set(modelId, supportIds);
       }
 
-      const hasMainSupports = supportIds.roots.length > 0
-        || supportIds.trunks.length > 0
-        || supportIds.branches.length > 0
-        || supportIds.braces.length > 0
-        || supportIds.leaves.length > 0
-        || supportIds.twigs.length > 0
-        || supportIds.sticks.length > 0;
-
-      if (hasMainSupports) return true;
-
-      return (kickstandCountByModel.get(modelId) ?? 0) > 0;
+      return MODEL_ID_COLLECTION_KEYS.some((key) => supportIds[key].length > 0);
     };
 
     const includeSupportHistory = existing.some((model) => modelHasSupports(model.id));
@@ -3880,7 +5469,19 @@ export function useSceneCollectionManager() {
     const currentActiveModelId = activeModelIdRef.current;
     const currentSelectedModelIds = selectedModelIdsRef.current;
 
-    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: includeSupportHistory });
+    // A caller removing a whole plate pushes one entry for the plate and its
+    // models together, so it asks this to stay off the stack.
+    const shouldPushHistory = options?.pushHistory !== false;
+    // The beds are named in both snapshots: the delete that empties the scene takes the
+    // spare beds with it, and undo has to bring them back with the models.
+    const currentPlates = platesRef.current;
+    const before = shouldPushHistory
+      ? captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
+          plates: currentPlates,
+          activePlateId: activePlateIdRef.current,
+          includeSupportState: includeSupportHistory,
+        })
+      : null;
 
     existing.forEach((model) => {
       tryRevokeObjectUrl(model.fileUrl);
@@ -3908,6 +5509,21 @@ export function useSceneCollectionManager() {
     const nextActiveModelId = currentActiveModelId && ids.has(currentActiveModelId) ? null : currentActiveModelId;
     const nextSelectedModelIds = currentSelectedModelIds.filter((sid) => !ids.has(sid));
 
+    /**
+     * A scene with nothing left standing is one empty bed, not a scatter of empty ones:
+     * beds exist to hold models, so the delete that empties the scene takes the spare
+     * beds with it. Plate 1 stays — the scene always has a bed under it — and the view
+     * follows, the way it does when the bed being worked on goes.
+     */
+    const emptyingTheScene = nextModels.length === 0 && currentPlates.length > 1;
+    const nextPlates = emptyingTheScene ? currentPlates.slice(0, 1) : currentPlates;
+    const nextActivePlateId = emptyingTheScene ? currentPlates[0].id : activePlateIdRef.current;
+    if (emptyingTheScene) {
+      setPlates(nextPlates);
+      if (activePlateIdRef.current !== nextActivePlateId) setPlateViewRunId((id) => id + 1);
+      setActivePlateId(nextActivePlateId);
+    }
+
     setModels(nextModels);
     setActiveModelId(nextActiveModelId);
     setSelectedModelIds(nextSelectedModelIds);
@@ -3916,38 +5532,34 @@ export function useSceneCollectionManager() {
     ids.forEach((id) => deleteStoredMeshModifiers(id));
 
     // Clean up associated supports before capturing the "after" snapshot so undo/redo remains atomic.
-    const supportState = getSnapshot();
     let totalRemovedSupports = 0;
     if (includeSupportHistory) {
-      ids.forEach((id) => {
-        totalRemovedSupports += deleteSupportsForModel(supportState, id);
-      });
-
-      // Defensive pass: guarantee no orphaned supports survive model deletion.
-      for (const modelId of ids) {
-        const remaining = getSupportsForModel(getSnapshot(), modelId);
-        const hasRemainingMainSupports = remaining.roots.length > 0
-          || remaining.trunks.length > 0
-          || remaining.branches.length > 0
-          || remaining.braces.length > 0
-          || remaining.leaves.length > 0
-          || remaining.twigs.length > 0
-          || remaining.sticks.length > 0;
-
-        const hasRemainingKickstands = Object.values(getKickstandSnapshot().kickstands)
-          .some((kickstand) => kickstand.modelId === modelId);
-
-        if (hasRemainingMainSupports || hasRemainingKickstands) {
-          totalRemovedSupports += deleteSupportsForModel(getSnapshot(), modelId);
-        }
-      }
+      // One cascade and one store write for the whole selection: seeding every
+      // model at once reaches a dependent of another model hanging off any of
+      // them, and a per-model call rebuilt the support store once per model.
+      totalRemovedSupports += removeSupportEntitiesForModels(ids);
     }
+    // Prepare's merged support geometry is per model and outlives the view that
+    // built it; the delete has to hand it back or a cleared plate keeps every
+    // deleted model's merged supports in RAM.
+    releasePrepareMergedSupportsFor(ids);
 
-    const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds, { includeSupportState: includeSupportHistory });
-    const deletedLabel = existing.length === 1
-      ? `Delete Model ${existing[0].name}`
-      : `Delete ${existing.length} Models`;
-    pushSceneSnapshotHistory(before, after, deletedLabel);
+    if (shouldPushHistory && before) {
+      const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds, {
+        plates: nextPlates,
+        activePlateId: nextActivePlateId,
+        includeSupportState: includeSupportHistory,
+      });
+      const deletedLabel = existing.length === 1
+        ? deleteModelLabel(existing[0].name)
+        : deleteModelsLabel(existing.length);
+      const deleteHistoryKey = pushSceneSnapshotHistory(before, after, deletedLabel);
+      // A delete must actually give the mesh memory back. The undo pair is the
+      // only thing still holding the deleted geometry, so move that geometry to
+      // the scratch store now instead of letting it sit in RAM until the history
+      // budget evicts the pair. Undo re-reads it; shared meshes are skipped.
+      void spillSceneSnapshotKey(deleteHistoryKey, nextModels);
+    }
 
     console.log(`[SceneCollection] Deleted ${ids.size} model(s) and ${totalRemovedSupports} associated supports.`);
   }, [pushSceneSnapshotHistory, tryRevokeObjectUrl, waitForUiYield]);
@@ -3956,7 +5568,7 @@ export function useSceneCollectionManager() {
     void deleteModels([id]);
   }, [deleteModels]);
 
-  const deleteSupportsForModels = useCallback((idsInput: string[], description?: string) => {
+  const deleteSupportsForModels = useCallback((idsInput: string[], description?: MessageDescriptor) => {
     const ids = new Set(idsInput);
     if (ids.size === 0) return 0;
 
@@ -3967,22 +5579,9 @@ export function useSceneCollectionManager() {
     if (existingModelIds.length === 0) return 0;
 
     const supportStateBefore = getSnapshot();
-    const kickstandStateBefore = getKickstandSnapshot();
-
     const hasSupportsForModel = (modelId: string) => {
       const supportIds = getSupportsForModel(supportStateBefore, modelId);
-      const hasMainSupports = supportIds.roots.length > 0
-        || supportIds.trunks.length > 0
-        || supportIds.branches.length > 0
-        || supportIds.braces.length > 0
-        || supportIds.leaves.length > 0
-        || supportIds.twigs.length > 0
-        || supportIds.sticks.length > 0;
-
-      if (hasMainSupports) return true;
-
-      return Object.values(kickstandStateBefore.kickstands)
-        .some((kickstand) => kickstand.modelId === modelId);
+      return MODEL_ID_COLLECTION_KEYS.some((key) => supportIds[key].length > 0);
     };
 
     const targetIds = existingModelIds.filter((modelId) => hasSupportsForModel(modelId));
@@ -3994,14 +5593,12 @@ export function useSceneCollectionManager() {
 
     let totalRemovedSupports = 0;
     const supportState = getSnapshot();
-    targetIds.forEach((modelId) => {
-      totalRemovedSupports += deleteSupportsForModel(supportState, modelId);
-    });
+    totalRemovedSupports += removeSupportEntitiesForModels(targetIds);
 
     const after = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: true });
     const defaultDescription = targetIds.length === 1
-      ? `Delete Supports for Model ${currentModels.find((m) => m.id === targetIds[0])?.name ?? targetIds[0]}`
-      : `Delete Supports for ${targetIds.length} Models`;
+      ? deleteSupportsForModelLabel(currentModels.find((m) => m.id === targetIds[0])?.name ?? targetIds[0])
+      : deleteSupportsForModelsLabel(targetIds.length);
 
     pushSceneSnapshotHistory(before, after, description ?? defaultDescription);
     return totalRemovedSupports;
@@ -4030,6 +5627,10 @@ export function useSceneCollectionManager() {
         supportClipboard,
         isSupportGeometry: source.isSupportGeometry,
         linkGroupId: source.linkGroupId,
+        materialProfileId: source.materialProfileId,
+        materialBaseColor: source.materialBaseColor,
+        bodyMaterialProfileIds: source.bodyMaterialProfileIds,
+        bodyColors: source.bodyColors,
       },
     ]);
 
@@ -4061,6 +5662,10 @@ export function useSceneCollectionManager() {
         supportClipboard,
         isSupportGeometry: source.isSupportGeometry,
         linkGroupId: source.linkGroupId,
+        materialProfileId: source.materialProfileId,
+        materialBaseColor: source.materialBaseColor,
+        bodyMaterialProfileIds: source.bodyMaterialProfileIds,
+        bodyColors: source.bodyColors,
       };
     }));
 
@@ -4082,8 +5687,6 @@ export function useSceneCollectionManager() {
     const beforeActiveModelId = activeModelId;
     const beforeSelectedModelIds = selectedModelIds;
     const supportStateBefore = getSnapshot();
-    const kickstandStateBefore = getKickstandSnapshot();
-
     const first = modelClipboard[0];
 
     const pastedGeometry = cloneGeometryWithBounds(first.geometry, { shared: true });
@@ -4091,7 +5694,7 @@ export function useSceneCollectionManager() {
     const id = uuidv4();
     const pastedModel: LoadedModel = {
       id,
-      name: `${first.name} Copy`,
+      name: pastedModelName(first.name, _),
       fileUrl: '',
       fileSizeBytes: first.fileSizeBytes,
       geometry: pastedGeometry,
@@ -4106,6 +5709,10 @@ export function useSceneCollectionManager() {
       meshModifiers: undefined,
       isSupportGeometry: first.isSupportGeometry,
       linkGroupId: first.linkGroupId,
+      materialProfileId: first.materialProfileId,
+      materialBaseColor: first.materialBaseColor,
+      bodyMaterialProfileIds: first.bodyMaterialProfileIds,
+      bodyColors: first.bodyColors,
     };
 
     const nextModels = [...models, pastedModel];
@@ -4115,7 +5722,7 @@ export function useSceneCollectionManager() {
 
     schedulePostPaint(() => {
       beginSupportStateBatch();
-      beginKickstandStoreBatch();
+      beginSupportStateBatch();
       try {
         pasteModelSupportsFromClipboard(
           first.supportClipboard,
@@ -4125,21 +5732,20 @@ export function useSceneCollectionManager() {
           { recordHistory: false },
         );
       } finally {
-        endKickstandStoreBatch();
+        endSupportStateBatch();
         endSupportStateBatch();
       }
 
       const before = captureSceneSnapshot(beforeModels, beforeActiveModelId, beforeSelectedModelIds, {
         includeSupportState: true,
         supportStateOverride: supportStateBefore,
-        kickstandStateOverride: kickstandStateBefore,
       });
       const after = captureSceneSnapshot(nextModels, id, [id], { includeSupportState: true });
-      pushSceneSnapshotHistory(before, after, `Paste Model ${first.name}`);
+      pushSceneSnapshotHistory(before, after, pasteModelLabel(first.name));
     });
 
     return id;
-  }, [activeModelId, cloneGeometryWithBounds, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds]);
+  }, [_, activeModelId, cloneGeometryWithBounds, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 5) => {
     if (modelClipboard.length === 0) return [] as string[];
@@ -4148,40 +5754,19 @@ export function useSceneCollectionManager() {
     const beforeActiveModelId = activeModelId;
     const beforeSelectedModelIds = selectedModelIds;
     const supportStateBefore = getSnapshot();
-    const kickstandStateBefore = getKickstandSnapshot();
-
+    const platesBefore = platesRef.current;
     const entries = modelClipboard;
 
     const centerX = defaultImportCenterXY.x;
     const centerY = defaultImportCenterXY.y;
-    const minX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
-    const maxX = minX + view3dSettings.widthMm;
-    const minY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
-    const maxY = minY + view3dSettings.depthMm;
+    // The search runs in world coordinates over the ACTIVE plate's volume, so a
+    // model imported onto the second plate lands on the second plate.
+    const { minX, maxX, minY, maxY } = activePlateRect;
 
     type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
     const intersectsRect = (a: Rect2D, b: Rect2D) => {
       return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
-    };
-
-    const isRectInsidePlate = (rect: Rect2D) => (
-      rect.minX >= minX
-      && rect.maxX <= maxX
-      && rect.minY >= minY
-      && rect.maxY <= maxY
-    );
-
-    const footprintFor = (size: THREE.Vector3, transform: ModelTransform) => {
-      const baseW = Math.max(2, Math.abs(size.x * transform.scale.x));
-      const baseD = Math.max(2, Math.abs(size.y * transform.scale.y));
-      const rz = transform.rotation.z;
-      const c = Math.abs(Math.cos(rz));
-      const s = Math.abs(Math.sin(rz));
-      return {
-        width: (baseW * c) + (baseD * s),
-        depth: (baseW * s) + (baseD * c),
-      };
     };
 
     const supportRectForPayload = (payload: SupportClipboardPayload | null | undefined): Rect2D | null => {
@@ -4251,40 +5836,25 @@ export function useSceneCollectionManager() {
         });
       };
 
-      payload.trunks.forEach((trunk) => {
-        expandSegments(trunk.segments as any[]);
-        if (trunk.contactCone) {
-          expand(trunk.contactCone.pos, Math.max(0.001, trunk.contactCone.profile.contactDiameterMm / 2));
+      // Every declared type widens the rectangle. A brace contributes nothing
+      // of its own: the knots it spans are expanded above. The radius field
+      // differs by contact kind -- a cone's is in its profile, a disk's is on
+      // the contact.
+      for (const descriptor of SUPPORT_TYPES) {
+        const entities = payload[descriptor.location.key] as unknown as Array<Record<string, any>> | undefined;
+        if (!entities) continue;
+        for (const entity of entities) {
+          if (descriptor.hasSegments) expandSegments(entity.segments as any[]);
+          for (const { kind, field } of contactEndpointsFor(descriptor.id)) {
+            const contact = entity[field];
+            if (!contact?.pos) continue;
+            const diameter = kind === 'cone'
+              ? contact.profile?.contactDiameterMm
+              : contact.contactDiameterMm;
+            expand(contact.pos, Math.max(0.001, (diameter ?? 0) / 2));
+          }
         }
-      });
-
-      payload.branches.forEach((branch) => {
-        expandSegments(branch.segments as any[]);
-        if (branch.contactCone) {
-          expand(branch.contactCone.pos, Math.max(0.001, branch.contactCone.profile.contactDiameterMm / 2));
-        }
-      });
-
-      payload.leaves.forEach((leaf) => {
-        if (!leaf.contactCone) return;
-        expand(leaf.contactCone.pos, Math.max(0.001, leaf.contactCone.profile.contactDiameterMm / 2));
-      });
-
-      payload.twigs.forEach((twig) => {
-        expandSegments(twig.segments as any[]);
-        expand(twig.contactDiskA.pos, Math.max(0.001, twig.contactDiskA.contactDiameterMm / 2));
-        expand(twig.contactDiskB.pos, Math.max(0.001, twig.contactDiskB.contactDiameterMm / 2));
-      });
-
-      payload.sticks.forEach((stick) => {
-        expandSegments(stick.segments as any[]);
-        expand(stick.contactConeA.pos, Math.max(0.001, stick.contactConeA.profile.contactDiameterMm / 2));
-        expand(stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
-      });
-
-      payload.kickstands.forEach((kickstand) => {
-        expandSegments(kickstand.segments as any[]);
-      });
+      }
 
       return hasAny ? { minX, maxX, minY, maxY } : null;
     };
@@ -4300,11 +5870,13 @@ export function useSceneCollectionManager() {
 
     const buildPlacementOffsets = (
       center: { x: number; y: number },
-      meshSize: THREE.Vector3,
+      geometry: Pick<GeometryWithBounds, 'geometry' | 'center'>,
       transform: ModelTransform,
       supportPayload: SupportClipboardPayload | null | undefined,
     ): PlacementOffsets => {
-      const meshFootprint = footprintFor(meshSize, transform);
+      // The footprint every other placement uses: projected through the whole rotation,
+      // so a model tipped on X or Y is not packed by its unrotated size.
+      const meshFootprint = footprintForTransform(geometry, transform);
       const meshRect: Rect2D = {
         minX: center.x - (meshFootprint.width * 0.5),
         maxX: center.x + (meshFootprint.width * 0.5),
@@ -4334,22 +5906,20 @@ export function useSceneCollectionManager() {
 
     const entryPlacementOffsets = entries.map((entry) => buildPlacementOffsets(
       { x: entry.transform.position.x, y: entry.transform.position.y },
-      entry.geometry.size,
+      entry.geometry,
       entry.transform,
       entry.supportClipboard,
     ));
 
     const maxWidth = Math.max(...entryPlacementOffsets.map((entry) => entry.width));
     const maxDepth = Math.max(...entryPlacementOffsets.map((entry) => entry.depth));
-    const stepX = Math.max(4, maxWidth + Math.max(0, spacingMm));
-    const stepY = Math.max(4, maxDepth + Math.max(0, spacingMm));
 
     const blockedRects: Rect2D[] = models
       .filter((model) => model.visible)
       .map((model) => {
         const meshPlacement = buildPlacementOffsets(
           { x: model.transform.position.x, y: model.transform.position.y },
-          model.geometry.size,
+          model.geometry,
           model.transform,
           null,
         );
@@ -4374,105 +5944,240 @@ export function useSceneCollectionManager() {
         };
       });
 
-    const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
-    const halfSpanX = Math.max(Math.abs(centerX - minX), Math.abs(maxX - centerX));
-    const halfSpanY = Math.max(Math.abs(centerY - minY), Math.abs(maxY - centerY));
-    const inPlateRingX = Math.ceil(halfSpanX / stepX) + 2;
-    const inPlateRingY = Math.ceil(halfSpanY / stepY) + 2;
-    const maxInPlateRing = Math.max(inPlateRingX, inPlateRingY);
-    const outsideRings = 12;
-    const maxRing = maxInPlateRing + outsideRings;
+    /**
+     * Places as many of `pending` as the given bed can take, in that bed's own
+     * coordinates, and hands back the ones it could not.
+     *
+     * Only positions that keep a model wholly on the bed count. A copy hanging over the
+     * edge is one the out-of-volume check is right to flag, and a copy out in the void
+     * beside the scene is worse than the bed it should have been given, so anything left
+     * over goes to the next bed — which the caller adds.
+     */
+    /**
+     * Places as many of `pending` as the given bed can take, in that bed's own frame, and
+     * hands back the ones it could not.
+     *
+     * Only positions that keep a copy wholly on the bed count. A copy hanging over the
+     * edge is one the out-of-volume check is right to flag, and a copy out in the void
+     * beside the scene is worse than the bed it should have been given, so anything left
+     * over goes to the next bed — which the caller adds.
+     */
+    const placeIntoBed = (
+      bedRect: Rect2D,
+      bedCenter: { x: number; y: number },
+      blockers: readonly Rect2D[],
+      pending: Array<{ entryIndex: number; placement: PlacementOffsets }>,
+    ): {
+      placed: Array<{ entryIndex: number; x: number; y: number }>;
+      unplaced: Array<{ entryIndex: number; placement: PlacementOffsets }>;
+    } => {
+      if (pending.length === 0) return { placed: [], unplaced: [] };
 
-    for (let ring = 0; ring <= maxRing; ring += 1) {
-      if (ring === 0) {
-        candidateCenters.push({ x: centerX, y: centerY, distSq: 0 });
-        continue;
-      }
+      const isInsideBed = (rect: Rect2D) => (
+        rect.minX >= bedRect.minX
+        && rect.maxX <= bedRect.maxX
+        && rect.minY >= bedRect.minY
+        && rect.maxY <= bedRect.maxY
+      );
 
-      for (let gx = -ring; gx <= ring; gx += 1) {
-        const gyTop = ring;
-        const gyBottom = -ring;
-        const x = centerX + gx * stepX;
+      const stepX = Math.max(4, maxWidth + Math.max(0, spacingMm));
+      const stepY = Math.max(4, maxDepth + Math.max(0, spacingMm));
 
-        const yTop = centerY + gyTop * stepY;
-        const dxTop = x - centerX;
-        const dyTop = yTop - centerY;
-        candidateCenters.push({ x, y: yTop, distSq: (dxTop * dxTop) + (dyTop * dyTop) });
+      // Candidate centres are the grid inside this bed, nearest its middle first.
+      const halfSpanX = Math.max(Math.abs(bedCenter.x - bedRect.minX), Math.abs(bedRect.maxX - bedCenter.x));
+      const halfSpanY = Math.max(Math.abs(bedCenter.y - bedRect.minY), Math.abs(bedRect.maxY - bedCenter.y));
+      const maxRing = Math.max(Math.ceil(halfSpanX / stepX) + 2, Math.ceil(halfSpanY / stepY) + 2);
 
-        if (gyBottom !== gyTop) {
-          const yBottom = centerY + gyBottom * stepY;
-          const dxBottom = x - centerX;
-          const dyBottom = yBottom - centerY;
-          candidateCenters.push({ x, y: yBottom, distSq: (dxBottom * dxBottom) + (dyBottom * dyBottom) });
+      const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
+      for (let ring = 0; ring <= maxRing; ring += 1) {
+        if (ring === 0) {
+          candidateCenters.push({ x: bedCenter.x, y: bedCenter.y, distSq: 0 });
+          continue;
+        }
+
+        for (let gx = -ring; gx <= ring; gx += 1) {
+          const x = bedCenter.x + gx * stepX;
+          for (const gy of [ring, -ring]) {
+            const y = bedCenter.y + gy * stepY;
+            candidateCenters.push({ x, y, distSq: ((x - bedCenter.x) ** 2) + ((y - bedCenter.y) ** 2) });
+          }
+        }
+
+        for (let gy = -ring + 1; gy <= ring - 1; gy += 1) {
+          const y = bedCenter.y + gy * stepY;
+          for (const gx of [ring, -ring]) {
+            const x = bedCenter.x + gx * stepX;
+            candidateCenters.push({ x, y, distSq: ((x - bedCenter.x) ** 2) + ((y - bedCenter.y) ** 2) });
+          }
         }
       }
 
-      for (let gy = -ring + 1; gy <= ring - 1; gy += 1) {
-        const gxRight = ring;
-        const gxLeft = -ring;
-        const y = centerY + gy * stepY;
+      candidateCenters.sort((a, b) => a.distSq - b.distSq);
 
-        const xRight = centerX + gxRight * stepX;
-        const dxRight = xRight - centerX;
-        const dyRight = y - centerY;
-        candidateCenters.push({ x: xRight, y, distSq: (dxRight * dxRight) + (dyRight * dyRight) });
+      const placed: Array<{ entryIndex: number; x: number; y: number }> = [];
+      const unplaced: Array<{ entryIndex: number; placement: PlacementOffsets }> = [];
+      const taken: Rect2D[] = [];
 
-        if (gxLeft !== gxRight) {
-          const xLeft = centerX + gxLeft * stepX;
-          const dxLeft = xLeft - centerX;
-          const dyLeft = y - centerY;
-          candidateCenters.push({ x: xLeft, y, distSq: (dxLeft * dxLeft) + (dyLeft * dyLeft) });
+      for (const { entryIndex, placement } of pending) {
+        const rectAt = (x: number, y: number): Rect2D => ({
+          minX: x + placement.minXOffset,
+          maxX: x + placement.maxXOffset,
+          minY: y + placement.minYOffset,
+          maxY: y + placement.maxYOffset,
+        });
+
+        const spot = candidateCenters.find((candidate) => {
+          const rect = rectAt(candidate.x, candidate.y);
+          return isInsideBed(rect)
+            && !blockers.some((blocked) => intersectsRect(rect, blocked))
+            && !taken.some((blocked) => intersectsRect(rect, blocked));
+        });
+
+        if (!spot) {
+          unplaced.push({ entryIndex, placement });
+          continue;
         }
+
+        taken.push(rectAt(spot.x, spot.y));
+        placed.push({ entryIndex, x: spot.x, y: spot.y });
+      }
+
+      return { placed, unplaced };
+    };
+
+    // The plate being worked on is filled first, in world coordinates: the search runs
+    // against its own volume, keeping clear of everything standing on it.
+    const activeOffset = plateOffsetForRef.current(activePlateIdRef.current);
+    /**
+     * Where each copy ended up: in the millimetres of the bed it goes to. A bed is picked
+     * after the plan, not during it, because the beds are all the same shape and one this
+     * paste adds is empty — so what fits on one is known before it exists.
+     */
+    const placedByEntry = new Map<number, { bedId: string | null; slot: number; x: number; y: number }>();
+
+    let pendingPlacements = entries.map((entry, entryIndex) => ({
+      entryIndex,
+      placement: entryPlacementOffsets[entryIndex],
+    }));
+
+    const activePlacements = placeIntoBed(
+      { minX, maxX, minY, maxY },
+      { x: centerX, y: centerY },
+      blockedRects,
+      pendingPlacements,
+    );
+    activePlacements.placed.forEach((entry) => {
+      // The active plate's own millimetres, so a bed that moves under the copies when more
+      // are added takes them with it.
+      placedByEntry.set(entry.entryIndex, {
+        bedId: activePlateIdRef.current,
+        slot: -1,
+        x: entry.x - activeOffset.dxMm,
+        y: entry.y - activeOffset.dyMm,
+      });
+    });
+    pendingPlacements = activePlacements.unplaced;
+
+    const localPlateRect: Rect2D = plateLocalRect(view3dSettings);
+    const { minX: localMinX, minY: localMinY } = localPlateRect;
+
+    // The beds the scene already has are filled next, in plate order: the run that spilled
+    // onto plate 2 leaves room on it, and a paste that went straight to a new bed would add
+    // plate 3 alongside a bed that is still half empty. What each one holds is known — they
+    // are the same shape as this plate, and what stands on them is in `blockedRects` — so a
+    // copy that fits needs no new bed at all.
+    for (const plate of platesRef.current) {
+      if (pendingPlacements.length === 0) break;
+      if (plate.id === activePlateIdRef.current) continue;
+
+      const offset = plateOffsetForRef.current(plate.id);
+      const bedRect: Rect2D = {
+        minX: localPlateRect.minX + offset.dxMm,
+        maxX: localPlateRect.maxX + offset.dxMm,
+        minY: localPlateRect.minY + offset.dyMm,
+        maxY: localPlateRect.maxY + offset.dyMm,
+      };
+      const bedPlacements = placeIntoBed(
+        bedRect,
+        { x: (bedRect.minX + bedRect.maxX) * 0.5, y: (bedRect.minY + bedRect.maxY) * 0.5 },
+        blockedRects,
+        pendingPlacements,
+      );
+      bedPlacements.placed.forEach((entry) => {
+        // That bed's own millimetres, so it rides with the bed the way the active plate's
+        // copies do.
+        placedByEntry.set(entry.entryIndex, {
+          bedId: plate.id,
+          slot: -1,
+          x: entry.x - offset.dxMm,
+          y: entry.y - offset.dyMm,
+        });
+      });
+      pendingPlacements = bedPlacements.unplaced;
+    }
+
+    // Whatever the beds could not take gets a bed of its own rather than hanging off an
+    // edge or landing in the void beside the scene. The plan runs on a bed's own
+    // frame — every bed is the same shape, and a bed added here is empty — so the beds are
+    // added once, together, with the count the plan needs.
+    let plannedBeds = 0;
+    while (pendingPlacements.length > 0 && plannedBeds < MAX_PASTE_PLATES) {
+      const bedPlacements = placeIntoBed(
+        localPlateRect,
+        { x: (localPlateRect.minX + localPlateRect.maxX) * 0.5, y: (localPlateRect.minY + localPlateRect.maxY) * 0.5 },
+        [],
+        pendingPlacements,
+      );
+      if (bedPlacements.placed.length === 0) break;
+
+      bedPlacements.placed.forEach((entry) => {
+        placedByEntry.set(entry.entryIndex, { bedId: null, slot: plannedBeds, x: entry.x, y: entry.y });
+      });
+      pendingPlacements = bedPlacements.unplaced;
+      plannedBeds += 1;
+    }
+
+    const reserved = addPlatesRef.current(plannedBeds);
+
+    // A model larger than a bed fits on none of them: it is set down clear of every bed,
+    // the way an arrange sets down what it cannot pack, instead of on top of what does fit.
+    if (pendingPlacements.length > 0) {
+      const localCenterY = localMinY + view3dSettings.depthMm * 0.5;
+      let columnRightX = localMinX - 8;
+
+      for (const { entryIndex, placement } of pendingPlacements) {
+        placedByEntry.set(entryIndex, {
+          bedId: activePlateIdRef.current,
+          slot: -1,
+          x: columnRightX - placement.width * 0.5,
+          y: localCenterY,
+        });
+        columnRightX -= placement.width + Math.max(0, spacingMm);
       }
     }
 
-    candidateCenters.sort((a, b) => a.distSq - b.distSq);
+    // Every copy was planned in its bed's own frame, so its world position is that frame
+    // plus where the bed finally sits — which the additions above have settled.
+    const assignedCenters = entries.map((entry, index) => {
+      const placement = placedByEntry.get(index);
+      if (!placement) return null;
 
-    const assignedCenters: Array<{ x: number; y: number }> = entries.map((entry, entryIndex) => {
-      const placement = entryPlacementOffsets[entryIndex];
+      const bedId = placement.bedId ?? reserved.added[placement.slot]?.id;
+      if (!bedId) return null;
 
-      const makeRectAt = (x: number, y: number): Rect2D => ({
-        minX: x + placement.minXOffset,
-        maxX: x + placement.maxXOffset,
-        minY: y + placement.minYOffset,
-        maxY: y + placement.maxYOffset,
-      });
+      const offset = reserved.offsets.get(bedId) ?? { dxMm: 0, dyMm: 0 };
+      return { x: placement.x + offset.dxMm, y: placement.y + offset.dyMm };
+    });
 
-      // Pass 1: exhaust all valid in-plate positions first.
-      for (const candidate of candidateCenters) {
-        const rect = makeRectAt(candidate.x, candidate.y);
-        if (!isRectInsidePlate(rect)) continue;
-
-        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
-          continue;
-        }
-
-        blockedRects.push(rect);
-        return { x: candidate.x, y: candidate.y };
-      }
-
-      // Pass 2: if in-plate is full, allow outside placements.
-      for (const candidate of candidateCenters) {
-        const rect = makeRectAt(candidate.x, candidate.y);
-
-        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
-          continue;
-        }
-
-        blockedRects.push(rect);
-        return { x: candidate.x, y: candidate.y };
-      }
-
-      // Fallback: if exhaustive candidates are blocked, place further to the right of center.
-      const fallbackX = centerX + (maxRing + 2 + blockedRects.length) * stepX;
-      const fallbackY = centerY;
-      blockedRects.push({
-        minX: fallbackX + placement.minXOffset,
-        maxX: fallbackX + placement.maxXOffset,
-        minY: fallbackY + placement.minYOffset,
-        maxY: fallbackY + placement.maxYOffset,
-      });
-      return { x: fallbackX, y: fallbackY };
+    /**
+     * The bed each copy landed on, so the copy carries it. Its position is what decides
+     * which plate it stands on, but a copy planned onto a bed is a copy that belongs to
+     * it, and the stored membership is what a printer switch shifts the models by.
+     */
+    const assignedPlateIds = entries.map((_, index) => {
+      const placement = placedByEntry.get(index);
+      if (!placement) return undefined;
+      return placement.bedId ?? reserved.added[placement.slot]?.id;
     });
 
     const createdIds: string[] = [];
@@ -4486,7 +6191,7 @@ export function useSceneCollectionManager() {
 
       return {
         id,
-        name: `${entry.name} Copy`,
+        name: pastedModelName(entry.name, _),
         fileUrl: '',
         fileSizeBytes: entry.fileSizeBytes,
         geometry,
@@ -4501,10 +6206,17 @@ export function useSceneCollectionManager() {
         meshModifiers: undefined,
         isSupportGeometry: entry.isSupportGeometry,
         linkGroupId: entry.linkGroupId,
+        materialProfileId: entry.materialProfileId,
+        materialBaseColor: entry.materialBaseColor,
+        bodyMaterialProfileIds: entry.bodyMaterialProfileIds,
+        bodyColors: entry.bodyColors,
+        ...(assignedPlateIds[index] ? { plateId: assignedPlateIds[index] } : {}),
       };
     });
 
-    const nextModels = [...models, ...pastedModels];
+    // The live list, not this render's: adding beds for the overflow shifts the models
+    // standing on the beds the cascade re-laid, and the paste must not undo that.
+    const nextModels = [...modelsRef.current, ...pastedModels];
     setModels(nextModels);
 
     if (createdIds.length > 0) {
@@ -4513,45 +6225,77 @@ export function useSceneCollectionManager() {
 
       schedulePostPaint(() => {
         beginSupportStateBatch();
-        beginKickstandStoreBatch();
+        beginSupportStateBatch();
         try {
-          pastedModels.forEach((pastedModel, index) => {
-            const sourceEntry = entries[index];
-            if (!sourceEntry) return;
-            pasteModelSupportsFromClipboard(
-              sourceEntry.supportClipboard,
-              pastedModel.id,
-              sourceEntry.transform,
-              pastedModel.transform,
-              { recordHistory: false },
-            );
-          });
+          pasteModelSupports(
+            pastedModels.flatMap((pastedModel, index) => {
+              const sourceEntry = entries[index];
+              if (!sourceEntry?.supportClipboard) return [];
+              return [{
+                payload: sourceEntry.supportClipboard,
+                targetModelId: pastedModel.id,
+                sourceTransform: sourceEntry.transform,
+                targetTransform: pastedModel.transform,
+              }];
+            }),
+            { recordHistory: false },
+          );
         } finally {
-          endKickstandStoreBatch();
+          endSupportStateBatch();
           endSupportStateBatch();
         }
 
+        // The support state is only part of this step when a copied model brought some
+        // with it: cloning it for a paste that carries none is the expensive half of
+        // pasting into a scene that has supports of its own.
+        const pasteCarriesSupports = entries.some((entry) => entry.supportClipboard != null);
+
         const before = captureSceneSnapshot(beforeModels, beforeActiveModelId, beforeSelectedModelIds, {
-          includeSupportState: true,
-          supportStateOverride: supportStateBefore,
-          kickstandStateOverride: kickstandStateBefore,
+          includeSupportState: pasteCarriesSupports,
+          ...(pasteCarriesSupports ? { supportStateOverride: supportStateBefore } : {}),
+          ...(plannedBeds > 0
+            ? { plates: platesBefore, activePlateId: activePlateIdRef.current }
+            : {}),
         });
-        const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds, { includeSupportState: true });
-        pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? 'Paste Model' : `Paste ${createdIds.length} Models`);
+        const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds, {
+          includeSupportState: pasteCarriesSupports,
+          ...(plannedBeds > 0
+            ? { plates: reserved.plates, activePlateId: activePlateIdRef.current }
+            : {}),
+        });
+        pushSceneSnapshotHistory(before, after, pasteModelsLabel(createdIds.length));
       });
     }
 
     return createdIds;
-  }, [activeModelId, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+  }, [_, activeModelId, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, footprintForTransform, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
-  const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[], sourceTransform?: ModelTransform | null) => {
+  const duplicateModelWithTransforms = useCallback((
+    sourceId: string,
+    transforms: ModelTransform[],
+    sourceTransform?: ModelTransform | null,
+    options?: {
+      /**
+       * Set when the same run added the beds these copies land on — a duplicate that
+       * overflowed the plate. The beds are then part of this step, so one undo takes the
+       * copies back and the beds with them rather than leaving empty beds behind.
+       */
+      platesBefore?: { plates: ScenePlate[]; activePlateId: string };
+      /** The beds as they stand after the addition. Defaults to the hook's own list. */
+      platesAfter?: { plates: ScenePlate[]; activePlateId: string };
+    },
+  ) => {
     if (transforms.length === 0) return [] as string[];
 
     const source = models.find((m) => m.id === sourceId);
     if (!source) return [] as string[];
     const supportClipboard = captureModelSupportsToClipboard(sourceId);
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
+    const platesBefore = options?.platesBefore;
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, {
+      includeSupportState: true,
+      ...(platesBefore ? { plates: platesBefore.plates, activePlateId: platesBefore.activePlateId } : {}),
+    });
 
     const resolvedGroupId = source.groupId ?? `group-${uuidv4()}`;
     const resolvedGroupName = source.groupName ?? source.name;
@@ -4565,7 +6309,7 @@ export function useSceneCollectionManager() {
 
       return {
         id,
-        name: `${source.name} Copy ${index + 1}`,
+        name: duplicatedModelName(source.name, index + 1, _),
         groupId: resolvedGroupId,
         groupName: resolvedGroupName,
         fileUrl: source.fileUrl,
@@ -4583,6 +6327,10 @@ export function useSceneCollectionManager() {
         meshModifiers: undefined,
         isSupportGeometry: source.isSupportGeometry,
         linkGroupId: source.linkGroupId,
+        materialProfileId: source.materialProfileId,
+        materialBaseColor: source.materialBaseColor,
+        bodyMaterialProfileIds: source.bodyMaterialProfileIds,
+        bodyColors: source.bodyColors,
       };
     });
 
@@ -4595,7 +6343,7 @@ export function useSceneCollectionManager() {
     // Apply source-support transform before model commit so support state can
     // never visually lag behind the moved source model during duplicate apply.
     beginSupportStateBatch();
-    beginKickstandStoreBatch();
+    beginSupportStateBatch();
     try {
       if (sourceTransform && !transformsEqual(source.transform, sourceTransform)) {
         transformSupportsForModel(sourceId, source.transform, sourceTransform);
@@ -4623,31 +6371,41 @@ export function useSceneCollectionManager() {
       const nextModels = [...withSourceGroup, ...newModels];
       setModels(nextModels);
 
-      newModels.forEach((model) => {
-        pasteModelSupportsFromClipboard(
-          supportClipboard,
-          model.id,
-          originalSourceTransform,
-          model.transform,
-          { recordHistory: false },
-        );
-      });
+      // One write for every copy: the merge and the store's own index rebuild
+      // are per-write, so pasting them one at a time cost N of each.
+      pasteModelSupports(
+        newModels.map((model) => ({
+          payload: supportClipboard as SupportClipboardPayload,
+          targetModelId: model.id,
+          sourceTransform: originalSourceTransform,
+          targetTransform: model.transform,
+        })),
+        { recordHistory: false },
+      );
 
       if (createdIds.length > 0) {
         setActiveModelId(createdIds[0]);
         setSelectedModelIds([sourceId, ...createdIds]);
 
         const nextSelected = [sourceId, ...createdIds];
-        const after = captureSceneSnapshot(nextModels, createdIds[0], nextSelected, { includeSupportState: true });
-        pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? `Duplicate Model ${source.name}` : `Duplicate ${createdIds.length} Models`);
+        const after = captureSceneSnapshot(nextModels, createdIds[0], nextSelected, {
+          includeSupportState: true,
+          ...(platesBefore
+            ? {
+                plates: options?.platesAfter?.plates ?? platesRef.current,
+                activePlateId: options?.platesAfter?.activePlateId ?? activePlateIdRef.current,
+              }
+            : {}),
+        });
+        pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? duplicateModelLabel(source.name) : duplicateModelsLabel(createdIds.length));
       }
     } finally {
-      endKickstandStoreBatch();
+      endSupportStateBatch();
       endSupportStateBatch();
     }
 
     return createdIds;
-  }, [activeModelId, cloneGeometryWithBounds, models, pushSceneSnapshotHistory, selectedModelIds]);
+  }, [_, activeModelId, cloneGeometryWithBounds, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   // LYS Import (1-step) — dispatched via plugin registry
 
@@ -4669,20 +6427,18 @@ export function useSceneCollectionManager() {
   const handleImportPluginSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
     if (!extension || extension === '.voxl') {
-      const unsupportedMessage = `Unsupported scene file: ${file.name}`;
-      console.warn(`[SceneCollection] ${unsupportedMessage}`);
+      console.warn(`[SceneCollection] Unsupported scene file: ${file.name}`);
       if (!options?.suppressReport) {
-        emitSceneImportReport(unsupportedMessage, 'error');
+        emitSceneImportReport(reportUnsupportedSceneFile(file.name, _), 'error');
       }
       return false;
     }
 
     const pluginImport = scenePluginImportHandlersByExtension.get(extension.toLowerCase());
     if (!pluginImport) {
-      const missingHandlerMessage = `No registered scene import handler for ${extension}.`;
-      console.warn(`[SceneCollection] ${missingHandlerMessage}`);
+      console.warn(`[SceneCollection] No registered scene import handler for ${extension}.`);
       if (!options?.suppressReport) {
-        emitSceneImportReport(missingHandlerMessage, 'error');
+        emitSceneImportReport(reportNoSceneImportHandler(extension, _), 'error');
       }
       return false;
     }
@@ -4695,7 +6451,7 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: `Importing ${pluginImport.fileType.displayName}…`,
+        label: importLabelFileType(pluginImport.fileType.displayName, _),
         detail: file.name,
         progress: null,
       });
@@ -4724,15 +6480,85 @@ export function useSceneCollectionManager() {
         throw new Error(`Plugin "${pluginImport.pluginId}" returned an unsupported scene payload.`);
       }
 
+      // A scene whose models were hollowed before export carries the cavity as a
+      // second mesh, so the model alone slices filled. Ask before baking it in:
+      // the answer decides the geometry every stage below works on, so it is
+      // settled here, before any of it runs.
+      const hollowedPayloads = normalizedPayloads.filter(
+        (p) => readPayloadCavity(p) !== null,
+      );
+      let bakeImportedHollowing = true;
+      if (hollowedPayloads.length > 0 && !options?.suppressPlacementPrompt) {
+        const choice = await requestSceneImportHollowingChoice({
+          source: extension.slice(1).toUpperCase(),
+          fileName: file.name,
+          modelCount: normalizedPayloads.length,
+          hollowedModelCount: hollowedPayloads.length,
+        });
+        bakeImportedHollowing = choice === 'bake';
+      }
+
       // Process all geometries sequentially
       const processedItems: Array<{
         normalized: PluginSceneImportPayload;
         processed: GeometryWithBounds;
       }> = [];
+      // Each baked model's shell as it was before the cavity joined it, read
+      // back below when the modifiers are stored.
+      const shellSnapshotByPayload = new Map<
+        PluginSceneImportPayload,
+        { sourcePositionsBase64: string; sourcePositionCount: number }
+      >();
       for (const normalized of normalizedPayloads) {
-        const processed = await processGeometry(normalized.geometry, {
+        // The plugin built this geometry in the renderer, so it has not been
+        // through the native loaders that refine coarse faces. Refine it here, and
+        // keep the normals the command returns: it ships one per face, so there is
+        // nothing left for `computeVertexNormals` to derive.
+        let geometry = normalized.geometry;
+        // Bake the cavity in first, so refine, classification and the BVH all
+        // describe the hollow solid rather than the shell that encloses it.
+        if (bakeImportedHollowing) {
+          const cavity = readPayloadCavity(normalized);
+          if (cavity) {
+            const shellTris = (geometry.getAttribute('position')?.count ?? 0) / 3;
+            // The shell before the cavity joins it is what Remove Hollowing
+            // restores, and this is the last point it exists on its own.
+            try {
+              shellSnapshotByPayload.set(normalized, snapshotGeometryPositions(geometry));
+            } catch (error) {
+              console.warn('[SceneCollection] Could not snapshot the pre-hollow shell', error);
+            }
+            geometry = mergeCavityIntoShell(geometry, cavity);
+            console.log(
+              `[SceneCollection] Baked cavity into model: ${shellTris.toLocaleString()} + `
+              + `${(cavity.length / 9).toLocaleString()} = `
+              + `${((geometry.getAttribute('position')?.count ?? 0) / 3).toLocaleString()} triangles`,
+            );
+          }
+        }
+        let skipComputeNormals = false;
+        // The mesh loaders already gate refinement on size. Plugin geometry
+        // takes this path directly, so apply the same ceiling here instead of
+        // sending a multi-million-triangle soup over IPC for a dense mesh.
+        if (shouldRefineCoarseFaces(geometry)) {
+          try {
+            const refined = await refineCoarseFaces(geometry);
+            if (refined) {
+              geometry = refined;
+              skipComputeNormals = true;
+            }
+          } catch (error) {
+            console.warn('[refine] plugin geometry left unrefined', error);
+          }
+        }
+        const processed = await processGeometry(geometry, {
           center: false,
+          ...(skipComputeNormals ? { _skipComputeNormals: true } : {}),
           nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
+          skipClassification: skipsNativePassForModelOnly(
+            normalized.skipClassification === true,
+            autoRepairScenes,
+          ),
           onNativeProcessingStage: (stage) => {
             if (options?.suppressProgress) return;
 
@@ -4740,10 +6566,10 @@ export function useSceneCollectionManager() {
               setImportProgress({
                 active: true,
                 type: 'scene',
-                label: `Importing ${pluginImport.fileType.displayName}…`,
+                label: importLabelFileType(pluginImport.fileType.displayName, _),
                 detail: normalizedPayloads.length > 1
-                  ? `Auto-Repairing Mesh ${processedItems.length + 1}/${normalizedPayloads.length}`
-                  : `Auto-Repairing ${file.name}`,
+                  ? importDetailAutoRepairingMesh(processedItems.length + 1, normalizedPayloads.length, _)
+                  : importDetailAutoRepairingFile(file.name, _),
                 progress: null,
               });
               return;
@@ -4753,10 +6579,10 @@ export function useSceneCollectionManager() {
               setImportProgress({
                 active: true,
                 type: 'scene',
-                label: `Importing ${pluginImport.fileType.displayName}…`,
+                label: importLabelFileType(pluginImport.fileType.displayName, _),
                 detail: normalizedPayloads.length > 1
-                  ? `Inspecting Mesh ${processedItems.length + 1}/${normalizedPayloads.length}`
-                  : `Inspecting ${file.name}`,
+                  ? importDetailInspectingMesh(processedItems.length + 1, normalizedPayloads.length, _)
+                  : importDetailInspectingFile(file.name, _),
                 progress: null,
               });
               return;
@@ -4766,10 +6592,10 @@ export function useSceneCollectionManager() {
               setImportProgress({
                 active: true,
                 type: 'scene',
-                label: `Importing ${pluginImport.fileType.displayName}…`,
+                label: importLabelFileType(pluginImport.fileType.displayName, _),
                 detail: normalizedPayloads.length > 1
-                  ? `Classifying Mesh ${processedItems.length + 1}/${normalizedPayloads.length}`
-                  : `Classifying ${file.name}`,
+                  ? importDetailClassifyingMesh(processedItems.length + 1, normalizedPayloads.length, _)
+                  : importDetailClassifyingFile(file.name, _),
                 progress: null,
               });
             }
@@ -4804,10 +6630,8 @@ export function useSceneCollectionManager() {
         shouldAutoArrangeOnImport = choice === 'auto_arrange';
       }
 
-      // Auto-arrange all models together so they don't overlap
-      const assignedCenters = shouldAutoArrangeOnImport
-        ? findFreeSpotCentersForModels(sourceCandidates, 5)
-        : [];
+      // Arranging waits for the supports: the raft is what stands on the plate, and
+      // only the store can measure it. Models land where the file put them first.
 
       const newModels: LoadedModel[] = [];
       const supportEntries: Array<{
@@ -4827,16 +6651,17 @@ export function useSceneCollectionManager() {
           scale: importedTransform.scale.clone(),
         };
 
-        const assignedCenter = assignedCenters[i] ?? null;
-        const finalPosition = new THREE.Vector3(
-          shouldAutoArrangeOnImport ? (assignedCenter?.x ?? originalPosition.x) : originalPosition.x,
-          shouldAutoArrangeOnImport ? (assignedCenter?.y ?? originalPosition.y) : originalPosition.y,
-          originalPosition.z,
-        );
+        // The file's own place, which the arrange pass revises once supports exist.
+        const finalPosition = originalPosition.clone();
+        const finalRotation = importedTransform.rotation;
 
-        const modelName = processedItems.length === 1
-          ? sanitizeImportedModelDisplayName(file.name)
-          : `${sanitizeImportedModelDisplayName(file.name)} (${i + 1})`;
+        // Prefer the source file's own object name; fall back to the imported
+        // filename (with an index when the container held several models).
+        const modelName = normalized.objName
+          ? sanitizeImportedModelDisplayName(normalized.objName)
+          : processedItems.length === 1
+            ? sanitizeImportedModelDisplayName(file.name)
+            : `${sanitizeImportedModelDisplayName(file.name)} (${i + 1})`;
 
         const model: LoadedModel = {
           id: importedModelId || uuidv4(),
@@ -4846,20 +6671,35 @@ export function useSceneCollectionManager() {
           geometry: processed,
           transform: {
             position: finalPosition,
-            rotation: importedTransform.rotation,
+            rotation: finalRotation,
             scale: importedTransform.scale,
           },
           visible: true,
           color: '#a3a3a3',
-          polygonCount: processed.geometry.getAttribute('position').count / 3,
-          ignoreAutoLift: true,
+          polygonCount: countTriangles(processed.geometry),
           meshModifiers: undefined,
-          manualZMoveOverride: true,
         };
 
         // Store meshModifiers externally so model objects stay lightweight
         if (meshModifiers) {
-          storeModelMeshModifiers(model.id, cloneMeshModifiersShallow(meshModifiers));
+          const stored = cloneMeshModifiersShallow(meshModifiers);
+          const hollowing = (stored as ModelMeshModifiers).hollowing;
+          if (hollowing?.enabled && hollowing.cavityPositionsBase64) {
+            // `bakedIntoGeometry` is what the hollowing panel trusts when it
+            // decides whether the cavity is already in the mesh, so it has to
+            // follow the choice rather than the file's own claim. Declining
+            // keeps the cavity for Interior View and leaves the panel able to
+            // bake it later.
+            // The shell snapshot rides along when the cavity was baked, so
+            // Remove Hollowing has a solid to put back.
+            const shellSnapshot = shellSnapshotByPayload.get(normalized);
+            (stored as ModelMeshModifiers).hollowing = {
+              ...hollowing,
+              bakedIntoGeometry: bakeImportedHollowing,
+              ...(shellSnapshot ?? {}),
+            };
+          }
+          storeModelMeshModifiers(model.id, stored);
         }
 
         newModels.push(model);
@@ -4874,23 +6714,226 @@ export function useSceneCollectionManager() {
       setActiveModelId(newModels[newModels.length - 1].id);
       setSelectedModelIds(newModels.map((m) => m.id));
 
+      // A rough arrangement on the raft each model stands on, now that the supports
+      // are in the store. The Arrange tool is where a careful nesting is asked for.
+      const arrangeImportedModels = () => {
+        if (!shouldAutoArrangeOnImport || newModels.length === 0) return;
+
+        const bedWidth = view3dSettings.widthMm;
+        const bedDepth = view3dSettings.depthMm;
+        const { minX: localMinX, minY: localMinY } = plateLocalRect(view3dSettings);
+
+        /** A model's footprint at a given Z, grown to the raft standing beside it. */
+        const footprintAt = (model: LoadedModel, rotationZ: number, reach: { x: number; y: number }) => {
+          const mesh = computeProjectedFootprintSize(
+            model.geometry,
+            new THREE.Euler(
+              model.transform.rotation.x,
+              model.transform.rotation.y,
+              rotationZ,
+              model.transform.rotation.order,
+            ),
+            model.transform.scale,
+          );
+          return { width: mesh.width + reach.x, depth: mesh.depth + reach.y };
+        };
+
+        const byId = new Map(newModels.map((model) => [model.id, model]));
+        const turnOf = new Map<string, number>();
+        const items: ShelfItem[] = newModels.map((model) => {
+          const currentZ = model.transform.rotation.z;
+          const turnedZ = currentZ + (Math.PI / 2);
+          turnOf.set(model.id, turnedZ);
+          const bare = computeProjectedFootprintSize(
+            model.geometry, model.transform.rotation, model.transform.scale,
+          );
+          // Only what stands on the plate: the raft around the model's roots.
+          const raft = estimateRaftBoundsForModel(model.id);
+          const reach = raft
+            ? {
+              x: Math.max(0, (raft.maxX - raft.minX) - bare.width),
+              y: Math.max(0, (raft.maxY - raft.minY) - bare.depth),
+            }
+            : { x: 0, y: 0 };
+          const asIs = footprintAt(model, currentZ, reach);
+          // The raft turns with the model, so its reach swaps axes with it.
+          const turned = footprintAt(model, turnedZ, { x: reach.y, y: reach.x });
+          return {
+            id: model.id,
+            width: asIs.width,
+            depth: asIs.depth,
+            turnedWidth: turned.width,
+            turnedDepth: turned.depth,
+          };
+        });
+
+        // Planned in each bed's own millimetres, then resolved: dynamic ordering
+        // re-lays the grid as beds are added, so an offset read early goes stale.
+        type PlannedSeat = { id: string; x: number; y: number; rotationZ: number };
+        const plateLocalSeats: PlannedSeat[][] = [];
+
+        const planSeats = (placements: ReturnType<typeof shelfPack>['placed']): PlannedSeat[] => (
+          placements.flatMap((placement) => {
+            const model = byId.get(placement.id);
+            if (!model) return [];
+            return [{
+              id: placement.id,
+              x: placement.x,
+              y: placement.y,
+              rotationZ: placement.turned
+                ? turnOf.get(placement.id) ?? model.transform.rotation.z
+                : model.transform.rotation.z,
+            }];
+          })
+        );
+
+        const packBed = (pending: ShelfItem[]) => shelfPack(pending, {
+          widthMm: bedWidth,
+          depthMm: bedDepth,
+          spacingMm: IMPORT_ARRANGE_SPACING_MM,
+        });
+
+        let pending = items;
+        const existingPlateIds = platesRef.current.map((plate) => plate.id);
+
+        // The beds the scene already has, in order.
+        for (let i = 0; i < existingPlateIds.length; i += 1) {
+          if (pending.length === 0) break;
+          const result = packBed(pending);
+          plateLocalSeats[i] = planSeats(result.placed);
+          const spilled = new Set(result.spilled);
+          pending = pending.filter((entry) => spilled.has(entry.id));
+        }
+
+        // Then a bed for each spill, still only planned.
+        const newBedSeats: PlannedSeat[][] = [];
+        let guard = 0;
+        while (pending.length > 0 && guard < MAX_IMPORT_PLATES) {
+          guard += 1;
+          const result = packBed(pending);
+
+          if (result.placed.length === 0) {
+            // Too large for an empty bed in either pose: it takes one on its own,
+            // overhanging, rather than being left adrift off every plate.
+            const stranded = pending[0];
+            const model = byId.get(stranded.id);
+            newBedSeats.push([{
+              id: stranded.id,
+              x: bedWidth * 0.5,
+              y: bedDepth * 0.5,
+              rotationZ: model?.transform.rotation.z ?? 0,
+            }]);
+            pending = pending.slice(1);
+            continue;
+          }
+
+          newBedSeats.push(planSeats(result.placed));
+          const spilled = new Set(result.spilled);
+          pending = pending.filter((entry) => spilled.has(entry.id));
+        }
+
+        // Every bed at once, so the grid settles before any offset is read.
+        const reserved = newBedSeats.length > 0
+          ? addPlatesRef.current(newBedSeats.length)
+          : null;
+
+        const seats = new Map<string, { x: number; y: number; rotationZ: number }>();
+        const placeOnBed = (plateId: string, planned: PlannedSeat[] | undefined) => {
+          if (!planned || planned.length === 0) return;
+          const { dxMm, dyMm } = reserved
+            ? reserved.offsets.get(plateId) ?? plateOffsetForRef.current(plateId)
+            : plateOffsetForRef.current(plateId);
+          for (const seat of planned) {
+            seats.set(seat.id, {
+              x: localMinX + dxMm + seat.x,
+              y: localMinY + dyMm + seat.y,
+              rotationZ: seat.rotationZ,
+            });
+          }
+        };
+
+        existingPlateIds.forEach((plateId, index) => placeOnBed(plateId, plateLocalSeats[index]));
+        newBedSeats.forEach((planned, index) => {
+          const plate = reserved?.added[index];
+          if (plate) placeOnBed(plate.id, planned);
+        });
+
+        const moved = newModels.filter((model) => {
+          const seat = seats.get(model.id);
+          if (!seat) return false;
+          return Math.abs(seat.x - model.transform.position.x) > 1e-6
+            || Math.abs(seat.y - model.transform.position.y) > 1e-6
+            || Math.abs(seat.rotationZ - model.transform.rotation.z) > 1e-6;
+        });
+        if (moved.length === 0) return;
+
+        const afterById = new Map(moved.map((model) => {
+          const seat = seats.get(model.id)!;
+          return [model.id, {
+            position: new THREE.Vector3(seat.x, seat.y, model.transform.position.z),
+            rotation: new THREE.Euler(
+              model.transform.rotation.x,
+              model.transform.rotation.y,
+              seat.rotationZ,
+              model.transform.rotation.order,
+            ),
+            scale: model.transform.scale.clone(),
+          }];
+        }));
+
+        setModels((prev) => prev.map((model) => {
+          const after = afterById.get(model.id);
+          return after ? { ...model, transform: after } : model;
+        }));
+
+        // The supports follow their model, in one notify for the whole run.
+        beginSupportStateBatch();
+        try {
+          for (const model of moved) {
+            const after = afterById.get(model.id);
+            if (!after) continue;
+            const before = {
+              position: model.transform.position.clone(),
+              rotation: model.transform.rotation.clone(),
+              scale: model.transform.scale.clone(),
+            };
+            // The model object is the one `newModels` holds, so later reads see the move.
+            model.transform = after;
+            transformSupportsForModel(model.id, before, after);
+          }
+        } finally {
+          endSupportStateBatch();
+        }
+      };
+
       // Load supports for all models in a single animation frame batch
       const pendingSupports = supportEntries.filter((e) => !!e.supportData);
       if (pendingSupports.length > 0) {
         const applySupports = () => {
-          for (const { model, sourceTransform, supportData } of pendingSupports) {
-            applyImportDefaultsToRaftState();
-            mergeFromImportFormat(supportData!);
-            if (!transformsEqual(sourceTransform, model.transform)) {
-              transformSupportsForModel(model.id, sourceTransform, model.transform);
+          beginSupportStateBatch();
+          try {
+            for (const { model, sourceTransform, supportData } of pendingSupports) {
+              applyImportDefaultsToRaftState();
+              // Bind these supports to THIS model. The plugin already stamps a
+              // modelId, but nothing verified it matched the id the host assigned
+              // the model -- so pass the host id and let the store reconcile.
+              mergeFromImportFormat(supportData!, model.id);
+              if (!transformsEqual(sourceTransform, model.transform)) {
+                transformSupportsForModel(model.id, sourceTransform, model.transform);
+              }
             }
+          } finally {
+            endSupportStateBatch();
           }
+          arrangeImportedModels();
         };
         if (typeof window !== 'undefined') {
           requestAnimationFrame(applySupports);
         } else {
           applySupports();
         }
+      } else {
+        arrangeImportedModels();
       }
 
       const totalSupportCount = supportEntries.reduce(
@@ -4898,12 +6941,8 @@ export function useSceneCollectionManager() {
         0,
       );
       if (!options?.suppressReport) {
-        const sourceLabel = extension.slice(1).toUpperCase();
-        const modelLabel = newModels.length === 1 ? '1 model' : `${newModels.length} models`;
         emitSceneImportReport(
-          totalSupportCount > 0
-            ? `Imported ${sourceLabel} scene: ${modelLabel}, ${totalSupportCount} supports.`
-            : `Imported ${sourceLabel} scene: ${modelLabel}.`,
+          reportImportedScene(extension.slice(1).toUpperCase(), newModels.length, totalSupportCount, 0, _),
           'success',
         );
       }
@@ -4914,10 +6953,10 @@ export function useSceneCollectionManager() {
       console.error('[SceneCollection] Failed to process plugin scene geometry:', err);
       const msg = err instanceof Error ? err.message : String(err);
       if (!options?.suppressReport) {
-        emitSceneImportReport(`Scene import failed: ${msg}`, 'error');
+        emitSceneImportReport(reportSceneImportFailed(msg, _), 'error');
       }
       if (!options?.suppressReport && typeof window !== 'undefined') {
-        window.alert(`Import Scene failed:\n${msg}`);
+        window.alert(alertSceneImportFailed(msg, _));
       }
       return false;
     } finally {
@@ -4931,7 +6970,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestMissingPrinterPluginChoice, requestSceneImportHollowingChoice, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
@@ -4942,7 +6981,7 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: 'Importing VOXL Scene…',
+        label: importLabelVoxlScene(_),
         detail: file.name,
         progress: null,
       });
@@ -4952,33 +6991,75 @@ export function useSceneCollectionManager() {
 
     try {
       const autoRepairScenes = shouldAutoRepairSceneImports(options);
-      // Peek at the first 6 bytes to detect format.
-      // V2 binary starts with "VOXL" magic (0x56 0x4F 0x58 0x4C) + uint16 version >= 2.
-      // V1 JSON starts with '{' (0x7B).
-      // For V1, we use file.text() rather than TextDecoder.decode(arrayBuffer) because
-      // some WebView environments (e.g. Tauri/WebView2) truncate TextDecoder output at ~4 MB
-      // for large single-buffer decodes, while the native file.text() path is unaffected.
+      // Peek at the first 6 bytes to detect the container. The binary container
+      // starts with "VOXL" magic (0x56 0x4F 0x58 0x4C) + uint16 version >= 2;
+      // anything else is either an obsolete V1 scene or not a VOXL file at all.
       const headerBytes = new Uint8Array(await file.slice(0, 6).arrayBuffer());
       const isV2 = isVoxlBinaryV2(headerBytes);
 
-      let document: VoxlDocumentV1;
-      let resolvedMeshBytes: Map<string, Uint8Array>;
-      let resolvedOriginalMeshBytes: Map<string, Uint8Array> | undefined;
-      let originalMeshChunks: Map<string, PrecompressedChunk> | undefined;
-
-      if (isV2) {
-        const r = parseVoxlBinaryV2(new Uint8Array(await file.arrayBuffer()));
-        document = r.document;
-        resolvedMeshBytes = r.meshBytes;
-        resolvedOriginalMeshBytes = r.originalMeshBytes;
-        originalMeshChunks = r.originalMeshChunks;
-        // sourceVersion is 2.2 only when the file actually carries modifier
-        // chunks; anything lower is treated as inline for format preservation.
-        lastLoadedVoxlFormatChunkedRef.current = r.sourceVersion >= 2.2;
-      } else {
-        document = parseVoxlDocument(await file.text());
-        resolvedMeshBytes = new Map();
+      if (!isV2) {
+        const obsolete = detectObsoleteVoxlVersion(headerBytes);
+        if (obsolete) {
+          throw new VoxlObsoleteVersionError(obsolete);
+        }
+        throw new Error('Not a VOXL file: the VOXL binary header is missing.');
       }
+
+      const importStarted = performance.now();
+      let committedAt = 0;
+      // The file's own path, when it has one: that is what lets the native loader
+      // read a mesh chunk by range instead of receiving its bytes. Same expression
+      // the sidecar resolution below uses.
+      const voxlPath = (file as File & { path?: string; filePath?: string }).path
+        || (file as File & { filePath?: string }).filePath
+        || options?.sourcePath
+        || undefined;
+      // With a path, the 13 mesh chunks (677 MB, ~2 s of inflate before any model
+      // work starts) stay where they are and the loader inflates each one itself.
+      // Without one — a zip entry, a synthesized file — nothing changes.
+      const parsed = await parseVoxlBinaryV2(new Uint8Array(await file.arrayBuffer()), {
+        deferMeshChunks: Boolean(voxlPath),
+      });
+      const parsedAt = performance.now();
+      const document: VoxlDocumentV1 = parsed.document;
+      const sceneMaterials: unknown[] = Array.isArray(document.materials) ? document.materials : [];
+
+      // Check the printer's plugin before inflating a single mesh: a scene owned by
+      // an uninstalled plugin can only keep geometry, and the answer decides whether
+      // this load is worth starting at all.
+      let skipPrinterMetadata = false;
+      const recordedPrinterEarly = document.meta?.printer;
+      if (recordedPrinterEarly) {
+        const installedEarly = findPrinterProfileForBundle(recordedPrinterEarly, getProfileStoreSnapshot());
+        const missing = installedEarly?.missingPlugin;
+        if (missing) {
+          const recordedName = typeof recordedPrinterEarly.printer.name === 'string'
+            ? recordedPrinterEarly.printer.name
+            : undefined;
+          const choice = await requestMissingPrinterPluginChoice({
+            pluginName: missing.name,
+            ...(recordedName ? { printerName: recordedName } : {}),
+          });
+          if (choice === 'manage') return false;
+          skipPrinterMetadata = true;
+        }
+      }
+      const bodyChunks = parsed.bodyChunks;
+      const resolvedMeshBytes: Map<string, Uint8Array> = parsed.meshBytes;
+      const resolvedOriginalMeshBytes = parsed.originalMeshBytes;
+      const originalMeshChunks = parsed.originalMeshChunks;
+      // sourceVersion is 3.1 only when the file actually carries modifier
+      // chunks; anything lower is treated as inline for format preservation.
+      lastLoadedVoxlFormatChunkedRef.current = parsed.sourceVersion >= 3.1;
+
+      // The file's plates, read once: the models below are stamped with the
+      // plate they stand on, and the scene adopts the list after they land.
+      const scenePlates = readScenePlates(document.scene);
+      const importedPlateIds = new Set(scenePlates.plates.map((plate) => plate.id));
+      const importedDefaultPlateId = scenePlates.plates[0]?.id;
+      /** A model's plate, when the file names one of its own; otherwise its first. */
+      const plateIdForImport = (raw?: string): string | undefined =>
+        raw && importedPlateIds.has(raw) ? raw : importedDefaultPlateId;
 
       const existingIds = new Set(modelsRef.current.map((model) => model.id));
       const idMap = new Map<string, string>();
@@ -4994,6 +7075,103 @@ export function useSceneCollectionManager() {
       const builtGeometryByHash = new Map<string, GeometryWithBounds>();
       let dedupHits = 0;
 
+      // Build every unique mesh, a couple at a time, before the placement loop.
+      // Placement stays in order below because it depends on what is already on the
+      // plate; building does not. Each build is a native round trip with serial
+      // phases (parse, refine, classify) around a parallel one, so two in flight let
+      // one model's serial phase run during another's. The hash is computed here once
+      // per model and reused by the loop, so neither the content hash nor the
+      // integrity check is paid twice.
+      //
+      // The `classification` a `MODL` entry carries is **not** used. It is a boundary
+      // into the soup the file stores, and a file written before the mesh chunk's
+      // signature could see a reordered soup pairs it with a different order: the
+      // boundary then cuts a slab out of the model and paints it as support. A count
+      // check cannot tell those apart, so the loader classifies the payload it just
+      // built and the sections come from that answer. Cost: one classify per model on
+      // load — the same pass a fresh STL import pays, done natively inside the loader
+      // rather than as a second round trip.
+      const buildOptionsFor = (model: (typeof document.models)[number]): ProcessGeometryOptions => ({
+        nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
+        assumeSupportGeometry: model.isSupportGeometry,
+        skipClassification: model.isSupportGeometry,
+        // The payload is the scene's own mesh: refining it again changes the count and
+        // order every boundary indexes, and grows it on each round trip.
+        _refine: false,
+      });
+      const hashByModelId = new Map<string, string>();
+      const uniqueBuilds = new Map<
+        string,
+        {
+          bytes?: Uint8Array;
+          range?: VoxlMeshRange;
+          name: string;
+          model: (typeof document.models)[number];
+        }
+      >();
+      const meshRanges = parsed.meshRanges;
+      for (const [index, model] of document.models.entries()) {
+        const meshRef = model.mesh;
+        const bytes = resolvedMeshBytes.get(model.id);
+        const range = meshRanges?.get(model.id);
+        if (!meshRef || meshRef.mode !== 'embedded-chunk' || (!bytes && !range)) continue;
+        const declaredSha = typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0
+          ? meshRef.sha256.trim().toLowerCase()
+          : undefined;
+        // A deferred chunk has no bytes to hash. Its identity inside the file is its
+        // chunk anyway — a V3 duplicate points at the owner's chunk — so the chunk
+        // index is the dedup key, and it is stable for the whole parse.
+        const contentHash = declaredSha
+          ?? (range
+            ? `chunk:${typeof meshRef.chunkIndex === 'number' ? meshRef.chunkIndex : index}`
+            : await sha256Hex(bytes!));
+        hashByModelId.set(model.id, contentHash);
+        if (builtGeometryByHash.has(contentHash) || uniqueBuilds.has(contentHash)) continue;
+        uniqueBuilds.set(contentHash, {
+          ...(bytes ? { bytes } : { range: range! }),
+          name: meshRef.fileName?.trim() || `${model.name || 'model'}.stl`,
+          model,
+        });
+      }
+      if (uniqueBuilds.size > 0) {
+        let finished = 0;
+        const buildCount = uniqueBuilds.size;
+        // Every mesh's occlusion bake is left in flight rather than awaited per
+        // model: it is the GPU's work (0.4-1.2 s a model on the scene this was
+        // measured against) while the remaining meshes are still being parsed,
+        // refined and classified, and running them one model at a time left the
+        // GPU idle for most of the load. They are all awaited below, before any
+        // model is placed, so each one's first frame still carries its occlusion
+        // — the pop-in that baking after the fact produced.
+        const pendingOcclusionBakes: Array<Promise<boolean>> = [];
+        await runWithConcurrency([...uniqueBuilds], VOXL_BUILD_CONCURRENCY, async ([hash, spec]) => {
+          try {
+            const options = {
+              ...buildOptionsFor(spec.model),
+              _deferOcclusionBake: (bake: Promise<boolean>) => pendingOcclusionBakes.push(bake),
+            };
+            const built = spec.range && voxlPath
+              ? await loadMeshGeometryFromRange(voxlPath, spec.range, spec.name, options)
+              : await loadMeshGeometry(spec.bytes!, spec.name, options);
+            builtGeometryByHash.set(hash, built);
+          } catch (error) {
+            // The loop below reports the model as skipped; one mesh that will not
+            // build is not worth failing the whole scene over.
+            console.error(`[SceneCollection] Failed building VOXL mesh "${spec.model.name}"`, error);
+          }
+          finished += 1;
+          setImportProgress({
+            active: true,
+            type: 'scene',
+            label: importLabelVoxlScene(_),
+            detail: importDetailVoxlModel(finished, buildCount, spec.model.name, _),
+            progress: null,
+          });
+        });
+        await Promise.all(pendingOcclusionBakes);
+      }
+      const builtAt = performance.now();
+
       for (let i = 0; i < document.models.length; i += 1) {
         const model = document.models[i];
         const meshRef = model.mesh;
@@ -5007,27 +7185,26 @@ export function useSceneCollectionManager() {
         setImportProgress({
           active: true,
           type: 'scene',
-          label: 'Importing VOXL Scene…',
-          detail: `Model ${i + 1}/${document.models.length}: ${model.name}`,
+          label: importLabelVoxlScene(_),
+          detail: importDetailVoxlModel(i + 1, document.models.length, model.name, _),
           progress: null,
         });
 
-        if (meshRef.mode !== 'embedded-file' && meshRef.mode !== 'embedded-chunk') {
+        if (meshRef.mode !== 'embedded-chunk') {
           console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": mesh mode \"${meshRef.mode}\" is not importable without embedded mesh data.`);
           skippedModels += 1;
           continue;
         }
 
-        // V2: mesh bytes pre-decoded; V1: fall back to base64 decode from meshRef.dataBase64
-        let meshDataBytes: Uint8Array | undefined = resolvedMeshBytes.get(model.id);
-
-        if (!meshDataBytes) {
-          if (!meshRef.dataBase64) {
-            console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing embedded mesh payload.`);
-            skippedModels += 1;
-            continue;
-          }
-          meshDataBytes = decodeVoxlEmbeddedMeshBytes(meshRef);
+        // Mesh bytes arrive pre-decoded from the container's MESH chunks — unless
+        // the parse deferred them, in which case the location is what arrives and
+        // the native loader reads it.
+        const meshDataBytes = resolvedMeshBytes.get(model.id);
+        const meshRange = meshRanges?.get(model.id);
+        if (!meshDataBytes && !(meshRange && voxlPath)) {
+          console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing embedded mesh payload.`);
+          skippedModels += 1;
+          continue;
         }
 
         try {
@@ -5039,7 +7216,10 @@ export function useSceneCollectionManager() {
             typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0
               ? meshRef.sha256.trim().toLowerCase()
               : undefined;
-          const contentHash = declaredSha ?? (await sha256Hex(bytes));
+          // Computed by the build pass above; the fallback covers a model it skipped.
+          const contentHash = hashByModelId.get(model.id)
+            ?? declaredSha
+            ?? (bytes ? await sha256Hex(bytes) : `chunk:${typeof meshRef.chunkIndex === 'number' ? meshRef.chunkIndex : i}`);
 
           const cached = builtGeometryByHash.get(contentHash);
           let geometry: GeometryWithBounds;
@@ -5053,55 +7233,19 @@ export function useSceneCollectionManager() {
             );
             geometry = cloneGeometryWithBounds(cached, { shared: true });
           } else {
-            if (declaredSha) {
+            // A deferred chunk has no bytes here to hash: its integrity is the
+            // container's own (the directory ranges are bounds-checked as the file
+            // is parsed) and the loader refuses a short read. The byte-source path
+            // below verifies the declared SHA as before.
+            if (declaredSha && bytes) {
               const actual = await sha256Hex(bytes);
               if (actual !== declaredSha) {
                 throw new Error('VOXL integrity check failed (SHA-256 mismatch).');
               }
             }
-
-            const embeddedName = meshRef.fileName?.trim() || `${model.name || 'model'}.stl`;
-
-            geometry = await loadMeshGeometry(bytes, embeddedName, {
-              nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
-              assumeSupportGeometry: model.isSupportGeometry,
-              skipClassification: model.isSupportGeometry,
-            onNativeProcessingStage: (stage) => {
-              if (stage === 'repairing') {
-                setImportProgress({
-                  active: true,
-                  type: 'scene',
-                  label: 'Importing VOXL Scene…',
-                  detail: `Auto-Repairing Mesh ${i + 1}/${document.models.length}: ${model.name}`,
-                  progress: null,
-                });
-                return;
-              }
-
-              if (stage === 'analyzing') {
-                setImportProgress({
-                  active: true,
-                  type: 'scene',
-                  label: 'Importing VOXL Scene…',
-                  detail: `Inspecting Mesh ${i + 1}/${document.models.length}: ${model.name}`,
-                  progress: null,
-                });
-                return;
-              }
-
-              if (stage === 'classifying') {
-                setImportProgress({
-                  active: true,
-                  type: 'scene',
-                  label: 'Importing VOXL Scene…',
-                  detail: `Classifying Mesh ${i + 1}/${document.models.length}: ${model.name}`,
-                  progress: null,
-                });
-              }
-            },
-            });
-            // Cache the freshly-built mesh so identical copies clone it.
-            builtGeometryByHash.set(contentHash, geometry);
+            // The build pass above builds every unique mesh; reaching here means that
+            // build failed, and it already logged why.
+            throw new Error(`VOXL mesh for "${model.name}" did not build.`);
           }
 
           let resolvedId = model.id;
@@ -5157,13 +7301,18 @@ export function useSceneCollectionManager() {
             }
           }
 
-          const polygonCount = geometry.geometry.getAttribute('position').count / 3;
+          const decodedSplitBodies = bodyChunks?.has(model.id)
+            ? await decodeBodyChunk(bodyChunks.get(model.id) as Uint8Array, geometry.center)
+            : undefined;
+          const polygonCount = countTriangles(geometry.geometry);
           const color = clampHexColor(model.color, DEFAULT_MESH_COLOR);
+          const importedPlateId = plateIdForImport(model.plateId);
 
           importedModels.push({
             id: resolvedId,
             name: sanitizeImportedModelDisplayName(model.name),
             fileUrl: '',
+            ...(importedPlateId ? { plateId: importedPlateId } : {}),
             sourcePath: model.sourcePath ?? undefined,
             originalRef: model.originalRef,
             fileSizeBytes: model.fileSizeBytes,
@@ -5177,10 +7326,21 @@ export function useSceneCollectionManager() {
             color,
             polygonCount,
             meshModifiers: undefined,
-            ignoreAutoLift: true,
-            manualZMoveOverride: true,
+            autoLift: model.autoLift === true,
+            liftRestoreMm: typeof model.liftRestoreMm === 'number' ? model.liftRestoreMm : undefined,
             isSupportGeometry: model.isSupportGeometry,
             linkGroupId: model.linkGroupId,
+            // A project saved before models carried a material still has to name one
+            // on a multi-tank printer.
+            materialProfileId: model.materialProfileId ?? resolveMultiTankImportDefault()?.materialProfileId,
+            materialBaseColor: model.materialBaseColor,
+            ...(decodedSplitBodies ? { splitBodies: decodedSplitBodies } : {}),
+            ...(model.bodyMaterialProfileIds
+              ? { bodyMaterialProfileIds: model.bodyMaterialProfileIds.map((id) => id ?? undefined) }
+              : {}),
+            ...(model.bodyColors
+              ? { bodyColors: model.bodyColors.map((color) => color ?? undefined) }
+              : {}),
           });
 
           // Store meshModifiers externally so model objects stay lightweight
@@ -5200,12 +7360,63 @@ export function useSceneCollectionManager() {
         );
       }
 
+      const placedAt = performance.now();
+
       const sourceTransformsByModelId = new Map<string, ModelTransform>();
       for (const imported of importedModels) {
         sourceTransformsByModelId.set(imported.id, cloneTransform(imported.transform));
       }
 
-      const offPlateImportedModels = importedModels.filter((model) => !isModelFootprintInsidePlate(model));
+      // The file's models stand where its own printer's beds were laid out, and the cascade
+      // spaces beds by the build volume: on any other printer every bed but the first is
+      // somewhere else, so the models have to make the same move. A model centred on plate 2
+      // stays centred on plate 2. The file's supports follow their models, because the shift
+      // is the delta against the transforms captured above.
+      const recordedLayoutMm = document.meta?.printer?.printer.buildVolumeMm;
+      if (recordedLayoutMm && scenePlates.plates.length > 1) {
+        const filePlates = scenePlates.plates.map((plate) => ({ id: plate.id, name: plate.name ?? '' }));
+        const shifted = modelsShiftedForRelaidPlates(filePlates, filePlates, importedModels, {
+          laidOut: {
+            widthMm: recordedLayoutMm.width,
+            depthMm: recordedLayoutMm.depth,
+            originMode: view3dSettings.originMode,
+          },
+          // The grid the file's beds were laid out on, which is what its model positions
+          // are measured against. A file that does not say was written under the dynamic
+          // grid, the only one there was. Without this, opening a scene in the other
+          // ordering would leave every model standing where its bed no longer is.
+          wasOrdering: readPlateOrdering(document.extensions?.[VOXL_PLATE_ORDERING_EXTENSION])
+            ?? DYNAMIC_PLATE_ORDERING,
+        });
+        if (shifted !== importedModels) importedModels.splice(0, importedModels.length, ...shifted);
+      }
+
+      // "Off-plate" means standing on none of the file's beds, not off the bed being worked
+      // on: reading the active one alone called every model on any other bed out of bounds,
+      // which in a multi-plate scene is the whole point of the file. A file that names no
+      // plates of its own leaves the beds already here in place, so those are the ones.
+      const { minX: localBedMinX, minY: localBedMinY } = plateLocalRect(view3dSettings);
+      const bedRectAt = (index: number, count: number): Rect2D => {
+        const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
+          widthMm: view3dSettings.widthMm,
+          depthMm: view3dSettings.depthMm,
+        }, count, plateOrderingRef.current);
+        return {
+          minX: localBedMinX + dxMm,
+          maxX: localBedMinX + dxMm + view3dSettings.widthMm,
+          minY: localBedMinY + dyMm,
+          maxY: localBedMinY + dyMm + view3dSettings.depthMm,
+        };
+      };
+      const importedBedRects: Rect2D[] = scenePlates.plates.map((plate, index) => (
+        bedRectAt(index, scenePlates.plates.length)
+      ));
+      const bedRectsForImport = importedBedRects.length > 0
+        ? importedBedRects
+        : platesRef.current.map((plate, index, all) => bedRectAt(index, all.length));
+      const offPlateImportedModels = importedModels.filter(
+        (model) => !rectStandsOnAnyBed(modelFootprintRect(model), bedRectsForImport),
+      );
       const shouldPromptForPlacement = offPlateImportedModels.length > 0 && !options?.suppressPlacementPrompt;
 
       // Preserve authored placement by default. Only auto-arrange if models are off-plate
@@ -5231,22 +7442,130 @@ export function useSceneCollectionManager() {
           });
         }
 
-        setModels((prev) => [...prev, ...importedModels]);
+        // A cached or older scene can carry a model whose size was never recorded —
+        // the writer used to store 0 for unknown, which reads back as "0 B". The
+        // document keeps the model's original path when it has one, so the size is
+        // one metadata call away. Desktop only: `readNativeFileSize` answers null
+        // elsewhere, which leaves the size unknown rather than wrong.
+        await Promise.all(importedModels.map(async (model) => {
+          if (typeof model.fileSizeBytes === 'number' && model.fileSizeBytes > 0) return;
+          const sourcePath = typeof model.sourcePath === 'string' ? model.sourcePath.trim() : '';
+          if (!sourcePath) return;
+          const size = await readNativeFileSize(sourcePath);
+          if (size != null && size > 0) model.fileSizeBytes = size;
+        }));
 
+        if (skipPrinterMetadata) {
+          for (const model of importedModels) {
+            const assigned = Boolean(
+              model.materialProfileId
+              || model.bodyMaterialProfileIds?.some(Boolean)
+              || model.bodyColors?.some(Boolean),
+            );
+            model.color = model.materialBaseColor ?? (assigned ? DEFAULT_MESH_COLOR : model.color);
+            model.materialProfileId = undefined;
+            model.materialBaseColor = undefined;
+            model.bodyMaterialProfileIds = undefined;
+            model.bodyColors = undefined;
+          }
+        }
+
+        setModels((prev) => [...prev, ...importedModels]);
+        committedAt = performance.now();
+
+        // Everything this file brought in is selected, so a freshly opened scene acts
+        // on all of it at once. The file's own selection is deliberately not restored:
+        // a saved scene carries one model's worth in most files, and honouring it left
+        // an import acting on a single model and looking like the rest were not there.
+        // The active model still follows the file, because that is the one the panels
+        // read, and falls back to the first imported model when the file names none.
         const mappedActiveId = (document.scene.activeModelId && idMap.get(document.scene.activeModelId))
           || importedModels[0]?.id
           || null;
 
-        const mappedSelectedIds = document.scene.selectedModelIds
-          .map((id) => idMap.get(id))
-          .filter((id): id is string => typeof id === 'string' && id.length > 0);
-
-        const finalSelected = mappedSelectedIds.length > 0
-          ? mappedSelectedIds
-          : (mappedActiveId ? [mappedActiveId] : []);
-
         setActiveModelId(mappedActiveId);
-        setSelectedModelIds(finalSelected);
+        setSelectedModelIds(importedModels.map((model) => model.id));
+
+        // The scene's plates: `plates` is canonical, the older `plateName` is the
+        // single-plate shorthand a file written before plates carries. A file with
+        // no plate list at all leaves this scene's plates as they were, since this
+        // path merges into the scene rather than replacing it.
+        if (scenePlates.plates.length > 0) {
+          setPlates(scenePlates.plates.map((plate) => ({ id: plate.id, name: plate.name ?? '' })));
+          setActivePlateId(scenePlates.activePlateId ?? scenePlates.plates[0].id);
+        } else if (scenePlates.legacyName) {
+          const legacyName = scenePlates.legacyName;
+          setPlates((prev) => prev.map((plate, index) => (index === 0 ? { ...plate, name: legacyName } : plate)));
+        }
+
+        // A scene built for another printer should not be dropped into this one without
+        // a word: its beds were spaced for the machine it names, and when that machine is
+        // the bigger the plates do not fit here at all. Read the store fresh rather than
+        // the memo, because this callback can run long after it was created.
+        const recordedPrinter = document.meta?.printer;
+        const recordedVolume = recordedPrinter?.printer.buildVolumeMm;
+        const currentPrinter = getActivePrinterProfile(getProfileStoreSnapshot());
+        if (recordedPrinter && recordedVolume && currentPrinter && !skipPrinterMetadata) {
+          const installed = findPrinterProfileForBundle(recordedPrinter, getProfileStoreSnapshot());
+          // Resolving to the profile selected now means the scene is already on its printer.
+          if (installed?.id !== currentPrinter.id) {
+            const recordedName = typeof recordedPrinter.printer.name === 'string' && recordedPrinter.printer.name.trim().length > 0
+              ? recordedPrinter.printer.name
+              : undefined;
+            const sceneUsesMultiTankMaterials = document.models.some((entry) => (
+              !!entry.materialProfileId || (entry.bodyMaterialProfileIds?.some((id) => !!id) ?? false)
+            ));
+            const requiredMaterialIds = new Set<string>();
+            for (const entry of document.models) {
+              if (entry.materialProfileId) requiredMaterialIds.add(entry.materialProfileId);
+              for (const id of entry.bodyMaterialProfileIds ?? []) {
+                if (id) requiredMaterialIds.add(id);
+              }
+            }
+            const recordedTankMaterials = recordedPrinter.printer.tankMaterials;
+            if (Array.isArray(recordedTankMaterials)) {
+              for (const id of recordedTankMaterials) {
+                if (typeof id === 'string' && id.length > 0) requiredMaterialIds.add(id);
+              }
+            }
+            const currentMaterialIds = new Set(
+              getMaterialProfilesForPrinter(currentPrinter.id, getProfileStoreSnapshot())
+                .map((material) => material.id),
+            );
+            const currentHasRequiredMaterials = [...requiredMaterialIds]
+              .every((id) => currentMaterialIds.has(id));
+            setPrinterMismatch({
+              bundle: recordedPrinter,
+              ...(sceneMaterials.length > 0 ? { materials: sceneMaterials } : {}),
+              sceneUsesMultiTankMaterials,
+              currentMaterialMode: currentPrinter.materialMode,
+              ...(recordedName ? { recordedName } : {}),
+              recordedBuildVolumeMm: { ...recordedVolume },
+              currentName: currentPrinter.name,
+              currentBuildVolumeMm: { ...currentPrinter.buildVolumeMm },
+              installedProfileId: installed?.id ?? null,
+              currentIsSmaller: buildVolumeIsSmaller(currentPrinter, recordedPrinter),
+              currentHasRequiredMaterials,
+              ...(installed?.missingPlugin ? { missingPlugin: installed.missingPlugin } : {}),
+              importedModelIds: importedModels.map((model) => model.id),
+            });
+          } else {
+            // The scene is already on its printer: adopt the materials and tank
+            // assignments it carries so its references resolve here.
+            const resolvedId = installed?.id ?? currentPrinter.id;
+            const remap = sceneMaterials.length > 0
+              ? importSceneMaterials(resolvedId, sceneMaterials)
+              : new Map<string, string>();
+            remapImportedMaterialReferences(importedModels.map((model) => model.id), remap);
+            applyBundleTankAssignments(resolvedId, recordedPrinter, remap);
+          }
+        } else if (currentPrinter && (sceneMaterials.length > 0 || recordedPrinter?.printer.tankMaterials)) {
+          const remap = sceneMaterials.length > 0
+            ? importSceneMaterials(currentPrinter.id, sceneMaterials)
+            : new Map<string, string>();
+          remapImportedMaterialReferences(importedModels.map((model) => model.id), remap);
+          if (recordedPrinter) applyBundleTankAssignments(currentPrinter.id, recordedPrinter, remap);
+        }
       }
 
       if (voxlSupportsContainData(document)) {
@@ -5264,36 +7583,57 @@ export function useSceneCollectionManager() {
 
       const importedSupportCount = countSupportEntries(document.supports);
       const importedModelCount = importedModels.length;
-      const modelNoun = importedModelCount === 1 ? 'model' : 'models';
-      const skippedNoun = skippedModels === 1 ? 'model' : 'models';
-      const supportsClause = importedSupportCount > 0 ? `, ${importedSupportCount} supports` : '';
-      const skippedClause = skippedModels > 0 ? `, skipped ${skippedModels} ${skippedNoun}` : '';
+
+      // Where a scene load went, in the app's own log next to the native timings:
+      // parse, the per-model build pass (native load + prep, with the bakes in
+      // flight), in-order placement, and the commit that hands the models to
+      // React. The frame that follows the commit — every geometry's upload and
+      // BVH reaching the GPU — is *after* this line, which is why the total here
+      // is not the user's wait.
+      const phaseTiming =
+        `[voxl] load: parse ${(parsedAt - importStarted).toFixed(0)}ms, ` +
+        `build ${(builtAt - parsedAt).toFixed(0)}ms, ` +
+        `place ${(placedAt - builtAt).toFixed(0)}ms, ` +
+        `commit ${(committedAt - placedAt).toFixed(0)}ms, ` +
+        `total ${(committedAt - importStarted).toFixed(0)}ms`;
+      console.log(phaseTiming);
+      void logToNativeFile('info', phaseTiming);
 
       if (importedModelCount > 0) {
         if (!options?.suppressReport) {
           emitSceneImportReport(
-            `Imported VOXL scene: ${importedModelCount} ${modelNoun}${supportsClause}${skippedClause}.`,
+            reportImportedScene('VOXL', importedModelCount, importedSupportCount, skippedModels, _),
             skippedModels > 0 ? 'warning' : 'success',
           );
         }
       }
 
       if (importedModels.length === 0) {
-        console.warn('[SceneCollection] VOXL import completed without importable meshes (expected embedded-file meshes).');
+        console.warn('[SceneCollection] VOXL import completed without importable meshes (expected embedded-chunk meshes).');
         if (!options?.suppressReport) {
-          emitSceneImportReport('VOXL import finished with no importable meshes.', 'warning');
+          emitSceneImportReport(reportVoxlNoMeshes(_), 'warning');
         }
         return false;
       }
       return true;
     } catch (error) {
       console.error('[SceneCollection] VOXL import failed:', error);
+      if (error instanceof VoxlObsoleteVersionError) {
+        // A V1 scene is refused outright: no shipped DragonFruit ever wrote one
+        // (the first release already wrote the binary container), so this is
+        // explained rather than reported as a parse failure.
+        setObsoleteVoxlScene({ fileName: file.name, detected: error.detected });
+        if (!options?.suppressReport) {
+          emitSceneImportReport(reportVoxlUnsupportedVersion(file.name, _), 'warning');
+        }
+        return false;
+      }
       const message = error instanceof Error ? error.message : String(error);
       if (!options?.suppressReport) {
-        emitSceneImportReport(`VOXL import failed: ${message}`, 'error');
+        emitSceneImportReport(reportVoxlImportFailed(message, _), 'error');
       }
       if (!options?.suppressReport && typeof window !== 'undefined') {
-        window.alert(`Import VOXL failed:\n${message}`);
+        window.alert(alertSceneImportFailed(message, _));
       }
       return false;
     } finally {
@@ -5307,7 +7647,7 @@ export function useSceneCollectionManager() {
         });
       }
     }
-  }, [cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
 
   const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
@@ -5341,8 +7681,8 @@ export function useSceneCollectionManager() {
     setImportProgress({
       active: true,
       type: 'scene',
-      label: 'Importing Scenes…',
-      detail: `Preparing 0/${files.length}`,
+      label: importLabelScenes(_),
+      detail: importDetailPreparing(0, files.length, _),
       progress: null,
     });
 
@@ -5355,8 +7695,8 @@ export function useSceneCollectionManager() {
       setImportProgress({
         active: true,
         type: 'scene',
-        label: 'Importing Scenes…',
-        detail: `${i + 1}/${files.length}: ${file.name}`,
+        label: importLabelScenes(_),
+        detail: importDetailIndexedFile(i + 1, files.length, file.name, _),
         progress: null,
       });
 
@@ -5380,14 +7720,14 @@ export function useSceneCollectionManager() {
     });
 
     if (failureCount === 0) {
-      emitSceneImportReport(`Imported ${successCount} scene files.`, 'success');
+      emitSceneImportReport(reportSceneFilesImported(successCount, _), 'success');
     } else if (successCount > 0) {
-      emitSceneImportReport(`Imported ${successCount}/${files.length} scene files (${failureCount} failed).`, 'warning');
+      emitSceneImportReport(reportSceneFilesPartlyImported(successCount, files.length, failureCount, _), 'warning');
     } else {
-      emitSceneImportReport(`Scene import failed for all ${files.length} files.`, 'error');
+      emitSceneImportReport(reportSceneFilesAllFailed(files.length, _), 'error');
     }
     return successCount > 0;
-  }, [emitSceneImportReport, getSceneExtension, importSceneFile, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, emitSceneImportReport, getSceneExtension, importSceneFile, trackRecentOpenedFiles, waitForUiYield]);
 
   const onImportSceneChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -5404,8 +7744,17 @@ export function useSceneCollectionManager() {
     // create a path-backed file so the Rust sideload reads from disk directly.
     // IndexedDB blobs for these files were stored empty (0 bytes) because
     // createPathBackedStlFile builds the File object with an empty blob.
+    //
+    // Only an STL goes without its bytes, as from the native picker: an OBJ or 3MF
+    // the native loader cannot read falls back to the renderer's loaders, which
+    // parse the File itself. Given an empty one, the 3MF unzip worker failed
+    // without answering and the import hung.
     if (entry.kind === 'mesh' && entry.sourcePath) {
-      const pathFile = new File([], entry.name, {
+      const core = entry.name.toLowerCase().endsWith('.stl') ? null : await loadTauriCore();
+      const bytes = core
+        ? await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath: entry.sourcePath })
+        : null;
+      const pathFile = new File(bytes ? [new Uint8Array(bytes)] : [], entry.name, {
         type: 'application/octet-stream',
         lastModified: Date.now(),
       });
@@ -5418,6 +7767,16 @@ export function useSceneCollectionManager() {
     if (!file) {
       console.warn('[SceneCollection] Unable to restore recent file from local cache.');
       return false;
+    }
+
+    // A mesh entry recorded before the on-disk path was tracked carries no
+    // sourcePath, so it can only be restored from the cached blob and the native
+    // loader is skipped. Re-importing the file records the path and heals it.
+    if (entry.kind === 'mesh' && !entry.sourcePath) {
+      console.warn(
+        '[SceneCollection] Recent mesh entry has no on-disk path; restoring from cache. ' +
+        'Re-import the file to enable the native loader for it.',
+      );
     }
 
     // Recovered file is empty and there is no disk path to fall back to — the
@@ -5469,17 +7828,17 @@ export function useSceneCollectionManager() {
       const json = JSON.parse(text) as unknown;
       const parsed = asDragonfruitImportFormat(json);
       if (!parsed) {
-        emitSceneImportReport('Support import failed: unsupported support JSON format.', 'error');
+        emitSceneImportReport(reportSupportJsonUnsupported(_), 'error');
         return;
       }
 
       applyImportDefaultsToRaftState();
       loadFromImportFormat(parsed);
-      emitSceneImportReport('Imported support data.', 'success');
+      emitSceneImportReport(reportSupportJsonImported(_), 'success');
 
     } catch (err) {
       console.error('[SceneCollection] Failed to import support JSON:', err);
-      emitSceneImportReport('Support import failed.', 'error');
+      emitSceneImportReport(reportSupportJsonFailed(_), 'error');
     }
   }, [emitSceneImportReport]);
 
@@ -5512,47 +7871,19 @@ export function useSceneCollectionManager() {
     const normalizedColor = clampHexColor(color, DEFAULT_MESH_COLOR);
     setPreferredMeshColor(normalizedColor);
 
-    if (activeModelId) {
-      setModels(prev => prev.map(m => {
-        if (m.id !== activeModelId) return m;
+    const currentModels = modelsRef.current;
+    const target = currentModels.find((model) => model.id === activeModelId);
+    if (!target || target.color === normalizedColor) return;
 
-        const hasColorAttribute = !!m.geometry.geometry.getAttribute('color');
-        if (hasColorAttribute) {
-          try {
-            clearPaintToBase(m.geometry.geometry, new THREE.Color(normalizedColor));
-          } catch (err) {
-            console.error('[SceneCollection] Failed to apply mesh color to geometry:', err);
-          }
-        }
-
-        return { ...m, color: normalizedColor };
-      }));
-    }
-
-    const prev = readMeshAppearanceFromLocalStorage();
-
-    const persistedShaderType = clampPersistedMeshShaderType(prev?.shaderType ?? shaderType, DEFAULT_SHADER_TYPE);
-    writeMeshAppearanceToLocalStorage({
-      v: 1,
-      shaderType: persistedShaderType,
-      matcapVariant: prev?.matcapVariant ?? matcapVariant,
-      flatUseVertexColors: prev?.flatUseVertexColors ?? flatUseVertexColors,
-      toonSteps: prev?.toonSteps ?? toonSteps,
-      ambientIntensity: prev?.ambientIntensity ?? ambientIntensity,
-      directionalIntensity: prev?.directionalIntensity ?? directionalIntensity,
-      materialRoughness: prev?.materialRoughness ?? materialRoughness,
-      wireframeThicknessPx: prev?.wireframeThicknessPx ?? wireframeThicknessPx,
-      xrayOpacity: prev?.xrayOpacity ?? xrayOpacity,
-      heatmapMinAngle: prev?.heatmapMinAngle ?? heatmapMinAngle,
-      heatmapMaxAngle: prev?.heatmapMaxAngle ?? heatmapMaxAngle,
-      heatmapColors: prev?.heatmapColors ?? heatmapColors,
-      meshColor: normalizedColor,
-      selectionColor: prev?.selectionColor ?? selectionColor,
-      hoverColor: prev?.hoverColor ?? hoverColor,
-      hoverTintStrength: prev?.hoverTintStrength ?? hoverTintStrength,
-      selectedTintStrength: prev?.selectedTintStrength ?? selectedTintStrength,
-    });
-  }, [activeModelId, ambientIntensity, directionalIntensity, flatUseVertexColors, heatmapMinAngle, heatmapColors, heatmapMaxAngle, hoverColor, hoverTintStrength, materialRoughness, matcapVariant, selectedTintStrength, selectionColor, shaderType, toonSteps, wireframeThicknessPx, xrayOpacity]);
+    paintModelBaseColor(target, normalizedColor);
+    const nextModels = currentModels.map((model) => (
+      model.id === target.id ? { ...model, color: normalizedColor } : model
+    ));
+    const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelIdRef.current, selectedModelIdsRef.current);
+    pushSceneSnapshotHistory(before, after, colorModelLabel(target.name));
+  }, [activeModelId, pushSceneSnapshotHistory]);
 
   const setMeshVisible = useCallback((visible: boolean) => {
     if (activeModelId) {
@@ -5581,8 +7912,159 @@ export function useSceneCollectionManager() {
     pushSceneSnapshotHistory(
       before,
       after,
-      isSupport ? 'Mark as Support Geometry' : 'Mark as Model Geometry',
+      isSupport ? MARK_AS_SUPPORT_LABEL : MARK_AS_MODEL_LABEL,
     );
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
+
+  const setModelBodyMaterial = useCallback((
+    modelId: string,
+    bodyIndices: number[],
+    materialProfileId: string | null,
+    materialColor?: string,
+  ) => {
+    const target = models.find((model) => model.id === modelId);
+    const bodyCount = target?.splitBodies?.length ?? 0;
+    if (!target || bodyCount <= 1 || bodyIndices.length === 0) return;
+
+    const nextIds = Array.from({ length: bodyCount }, (_, index) => target.bodyMaterialProfileIds?.[index]);
+    const nextColors = Array.from({ length: bodyCount }, (_, index) => target.bodyColors?.[index]);
+    let changed = false;
+    for (const index of bodyIndices) {
+      if (index < 0 || index >= bodyCount) continue;
+      const nextId = materialProfileId || undefined;
+      const nextColor = nextId ? materialColor : undefined;
+      if (nextIds[index] !== nextId || nextColors[index] !== nextColor) {
+        nextIds[index] = nextId;
+        nextColors[index] = nextColor;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+
+    const nextModels = models.map((model) => (
+      model.id === modelId
+        ? { ...model, bodyMaterialProfileIds: nextIds, bodyColors: nextColors }
+        : model
+    ));
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    pushSceneSnapshotHistory(before, after, ASSIGN_MATERIAL_LABEL);
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
+
+  const setModelMaterialProfile = useCallback((
+    modelIds: string[],
+    materialProfileId: string | null,
+    materialColor?: string,
+  ) => {
+    if (modelIds.length === 0) return;
+    const targetIds = new Set(modelIds);
+    if (!models.some((m) => targetIds.has(m.id))) return;
+
+    const nextMaterialProfileId = materialProfileId || undefined;
+    // An assigned material paints its resin colour on the mesh, remembering the
+    // colour it replaced; clearing the assignment hands that colour back.
+    const nextModels = models.map((model) => {
+      if (!targetIds.has(model.id)) return model;
+      if (!nextMaterialProfileId) {
+        if (!model.materialProfileId && !model.materialBaseColor) return model;
+        return {
+          ...model,
+          materialProfileId: undefined,
+          materialBaseColor: undefined,
+          color: model.materialBaseColor ?? model.color,
+        };
+      }
+      if (!materialColor) {
+        return model.materialProfileId === nextMaterialProfileId
+          ? model
+          : { ...model, materialProfileId: nextMaterialProfileId };
+      }
+      return {
+        ...model,
+        materialProfileId: nextMaterialProfileId,
+        materialBaseColor: model.materialBaseColor ?? model.color,
+        color: materialColor,
+      };
+    });
+
+    if (nextModels.every((model, index) => model === models[index])) return;
+
+    nextModels.forEach((next, index) => {
+      const previous = models[index];
+      if (previous.color !== next.color) paintModelBaseColor(next, next.color);
+    });
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    pushSceneSnapshotHistory(before, after, ASSIGN_MATERIAL_LABEL);
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
+
+  /**
+   * Replace every scene material reference through one old-to-new map. Missing
+   * entries unassign, which is what a printer with no matching tank materials
+   * offers. One history entry, because the whole scene moved together.
+   */
+  const reassignSceneMaterials = useCallback((
+    assignments: Map<string, { id: string; color?: string }>,
+    unassignMissing = false,
+  ) => {
+    const nextModels = models.map((model) => {
+      const nextModelMaterial = model.materialProfileId ? assignments.get(model.materialProfileId) : undefined;
+      const clearModel = Boolean(model.materialProfileId) && !nextModelMaterial && unassignMissing;
+      const bodyMaterialProfileIds = model.bodyMaterialProfileIds?.map((id) => {
+        if (!id) return undefined;
+        const next = assignments.get(id);
+        if (next) return next.id;
+        return unassignMissing ? undefined : id;
+      });
+      const bodyColors = model.bodyMaterialProfileIds
+        ? model.bodyColors?.map((color, index) => {
+          const id = model.bodyMaterialProfileIds?.[index];
+          if (!id) return color;
+          const next = assignments.get(id);
+          if (next) return next.color;
+          return unassignMissing ? undefined : color;
+        })
+        : model.bodyColors;
+
+      const materialProfileId = nextModelMaterial?.id ?? (clearModel ? undefined : model.materialProfileId);
+      let materialBaseColor = model.materialBaseColor;
+      let color = model.color;
+      if (clearModel) {
+        materialBaseColor = undefined;
+        color = model.materialBaseColor ?? model.color;
+      } else if (nextModelMaterial?.color) {
+        materialBaseColor = model.materialBaseColor ?? model.color;
+        color = nextModelMaterial.color;
+      }
+
+      const changed = materialProfileId !== model.materialProfileId
+        || materialBaseColor !== model.materialBaseColor
+        || color !== model.color
+        || (bodyMaterialProfileIds && bodyMaterialProfileIds.some((id, index) => id !== model.bodyMaterialProfileIds?.[index]))
+        || (bodyColors && bodyColors.some((entry, index) => entry !== model.bodyColors?.[index]));
+      if (!changed) return model;
+      return {
+        ...model,
+        materialProfileId,
+        materialBaseColor,
+        color,
+        ...(bodyMaterialProfileIds ? { bodyMaterialProfileIds } : {}),
+        ...(bodyColors ? { bodyColors } : {}),
+      };
+    });
+
+    if (nextModels.every((model, index) => model === models[index])) return;
+    nextModels.forEach((next, index) => {
+      if (models[index].color !== next.color) paintModelBaseColor(next, next.color);
+    });
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    pushSceneSnapshotHistory(before, after, ASSIGN_MATERIAL_LABEL);
   }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   const linkModels = useCallback((idsInput: string[]) => {
@@ -5608,7 +8090,7 @@ export function useSceneCollectionManager() {
 
     setModels(nextModels);
     const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds);
-    pushSceneSnapshotHistory(before, after, `Link ${targetModels.length} Models`);
+    pushSceneSnapshotHistory(before, after, linkModelsLabel(targetModels.length));
   }, [pushSceneSnapshotHistory]);
 
   const unlinkModels = useCallback((idsInput: string[]) => {
@@ -5646,72 +8128,283 @@ export function useSceneCollectionManager() {
 
     setModels(nextModels);
     const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds);
-    pushSceneSnapshotHistory(before, after, `Unlink ${targetModels.length} Models`);
+    pushSceneSnapshotHistory(before, after, unlinkModelsLabel(targetModels.length));
   }, [pushSceneSnapshotHistory]);
 
   /**
-   * Re-runs the full native repair pipeline on an already-loaded model's
-   * geometry and swaps the result back in-place.  Intended for the manual
-   * "Repair Mesh" context-menu action.
+   * Put a model back to how it arrived, by loading its file again.
+   *
+   * A repair leaves no copy of what it replaced, so undo re-reads the source and lets the import
+   * path do what it did the first time. The file goes through Rust: the webview refuses a `file://`
+   * fetch. Only the geometry is swapped, so the model keeps its transform and does not move.
    */
-  const repairModelInPlace = useCallback(async (modelId: string): Promise<boolean> => {
-    const model = modelsRef.current.find(m => m.id === modelId);
-    if (!model) return false;
-    try {
-      const processed = await processGeometry(model.geometry.geometry, {
-        center: false,
-        nativeProcessingMode: 'repair',
-        assumeSupportGeometry: model.isSupportGeometry,
-      });
-      const posAttr = processed.geometry.getAttribute('position') as THREE.BufferAttribute | null;
-      const polygonCount = posAttr ? Math.floor(posAttr.count / 3) : model.polygonCount;
-      const repairReport = processed.meshDefects?.nativeRepairReport ?? null;
-
-      setModels(prev => prev.map(m =>
-        m.id === modelId ? { ...m, geometry: processed, polygonCount } : m
-      ));
-
-      if (repairReport) {
-        const reportEntry: MeshRepairReportEntry = {
-          id: modelId,
-          modelName: model.name,
-          report: repairReport,
-        };
-        setPendingMeshRepairReports([]);
-        clearSceneImportReport();
-        setMeshRepairReportPresentation('optimistic');
-        setMeshRepairReports([reportEntry]);
-      } else {
-        setPendingMeshRepairReports([]);
-        emitSceneImportReport(`Repaired ${model.name}.`, 'success');
-      }
-
-      return true;
-    } catch (err) {
-      console.error('[repairModelInPlace] Repair failed:', err);
-      setPendingMeshRepairReports([]);
-      const message = err instanceof Error ? err.message : String(err);
-      emitSceneImportReport(`Repair failed: ${message}`, 'error', { durationMs: 6_000 });
+  const undoRepairsInPlace = useCallback(async (modelId: string) => {
+    const model = models.find((entry) => entry.id === modelId);
+    const sourcePath = model?.sourcePath?.trim();
+    if (!model || !sourcePath) {
+      emitSceneImportReport(_(msg`No source file to restore this model from.`), 'warning');
       return false;
     }
-  }, [clearSceneImportReport, emitSceneImportReport]);
+    try {
+      const positions = await loadMeshFromPath(sourcePath);
+      if (!positions || positions.length === 0) {
+        throw new Error('the file produced no geometry');
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const reloaded = await processGeometry(geometry, {
+        center: false,
+        nativeProcessingMode: shouldAutoRepairSceneImports() ? 'auto' : 'none',
+      });
+      const posAttr = reloaded.geometry.getAttribute('position') as THREE.BufferAttribute | null;
+      const polygonCount = posAttr ? Math.floor(posAttr.count / 3) : model.polygonCount;
+      setModels(prev => prev.map(entry =>
+        entry.id === modelId ? { ...entry, geometry: reloaded, polygonCount } : entry
+      ));
+      // The repair is gone, so the menu must stop offering it and the report it left.
+      setManuallyRepairedModelIds(prev => prev.filter((id) => id !== modelId));
+      setMeshRepairReports([]);
+      setPendingMeshRepairReports([]);
+      emitSceneImportReport(reportRestoredModel(model.name, _), 'success');
+      return true;
+    } catch (error) {
+      console.error('[undoRepairsInPlace] Reload failed:', error);
+      emitSceneImportReport(_(msg`Could not restore the model.`), 'error');
+      return false;
+    }
+  }, [_, emitSceneImportReport, models, shouldAutoRepairSceneImports]);
+
+  /**
+   * Re-runs the full native repair pipeline on each model in turn and swaps every result in as
+   * one undo step. Intended for the manual "Repair Mesh" action, on one model or a selection.
+   * The reports of every model that had one are shown together; a model that fails is reported
+   * and the rest still run. A cancel stops the run on the model it lands on: the models already
+   * finished keep their repair, the one in progress is left alone. Resolves true when every
+   * model was repaired.
+   */
+  const repairModelsInPlace = useCallback(async (
+    modelIds: readonly string[],
+    repairProgressSink?: ModelsRepairProgressSink,
+  ): Promise<boolean> => {
+    const repaired = new Map<string, { geometry: GeometryWithBounds; polygonCount: number }>();
+    const reportEntries: MeshRepairReportEntry[] = [];
+    const repairedNames: string[] = [];
+    let allRepaired = true;
+    let cancelled = false;
+
+    for (const [index, modelId] of modelIds.entries()) {
+      const model = modelsRef.current.find(m => m.id === modelId);
+      if (!model) {
+        allRepaired = false;
+        continue;
+      }
+      repairProgressSink?.onModelStart?.(modelId, index, modelIds.length);
+      try {
+        const processed = await processGeometry(model.geometry.geometry, {
+          center: false,
+          nativeProcessingMode: 'repair',
+          assumeSupportGeometry: model.isSupportGeometry,
+          repairProgressSink,
+          // The file it came from, so the repair reads it through the same loader the
+          // import did instead of uploading a triangle soup and re-deriving every vertex.
+          sourcePath: model.sourcePath ?? undefined,
+        });
+
+        // A cancelled repair stopped where it was asked to, and the mesh it hands back
+        // is a partly repaired one. Applying it would replace the model with something
+        // the caller did not ask for, so the model is left alone and the run ends here.
+        if (processed.meshDefects?.nativeRepairReport?.cancelled) {
+          cancelled = true;
+          allRepaired = false;
+          break;
+        }
+
+        const polygonCount = processed.geometry.getAttribute('position')
+          ? countTriangles(processed.geometry)
+          : model.polygonCount;
+        const repairReport = processed.meshDefects?.nativeRepairReport ?? null;
+
+        repaired.set(modelId, { geometry: processed, polygonCount });
+        repairedNames.push(model.name);
+        if (repairReport) {
+          reportEntries.push({ id: modelId, modelName: model.name, report: repairReport });
+        }
+      } catch (err) {
+        console.error('[repairModelsInPlace] Repair failed:', err);
+        allRepaired = false;
+        const message = err instanceof Error ? err.message : String(err);
+        emitSceneImportReport(
+          modelIds.length === 1
+            ? repairFailedMessage(message, _)
+            : repairFailedForModelMessage(model.name, message, _),
+          'error',
+          { durationMs: 6_000 },
+        );
+      }
+    }
+
+    setPendingMeshRepairReports([]);
+    if (repaired.size === 0) {
+      if (cancelled) {
+        emitSceneImportReport(
+          repairCancelledMessage(modelIds.length, _),
+          'warning',
+        );
+      }
+      return false;
+    }
+
+    // The repairs awaited, so the scene they land in is the current one, not the one they started from.
+    const currentModels = modelsRef.current;
+    const nextModels = currentModels.map(m => {
+      const result = repaired.get(m.id);
+      return result ? { ...m, geometry: result.geometry, polygonCount: result.polygonCount } : m;
+    });
+    const before = captureSceneSnapshot(currentModels, activeModelIdRef.current, selectedModelIdsRef.current);
+    setModels(nextModels);
+    const after = captureSceneSnapshot(nextModels, activeModelIdRef.current, selectedModelIdsRef.current);
+    const [onlyRepairedId] = repaired.keys();
+    pushSceneSnapshotHistory(
+      before,
+      after,
+      repaired.size === 1 ? repairModelLabel(repairedNames[0]) : repairModelsLabel(repaired.size),
+      repaired.size === 1 ? onlyRepairedId : undefined,
+    );
+    setManuallyRepairedModelIds(prev => [...prev, ...[...repaired.keys()].filter(id => !prev.includes(id))]);
+
+    if (reportEntries.length > 0) {
+      clearSceneImportReport();
+      setMeshRepairReportPresentation('optimistic');
+      setMeshRepairReports(reportEntries);
+    }
+    if (cancelled) {
+      emitSceneImportReport(repairStoppedMessage(repaired.size, modelIds.length, _), 'warning');
+    } else if (reportEntries.length === 0 && allRepaired) {
+      emitSceneImportReport(repairedModelsMessage(repairedNames, _), 'success');
+    }
+
+    return allRepaired;
+  }, [_, clearSceneImportReport, emitSceneImportReport, pushSceneSnapshotHistory]);
+
+  /**
+   * Rebuild one model's surface with the native tetrahedral surfacing pass and swap the result in
+   * as a single undo step.
+   *
+   * Unlike the shrinkwrap remesh, the decomposition follows the model's own points rather than a
+   * uniform lattice, so fine detail survives and the boundary is closed by construction. The swap
+   * lands in place, keeping the model's transform and its place in the scene. The outcome, with the
+   * before/after triangle counts, is reported as a toast.
+   */
+  const tetSurfaceModelInPlace = useCallback(async (
+    modelId: string,
+    options: TetWrapOptions,
+    progressSink?: TetSurfaceProgressSink,
+  ): Promise<boolean> => {
+    const model = modelsRef.current.find((entry) => entry.id === modelId);
+    if (!model) return false;
+
+    try {
+      const result = await tetSurfaceFromGeometry(model.geometry.geometry, options, progressSink);
+      if (!result) {
+        emitSceneImportReport(_(msg`Remesh needs the desktop app.`), 'warning');
+        return false;
+      }
+      // The pass awaited, so the scene it lands in may no longer hold the model.
+      if (!modelsRef.current.some((entry) => entry.id === modelId)) return false;
+
+      // The pass carries no mesh modifiers, so an empty before-state is what marks this as a
+      // single undo step: the swap is recorded only when a history option is given.
+      const swapped = replaceModelGeometry(modelId, result.geometry, tetSurfaceModelLabel(model.name), {
+        historyBefore: {},
+      });
+      if (!swapped) return false;
+
+      const { report } = result;
+      emitSceneImportReport(
+        tetSurfacedMessage(
+          fmt.number(report.input_triangles),
+          fmt.number(report.output_triangles),
+          fmt.quantity(Math.round(report.ms), 0, 'ms'),
+          _,
+        ),
+        'success',
+      );
+      return true;
+    } catch (error) {
+      console.error('[tetSurfaceModelInPlace] Remesh failed:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      emitSceneImportReport(_(msg`Remesh failed: ${message}`), 'error', { durationMs: 6_000 });
+      return false;
+    }
+  }, [_, emitSceneImportReport, fmt, replaceModelGeometry]);
+
+  /**
+   * Rebuild one model's surface by resolving it into a solid and swap the result in as a single
+   * undo step.
+   *
+   * This is the mode the reference implementation's shrinkwrap uses: close what is open, boolean the
+   * mesh with itself so the result is resolved and retriangulated, then drop scrap shells. Where the
+   * tetrahedral remesh conforms to the model's own points and hands the same surface back, this one
+   * moves it, so it is for a mesh that is not one solid. The swap lands in place, keeping the
+   * model's transform and its place in the scene. The outcome, with the before/after triangle
+   * counts, is reported as a toast.
+   */
+  const solidRemeshModelInPlace = useCallback(async (
+    modelId: string,
+    options: SolidRemeshOptions,
+    progressSink?: SolidRemeshProgressSink,
+  ): Promise<boolean> => {
+    const model = modelsRef.current.find((entry) => entry.id === modelId);
+    if (!model) return false;
+
+    try {
+      const result = await solidRemeshFromGeometry(model.geometry.geometry, options, progressSink);
+      if (!result) {
+        emitSceneImportReport(_(msg`Shrink-Wrap needs the desktop app.`), 'warning');
+        return false;
+      }
+      // The pass awaited, so the scene it lands in may no longer hold the model.
+      if (!modelsRef.current.some((entry) => entry.id === modelId)) return false;
+
+      // The pass carries no mesh modifiers, so an empty before-state is what marks this as a
+      // single undo step: the swap is recorded only when a history option is given.
+      const swapped = replaceModelGeometry(modelId, result.geometry, solidRemeshModelLabel(model.name), {
+        historyBefore: {},
+      });
+      if (!swapped) return false;
+
+      const { report } = result;
+      emitSceneImportReport(
+        shrinkWrappedMessage(
+          fmt.number(report.input_triangles),
+          fmt.number(report.output_triangles),
+          fmt.quantity(Math.round(report.ms), 0, 'ms'),
+          _,
+        ),
+        'success',
+      );
+      return true;
+    } catch (error) {
+      console.error('[solidRemeshModelInPlace] Shrink-Wrap failed:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      emitSceneImportReport(_(msg`Shrink-Wrap failed: ${message}`), 'error', { durationMs: 6_000 });
+      return false;
+    }
+  }, [_, emitSceneImportReport, fmt, replaceModelGeometry]);
 
   // Cleanup on unmount
   useEffect(() => {
     const previous = trackedGeometriesRef.current;
-    const next = new Set<THREE.BufferGeometry>(models.map((model) => model.geometry.geometry));
+    const next = new Set<THREE.BufferGeometry>();
+    for (const model of models) modelGeometries(model).forEach((geometry) => next.add(geometry));
 
     for (const clipboardEntry of modelClipboard) {
-      next.add(clipboardEntry.geometry.geometry);
+      modelGeometries(clipboardEntry).forEach((geometry) => next.add(geometry));
     }
 
     for (const snapshot of sceneSnapshotRegistry.values()) {
-      for (const model of snapshot.before.models) {
-        next.add(model.geometry.geometry);
-      }
-      for (const model of snapshot.after.models) {
-        next.add(model.geometry.geometry);
-      }
+      for (const model of snapshot.before.models) modelGeometries(model).forEach((geometry) => next.add(geometry));
+      for (const model of snapshot.after.models) modelGeometries(model).forEach((geometry) => next.add(geometry));
     }
 
     const removed: THREE.BufferGeometry[] = [];
@@ -5808,10 +8501,514 @@ export function useSceneCollectionManager() {
     return hasVisible ? unionBox : null;
   }, [models]);
 
+  // ─── Plates ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Where a plate sits in the world, from its place in the cascade. The first
+   * plate is the origin, so a single-plate scene is exactly where it always was.
+   */
+  const plateOffsetFor = useCallback((plateId: string): { dxMm: number; dyMm: number } => {
+    const index = platesRef.current.findIndex((plate) => plate.id === plateId);
+    if (index <= 0) return { dxMm: 0, dyMm: 0 };
+    return plateCascadeOffsetMm(index, {
+      widthMm: view3dSettings.widthMm,
+      depthMm: view3dSettings.depthMm,
+    }, platesRef.current.length, plateOrderingRef.current);
+  }, [view3dSettings.widthMm, view3dSettings.depthMm]);
+
+  /**
+   * The batched bed insert and the offset lookup, for callers declared above them.
+   *
+   * A paste that overflows needs both, and it is defined earlier in this hook than they
+   * are; going through refs keeps the hook's declaration order intact instead of
+   * rearranging a thousand lines to satisfy it.
+   */
+  const addPlatesRef = useRef<(count: number) => {
+    plates: ScenePlate[];
+    added: ScenePlate[];
+    offsets: Map<string, { dxMm: number; dyMm: number }>;
+  }>(() => ({ plates: [], added: [], offsets: new Map() }));
+  const plateOffsetForRef = useRef(plateOffsetFor);
+  plateOffsetForRef.current = plateOffsetFor;
+
+  /**
+   * The models, moved with their beds when the grid is re-laid: `relaidPlateShifts` in
+   * plateLayout decides how far each one moves, and this applies it to the app's models.
+   * A model that stays put keeps its transform object, which is how the support shift
+   * knows to skip it.
+   */
+  const modelsShiftedForRelaidPlates = useCallback((
+    before: readonly ScenePlate[],
+    after: readonly ScenePlate[],
+    models: readonly LoadedModel[],
+    options?: PlateRelayoutOptions,
+  ): LoadedModel[] => {
+    const { widthMm, depthMm, originMode } = view3dSettings;
+    const shifts = relaidPlateShifts({
+      before,
+      after,
+      models,
+      footprint: { widthMm, depthMm, originMode },
+      ordering: plateOrderingRef.current,
+      laidOut: options?.laidOut,
+      wasOrdering: options?.wasOrdering,
+    });
+    if (shifts.size === 0) return models as LoadedModel[];
+
+    return models.map((model) => {
+      const shift = shifts.get(model.id);
+      if (!shift) return model;
+      return {
+        ...model,
+        transform: {
+          ...model.transform,
+          position: model.transform.position.clone().add(new THREE.Vector3(shift.dxMm, shift.dyMm, 0)),
+        },
+      };
+    });
+  }, [view3dSettings]);
+
+  /**
+   * Lay the beds out as `next` and move what stands on them: each model by how far its own
+   * bed moved, its supports by the same move, and the refs as well as the state, because a
+   * caller may place models from the same lists in this same tick. Every relayout goes
+   * through here, so none can move the models and leave their supports behind (#926).
+   *
+   * Returns the models before and after, for a caller that records a history step.
+   */
+  const relayPlates = useCallback((
+    next: ScenePlate[],
+    options?: PlateRelayoutOptions,
+  ): { modelsBefore: LoadedModel[]; shiftedModels: LoadedModel[] } => {
+    const current = platesRef.current;
+    const modelsBefore = modelsRef.current;
+    const shiftedModels = modelsShiftedForRelaidPlates(current, next, modelsBefore, options);
+    if (next !== current) {
+      platesRef.current = next;
+      setPlates(next);
+    }
+    if (shiftedModels !== modelsBefore) {
+      shiftSupportsWithModels(modelsBefore, shiftedModels);
+      modelsRef.current = shiftedModels;
+      setModels(shiftedModels);
+    }
+    return { modelsBefore, shiftedModels };
+  }, [modelsShiftedForRelaidPlates]);
+
+  /**
+   * The build volume the beds were last laid out on.
+   *
+   * The cascade spaces the beds by their own footprint, so a printer switch moves every
+   * bed but the first. The models have to make the same move: one left at the plate 2
+   * of the old printer sits off the side of the one it stands on, and reads as outside
+   * its plate — which is what a smaller printer used to do to every bed but the first.
+   */
+  const laidOutFootprintRef = useRef<{
+    printerId: string | null;
+    widthMm: number;
+    depthMm: number;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    const previous = laidOutFootprintRef.current;
+    const current = {
+      printerId: activePrinterProfile?.id ?? null,
+      widthMm: view3dSettings.widthMm,
+      depthMm: view3dSettings.depthMm,
+    };
+    laidOutFootprintRef.current = current;
+    if (!previous) return;
+
+    const printerChanged = previous.printerId !== current.printerId;
+    const footprintChanged = previous.widthMm !== current.widthMm
+      || previous.depthMm !== current.depthMm;
+    if (!printerChanged && !footprintChanged) return;
+
+    const currentPlates = platesRef.current;
+    const supportStateBefore = supportStateFor(modelsRef.current);
+    const { modelsBefore, shiftedModels } = relayPlates(currentPlates, {
+      laidOut: {
+        widthMm: previous.widthMm,
+        depthMm: previous.depthMm,
+        originMode: view3dSettings.originMode,
+      },
+    });
+
+    if (shiftedModels !== modelsBefore) {
+      // The bed being worked on moved with the others, so the view comes along the way it
+      // does when you pick a bed.
+      setPlateViewRunId((id) => id + 1);
+    }
+
+    // Only a change of printer is a step worth naming. Editing the build volume of the same
+    // profile moves the beds too, but there is no earlier volume to return to: the profile
+    // itself is not part of the snapshot, only which one is active.
+    if (!printerChanged) return;
+
+    pushSceneSnapshotHistory(
+      captureSceneSnapshot(modelsBefore, activeModelIdRef.current, selectedModelIdsRef.current, {
+        plates: currentPlates,
+        activePlateId: activePlateIdRef.current,
+        printerProfileId: previous.printerId,
+        includeSupportState: supportStateBefore !== undefined,
+        supportStateOverride: supportStateBefore,
+      }),
+      captureSceneSnapshot(shiftedModels, activeModelIdRef.current, selectedModelIdsRef.current, {
+        plates: currentPlates,
+        activePlateId: activePlateIdRef.current,
+        printerProfileId: current.printerId,
+        includeSupportState: supportStateBefore !== undefined,
+      }),
+      activePrinterProfile ? switchPrinterLabel(activePrinterProfile.name) : SWITCH_PRINTER_LABEL,
+    );
+  }, [
+    activePrinterProfile,
+    pushSceneSnapshotHistory,
+    relayPlates,
+    view3dSettings.depthMm,
+    view3dSettings.originMode,
+    view3dSettings.widthMm,
+  ]);
+
+  /**
+   * Switching the layout moves every bed but the first, so the models standing on them
+   * move too: left where they were, each would belong to whichever bed the new layout
+   * put under that spot. The same shift the plate-add path applies, told which ordering
+   * the positions were laid out under, because that is the layout they are leaving.
+   *
+   * No history entry: the ordering is a setting, not scene content, so there is no
+   * earlier document state to return to — the way a build volume edit moves the beds
+   * without being a step of its own.
+   */
+  useEffect(() => {
+    const previous = appliedPlateOrderingRef.current;
+    if (previous.mode === plateOrdering.mode && previous.columns === plateOrdering.columns) return;
+    appliedPlateOrderingRef.current = plateOrdering;
+
+    const currentPlates = platesRef.current;
+    if (currentPlates.length <= 1) return;
+
+    const { modelsBefore, shiftedModels } = relayPlates(currentPlates, { wasOrdering: previous });
+    if (shiftedModels === modelsBefore) return;
+
+    // The bed being worked on moved with the others, so the view comes along.
+    setPlateViewRunId((id) => id + 1);
+  }, [plateOrdering, relayPlates]);
+
+  /**
+   * Drops beds from the scene without touching what stands on them.
+   *
+   * For a run that is about to move every model off them: the models keep their positions
+   * until the run places them, and the beds go first, so the cascade spaces the beds that
+   * remain — and any the run then adds — against the count that is actually left. The models
+   * standing on the beds that stay are shifted with them, the same move adding a bed makes.
+   *
+   * `removePlate` is the one for a delete: it takes the plates' models with it.
+   *
+   * No history of its own: the caller folds the beds into its own step, which one undo then
+   * takes back with the placements.
+   */
+  const dropPlates = useCallback((plateIds: readonly string[]): ScenePlate[] => {
+    const current = platesRef.current;
+    const doomed = new Set(plateIds);
+    const remaining = current.filter((plate) => !doomed.has(plate.id));
+    if (remaining.length === current.length || remaining.length === 0) return current;
+
+    // An arrange places its models from the same lists in the same tick, which is why
+    // `relayPlates` refreshes the refs and not only the state.
+    relayPlates(remaining);
+    if (doomed.has(activePlateIdRef.current)) {
+      setActivePlateId(remaining[0].id);
+      setPlateViewRunId((id) => id + 1);
+    }
+
+    return remaining;
+  }, [relayPlates]);
+
+  /**
+   * Add `count` empty beds after the last one, and report the scene's beds with the frame
+   * each ends up at.
+   *
+   * A run that fills more than one bed has to know where every bed sits before it can
+   * place anything: it packs in a bed's own frame and then shifts the result into the
+   * bed. Adding a bed can re-lay the ones already there, so the frames are only true once
+   * the whole addition has landed — and they come from refs this hook owns, which a
+   * caller cannot read until React has committed. Hence one call that adds the beds and
+   * answers with the frames.
+   *
+   * No history entry of its own: the caller folds the beds into its own step, which one
+   * undo then takes back with the placements.
+   */
+  const addPlates = useCallback((count: number): {
+    plates: ScenePlate[];
+    added: ScenePlate[];
+    offsets: Map<string, { dxMm: number; dyMm: number }>;
+  } => {
+    const current = platesRef.current;
+    const footprint = { widthMm: view3dSettings.widthMm, depthMm: view3dSettings.depthMm };
+    const addedPlates: ScenePlate[] = count > 0
+      ? Array.from({ length: count }, () => ({ id: uuidv4(), name: '' }))
+      : [];
+    const settled = addedPlates.length > 0 ? [...current, ...addedPlates] : current;
+
+    // Whatever asked for the beds places its models from the same lists in this same tick,
+    // which is why `relayPlates` refreshes the refs and not only the state.
+    if (addedPlates.length > 0) relayPlates(settled);
+
+    const offsets = new Map<string, { dxMm: number; dyMm: number }>();
+    settled.forEach((plate, index) => {
+      offsets.set(plate.id, plateCascadeOffsetMm(index, footprint, settled.length, plateOrderingRef.current));
+    });
+
+    return { plates: settled, added: addedPlates, offsets };
+  }, [relayPlates, view3dSettings.depthMm, view3dSettings.widthMm]);
+  addPlatesRef.current = addPlates;
+
+  /**
+   * Add an empty plate after the last one, as its own history step. The plate being worked
+   * on does not change: adding a bed is not a reason to leave the one you are on.
+   */
+  const addPlate = useCallback((options?: { pushHistory?: boolean }): string => {
+    if (options?.pushHistory === false) return addPlates(1).added[0].id;
+
+    const platesBefore = platesRef.current;
+    const modelsBefore = modelsRef.current;
+    const supportStateBefore = supportStateFor(modelsBefore);
+    const before = captureSceneSnapshot(modelsBefore, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: platesBefore,
+      activePlateId: activePlateIdRef.current,
+      includeSupportState: supportStateBefore !== undefined,
+      supportStateOverride: supportStateBefore,
+    });
+
+    const { plates: next, added } = addPlates(1);
+
+    const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: next,
+      activePlateId: activePlateIdRef.current,
+      includeSupportState: supportStateBefore !== undefined,
+    });
+    pushSceneSnapshotHistory(before, after, addPlateLabel(next.length));
+    return added[0].id;
+  }, [addPlates, pushSceneSnapshotHistory]);
+
+  const activatePlate = useCallback((plateId: string) => {
+    if (!platesRef.current.some((plate) => plate.id === plateId)) return;
+    if (activePlateIdRef.current === plateId) return;
+
+    // Working on another bed: whatever was selected on the last one is not selected
+    // here, and leaving it selected would keep the gizmo and the panels on a model
+    // that is not on the plate you are looking at. The panel's own plate header
+    // selects that plate's models straight after, which is where a selection on the
+    // plate you just moved to comes from.
+    setSelectedModelIds([]);
+    setActiveModelId(null);
+    setActivePlateId(plateId);
+    setPlateViewRunId((id) => id + 1);
+  }, []);
+
+  /**
+   * Every plate's world rect: its cascade offset, and the build volume it holds
+   * in world coordinates. Computed once here because the canvas, the placement
+   * search and the out-of-bounds check all have to agree about where a plate is,
+   * and three separate derivations is how they stop agreeing.
+   */
+  const plateFrames = useMemo<PlateFrame[]>(() => {
+    const { widthMm, depthMm, originMode } = view3dSettings;
+    return computePlateFrames({ plates, footprint: { widthMm, depthMm, originMode }, ordering: plateOrdering });
+  }, [plateOrdering, plates, view3dSettings]);
+
+  plateFramesRef.current = plateFrames;
+
+  /** The plate a model stands on; the rule is `resolveModelPlateId` in plateLayout. */
+  const resolveModelPlateId = useCallback(
+    (model: LoadedModel): string => plateIdForModel(model, plateFrames),
+    [plateFrames],
+  );
+
+  /** The frame of the plate a model stands on. */
+  const modelPlateFrame = useCallback((model: LoadedModel): PlateFrame | undefined => {
+    const plateId = resolveModelPlateId(model);
+    return plateFrames.find((frame) => frame.id === plateId) ?? plateFrames[0];
+  }, [plateFrames, resolveModelPlateId]);
+
+  const renamePlate = useCallback((plateId: string, name: string) => {
+    setPlates((prev) => prev.map((plate) => (plate.id === plateId ? { ...plate, name } : plate)));
+  }, []);
+
+  /**
+   * Delete a plate and the models standing on it. Any plate can go, the first one
+   * included, but not the last: a scene with no bed has nowhere to build, so that
+   * is refused rather than half-done (`plateCanBeRemoved`).
+   */
+  const removePlate = useCallback((plateId: string): boolean => {
+    const current = platesRef.current;
+    if (!plateCanBeRemoved(current, plateId)) return false;
+    const remaining = current.filter((plate) => plate.id !== plateId);
+
+    const doomed = modelsOnPlate(modelsRef.current, plateId, plateFramesRef.current);
+    const nextActivePlateId = activePlateIdRef.current === plateId ? remaining[0].id : activePlateIdRef.current;
+    // The supports too: the delete takes the doomed models' supports, and the shift moves the
+    // others', so an undo without them would leave both where the delete put them.
+    const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: current,
+      activePlateId: activePlateIdRef.current,
+      includeSupportState: true,
+    });
+
+    // The beds after it move up a slot, and their models and supports with them; the doomed
+    // models stay put for the delete below to find.
+    relayPlates(remaining);
+    setActivePlateId(nextActivePlateId);
+    // Deleting the bed being worked on moves to another one, and the view comes with
+    // it — the same slide picking a bed gives, rather than leaving the camera where the
+    // bed that is now gone used to be.
+    if (activePlateIdRef.current !== nextActivePlateId) setPlateViewRunId((id) => id + 1);
+
+    // One entry for the whole move: `deleteModels` is asked not to push its own,
+    // because undoing that one alone would bring the models back onto a bed that
+    // is still gone and land them on another plate.
+    void deleteModels(doomed.map((model) => model.id), { pushHistory: false }).then(async () => {
+      // The models, the active model and the selection all come from the scene's refs,
+      // which the delete's `setState`es only refresh once React has committed — a snapshot
+      // taken a microtask early still holds the deleted models, and redo then puts them
+      // back on another bed.
+      await waitForUiYield();
+
+      const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+        plates: remaining,
+        activePlateId: nextActivePlateId,
+        includeSupportState: true,
+      });
+      pushSceneSnapshotHistory(before, after, deletePlateLabel(current.findIndex((plate) => plate.id === plateId) + 1));
+    });
+
+    return true;
+  }, [deleteModels, pushSceneSnapshotHistory, relayPlates]);
+
+  /**
+   * Delete the models *and* every bed but the first.
+   *
+   * This is the select-all delete: the gesture names the whole scene, so leaving the
+   * other beds standing behind would leave a scene that is empty but not clean. One
+   * history entry for the lot, because undoing a wipe should bring the scene back whole
+   * rather than bed by bed.
+   *
+   * A bed is kept when something the delete does not name is still standing on it — a
+   * hidden model the select-all gesture skipped keeps its bed, rather than being orphaned
+   * onto a plate it never stood on.
+   */
+  const deleteModelsAndExtraPlates = useCallback(async (idsInput: string[]): Promise<void> => {
+    const current = platesRef.current;
+    const firstPlateId = current[0]?.id;
+    if (current.length <= 1 || !firstPlateId) {
+      await deleteModels(idsInput);
+      return;
+    }
+
+    const doomed = new Set(idsInput);
+    const survivorStandsOnExtraPlate = modelsRef.current.some(
+      (model) => !doomed.has(model.id) && modelPlateId(model) !== firstPlateId,
+    );
+    if (survivorStandsOnExtraPlate) {
+      await deleteModels(idsInput);
+      return;
+    }
+
+    const remaining = current.slice(0, 1);
+    const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: current,
+      activePlateId: activePlateIdRef.current,
+      includeSupportState: true,
+    });
+
+    setPlates(remaining);
+    setActivePlateId(firstPlateId);
+    if (activePlateIdRef.current !== firstPlateId) setPlateViewRunId((id) => id + 1);
+
+    await deleteModels(idsInput, { pushHistory: false });
+    // The models, the active model and the selection all come from the scene's refs,
+    // which the delete's `setState`es only refresh once React has committed — a
+    // snapshot taken a microtask early would put the deleted models back into the
+    // "after" state, and redo would resurrect them.
+    await waitForUiYield();
+
+    const after = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
+      plates: remaining,
+      activePlateId: firstPlateId,
+      includeSupportState: true,
+    });
+    const historyKey = pushSceneSnapshotHistory(before, after, DELETE_MODELS_AND_PLATES_LABEL);
+    void spillSceneSnapshotKey(historyKey, modelsRef.current);
+  }, [deleteModels, modelPlateId, pushSceneSnapshotHistory, waitForUiYield]);
+
+  /**
+   * Move models to another plate, carrying them across the cascade so they keep
+   * their place on the bed they arrive at rather than landing wherever their old
+   * coordinates happen to fall.
+   */
+  const moveModelsToPlate = useCallback((modelIds: string[], plateId: string) => {
+    const plateList = platesRef.current;
+    const targetIndex = plateList.findIndex((plate) => plate.id === plateId);
+    if (targetIndex < 0) return;
+
+    const footprint = { widthMm: view3dSettings.widthMm, depthMm: view3dSettings.depthMm };
+    const ordering = plateOrderingRef.current;
+    const target = plateCascadeOffsetMm(targetIndex, footprint, plateList.length, ordering);
+    const wanted = new Set(modelIds);
+
+    for (const model of modelsRef.current) {
+      if (!wanted.has(model.id)) continue;
+      const sourcePlateId = modelPlateId(model);
+      const sourceIndex = Math.max(0, plateList.findIndex((plate) => plate.id === sourcePlateId));
+      const source = plateCascadeOffsetMm(sourceIndex, footprint, plateList.length, ordering);
+      const dx = target.dxMm - source.dxMm;
+      const dy = target.dyMm - source.dyMm;
+      if (dx === 0 && dy === 0) continue;
+      updateModelTransform(model.id, {
+        ...model.transform,
+        position: new THREE.Vector3(
+          model.transform.position.x + dx,
+          model.transform.position.y + dy,
+          model.transform.position.z,
+        ),
+      }, model.transform);
+    }
+
+    setModels((prev) => prev.map((model) => (wanted.has(model.id) ? { ...model, plateId } : model)));
+  }, [modelPlateId, updateModelTransform, view3dSettings.widthMm, view3dSettings.depthMm]);
+
   return {
     models,
     activeModelId,
     setActiveModelId,
+    plateName,
+    setPlateName,
+    plates,
+    activePlateId,
+    plateViewRunId,
+    addPlate,
+    activatePlate,
+    renamePlate,
+    removePlate,
+    moveModelsToPlate,
+    plateOffsetFor,
+    addPlates,
+    dropPlates,
+    /** The grid the beds are laid out on, for the callers that draw one that is not there yet. */
+    plateOrdering,
+    plateFrames,
+    modelPlateFrame,
+    resolveModelPlateId,
+    voxlPrinterBundle,
+    printerMismatch,
+    resolvePrinterMismatch,
+    missingPrinterPluginPrompt,
+    resolveMissingPrinterPluginChoice,
+    plateLocked,
+    setPlateLocked,
+    isPlateLocked,
+    isModelPlateLocked,
     selectedModelIds,
     setSelectedModelIds,
     lastLoadedVoxlFormatChunkedRef,
@@ -5836,12 +9033,21 @@ export function useSceneCollectionManager() {
     meshRepairReports,
     meshRepairReportPresentation,
     openPendingMeshRepairReports,
+    openMeshRepairReportForModel,
+    undoRepairsInPlace,
+    manuallyRepairedModelIds,
     dismissMeshRepairReports,
     sceneImportPlacementPrompt,
     resolveSceneImportPlacementPrompt,
+    obsoleteVoxlScene,
+    dismissObsoleteVoxlScene,
+    sceneImportHollowingPrompt,
+    resolveSceneImportHollowingPrompt,
     meshRepairConfirmPrompt,
     resolveMeshRepairConfirmPrompt,
-    repairModelInPlace,
+    repairModelsInPlace,
+    tetSurfaceModelInPlace,
+    solidRemeshModelInPlace,
     recentOpenedFiles,
     reopenRecentOpenedFile,
     clearRecentOpenedFiles,
@@ -5860,12 +9066,15 @@ export function useSceneCollectionManager() {
     addModelFromGeometry,
     splitModelIntoParts,
     finalizeModelGeometryPostProcessing,
-    setModelManualZMoveOverride,
     setModelVisibility,
     toggleSupportDesignation,
+    setModelMaterialProfile,
+    setModelBodyMaterial,
+    reassignSceneMaterials,
     linkModels,
     unlinkModels,
     setModelMeshModifiers,
+    setModelsAutoLift,
     getModelMeshModifiers: useCallback((id: string) => getStoredMeshModifiers(id), []),
     renameModel,
     groupModels,
@@ -5877,6 +9086,7 @@ export function useSceneCollectionManager() {
     renameGroup,
     selectGroup,
     deleteModels,
+    deleteModelsAndExtraPlates,
     deleteModel,
     deleteSupportsForModels,
     copyModel,
@@ -5897,6 +9107,8 @@ export function useSceneCollectionManager() {
     setDirectionalIntensity,
     materialRoughness,
     setMaterialRoughness,
+    bakedAoIntensity,
+    setBakedAoIntensity,
     wireframeThicknessPx,
     setWireframeThicknessPx,
     xrayOpacity,
@@ -5907,16 +9119,12 @@ export function useSceneCollectionManager() {
     setHeatmapMaxAngle,
     shaderType,
     setShaderType,
+    configuredShaderType,
+    setConfiguredShaderType,
     matcapVariant,
     setMatcapVariant,
     flatUseVertexColors,
     setFlatUseVertexColors,
-    toonSteps,
-    setToonSteps,
-    selectionColor,
-    setSelectionColor,
-    hoverColor,
-    setHoverColor,
     hoverTintStrength,
     setHoverTintStrength,
     selectedTintStrength,
@@ -5949,10 +9157,6 @@ export function useSceneCollectionManager() {
     importPluginSceneFile: handleImportPluginSceneFile,
     importSceneFile,
     importSceneFiles,
-    onImportSceneChange,
-
-    // Debug primitives
-    addDebugPrimitive,
-    clearDebugModels
+    onImportSceneChange
   };
 }

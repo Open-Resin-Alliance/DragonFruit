@@ -1,4 +1,4 @@
-import { defineConfig } from "@lingui/conf";
+import { defineConfig } from "@lingui/cli";
 
 export default defineConfig({
   sourceLocale: "en",

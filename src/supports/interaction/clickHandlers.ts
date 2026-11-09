@@ -3,13 +3,14 @@ import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactD
 import { getSnapshot } from '../state';
 import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
 import { getSelectedSupportIds } from './supportMultiSelection';
+import { hasWindow } from '@/utils/dom';
 
 let hoverGuardInitialized = false;
 let orbitInteractionActive = false;
 let lastDispatchedHoverModelId: string | null = null;
 
 function initializeHoverGuards() {
-    if (hoverGuardInitialized || typeof window === 'undefined') return;
+    if (hoverGuardInitialized || !hasWindow()) return;
     hoverGuardInitialized = true;
 
     const markOrbitActive = () => {
@@ -49,7 +50,7 @@ export function shouldDeferSupportPrimitiveSelection(e: any) {
 }
 
 export function emitSupportModelPointerHover(modelId: string | null) {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
 
     initializeHoverGuards();
 
@@ -70,7 +71,7 @@ export function emitSupportModelPointerHover(modelId: string | null) {
 }
 
 export function emitSupportModelPointerSelect(modelId: string | null) {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
     if (!modelId) return;
 
     window.dispatchEvent(new CustomEvent('support-model-pointer-select', {

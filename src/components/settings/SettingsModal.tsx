@@ -10,6 +10,7 @@ import { SponsorsCarousel } from '@/components/settings/SponsorsCarousel';
 import { CameraSettingsTab } from '@/components/settings/CameraSettingsTab';
 import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
+import { DEFAULT_BAKED_OCCLUSION_INTENSITY } from '@/features/scene/bakedOcclusion';
 import { PluginsSettingsTab } from '@/components/settings/PluginsSettingsTab';
 import { ExperimentsSettingsTab } from '@/components/settings/ExperimentsSettingsTab';
 import { getEnabledExperimentIds } from '@/features/experiments/experimentsRegistry';
@@ -22,8 +23,9 @@ import { UISettingsTab } from './UISettingsTab';
 import { UpdatesSettingsTab } from '@/features/updater/UpdatesSettingsTab';
 import { getUpdateChannel, type UpdateChannel } from '@/features/updater/updateBridge';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
+import { MultiPlateSettingsTab } from '@/components/settings/MultiPlateSettingsTab';
 import { PerformanceSettingsTab, type SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
-import { AlertTriangle, Check, CloudDownload, Edit3, ExternalLink, FlaskConical, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText } from 'lucide-react';
+import { AlertTriangle, Check, CloudDownload, Edit3, ExternalLink, FlaskConical, Gamepad2, Github, HardDrive, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Save, Settings2, Trash2, X, Camera, Grid3x3, ArchiveRestore, ScrollText, SquareStack } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -34,6 +36,7 @@ import {
   getSavedThemeCustomColors,
   getSavedCustomThemeProfiles,
   getThemeProfile,
+  getThemeProfiles,
   getSavedThemePreset,
   getSavedThemePreference,
   exportThemeProfileToJson,
@@ -50,7 +53,6 @@ import {
   type ThemePreset,
   type SavedCustomThemeProfile,
 } from '@/components/settings/themeCustomizations';
-import { DEFAULT_HOVER_COLOR, DEFAULT_SELECTION_COLOR } from '@/features/scene/useSceneCollectionManager';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -119,10 +121,11 @@ import {
 import { outputFormatUsesPngLayers } from '@/features/slicing/formats/registry';
 import {
   clearSavedFloatingLayout,
-  isDebugPrimitivesPanelVisibleEnabled,
+  getToolLayout,
   isFloatingLayoutPersistenceEnabled,
-  setDebugPrimitivesPanelVisibleEnabled,
   setFloatingLayoutPersistenceEnabled,
+  setToolLayout,
+  type ToolLayout,
 } from '@/components/layout/floatingLayoutPreferences';
 import {
   DEFAULT_IMPORT_DEFAULTS_SETTINGS,
@@ -130,20 +133,20 @@ import {
   saveImportDefaultsSettings,
   type ImportDefaultsSettings,
 } from '@/features/scene/importDefaultsPreferences';
+import { Button, ColorSwatchInput, IconButton } from '@/components/atoms';
 
 const DEFAULT_MESH_COLOR = '#a3a3a3';
 const DEFAULT_HEATMAP_MIN_ANGLE = 0;
 const DEFAULT_HEATMAP_MAX_ANGLE = 45;
-const DEFAULT_AMBIENT_INTENSITY = 0.6;
-const DEFAULT_DIRECTIONAL_INTENSITY = 0.8;
-const DEFAULT_MATERIAL_ROUGHNESS = 0.65;
+const DEFAULT_AMBIENT_INTENSITY = 0.28;
+const DEFAULT_DIRECTIONAL_INTENSITY = 1.12;
+const DEFAULT_MATERIAL_ROUGHNESS = 0.55;
 const DEFAULT_XRAY_OPACITY = 0.25;
 const DEFAULT_SHADER_TYPE: MeshShaderType = 'soft_clay';
 const DEFAULT_MATCAP_VARIANT: MatcapVariant = 'neutral';
 const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
-const DEFAULT_TOON_STEPS = 5;
 const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
-const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
+const DEFAULT_SELECTED_TINT_STRENGTH = 0.70;
 const DRAGONFRUIT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
 const DRAGONFRUIT_BUILD_CHANNEL = (process.env.NEXT_PUBLIC_BUILD_CHANNEL ?? 'mainline').trim().toLowerCase();
 const DRAGONFRUIT_GIT_COMMIT = process.env.NEXT_PUBLIC_GIT_COMMIT ?? '';
@@ -172,24 +175,22 @@ type SettingsModalProps = {
   onClose: () => void;
   meshColor: string;
   onMeshColorChange: (color: string) => void;
-  selectionColor: string;
-  onSelectionColorChange: (color: string) => void;
-  hoverColor: string;
-  onHoverColorChange: (color: string) => void;
-  shaderType: MeshShaderType;
-  onShaderTypeChange: (shaderType: MeshShaderType) => void;
+  /** The type the Mesh tab is configuring. Does not change what the viewport renders. */
+  configuredShaderType: MeshShaderType;
+  onConfiguredShaderTypeChange: (shaderType: MeshShaderType) => void;
   matcapVariant: MatcapVariant;
   onMatcapVariantChange: (variant: MatcapVariant) => void;
   flatUseVertexColors: boolean;
   onFlatUseVertexColorsChange: (value: boolean) => void;
-  toonSteps: number;
-  onToonStepsChange: (value: number) => void;
   ambientIntensity: number;
   onAmbientIntensityChange: (value: number) => void;
   directionalIntensity: number;
   onDirectionalIntensityChange: (value: number) => void;
   materialRoughness: number;
+  /** Multiplier on the baked occlusion's strength; 0 means the bake is off. */
+  bakedAoIntensity: number;
   onMaterialRoughnessChange: (value: number) => void;
+  onBakedAoIntensityChange: (value: number) => void;
   xrayOpacity: number;
   heatmapMinAngle: number;
   heatmapMaxAngle: number;
@@ -202,8 +203,6 @@ type SettingsModalProps = {
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
   onSelectedTintStrengthChange: (value: number) => void;
-  debugPrimitivesPanelVisible: boolean;
-  onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
   view3dSettings: View3DSettings;
   onView3dSettingsChange: (settings: View3DSettings) => void;
   slicingThumbnailRenderSettings: SlicingThumbnailRenderSettings;
@@ -213,8 +212,65 @@ type SettingsModalProps = {
   initialTab?: SettingsTabKey;
 };
 
-export type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'experiments' | 'sceneAutosave' | 'backups' | 'uvtools' | 'ui' | 'hotkeys' | 'logging' | 'updates' | 'about';
+export type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'multiPlate' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'experiments' | 'sceneAutosave' | 'backups' | 'uvtools' | 'ui' | 'hotkeys' | 'logging' | 'updates' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
+
+type SettingsTabMeta = {
+  label: string;
+  description: string;
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+  tone: SettingsTabTone;
+};
+
+/**
+ * One settings sidebar entry: icon, label and its description. The description
+ * stays visible; the compactness comes from dropping the icon's own 24px box,
+ * `leading-tight` and `px-2.5 py-2`, which matches the inset of the setting rows
+ * beside it, and the icon keeps the full glyph size instead of sitting in a box
+ * that padded it away from the card edge.
+ */
+function SettingsSidebarTab({
+  tabId,
+  meta,
+  active,
+  onSelect,
+}: {
+  tabId: SettingsTabKey;
+  meta: SettingsTabMeta;
+  active: boolean;
+  onSelect: (tab: SettingsTabKey) => void;
+}) {
+  const Icon = meta.icon;
+  const tabColor = meta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(tabId)}
+      className="w-full rounded-sm border px-2.5 py-1.5 text-left transition-all duration-150"
+      style={active
+        ? {
+          borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
+          background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
+          boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
+        }
+        : {
+          borderColor: 'var(--border-subtle)',
+          background: 'var(--surface-1)',
+        }}
+    >
+      <div className="flex items-center gap-2.5">
+        <Icon className="h-5 w-5 shrink-0" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
+        <span className="min-w-0 flex-1">
+          <span className="block text-[15px] font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+            {meta.label}
+          </span>
+          <TabDescription text={meta.description} />
+        </span>
+      </div>
+    </button>
+  );
+}
 
 /**
  * A sidebar description line that only offers a tooltip when it is actually
@@ -276,7 +332,7 @@ function TabDescription({ text }: { text: string }) {
       <Tooltip content={isClipped ? text : null} fullWidth maxWidth={280}>
         <span
           ref={textRef}
-          className="block min-w-0 flex-1 truncate text-xs"
+          className="block min-w-0 flex-1 truncate text-xs leading-tight"
           style={{ color: 'var(--text-muted)' }}
         >
           {text}
@@ -291,23 +347,19 @@ export function SettingsModal({
   onClose,
   meshColor,
   onMeshColorChange,
-  selectionColor,
-  onSelectionColorChange,
-  hoverColor,
-  onHoverColorChange,
-  shaderType,
-  onShaderTypeChange,
+  configuredShaderType,
+  onConfiguredShaderTypeChange,
   matcapVariant,
   onMatcapVariantChange,
   flatUseVertexColors,
   onFlatUseVertexColorsChange,
-  toonSteps,
-  onToonStepsChange,
   ambientIntensity,
   onAmbientIntensityChange,
   directionalIntensity,
   onDirectionalIntensityChange,
   materialRoughness,
+  bakedAoIntensity,
+  onBakedAoIntensityChange,
   onMaterialRoughnessChange,
   xrayOpacity,
   heatmapMinAngle,
@@ -321,8 +373,6 @@ export function SettingsModal({
   onHoverTintStrengthChange,
   selectedTintStrength,
   onSelectedTintStrengthChange,
-  debugPrimitivesPanelVisible,
-  onDebugPrimitivesPanelVisibleChange,
   view3dSettings,
   onView3dSettingsChange,
   slicingThumbnailRenderSettings,
@@ -389,21 +439,19 @@ export function SettingsModal({
   const [draftLocale, setDraftLocale] = useState(activeLocale);
 
   const [draftMeshColor, setDraftMeshColor] = useState(meshColor);
-  const [draftShaderType, setDraftShaderType] = useState(shaderType);
+  const [draftShaderType, setDraftShaderType] = useState(configuredShaderType);
   const [draftMatcapVariant, setDraftMatcapVariant] = useState(matcapVariant);
   const [draftFlatUseVertexColors, setDraftFlatUseVertexColors] = useState(flatUseVertexColors);
-  const [draftToonSteps, setDraftToonSteps] = useState(toonSteps);
   const [draftAmbientIntensity, setDraftAmbientIntensity] = useState(ambientIntensity);
   const [draftDirectionalIntensity, setDraftDirectionalIntensity] = useState(directionalIntensity);
   const [draftMaterialRoughness, setDraftMaterialRoughness] = useState(materialRoughness);
+  const [draftBakedAoIntensity, setDraftBakedAoIntensity] = useState(bakedAoIntensity);
   const [draftXrayOpacity, setDraftXrayOpacity] = useState(xrayOpacity);
   const [draftHeatmapMinAngle, setDraftHeatmapMinAngle] = useState(heatmapMinAngle);
   const [draftHeatmapMaxAngle, setDraftHeatmapMaxAngle] = useState(heatmapMaxAngle);
   const [draftHeatmapColors, setDraftHeatmapColors] = useState(heatmapColors);
   const [draftHoverTintStrength, setDraftHoverTintStrength] = useState(hoverTintStrength);
   const [draftSelectedTintStrength, setDraftSelectedTintStrength] = useState(selectedTintStrength);
-  const [draftSelectionColor, setDraftSelectionColor] = useState(selectionColor);
-  const [draftHoverColor, setDraftHoverColor] = useState(hoverColor);
   const [draftCameraProjectionMode, setDraftCameraProjectionMode] = useState<CameraProjectionMode>(() => getSavedCameraProjectionSettings().mode);
   const [draftCameraFeelPreset, setDraftCameraFeelPreset] = useState<CameraFeelPreset>(() => getSavedCameraFeelSettings().preset);
   const [draftCameraTrackpadPrimaryAction, setDraftCameraTrackpadPrimaryAction] = useState<CameraTrackpadPrimaryAction>(() => getSavedCameraTrackpadSettings().primaryAction);
@@ -428,7 +476,7 @@ export function SettingsModal({
     return savedProfile.isBuiltIn ? '' : savedProfile.name;
   });
   const [draftFloatingLayoutPersistence, setDraftFloatingLayoutPersistence] = useState<boolean>(() => isFloatingLayoutPersistenceEnabled());
-  const [draftDebugPrimitivesPanelVisible, setDraftDebugPrimitivesPanelVisible] = useState<boolean>(() => debugPrimitivesPanelVisible);
+  const [draftToolLayout, setDraftToolLayout] = useState<ToolLayout>(() => getToolLayout());
   const [draftImportDefaults, setDraftImportDefaults] = useState<ImportDefaultsSettings>(() => getSavedImportDefaultsSettings());
   const [draftSpaceMouseSettings, setDraftSpaceMouseSettings] = useState<SpaceMouseSettings>(() => getSavedSpaceMouseSettings());
   const [draftWorkspaceCameraDefaults, setDraftWorkspaceCameraDefaults] = useState<WorkspaceCameraDefaults>(() => getSavedWorkspaceCameraSettings().defaults);
@@ -456,6 +504,15 @@ export function SettingsModal({
   const [isLightTheme, setIsLightTheme] = useState(false);
   const didCommitThemeDraftRef = React.useRef(false);
   const showPngCompressionControls = outputFormatUsesPngLayers(activeOutputFormat ?? undefined);
+
+  // The Mesh tab's Selection & Hover section edits the theme's mesh highlight
+  // colors (not a separate appearance override), so its Reset restores the
+  // values stored on the selected profile — the same source the UI tab's Reset
+  // uses.
+  const draftThemeProfileColors = React.useMemo(
+    () => getThemeProfile(draftThemePreset, draftThemeProfiles).colors,
+    [draftThemePreset, draftThemeProfiles],
+  );
 
   // Load saved update channel preference.
   React.useEffect(() => {
@@ -491,21 +548,19 @@ export function SettingsModal({
     const savedThemeProfile = getThemeProfile(savedThemePreset, savedThemeProfiles);
 
     setDraftMeshColor(meshColor);
-    setDraftShaderType(shaderType);
+    setDraftShaderType(configuredShaderType);
     setDraftMatcapVariant(matcapVariant);
     setDraftFlatUseVertexColors(flatUseVertexColors);
-    setDraftToonSteps(toonSteps);
     setDraftAmbientIntensity(ambientIntensity);
     setDraftDirectionalIntensity(directionalIntensity);
     setDraftMaterialRoughness(materialRoughness);
+    setDraftBakedAoIntensity(bakedAoIntensity);
     setDraftXrayOpacity(xrayOpacity);
     setDraftHeatmapMinAngle(heatmapMinAngle);
     setDraftHeatmapMaxAngle(heatmapMaxAngle);
     setDraftHeatmapColors(heatmapColors);
     setDraftHoverTintStrength(hoverTintStrength);
     setDraftSelectedTintStrength(selectedTintStrength);
-    setDraftSelectionColor(selectionColor);
-    setDraftHoverColor(hoverColor);
     setDraftCameraProjectionMode(getSavedCameraProjectionSettings().mode);
     setDraftCameraFeelPreset(getSavedCameraFeelSettings().preset);
     setDraftCameraTrackpadPrimaryAction(getSavedCameraTrackpadSettings().primaryAction);
@@ -522,7 +577,7 @@ export function SettingsModal({
     setDraftThemeProfiles(savedThemeProfiles);
     setDraftCustomThemeName(savedThemeProfile.isBuiltIn ? '' : savedThemeProfile.name);
     setDraftFloatingLayoutPersistence(isFloatingLayoutPersistenceEnabled());
-    setDraftDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
+    setDraftToolLayout(getToolLayout());
     setDraftImportDefaults(getSavedImportDefaultsSettings());
     setDraftSpaceMouseSettings(getSavedSpaceMouseSettings());
     setDraftWorkspaceCameraDefaults(getSavedWorkspaceCameraSettings().defaults);
@@ -538,18 +593,15 @@ export function SettingsModal({
     directionalIntensity,
     flatUseVertexColors,
     meshColor,
-    toonSteps,
     matcapVariant,
     materialRoughness,
+    bakedAoIntensity,
     heatmapColors,
     hoverTintStrength,
     selectedTintStrength,
-    selectionColor,
-    hoverColor,
-    debugPrimitivesPanelVisible,
     view3dSettings,
     slicingThumbnailRenderSettings,
-    shaderType,
+    configuredShaderType,
     xrayOpacity,
     heatmapMinAngle,
     heatmapMaxAngle,
@@ -557,42 +609,26 @@ export function SettingsModal({
   ]);
 
   const handleThemeColorChange = React.useCallback((key: keyof ThemeCustomColors, value: string) => {
-    if (key === 'accent' && typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value)) {
-      const oldAccent = draftThemeColors.accent?.toLowerCase();
-      const newAccent = value.toLowerCase();
-      if (oldAccent && newAccent && oldAccent !== newAccent) {
-        const selLower = draftSelectionColor.toLowerCase();
-        const hovLower = draftHoverColor.toLowerCase();
-        if (selLower === oldAccent) setDraftSelectionColor(value);
-        if (hovLower === oldAccent) setDraftHoverColor(value);
-      }
-    }
     setDraftThemeColors((prev) => ({
       ...prev,
       [key]: value,
     }));
-  }, [draftThemeColors.accent, draftSelectionColor, draftHoverColor]);
+  }, []);
+  // The Mesh tab edits these two theme colors, so both surfaces write the same
+  // draft entry.
+  const handleMeshSelectionColorChange = React.useCallback((color: string) => {
+    handleThemeColorChange('meshSelectionColor', color);
+  }, [handleThemeColorChange]);
+  const handleMeshHoverColorChange = React.useCallback((color: string) => {
+    handleThemeColorChange('meshHoverColor', color);
+  }, [handleThemeColorChange]);
   const restoreSavedThemePreview = React.useCallback(() => {
     applyThemePreference(getSavedThemePreference());
     applyThemeCustomColors(getSavedThemeCustomColors());
   }, []);
   const handleThemePresetChange = React.useCallback((preset: ThemePreset) => {
-    const oldProfile = getThemeProfile(draftThemePreset, draftThemeProfiles);
-    const newProfile = getThemeProfile(preset, draftThemeProfiles);
-    const oldAccent = oldProfile.colors.accent?.toLowerCase();
-    const newAccent = newProfile.colors.accent?.toLowerCase();
-    if (oldAccent && newAccent && oldAccent !== newAccent) {
-      const selLower = draftSelectionColor.toLowerCase();
-      const hovLower = draftHoverColor.toLowerCase();
-      const defSel = DEFAULT_SELECTION_COLOR.toLowerCase();
-      const defHov = DEFAULT_HOVER_COLOR.toLowerCase();
-      const isSelDefault = selLower === oldAccent || selLower === defSel;
-      const isHovDefault = hovLower === oldAccent || hovLower === defHov;
-      if (isSelDefault) setDraftSelectionColor(newProfile.colors.accent);
-      if (isHovDefault) setDraftHoverColor(newProfile.colors.accent);
-    }
     setThemeDraftFromProfile(preset, draftThemeProfiles);
-  }, [draftThemePreset, draftThemeProfiles, draftSelectionColor, draftHoverColor, setThemeDraftFromProfile]);
+  }, [draftThemeProfiles, setThemeDraftFromProfile]);
 
   const handleDraftHeatmapColorChange = React.useCallback((index: number, color: string) => {
     setDraftHeatmapColors((prev) => {
@@ -856,17 +892,15 @@ export function SettingsModal({
     setDraftShaderType(DEFAULT_SHADER_TYPE);
     setDraftMatcapVariant(DEFAULT_MATCAP_VARIANT);
     setDraftFlatUseVertexColors(DEFAULT_FLAT_USE_VERTEX_COLORS);
-    setDraftToonSteps(DEFAULT_TOON_STEPS);
     setDraftAmbientIntensity(DEFAULT_AMBIENT_INTENSITY);
     setDraftDirectionalIntensity(DEFAULT_DIRECTIONAL_INTENSITY);
     setDraftMaterialRoughness(DEFAULT_MATERIAL_ROUGHNESS);
+    setDraftBakedAoIntensity(DEFAULT_BAKED_OCCLUSION_INTENSITY);
     setDraftXrayOpacity(DEFAULT_XRAY_OPACITY);
     setDraftHeatmapMinAngle(DEFAULT_HEATMAP_MIN_ANGLE);
     setDraftHeatmapMaxAngle(DEFAULT_HEATMAP_MAX_ANGLE);
     setDraftHoverTintStrength(DEFAULT_HOVER_TINT_STRENGTH);
     setDraftSelectedTintStrength(DEFAULT_SELECTED_TINT_STRENGTH);
-    setDraftSelectionColor(DEFAULT_THEME_CUSTOM_COLORS.accent);
-    setDraftHoverColor(DEFAULT_THEME_CUSTOM_COLORS.accentHover);
     setDraftCameraProjectionMode(DEFAULT_CAMERA_PROJECTION_SETTINGS.mode);
     setDraftCameraFeelPreset(DEFAULT_CAMERA_FEEL_SETTINGS.preset);
     setDraftCameraTrackpadPrimaryAction(DEFAULT_CAMERA_TRACKPAD_SETTINGS.primaryAction);
@@ -882,7 +916,6 @@ export function SettingsModal({
     setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
     setDraftCustomThemeName('');
     setDraftFloatingLayoutPersistence(true);
-    setDraftDebugPrimitivesPanelVisible(false);
     setDraftImportDefaults(DEFAULT_IMPORT_DEFAULTS_SETTINGS);
     setDraftSpaceMouseSettings(DEFAULT_SPACEMOUSE_SETTINGS);
     setDraftWorkspaceCameraDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.defaults);
@@ -935,44 +968,23 @@ export function SettingsModal({
   const handleApply = React.useCallback(() => {
     applyLocale(draftLocale);
     onMeshColorChange(draftMeshColor);
-    onShaderTypeChange(draftShaderType);
+    onConfiguredShaderTypeChange(draftShaderType);
     onMatcapVariantChange(draftMatcapVariant);
     onFlatUseVertexColorsChange(draftFlatUseVertexColors);
-    onToonStepsChange(draftToonSteps);
     onAmbientIntensityChange(draftAmbientIntensity);
     onDirectionalIntensityChange(draftDirectionalIntensity);
     onMaterialRoughnessChange(draftMaterialRoughness);
+    onBakedAoIntensityChange(draftBakedAoIntensity);
     onXrayOpacityChange(draftXrayOpacity);
     onHeatmapMinAngleChange(draftHeatmapMinAngle);
     onHeatmapMaxAngleChange(draftHeatmapMaxAngle);
     draftHeatmapColors.forEach((color, i) => onHeatmapColorChange(i, color));
     onHoverTintStrengthChange(draftHoverTintStrength);
     onSelectedTintStrengthChange(draftSelectedTintStrength);
-    // Auto-apply theme accent to selection/hover if not user-overridden (theme changed and selection still at old default)
-    let finalSelectionColor = draftSelectionColor;
-    let finalHoverColor = draftHoverColor;
-    try {
-      const savedThemeAccent = getSavedThemeCustomColors().accent?.toLowerCase();
-      const draftAccent = draftThemeColors.accent?.toLowerCase();
-      if (savedThemeAccent && draftAccent && savedThemeAccent !== draftAccent) {
-        const savedSel = selectionColor.toLowerCase();
-        const defSel = DEFAULT_SELECTION_COLOR.toLowerCase();
-        const isSavedSelDefault = savedSel === savedThemeAccent || savedSel === defSel;
-        const isDraftSelUnchanged = draftSelectionColor.toLowerCase() === savedSel;
-        if (isSavedSelDefault && isDraftSelUnchanged) finalSelectionColor = draftThemeColors.accent;
-        const savedHov = hoverColor.toLowerCase();
-        const defHov = DEFAULT_HOVER_COLOR.toLowerCase();
-        const isSavedHovDefault = savedHov === savedThemeAccent || savedHov === defHov;
-        const isDraftHovUnchanged = draftHoverColor.toLowerCase() === savedHov;
-        if (isSavedHovDefault && isDraftHovUnchanged) finalHoverColor = draftThemeColors.accent;
-      }
-    } catch {}
-    onSelectionColorChange(finalSelectionColor);
-    onHoverColorChange(finalHoverColor);
     applyThemePreference(draftThemePreference);
     applyThemeCustomColors(draftThemeColors);
     setFloatingLayoutPersistenceEnabled(draftFloatingLayoutPersistence);
-    setDebugPrimitivesPanelVisibleEnabled(draftDebugPrimitivesPanelVisible);
+    setToolLayout(draftToolLayout);
     saveImportDefaultsSettings(draftImportDefaults);
     saveSpaceMouseSettings(draftSpaceMouseSettings);
     saveCameraProjectionSettings({ mode: draftCameraProjectionMode });
@@ -997,7 +1009,6 @@ export function SettingsModal({
     const normalized3dView = normalizeView3DSettings(draftView3dSettings);
     saveView3DSettings(normalized3dView);
     onView3dSettingsChange(normalized3dView);
-    onDebugPrimitivesPanelVisibleChange(draftDebugPrimitivesPanelVisible);
     saveLogLevel(draftLogLevel);
 
     if (typeof window !== 'undefined') {
@@ -1010,6 +1021,9 @@ export function SettingsModal({
     didCommitThemeDraftRef.current = true;
     requestClose();
   }, [
+    // Every draft this callback reads belongs in this list. One omission and
+    // Apply pushes whatever the draft happened to be when the callback was last
+    // rebuilt, which presents as a control that saves once and then reverts.
     applyLocale,
     draftLocale,
     draftAmbientIntensity,
@@ -1017,23 +1031,19 @@ export function SettingsModal({
     draftFlatUseVertexColors,
     draftMatcapVariant,
     draftMaterialRoughness,
+    draftBakedAoIntensity,
     draftMeshColor,
     draftHoverTintStrength,
     draftSelectedTintStrength,
-    draftSelectionColor,
-    draftHoverColor,
-    selectionColor,
-    hoverColor,
     draftCameraScope,
     draftHigherContrastModelEdges,
     draftThemePreset,
     draftShaderType,
-    draftToonSteps,
     draftThemePreference,
     draftThemeColors,
     draftThemeProfiles,
     draftFloatingLayoutPersistence,
-    draftDebugPrimitivesPanelVisible,
+    draftToolLayout,
     draftImportDefaults,
     draftSpaceMouseSettings,
     draftCameraProjectionMode,
@@ -1064,13 +1074,9 @@ export function SettingsModal({
     onMeshColorChange,
     onHoverTintStrengthChange,
     onSelectedTintStrengthChange,
-    onSelectionColorChange,
-    onHoverColorChange,
-    onDebugPrimitivesPanelVisibleChange,
     onSlicingThumbnailRenderSettingsChange,
     onView3dSettingsChange,
-    onShaderTypeChange,
-    onToonStepsChange,
+    onConfiguredShaderTypeChange,
     onXrayOpacityChange,
     onHeatmapMinAngleChange,
     onHeatmapMaxAngleChange,
@@ -1147,8 +1153,8 @@ export function SettingsModal({
   }, []);
 
   // Nested dialogs rendered through StructuredDialogModal register their own
-  // Escape handler and take precedence; the cascade here covers the inline
-  // restore-defaults confirmation, which does not.
+  // Escape handler and take precedence; the cascade here is the settings
+  // shell's own dismissal when nothing is layered above it.
   useEscapeToClose(isOpen, () => {
     if (showThemeDeleteConfirm) {
       handleCancelThemeDeleteConfirm();
@@ -1160,10 +1166,6 @@ export function SettingsModal({
     }
     if (showThemeSaveConfirm) {
       handleCancelThemeSaveConfirm();
-      return;
-    }
-    if (showRestoreDefaultsConfirm) {
-      handleCancelRestoreDefaults();
       return;
     }
     handleCancel();
@@ -1204,7 +1206,7 @@ export function SettingsModal({
     return preferenceChanged || colorsChanged;
   })();
 
-  const tabMeta: Record<SettingsTabKey, { label: string; description: string; icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; tone: SettingsTabTone }> = {
+  const tabMeta: Record<SettingsTabKey, SettingsTabMeta> = {
     general: {
       label: _(msg`General`),
       description: _(msg`Workspace behavior and panel layout`),
@@ -1230,9 +1232,15 @@ export function SettingsModal({
       tone: 'primary',
     },
     workspaces: {
-      label: _(msg`Workspaces`),
-      description: _(msg`Per-workspace camera defaults`),
+      label: _(msg`Workspace`),
+      description: _(msg`Build volume bounds, origin, and 3D view resolution`),
       icon: MonitorCog,
+      tone: 'primary',
+    },
+    multiPlate: {
+      label: _(msg`Multi-Plate`),
+      description: _(msg`Plate behaviour across several beds`),
+      icon: SquareStack,
       tone: 'primary',
     },
     ui: {
@@ -1303,7 +1311,7 @@ export function SettingsModal({
     },
   };
 
-  const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
+  const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'multiPlate', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
   const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'experiments', 'sceneAutosave', 'backups', 'uvtools', 'logging', 'updates', 'about'];
 
 
@@ -1370,14 +1378,14 @@ export function SettingsModal({
               </p>
             </div>
           </div>
-          <button
-            onClick={handleCancel}
-            className="ui-button ui-button-secondary inline-flex items-center justify-center leading-none !h-8 !w-8 !p-0"
+          <IconButton
+            variant="solid"
+            size="sm"
             aria-label="Close"
-            type="button"
+            onClick={handleCancel}
           >
             <X className="h-4 w-4" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="flex-1 min-h-0 flex">
@@ -1388,122 +1396,47 @@ export function SettingsModal({
               background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 6%), color-mix(in srgb, var(--accent-secondary), var(--surface-1) 96%))',
             }}
           >
-            <div className="h-full min-h-0 overflow-y-auto custom-scrollbar pr-1 flex flex-col">
+            {/* No `pr-1` on the scroller: the column's 2.5 already insets the tab
+                cards, and a second inset here stacked on top of the 10px scrollbar
+                gutter, so the cards sat nearly twice as far from the right edge as
+                from the left. */}
+            <div className="h-full min-h-0 overflow-y-auto custom-scrollbar flex flex-col">
               <div className="space-y-1">
-                {sidebarTopTabs.map((tab) => {
-                  const meta = tabMeta[tab];
-                  const Icon = meta.icon;
-                  const active = activeTab === tab;
-                  const tabColor = meta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
-
-                  return (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => handleSelectTab(tab)}
-                      className="w-full rounded-lg border px-3 py-2 text-left transition-all duration-150"
-                      style={active
-                        ? {
-                          borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
-                          background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
-                          boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
-                        }
-                        : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                        }}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border"
-                          style={{
-                            borderColor: active
-                              ? `color-mix(in srgb, ${tabColor}, var(--border-subtle) 30%)`
-                              : 'var(--border-subtle)',
-                            background: active
-                              ? `color-mix(in srgb, ${tabColor}, var(--surface-1) 82%)`
-                              : 'var(--surface-2)',
-                          }}
-                        >
-                          <Icon className="h-3.5 w-3.5" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-semibold" style={{ color: active ? 'var(--text-strong)' : 'var(--text-strong)' }}>
-                            {meta.label}
-                          </span>
-                          <TabDescription text={meta.description} />
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
+                {sidebarTopTabs.map((tab) => (
+                  <SettingsSidebarTab
+                    key={tab}
+                    meta={tabMeta[tab]}
+                    active={activeTab === tab}
+                    onSelect={handleSelectTab}
+                    tabId={tab}
+                  />
+                ))}
               </div>
 
               <div className="mt-auto space-y-1 pt-3">
-                {sidebarBottomTabs.map((tab) => {
-                  const meta = tabMeta[tab];
-                  const Icon = meta.icon;
-                  const active = activeTab === tab;
-                  const tabColor = meta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
-
-                  return (
-                    <button
-                      key={tab}
-                      type="button"
-                      aria-disabled={false}
-                      onClick={() => handleSelectTab(tab)}
-                      className="w-full rounded-lg border px-3 py-2 text-left transition-all duration-150"
-                      style={{
-                        ...(active
-                          ? {
-                            borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
-                            background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
-                            boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
-                          }
-                          : {
-                            borderColor: 'var(--border-subtle)',
-                            background: 'var(--surface-1)',
-                          }),
-                      }}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border"
-                          style={{
-                            borderColor: active
-                              ? `color-mix(in srgb, ${tabColor}, var(--border-subtle) 30%)`
-                              : 'var(--border-subtle)',
-                            background: active
-                              ? `color-mix(in srgb, ${tabColor}, var(--surface-1) 82%)`
-                              : 'var(--surface-2)',
-                          }}
-                        >
-                          <Icon className="h-3.5 w-3.5" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-semibold" style={{ color: active ? 'var(--text-strong)' : 'var(--text-strong)' }}>
-                            {meta.label}
-                          </span>
-                          <TabDescription text={meta.description} />
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
+                {sidebarBottomTabs.map((tab) => (
+                  <SettingsSidebarTab
+                    key={tab}
+                    meta={tabMeta[tab]}
+                    active={activeTab === tab}
+                    onSelect={handleSelectTab}
+                    tabId={tab}
+                  />
+                ))}
               </div>
             </div>
           </div>
 
-          <div className={usesInternalTabScrollLayout ? 'flex-1 min-h-0 flex flex-col p-4' : 'flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4'}>
+          <div className={usesInternalTabScrollLayout ? 'flex-1 min-h-0 min-w-0 flex flex-col p-4' : 'flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4'}>
 
             <div key={activeTab} className={usesInternalTabScrollLayout ? 'animate-[settingsTabIn_180ms_ease-out] flex-1 min-h-0 flex flex-col' : 'animate-[settingsTabIn_180ms_ease-out]'}>
               {activeTab === 'general' && (
                 <GeneralSettingsTab
                   floatingLayoutPersistence={draftFloatingLayoutPersistence}
                   onFloatingLayoutPersistenceChange={setDraftFloatingLayoutPersistence}
+                  toolLayout={draftToolLayout}
+                  onToolLayoutChange={setDraftToolLayout}
                   onResetFloatingLayout={handleResetFloatingLayout}
-                  debugPrimitivesPanelVisible={draftDebugPrimitivesPanelVisible}
-                  onDebugPrimitivesPanelVisibleChange={setDraftDebugPrimitivesPanelVisible}
                   importDefaults={draftImportDefaults}
                   onImportDefaultsChange={setDraftImportDefaults}
                   language={draftLocale}
@@ -1542,16 +1475,15 @@ export function SettingsModal({
                   onView3dSettingsChange={setDraftView3dSettings}
                 />
               )}
+              {activeTab === 'multiPlate' && <MultiPlateSettingsTab />}
               {activeTab === 'mesh' && (
                 <MeshSettingsTab
-                  shaderType={draftShaderType}
-                  onShaderTypeChange={setDraftShaderType}
+                  configuredShaderType={draftShaderType}
+                  onConfiguredShaderTypeChange={setDraftShaderType}
                   matcapVariant={draftMatcapVariant}
                   onMatcapVariantChange={setDraftMatcapVariant}
                   flatUseVertexColors={draftFlatUseVertexColors}
                   onFlatUseVertexColorsChange={setDraftFlatUseVertexColors}
-                  toonSteps={draftToonSteps}
-                  onToonStepsChange={setDraftToonSteps}
                   meshColor={draftMeshColor}
                   onMeshColorChange={setDraftMeshColor}
                   ambientIntensity={draftAmbientIntensity}
@@ -1560,6 +1492,8 @@ export function SettingsModal({
                   onDirectionalIntensityChange={setDraftDirectionalIntensity}
                   materialRoughness={draftMaterialRoughness}
                   onMaterialRoughnessChange={setDraftMaterialRoughness}
+                  bakedAoIntensity={draftBakedAoIntensity}
+                  onBakedAoIntensityChange={setDraftBakedAoIntensity}
                   xrayOpacity={draftXrayOpacity}
                   heatmapMinAngle={draftHeatmapMinAngle}
                   heatmapMaxAngle={draftHeatmapMaxAngle}
@@ -1568,16 +1502,16 @@ export function SettingsModal({
                   onHeatmapMaxAngleChange={setDraftHeatmapMaxAngle}
                   heatmapColors={draftHeatmapColors}
                   onHeatmapColorChange={handleDraftHeatmapColorChange}
-                  selectionColor={draftSelectionColor}
-                  onSelectionColorChange={setDraftSelectionColor}
-                  hoverColor={draftHoverColor}
-                  onHoverColorChange={setDraftHoverColor}
+                  meshSelectionColor={draftThemeColors.meshSelectionColor}
+                  onMeshSelectionColorChange={handleMeshSelectionColorChange}
+                  meshHoverColor={draftThemeColors.meshHoverColor}
+                  onMeshHoverColorChange={handleMeshHoverColorChange}
                   hoverTintStrength={draftHoverTintStrength}
                   onHoverTintStrengthChange={setDraftHoverTintStrength}
                   selectedTintStrength={draftSelectedTintStrength}
                   onSelectedTintStrengthChange={setDraftSelectedTintStrength}
-                  defaultSelectionColor={draftThemeColors.accent}
-                  defaultHoverColor={draftThemeColors.accent}
+                  defaultMeshSelectionColor={draftThemeProfileColors.meshSelectionColor}
+                  defaultMeshHoverColor={draftThemeProfileColors.meshHoverColor}
                 />
               )}
               {activeTab === 'performance' && (
@@ -1591,11 +1525,7 @@ export function SettingsModal({
               )}
               {activeTab === 'ui' && (
                 <UISettingsTab
-                  themeProfiles={[
-                    getThemeProfile('dragonfruit-dark', draftThemeProfiles),
-                    getThemeProfile('dragonfruit-light', draftThemeProfiles),
-                    ...draftThemeProfiles.map((profile) => getThemeProfile(profile.id, draftThemeProfiles)),
-                  ]}
+                  themeProfiles={getThemeProfiles(draftThemeProfiles)}
                   themePreset={draftThemePreset}
                   onThemePresetChange={handleThemePresetChange}
                   themePreference={draftThemePreference}
@@ -1714,7 +1644,7 @@ export function SettingsModal({
                         </div>
                       </div>
 
-                      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                      <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                         <h5 className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                           Team & Credits
                         </h5>
@@ -1753,7 +1683,7 @@ export function SettingsModal({
                                       return (
                                         <div
                                           key={person.name}
-                                          className="rounded-lg border px-3 py-2.5"
+                                          className="rounded-md border px-3 py-2.5"
                                           style={{
                                             borderColor: `color-mix(in srgb, ${toneVar}, var(--border-subtle) 45%)`,
                                             background: `color-mix(in srgb, ${toneVar}, var(--surface-0) ${bgMix})`,
@@ -1842,211 +1772,120 @@ export function SettingsModal({
           </div>
         </div>
 
-        <div className="px-4 py-3 flex items-center justify-between gap-2" style={{ borderTop: '1px solid var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 10%)' }}>
-          <button
-            type="button"
-            onClick={handleRestoreDefaults}
-            className="ui-button !h-10 !px-3.5 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap"
+        <div className="px-3 py-3 flex items-center justify-between gap-2" style={{ borderTop: '1px solid var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 10%)' }}>
+          <Button
+            variant="secondary"
+            size="auto"
+            className="!h-10 !px-3.5 !py-0 text-sm gap-1.5 whitespace-nowrap"
             style={accentSecondaryActionStyle92}
+            onClick={handleRestoreDefaults}
           >
             <RotateCcw className="h-4 w-4 shrink-0" />
             Restore Defaults
-          </button>
+          </Button>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleCancel}
-              className="ui-button ui-button-secondary !h-10 !px-4 !py-0 text-sm"
+            <Button
+              variant="secondary"
+              size="auto"
+              className="!h-10 !px-4 !py-0 text-sm"
               style={{
                 color: 'var(--text-muted)',
               }}
+              onClick={handleCancel}
             >
               Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleApply}
-              className="ui-button ui-button-primary !h-10 !px-4 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap"
+            </Button>
+            <Button
+              variant="primary"
+              size="auto"
+              className="!h-10 !px-4 !py-0 text-sm gap-1.5 whitespace-nowrap"
               style={{
                 background: 'color-mix(in srgb, var(--accent), var(--surface-0) 16%)',
                 borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
               }}
+              onClick={handleApply}
             >
               <Check className="h-4 w-4 shrink-0" />
               Apply
-            </button>
+            </Button>
           </div>
         </div>
       </div>
 
-      {showRestoreDefaultsConfirm && (
-        <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              handleCancelRestoreDefaults();
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Confirm restore defaults"
-          >
-            <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex items-center gap-2.5 min-w-0">
-                <span
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <RotateCcw className="h-4 w-4" />
-                </span>
-                <div className="min-w-0">
-                  <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Restore Defaults?
-                  </h3>
-                  <p className="text-xs leading-snug mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                    This resets settings in this dialog to their default values.
-                  </p>
-                </div>
-              </div>
+      <StructuredDialogModal
+        open={showRestoreDefaultsConfirm}
+        ariaLabel="Confirm restore defaults"
+        title="Restore Defaults?"
+        subtitle="This resets settings in this dialog to their default values."
+        icon={<RotateCcw className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[70]"
+        maxWidthClassName="max-w-md"
+        closeAriaLabel="Close restore defaults confirmation"
+        onClose={handleCancelRestoreDefaults}
+        actions={(
+          <>
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={handleCancelRestoreDefaults}
+            >
+              Keep Current
+            </Button>
+            <Button
+              variant="tinted-accent"
+              size="md"
+              className="gap-1.5"
+              onClick={handleConfirmRestoreDefaults}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Restore Defaults
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+          You can still review the changes before saving. Nothing is written until you click <strong>Apply</strong>.
+        </p>
+      </StructuredDialogModal>
 
-              <button
-                type="button"
-                onClick={handleCancelRestoreDefaults}
-                className="ui-button ui-button-secondary inline-flex items-center justify-center leading-none !h-8 !w-8 !p-0"
-                aria-label="Close restore defaults confirmation"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3">
-              <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                You can still review the changes before saving. Nothing is written until you click <strong>Apply</strong>.
-              </p>
-
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={handleCancelRestoreDefaults}
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                >
-                  Keep Current
-                </button>
-                <button
-                  type="button"
-                  onClick={handleConfirmRestoreDefaults}
-                  className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                  style={{
-                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                    color: 'var(--accent)',
-                  }}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Restore Defaults
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showReloadPrompt && (
-        <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setShowReloadPrompt(false);
-            }
-          }}
-        >
-          <div
-            className="w-full max-w-md overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Apply experiments"
-          >
-            <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex items-center gap-2.5 min-w-0">
-                <span
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <RotateCcw className="h-4 w-4" />
-                </span>
-                <div className="min-w-0">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    Apply Experiments
-                  </h2>
-                  <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    Experiment changes take effect after a restart.
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setShowReloadPrompt(false)}
-                className="ui-button ui-button-secondary inline-flex items-center justify-center leading-none !h-8 !w-8 !p-0"
-                aria-label="Close restart prompt"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3">
-              <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                Reload DragonFruit now to apply your experiment changes? Any unsaved changes to the current scene will be lost.
-              </p>
-
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setShowReloadPrompt(false); onClose(); }}
-                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-                >
-                  Not Now
-                </button>
-                <button
-                  type="button"
-                  onClick={reloadToApplyExperiments}
-                  className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-                  style={{
-                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                    color: 'var(--accent)',
-                  }}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Reload Now
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <StructuredDialogModal
+        open={showReloadPrompt}
+        ariaLabel="Apply experiments"
+        title="Apply Experiments"
+        subtitle="Experiment changes take effect after a restart."
+        icon={<RotateCcw className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[80]"
+        maxWidthClassName="max-w-md"
+        closeAriaLabel="Close restart prompt"
+        onClose={() => setShowReloadPrompt(false)}
+        actions={(
+          <>
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={() => { setShowReloadPrompt(false); onClose(); }}
+            >
+              Not Now
+            </Button>
+            <Button
+              variant="tinted-accent"
+              size="md"
+              className="gap-1.5"
+              onClick={reloadToApplyExperiments}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reload Now
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
+          Reload DragonFruit now to apply your experiment changes? Any unsaved changes to the current scene will be lost.
+        </p>
+      </StructuredDialogModal>
 
       <StructuredDialogModal
         open={showThemeSaveConfirm && !isBuiltInThemePreset(draftThemePreset)}
@@ -2060,26 +1899,22 @@ export function SettingsModal({
         onClose={handleCancelThemeSaveConfirm}
         actions={(
           <>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="md"
               onClick={handleCancelThemeSaveConfirm}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
             >
               Cancel
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="tinted-accent"
+              size="md"
+              className="gap-1.5"
               onClick={handleConfirmSaveCurrentCustomTheme}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
             >
               <Save className="h-3.5 w-3.5" />
               Save Theme
-            </button>
+            </Button>
           </>
         )}
       >
@@ -2100,26 +1935,22 @@ export function SettingsModal({
         onClose={handleCancelThemeDeleteConfirm}
         actions={(
           <>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="md"
               onClick={handleCancelThemeDeleteConfirm}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
             >
               Keep Theme
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="tinted-danger"
+              size="md"
+              className="gap-1.5"
               onClick={handleConfirmDeleteCurrentCustomTheme}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete Theme
-            </button>
+            </Button>
           </>
         )}
       >
@@ -2140,27 +1971,23 @@ export function SettingsModal({
         onClose={handleCancelThemeRenameDialog}
         actions={(
           <>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="md"
               onClick={handleCancelThemeRenameDialog}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
             >
               Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleConfirmRenameCurrentCustomTheme}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
+            </Button>
+            <Button
+              variant="tinted-accent"
+              size="md"
+              className="gap-1.5"
               disabled={draftThemeRenameName.trim().length === 0}
+              onClick={handleConfirmRenameCurrentCustomTheme}
             >
               <Check className="h-3.5 w-3.5" />
               {isCreatingCustomThemeName ? 'Create' : 'Save Name'}
-            </button>
+            </Button>
           </>
         )}
       >
@@ -2220,12 +2047,10 @@ export function SettingsModal({
                   Primary branding
                 </label>
                 <div className="flex items-center gap-1.5">
-                  <input
-                    type="color"
+                  <ColorSwatchInput
                     value={draftThemeCreatePrimaryBrandColor}
-                    onChange={(event) => setDraftThemeCreatePrimaryBrandColor(event.target.value)}
-                    className="h-8 w-9 shrink-0 rounded border"
-                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
+                    onChange={setDraftThemeCreatePrimaryBrandColor}
+                    className="h-8 w-9"
                   />
                   <input
                     type="text"
@@ -2242,12 +2067,10 @@ export function SettingsModal({
                   Secondary branding
                 </label>
                 <div className="flex items-center gap-1.5">
-                  <input
-                    type="color"
+                  <ColorSwatchInput
                     value={draftThemeCreateSecondaryBrandColor}
-                    onChange={(event) => setDraftThemeCreateSecondaryBrandColor(event.target.value)}
-                    className="h-8 w-9 shrink-0 rounded border"
-                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
+                    onChange={setDraftThemeCreateSecondaryBrandColor}
+                    className="h-8 w-9"
                   />
                   <input
                     type="text"

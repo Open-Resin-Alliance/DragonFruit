@@ -1,14 +1,13 @@
+import { registerAnatomyPreview } from '../../../anatomyPreviewRegistry';
 import React from 'react';
 import { SupportBuilder } from '@/supports/rendering/SupportBuilder';
 import { ANATOMY_CONFIG } from '../../AnatomyPreviewConfig';
 import { buildRaftPreviewBaseCircles, buildRaftPreviewSupports } from './previewSupports';
 import { buildRaftPreviewMeshes, disposeRaftPreviewMeshes } from './buildRaftPreviewMeshes';
-import type { SupportKind } from '../../../supportKindState';
 
 interface RaftPreviewProps {
     settings: any;
     liveConfig: any;
-    activeKind: SupportKind;
     raftSettings: any;
     previewState: any;
     anatomyOverrides?: any; // Optional as Raft implies specific overrides often, but good to have
@@ -17,7 +16,6 @@ interface RaftPreviewProps {
 export function RaftPreview({
     settings,
     liveConfig,
-    activeKind,
     raftSettings,
     previewState,
 }: RaftPreviewProps) {
@@ -29,7 +27,6 @@ export function RaftPreview({
     const NORMAL_COLOR = ANATOMY_CONFIG.colors.normal;
 
     const raftPreviewMeshes = React.useMemo(() => {
-        if (activeKind !== 'raft') return null;
         if (raftSettings.bottomMode === 'off') return null;
 
         const focusKey = previewState.activeSettingKey;
@@ -53,7 +50,6 @@ export function RaftPreview({
             },
         });
     }, [
-        activeKind,
         previewState.activeSettingKey,
         settings.roots.diameterMm,
         raftSettings.bottomMode,
@@ -69,7 +65,6 @@ export function RaftPreview({
     ]);
 
     const raftPreviewSupports = React.useMemo(() => {
-        if (activeKind !== 'raft') return null;
         if (raftSettings.bottomMode === 'off') return null;
 
         const rRaw = settings.roots.diameterMm / 2;
@@ -79,7 +74,7 @@ export function RaftPreview({
         const spread = 4;
         const circles = buildRaftPreviewBaseCircles({ rootsDiameterMm: r * 2, spreadMm: spread });
         return buildRaftPreviewSupports({ previewHeightMm: liveConfig.previewHeightMm, circles });
-    }, [activeKind, raftSettings.bottomMode, settings.roots.diameterMm, liveConfig.previewHeightMm]);
+    }, [raftSettings.bottomMode, settings.roots.diameterMm, liveConfig.previewHeightMm]);
 
     React.useEffect(() => {
         return () => {
@@ -88,13 +83,11 @@ export function RaftPreview({
         };
     }, [raftPreviewMeshes]);
 
-    if (activeKind !== 'raft') return null;
-
     return (
         <>
             {/* Raft-specific lighting was in the Canvas, should we move it here? 
                 The Canvas had:
-                {activeKind === 'raft' && ( <directionalLight ... /> )}
+                {activePanel === 'raft' && ( <directionalLight ... /> )}
                 It's better to keep scene lighting in the scene/canvas or move it here if it's strictly raft related.
                 Let's keep it in Canvas for now to minimize changes to global scene, 
                 OR move it here if we want self-contained component. 
@@ -139,3 +132,6 @@ export function RaftPreview({
         </>
     );
 }
+
+// The raft's own anatomy preview, registered where it lives.
+registerAnatomyPreview('raft', RaftPreview);

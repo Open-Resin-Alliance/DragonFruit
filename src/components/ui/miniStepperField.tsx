@@ -1,6 +1,7 @@
 import React from 'react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { wheelStepDirection } from '@/components/ui/wheelStepDirection';
+import { clamp } from '@/utils/math';
 
 interface MiniStepperFieldProps {
   value: number;
@@ -27,10 +28,10 @@ export function MiniStepperField({
   ariaLabel,
 }: MiniStepperFieldProps) {
   const safe = Number.isFinite(value) ? value : min;
-  const clamped = Math.min(max, Math.max(min, Math.round(safe)));
+  const clamped = clamp(Math.round(safe), min, max);
 
   const apply = React.useCallback((next: number) => {
-    const normalized = Math.min(max, Math.max(min, Math.round(Number.isFinite(next) ? next : min)));
+    const normalized = clamp(Math.round(Number.isFinite(next) ? next : min), min, max);
     onChange(normalized);
   }, [max, min, onChange]);
 

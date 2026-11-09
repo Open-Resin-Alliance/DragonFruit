@@ -1,0 +1,16 @@
+[package]
+name = "dragonfruit-tetgen"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "TetGen, vendored, for the tetrahedral decomposition the shrinkwrap matching needs"
+build = "build.rs"
+links = "tetgen"
+
+# TetGen is AGPL-3.0 and this repository is AGPL-3.0, so the two are compatible. The vendored copy
+# and its licence live in `vendor/`; see the provenance note there and the crate README.
+
+[dependencies]
+
+[build-dependencies]
+cc = "1"

@@ -6,6 +6,7 @@ import { createTypedHistory } from '@/history/typedHistory';
 import { MESH_SMOOTHING_STROKE, type MeshSmoothingHistoryPayloadMap } from './actionTypes';
 import { getMeshSmoothingGeometryByKey, subscribeToMeshSmoothingStrokeFinalized } from '../meshSmoothingEngine';
 import { getMeshTopology } from '../topologyCache';
+import { MESH_SMOOTHING_HISTORY_LABELS } from './historyLabels';
 
 type BVHGeometry = THREE.BufferGeometry & {
   boundsTree?: {
@@ -91,7 +92,7 @@ function applyUniquePositions(geometry: THREE.BufferGeometry, uniqueIds: Uint32A
   return true;
 }
 
-const meshSmoothingHistory = createTypedHistory<MeshSmoothingHistoryPayloadMap>();
+const meshSmoothingHistory = createTypedHistory<MeshSmoothingHistoryPayloadMap>(MESH_SMOOTHING_HISTORY_LABELS);
 
 export function useMeshSmoothingHistoryHandlers() {
   useEffect(() => {

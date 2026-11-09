@@ -3,6 +3,8 @@
 import React from 'react';
 import { RaftSettings } from '../../Rafts/Crenelated/RaftTypes';
 import { NumberInput } from '@/components/ui/NumberInput';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { setAnatomyPreviewActiveSettingKey } from '../AnatomyPreview/previewState';
 
@@ -14,6 +16,7 @@ interface RaftSettingsCardProps {
 }
 
 export function RaftSettingsCard({ settings, onChange, activeModelId, selectedModelIds }: RaftSettingsCardProps) {
+    const { _ } = useLingui();
     if (!settings) return null;
 
     const makeFocusHandlers = React.useCallback((key: string) => {
@@ -112,15 +115,15 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
         <div className="space-y-2.5">
             <div className="space-y-1.5">
                 <div className="grid grid-cols-3 gap-1.5">
-                    <ModeButton active={settings.bottomMode === 'off'} onClick={() => onChange({ bottomMode: 'off' })}>Off</ModeButton>
-                    <ModeButton active={settings.bottomMode === 'solid'} onClick={() => onChange({ bottomMode: 'solid' })}>Solid</ModeButton>
-                    <ModeButton active={settings.bottomMode === 'line'} onClick={() => onChange({ bottomMode: 'line' })}>Line</ModeButton>
+                    <ModeButton active={settings.bottomMode === 'off'} onClick={() => onChange({ bottomMode: 'off' })}>{_(msg({ message: 'Off', comment: 'Raft bottom mode. One of three narrow buttons: Off / Solid / Line.' }))}</ModeButton>
+                    <ModeButton active={settings.bottomMode === 'solid'} onClick={() => onChange({ bottomMode: 'solid' })}>{_(msg({ message: 'Solid', comment: 'Raft bottom mode. One of three narrow buttons: Off / Solid / Line.' }))}</ModeButton>
+                    <ModeButton active={settings.bottomMode === 'line'} onClick={() => onChange({ bottomMode: 'line' })}>{_(msg({ message: 'Line', comment: 'Raft bottom mode. One of three narrow buttons: Off / Solid / Line.' }))}</ModeButton>
                 </div>
                 {settings.bottomMode === 'solid' && (
                     <ToggleButton
                         checked={isWallEnabled}
                         onChange={() => onChange({ wallEnabled: !isWallEnabled })}
-                        label="Wall"
+                        label={_(msg`Wall`)}
                         tone="secondary"
                     />
                 )}
@@ -131,7 +134,7 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
                     {settings.bottomMode === 'solid' && (
                         <>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.thickness')}>
-                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Thickness</span>
+                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>{_(msg`Thickness`)}</span>
                                 <div className="relative">
                                     <NumberInput
                                         value={settings.thickness}
@@ -144,7 +147,7 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
                                 </div>
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.chamferAngle')}>
-                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Chamfer Angle</span>
+                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>{_(msg`Chamfer Angle`)}</span>
                                 <div className="relative">
                                     <NumberInput
                                         value={settings.chamferAngle}
@@ -161,7 +164,7 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
                     {settings.bottomMode === 'line' && (
                         <>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.lineWidthMm')}>
-                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Line Width</span>
+                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>{_(msg`Line Width`)}</span>
                                 <div className="relative">
                                     <NumberInput
                                         value={settings.lineWidthMm}
@@ -174,7 +177,7 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
                                 </div>
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.lineHeightMm')}>
-                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Line Height</span>
+                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>{_(msg`Line Height`)}</span>
                                 <div className="relative">
                                     <NumberInput
                                         value={settings.lineHeightMm}
@@ -192,7 +195,7 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
                     {isWallEnabled && (
                         <>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.wallHeight')}>
-                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Wall Height</span>
+                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>{_(msg`Wall Height`)}</span>
                                 <div className="relative">
                                     <NumberInput
                                         value={settings.wallHeight}
@@ -205,7 +208,7 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
                                 </div>
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.wallThickness')}>
-                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Wall Thickness</span>
+                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>{_(msg`Wall Thickness`)}</span>
                                 <div className="relative">
                                     <NumberInput
                                         value={settings.wallThickness}
@@ -218,7 +221,7 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
                                 </div>
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.crenulationGapWidth')}>
-                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Gap Width</span>
+                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>{_(msg`Gap Width`)}</span>
                                 <div className="relative">
                                     <NumberInput
                                         value={settings.crenulationGapWidth}
@@ -231,7 +234,7 @@ export function RaftSettingsCard({ settings, onChange, activeModelId, selectedMo
                                 </div>
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.crenulationSpacing')}>
-                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Gap Spacing</span>
+                                <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>{_(msg`Gap Spacing`)}</span>
                                 <div className="relative">
                                     <NumberInput
                                         value={settings.crenulationSpacing}

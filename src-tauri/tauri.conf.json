@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DragonFruit",
-  "version": "0.1.15",
+  "version": "0.3.1",
   "identifier": "org.openresinalliance.dragonfruit",
   "build": {
-    "beforeDevCommand": "npm run predev:once && npm run dev",
-    "beforeBuildCommand": "npm run build:tauri && node scripts/build-thumbnail-providers.mjs",
+    "beforeDevCommand": "npm run build:thumbnail-providers && npm run dev",
+    "beforeBuildCommand": "npm run build:tauri && npm run build:thumbnail-providers",
     "devUrl": "http://localhost:3005",
     "frontendDist": "frontend-dist"
   },
@@ -18,8 +18,16 @@
           "voxl"
         ],
         "name": "DragonFruit Scene File",
-        "description": "DragonFruit scene",
+        "description": "DragonFruit Scene",
         "mimeType": "application/vnd.dragonfruit.voxl+json"
+      },
+      {
+        "ext": [
+          "lumen"
+        ],
+        "name": "ORA LUMEN File",
+        "description": "LUMEN Print File",
+        "mimeType": "application/vnd.openresin.lumen"
       }
     ],
     "icon": [
@@ -34,9 +42,6 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0NjE2N0VERDQ3RjYwMDcKUldRSFlIL1U3V2RoNVBnc0hoWnU5NnZSdkhSRys5OFFRVXpHNWhsd3ZwRGYwc1N1UkpLR3htWmkK",
-      "endpoints": [
-        "https://github.com/Open-Resin-Alliance/DragonFruit/releases/latest/download/latest.json"
-      ],
       "windows": {
         "installMode": "passive"
       }
@@ -50,6 +55,7 @@
       {
         "label": "splashscreen",
         "url": "/splashscreen.html",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --force_high_performance_gpu",
         "width": 400,
         "height": 330,
         "center": true,
@@ -67,6 +73,7 @@
       {
         "label": "main",
         "create": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --force_high_performance_gpu",
         "visible": false,
         "theme": "Dark",
         "backgroundColor": "#0B0F14",

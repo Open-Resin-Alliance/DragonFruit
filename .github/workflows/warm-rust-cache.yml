@@ -16,20 +16,117 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A push that bumps the version also starts release.yml, whose macOS build is
+  # the fat leg below at the same commit: same command, same cache key. Warming
+  # alongside it compiled everything twice (0.1.16: 12m 12s in the release, 12m 28s
+  # here, finishing within a minute of each other) and saved nothing, because the
+  # warm restored an exact match and `rust-cache` skips saving on one. The release
+  # saves that cache itself when it succeeds, so on those pushes only the thin leg,
+  # which nothing else writes, is worth running.
+  release-push:
+    name: Detect a release push
+    runs-on: ubuntu-latest
+    outputs:
+      bumped: ${{ steps.version.outputs.bumped }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Fails towards warming: an unreadable previous version (a dispatch, a new
+      # branch, a force push) leaves both legs on, which costs minutes, not a cache.
+      - name: Compare the version with the one before the push
+        id: version
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          bumped=false
+          if [[ "${{ github.event_name }}" == "push" ]] && git fetch --quiet --depth=1 origin "$BEFORE" 2>/dev/null; then
+            previous=$(git show "$BEFORE:package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")
+            current=$(node -p "require('./package.json').version")
+            if [[ -n "$previous" && "$previous" != "$current" ]]; then
+              bumped=true
+              echo "Version $previous -> $current: release.yml builds the fat leg, skipping it here."
+            fi
+          fi
+          echo "bumped=$bumped" >> "$GITHUB_OUTPUT"
+
   warm-macos:
-    name: Warm macOS Rust cache
+    name: Warm macOS Rust cache (${{ matrix.profile }})
+    needs: release-push
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The shipped profile and target, and the ones the compile check now uses.
+        # Both are warmed because a profile or target change is a different
+        # fingerprint for every crate, so one cache cannot serve the other: the
+        # check would restore the wrong artifacts, reuse none of them, and then
+        # skip saving its own.
+        #
+        # The thin leg is what makes a pull request's *first* macOS check warm. The
+        # check runs on pull requests only, whose caches are scoped to their own
+        # merge ref, so nothing else can put that cache where they can read it.
+        profile: [fat, thin]
+        exclude:
+          - profile: ${{ needs.release-push.outputs.bumped == 'true' && 'fat' || 'none' }}
+    # Each leg's settings follow from its profile here rather than from `include`:
+    # GitHub applies `include` after `exclude` and turns an entry that matches no
+    # remaining combination into a new one, which would put the fat leg back.
+    env:
+      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.profile }}
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ matrix.profile == 'fat' && '1' || '16' }}
+      DF_BUILD_TARGET_TRIPLE: ${{ matrix.profile == 'fat' && 'universal-apple-darwin' || 'aarch64-apple-darwin' }}
+      CMAKE_OSX_ARCHITECTURES: ${{ matrix.profile == 'fat' && 'arm64;x86_64' || 'arm64' }}
     permissions:
       actions: write
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      # `rust-toolchain.toml` pins the toolchain and its Apple targets, and rustup
+      # installs what that file names. `@stable` installed the rolling channel
+      # instead, which is what `swatinem/rust-cache` hashes: Rust 1.99.0 shipping
+      # moved every macOS cache key at once (`...-773432c4-*` -> `...-d94a1be7-*`)
+      # and the next build check compiled dependencies from scratch, 28 minutes
+      # against 19 warm. A pinned channel moves the key only when that file is
+      # bumped, which is a decision someone makes on purpose.
+      - name: Read the pinned Rust toolchain
+        id: rust_toolchain
+        # bash, not the runner's default shell: Windows would run this as pwsh,
+        # where `$(sed …)` is a module path, and the step died there.
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust_toolchain.outputs.channel }}
+
+      # `swatinem/rust-cache` hashes every toolchain `rustup` lists, not only the
+      # one the build uses, and the runner image ships its own `stable` (1.98.1
+      # when this was written). Pinning the channel alone left the key to move
+      # whenever the image moved that one; removing the rest leaves the pinned
+      # toolchain as the only Rust input to the key.
+      - name: Drop the runner's other Rust toolchains
+        shell: bash
+        env:
+          PINNED: ${{ steps.rust_toolchain.outputs.channel }}
+        run: |
+          rustup default "$PINNED"
+          rustup toolchain list | awk '{print $1}' | while read -r tc; do
+            case "$tc" in
+              # `system` is a rustc outside rustup, which rustup cannot remove.
+              "$PINNED"-* | system) ;;
+              *) rustup toolchain uninstall "$tc" || echo "::warning::could not uninstall $tc" ;;
+            esac
+          done
+          rustup toolchain list
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -38,32 +135,34 @@ jobs:
             ./src-tauri -> target
             ./rust/dragonfruit-voxl-thumbnail -> target
           shared-key: tauri
-          # If a late compile step fails, still save everything built so far —
-          # the whole point of this workflow is warming the dependency cache.
-          cache-on-failure: true
+          env-vars: CARGO_PROFILE_RELEASE_LTO CARGO_PROFILE_RELEASE_CODEGEN_UNITS DF_BUILD_TARGET_TRIPLE CMAKE_OSX_ARCHITECTURES
+          # No `cache-on-failure`. A run cancelled or failed mid-compile would save
+          # what it had under the final key, and every later run restores that as an
+          # exact match, recompiles the rest and then skips saving ("Cache
+          # up-to-date"), so the gap is never filled until the key moves. 0.1.16:
+          # a warm cancelled after 24 crates left the key every release attempt and
+          # warm then hit, each recompiling 330 crates and saving none of them.
 
       - name: Generate plugin registry
         run: node scripts/generate-plugin-registry.mjs
 
-      # tauri::generate_context!() embeds frontendDist assets when compiling
-      # dragonfruit-desktop and fails if the directory is missing. A stub is
-      # enough: desktop-crate artifacts are branch-specific and recompiled on
-      # every PR anyway; this workflow only warms the dependency cache.
-      - name: Stub frontend dist
-        run: |
-          mkdir -p src-tauri/frontend-dist
-          [ -f src-tauri/frontend-dist/index.html ] || echo '<!doctype html><title>warm-cache stub</title>' > src-tauri/frontend-dist/index.html
+      - name: Install frontend dependencies
+        run: npm ci
 
-      - name: Build thumbnail provider sidecars
-        env:
-          DF_BUILD_TARGET_TRIPLE: universal-apple-darwin
-        run: node scripts/build-thumbnail-providers.mjs
-
-      - name: Compile Rust dependencies
-        working-directory: src-tauri
-        env:
-          CMAKE_OSX_ARCHITECTURES: "arm64;x86_64"
-          DF_BUILD_TARGET_TRIPLE: universal-apple-darwin
-        run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
+      # The build it feeds is `tauri build --target universal-apple-darwin`, and the
+      # CLI owns those details from there: the per-arch cargo invocations, the
+      # `target/universal-apple-darwin` directory it merges the binary into, and the
+      # feature set the app binary is built with. Warming with a bare `cargo build`
+      # instead left every crate whose features the two commands resolve differently
+      # to rebuild on each check (wry, tauri-runtime, the objc2 family, the updater
+      # stack, zip/zstd/bzip2): 56 crates, twice per arch, on every run. Same command
+      # as the check, minus bundling, so what lands in the cache is what it reads.
+      # `beforeBuildCommand` builds the frontend and the thumbnail sidecars on the
+      # way through, which is why neither needs a step of its own here.
+      # `--config` turns the updater artifacts off for this run: the check has a step
+      # that patches them out of `tauri.conf.json` when no signing key is present,
+      # and warming has no key either.
+      - name: Compile the app and its dependencies
+        # The target comes from the profile (job `env`): `universal-apple-darwin` for
+        # the shipped leg, `aarch64-apple-darwin` for the one the check reads.
+        run: npx tauri build --target ${{ env.DF_BUILD_TARGET_TRIPLE }} --no-bundle --config '{"bundle":{"createUpdaterArtifacts":false}}'

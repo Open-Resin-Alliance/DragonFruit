@@ -1,10 +1,10 @@
 import React from 'react';
 import * as THREE from 'three';
-import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
-import type { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import type { useTransformManager } from '@/features/transform/useTransformManager';
+import { SupportInspectorPanel } from '@/supports/SupportInspectorPanel';
+import { Card, CardHeader } from '@/components/atoms/Card';
 
 type DebugStamp = { perfMs: number; epochMs: number };
 type Vec3Like = { x: number; y: number; z: number };
@@ -53,17 +53,7 @@ type TransformDebugStats = {
     lastPushApplied: boolean | null;
     lastAt: DebugStamp | null;
   };
-  supportCounts: {
-    trunks: number;
-    branches: number;
-    leaves: number;
-    twigs: number;
-    sticks: number;
-    braces: number;
-    roots: number;
-    knots: number;
-    kickstands: number;
-  };
+  supportCounts: Record<string, number>;
 };
 
 type SupportDebugStats = {
@@ -77,7 +67,7 @@ type SupportDebugStats = {
   braceStartSegmentId: string | null;
   braceSnapKind: string | null;
   braceSnapSegmentId: string | null;
-  braceSnapLeafId: string | null;
+  braceSnapPrimitiveId: string | null;
   previewStart: Vec3Like | null;
   previewEnd: Vec3Like | null;
   hoveredVsSnapMismatch: boolean;
@@ -93,6 +83,10 @@ type SupportDebugStats = {
   externalHoverModelId: string | null;
   effectiveHoverModelId: string | null;
   sceneHoveredSupportId: string | null;
+  /** modelId of the hovered support -- the model<->support link the import bridge establishes. */
+  hoveredSupportModelId: string | null;
+  /** Whether that owner is the active model; null when nothing resolvable is hovered. */
+  hoveredSupportOwnedByActiveModel: boolean | null;
   marqueeHoveredSupportId: string | null;
   rawHoveredCategory: string | null;
   rawHoveredId: string | null;
@@ -100,28 +94,12 @@ type SupportDebugStats = {
   hoveredIdForVisual: string | null;
 };
 
-type SupportEntityCounts = {
-  trunks: number;
-  branches: number;
-  leaves: number;
-  twigs: number;
-  sticks: number;
-  braces: number;
-  roots: number;
-  knots: number;
-  kickstands: number;
-};
+/** One count per collection, derived so a new support type is counted too. */
 
+/** Debug rows: the support types in registry order, then the primitives. */
 export type SharedPanelStackProps = {
   scene: ReturnType<typeof useSceneCollectionManager>;
-  slicing: ReturnType<typeof useSlicingManager>;
   transformMgr: ReturnType<typeof useTransformManager>;
-
-  // VisualSettingsPanel
-  handleSceneLayerScrubStart: React.ComponentProps<typeof VisualSettingsPanel>['onScrubStart'];
-  handleSceneLayerScrubEnd: React.ComponentProps<typeof VisualSettingsPanel>['onScrubEnd'];
-  isCrossSectionEnabled: boolean;
-  handleToggleCrossSection: () => void;
 
   // Debug overlay
   isTransformDebugOverlayOpen: boolean;
@@ -129,7 +107,6 @@ export type SharedPanelStackProps = {
   displayActiveModelId: string | null;
   transformDebugStats: TransformDebugStats;
   supportDebugStats: SupportDebugStats;
-  activeSupportEntityCounts: SupportEntityCounts;
 
   formatDebugVec3: (v: THREE.Vector3 | null | undefined) => string;
   formatDebugVec3Like: (v: Vec3Like | null | undefined) => string;
@@ -146,7 +123,8 @@ export type SharedPanelStackProps = {
   printingSendProgress: number;
   printingSendBusy: boolean;
   printingSendStageText: string | null;
-  printingLayerPreviewUrls: Array<string | null>;
+  printingLayerPreviewUrlAt: (layerNumber: number) => string | null;
+  printingLayerPreviewCount: number;
   printingArtifact: SliceExportArtifact | null;
   printingUploadDialogOpen: boolean;
   printingUploadDialogStage: 'uploading' | 'processing' | 'ready' | 'starting' | 'failed' | 'started';
@@ -157,21 +135,15 @@ export type SharedPanelStackProps = {
   printingSlicingBenchmark: SliceExportResult['benchmark'] | null;
 };
 
-/** Mode-shared floating panels: visual settings + the transform/support/printing debug overlay. */
+/** Mode-shared floating panels: the transform/support/printing debug overlay. */
 export function SharedPanelStack({
   scene,
-  slicing,
   transformMgr,
-  handleSceneLayerScrubStart,
-  handleSceneLayerScrubEnd,
-  isCrossSectionEnabled,
-  handleToggleCrossSection,
   isTransformDebugOverlayOpen,
   setIsTransformDebugOverlayOpen,
   displayActiveModelId,
   transformDebugStats,
   supportDebugStats,
-  activeSupportEntityCounts,
   formatDebugVec3,
   formatDebugVec3Like,
   formatDebugNumber,
@@ -185,7 +157,8 @@ export function SharedPanelStack({
   printingSendProgress,
   printingSendBusy,
   printingSendStageText,
-  printingLayerPreviewUrls,
+  printingLayerPreviewUrlAt,
+  printingLayerPreviewCount,
   printingArtifact,
   printingUploadDialogOpen,
   printingUploadDialogStage,
@@ -199,49 +172,31 @@ export function SharedPanelStack({
   'use no memo';
   return (
     <>
-      {scene.models.length > 0 && scene.mode !== 'printing' && (
-        <VisualSettingsPanel
-          key="visual-settings"
-          layerIndex={slicing.layerIndex}
-          maxLayers={slicing.numLayers}
-          onLayerIndexChange={slicing.setLayerIndex}
-          onScrubStart={handleSceneLayerScrubStart}
-          onScrubEnd={handleSceneLayerScrubEnd}
-          currentHeightMm={slicing.currentHeightMm}
-          maxHeightMm={slicing.heightMm}
-          lowerLayerIndex={slicing.lowerLayerIndex}
-          onLowerLayerIndexChange={slicing.setLowerLayerIndex}
-          lowerCurrentHeightMm={slicing.lowerCurrentHeightMm}
-          crossSectionEnabled={isCrossSectionEnabled}
-          onToggleCrossSection={handleToggleCrossSection}
-          layerHeightMm={slicing.layerHeightMm}
-        />
-      )}
-
+      {/* i18n-ignore-start: developer debug overlay (Ctrl+Shift+X), kept in English */}
       {isTransformDebugOverlayOpen && (
-        <div
+        <Card
           key="transform-debug-overlay"
-          className="rounded-lg border p-2.5 font-mono text-[10px] leading-tight shadow-xl"
-          style={{
-            borderColor: 'var(--border-subtle)',
-            color: 'var(--text-strong)',
-            background: 'color-mix(in srgb, var(--surface-0), black 14%)',
-            fontSize: '10px',
-          }}
+          className="font-mono text-[10px] leading-tight"
+          style={{ color: 'var(--text-strong)', fontSize: '10px' }}
         >
-          <div className="mb-2 flex items-center justify-between">
-            <div className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
-              {scene.mode === 'printing' ? 'Printing Debug Overlay' : scene.mode === 'support' ? 'Support Debug Overlay' : 'Transform Debug Overlay'}
-            </div>
-            <button
-              type="button"
-              className="rounded border px-2 py-0.5 text-[10px]"
-              style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-              onClick={() => setIsTransformDebugOverlayOpen(false)}
-            >
-              Close
-            </button>
-          </div>
+          <CardHeader
+            left={(
+              <h3 className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
+                {scene.mode === 'printing' ? 'Printing Debug Overlay' : scene.mode === 'support' ? 'Support Debug Overlay' : 'Transform Debug Overlay'}
+              </h3>
+            )}
+            right={(
+              <button
+                type="button"
+                className="rounded border px-2 py-0.5 text-[10px]"
+                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                onClick={() => setIsTransformDebugOverlayOpen(false)}
+              >
+                Close
+              </button>
+            )}
+          />
+          <div className="px-2.5 pb-2.5">
 
           {scene.mode === 'printing' ? (
             <div className="grid grid-cols-2 gap-x-3 gap-y-1">
@@ -278,9 +233,9 @@ export function SharedPanelStack({
               <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                 Preview State
               </div>
-              <div>Preview URLs loaded: {printingLayerPreviewUrls.filter(u => u !== null).length} / {printingPreviewTotalLayers}</div>
-              <div>Selected URL exists: {(printingLayerPreviewUrls[printingSelectedLayer - 1] ?? null) ? 'true' : 'false'}</div>
-              <div>Displayed URL exists: {(printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null) ? 'true' : 'false'}</div>
+              <div>Preview URLs loaded: {printingLayerPreviewCount} / {printingPreviewTotalLayers}</div>
+              <div>Selected URL exists: {printingLayerPreviewUrlAt(printingSelectedLayer) ? 'true' : 'false'}</div>
+              <div>Displayed URL exists: {printingLayerPreviewUrlAt(printingDisplayedLayer) ? 'true' : 'false'}</div>
               <div>Artifact ready: {printingArtifact ? 'true' : 'false'}</div>
               <div>Artifact name: {printingArtifact?.outputName ?? 'none'}</div>
               <div>Upload dialog open: {printingUploadDialogOpen ? 'true' : 'false'}</div>
@@ -313,43 +268,65 @@ export function SharedPanelStack({
             </div>
           )}
 
-          {scene.mode === 'support' && (
-            <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                Placement Lock Debug
+          {scene.mode === 'support' && (() => {
+            const armed = [
+              supportDebugStats.supportInteractionSuppressed && 'interaction',
+              supportDebugStats.disableSelectionAndHover && 'selection+hover',
+              supportDebugStats.gizmoInteractionLockActive && 'gizmo lock',
+              supportDebugStats.knotGizmoDragging && 'knot drag',
+              supportDebugStats.jointGizmoDragging && 'joint drag',
+            ].filter(Boolean) as string[];
+
+            return (
+              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Support Debug
+                </div>
+                <div>hover: {supportDebugStats.hoveredCategory} / {supportDebugStats.hoveredId ?? 'none'}</div>
+                <div>scene hover: {supportDebugStats.sceneHoveredSupportId ?? 'none'}</div>
+                <div>segment hover: {supportDebugStats.shaftHoveredSegmentId ?? 'none'}</div>
+                <div>hover model: {supportDebugStats.effectiveHoverModelId ?? 'none'}</div>
+                <div>visual hover: {supportDebugStats.hoveredCategoryForVisual ?? 'none'} / {supportDebugStats.hoveredIdForVisual ?? 'none'}</div>
+                {armed.length > 0 && (
+                  <div style={{ color: '#ff8a8a' }}>suppressed: {armed.join(' · ')}</div>
+                )}
+                {supportDebugStats.hoveredVsSnapMismatch && (
+                  <div style={{ color: '#ff8a8a' }}>hover/snap segment mismatch</div>
+                )}
+
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    Details
+                  </summary>
+                  <div className="mt-1">
+                    <div>Shaft hover point: {formatDebugVec3Like(supportDebugStats.shaftHoverPoint)}</div>
+                    <div>Brace Alt active: {supportDebugStats.braceAltActive ? 'true' : 'false'}</div>
+                    <div>Brace stage: {supportDebugStats.braceStage}</div>
+                    <div>Brace start: {supportDebugStats.braceStartKind ?? 'none'} / {supportDebugStats.braceStartSegmentId ?? 'n/a'}</div>
+                    <div>Brace snap: {supportDebugStats.braceSnapKind ?? 'none'} / {supportDebugStats.braceSnapSegmentId ?? supportDebugStats.braceSnapPrimitiveId ?? 'n/a'}</div>
+                    <div>Preview start: {formatDebugVec3Like(supportDebugStats.previewStart)}</div>
+                    <div>Preview end: {formatDebugVec3Like(supportDebugStats.previewEnd)}</div>
+                    <div>Suppressed: {supportDebugStats.supportInteractionSuppressed ? 'true' : 'false'}</div>
+                    <div>disableSelectionAndHover: {supportDebugStats.disableSelectionAndHover ? 'true' : 'false'}</div>
+                    <div>Gizmo lock active: {supportDebugStats.gizmoInteractionLockActive ? 'true' : 'false'}</div>
+                    <div>Knot dragging: {supportDebugStats.knotGizmoDragging ? 'true' : 'false'}</div>
+                    <div>Joint dragging: {supportDebugStats.jointGizmoDragging ? 'true' : 'false'}</div>
+                    <div>Knot guard remaining: {supportDebugStats.knotGuardRemainingMs} ms</div>
+                    <div>Knot-only guard: {supportDebugStats.knotOnlyGuardRemainingMs} ms</div>
+                    <div>Joint-only guard: {supportDebugStats.jointOnlyGuardRemainingMs} ms</div>
+                    <div>Immediate hover model: {supportDebugStats.immediateModelHoverId ?? 'none'}</div>
+                    <div>External hover model: {supportDebugStats.externalHoverModelId ?? 'none'}</div>
+                    <div>Hovered support owner: {supportDebugStats.hoveredSupportModelId ?? 'none'}
+                      {supportDebugStats.hoveredSupportOwnedByActiveModel === true ? ' (active model)' : null}
+                      {supportDebugStats.hoveredSupportOwnedByActiveModel === false ? ' (OTHER MODEL)' : null}
+                    </div>
+                    <div>Marquee hovered support: {supportDebugStats.marqueeHoveredSupportId ?? 'none'}</div>
+                    <div>Raw hover: {supportDebugStats.rawHoveredCategory ?? 'none'} / {supportDebugStats.rawHoveredId ?? 'none'}</div>
+                  </div>
+                </details>
               </div>
-              <div>Hovered category/id: {supportDebugStats.hoveredCategory} / {supportDebugStats.hoveredId ?? 'none'}</div>
-              <div>Shaft hovered segment: {supportDebugStats.shaftHoveredSegmentId ?? 'none'}</div>
-              <div>Shaft hover point: {formatDebugVec3Like(supportDebugStats.shaftHoverPoint)}</div>
-              <div>Brace Alt active: {supportDebugStats.braceAltActive ? 'true' : 'false'}</div>
-              <div>Brace stage: {supportDebugStats.braceStage}</div>
-              <div>Brace start: {supportDebugStats.braceStartKind ?? 'none'} / {supportDebugStats.braceStartSegmentId ?? 'n/a'}</div>
-              <div>Brace snap: {supportDebugStats.braceSnapKind ?? 'none'} / {supportDebugStats.braceSnapSegmentId ?? supportDebugStats.braceSnapLeafId ?? 'n/a'}</div>
-              <div>Preview start: {formatDebugVec3Like(supportDebugStats.previewStart)}</div>
-              <div>Preview end: {formatDebugVec3Like(supportDebugStats.previewEnd)}</div>
-              <div>Suppressed: {supportDebugStats.supportInteractionSuppressed ? 'true' : 'false'}</div>
-              <div>disableSelectionAndHover: {supportDebugStats.disableSelectionAndHover ? 'true' : 'false'}</div>
-              <div>Gizmo lock active: {supportDebugStats.gizmoInteractionLockActive ? 'true' : 'false'}</div>
-              <div>Knot dragging: {supportDebugStats.knotGizmoDragging ? 'true' : 'false'}</div>
-              <div>Joint dragging: {supportDebugStats.jointGizmoDragging ? 'true' : 'false'}</div>
-              <div>Knot guard remaining: {supportDebugStats.knotGuardRemainingMs} ms</div>
-              <div>Knot-only guard: {supportDebugStats.knotOnlyGuardRemainingMs} ms</div>
-              <div>Joint-only guard: {supportDebugStats.jointOnlyGuardRemainingMs} ms</div>
-              <div>Immediate hover model: {supportDebugStats.immediateModelHoverId ?? 'none'}</div>
-              <div>External hover model: {supportDebugStats.externalHoverModelId ?? 'none'}</div>
-              <div>Effective hover model: {supportDebugStats.effectiveHoverModelId ?? 'none'}</div>
-              <div>Scene hovered support: {supportDebugStats.sceneHoveredSupportId ?? 'none'}</div>
-              <div>Marquee hovered support: {supportDebugStats.marqueeHoveredSupportId ?? 'none'}</div>
-              <div>Raw hovered category/id: {supportDebugStats.rawHoveredCategory ?? 'none'} / {supportDebugStats.rawHoveredId ?? 'none'}</div>
-              <div>Visual hovered category/id: {supportDebugStats.hoveredCategoryForVisual ?? 'none'} / {supportDebugStats.hoveredIdForVisual ?? 'none'}</div>
-              <div>
-                Hover vs snap segment mismatch:{' '}
-                <span style={{ color: supportDebugStats.hoveredVsSnapMismatch ? '#ff8a8a' : 'var(--text-strong)' }}>
-                  {supportDebugStats.hoveredVsSnapMismatch ? 'YES' : 'no'}
-                </span>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {scene.mode !== 'support' && scene.mode !== 'printing' && (
             <>
@@ -374,20 +351,13 @@ export function SharedPanelStack({
             </>
           )}
 
-          <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-            <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Support Counts (all / active model)
-            </div>
-            <div>Trunks: {transformDebugStats.supportCounts.trunks} / {activeSupportEntityCounts.trunks}</div>
-            <div>Branches: {transformDebugStats.supportCounts.branches} / {activeSupportEntityCounts.branches}</div>
-            <div>Leaves: {transformDebugStats.supportCounts.leaves} / {activeSupportEntityCounts.leaves}</div>
-            <div>Twigs: {transformDebugStats.supportCounts.twigs} / {activeSupportEntityCounts.twigs}</div>
-            <div>Sticks: {transformDebugStats.supportCounts.sticks} / {activeSupportEntityCounts.sticks}</div>
-            <div>Braces: {transformDebugStats.supportCounts.braces} / {activeSupportEntityCounts.braces}</div>
-            <div>Roots: {transformDebugStats.supportCounts.roots} / {activeSupportEntityCounts.roots}</div>
-            <div>Knots: {transformDebugStats.supportCounts.knots} / {activeSupportEntityCounts.knots}</div>
-            <div>Kickstands: {transformDebugStats.supportCounts.kickstands} / {activeSupportEntityCounts.kickstands}</div>
-          </div>
+          {/* Selection, connections and counts, read from the support store.
+              The page snapshot these used to come from is deliberately empty
+              in support mode, so every count read zero exactly here. */}
+          <SupportInspectorPanel
+            activeModelId={scene.activeModelId ?? null}
+            hoveredSupportId={supportDebugStats.hoveredIdForVisual ?? null}
+          />
 
           {scene.mode !== 'support' && scene.mode !== 'printing' && (
             <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -447,8 +417,10 @@ export function SharedPanelStack({
           <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
             Toggle: Ctrl+Shift+X
           </div>
-        </div>
+          </div>
+        </Card>
       )}
+      {/* i18n-ignore-end */}
     </>
   );
 }

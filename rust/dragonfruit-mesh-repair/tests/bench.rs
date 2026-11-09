@@ -12,7 +12,8 @@ fn build_cube(subdiv: usize) -> IndexedMesh {
     let mut positions: Vec<f32> = Vec::with_capacity(subdiv * subdiv * 36 * 6);
     let s = subdiv as f32;
 
-    let push_quad = |a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3], out: &mut Vec<f32>| {        out.extend_from_slice(&a);
+    let push_quad = |a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3], out: &mut Vec<f32>| {
+        out.extend_from_slice(&a);
         out.extend_from_slice(&b);
         out.extend_from_slice(&c);
         out.extend_from_slice(&a);
@@ -27,17 +28,53 @@ fn build_cube(subdiv: usize) -> IndexedMesh {
             let v0 = j as f32 / s;
             let v1 = (j + 1) as f32 / s;
             // +Z face
-            push_quad([u0, v0, 1.0], [u1, v0, 1.0], [u1, v1, 1.0], [u0, v1, 1.0], &mut positions);
+            push_quad(
+                [u0, v0, 1.0],
+                [u1, v0, 1.0],
+                [u1, v1, 1.0],
+                [u0, v1, 1.0],
+                &mut positions,
+            );
             // -Z face
-            push_quad([u0, v1, 0.0], [u1, v1, 0.0], [u1, v0, 0.0], [u0, v0, 0.0], &mut positions);
+            push_quad(
+                [u0, v1, 0.0],
+                [u1, v1, 0.0],
+                [u1, v0, 0.0],
+                [u0, v0, 0.0],
+                &mut positions,
+            );
             // +X face
-            push_quad([1.0, v0, u0], [1.0, v1, u0], [1.0, v1, u1], [1.0, v0, u1], &mut positions);
+            push_quad(
+                [1.0, v0, u0],
+                [1.0, v1, u0],
+                [1.0, v1, u1],
+                [1.0, v0, u1],
+                &mut positions,
+            );
             // -X face
-            push_quad([0.0, v0, u1], [0.0, v1, u1], [0.0, v1, u0], [0.0, v0, u0], &mut positions);
+            push_quad(
+                [0.0, v0, u1],
+                [0.0, v1, u1],
+                [0.0, v1, u0],
+                [0.0, v0, u0],
+                &mut positions,
+            );
             // +Y face
-            push_quad([u0, 1.0, v1], [u1, 1.0, v1], [u1, 1.0, v0], [u0, 1.0, v0], &mut positions);
+            push_quad(
+                [u0, 1.0, v1],
+                [u1, 1.0, v1],
+                [u1, 1.0, v0],
+                [u0, 1.0, v0],
+                &mut positions,
+            );
             // -Y face
-            push_quad([u0, 0.0, v0], [u1, 0.0, v0], [u1, 0.0, v1], [u0, 0.0, v1], &mut positions);
+            push_quad(
+                [u0, 0.0, v0],
+                [u1, 0.0, v0],
+                [u1, 0.0, v1],
+                [u0, 0.0, v1],
+                &mut positions,
+            );
         }
     }
 

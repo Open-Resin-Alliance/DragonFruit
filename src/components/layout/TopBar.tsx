@@ -9,8 +9,10 @@ import { SettingsModal, type SettingsTabKey } from '@/components/settings/Settin
 import { ProfileSettingsModal } from '@/components/settings/ProfileSettingsModal';
 import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
-import { Button } from '@/components/atoms';
-import { Activity, AlertTriangle, Anchor, ChevronDown, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, SaveAll, Square, Upload, X } from 'lucide-react';
+import { AlertDiamondIcon, Button } from '@/components/atoms';
+import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { ContextMenu, type ContextMenuEntry } from '@/components/ui/ContextMenu';
+import { Activity, AlertTriangle, Anchor, ChevronDown, FilePlus2, FolderInput, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, SaveAll, Settings, Square, Upload, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -34,28 +36,27 @@ import {
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
 import type { SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
 import { useSceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
+import { formatTopbarPrinterAriaLabel, formatTopbarPrinterTitle } from '@/components/layout/topBarMessages';
 
 interface TopBarProps {
   meshColor: string;
   onMeshColorChange: (color: string) => void;
-  selectionColor: string;
-  onSelectionColorChange: (color: string) => void;
-  hoverColor: string;
-  onHoverColorChange: (color: string) => void;
-  shaderType: MeshShaderType;
-  onShaderTypeChange: (shaderType: MeshShaderType) => void;
+  /** The type the Mesh tab in Settings is configuring. */
+  configuredShaderType: MeshShaderType;
+  onConfiguredShaderTypeChange: (shaderType: MeshShaderType) => void;
   matcapVariant: MatcapVariant;
   onMatcapVariantChange: (variant: MatcapVariant) => void;
   flatUseVertexColors: boolean;
   onFlatUseVertexColorsChange: (value: boolean) => void;
-  toonSteps: number;
-  onToonStepsChange: (value: number) => void;
   ambientIntensity: number;
   onAmbientIntensityChange: (value: number) => void;
   directionalIntensity: number;
   onDirectionalIntensityChange: (value: number) => void;
   materialRoughness: number;
+  /** Multiplier on the baked occlusion's strength; 0 means the bake is off. */
+  bakedAoIntensity: number;
   onMaterialRoughnessChange: (value: number) => void;
+  onBakedAoIntensityChange: (value: number) => void;
   xrayOpacity: number;
   onXrayOpacityChange: (value: number) => void;
   heatmapMinAngle: number;
@@ -66,8 +67,6 @@ interface TopBarProps {
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
   onSelectedTintStrengthChange: (value: number) => void;
-  debugPrimitivesPanelVisible: boolean;
-  onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
   view3dSettings: View3DSettings;
   onView3dSettingsChange: (settings: View3DSettings) => void;
   slicingThumbnailRenderSettings: SlicingThumbnailRenderSettings;
@@ -77,14 +76,16 @@ interface TopBarProps {
   onModeChange: (mode: SupportMode) => void;
   hasModels: boolean;
   hasPrintingData: boolean;
-  viewTypeOverride: MeshShaderType | null;
-  onViewTypeOverrideChange: (value: MeshShaderType | null) => void;
-  interiorView: boolean;
-  onInteriorViewChange: (value: boolean) => void;
-  interiorViewAvailable?: boolean;
+  /** The persisted view mode: what the camera dropdown shows and the viewport renders. */
+  viewType: MeshShaderType;
+  onViewTypeChange: (value: MeshShaderType) => void;
+  /** True while the Overhangs view mode is active, so the quick toggle can show it. */
+  overhangViewActive: boolean;
+  onOverhangViewChange: (value: boolean) => void;
   heatmapColors: string[];
   onHeatmapColorChange: (index: number, color: string) => void;
   isSlicingBusy?: boolean;
+  onNewScene?: () => void;
   onSaveScene?: () => void;
   onSaveSceneAs?: () => void;
   onOpenScene?: () => void;
@@ -106,23 +107,19 @@ interface TopBarProps {
 export function TopBar({
   meshColor,
   onMeshColorChange,
-  selectionColor,
-  onSelectionColorChange,
-  hoverColor,
-  onHoverColorChange,
-  shaderType,
-  onShaderTypeChange,
+  configuredShaderType,
+  onConfiguredShaderTypeChange,
   matcapVariant,
   onMatcapVariantChange,
   flatUseVertexColors,
   onFlatUseVertexColorsChange,
-  toonSteps,
-  onToonStepsChange,
   ambientIntensity,
   onAmbientIntensityChange,
   directionalIntensity,
   onDirectionalIntensityChange,
   materialRoughness,
+  bakedAoIntensity,
+  onBakedAoIntensityChange,
   onMaterialRoughnessChange,
   xrayOpacity,
   onXrayOpacityChange,
@@ -134,8 +131,6 @@ export function TopBar({
   onHoverTintStrengthChange,
   selectedTintStrength,
   onSelectedTintStrengthChange,
-  debugPrimitivesPanelVisible,
-  onDebugPrimitivesPanelVisibleChange,
   view3dSettings,
   onView3dSettingsChange,
   slicingThumbnailRenderSettings,
@@ -144,16 +139,16 @@ export function TopBar({
   onModeChange,
   hasModels,
   hasPrintingData,
-  viewTypeOverride,
-  onViewTypeOverrideChange,
-  interiorView,
-  onInteriorViewChange,
-  interiorViewAvailable = true,
+  viewType,
+  onViewTypeChange,
+  overhangViewActive,
+  onOverhangViewChange,
   heatmapColors,
   onHeatmapColorChange,
   isSlicingBusy = false,
   onLoadMeshChange,
   onImportSceneChange,
+  onNewScene,
   onSaveScene,
   onSaveSceneAs,
   onOpenScene,
@@ -327,35 +322,6 @@ export function TopBar({
   }, []);
 
   React.useEffect(() => {
-    if (!isAppMenuOpen) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-
-      const appMenuNode = document.querySelector('[data-app-menu="true"]');
-      const appMenuButtonNode = appMenuButtonRef.current;
-
-      if (appMenuNode?.contains(target)) return;
-      if (appMenuButtonNode?.contains(target)) return;
-      closeAppMenu();
-    };
-
-    const handleEscape = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') {
-        closeAppMenu();
-      }
-    };
-
-    window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    return () => {
-      window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    };
-  }, [closeAppMenu, isAppMenuOpen]);
-
-  React.useEffect(() => {
     if (!isPrinterQuickMenuOpen) return;
 
     const handlePointerDown = (event: MouseEvent) => {
@@ -410,6 +376,9 @@ export function TopBar({
       'input',
       'select',
       '[role="button"]',
+      // The desktop window drag keeps its own opt-out. `data-no-drag` belongs to
+      // the floating panel stack (see FloatingPanelStack.isDragBlockedByTarget);
+      // the two are not interchangeable.
       '[data-no-window-drag="true"]',
     ].join(',');
 
@@ -474,7 +443,7 @@ export function TopBar({
     const handleOpenSettings = (e: Event) => {
       const detail = (e as CustomEvent).detail as { tab?: string } | undefined;
       const tab = detail?.tab as SettingsTabKey | undefined;
-      if (tab && ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys', 'plugins', 'experiments', 'sceneAutosave', 'backups', 'uvtools', 'logging', 'updates', 'about'].includes(tab)) {
+      if (tab && ['general', 'camera', 'workspaces', 'multiPlate', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys', 'plugins', 'experiments', 'sceneAutosave', 'backups', 'uvtools', 'logging', 'updates', 'about'].includes(tab)) {
         setSettingsInitialTab(tab as SettingsTabKey);
       } else {
         setSettingsInitialTab('general');
@@ -528,7 +497,7 @@ export function TopBar({
     if (topbarUsesFleetLabelOrder) {
       const profileName = activePrinterProfile?.name ?? _(msg`Select profile`);
       const printerName = topbarFleetPrinterName ?? _(msg`No active printer`);
-      return _(msg({ message: `Printer profile: ${profileName} • Active printer: ${printerName}`, comment: '"Printer profile" is the saved configuration (material, output format, etc.); "Active printer" is the physical network device currently connected under that profile. The two are distinct concepts that happen to both contain the word "printer".' }));
+      return formatTopbarPrinterTitle(profileName, printerName, _);
     }
     return activePrinterProfile ? _(msg`Printer profile: ${activePrinterProfile.name}`) : _(msg`Select printer profile`);
   }, [_, activePrinterProfile, topbarFleetPrinterName, topbarUsesFleetLabelOrder]);
@@ -536,7 +505,7 @@ export function TopBar({
     if (topbarUsesFleetLabelOrder) {
       const profileName = activePrinterProfile?.name ?? _(msg`Select profile`);
       const printerName = topbarFleetPrinterName ?? _(msg`No active printer`);
-      return _(msg({ message: `Printer profile ${profileName}, active printer ${printerName}`, comment: 'Same distinction as the title tooltip above (profile = saved configuration, printer = connected physical device), phrased for screen readers without the bullet separator.' }));
+      return formatTopbarPrinterAriaLabel(profileName, printerName, _);
     }
     return activePrinterProfile ? _(msg`Printer profile ${activePrinterProfile.name}`) : _(msg`Select printer profile`);
   }, [_, activePrinterProfile, topbarFleetPrinterName, topbarUsesFleetLabelOrder]);
@@ -586,6 +555,11 @@ export function TopBar({
     if (typeof window === 'undefined') return false;
     return window.innerWidth < 800;
   });
+  // The view mode trigger shows the selected shader's name when the bar has room
+  // and falls back to its icon when it does not. Its own width feeds the
+  // measurement it is based on, so the thresholds are asymmetric: appearing
+  // needs more room than staying does.
+  const [showViewModeLabel, setShowViewModeLabel] = React.useState(false);
 
   React.useEffect(() => {
     const el = stepsContainerRef.current;
@@ -594,6 +568,7 @@ export function TopBar({
       const gapPx = 4;
       const perButton = (entry.contentRect.width - 3 * gapPx) / 4;
       setHideBadges(perButton < 120);
+      setShowViewModeLabel((previous) => (previous ? perButton >= 130 : perButton >= 155));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -644,6 +619,85 @@ export function TopBar({
     },
   ];
 
+  // Same rows the DragonFruit dropdown has always offered; placement, grouping
+  // rules and dismissal belong to ContextMenu.
+  const appMenuEntries: ContextMenuEntry[] = [
+    {
+      id: 'new-scene',
+      label: _(msg`New scene`),
+      icon: FilePlus2,
+      disabled: topbarActionsDisabled || !onNewScene || !hasModels,
+    },
+    {
+      id: 'save-scene',
+      label: _(msg`Save scene`),
+      icon: Save,
+      disabled: topbarActionsDisabled || !onSaveScene,
+      startsGroup: true,
+    },
+    {
+      id: 'save-scene-as',
+      label: _(msg`Save scene as…`),
+      icon: SaveAll,
+      disabled: topbarActionsDisabled || !onSaveSceneAs,
+    },
+    {
+      id: 'open-scene',
+      label: _(msg`Open scene…`),
+      icon: FolderOpen,
+      disabled: topbarActionsDisabled || !onOpenScene,
+    },
+    {
+      id: 'import-mesh',
+      label: _(msg`Import mesh…`),
+      icon: Upload,
+      disabled: topbarActionsDisabled || !onLoadMeshChange,
+      startsGroup: true,
+    },
+    {
+      id: 'import-scene',
+      label: _(msg`Import scene…`),
+      icon: FolderInput,
+      disabled: topbarActionsDisabled || !onImportSceneChange,
+    },
+    {
+      id: 'close-program',
+      label: _(msg`Close program`),
+      icon: Power,
+      startsGroup: true,
+    },
+  ];
+
+  const handleAppMenuSelect = (id: string) => {
+    switch (id) {
+      case 'new-scene':
+        onNewScene?.();
+        break;
+      case 'save-scene':
+        onSaveScene?.();
+        break;
+      case 'save-scene-as':
+        onSaveSceneAs?.();
+        break;
+      case 'open-scene':
+        onOpenScene?.();
+        break;
+      case 'import-mesh':
+        if (typeof document === 'undefined') break;
+        (document.getElementById('topbar-mesh-input') as HTMLInputElement | null)?.click();
+        break;
+      case 'import-scene':
+        if (typeof document === 'undefined') break;
+        (document.getElementById('topbar-scene-input') as HTMLInputElement | null)?.click();
+        break;
+      case 'close-program':
+        void handleCloseProgram();
+        break;
+      default:
+        break;
+    }
+  };
+
   return (
     <>
       <div className={`ui-topbar-blur ${hideWorkflowControls ? 'ui-topbar-blur-transparent' : ''}`} aria-hidden="true" />
@@ -679,6 +733,7 @@ export function TopBar({
         >
           <img
             src="/dragonfruit_assets/branding/simple_icon.svg"
+            // i18n-ignore: product name
             alt="DragonFruit"
             className="h-7 w-7 object-contain"
             draggable={false}
@@ -721,7 +776,7 @@ export function TopBar({
             {activePrinterThumbnailSrc ? (
               <img
                 src={activePrinterThumbnailSrc}
-                alt={activePrinterProfile?.name ?? 'Selected printer'}
+                alt={activePrinterProfile?.name ?? _(msg`Selected printer`)}
                 className="h-full w-full object-contain"
                 draggable={false}
                 onError={() => setPrinterThumbnailFailed(true)}
@@ -733,14 +788,14 @@ export function TopBar({
           <span className="min-w-0 flex flex-col items-start leading-none gap-[2px]">
             <span
               className={topbarUsesFleetLabelOrder
-                ? 'truncate text-[10px] tracking-[0.01em]'
-                : 'text-[9px] uppercase tracking-[0.11em]'}
+                ? 'truncate text-[11px] tracking-[0.01em]'
+                : 'text-[11px] uppercase tracking-[0.11em]'}
               style={{ color: 'var(--text-muted)' }}
               title={topbarPrinterLabelTop}
             >
               {topbarPrinterLabelTop}
             </span>
-            <span className="truncate text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <span className="truncate text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }}>
               {topbarPrinterLabelBottom}
             </span>
           </span>
@@ -778,143 +833,16 @@ export function TopBar({
       </div>
 
       {isAppMenuOpen && appMenuPosition && (
-        <div
-          data-app-menu="true"
-          className="fixed z-[120] w-44 rounded-lg border p-1.5 shadow-xl backdrop-blur-sm"
-          style={{
-            left: appMenuPosition.x,
-            top: appMenuPosition.y,
-            borderColor: 'var(--border-subtle)',
-            background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
-          }}
-          role="menu"
-          aria-label={_(msg({ message: 'DragonFruit app menu', comment: '"DragonFruit" is the product name and should stay untranslated/unchanged.' }))}
-        >
-          <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-            DragonFruit
-          </div>
-          <div className="space-y-0.5">
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                onSaveScene?.();
-              }}
-              disabled={topbarActionsDisabled || !onSaveScene}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onSaveScene) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onSaveScene) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <Save className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Save scene`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                onSaveSceneAs?.();
-              }}
-              disabled={topbarActionsDisabled || !onSaveSceneAs}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onSaveSceneAs) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onSaveSceneAs) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <SaveAll className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Save scene as…`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                onOpenScene?.();
-              }}
-              disabled={topbarActionsDisabled || !onOpenScene}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onOpenScene) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onOpenScene) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <FolderOpen className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Open scene…`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                if (typeof document === 'undefined') return;
-                const input = document.getElementById('topbar-mesh-input') as HTMLInputElement | null;
-                input?.click();
-              }}
-              disabled={topbarActionsDisabled || !onLoadMeshChange}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onLoadMeshChange) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onLoadMeshChange) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <Upload className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Import mesh…`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                if (typeof document === 'undefined') return;
-                const input = document.getElementById('topbar-scene-input') as HTMLInputElement | null;
-                input?.click();
-              }}
-              disabled={topbarActionsDisabled || !onImportSceneChange}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{
-                color: (topbarActionsDisabled || !onImportSceneChange) ? 'var(--text-muted)' : 'var(--text-strong)',
-                opacity: (topbarActionsDisabled || !onImportSceneChange) ? 0.55 : 1,
-              }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <FolderInput className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Import scene…`)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAppMenu();
-                void handleCloseProgram();
-              }}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
-              style={{ color: 'var(--text-strong)' }}
-              role="menuitem"
-            >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <Power className="h-3.5 w-3.5" />
-              </span>
-              <span>{_(msg`Close program`)}</span>
-            </button>
-          </div>
-        </div>
+        <ContextMenu
+          position={appMenuPosition}
+          entries={appMenuEntries}
+          onSelect={handleAppMenuSelect}
+          onClose={closeAppMenu}
+          dismissIgnoreRef={appMenuButtonRef}
+          // i18n-ignore: product name
+          title="DragonFruit"
+          ariaLabel={_(msg({ message: 'DragonFruit app menu', comment: '"DragonFruit" is the product name and should stay untranslated/unchanged.' }))}
+        />
       )}
 
       <input
@@ -1035,7 +963,7 @@ export function TopBar({
           className={`relative w-full transition-opacity ${topbarActionsDisabled ? 'opacity-45' : ''}`}
           aria-disabled={topbarActionsDisabled}
         >
-          <div ref={stepsContainerRef} className="flex items-center justify-center gap-1">
+          <div ref={stepsContainerRef} className="flex items-center justify-center gap-2">
             {steps.map((item) => {
               const active = mode === item.mode;
               const locked = item.locked;
@@ -1054,7 +982,7 @@ export function TopBar({
                   }}
                   disabled={nativeDisabled}
                   aria-disabled={disabled}
-                  className={`group relative flex cursor-pointer items-center gap-1.5 rounded-lg border px-1.5 py-1.5 transition-all duration-200 flex-1 min-w-[90px] max-w-[190px] h-[32px] ${
+                  className={`group relative flex cursor-pointer items-center gap-1.5 rounded-[5.5px] border px-1.5 py-1.5 transition-all duration-200 flex-1 min-w-[90px] max-w-[190px] h-[32px] ${
                     active
                       ? 'shadow-[0_6px_16px_rgba(0,0,0,0.25)]'
                       : 'hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(0,0,0,0.18)]'
@@ -1119,33 +1047,27 @@ export function TopBar({
       </div>
       )}
 
-      <div className="flex flex-1 max-w-[430px] items-center justify-end gap-2 pr-2">
+      <div className="flex flex-1 max-w-[430px] items-center justify-end gap-2 pr-[3px]">
         <div className={`flex items-center gap-2 transition-opacity ${topbarActionsDisabled ? 'opacity-45 pointer-events-none' : ''}`}>
           {!hideWorkflowControls && (
           <>
           <ViewTypeDropdown
-            value={viewTypeOverride}
-            onChange={onViewTypeOverrideChange}
-            iconOnly
+            value={viewType}
+            onChange={onViewTypeChange}
+            iconOnly={!showViewModeLabel}
             title={_(msg`View mode`)}
-            className="[&>button]:!h-8 [&>button]:!w-8 [&>button]:!p-0"
           />
           <Button
             type="button"
-            variant={interiorView ? 'primary' : 'secondary'}
+            variant={overhangViewActive ? 'primary' : 'secondary'}
             className="!p-2"
-            onClick={() => onInteriorViewChange(!interiorView)}
-            disabled={topbarActionsDisabled || !interiorViewAvailable}
-            title={interiorView ? _(msg({ message: 'Interior view: On', comment: 'Tooltip for a toggle button showing its current state, format "Feature name: state". Interior view is a 3D viewport mode that renders the inside of a hollowed model.' })) : interiorViewAvailable ? _(msg`Interior view: Off`) : _(msg`Interior view: Unavailable (apply hollowing first)`)}
-            aria-label={interiorView ? _(msg`Interior view: On`) : interiorViewAvailable ? _(msg`Interior view: Off`) : _(msg`Interior view: Unavailable`)}
+            onClick={() => onOverhangViewChange(!overhangViewActive)}
+            disabled={topbarActionsDisabled}
+            title={overhangViewActive ? _(msg({ message: 'Overhangs view: On', comment: 'Tooltip for a toggle button showing its current state, format "Feature name: state". The Overhangs view colours surfaces by how steeply they overhang, which is where supports are needed.' })) : _(msg`Overhangs view: Off`)}
+            aria-label={overhangViewActive ? _(msg`Overhangs view: On`) : _(msg`Overhangs view: Off`)}
             data-no-window-drag="true"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
-              {/* Cube with inward-facing arrow to symbolize inner/backface viewing */}
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v18M3.6 9l16.8 0M3.6 15l16.8 0" opacity="0.3" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 11l-2 2m2-2l2 2m-2-2v3" />
-            </svg>
+            <AlertDiamondIcon className="w-4 h-4" />
           </Button>
           </>
           )}
@@ -1159,15 +1081,7 @@ export function TopBar({
             aria-label={_(msg`Settings`)}
               data-no-window-drag="true"
             >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-              />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
+            <Settings className="w-4 h-4" />
             </Button>
         </div>
         {isDesktopWindow && (
@@ -1175,7 +1089,7 @@ export function TopBar({
             <button
               type="button"
               onClick={handleDesktopWindowMinimize}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] border transition-colors"
               style={isLightTheme ? {
                 borderColor: 'color-mix(in srgb, #c8920a, var(--border-subtle) 35%)',
                 background: 'color-mix(in srgb, #c8920a, var(--surface-1) 50%)',
@@ -1188,12 +1102,12 @@ export function TopBar({
               title={_(msg`Minimize`)}
               aria-label={_(msg`Minimize window`)}
             >
-              <Minimize2 className="h-3.5 w-3.5" />
+              <Minimize2 className="h-4 w-4" />
             </button>
             <button
               type="button"
               onClick={handleDesktopWindowToggleMaximize}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] border transition-colors"
               style={isLightTheme ? {
                 borderColor: 'color-mix(in srgb, #1a7a3a, var(--border-subtle) 35%)',
                 background: 'color-mix(in srgb, #1a7a3a, var(--surface-1) 50%)',
@@ -1207,15 +1121,15 @@ export function TopBar({
               aria-label={isDesktopWindowMaximized ? _(msg`Restore window`) : _(msg`Maximize window`)}
             >
               {isDesktopWindowMaximized ? (
-                <Square className="h-3.5 w-3.5" />
+                <Square className="h-4 w-4" />
               ) : (
-                <Maximize2 className="h-3.5 w-3.5" />
+                <Maximize2 className="h-4 w-4" />
               )}
             </button>
             <button
               type="button"
               onClick={handleDesktopWindowClose}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] border transition-colors"
               style={isLightTheme ? {
                 borderColor: 'color-mix(in srgb, #c0160a, var(--border-subtle) 35%)',
                 background: 'color-mix(in srgb, #c0160a, var(--surface-1) 50%)',
@@ -1228,94 +1142,51 @@ export function TopBar({
               title={_(msg`Close`)}
               aria-label={_(msg`Close window`)}
             >
-              <X className="h-3.5 w-3.5" />
+              <X className="h-4 w-4" />
             </button>
           </div>
         )}
       </div>
 
       {showProfileChangeWarning && (
-        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" data-no-window-drag="true">
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'var(--surface-0)',
-              borderColor: 'var(--border-subtle)',
-              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label={_(msg`Changing printer profile requires re-slice`)}
-          >
-            <div className="flex items-start justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="flex min-w-0 items-start gap-2.5 pr-2">
-                <span
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-                    color: '#d97706',
-                  }}
-                >
-                  <AlertTriangle className="h-4 w-4" />
-                </span>
-                <div className="min-w-0 pr-2">
-                  <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                    {_(msg({ message: 'Re-slice required after profile change', comment: '"Slice"/"re-slice" is the 3D-printing step that converts a model into printer instructions (G-code). This dialog warns that switching printer profile invalidates the already-sliced file.' }))}
-                  </h2>
-                  <p className="mt-1 max-w-[40ch] text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    {_(msg`Changing print settings invalidates the current sliced file.`)}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-muted)',
-                }}
-                aria-label={_(msg`Close warning`)}
+        <StructuredDialogModal
+          open
+          ariaLabel={_(msg`Changing printer profile requires re-slice`)}
+          title={_(msg({ message: 'Re-slice required after profile change', comment: '"Slice"/"re-slice" is the 3D-printing step that converts a model into printer instructions (G-code). This dialog warns that switching printer profile invalidates the already-sliced file.' }))}
+          subtitle={_(msg`Changing print settings invalidates the current sliced file.`)}
+          icon={<AlertTriangle className="h-4 w-4" />}
+          iconTone="warning"
+          zIndexClassName="z-[220]"
+          closeAriaLabel={_(msg`Close warning`)}
+          onClose={() => setShowProfileChangeWarning(false)}
+          actions={(
+            <>
+              <Button
+                variant="secondary"
+                size="md"
+                className="w-full"
                 onClick={() => setShowProfileChangeWarning(false)}
               >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3">
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                {_(msg`You can continue to adjust profiles, but you’ll be prompted to re-slice before printing with the updated settings.`)}
-              </p>
-
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-9 w-full px-3 text-xs"
-                  onClick={() => setShowProfileChangeWarning(false)}
-                >
-                  {_(msg({ message: 'Keep current profiles', comment: 'Cancels the pending profile change and closes this warning dialog, leaving the previous profile selection untouched. Paired with the "Continue" button below.' }))}
-                </button>
-                <button
-                  type="button"
-                  className="ui-button !h-9 w-full px-3 text-xs"
-                  style={{
-                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
-                    color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
-                  }}
-                  onClick={() => {
-                    setShowProfileChangeWarning(false);
-                    openProfileSettings(profileModalTab);
-                  }}
-                >
-                  {_(msg({ message: 'Continue', comment: 'Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).' }))}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+                {_(msg({ message: 'Keep current profiles', comment: 'Cancels the pending profile change and closes this warning dialog, leaving the previous profile selection untouched. Paired with the "Continue" button below.' }))}
+              </Button>
+              <Button
+                variant="tinted-warning"
+                size="md"
+                className="w-full"
+                onClick={() => {
+                  setShowProfileChangeWarning(false);
+                  openProfileSettings(profileModalTab);
+                }}
+              >
+                {_(msg({ message: 'Continue', comment: 'Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).' }))}
+              </Button>
+            </>
+          )}
+        >
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            {_(msg`You can continue to adjust profiles, but you’ll be prompted to re-slice before printing with the updated settings.`)}
+          </p>
+        </StructuredDialogModal>
       )}
 
       <SettingsModal
@@ -1324,23 +1195,19 @@ export function TopBar({
         initialTab={settingsInitialTab}
         meshColor={meshColor}
         onMeshColorChange={onMeshColorChange}
-        selectionColor={selectionColor}
-        onSelectionColorChange={onSelectionColorChange}
-        hoverColor={hoverColor}
-        onHoverColorChange={onHoverColorChange}
-        shaderType={shaderType}
-        onShaderTypeChange={onShaderTypeChange}
+        configuredShaderType={configuredShaderType}
+        onConfiguredShaderTypeChange={onConfiguredShaderTypeChange}
         matcapVariant={matcapVariant}
         onMatcapVariantChange={onMatcapVariantChange}
         flatUseVertexColors={flatUseVertexColors}
         onFlatUseVertexColorsChange={onFlatUseVertexColorsChange}
-        toonSteps={toonSteps}
-        onToonStepsChange={onToonStepsChange}
         ambientIntensity={ambientIntensity}
         onAmbientIntensityChange={onAmbientIntensityChange}
         directionalIntensity={directionalIntensity}
         onDirectionalIntensityChange={onDirectionalIntensityChange}
         materialRoughness={materialRoughness}
+        bakedAoIntensity={bakedAoIntensity}
+        onBakedAoIntensityChange={onBakedAoIntensityChange}
         onMaterialRoughnessChange={onMaterialRoughnessChange}
         xrayOpacity={xrayOpacity}
         onXrayOpacityChange={onXrayOpacityChange}
@@ -1352,8 +1219,6 @@ export function TopBar({
         onHoverTintStrengthChange={onHoverTintStrengthChange}
         selectedTintStrength={selectedTintStrength}
         onSelectedTintStrengthChange={onSelectedTintStrengthChange}
-        debugPrimitivesPanelVisible={debugPrimitivesPanelVisible}
-        onDebugPrimitivesPanelVisibleChange={onDebugPrimitivesPanelVisibleChange}
         view3dSettings={view3dSettings}
         onView3dSettingsChange={onView3dSettingsChange}
         slicingThumbnailRenderSettings={slicingThumbnailRenderSettings}

@@ -1,4 +1,4 @@
-import { HistoryAction, HistoryHandler, HistoryOrigin, HistorySubscriber, HistoryDirection, HistoryDebugEvent, HistoryDebugEventKind } from './types';
+import { HistoryAction, HistoryChange, HistoryHandler, HistoryOrigin, HistorySubscriber, HistoryDirection, HistoryDebugEvent, HistoryDebugEventKind } from './types';
 
 const undoStack: HistoryAction[] = [];
 const redoStack: HistoryAction[] = [];
@@ -6,6 +6,7 @@ const handlerMap = new Map<string, Set<HistoryHandler>>();
 const subscribers = new Set<HistorySubscriber>();
 const historyOperationSubscribers = new Set<(payload: { direction: HistoryDirection; action: HistoryAction }) => void>();
 const historyDebugSubscribers = new Set<HistorySubscriber>();
+const historyChangeSubscribers = new Set<(change: HistoryChange) => void>();
 const historyDebugLog: HistoryDebugEvent[] = [];
 const HISTORY_DEBUG_LOG_LIMIT = 600;
 let historyDebugIdCounter = 1;
@@ -21,11 +22,26 @@ function notifySubscribers() {
 }
 
 function notifyHistoryOperation(direction: HistoryDirection, action: HistoryAction) {
+  // The action is the stack's own entry and subscribers are read-only: cloning it
+  // here copied every payload once per subscriber, and a support-edit payload is
+  // two whole support states. Mutating it in a subscriber is a contract violation
+  // (`subscribeHistoryOperations` documents that).
   historyOperationSubscribers.forEach((listener) => {
     try {
-      listener({ direction, action: structuredClone(action) });
+      listener({ direction, action });
     } catch (err) {
       console.error('[HistoryStore] operation subscriber error', err);
+    }
+  });
+}
+
+function notifyHistoryChange(kind: HistoryChange['kind'], action: HistoryAction) {
+  const change: HistoryChange = { kind, actionType: action.type };
+  historyChangeSubscribers.forEach((listener) => {
+    try {
+      listener(change);
+    } catch (err) {
+      console.error('[HistoryStore] change subscriber error', err);
     }
   });
 }
@@ -40,6 +56,19 @@ function notifyHistoryDebugSubscribers() {
   });
 }
 
+/**
+ * Whether the History Debug panel is open.
+ *
+ * Byte accounting walks every payload in both stacks, and a support-edit payload
+ * is two whole support states. It is only useful to a reader, so it runs only
+ * while that reader exists.
+ */
+let historyDebugDetailsEnabled = false;
+
+export function setHistoryDebugDetailsEnabled(enabled: boolean): void {
+  historyDebugDetailsEnabled = enabled;
+}
+
 function appendHistoryDebugEvent(kind: HistoryDebugEventKind, action?: HistoryAction) {
   historyDebugLog.push({
     id: historyDebugIdCounter++,
@@ -49,9 +78,7 @@ function appendHistoryDebugEvent(kind: HistoryDebugEventKind, action?: HistoryAc
     actionDescription: action?.description,
     undoCount: undoStack.length,
     redoCount: redoStack.length,
-    payloadBytes: action ? estimatePayloadBytes(action.payload) : undefined,
-    stackBytes: undoStack.reduce((sum, a) => sum + estimatePayloadBytes(a.payload), 0)
-      + redoStack.reduce((sum, a) => sum + estimatePayloadBytes(a.payload), 0),
+    payloadBytes: historyDebugDetailsEnabled && action ? estimatePayloadBytes(action.payload) : undefined,
   });
 
   while (historyDebugLog.length > HISTORY_DEBUG_LOG_LIMIT) {
@@ -76,16 +103,50 @@ export function setHistoryOriginProvider(provider: (() => HistoryOrigin) | null)
   };
 }
 
+/** Domains that queue their own entries; drained before any push, dropped on clear. */
+interface PendingHistorySource {
+  flush: () => void;
+  cancel: () => void;
+}
+
+const pendingSources = new Set<PendingHistorySource>();
+
+export function registerPendingHistorySource(source: PendingHistorySource) {
+  pendingSources.add(source);
+  return () => pendingSources.delete(source);
+}
+
+let flushingPending = false;
+
+/** Lands every queued entry, so what follows pushes on top of it. */
+function flushPendingSources() {
+  if (flushingPending) return;
+  flushingPending = true;
+  try {
+    pendingSources.forEach((source) => {
+      try {
+        source.flush();
+      } catch (err) {
+        console.error('[HistoryStore] pending source flush error', err);
+      }
+    });
+  } finally {
+    flushingPending = false;
+  }
+}
+
 export function pushHistory(action: HistoryAction) {
+  flushPendingSources();
   // An explicit origin wins — a domain that knows better than "wherever the user
   // happens to be" can say so; everything else gets stamped here.
   if (!action.origin && originProvider) {
     action = { ...action, origin: originProvider() };
   }
-  undoStack.push(structuredClone(action));
+  undoStack.push(action.payloadOwned ? action : structuredClone(action));
   redoStack.length = 0;
   appendHistoryDebugEvent('push', action);
   notifySubscribers();
+  notifyHistoryChange('push', action);
 }
 
 export function undo() {
@@ -96,10 +157,11 @@ export function undo() {
   }
   const outcome = dispatch(action, 'undo');
   if (outcome === 'applied') {
-    redoStack.push(structuredClone(action));
+    redoStack.push(action.payloadOwned ? action : structuredClone(action));
     notifyHistoryOperation('undo', action);
     appendHistoryDebugEvent('undo', action);
     notifySubscribers();
+    notifyHistoryChange('undo', action);
     return;
   }
   if (outcome === 'no-handler') {
@@ -126,10 +188,11 @@ export function redo() {
   }
   const outcome = dispatch(action, 'redo');
   if (outcome === 'applied') {
-    undoStack.push(structuredClone(action));
+    undoStack.push(action.payloadOwned ? action : structuredClone(action));
     notifyHistoryOperation('redo', action);
     appendHistoryDebugEvent('redo', action);
     notifySubscribers();
+    notifyHistoryChange('redo', action);
     return;
   }
   if (outcome === 'no-handler') {
@@ -146,6 +209,14 @@ export function redo() {
 }
 
 export function clearHistory() {
+  // A queued entry would otherwise land after the clear and refill the stack.
+  pendingSources.forEach((source) => {
+    try {
+      source.cancel();
+    } catch (err) {
+      console.error('[HistoryStore] pending source cancel error', err);
+    }
+  });
   undoStack.length = 0;
   redoStack.length = 0;
   appendHistoryDebugEvent('clear-history');
@@ -180,9 +251,22 @@ export function subscribeHistory(listener: HistorySubscriber) {
   return () => subscribers.delete(listener);
 }
 
+/**
+ * Observe undo/redo. The action is the stack's own entry and is **read-only**;
+ * do not mutate its payload.
+ */
 export function subscribeHistoryOperations(listener: (payload: { direction: HistoryDirection; action: HistoryAction }) => void) {
   historyOperationSubscribers.add(listener);
   return () => historyOperationSubscribers.delete(listener);
+}
+
+/**
+ * Every entry that changed the scene: a push, or an undo or redo that applied. Unlike the debug
+ * log, which is capped and can be cleared by hand, this is for code that acts on edits.
+ */
+export function subscribeHistoryChanges(listener: (change: HistoryChange) => void) {
+  historyChangeSubscribers.add(listener);
+  return () => historyChangeSubscribers.delete(listener);
 }
 
 export function subscribeHistoryDebug(listener: HistorySubscriber) {
@@ -245,6 +329,11 @@ export function getUndoCount() {
 
 export function getRedoCount() {
   return redoStack.length;
+}
+
+/** The entry the next undo would pop, or null. For inspection only: the entry is the stack's own. */
+export function peekUndo(): HistoryAction | null {
+  return undoStack[undoStack.length - 1] ?? null;
 }
 
 /**

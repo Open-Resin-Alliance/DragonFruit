@@ -1,7 +1,13 @@
 'use client';
 
-import { useEffect, useState, useRef, useLayoutEffect } from 'react';
+import { useEffect, useState, useLayoutEffect } from 'react';
 import { Heart } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { Button, Spinner } from '@/components/atoms';
+import { Tooltip } from '@/components/ui/Tooltip';
 import fallbackSponsors from '@/components/settings/sponsors.json';
 
 export type Sponsor = {
@@ -39,6 +45,26 @@ export function getSponsorRank(total?: number | null): { tier: string; borderCol
     glow: '0 0 6px rgba(205, 127, 50, 0.25), inset 0 1px 1px rgba(255,255,255,0.3)',
   };
   return { tier: 'supporter', borderColor: 'var(--border-subtle)', glow: 'none' };
+}
+
+// Fallback mark for a sponsor with no avatar image — first letter of the first and
+// last word, with camelCase split so "WickedGrey" → WG and "Kryz Slaughter" → KS.
+// A lone word keeps one letter ("ben" → B), so the mark stays a monogram.
+/** Module-level so React Compiler cannot rename the placeholder (see AGENTS.md). */
+function formatOpenSponsorProfile(translate: (descriptor: MessageDescriptor) => string, name: string): string {
+  return translate(msg`${name} — open sponsor profile`);
+}
+
+function sponsorInitials(name: string): string {
+  const letters = name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .map((word) => Array.from(word)[0])
+    .filter((char) => /\p{L}/u.test(char));
+  if (letters.length === 0) return '?';
+  const picked = letters.length === 1 ? letters : [letters[0], letters[letters.length - 1]];
+  return picked.join('').toUpperCase();
 }
 
 // Open Collective collectives for Open Resin Alliance.
@@ -172,6 +198,7 @@ function writeCachedAvatar(src: string, dataUrl: string) {
 }
 
 function CachedAvatar({ src, profile, alt, className, totalAmountDonated }: { src: string; profile?: string | null; alt: string; className: string; totalAmountDonated?: number | null }) {
+  const { _ } = useLingui();
   const highResSrc = toHighResUrl(src, profile);
   const [url, setUrl] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -259,12 +286,14 @@ function CachedAvatar({ src, profile, alt, className, totalAmountDonated }: { sr
           width: '3rem',
           boxSizing: 'content-box',
           height: '3rem',
-          padding: hasRing ? ringPad : undefined,
+          // Always reserve the 3px ring gutter so ring-less avatars stay the
+          // same 54px height — otherwise their label sits 6px higher.
+          padding: ringPad,
           background: hasRing ? rank.gradient : undefined,
           boxShadow: hasRing && rank.glow !== 'none' ? rank.glow : undefined,
           borderRadius: '9999px',
         }}
-        aria-label="Loading avatar"
+        aria-label={_(msg`Loading avatar`)}
       >
         <span
           className="inline-flex h-full w-full items-center justify-center rounded-full border"
@@ -274,7 +303,7 @@ function CachedAvatar({ src, profile, alt, className, totalAmountDonated }: { sr
             color: 'var(--text-muted)',
           }}
         >
-          <span className="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" />
+          <Spinner size="lg" />
         </span>
       </span>
     );
@@ -288,7 +317,8 @@ function CachedAvatar({ src, profile, alt, className, totalAmountDonated }: { sr
           boxSizing: 'content-box',
         height: '3rem',
         borderRadius: '9999px',
-        padding: rank.gradient ? '3px' : undefined,
+        // Same constant gutter as above — label alignment across pills.
+        padding: '3px',
         background: rank.gradient ?? undefined,
         boxShadow: rank.glow !== 'none' ? rank.glow : undefined,
       }}
@@ -304,7 +334,7 @@ function CachedAvatar({ src, profile, alt, className, totalAmountDonated }: { sr
             }}
             aria-hidden="true"
           >
-            <span className="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            <Spinner size="lg" />
           </span>
         )}
         <div
@@ -340,14 +370,13 @@ function CachedAvatar({ src, profile, alt, className, totalAmountDonated }: { sr
 }
 
 export function SponsorsCarousel() {
+  const { _ } = useLingui();
   const [sponsors, setSponsors] = useState<Sponsor[] | null>(() => {
     const cached = readCachedSponsors();
     if (cached && cached.length >= 0) return cached;
     return null;
   });
-  const containerRef = useRef<HTMLDivElement>(null);
-  const trackRef = useRef<HTMLDivElement>(null);
-  const [shouldMarquee, setShouldMarquee] = useState(false);
+  // No overflow measurement: the row always scrolls as an infinite marquee.
 
   // Live sponsors — cached, not just baked-in fallback. Initial paint is cached
   // sponsors if available (instant, no flash), otherwise null → loading spinner
@@ -445,38 +474,8 @@ export function SponsorsCarousel() {
   const hasSponsors = Array.isArray(sponsors) && sponsors.length > 0;
   const isLoadingSponsors = sponsors === null;
 
-  // Only spin when the single sponsor row overflows the container.
-  // With 2 sponsors (Siraya Tech, Cunabula) the pills fit easily, so we
-  // show a static centered row; once sponsors grow beyond the line we
-  // switch to the infinite marquee.
-  useEffect(() => {
-    if (!hasSponsors) {
-      setShouldMarquee(false);
-      return;
-    }
-    const container = containerRef.current;
-    const track = trackRef.current;
-    if (!container || !track) return;
-
-    const update = () => {
-      // When marquee is active the track is duplicated (2× width). Use half
-      // as the single-row width; otherwise use the track's full width.
-      const singleWidth = shouldMarquee ? track.scrollWidth / 2 : track.scrollWidth;
-      setShouldMarquee(singleWidth > container.clientWidth);
-    };
-
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(container);
-    ro.observe(track);
-    window.addEventListener('resize', update);
-    // Re-measure after fonts load (affects pill width)
-    void document.fonts?.ready.then(update);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', update);
-    };
-  }, [sponsors, hasSponsors, shouldMarquee]);
+  // The sponsor row always renders as a single-row infinite marquee
+  // (duplicated list, CSS animation) — no measuring, no observers.
 
   const openExternal = async (url: string) => {
     try {
@@ -492,14 +491,14 @@ export function SponsorsCarousel() {
     <div
       className="shrink-0 rounded-lg border px-3 py-2"
       style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
-      aria-label="Sponsors"
+      aria-label={_(msg`Sponsors`)}
     >
       <div className="flex items-center justify-between gap-2">
         <h5 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
           <Heart className="h-3 w-3" style={{ color: 'var(--accent-secondary)' }} aria-hidden="true" />
-          Sponsors
+          <Trans>Sponsors</Trans>
           <span className="normal-case tracking-normal font-normal" style={{ color: 'var(--text-muted)', opacity: 0.85 }}>
-            via Open Collective
+            <Trans>via Open Collective</Trans>
           </span>
         </h5>
         <button
@@ -508,15 +507,15 @@ export function SponsorsCarousel() {
           className="inline-flex items-center gap-1 text-[10px] font-medium hover:underline"
           style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
         >
-          Sponsor Us
+          <Trans>Sponsor Us</Trans>
           <Heart className="h-3 w-3" aria-hidden="true" />
         </button>
       </div>
 
       {isLoadingSponsors ? (
         <div className="mt-2 flex items-center justify-center gap-2 rounded-md border px-3 py-6" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 20%)', color: 'var(--text-muted)' }}>
-          <span className="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" />
-          <span className="text-[11px]">Loading sponsors…</span>
+          <Spinner size="lg" />
+          <span className="text-[11px]"><Trans>Loading sponsors…</Trans></span>
         </div>
       ) : !hasSponsors ? (
         <div className="mt-2 flex items-center gap-2 rounded-md border border-dashed px-3 py-2" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 40%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 94%)' }}>
@@ -525,16 +524,18 @@ export function SponsorsCarousel() {
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-[11px] font-medium leading-none" style={{ color: 'var(--text-strong)' }}>
-              No sponsors yet — be the first!
+              <Trans>No sponsors yet — be the first!</Trans>
             </p>
             <p className="text-[10px] leading-tight" style={{ color: 'var(--text-muted)' }}>
-              Your name spins here when you back us.
+              <Trans>Your name spins here when you back us.</Trans>
             </p>
           </div>
-          <button
+          <Button
             type="button"
             onClick={() => openExternal(OPENCOLLECTIVE_URL)}
-            className="ui-button !h-7 shrink-0 !px-2.5 text-[11px] inline-flex items-center gap-1"
+            variant="secondary"
+            size="auto"
+            className="!h-7 shrink-0 !px-2.5 text-[11px] inline-flex items-center gap-1"
             style={{
               background: 'color-mix(in srgb, var(--accent), var(--surface-0) 12%)',
               borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
@@ -542,11 +543,11 @@ export function SponsorsCarousel() {
             }}
           >
             <Heart className="h-3 w-3" aria-hidden="true" />
-            Sponsor
-          </button>
+            <Trans>Sponsor</Trans>
+          </Button>
         </div>
-      ) : shouldMarquee ? (
-        <div ref={containerRef} className="relative mt-2 overflow-hidden rounded-md" style={{ background: 'color-mix(in srgb, var(--surface-0), transparent 20%)' }}>
+      ) : (
+        <div className="relative mt-2 overflow-hidden rounded-md" style={{ background: 'color-mix(in srgb, var(--surface-0), transparent 20%)' }}>
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-y-0 left-0 z-10 w-6"
@@ -558,119 +559,66 @@ export function SponsorsCarousel() {
             style={{ background: 'linear-gradient(270deg, var(--surface-1) 0%, transparent 100%)' }}
           />
           <div
-            ref={trackRef}
-            className="sponsors-marquee-track sponsors-marquee-track--animated flex items-center gap-2 py-2 will-change-transform"
+            className="sponsors-marquee-track sponsors-marquee-track--animated flex items-center gap-3 py-2 will-change-transform"
             aria-live="polite"
           >
             {[...sponsors, ...sponsors].map((s, idx) => {
               const isDuplicate = idx >= sponsors.length;
+              const isCopyStart = idx % sponsors.length === 0;
               const label = s.name;
+              const initials = sponsorInitials(label);
               const href = s.profile ?? s.website ?? OPENCOLLECTIVE_URL;
               return (
-                <button
-                  key={`${s.name}-${idx}`}
-                  type="button"
-                  onClick={() => openExternal(href)}
-                  className="inline-flex shrink-0 flex-col items-center gap-1 min-w-[56px] max-w-[80px] p-1 transition-opacity hover:opacity-80"
-                  style={{ color: 'var(--text-strong)', background: 'none', border: 'none', cursor: 'pointer' }}
-                  aria-label={`${label} — open sponsor profile`}
-                  aria-hidden={isDuplicate ? true : undefined}
-                  tabIndex={isDuplicate ? -1 : 0}
-                >
-                  {s.image ? (
-                    <CachedAvatar
-                      src={s.image}
-                      profile={s.profile}
-                      alt=""
-                      className="h-12 w-12 rounded-full object-cover shrink-0"
-                      totalAmountDonated={s.totalAmountDonated}
-                    />
-                  ) : (
-                    <span
-                      className="inline-flex shrink-0 items-center justify-center rounded-full"
-                      style={{
-                        width: '3rem',
-          boxSizing: 'content-box',
-                        height: '3rem',
-                        padding: getSponsorRank(s.totalAmountDonated).gradient ? '3px' : undefined,
-                        background: getSponsorRank(s.totalAmountDonated).gradient ?? undefined,
-                        boxShadow: getSponsorRank(s.totalAmountDonated).glow !== 'none' ? getSponsorRank(s.totalAmountDonated).glow : undefined,
-                        borderRadius: '9999px',
-                      }}
-                      aria-hidden="true"
-                    >
+                <Tooltip key={`${s.name}-${idx}`} content={label} maxWidth={220}>
+                  <button
+                    className={`inline-flex shrink-0 items-center justify-center py-1 transition-opacity hover:opacity-80${isCopyStart ? ' ml-6' : ''}`}
+                    onClick={() => openExternal(href)}
+                    style={{ color: 'var(--text-strong)', background: 'none', border: 'none', cursor: 'pointer' }}
+                    aria-label={formatOpenSponsorProfile(_, label)}
+                    aria-hidden={isDuplicate ? true : undefined}
+                    tabIndex={isDuplicate ? -1 : 0}
+                  >
+                    {s.image ? (
+                      <CachedAvatar
+                        src={s.image}
+                        profile={s.profile}
+                        alt=""
+                        className="h-12 w-12 rounded-full object-cover shrink-0"
+                        totalAmountDonated={s.totalAmountDonated}
+                      />
+                    ) : (
                       <span
-                        className="inline-flex h-full w-full items-center justify-center rounded-full border"
+                        className="inline-flex shrink-0 items-center justify-center rounded-full"
                         style={{
-                          background: 'var(--surface-1)',
-                          color: getSponsorRank(s.totalAmountDonated).gradient ? getSponsorRank(s.totalAmountDonated).borderColor : 'var(--accent)',
-                          borderColor: 'transparent',
+                          width: '3rem',
+                          boxSizing: 'content-box',
+                          height: '3rem',
+                          // Constant gutter: a ringed avatar and a ring-less one are both 54px.
+                          padding: '3px',
+                          background: getSponsorRank(s.totalAmountDonated).gradient ?? undefined,
+                          boxShadow: getSponsorRank(s.totalAmountDonated).glow !== 'none' ? getSponsorRank(s.totalAmountDonated).glow : undefined,
+                          borderRadius: '9999px',
                         }}
+                        aria-hidden="true"
                       >
-                        <Heart className="h-6 w-6" />
+                        <span
+                          className="inline-flex h-full w-full items-center justify-center rounded-full border"
+                          style={{
+                            background: 'var(--surface-1)',
+                            color: getSponsorRank(s.totalAmountDonated).gradient ? getSponsorRank(s.totalAmountDonated).borderColor : 'var(--accent)',
+                            borderColor: 'transparent',
+                          }}
+                        >
+                          <span
+                            className={`font-semibold leading-none tracking-wide ${initials.length > 1 ? 'text-[15px]' : 'text-[19px]'}`}
+                          >
+                            {initials}
+                          </span>
+                        </span>
                       </span>
-                    </span>
-                  )}
-                  <span className="w-full truncate text-center text-[11px] font-medium leading-tight">{label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : (
-        <div ref={containerRef} className="mt-2 overflow-hidden rounded-md" style={{ background: 'color-mix(in srgb, var(--surface-0), transparent 20%)' }}>
-          <div
-            ref={trackRef}
-            className="flex flex-wrap items-center justify-center gap-2 py-2"
-            aria-live="polite"
-          >
-            {sponsors.map((s) => {
-              const href = s.profile ?? s.website ?? OPENCOLLECTIVE_URL;
-              return (
-                <button
-                  key={s.name}
-                  type="button"
-                  onClick={() => openExternal(href)}
-                  className="inline-flex shrink-0 flex-col items-center gap-1 min-w-[56px] max-w-[80px] p-1 transition-opacity hover:opacity-80"
-                  style={{ color: 'var(--text-strong)', background: 'none', border: 'none', cursor: 'pointer' }}
-                  aria-label={`${s.name} — open sponsor profile`}
-                >
-                  {s.image ? (
-                    <CachedAvatar
-                      src={s.image}
-                      profile={s.profile}
-                      alt=""
-                      className="h-12 w-12 rounded-full object-cover shrink-0"
-                      totalAmountDonated={s.totalAmountDonated}
-                    />
-                  ) : (
-                    <span
-                      className="inline-flex shrink-0 items-center justify-center rounded-full"
-                      style={{
-                        width: '3rem',
-          boxSizing: 'content-box',
-                        height: '3rem',
-                        padding: getSponsorRank(s.totalAmountDonated).gradient ? '3px' : undefined,
-                        background: getSponsorRank(s.totalAmountDonated).gradient ?? undefined,
-                        boxShadow: getSponsorRank(s.totalAmountDonated).glow !== 'none' ? getSponsorRank(s.totalAmountDonated).glow : undefined,
-                        borderRadius: '9999px',
-                      }}
-                      aria-hidden="true"
-                    >
-                      <span
-                        className="inline-flex h-full w-full items-center justify-center rounded-full border"
-                        style={{
-                          background: 'var(--surface-1)',
-                          color: getSponsorRank(s.totalAmountDonated).gradient ? getSponsorRank(s.totalAmountDonated).borderColor : 'var(--accent)',
-                          borderColor: 'transparent',
-                        }}
-                      >
-                        <Heart className="h-6 w-6" />
-                      </span>
-                    </span>
-                  )}
-                  <span className="w-full truncate text-center text-[11px] font-medium leading-tight">{s.name}</span>
-                </button>
+                    )}
+                  </button>
+                </Tooltip>
               );
             })}
           </div>
@@ -679,14 +627,18 @@ export function SponsorsCarousel() {
       <style>{`
         .sponsors-marquee-track--animated {
           width: max-content;
-          animation: sponsors-marquee 28s linear infinite;
+          animation: sponsors-marquee 34s linear infinite;
         }
         .sponsors-marquee-track--animated:hover,
         .sponsors-marquee-track--animated:focus-within {
           animation-play-state: paused;
         }
         @keyframes sponsors-marquee {
+          /* 34s loop: 3s dwell at list start, 28s scroll, 3s dwell at rotation end.
+             100% rests at -50% so the loop restart (second copy aligned) is invisible. */
           0% { transform: translateX(0); }
+          8.8% { transform: translateX(0); }
+          91.2% { transform: translateX(-50%); }
           100% { transform: translateX(-50%); }
         }
         @media (prefers-reduced-motion: reduce) {

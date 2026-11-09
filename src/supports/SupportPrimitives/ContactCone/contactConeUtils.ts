@@ -57,6 +57,32 @@ export function getFinalSocketPosition(cone: ContactCone): Vec3 {
     return getSocketPosition(startPos, normal, profile);
 }
 
+/** Lowest world Z of the authored body, round tip and (when present) disk. */
+export function getContactConeLowestZ(cone: ContactCone): number {
+    const { pos, normal, profile } = cone;
+    const surfaceNormal = cone.surfaceNormal ?? normal;
+    const thickness = profile.type === 'disk'
+        ? (cone.diskLengthOverride ?? calculateDiskThickness(surfaceNormal, normal, profile))
+        : 0;
+    const startZ = pos.z + surfaceNormal.z * thickness;
+    const contactRadius = profile.contactDiameterMm / 2;
+    const bodyRadius = profile.bodyDiameterMm / 2;
+    // A circular end face tilted off vertical extends below its centre.
+    // The frustum's minimum is attained on one of its two end rims.
+    const axisRadialZ = Math.sqrt(Math.max(0, 1 - normal.z * normal.z));
+    let lowestZ = Math.min(
+        startZ - contactRadius,
+        startZ - contactRadius * axisRadialZ,
+        startZ + normal.z * profile.lengthMm - bodyRadius * axisRadialZ,
+    );
+    if (profile.type === 'disk') {
+        const surfaceRadialZ = Math.sqrt(Math.max(0, 1 - surfaceNormal.z * surfaceNormal.z));
+        const diskBackZ = pos.z - surfaceNormal.z * Math.max(0, profile.penetrationMm);
+        lowestZ = Math.min(lowestZ, Math.min(diskBackZ, startZ) - contactRadius * surfaceRadialZ);
+    }
+    return lowestZ;
+}
+
 /**
  * Calculate the cone's center position (midpoint between contact and socket).
  */
@@ -83,6 +109,21 @@ export function getConeQuaternion(normal: Vec3): THREE.Quaternion {
     const dir = new THREE.Vector3(normal.x, normal.y, normal.z).negate();
     return new THREE.Quaternion().setFromUnitVectors(up, dir);
 }
+
+/**
+ * The cone's rotation, written into `target`.
+ *
+ * The instance batches lay out thousands of cones per pass and re-lay out
+ * whenever the visible set changes, so a helper that mints its own vectors costs
+ * more than the maths it does.
+ */
+export function getConeQuaternionInto(normal: Vec3, target: THREE.Quaternion): THREE.Quaternion {
+    _coneAxis.set(normal.x, normal.y, normal.z).negate();
+    return target.setFromUnitVectors(UP, _coneAxis);
+}
+
+const UP = new THREE.Vector3(0, 1, 0);
+const _coneAxis = new THREE.Vector3();
 
 /**
  * Get the penetration-adjusted contact position.

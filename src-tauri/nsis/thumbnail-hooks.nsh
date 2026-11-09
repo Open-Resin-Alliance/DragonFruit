@@ -3,6 +3,7 @@
 ;
 ; Provides:
 ;   - Dark-mode page backgrounds via WM_CTLCOLOR message handling
+;   - Direct-from-Microsoft Visual C++ prerequisite deployment
 ;   - VOXL thumbnail COM DLL registration
 ;
 ; Note on dark mode: NSIS MUI2 does not support dark mode natively.
@@ -10,6 +11,15 @@
 ; the dark BMP images. The page content area (dialog controls) will follow
 ; the Windows system theme. The SetCtlColors calls below darken the outer
 ; installer window background as much as NSIS allows through hooks.
+
+!include "${__FILEDIR__}\runtime-prerequisite.nsh"
+
+!macro NSIS_HOOK_PREINSTALL
+  !if "${ARCH}" != "x64"
+    !error "The DragonFruit Visual C++ prerequisite supports x64 packages only."
+  !endif
+  Call DF_EnsureVcRuntime
+!macroend
 
 ; ── Dark mode outer window coloring ──────────────────────────────────────────
 !macro customInstall

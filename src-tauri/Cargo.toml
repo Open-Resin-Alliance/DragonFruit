@@ -1,6 +1,6 @@
 [package]
 name = "dragonfruit-desktop"
-version = "0.1.15"
+version = "0.3.1"
 edition = "2021"
 
 [build-dependencies]
@@ -8,27 +8,31 @@ edition = "2021"
 # backend. macOS/Windows use wry (default); Linux builds pass --features
 # tauri-cef. Pinned to a release tag (not `branch`) for reproducibility — see
 # the [patch.crates-io] note below and ADR 0005 for the bump procedure.
-tauri-build = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.22", features = [] }
+tauri-build = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26", features = [] }
 
 [dependencies]
 # default-features = false — runtime backend chosen via tauri-wry / tauri-cef features.
-tauri = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.22", default-features = false, features = ["compression", "dynamic-acl"] }
+tauri = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26", default-features = false, features = ["compression", "dynamic-acl"] }
 # Enabled by the `logging` feature on every backend: tauri-plugin-log declares
 # tauri with default-features = false, so it does not pull in wry.
 tauri-plugin-log = { version = "2", optional = true }
 # wry-only: not yet validated against the CEF runtime.
 tauri-plugin-single-instance = { version = "2", optional = true }
-tauri-plugin-updater = "2"
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-process = "2"
 url = "2"
+# Decodes the `x-mesh-stage-path` IPC header: HTTP header values are
+# visible-ASCII only, so destination paths cross the bridge percent-encoded.
+percent-encoding = "2"
 # Only to hand the updater's OffsetDateTime to the frontend as RFC 3339.
 time = { version = "0.3", features = ["formatting"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 rfd = "0.15"
+flate2 = "1"
 rayon = "1.10"
-zip = "2"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 # tauri-plugin-updater turns on reqwest's `rustls-no-provider`, which requires the
 # application to install a process-wide CryptoProvider. Declared directly so `ring`
@@ -47,17 +51,36 @@ futures-util = "0.3"
 dragonfruit-slicing-engine = { path = "../rust/dragonfruit-slicing-engine" }
 dragonfruit-rtsp-relay = { path = "../rust/dragonfruit-rtsp-relay" }
 dragonfruit-islands = { path = "../rust/dragonfruit-islands" }
+dragonfruit-mesh-core = { path = "../rust/dragonfruit-mesh-core" }
+dragonfruit-ao-gpu = { path = "../rust/dragonfruit-ao-gpu" }
 dragonfruit-mesh-repair = { path = "../rust/dragonfruit-mesh-repair", features = ["manifold"] }
 dragonfruit-organic-cut = { path = "../rust/dragonfruit-organic-cut", features = ["manifold"] }
-dragonfruit-sdf = { path = "../rust/dragonfruit-sdf" }
-dragonfruit-astar = { path = "../rust/dragonfruit-astar" }
-flate2 = "1.1.9"
+dragonfruit-plugin-package = { path = "../rust/dragonfruit-plugin-package" }
+dragonfruit-plugin-sdk = { path = "../rust/dragonfruit-plugin-sdk" }
+# The host maps the shared ring the plugin reads layer bytes from.
+memmap2 = "0.9"
 bytemuck = "1"
 meshopt = "0.6.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-macos-fps = { path = "../rust/tauri-plugin-macos-fps" }
 libloading = "0.8"
+# The webview watchdog's reload prompt: a sheet it can close itself, which
+# rfd's blocking modal cannot do.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "NSAlert",
+  "NSApplication",
+  "NSButton",
+  "NSControl",
+  "NSResponder",
+  "NSView",
+  "NSWindow",
+] }
+block2 = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 libloading = "0.8"
@@ -77,7 +100,7 @@ logging = ["dep:tauri-plugin-log"]
 # resolves a single tauri version tree. Safe for macOS/Windows since wry
 # remains the default feature on feat/cef.
 #
-# Pinned to the `tauri-cef-v3.0.0-alpha.22` tag rather than `branch = "feat/cef"`
+# Pinned to the `tauri-cef-v3.0.0-alpha.26` tag rather than `branch = "feat/cef"`
 # so the build is reproducible and cannot silently drift when the upstream
 # branch moves. A tag also keeps every crate on a single commit: the previous
 # rev-based pinning left `tauri-plugin` on an older commit than the rest, and
@@ -87,14 +110,14 @@ logging = ["dep:tauri-plugin-log"]
 # ADR 0005, "Bumping the pinned tauri tag".
 # To revert to stable: delete this block and switch deps back to crates.io.
 [patch.crates-io]
-tauri = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.22" }
-tauri-build = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.22" }
-tauri-runtime = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.22" }
-tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.22" }
-tauri-macros = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.22" }
-tauri-utils = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.22" }
-tauri-codegen = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.22" }
-tauri-plugin = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.22" }
+tauri = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26" }
+tauri-build = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26" }
+tauri-runtime = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26" }
+tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26" }
+tauri-macros = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26" }
+tauri-utils = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26" }
+tauri-codegen = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26" }
+tauri-plugin = { git = "https://github.com/tauri-apps/tauri", tag = "tauri-cef-v3.0.0-alpha.26" }
 
 # Maximum release optimisation: fat LTO collapses all codegen units into one
 # link step, enabling inlining and dead-code elimination across crate boundaries.
@@ -115,6 +138,16 @@ strip = "none"  # keep debug info for crash reports; strip handled by Tauri bund
 opt-level = 3
 
 # The wildcard above only covers registry deps; path deps need explicit entries.
+# The two mesh crates are in every import's hot path — weld, refine, normals and
+# the model/support classifier — and unoptimized they cost seconds on a 1M-triangle
+# model (a 69 MB payload took 7 s to encode). Their neighbours (islands, the GPU
+# bake, organic cut) should join them as they land in profiling.
+[profile.dev.package.dragonfruit-mesh-repair]
+opt-level = 3
+
+[profile.dev.package.dragonfruit-mesh-core]
+opt-level = 3
+
 [profile.dev.package.dragonfruit-slicing-engine]
 opt-level = 3
 

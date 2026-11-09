@@ -118,7 +118,7 @@ fn faces_within(bvh: &Bvh, mesh: &IndexedMesh, p: Vec3, reach: f32, out: &mut AH
         max: Vec3::new(p.x + reach, p.y + reach, p.z + reach),
     };
     let r2 = reach * reach;
-    bvh.query_aabb(&query, |ti| {
+    bvh.query_aabb(mesh, &query, |ti| {
         let t = &mesh.triangles[ti as usize];
         let (_, d2) = closest_on_tri(
             p,

@@ -2,6 +2,10 @@ import React from 'react';
 import { getBuiltinComplexPluginDefinitions } from './builtinComplexPlugins';
 import { computeGatedPluginIds, EXPERIMENT_DEFINITIONS, getEnabledExperimentIds, subscribeToExperiments } from '@/features/experiments/experimentsRegistry';
 import { GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS } from '@/features/plugins/generatedBuiltinComplexPlugins';
+import {
+  sideloadedSceneExtensions,
+  subscribeSideloadedFileTypes,
+} from '@/features/plugins/sideloadedFileTypeRegistry';
 
 // Server snapshot must match what SSR renders (window === undefined -> defaultEnabled).
 // On the client, getServerSnapshot is called during hydration to compare against SSR HTML,
@@ -115,12 +119,52 @@ export const SCENE_FILE_EXTENSIONS: readonly string[] = getSceneFileExtensionsSn
  * SSR (no localStorage) and the hydrated client.
  */
 export function sceneFileInputAccept(includeZip = true): string {
-  return getSceneFileInputAcceptSnapshot(includeZip);
+  return mergeAccept(getSceneFileInputAcceptSnapshot(includeZip), includeZip, sideloadedSceneTokens());
 }
 
 /** Uppercase scene format names for display, e.g. "VOXL, LYS, CHITUBOX". */
 export function sceneFileExtensionLabels(): string[] {
-  return getSceneFileExtensionLabelsSnapshot();
+  return mergeLabels(getSceneFileExtensionLabelsSnapshot(), sideloadedSceneTokens());
+}
+
+function sideloadedSceneTokens(): string[] {
+  return sideloadedSceneExtensions().map((extension) => extension.replace(/^\./, '').toLowerCase());
+}
+
+function mergeScene(base: readonly string[], extra: readonly string[]): readonly string[] {
+  const added = extra.filter((token) => !base.includes(token));
+  return added.length === 0 ? base : [...base, ...added];
+}
+
+function mergeLabels(base: string[], extra: readonly string[]): string[] {
+  const added = extra
+    .filter((token) => !base.some((label) => label.toLowerCase() === token))
+    .map((token) => token.toUpperCase());
+  return added.length === 0 ? base : [...base, ...added];
+}
+
+function mergeAccept(base: string, includeZip: boolean, extra: readonly string[]): string {
+  const existing = new Set(base.split(',').filter(Boolean));
+  for (const token of extra) {
+    existing.add(`.${token}`);
+  }
+  if (includeZip) existing.add('.zip');
+  return Array.from(existing).join(',');
+}
+
+/**
+ * Sideloaded packages register scene extensions at runtime, so the hooks below
+ * merge them in and subscribe to the registry: installing a package updates the
+ * pickers and the drop target without a reload.
+ */
+function useSideloadedSceneTokens(): readonly string[] {
+  const [value, setValue] = React.useState<readonly string[]>(() => []);
+  React.useEffect(() => {
+    const read = () => setValue([...sideloadedSceneTokens()]);
+    read();
+    return subscribeSideloadedFileTypes(read);
+  }, []);
+  return value;
 }
 
 /**
@@ -159,7 +203,8 @@ export function usePluginSceneFileExtensions(): readonly string[] {
     setValue(getPluginSceneFileExtensionsSnapshot());
     return subscribeToExperiments(() => setValue(getPluginSceneFileExtensionsSnapshot()));
   }, []);
-  return value;
+  const sideloaded = useSideloadedSceneTokens();
+  return React.useMemo(() => mergeScene(value, sideloaded), [value, sideloaded]);
 }
 
 export function useSceneFileExtensions(): readonly string[] {
@@ -168,7 +213,8 @@ export function useSceneFileExtensions(): readonly string[] {
     setValue(getSceneFileExtensionsSnapshot());
     return subscribeToExperiments(() => setValue(getSceneFileExtensionsSnapshot()));
   }, []);
-  return value;
+  const sideloaded = useSideloadedSceneTokens();
+  return React.useMemo(() => mergeScene(value, sideloaded), [value, sideloaded]);
 }
 
 export function useSceneFileInputAccept(includeZip = true): string {
@@ -177,7 +223,8 @@ export function useSceneFileInputAccept(includeZip = true): string {
     setValue(getSceneFileInputAcceptSnapshot(includeZip));
     return subscribeToExperiments(() => setValue(getSceneFileInputAcceptSnapshot(includeZip)));
   }, [includeZip]);
-  return value;
+  const sideloaded = useSideloadedSceneTokens();
+  return React.useMemo(() => mergeAccept(value, includeZip, sideloaded), [value, includeZip, sideloaded]);
 }
 
 export function useSceneFileExtensionLabels(): string[] {
@@ -186,5 +233,6 @@ export function useSceneFileExtensionLabels(): string[] {
     setValue(getSceneFileExtensionLabelsSnapshot());
     return subscribeToExperiments(() => setValue(getSceneFileExtensionLabelsSnapshot()));
   }, []);
-  return value;
+  const sideloaded = useSideloadedSceneTokens();
+  return React.useMemo(() => mergeLabels(value, sideloaded), [value, sideloaded]);
 }

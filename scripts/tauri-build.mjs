@@ -8,23 +8,30 @@
  *
  * On macOS/Windows: passes through to tauri build with default features (wry).
  *
- * On macOS, a post-build step embeds the QuickLook thumbnail extension
- * (VoxlThumbnailExtension.appex) into Contents/PlugIns/ of the app bundle
- * and re-signs the bundle so Finder/quicklookd can load it.
+ * On macOS, Tauri embeds the QuickLook thumbnail extension
+ * (VoxlThumbnailExtension.appex) into Contents/PlugIns/ itself, through
+ * src-tauri/tauri.macos.conf.json, and a post-build step checks it is there
+ * and signed.
  *
- * Usage: node scripts/tauri-build.mjs [extra tauri args...]
+ * Linux/macOS behaviour is chosen from the target triple (--target or
+ * CARGO_BUILD_TARGET), falling back to the host's own triple, so a caller can
+ * hand this script a target directly instead of re-deriving the flags itself.
+ *
+ * Usage: node scripts/tauri-build.mjs [--universal] [--no-appex] [extra tauri args...]
+ *
+ *   --no-appex  leave the macOS QuickLook extension out of the bundle
+ *               (single-arch dev shortcuts; rejected together with --universal).
  */
 
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { embedAppex } from "./macos-embed-appex.mjs";
+import { notarizeDmg, verifyEmbeddedAppex } from "./macos-embed-appex.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 
-const isLinux = process.platform === "linux";
 const extraArgs = process.argv.slice(2);
 
 // --universal (or TAURI_BUILD_UNIVERSAL=1): build a single fat
@@ -33,11 +40,21 @@ const extraArgs = process.argv.slice(2);
 // build-thumbnail-providers.mjs to emit a universal sidecar via
 // DF_BUILD_TARGET_TRIPLE.
 const isUniversal = extraArgs.includes("--universal") || process.env.TAURI_BUILD_UNIVERSAL === "1";
-// Strip our custom flag so it isn't forwarded to `tauri build`.
-const passThroughArgs = extraArgs.filter((a) => a !== "--universal");
+// --no-appex: leave the macOS QuickLook extension out. Building the fat .appex
+// is a cost the single-arch dev shortcuts exist to avoid, and Tauri would fail
+// the bundle on a missing one, so this drops both the build and the copy from
+// the config for this run (see the --config override below).
+const skipAppex = extraArgs.includes("--no-appex");
+// Strip our custom flags so they aren't forwarded to `tauri build`.
+const passThroughArgs = extraArgs.filter((a) => a !== "--universal" && a !== "--no-appex");
 
 if (isUniversal && process.platform !== "darwin") {
   console.error("[tauri-build] --universal is macOS-only (produces a universal-apple-darwin bundle).");
+  process.exit(1);
+}
+
+if (isUniversal && skipAppex) {
+  console.error("[tauri-build] --no-appex cannot be combined with --universal: verify-universal-bundle.mjs hard-fails on a bundle without the QuickLook extension.");
   process.exit(1);
 }
 
@@ -74,6 +91,17 @@ const explicitTarget =
     ? filteredPassThroughArgs[explicitTargetIdx + 1]
     : (process.env.CARGO_BUILD_TARGET ?? null);
 
+// Everything below keys off the target this build produces artifacts FOR, not
+// the host it runs on: an explicit --target has to win, otherwise the bundle
+// orchestrator's Linux entry would build wry/WebKitGTK from a non-Linux host.
+const targetTriple = isUniversal
+  ? "universal-apple-darwin"
+  : (explicitTarget ?? resolveDefaultTargetTriple());
+const targetsLinux = targetTriple?.includes("linux") ?? false;
+// Flatpak packaging is the exception: producing Linux artifacts is one thing,
+// running flatpak-builder from a non-Linux host is another.
+const canBuildFlatpak = targetsLinux && process.platform === "linux";
+
 const cmdArgs = ["tauri", "build", ...filteredPassThroughArgs];
 const hasBundlesArg = filteredPassThroughArgs.includes("--bundles");
 
@@ -83,7 +111,19 @@ if (isUniversal && !passThroughArgs.includes("--target")) {
   cmdArgs.push("--target", "universal-apple-darwin");
 }
 
-if (isLinux) {
+// A JSON merge patch: null removes the key, so this run neither builds the
+// .appex nor asks Tauri to copy it in.
+if (process.platform === "darwin" && skipAppex) {
+  cmdArgs.push(
+    "--config",
+    JSON.stringify({
+      build: { beforeBundleCommand: null },
+      bundle: { macOS: { files: { "PlugIns/VoxlThumbnailExtension.appex": null } } },
+    }),
+  );
+}
+
+if (targetsLinux) {
   if (process.env.DF_SKIP_LOCAL_FLATPAK !== "1" && !hasBundlesArg && !noBundles) {
     cmdArgs.push("--bundles", "deb,rpm");
   }
@@ -97,14 +137,11 @@ if (isLinux) {
 // x86_64 codegen flags (+avx2,+fma) now live in .cargo/config.toml so they apply
 // to every cargo invocation (including each arch of a universal build); no
 // RUSTFLAGS env injection here (env would clobber the config entries).
-const targetTriple = isUniversal
-  ? "universal-apple-darwin"
-  : (process.env.CARGO_BUILD_TARGET ?? resolveDefaultTargetTriple());
 console.log(`[tauri-build] ${npxCmd} ${cmdArgs.join(" ")} (target=${targetTriple ?? "unknown"})`);
 
 const tauriEnv = {
   ...process.env,
-  ...(isLinux ? { APPIMAGE_EXTRACT_AND_RUN: process.env.APPIMAGE_EXTRACT_AND_RUN ?? "1" } : {}),
+  ...(targetsLinux ? { APPIMAGE_EXTRACT_AND_RUN: process.env.APPIMAGE_EXTRACT_AND_RUN ?? "1" } : {}),
   // Universal: build manifold's C++ fat and tell build-thumbnail-providers.mjs
   // to emit a universal sidecar. Respect a caller-provided CMAKE_OSX_ARCHITECTURES.
   ...(isUniversal
@@ -123,16 +160,25 @@ const result = spawnSync(npxCmd, cmdArgs, {
   env: tauriEnv,
 });
 
-// ── macOS post-build: embed QuickLook extension into Contents/PlugIns/ ───────
-// Tauri has no native PlugIns/ support. The embed + re-sign + DMG-rebuild lives
-// in macos-embed-appex.mjs so CI (which uses tauri-action, not this script) can
-// run the identical sequence. Best-effort here: a dev without the QL extension
-// still gets a runnable app; the universal wrapper + CI then run
+// ── macOS post-build: check the QuickLook extension is in the bundle ─────────
+// Tauri embeds it (tauri.macos.conf.json); this only checks the result, with
+// the same module CI calls. Best-effort here: a dev whose extension did not make
+// it in still gets a runnable app; the universal wrapper + CI then run
 // verify-universal-bundle.mjs, which hard-fails on a missing/thin/unsigned .appex.
-if (process.platform === "darwin" && result.status === 0) {
-  const { ok, reason } = embedAppex({ targetTriple, repoRoot });
+if (process.platform === "darwin" && result.status === 0 && !skipAppex) {
+  const { ok, reason } = verifyEmbeddedAppex({ targetTriple, repoRoot });
   if (!ok) {
-    console.warn(`[tauri-build] QuickLook extension not embedded: ${reason}`);
+    console.warn(`[tauri-build] QuickLook extension check failed: ${reason}`);
+  }
+} else if (process.platform === "darwin" && result.status === 0 && skipAppex) {
+  console.log("[tauri-build] --no-appex: bundle built without the QuickLook extension.");
+}
+// Tauri notarizes the .app but not the DMG; with notary credentials in the
+// environment, finish the job the way CI does. Without them this is a no-op.
+if (process.platform === "darwin" && result.status === 0) {
+  const dmg = notarizeDmg({ targetTriple, repoRoot });
+  if (!dmg.ok) {
+    console.warn(`[tauri-build] DMG not notarized: ${dmg.reason}`);
   }
 }
 
@@ -147,7 +193,7 @@ if (process.platform === "darwin" && result.status === 0) {
 // Note: we intentionally attempt Flatpak even if `tauri build` returned
 // non-zero (for example, AppImage/linuxdeploy failure) so partial outputs can
 // still be repackaged when the required binary artifacts exist.
-if (isLinux) {
+if (canBuildFlatpak) {
   if (result.status !== 0) {
     console.warn(
       "[tauri-build] tauri build exited non-zero; attempting Flatpak anyway if required artifacts exist.",
@@ -171,6 +217,9 @@ if (isLinux) {
       cwd: repoRoot,
       stdio: "pipe",
     });
+    // Which CEF got staged is the first thing to check when a build starts
+    // with the wrong libcef, so keep it in the CI log.
+    process.stdout.write(cefResult.stdout?.toString() ?? "");
     if (cefResult.status !== 0) {
       console.error("[tauri-build] bundle-cef-libs.sh failed — skipping Flatpak bundle.");
       console.error(cefResult.stderr?.toString());
@@ -262,8 +311,8 @@ if (isLinux) {
               path.join(staging, "org.openresinalliance.dragonfruit.metainfo.xml")
             );
             cpSync(
-              path.join(flatpakDir, "dragonfruit-voxl-mime.xml"),
-              path.join(staging, "dragonfruit-voxl-mime.xml")
+              path.join(repoRoot, "rust", "dragonfruit-voxl-thumbnail", "generated", "dragonfruit-mime.xml"),
+              path.join(staging, "dragonfruit-mime.xml")
             );
 
             // Icons

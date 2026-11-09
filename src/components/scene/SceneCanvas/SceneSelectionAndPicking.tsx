@@ -299,6 +299,27 @@ function PickingModeConfigSync({
 }
 
 /**
+ * Pauses GPU picking while a drag is in flight. Must be rendered inside
+ * PickingProvider.
+ *
+ * A drag owns the pointer, so picking's answer cannot change while it runs, and
+ * every frame it runs costs a render to the pick target plus a synchronous
+ * `readRenderTargetPixels` stall. Measured at a drag's start on a 17 model scene:
+ * 70 ms of the profile in that readback alone.
+ */
+export function PickingDragPauser({ active }: { active: boolean }) {
+  const { pause, resume } = usePicking();
+
+  useEffect(() => {
+    if (!active) return;
+    pause();
+    return () => resume();
+  }, [active, pause, resume]);
+
+  return null;
+}
+
+/**
  * Wrapper that always applies PickingProvider, but conditionally enables debug mode.
  */
 export function PickingProviderWrapper({
@@ -306,18 +327,21 @@ export function PickingProviderWrapper({
   mode,
   transformMode,
   interactionEnabled = true,
+  dragActive = false,
   children,
 }: {
   enabled?: boolean;
   mode?: SupportMode;
   transformMode?: TransformMode;
   interactionEnabled?: boolean;
+  dragActive?: boolean;
   children: React.ReactNode;
 }) {
   // Always render PickingProvider, pass enabled as debug flag
   return (
     <PickingProvider debug={enabled}>
       {interactionEnabled && <PickingOrbitPauser />}
+      {interactionEnabled && <PickingDragPauser active={dragActive} />}
       <PickingModeConfigSync mode={mode} transformMode={transformMode} interactionEnabled={interactionEnabled} />
       {children}
     </PickingProvider>

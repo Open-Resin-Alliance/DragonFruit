@@ -1,4 +1,7 @@
-# Register the VOXL thumbnail provider on Windows.
+# Register the DragonFruit thumbnail provider on Windows.
+#
+# Answers for `.voxl` scenes and `.lumen` prints; the DLL decides which it has
+# from the file's own bytes.
 #
 # Usage:
 #   .\register.ps1 [-DllPath <path>] [-PerUser]
@@ -6,6 +9,8 @@
 # Notes:
 #   - Registration is per-user (HKCU) inside DllRegisterServer.
 #   - -PerUser is kept only for backwards compatibility.
+#   - The packaged copy under src-tauri\windows-resources is registered by default.
+#     Pass -DllPath to register a raw cargo build in windows-com\target instead.
 
 param(
     [string]$DllPath,
@@ -21,11 +26,16 @@ function Resolve-DllPath {
     param([string]$ScriptDir)
 
     $crateRoot = Split-Path -Parent (Split-Path -Parent $ScriptDir)
+    # The packaged copy comes first: cargo deletes and relinks its own output on every
+    # build, and the shell keeps whatever is registered mapped inside a DllHost
+    # surrogate, so registering the build output makes cargo's relink fail with
+    # "Access is denied". The build outputs stay as fallbacks for a raw `cargo build`
+    # that has not been packaged yet.
     $candidates = @(
+        (Join-Path $crateRoot '..\..\src-tauri\windows-resources\dragonfruit_voxl_thumbnail_com.dll'),
         (Join-Path $crateRoot 'windows-com\target\release\dragonfruit_voxl_thumbnail_com.dll'),
         (Join-Path $crateRoot ('windows-com\target\{0}\release\dragonfruit_voxl_thumbnail_com.dll' -f $env:TAURI_ENV_TARGET_TRIPLE)),
-        (Join-Path $crateRoot 'target\release\dragonfruit_voxl_thumbnail_com.dll'),
-        (Join-Path $crateRoot '..\..\src-tauri\windows-resources\dragonfruit_voxl_thumbnail_com.dll')
+        (Join-Path $crateRoot 'target\release\dragonfruit_voxl_thumbnail_com.dll')
     ) | Where-Object { $_ }
 
     foreach ($candidate in $candidates) {
@@ -60,25 +70,30 @@ if (-not (Test-Path $DllPath)) {
 $DllPath = (Resolve-Path $DllPath).Path
 $RegSvr32 = Join-Path $env:WINDIR 'System32\regsvr32.exe'
 
-Write-Host "Registering VOXL thumbnail handler via regsvr32..."
+Write-Host "Registering DragonFruit thumbnail handler via regsvr32..."
 Write-Host "  DLL:  $DllPath"
 
-& $RegSvr32 /s $DllPath
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "regsvr32 failed with exit code $LASTEXITCODE"
-    exit $LASTEXITCODE
+# regsvr32 is a GUI-subsystem binary: `&` does not wait for it and leaves
+# $LASTEXITCODE unset, so the registration would run on unchecked. -Wait makes the
+# exit code real, and the sanity checks below then describe the state regsvr32 left.
+$regResult = Start-Process -FilePath $RegSvr32 -ArgumentList @('/s', $DllPath) -Wait -PassThru
+if ($regResult.ExitCode -ne 0) {
+    Write-Error "regsvr32 failed with exit code $($regResult.ExitCode)"
+    exit $regResult.ExitCode
 }
 
 # Quick sanity checks
 $inprocKey = "HKCU:\Software\Classes\CLSID\$CLSID\InProcServer32"
-$shellExKey = "HKCU:\Software\Classes\.voxl\ShellEx\$ThumbnailHandlerCATID"
 $approvedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved'
 
 if (-not (Test-Path $inprocKey)) {
     Write-Warning "Missing registry key: $inprocKey"
 }
-if (-not (Test-Path $shellExKey)) {
-    Write-Warning "Missing registry key: $shellExKey"
+foreach ($Extension in @('.voxl', '.lumen')) {
+    $shellExKey = "HKCU:\Software\Classes\$Extension\ShellEx\$ThumbnailHandlerCATID"
+    if (-not (Test-Path $shellExKey)) {
+        Write-Warning "Missing registry key: $shellExKey"
+    }
 }
 if (-not (Get-ItemProperty -Path $approvedKey -Name $CLSID -ErrorAction SilentlyContinue)) {
     Write-Warning "Missing approved shell extension entry at: $approvedKey"
@@ -87,5 +102,5 @@ if (-not (Get-ItemProperty -Path $approvedKey -Name $CLSID -ErrorAction Silently
 Write-Host "`nRegistration complete."
 Write-Host "If thumbnails still don't appear, refresh shell caches:"
 Write-Host "  ie4uinit.exe -show"
-Write-Host "  Remove-Item `"$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache_*.db`" -Force -ErrorAction SilentlyContinue"
+Write-Host '  Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache_*.db" -Force -ErrorAction SilentlyContinue'
 Write-Host "Then restart Explorer (or sign out/in)."

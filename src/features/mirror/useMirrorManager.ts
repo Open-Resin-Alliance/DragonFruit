@@ -7,11 +7,15 @@ import {
   buildMirrorSupportTransforms,
   reflectTransformAcrossWorldAxis,
 } from '@/features/mirror/logic/buildMirrorSupportTransforms';
-import { transformSupportsForModel } from '@/supports/state';
+import { getSnapshot as getSupportSnapshot, transformSupportsForModel } from '@/supports/state';
+import type { SupportState } from '@/supports/types';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import type { useTransformManager } from '@/features/transform/useTransformManager';
+import {
+  mirrorModelLabel,
+} from '@/features/scene/sceneHistoryLabels';
 
 type MirrorSession = {
   modelId: string;
@@ -19,6 +23,8 @@ type MirrorSession = {
   initialTransform: ModelTransform;
   previewTransform: ModelTransform;
   initialGeometry: GeometryWithBounds;
+  /** Supports before the first flip: X/Y flips move them during the preview. */
+  initialSupportState: SupportState;
 };
 
 export type UseMirrorManagerOptions = {
@@ -79,12 +85,29 @@ export function useMirrorManager({
     );
   }, [suppressTransformPersistenceCycles, transformMgr.transformHook]);
 
+  // One step for the whole session: the baked geometry and its transform land together,
+  // and undo returns to the model as it was before the first flip, not to the preview.
+  const commitMirror = React.useCallback((
+    session: MirrorSession,
+    baked: THREE.BufferGeometry,
+    finalizedTransform: ModelTransform,
+    axisLabel: string,
+  ) => {
+    scene.replaceModelGeometry(session.modelId, baked, mirrorModelLabel(axisLabel), {
+      // Z deletes the supports up front, behind its own confirmation.
+      includeSupportState: !session.flips.z,
+      transformAfter: finalizedTransform,
+      historyBefore: { transform: session.initialTransform, supportState: session.initialSupportState },
+    });
+    syncTransformManagerToTransform(finalizedTransform);
+  }, [scene, syncTransformManagerToTransform]);
+
   const finalizeMirrorSession = React.useCallback(() => {
     const session = mirrorSessionRef.current;
     mirrorSessionRef.current = null;
     if (!session) return;
 
-    const { modelId, flips, previewTransform, initialGeometry } = session;
+    const { flips, previewTransform, initialGeometry } = session;
     const anyFlip = flips.x || flips.y || flips.z;
 
     if (!anyFlip) {
@@ -127,25 +150,9 @@ export function useMirrorManager({
       scale: finalizedScale,
     };
 
-    // Replace geometry FIRST (direct setModels call using modelsRef.current),
-    // then apply the finalized transform AFTER via a functional setModels updater.
-    // This ordering matters: replaceModelGeometry uses a direct state value from
-    // modelsRef.current (pre-mirror transform), so any prior setModelTransformRaw
-    // functional updates get overwritten by the direct call. By setting the transform
-    // AFTER replaceModelGeometry, the functional updater applies on top of the
-    // direct state and the final batched React state has both the correct geometry
-    // AND the correct transform.
     const axes = [flips.x && 'X', flips.y && 'Y', flips.z && 'Z'].filter(Boolean).join(', ');
-    scene.replaceModelGeometry(modelId, baked, `Mirror Model (${axes})`, {
-      includeSupportState: !flips.z,
-    });
-    scene.setModelTransformRaw(modelId, {
-      position: finalizedTransform.position.clone(),
-      rotation: finalizedTransform.rotation.clone(),
-      scale: finalizedTransform.scale.clone(),
-    });
-    syncTransformManagerToTransform(finalizedTransform);
-  }, [scene, syncTransformManagerToTransform]);
+    commitMirror(session, baked, finalizedTransform, axes);
+  }, [commitMirror]);
 
   // Schedules baking off the main thread via a Web Worker so the visual mirror
   // renders instantly. Cancels any in-flight worker/timer so rapid successive
@@ -166,7 +173,7 @@ export function useMirrorManager({
     const session = mirrorSessionRef.current;
     if (!session) return;
 
-    const { modelId, flips, previewTransform, initialGeometry } = session;
+    const { flips, previewTransform, initialGeometry } = session;
     const anyFlip = flips.x || flips.y || flips.z;
     if (!anyFlip) {
       // Net-zero session: clear without baking.
@@ -223,7 +230,6 @@ export function useMirrorManager({
     if (flips.y) axes.push(1);
     if (flips.z) axes.push(2);
     const axisLabel = [flips.x && 'X', flips.y && 'Y', flips.z && 'Z'].filter(Boolean).join(', ');
-    const includeSupports = !flips.z;
 
     const worker = new Worker(
       new URL('@/features/mirror/workers/bakeMirrorWorker', import.meta.url),
@@ -277,15 +283,7 @@ export function useMirrorManager({
       baked.computeBoundingBox();
       baked.computeBoundingSphere();
 
-      scene.replaceModelGeometry(modelId, baked, `Mirror Model (${axisLabel})`, {
-        includeSupportState: includeSupports,
-      });
-      scene.setModelTransformRaw(modelId, {
-        position: finalizedTransform.position.clone(),
-        rotation: finalizedTransform.rotation.clone(),
-        scale: finalizedTransform.scale.clone(),
-      });
-      syncTransformManagerToTransform(finalizedTransform);
+      commitMirror(session, baked, finalizedTransform, axisLabel);
     };
 
     worker.onerror = () => {
@@ -295,7 +293,7 @@ export function useMirrorManager({
       console.error('[Mirror] bake worker failed – falling back to synchronous bake');
       finalizeMirrorSession();
     };
-  }, [scene, finalizeMirrorSession, syncTransformManagerToTransform]);
+  }, [commitMirror, finalizeMirrorSession]);
 
   // Cancels any pending deferred bake (timer or worker) and runs it
   // synchronously now. Used when exiting mirror mode so geometry is committed
@@ -343,6 +341,7 @@ export function useMirrorManager({
           scale: model.transform.scale.clone(),
         },
         initialGeometry: model.geometry,
+        initialSupportState: getSupportSnapshot(),
       };
     }
 

@@ -2,10 +2,8 @@ import { useEffect } from 'react';
 import { redo, undo } from '@/history/historyStore';
 import { hotkeyStore, isActionActiveSync } from './hotkeyStore';
 
-export function useUndoRedoHotkeys({ disabled = false }: { disabled?: boolean } = {}) {
+export function useUndoRedoHotkeys() {
   useEffect(() => {
-    if (disabled) return;
-
     let wasUndoActive = false;
     let wasRedoActive = false;
 
@@ -27,5 +25,5 @@ export function useUndoRedoHotkeys({ disabled = false }: { disabled?: boolean } 
     });
 
     return unsubscribe;
-  }, [disabled]);
+  }, []);
 }

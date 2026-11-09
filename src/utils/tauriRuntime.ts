@@ -1,5 +1,6 @@
 /** True when running inside the Tauri desktop shell. False during SSR. */
+import { hasWindow } from '@/utils/dom';
 export function isTauriRuntime(): boolean {
-    if (typeof window === 'undefined') return false;
+    if (!hasWindow()) return false;
     return '__TAURI_INTERNALS__' in window;
 }

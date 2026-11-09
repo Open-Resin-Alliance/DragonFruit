@@ -3,7 +3,7 @@ import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { quantizeToScale } from '@/utils/math';
 
-type TransformLike = {
+export type TransformLike = {
   position: THREE.Vector3;
   rotation: THREE.Euler;
   scale: THREE.Vector3;
@@ -12,10 +12,17 @@ type TransformLike = {
 type GeometryLike = Pick<GeometryWithBounds, 'geometry' | 'bbox' | 'center'>;
 
 type GeometryCacheEntry = {
-  centeredPositions: Float32Array;
   attributeVersion: number;
   vertexCount: number;
   boundsCache: Map<string, THREE.Box3>;
+};
+
+/** The geometry's own vertex array plus the centre to subtract; no copy is made. */
+export type CenteredPositionSource = {
+  array: Float32Array;
+  itemSize: number;
+  count: number;
+  center: THREE.Vector3;
 };
 
 const geometryCache = new WeakMap<THREE.BufferGeometry, GeometryCacheEntry>();
@@ -26,16 +33,26 @@ const matrixScratch = new THREE.Matrix4();
 const quaternionScratch = new THREE.Quaternion();
 const centeredBoxScratch = new THREE.Box3();
 const centerOffsetScratch = new THREE.Vector3();
+const originScratch = new THREE.Vector3();
 
-function makeTransformKey(t: TransformLike): string {
+/**
+ * The part of a transform the precise walk depends on: how the vertices are
+ * oriented and sized, not where they sit.
+ *
+ * The position is deliberately absent. A translation moves every vertex by the
+ * same vector, so it moves the resulting box by that vector and changes nothing
+ * else - the walk is over the same points either way. Keeping it in the key gave
+ * a drag a fresh key on every frame, and a full walk over every vertex with it:
+ * the cost a complex model paid per frame and a small one did not.
+ */
+function makeOrientationKey(t: TransformLike): string {
   return [
-    quantizeToScale(t.position.x, QUANTIZE), quantizeToScale(t.position.y, QUANTIZE), quantizeToScale(t.position.z, QUANTIZE),
     quantizeToScale(t.rotation.x, QUANTIZE), quantizeToScale(t.rotation.y, QUANTIZE), quantizeToScale(t.rotation.z, QUANTIZE),
     quantizeToScale(t.scale.x, QUANTIZE), quantizeToScale(t.scale.y, QUANTIZE), quantizeToScale(t.scale.z, QUANTIZE),
   ].join('|');
 }
 
-function ensureCenteredPositionBuffer(geometryData: GeometryLike): GeometryCacheEntry | null {
+function boundsCacheFor(geometryData: GeometryLike): GeometryCacheEntry | null {
   const geometry = geometryData.geometry;
   const positionAttribute = geometry.getAttribute('position');
   if (!positionAttribute || positionAttribute.count === 0) return null;
@@ -48,47 +65,34 @@ function ensureCenteredPositionBuffer(geometryData: GeometryLike): GeometryCache
     return cached;
   }
 
-  const centered = new Float32Array(positionAttribute.count * 3);
-  const cx = geometryData.center.x;
-  const cy = geometryData.center.y;
-  const cz = geometryData.center.z;
-
-  if (positionAttribute instanceof THREE.BufferAttribute) {
-    const source = positionAttribute.array;
-    const itemSize = positionAttribute.itemSize;
-    for (let i = 0; i < positionAttribute.count; i++) {
-      const src = i * itemSize;
-      const dst = i * 3;
-      centered[dst] = source[src] - cx;
-      centered[dst + 1] = source[src + 1] - cy;
-      centered[dst + 2] = source[src + 2] - cz;
-    }
-  } else {
-    for (let i = 0; i < positionAttribute.count; i++) {
-      const dst = i * 3;
-      centered[dst] = positionAttribute.getX(i) - cx;
-      centered[dst + 1] = positionAttribute.getY(i) - cy;
-      centered[dst + 2] = positionAttribute.getZ(i) - cz;
-    }
-  }
-
   const next: GeometryCacheEntry = {
-    centeredPositions: centered,
     attributeVersion: attrVersion,
     vertexCount: positionAttribute.count,
     boundsCache: new Map<string, THREE.Box3>(),
   };
-
   geometryCache.set(geometry, next);
   return next;
 }
 
+/** Drop the derived bounds cache for a geometry that is being released. */
+export function forgetCenteredPositions(geometry: THREE.BufferGeometry): void {
+  geometryCache.delete(geometry);
+}
+
 /**
- * Mesh vertices with the geometry's own centre offset already removed, so the
- * model transform alone places them in world space. Cached per geometry.
+ * The original position array and centre. Keeping no centred copy matters: the
+ * model was held by React's development fiber tree, so a WeakMap value keyed by
+ * its geometry stayed alive and duplicated every vertex buffer (~20 MB a model).
  */
-export function getCenteredPositions(geometryData: GeometryLike): Float32Array | null {
-  return ensureCenteredPositionBuffer(geometryData)?.centeredPositions ?? null;
+export function getCenteredPositionSource(geometryData: GeometryLike): CenteredPositionSource | null {
+  const positionAttribute = geometryData.geometry.getAttribute('position');
+  if (!(positionAttribute instanceof THREE.BufferAttribute) || positionAttribute.count === 0) return null;
+  return {
+    array: positionAttribute.array as Float32Array,
+    itemSize: positionAttribute.itemSize,
+    count: positionAttribute.count,
+    center: geometryData.center,
+  };
 }
 
 export function shouldUsePreciseBoundsForTransform(transform: TransformLike, angleEpsilon = 1e-4): boolean {
@@ -130,21 +134,29 @@ export function computePreciseModelWorldBounds(
   out?: THREE.Box3,
 ): THREE.Box3 {
   const target = out ?? new THREE.Box3();
-  const cacheEntry = ensureCenteredPositionBuffer(geometryData);
-  if (!cacheEntry || cacheEntry.centeredPositions.length === 0) {
+  const source = getCenteredPositionSource(geometryData);
+  const cacheEntry = source ? boundsCacheFor(geometryData) : null;
+  if (!source || !cacheEntry) {
     return computeApproxModelWorldBounds(geometryData, transform, target);
   }
 
-  const key = makeTransformKey(transform);
+  const key = makeOrientationKey(transform);
   const cachedBounds = cacheEntry.boundsCache.get(key);
   if (cachedBounds) {
-    target.copy(cachedBounds);
+    target.copy(cachedBounds).translate(transform.position);
     return target;
   }
 
-  matrixScratch.compose(transform.position, quaternionScratch.copy(quaternionFromGlobalEuler(transform.rotation)), transform.scale);
+  // Walked with the position held at the origin: the rotation and scale are what
+  // the walk is for, and the position is added to the box afterwards. Translating
+  // a box is exact, so this is the same answer for a fraction of the work.
+  matrixScratch.compose(originScratch, quaternionScratch.copy(quaternionFromGlobalEuler(transform.rotation)), transform.scale);
   const e = matrixScratch.elements;
-  const points = cacheEntry.centeredPositions;
+  const points = source.array;
+  const itemSize = source.itemSize;
+  const centerX = source.center.x;
+  const centerY = source.center.y;
+  const centerZ = source.center.z;
 
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
@@ -153,10 +165,11 @@ export function computePreciseModelWorldBounds(
   let maxY = Number.NEGATIVE_INFINITY;
   let maxZ = Number.NEGATIVE_INFINITY;
 
-  for (let i = 0; i < points.length; i += 3) {
-    const x = points[i];
-    const y = points[i + 1];
-    const z = points[i + 2];
+  for (let i = 0; i < source.count; i += 1) {
+    const offset = i * itemSize;
+    const x = points[offset] - centerX;
+    const y = points[offset + 1] - centerY;
+    const z = points[offset + 2] - centerZ;
 
     const tx = (x * e[0]) + (y * e[4]) + (z * e[8]) + e[12];
     const ty = (x * e[1]) + (y * e[5]) + (z * e[9]) + e[13];
@@ -180,7 +193,7 @@ export function computePreciseModelWorldBounds(
     if (!first.done) cacheEntry.boundsCache.delete(first.value);
   }
 
-  return target;
+  return target.translate(transform.position);
 }
 
 export function isBoundsOutsideVolume(bounds: THREE.Box3, volume: THREE.Box3, epsilonMm: number): boolean {
@@ -191,5 +204,25 @@ export function isBoundsOutsideVolume(bounds: THREE.Box3, volume: THREE.Box3, ep
     || bounds.max.y > (volume.max.y + epsilonMm)
     || bounds.min.z < (volume.min.z - epsilonMm)
     || bounds.max.z > (volume.max.z + epsilonMm)
+  );
+}
+
+/**
+ * True when `bounds` and `volume` share no space on any axis, so nothing inside
+ * the bounds can print.
+ *
+ * Distinct from `isBoundsOutsideVolume`, which asks whether the bounds leave the
+ * volume at all: a model that merely straddles a plate edge fails that test but
+ * is not disjoint. Slicing retains its closed surface and limits raster output
+ * to the printable footprint.
+ */
+export function isBoundsDisjointFromVolume(bounds: THREE.Box3, volume: THREE.Box3, epsilonMm: number): boolean {
+  return (
+    bounds.max.x < (volume.min.x - epsilonMm)
+    || bounds.min.x > (volume.max.x + epsilonMm)
+    || bounds.max.y < (volume.min.y - epsilonMm)
+    || bounds.min.y > (volume.max.y + epsilonMm)
+    || bounds.max.z < (volume.min.z - epsilonMm)
+    || bounds.min.z > (volume.max.z + epsilonMm)
   );
 }

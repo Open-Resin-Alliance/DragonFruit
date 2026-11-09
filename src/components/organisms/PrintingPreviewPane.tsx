@@ -1,5 +1,9 @@
 import React from 'react';
 import * as THREE from 'three';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import type { PrinterProfile } from '@/features/profiles/profileStore';
@@ -46,6 +50,18 @@ export type PrintingPreviewPaneProps = {
 };
 
 /** Printing-mode right column: layer slider + GPU/PNG/settled layer preview. */
+type Translate = (descriptor: MessageDescriptor) => string;
+
+// Interpolating messages live at module level so React Compiler cannot rename their
+// placeholders (see AGENTS.md). Both reuse the wording of the slicing and print-monitor panels.
+function formatLayerPreviewAlt(translate: Translate, layer: number): string {
+  return translate(msg`Layer ${layer} preview`);
+}
+
+function formatLayerProgress(translate: Translate, layers: string): string {
+  return translate(msg({ message: `Layer ${layers}`, comment: 'Print progress on a monitor card, e.g. "Layer 120/450".' }));
+}
+
 export function PrintingPreviewPane({
   printingPreviewTotalLayers,
   printingSelectedLayer,
@@ -74,6 +90,7 @@ export function PrintingPreviewPane({
   printingPreviewCanvasRef,
   isPrintingSettledCanvasReady,
 }: PrintingPreviewPaneProps) {
+  const { _ } = useLingui();
   return (
     <div
       className="absolute right-0 w-1/2 min-w-0 grid overflow-hidden"
@@ -106,10 +123,10 @@ export function PrintingPreviewPane({
 
       <div className="h-full min-h-0 min-w-0 p-3 flex flex-col gap-2 overflow-hidden">
         <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-          Layer Preview
+          <Trans>Layer Preview</Trans>
         </div>
         <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-          Layer {Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer))}/{Math.max(1, printingPreviewTotalLayers)}
+          {formatLayerProgress(_, `${Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer))}/${Math.max(1, printingPreviewTotalLayers)}`)}
         </div>
 
         <div
@@ -120,6 +137,8 @@ export function PrintingPreviewPane({
             background: 'color-mix(in srgb, var(--surface-1), transparent 6%)',
             cursor: printingPreviewCursor,
             touchAction: 'none',
+            // The layer box below sizes itself from this one's content box.
+            containerType: 'size',
           }}
           onWheel={handlePrintingPreviewWheel}
           onPointerDown={handlePrintingPreviewPointerDown}
@@ -142,9 +161,10 @@ export function PrintingPreviewPane({
                 className="block rounded relative"
                 style={{
                   aspectRatio: aspectRatio.toString(),
-                  width: '100%',
-                  maxWidth: '100%',
-                  maxHeight: '100%',
+                  // Fitted to whichever side runs out first. A width of 100% capped by
+                  // max-height keeps the full width and drops the ratio, which stretched the
+                  // GPU layer while the PNG over it stayed letterboxed at the right shape.
+                  width: `min(100cqw, 100cqh * ${aspectRatio})`,
                   transform: printingPreviewVisualTransform || 'none',
                   transformOrigin: 'center center',
                   willChange: 'transform',
@@ -170,6 +190,7 @@ export function PrintingPreviewPane({
                       supportVersion={supportRenderRefreshNonce}
                       mirrorX={activePrinterProfile?.display?.mirrorX === true}
                       mirrorY={activePrinterProfile?.display?.mirrorY === true}
+                      multiMaterialMode={activePrinterProfile?.materialMode === 'multiTank'}
                       className="block w-full h-full rounded"
                       style={{
                         transform: printingPreviewScrubUpscaleTransform || 'none',
@@ -192,7 +213,7 @@ export function PrintingPreviewPane({
                         preserveAspectRatio="xMidYMid meet"
                         className="block w-full h-full rounded"
                         role="img"
-                        aria-label={`Layer ${printingSelectedLayer} preview`}
+                        aria-label={formatLayerPreviewAlt(_, printingSelectedLayer)}
                       >
                         <image
                           href={printingPreviewPngUrlForDisplay}
@@ -207,7 +228,7 @@ export function PrintingPreviewPane({
                     ) : (
                       <img
                         src={printingPreviewPngUrlForDisplay}
-                        alt={`Layer ${printingSelectedLayer} preview`}
+                        alt={formatLayerPreviewAlt(_, printingSelectedLayer)}
                         className="block rounded w-full h-full object-contain"
                         style={{ imageRendering: 'pixelated' }}
                       />
@@ -219,9 +240,14 @@ export function PrintingPreviewPane({
                 {!selectedPrintingLayerPreviewUrl && printingPreviewTotalLayers === 0 && (
                   <div
                     className="absolute inset-0 rounded border border-dashed flex items-center justify-center text-xs"
-                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                    style={{
+                      borderColor: 'var(--border-subtle)',
+                      color: 'var(--text-muted)',
+                      // The box is flipped to undo a mirrored display; text has nothing to undo.
+                      transform: `scale(${activePrinterProfile?.display?.mirrorX === true ? -1 : 1}, ${activePrinterProfile?.display?.mirrorY === true ? -1 : 1})`,
+                    }}
                   >
-                    No preview available yet.
+                    <Trans>No preview available yet.</Trans>
                   </div>
                 )}
               </div>
@@ -236,7 +262,7 @@ export function PrintingPreviewPane({
                 imageRendering: 'pixelated',
                 opacity: isPrintingSettledCanvasReady ? 1 : 0,
               }}
-              aria-label={`Layer ${printingSelectedLayer} settled preview`}
+              aria-label={formatLayerPreviewAlt(_, printingSelectedLayer)}
             />
           )}
         </div>

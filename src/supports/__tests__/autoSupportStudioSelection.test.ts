@@ -4,8 +4,7 @@ import * as THREE from 'three';
 
 import { footprintFromPoints } from '../../volumeAnalysis/Islands/voxelFootprint';
 import { runAutoPlace } from '../autoSupport/autoPlace';
-import { resetStore, getSnapshot, setSelectedId } from '../state';
-import { resetKickstandStore } from '../SupportTypes/Kickstand/kickstandStore';
+import { resetStore, getSnapshot, setSelectedId, resetKickstandsInState} from '../state';
 import { clearHistory } from '../../history/historyStore';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
 import { setModelMesh } from '../autoSupport/meshStore';
@@ -13,7 +12,7 @@ import { resolveEditableSupportTarget, getSupportSettingsForTarget } from '../st
 
 test('selected auto trunk loads its own sized parameters, not the global band', () => {
     resetStore();
-    resetKickstandStore();
+    resetKickstandsInState();
     clearHistory();
     const dispose = registerSupportHistoryHandlers();
 
@@ -27,7 +26,7 @@ test('selected auto trunk loads its own sized parameters, not the global band', 
         areaMm2: 400, contactVoxels: footprintFromPoints(contactVoxels),
     };
     const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true });
-    assert.ok(result.placedTrunks > 0, 'trunks placed');
+    assert.ok(result.placed.trunk > 0, 'trunks placed');
 
     // Select the first auto-placed trunk through the production chain.
     const snapshot = getSnapshot();

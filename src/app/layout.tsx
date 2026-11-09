@@ -20,10 +20,12 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// i18n-ignore-start: static HTML metadata, rendered before any locale is known; product and org names
 export const metadata: Metadata = {
   title: "DragonFruit",
   description: "DragonFruit by Open Resin Alliance",
 };
+// i18n-ignore-end
 
 export default function RootLayout({
   children,

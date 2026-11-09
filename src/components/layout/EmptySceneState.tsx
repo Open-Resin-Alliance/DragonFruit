@@ -1,13 +1,17 @@
 "use client";
 
 import React from 'react';
-import { FolderInput, Loader2, Upload, Printer, Wrench } from 'lucide-react';
+import { FolderInput, Upload, Printer, Wrench } from 'lucide-react';
+import { ProgressBar } from '@/components/atoms';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import type { RecentOpenedFileEntry } from '@/features/scene/useSceneCollectionManager';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useSceneFileExtensions, useSceneFileExtensionLabels, useSceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
+import { isSideloadedFileName } from '@/features/plugins/sideloadedFileTypeRegistry';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+import type { UnitFormat, Unit } from '@/utils/unitFormatting';
 
 const BUILD_CHANNEL = (process.env.NEXT_PUBLIC_BUILD_CHANNEL ?? '').toLowerCase();
 const APP_VERSION = (process.env.NEXT_PUBLIC_APP_VERSION ?? '').toLowerCase();
@@ -105,11 +109,16 @@ const TAGLINES: MessageDescriptor[] = [
   msg({ message: "Not all slicers are created equal. This one's free!", comment: 'Play on "all men are created equal" from the United States Declaration of Independence (1776).' }),
 ];
 
-function formatBytes(bytes?: number): string | null {
-  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return null;
-  if (bytes < 1024) return `${bytes} B`;
+/** Build chip under the welcome title; reuses the updater's "Version {version}" wording. */
+function formatVersionChip(translate: (descriptor: MessageDescriptor) => string, version: string, beta: boolean): string {
+  return beta ? translate(msg`Version ${version} — Beta`) : translate(msg`Version ${version}`);
+}
 
-  const units = ['KB', 'MB', 'GB'];
+function formatBytes(fmt: UnitFormat, bytes?: number): string | null {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return null;
+  if (bytes < 1024) return fmt.quantity(bytes, 0, 'B');
+
+  const units = ['KB', 'MB', 'GB'] as const satisfies readonly Unit[];
   let value = bytes / 1024;
   let unitIndex = 0;
 
@@ -119,7 +128,7 @@ function formatBytes(bytes?: number): string | null {
   }
 
   const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
-  return `${rounded} ${units[unitIndex]}`;
+  return fmt.unit(units[unitIndex], fmt.number(rounded));
 }
 
 function getFileExtension(name: string): string {
@@ -136,7 +145,10 @@ function isSupportedDropName(name: string, sceneExtensions: readonly string[]): 
   if (MESH_DROP_EXTENSIONS.includes(ext)) return true;
   // Scene formats come from the plugin registry, so a newly registered plugin
   // is droppable without touching this list.
-  return sceneExtensions.some((sceneExt) => ext === `.${sceneExt}`);
+  if (sceneExtensions.some((sceneExt) => ext === `.${sceneExt}`)) return true;
+  // Sideloaded packages register their extensions at runtime, after the list
+  // above was built.
+  return isSideloadedFileName(name);
 }
 
 function getDropSupportStateFromDataTransfer(
@@ -225,6 +237,7 @@ export function EmptySceneState({
   onUseWithoutPrinter,
 }: EmptySceneStateProps) {
   const { _ } = useLingui();
+  const fmt = useLocaleFormat();
   const sceneExtensions = useSceneFileExtensions();
   const sceneExtensionLabels = useSceneFileExtensionLabels();
   const sceneFileAccept = useSceneFileInputAccept();
@@ -476,7 +489,7 @@ export function EmptySceneState({
               boxShadow: '0 0 6px color-mix(in srgb, var(--accent), transparent 84%)',
             }}
           >
-            {copied ? '✓ Copied!' : `Version ${APP_VERSION}${IS_BETA_BUILD ? ' — Beta' : ''}`}
+            {copied ? `✓ ${_(msg`Copied!`)}` : formatVersionChip(_, APP_VERSION, IS_BETA_BUILD)}
           </span>
         </Tooltip>
         <h1 className="ui-empty-title" suppressHydrationWarning>{_(taglineDescriptor)}</h1>
@@ -492,22 +505,13 @@ export function EmptySceneState({
               background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
             }}
           >
-            <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              <Loader2 className="h-4 w-4 animate-spin" style={{ color: 'var(--accent)' }} />
+            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
               <span>{loadingLabel ?? _(msg`Importing your file…`)}</span>
             </div>
             <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
               {loadingDetail ?? _(msg`Please hang tight while we prepare your scene.`)}
             </div>
-            <div
-              className="ui-loading-track mt-3 h-2 w-full rounded-full"
-              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-            >
-              <div
-                className="ui-loading-indicator"
-                style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
-              />
-            </div>
+            <ProgressBar indeterminate size="sm" className="mt-3" />
           </div>
         ) : shouldShowFirstTimeOnboarding ? (
           <>
@@ -647,7 +651,7 @@ export function EmptySceneState({
               ) : (
                 <div className="mt-1.5 grid grid-cols-2 gap-1.5">
                   {recentOpenedFiles.slice().reverse().slice(0, 8).map((entry) => {
-                    const sizeLabel = formatBytes(entry.sizeBytes);
+                    const sizeLabel = formatBytes(fmt, entry.sizeBytes);
                     const isBusy = reopeningEntryId === entry.id;
                     const period = formatRecentOpenedAt(entry.openedAt, _);
                     const kindAccent = entry.kind === 'scene'
@@ -711,7 +715,7 @@ export function EmptySceneState({
               )}
 
               <div
-                className="mt-2 block min-h-[32px] rounded-md border border-dashed px-4 py-3 transition-colors"
+                className="mt-2 flex min-h-[64px] items-center justify-center rounded-md border border-dashed px-4 py-3 text-center transition-colors"
                 style={{
                   borderColor: isDropActive
                     ? (isDropUnsupported ? 'var(--danger)' : 'var(--accent)')
@@ -727,34 +731,19 @@ export function EmptySceneState({
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
               >
-                <div className="flex min-h-[34px] items-center justify-between gap-3">
-                  <div className="min-w-0 inline-flex items-center gap-2">
-                    <Upload className="h-4 w-4" style={{ color: isDropUnsupported ? 'var(--danger)' : 'var(--accent)' }} />
+                <div className="min-w-0">
+                  <div className="inline-flex items-center justify-center gap-2">
+                    <Upload className="h-4 w-4 shrink-0" style={{ color: isDropUnsupported ? 'var(--danger)' : 'var(--accent)' }} />
                     <span className="truncate text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      {isDropUnsupported ? _(msg`Unsupported file type`) : _(msg`Drop supported files`)}
+                      {isDropUnsupported ? _(msg`Unsupported file type`) : _(msg({ message: 'Drag & Drop Area', comment: 'Heading of the dashed file target in the empty-scene dialog.' }))}
                     </span>
                   </div>
-                  <span
-                    className="shrink-0 rounded px-2 py-1 text-[10px] font-semibold uppercase tracking-wide"
-                    style={{
-                      color: isDropUnsupported ? 'var(--danger)' : 'var(--accent)',
-                      background: isDropUnsupported
-                        ? 'color-mix(in srgb, var(--danger), var(--surface-0) 84%)'
-                        : 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
-                      border: isDropUnsupported
-                        ? '1px solid color-mix(in srgb, var(--danger), var(--border-subtle) 48%)'
-                        : '1px solid color-mix(in srgb, var(--accent), var(--border-subtle) 56%)',
-                    }}
-                  >
-                    {['STL', 'OBJ', '3MF', ...sceneExtensionLabels].join(' • ')}
-                  </span>
+                  {isDropUnsupported && (
+                    <div className="mt-1 text-[11px]" style={{ color: 'var(--danger)' }}>
+                      {_(msg`Unsupported format detected.`)}
+                    </div>
+                  )}
                 </div>
-                {isDropUnsupported && (
-                  <div className="mt-1 text-[11px]" style={{ color: 'var(--danger)' }}>
-                    {_(msg`Unsupported format detected.`)}{' '}
-                    {['STL', 'OBJ', '3MF', ...sceneExtensionLabels].join(', ')}
-                  </div>
-                )}
               </div>
             </div>
           </>

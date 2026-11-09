@@ -49,7 +49,11 @@ pub fn parse_str(text: &str) -> Result<IndexedMesh, MeshRepairError> {
                         } else if parsed < 0 {
                             // Negative indices are relative to current vertex count.
                             let n = positions.len() as i64 + parsed;
-                            if n < 0 { 0 } else { n as u32 }
+                            if n < 0 {
+                                0
+                            } else {
+                                n as u32
+                            }
                         } else {
                             0
                         }
@@ -71,5 +75,8 @@ pub fn parse_str(text: &str) -> Result<IndexedMesh, MeshRepairError> {
             "OBJ: no geometry (positions or faces)".into(),
         ));
     }
-    Ok(IndexedMesh { positions, triangles })
+    Ok(IndexedMesh {
+        positions,
+        triangles,
+    })
 }

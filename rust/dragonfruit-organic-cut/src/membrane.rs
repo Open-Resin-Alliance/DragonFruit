@@ -1460,7 +1460,7 @@ const KERF_DEBRIS_DIAGONALS: f32 = 10.0;
 ///   side of the model and calls the cut a success. Those orphans ride along with
 ///   the bigger part instead.
 /// - The side cannot be read from an island's CENTROID. A model's centroid can sit
-///   a hundred millimetres from the seam, where the nearest membrane triangle's
+///   a hundred millimeters from the seam, where the nearest membrane triangle's
 ///   normal says nothing about which side the island is on — the freed spire and
 ///   the whole body both came out "+". Only points on the cut face itself carry
 ///   that information, so each island votes with the vertices it has there.
@@ -1562,7 +1562,7 @@ fn signed_side_on_cut_face(
     };
     let mut best_d2 = band * band;
     let mut best_signed = None;
-    bvh.query_aabb(&query, |ti| {
+    bvh.query_aabb(membrane_mesh, &query, |ti| {
         let t = &membrane_mesh.triangles[ti as usize];
         let a = membrane_mesh.positions[t[0] as usize];
         let b = membrane_mesh.positions[t[1] as usize];
@@ -1846,7 +1846,7 @@ fn boundary_outward_dirs(m: &Membrane) -> Vec<Vec3> {
 /// It has to cover two things: a smoothed seam dipping below the surface (0.14 mm
 /// on the model that found this), and a seam running UNDER an overhanging detail —
 /// a shingle, a scale, a fold — whose lip the rim must pass to reach open air. On
-/// that model's turret the lip was thicker than half a millimetre, and a shorter
+/// that model's turret the lip was thicker than half a millimeter, and a shorter
 /// leash left the two sides bridged by exactly that ridge. It stays a leash rather
 /// than an open walk because the rim only moves when it FINDS air (see the caller):
 /// a vertex that runs out of leash is aimed into the body and stays put, so the cut
@@ -1945,7 +1945,7 @@ fn last_exit_along(
         max: p.max(far),
     };
     let mut last: Option<f32> = None;
-    bvh.query_aabb(&query, |ti| {
+    bvh.query_aabb(model, &query, |ti| {
         let t = &model.triangles[ti as usize];
         let hit = dragonfruit_mesh_core::bvh::ray_tri(
             p,
@@ -2285,7 +2285,7 @@ fn distance_to_surface(
             max: Vec3::new(p.x + r, p.y + r, p.z + r),
         };
         let mut best = f32::INFINITY;
-        bvh.query_aabb(&query, |t| {
+        bvh.query_aabb(mesh, &query, |t| {
             let t = &mesh.triangles[t as usize];
             let (_, d2) = closest_on_tri(
                 p,

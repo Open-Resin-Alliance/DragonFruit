@@ -4,12 +4,12 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, CloudDownload, Download, Loader2, RotateCcw, ScrollText, X } from 'lucide-react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
-import { Trans } from '@lingui/react/macro';
 import ReactMarkdown from 'react-markdown';
 import { fetchUpdateInfo, downloadAndInstall, getUpdateChannel, updatesAreExternal, type UpdateInfo, type DownloadProgress, type UpdateChannel } from '@/features/updater/updateBridge';
 import { openSettingsModal } from '@/components/settings/settingsModalEvents';
 import { pushSystemNotification, dismissSystemNotification } from '@/features/notifications/systemNotificationStore';
 import { isAllowSameVersionEnabled, enableAllowSameVersionForSession } from '@/features/updater/debugForceSession';
+import { formatUpdateProgressPct, formatUpdateReleaseLine, formatUpdateVersionChip } from '@/features/updater/updaterMessages';
 // ---------------------------------------------------------------------------
 
 type IndicatorState =
@@ -155,10 +155,10 @@ export function GlobalUpdateIndicator() {
       // On success the app relaunches.
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : 'Unknown error installing the update.';
+        err instanceof Error ? err.message : _(msg`Unknown error installing the update.`);
       setState({ status: 'error', message });
     }
-  }, [state.status]);
+  }, [state.status, _]);
 
   const handleDismiss = useCallback(() => {
     if (state.status !== 'available') return;
@@ -193,19 +193,19 @@ export function GlobalUpdateIndicator() {
       const releaseDate = parsedDate && !Number.isNaN(parsedDate.getTime())
         ? parsedDate.toLocaleDateString(i18n.locale, { year: 'numeric', month: 'long', day: 'numeric' })
         : null;
-      const subtitle = releaseDate ? _(msg`Released ${releaseDate}`) : undefined;
+      const subtitle = releaseDate ? formatUpdateReleaseLine(releaseDate, _) : undefined;
       pushSystemNotification({
         id: 'update-available',
-        title: 'Update Available!',
-        subtitle: subtitle ? (subtitle as string).replace('Released ', 'Release ') : undefined,
+        title: _(msg`Update Available!`),
+        subtitle,
         tone: 'accent-secondary',
         hideIcon: true,
-        versionChip: `Version ${info.version}`,
+        versionChip: formatUpdateVersionChip(info.version, _),
         expiryMs: 30_000,
         onClose: handleClose,
         actions: [
-          { label: 'Remind me later', variant: 'secondary', onClick: handleDismiss },
-          { label: 'View in Settings', variant: 'accent-secondary', onClick: () => { openSettingsModal('updates'); handleClose(); } },
+          { label: _(msg`Remind me later`), variant: 'secondary', onClick: handleDismiss },
+          { label: _(msg`View in Settings`), variant: 'accent-secondary', onClick: () => { openSettingsModal('updates'); handleClose(); } },
         ],
       });
       return;
@@ -214,8 +214,8 @@ export function GlobalUpdateIndicator() {
       const pct = state.pct;
       pushSystemNotification({
         id: 'update-available',
-        title: 'Downloading update',
-        subtitle: `${pct}%`,
+        title: _(msg`Downloading update`),
+        subtitle: formatUpdateProgressPct(pct, _),
         tone: 'accent',
         progressPct: pct,
         expiryMs: null,
@@ -224,22 +224,21 @@ export function GlobalUpdateIndicator() {
       return;
     }
     if (state.status === 'error') {
-      const msg = state.message;
       pushSystemNotification({
         id: 'update-available',
-        title: 'Update failed',
-        subtitle: msg,
+        title: _(msg`Update failed`),
+        subtitle: state.message,
         tone: 'error',
         expiryMs: null,
         actions: [
-          { label: 'Dismiss', variant: 'secondary', onClick: handleClose },
-          { label: 'Try again', variant: 'danger', onClick: handleClose },
+          { label: _(msg`Dismiss`), variant: 'secondary', onClick: handleClose },
+          { label: _(msg`Try again`), variant: 'danger', onClick: handleClose },
         ],
       });
       return;
     }
     dismissSystemNotification('update-available');
-  }, [state, i18n, handleDismiss, handleClose]);
+  }, [state, i18n, _, handleDismiss, handleClose]);
 
   return null;
 }

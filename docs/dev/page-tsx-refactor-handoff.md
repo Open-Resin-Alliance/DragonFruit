@@ -220,7 +220,9 @@ concurrently). Gotchas learned:
   needs an `npm install` to pick up the kept pins.
 - **2 pre-existing solver test failures** (`fieldDeterministicSolver`,
   `potentialFieldSolver`) are unrelated to this refactor (fail with these changes
-  stashed too).
+  stashed too). Both solvers have since been replaced by `SmartPlacementV3` and
+  their tests removed with them, so the failures are gone too. See
+  [Support Pathfinding V3](support-pathfinding-v3.md).
 - **Never `git add -A`** here — it once swept pre-session WIP into a commit. Stage
   specific paths.
 

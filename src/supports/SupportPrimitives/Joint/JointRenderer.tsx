@@ -9,6 +9,7 @@ import { selectPrimitiveById } from '../../interaction/shared/selection/selectio
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 import { useJointDragPosition } from '../../interaction/jointDragPosition';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
+import { useDraggedSupport, usePrimitiveDragSuppressed } from '../../instanced/dragSuppression';
 
 interface JointRendererProps {
     joint: Joint;
@@ -117,6 +118,15 @@ export function JointRenderer({
 
     const jointDragPosition = useJointDragPosition(joint.id);
     const effectiveJointPos = jointDragPosition ?? joint.pos;
+    /**
+     * A joint drag draws this ball through its private batch. Only the visual
+     * mesh goes: the zero-alpha hitbox must stay drawable, because the GPU pick
+     * pass renders the group's meshes and the joint has to keep answering the
+     * pointer with the pick id it already registered.
+     */
+    const storeDragSuppressed = usePrimitiveDragSuppressed('joint', joint.id);
+    const draggedSupport = useDraggedSupport();
+    const dragSuppressed = storeDragSuppressed || (draggedSupport?.jointIds.has(joint.id) ?? false);
 
     const isPointerOverThisJoint = (e: any): boolean => {
         if (!groupRef.current) return false;
@@ -273,7 +283,7 @@ export function JointRenderer({
             </mesh>
 
             {/* Visual Mesh - Purely display */}
-            <mesh raycast={meshRaycast} userData={{ supportPrimitiveType: 'joint' }}>
+            <mesh raycast={meshRaycast} visible={!dragSuppressed} userData={{ supportPrimitiveType: 'joint' }}>
                 <sphereGeometry args={[radius, 16, 12]} />
                 <meshStandardMaterial 
                     color={displayColor} 

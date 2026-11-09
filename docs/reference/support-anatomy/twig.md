@@ -23,6 +23,15 @@ A twig is a model-to-model support that uses one continuous body between two con
 
 - Twigs do not use knots.
 - Twigs do not attach to support shafts.
+- The built shaft must stand within 45° of vertical. A twig's ends are contact
+  disks, and the standoff a sloped or sidewall landing needs can push the
+  sockets far off the line between the two contacts; past that cant the member
+  is a whisker that carries no load, so it is refused rather than placed.
+  Sticks, which bridge longer spans, are held to 20°.
+- The cap applies to the automatic passes. A twig you aim by hand is built at
+  whatever cant you aim it, because you chose both contacts and the preview
+  shows you the shape; the cap exists so the auto pass cannot fill a gap with
+  whiskers, not to overrule a deliberate placement.
 
 ## Related
 

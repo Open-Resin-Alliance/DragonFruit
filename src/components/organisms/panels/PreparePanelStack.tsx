@@ -1,29 +1,28 @@
 import React from 'react';
 import { ModelManagerPanel } from '@/components/controls/ModelManagerPanel';
-import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel';
+import { ModelsPanel } from '@/components/organisms/panels/ModelsPanel';
+import { AutoRotationPanel } from '@/components/controls/AutoRotationPanel';
 import { TransformControls } from '@/components/controls/TransformControls';
 import { ArrangePanel } from '@/components/controls/ArrangePanel';
 import { DuplicatePanel } from '@/components/controls/DuplicatePanel';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
-import { HollowingPanel } from '@/features/hollowing';
-import { HolePunchPanel } from '@/features/hole-punching/HolePunchPanel';
 import { OrganicCutPanel, type OrganicCutSession } from '@/features/organicCut';
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import type { useTransformManager } from '@/features/transform/useTransformManager';
-import type { useHollowingManager } from '@/features/hollowing/useHollowingManager';
-import type { useHolePunchManager } from '@/features/hole-punching/useHolePunchManager';
 import type { useArrangeManager } from '@/features/scene/arrange/useArrangeManager';
+import type { SelectionRotationMode } from '@/features/scene/selectionTransform';
 
 export type PreparePanelStackProps = {
   scene: ReturnType<typeof useSceneCollectionManager>;
   transformMgr: ReturnType<typeof useTransformManager>;
-  hollowing: ReturnType<typeof useHollowingManager>;
-  holePunch: ReturnType<typeof useHolePunchManager>;
   arrange: ReturnType<typeof useArrangeManager>;
   organicCut: OrganicCutSession;
 
   outsidePlateModelIds: React.ComponentProps<typeof ModelManagerPanel>['outsidePlateModelIds'];
   handleModelSelection: React.ComponentProps<typeof ModelManagerPanel>['onSelect'];
+  selectedBodyKeys?: React.ComponentProps<typeof ModelManagerPanel>['selectedBodyKeys'];
+  handleSelectBody?: React.ComponentProps<typeof ModelManagerPanel>['onSelectBody'];
+  handleCloseBodyDrawer?: React.ComponentProps<typeof ModelManagerPanel>['onCloseBodyDrawer'];
   handleModelRangeSelection: React.ComponentProps<typeof ModelManagerPanel>['onSelectRange'];
   handleGroupSelection: React.ComponentProps<typeof ModelManagerPanel>['onSelectGroup'];
   handleGroupSelectedModels: React.ComponentProps<typeof ModelManagerPanel>['onGroupModels'];
@@ -35,15 +34,27 @@ export type PreparePanelStackProps = {
   handleModelListContextMenu: React.ComponentProps<typeof ModelManagerPanel>['onModelContextMenu'];
   handleRepairModel: React.ComponentProps<typeof ModelManagerPanel>['onRepairModel'];
   handleOpenModelSupportsInfo: React.ComponentProps<typeof ModelManagerPanel>['onOpenSupportsInfo'];
+  handleAddModels: React.ComponentProps<typeof ModelsPanel>['handleAddModels'];
   showEmptySceneDialog: boolean;
   importOverlayState: { active: boolean };
   modelStatsBottomClearancePx: number;
+  /** Tool rail's `Models` entry: the list stays mounted, it just is not shown. */
+  modelsPanelVisible: boolean;
+  /** The model list is collapsible only while the tool rail is a bar. */
+  modelsPanelCollapsible: boolean;
 
-  debugPrimitivesPanelVisible: boolean;
+  /**
+   * The Auto Orientation panel, rendered beneath the Transform controls and only
+   * while the Transform tool is active. `null` when the Auto Orientation
+   * experiment is disabled, so nothing is mounted.
+   */
+  orientationPanel: Omit<React.ComponentProps<typeof AutoRotationPanel>, 'blockersActive' | 'onToggleBlockers'> | null;
 
   ensurePendingTransformHistoryForActiveModel: (operation: 'move' | 'rotate' | 'scale') => void;
   requestDestructiveTransformSupportDeletion: (operationLabel: string) => boolean;
   handleRotationComplete: () => void;
+  /** Whether every selected model stands clear of the plate. */
+  autoLift: boolean;
   handleAutoLiftChange: (enabled: boolean) => void;
   selectionPositionOrigin: React.ComponentProps<typeof TransformControls>['position'];
   handlePositionSelectedModels: (x: number, y: number, z: number) => void;
@@ -51,30 +62,33 @@ export type PreparePanelStackProps = {
   handleCenterSelectedModels: () => void;
   handleLiftSelectedModels: () => void;
   handleDropSelectedModels: () => void;
+  handleRotateSelectedModels: (x: number, y: number, z: number) => void;
+  handleSelectionTransformCommit: () => void;
+  handleScaleSelectedModels: (x: number, y: number, z: number) => void;
+  handleResetSelectedModels: (reset: 'rotation' | 'scale') => void;
+  selectionRotationMode: SelectionRotationMode;
+  setSelectionRotationMode: (mode: SelectionRotationMode) => void;
   scheduleCommitPendingTransformHistory: (frameDelay?: number) => void;
   uniformScaling: boolean;
   setUniformScaling: (value: boolean) => void;
   localTransformSpace: boolean;
   setLocalTransformSpace: (value: boolean) => void;
 
-  isApplyingHolePunch: boolean;
-  interiorView: boolean;
-  hasCavityGeometry: boolean;
-
   arrangeSpacingMm: number;
   setArrangeSpacingMm: (value: number) => void;
 };
 
-/** PREPARE-mode floating panel group: model manager, transform/smoothing/hollowing/arrange tools. */
+/** PREPARE-mode floating panel group: model manager, transform/smoothing/arrange tools. */
 export function PreparePanelStack({
   scene,
   transformMgr,
-  hollowing,
-  holePunch,
   arrange,
   organicCut,
   outsidePlateModelIds,
   handleModelSelection,
+  selectedBodyKeys,
+  handleSelectBody,
+  handleCloseBodyDrawer,
   handleModelRangeSelection,
   handleGroupSelection,
   handleGroupSelectedModels,
@@ -86,13 +100,17 @@ export function PreparePanelStack({
   handleModelListContextMenu,
   handleRepairModel,
   handleOpenModelSupportsInfo,
+  handleAddModels,
   showEmptySceneDialog,
   importOverlayState,
   modelStatsBottomClearancePx,
-  debugPrimitivesPanelVisible,
+  modelsPanelVisible,
+  modelsPanelCollapsible,
+  orientationPanel,
   ensurePendingTransformHistoryForActiveModel,
   requestDestructiveTransformSupportDeletion,
   handleRotationComplete,
+  autoLift,
   handleAutoLiftChange,
   selectionPositionOrigin,
   handlePositionSelectedModels,
@@ -100,49 +118,27 @@ export function PreparePanelStack({
   handleCenterSelectedModels,
   handleLiftSelectedModels,
   handleDropSelectedModels,
+  handleRotateSelectedModels,
+  handleSelectionTransformCommit,
+  handleScaleSelectedModels,
+  handleResetSelectedModels,
+  selectionRotationMode,
+  setSelectionRotationMode,
   scheduleCommitPendingTransformHistory,
   uniformScaling,
   setUniformScaling,
   localTransformSpace,
   setLocalTransformSpace,
-  isApplyingHolePunch,
-  interiorView,
-  hasCavityGeometry,
   arrangeSpacingMm,
   setArrangeSpacingMm,
 }: PreparePanelStackProps) {
   // Invoked inline by Home (not as <JSX/>) so FloatingPanelStack can flatten these keyed panels as direct children for its layout-profile positioning. 'use no memo' keeps React Compiler from injecting a useMemoCache hook (the conditional inline call must stay hook-free).
   'use no memo';
   const {
-    hollowingState,
-    handleHollowingStateChange,
-    requestClearAppliedHollowing,
-    handleResetHollowingSettings,
-    handleStartHollowVoxelEditing,
-    handleDoneHollowVoxelEditing,
-    handleClearHollowVoxelEditing,
-    handleApplyHollowing,
-    isApplyingHollowing,
-    isPreviewingHollowing,
-    isApplyingBlockersHollowing,
-    isHollowingDirty,
-    isHollowingApplied,
-    hollowingEditMode,
-    isShellFaceSelectionPending,
-  } = hollowing;
-  const {
-    holePunchState,
-    handleHolePunchStateChange,
-    requestResetHolePunch,
-    handleApplyHolePunch,
-    canUseAutoHolePunchDepth,
-    isHolePunchDirty,
-    holePunchNeedsBake,
-    canResetHolePunch,
-  } = holePunch;
-  const {
     arrangePrecisionMode,
     setArrangePrecisionMode,
+    arrangePlateFillMode,
+    setArrangePlateFillMode,
     arrangeLayoutMode,
     setArrangeLayoutMode,
     arrangeAllowRotateOnZ,
@@ -192,56 +188,53 @@ export function PreparePanelStack({
     isDuplicating,
     activeArrangeOperation,
   } = arrange;
+  const isMultiSelection = scene.selectedModelIds.length > 1;
   return (
     <>
-      <ModelManagerPanel
+      <ModelsPanel
         key="prepare-models"
-        models={scene.models}
+        scene={scene}
         outsidePlateModelIds={outsidePlateModelIds}
-        activeModelId={scene.activeModelId}
-        selectedModelIds={scene.selectedModelIds}
-        onSelect={handleModelSelection}
-        onSelectRange={handleModelRangeSelection}
-        onSelectGroup={handleGroupSelection}
-        onGroupModels={handleGroupSelectedModels}
-        onUngroupModels={handleUngroupSelectedModels}
-        onUngroupGroup={handleUngroupFolder}
-        onSplitImportGroup={handleSplitImportGroup}
-        onRenameGroup={handleRenameFolder}
-        onRenameModel={handleRenameModel}
-        onModelContextMenu={handleModelListContextMenu}
-        onRepairModel={handleRepairModel}
-        onOpenSupportsInfo={handleOpenModelSupportsInfo}
-        onDelete={scene.deleteModel}
-        onVisibilityChange={scene.setModelVisibility}
+        handleModelSelection={handleModelSelection}
+        selectedBodyKeys={selectedBodyKeys}
+        handleSelectBody={handleSelectBody}
+        handleCloseBodyDrawer={handleCloseBodyDrawer}
+        handleModelRangeSelection={handleModelRangeSelection}
+        handleGroupSelection={handleGroupSelection}
+        handleGroupSelectedModels={handleGroupSelectedModels}
+        handleUngroupSelectedModels={handleUngroupSelectedModels}
+        handleUngroupFolder={handleUngroupFolder}
+        handleSplitImportGroup={handleSplitImportGroup}
+        handleRenameFolder={handleRenameFolder}
+        handleRenameModel={handleRenameModel}
+        handleModelListContextMenu={handleModelListContextMenu}
+        handleRepairModel={handleRepairModel}
+        handleOpenModelSupportsInfo={handleOpenModelSupportsInfo}
+        handleAddModels={handleAddModels}
         dimmed={showEmptySceneDialog || importOverlayState.active}
+        hidden={!modelsPanelVisible}
+        collapsible={modelsPanelCollapsible}
         bottomClearancePx={modelStatsBottomClearancePx}
       />
-
-      {debugPrimitivesPanelVisible && (
-        <DebugPrimitivesPanel
-          key="prepare-debug-primitives"
-          onAdd={scene.addDebugPrimitive}
-          onClear={scene.clearDebugModels}
-        />
-      )}
 
       {scene.geom && transformMgr.transformMode === 'transform' && (
         <TransformControls
           key="prepare-transform-controls"
-          position={scene.selectedModelIds.length > 1
+          position={isMultiSelection
             ? selectionPositionOrigin
             : transformMgr.transform.position}
-          onPositionChange={scene.selectedModelIds.length > 1
+          onPositionChange={isMultiSelection
             ? handlePositionSelectedModels
             : transformMgr.transformHook.setPosition}
-          onPositionCommit={scene.selectedModelIds.length > 1
+          onPositionCommit={isMultiSelection
             ? commitPendingSelectionPositionHistory
             : scheduleCommitPendingTransformHistory}
           onCenter={handleCenterSelectedModels}
           onPlatform={transformMgr.transformHook.setPlatformZ}
           rotation={transformMgr.transform.rotation}
-          onRotationChange={(x, y, z) => {
+          selectionRotationMode={isMultiSelection ? selectionRotationMode : undefined}
+          onSelectionRotationModeChange={setSelectionRotationMode}
+          onRotationChange={isMultiSelection ? handleRotateSelectedModels : (x, y, z) => {
             const current = transformMgr.transform.rotation;
             const EPS = 1e-6;
             const hasDestructiveRotate = Math.abs(x - current.x) > EPS
@@ -259,84 +252,37 @@ export function PreparePanelStack({
 
             transformMgr.transformHook.setRotation(x, y, z);
           }}
-          onResetRotation={transformMgr.transformHook.resetRotation}
-          onRotationComplete={handleRotationComplete}
+          onResetRotation={isMultiSelection
+            ? () => handleResetSelectedModels('rotation')
+            : transformMgr.transformHook.resetRotation}
+          onRotationComplete={isMultiSelection ? handleSelectionTransformCommit : handleRotationComplete}
           scale={transformMgr.transform.scale}
-          onScaleChange={(x, y, z) => {
-            const current = transformMgr.transform.scale;
-            const EPS = 1e-6;
-            const hasDestructiveScale = Math.abs(x - current.x) > EPS
-              || Math.abs(y - current.y) > EPS
-              || Math.abs(z - current.z) > EPS;
-
-            if (hasDestructiveScale) {
-              ensurePendingTransformHistoryForActiveModel('scale');
-            }
-
-            if (hasDestructiveScale) {
-              const proceed = requestDestructiveTransformSupportDeletion('Scale XYZ');
-              if (!proceed) return;
-            }
-
-            transformMgr.transformHook.setScale(x, y, z);
-          }}
-          onResetScale={transformMgr.transformHook.resetScale}
+          onScaleChange={handleScaleSelectedModels}
+          onResetScale={() => handleResetSelectedModels('scale')}
+          onScaleCommit={handleSelectionTransformCommit}
           uniformScaling={uniformScaling}
           onUniformScalingChange={setUniformScaling}
           localSpace={localTransformSpace}
           onLocalSpaceChange={setLocalTransformSpace}
           modelBBox={scene.geom.bbox}
-          autoLift={transformMgr.autoLift}
+          autoLift={autoLift}
           onAutoLiftChange={handleAutoLiftChange}
           liftDistance={transformMgr.liftDistance}
           onLiftDistanceChange={transformMgr.setLiftDistance}
           onLift={handleLiftSelectedModels}
           onDrop={handleDropSelectedModels}
-          onTransformCommit={scheduleCommitPendingTransformHistory}
+          onTransformCommit={isMultiSelection
+            ? handleSelectionTransformCommit
+            : scheduleCommitPendingTransformHistory}
         />
+      )}
+
+      {scene.geom && transformMgr.transformMode === 'transform' && orientationPanel && (
+        <AutoRotationPanel key="prepare-orientation" {...orientationPanel} />
       )}
 
       {scene.geom && transformMgr.transformMode === 'smoothing' && (
         <MeshSmoothingSettingsPanel key="prepare-smoothing-settings" />
-      )}
-
-      {scene.geom && transformMgr.transformMode === 'hollowing' && (
-        <>
-          <HollowingPanel
-            key="prepare-hollowing-panel"
-            state={hollowingState}
-            onStateChange={handleHollowingStateChange}
-            onReset={requestClearAppliedHollowing}
-            onResetSettings={handleResetHollowingSettings}
-            onStartEdit={handleStartHollowVoxelEditing}
-            onDoneEdit={handleDoneHollowVoxelEditing}
-            onClearEdit={handleClearHollowVoxelEditing}
-            onApply={() => { void handleApplyHollowing(); }}
-            isApplying={isApplyingHollowing}
-            isPreviewing={isPreviewingHollowing}
-            isApplyingBlockers={isApplyingBlockersHollowing || isPreviewingHollowing}
-            canApply={!isShellFaceSelectionPending && (isHollowingDirty || !isHollowingApplied)}
-            canEdit={!isShellFaceSelectionPending && Boolean(scene.activeModel)}
-            isEditMode={hollowingEditMode}
-            isHollowingApplied={isHollowingApplied}
-            shellFaceSelectionPending={isShellFaceSelectionPending}
-          />
-
-          <HolePunchPanel
-            key="prepare-hole-punch-panel"
-            state={holePunchState}
-            onStateChange={handleHolePunchStateChange}
-            onReset={requestResetHolePunch}
-            onApply={() => { void handleApplyHolePunch(); }}
-            canUseAutoDepth={canUseAutoHolePunchDepth}
-            isApplying={isApplyingHolePunch}
-            canApply={!isShellFaceSelectionPending && (isHolePunchDirty || holePunchNeedsBake)}
-            canReset={!isShellFaceSelectionPending && canResetHolePunch}
-            disabled={hollowingEditMode}
-            interiorView={interiorView}
-            interiorViewAvailable={hasCavityGeometry}
-          />
-        </>
       )}
 
       {scene.geom && transformMgr.transformMode === 'organicCut' && (
@@ -365,80 +311,82 @@ export function PreparePanelStack({
       )}
 
       {scene.models.length > 0 && transformMgr.transformMode === 'arrange' && (
-        <>
-          <ArrangePanel
-            key="prepare-arrange-panel"
-            precisionMode={arrangePrecisionMode}
-            onPrecisionModeChange={setArrangePrecisionMode}
-            layoutMode={arrangeLayoutMode}
-            onLayoutModeChange={setArrangeLayoutMode}
-            spacingMm={arrangeSpacingMm}
-            onSpacingMmChange={setArrangeSpacingMm}
-            allowRotateOnZ={arrangeAllowRotateOnZ}
-            onAllowRotateOnZChange={setArrangeAllowRotateOnZ}
-            arrayCountX={arrangeArrayCountX}
-            arrayCountY={arrangeArrayCountY}
-            arrayCountZ={arrangeArrayCountZ}
-            onArrayCountXChange={setArrangeArrayCountX}
-            onArrayCountYChange={setArrangeArrayCountY}
-            onArrayCountZChange={setArrangeArrayCountZ}
-            arrayGapX={arrangeArrayGapX}
-            arrayGapY={arrangeArrayGapY}
-            arrayGapZ={arrangeArrayGapZ}
-            onArrayGapXChange={setArrangeArrayGapX}
-            onArrayGapYChange={setArrangeArrayGapY}
-            onArrayGapZChange={setArrangeArrayGapZ}
-            anchorMode={arrangeAnchorMode}
-            onAnchorModeChange={setArrangeAnchorMode}
-            onApplyAll={() => {
-              void (arrangeLayoutMode === 'array'
-                ? handleManualArrayArrangeModels('all')
-                : (arrangePrecisionMode === 'high_precision'
-                  ? handleHighPrecisionArrangeModels('all')
-                  : handleAutoArrangeModels('all')));
-            }}
-            onApplySelected={() => {
-              void (arrangeLayoutMode === 'array'
-                ? handleManualArrayArrangeModels('selected')
-                : (arrangePrecisionMode === 'high_precision'
-                  ? handleHighPrecisionArrangeModels('selected')
-                  : handleAutoArrangeModels('selected')));
-            }}
-            modelCount={scene.models.filter((m) => m.visible).length}
-            selectedModelCount={scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length}
-            isApplying={isAutoArranging}
-            disableArrangeActions={isDuplicateSetupBlockingArrange}
-          />
+        <ArrangePanel
+          key="prepare-arrange-panel"
+          precisionMode={arrangePrecisionMode}
+          onPrecisionModeChange={setArrangePrecisionMode}
+          fillMode={arrangePlateFillMode}
+          onFillModeChange={setArrangePlateFillMode}
+          layoutMode={arrangeLayoutMode}
+          onLayoutModeChange={setArrangeLayoutMode}
+          spacingMm={arrangeSpacingMm}
+          onSpacingMmChange={setArrangeSpacingMm}
+          allowRotateOnZ={arrangeAllowRotateOnZ}
+          onAllowRotateOnZChange={setArrangeAllowRotateOnZ}
+          arrayCountX={arrangeArrayCountX}
+          arrayCountY={arrangeArrayCountY}
+          arrayCountZ={arrangeArrayCountZ}
+          onArrayCountXChange={setArrangeArrayCountX}
+          onArrayCountYChange={setArrangeArrayCountY}
+          onArrayCountZChange={setArrangeArrayCountZ}
+          arrayGapX={arrangeArrayGapX}
+          arrayGapY={arrangeArrayGapY}
+          arrayGapZ={arrangeArrayGapZ}
+          onArrayGapXChange={setArrangeArrayGapX}
+          onArrayGapYChange={setArrangeArrayGapY}
+          onArrayGapZChange={setArrangeArrayGapZ}
+          anchorMode={arrangeAnchorMode}
+          onAnchorModeChange={setArrangeAnchorMode}
+          onApplyAll={() => {
+            void (arrangeLayoutMode === 'array'
+              ? handleManualArrayArrangeModels('all')
+              : (arrangePrecisionMode === 'high_precision'
+                ? handleHighPrecisionArrangeModels('all')
+                : handleAutoArrangeModels('all')));
+          }}
+          onApplySelected={() => {
+            void (arrangeLayoutMode === 'array'
+              ? handleManualArrayArrangeModels('selected')
+              : (arrangePrecisionMode === 'high_precision'
+                ? handleHighPrecisionArrangeModels('selected')
+                : handleAutoArrangeModels('selected')));
+          }}
+          modelCount={scene.models.filter((m) => m.visible).length}
+          selectedModelCount={scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length}
+          isApplying={isAutoArranging}
+          disableArrangeActions={isDuplicateSetupBlockingArrange}
+        />
+      )}
 
-          <DuplicatePanel
-            key="prepare-duplicate-panel"
-            activeModelName={scene.activeModel?.name ?? null}
-            layoutMode={duplicateLayoutMode}
-            onLayoutModeChange={setDuplicateLayoutMode}
-            precisionMode={duplicatePrecisionMode}
-            onPrecisionModeChange={setDuplicatePrecisionMode}
-            totalCopies={duplicateTotalCopies}
-            onTotalCopiesChange={setDuplicateTotalCopies}
-            spacingMm={duplicateSpacingMm}
-            onSpacingMmChange={setDuplicateSpacingMm}
-            arrayCountX={duplicateArrayCountX}
-            arrayCountY={duplicateArrayCountY}
-            arrayCountZ={duplicateArrayCountZ}
-            onArrayCountXChange={setDuplicateArrayCountX}
-            onArrayCountYChange={setDuplicateArrayCountY}
-            onArrayCountZChange={setDuplicateArrayCountZ}
-            arrayGapX={duplicateArrayGapX}
-            arrayGapY={duplicateArrayGapY}
-            arrayGapZ={duplicateArrayGapZ}
-            onArrayGapXChange={setDuplicateArrayGapX}
-            onArrayGapYChange={setDuplicateArrayGapY}
-            onArrayGapZChange={setDuplicateArrayGapZ}
-            onConfirm={handleConfirmDuplicate}
-            onFillPlate={handleFillPlateDuplicate}
-            previewCount={duplicatePreviewTransforms.length}
-            isApplying={isDuplicating || (isAutoArranging && activeArrangeOperation === 'high_precision_fill')}
-          />
-        </>
+      {scene.models.length > 0 && transformMgr.transformMode === 'duplicate' && (
+        <DuplicatePanel
+          key="prepare-duplicate-panel"
+          activeModelName={scene.activeModel?.name ?? null}
+          layoutMode={duplicateLayoutMode}
+          onLayoutModeChange={setDuplicateLayoutMode}
+          precisionMode={duplicatePrecisionMode}
+          onPrecisionModeChange={setDuplicatePrecisionMode}
+          totalCopies={duplicateTotalCopies}
+          onTotalCopiesChange={setDuplicateTotalCopies}
+          spacingMm={duplicateSpacingMm}
+          onSpacingMmChange={setDuplicateSpacingMm}
+          arrayCountX={duplicateArrayCountX}
+          arrayCountY={duplicateArrayCountY}
+          arrayCountZ={duplicateArrayCountZ}
+          onArrayCountXChange={setDuplicateArrayCountX}
+          onArrayCountYChange={setDuplicateArrayCountY}
+          onArrayCountZChange={setDuplicateArrayCountZ}
+          arrayGapX={duplicateArrayGapX}
+          arrayGapY={duplicateArrayGapY}
+          arrayGapZ={duplicateArrayGapZ}
+          onArrayGapXChange={setDuplicateArrayGapX}
+          onArrayGapYChange={setDuplicateArrayGapY}
+          onArrayGapZChange={setDuplicateArrayGapZ}
+          onConfirm={handleConfirmDuplicate}
+          onFillPlate={handleFillPlateDuplicate}
+          previewCount={duplicatePreviewTransforms.length}
+          isApplying={isDuplicating || (isAutoArranging && activeArrangeOperation === 'high_precision_fill')}
+        />
       )}
     </>
   );

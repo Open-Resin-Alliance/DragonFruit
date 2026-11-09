@@ -43,6 +43,10 @@ export type NativeSolidSliceJobEnvelope = {
   zaaPattern?: 'uniform' | 'halton' | 'base2';
   zaaDuplicateZ?: boolean;
   modelTriangleCount: number;
+  /** Resin tanks this job prints; `1` on a single-material printer. */
+  tankCount?: number;
+  /** Tank per triangle, aligned with `trianglesXYZ`. */
+  triangleTankIndex?: Uint32Array | number[];
   containerCompressionLevel?: number;
   buildWidthMm: number;
   buildDepthMm: number;
@@ -97,6 +101,9 @@ type NativeSolidSliceMetadataPayload = {
   zaa_pattern?: 'uniform' | 'halton' | 'base2';
   zaa_duplicate_z?: boolean;
   model_triangle_count: number;
+  /** Present only for a multi-tank job; absent keeps a single-material payload byte-identical. */
+  tank_count?: number;
+  triangle_tank_index?: number[];
   container_compression_level: number;
   build_width_mm: number;
   build_depth_mm: number;
@@ -199,6 +206,12 @@ export function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): Nativ
     zaa_pattern: job.zaaPattern,
     zaa_duplicate_z: job.zaaDuplicateZ,
     model_triangle_count: clampSliceJobNumber('modelTriangleCount', job.modelTriangleCount),
+    ...((job.tankCount ?? 1) > 1
+      ? {
+        tank_count: job.tankCount,
+        triangle_tank_index: job.triangleTankIndex ? Array.from(job.triangleTankIndex) : [],
+      }
+      : {}),
     container_compression_level: clampSliceJobNumber('containerCompressionLevel', job.containerCompressionLevel),
     build_width_mm: job.buildWidthMm,
     build_depth_mm: job.buildDepthMm,
@@ -547,6 +560,70 @@ export async function pickOpenFilesWithNativeDialog(
   });
 }
 
+/**
+ * The IPC layer hands back an `ArrayBuffer` over the custom protocol, but its
+ * `postMessage` fallback — taken when that protocol fails — returns a view or a
+ * plain number array. Normalise so a caller reads the payload one way.
+ */
+function toPayloadBytes(payload: ArrayBuffer | ArrayBufferView | number[]): Uint8Array {
+  if (payload instanceof ArrayBuffer) return new Uint8Array(payload);
+  if (ArrayBuffer.isView(payload)) {
+    return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+  }
+  return Uint8Array.from(payload);
+}
+
+/**
+ * Parse a mesh file of any supported format on the native side and return the
+ * `DFMX` payload: a 32-byte header, a body table, then positions and corner
+ * normals as 9 `f32` per triangle for each body. The layout is specified in
+ * `docs/dev/mesh-wire-formats.md`.
+ *
+ * The native loader refines coarse faces and returns each triangle's own face
+ * normal, so the geometry matches what every other import path sees. Desktop
+ * only — throws outside the Tauri runtime.
+ */
+export async function loadMeshFileFromNativePath(filePath: string, classify?: boolean): Promise<Uint8Array> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native mesh loading is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  const payload = await core.invoke<ArrayBuffer | Uint8Array | number[]>('load_mesh_file', {
+    filePath,
+    ...(classify === undefined ? {} : { classify }),
+  });
+  return toPayloadBytes(payload);
+}
+
+/**
+ * Parse a mesh's bytes with the native loader, for a source that has no on-disk
+ * path: a VOXL's embedded mesh chunk, or a file expanded out of a zip. Returns
+ * the same `DFMX` payload `loadMeshFileFromNativePath` does.
+ *
+ * The classify flag rides in a header, because a raw-body command cannot also
+ * take JSON arguments.
+ */
+export async function loadMeshBytes(
+  bytes: Uint8Array,
+  classify: boolean,
+  refine = true,
+): Promise<Uint8Array> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native mesh loading is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  const payload = await core.invoke<ArrayBuffer | Uint8Array | number[]>('load_mesh_bytes', bytes, {
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'x-mesh-classify': classify ? '1' : '0',
+      'x-mesh-refine': refine ? '1' : '0',
+    },
+  });
+  return toPayloadBytes(payload);
+}
+
 export async function writeBytesToNativePath(
   destinationPath: string,
   bytes: Uint8Array,
@@ -613,6 +690,22 @@ export function runExclusiveNativeWrite<T>(task: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * Percent-encodes a destination path for the `x-mesh-stage-path` IPC header.
+ *
+ * HTTP header values carry visible ASCII only. A path with an umlaut, accent or
+ * CJK character (`C:\Users\…\Tatsächliche Dokumente\scene.voxl`) therefore made
+ * `append_mesh_stage_chunk` reject its very first chunk — every save into such a
+ * folder failed, and the fallback chain downgraded it to a browser download
+ * instead of an error. Rust reverses this with `decode_stage_path_header`.
+ *
+ * Every sender of the header must use this: the Rust side always decodes, so an
+ * unencoded path containing a literal `%` would be mangled.
+ */
+export function encodeStagePathHeader(path: string): string {
+  return encodeURIComponent(path);
+}
+
+/**
  * Chunked write with an explicit `invoke`, **without** taking the single-flight
  * lock. Internal composition seam — exported for the write-seam tests and for
  * `writeFileAtomicWithInvoke`, which holds the lock across its whole sequence.
@@ -630,7 +723,7 @@ export async function writeChunkedUnlocked(
       await invoke<number>('append_mesh_stage_chunk', chunk, {
         headers: {
           'Content-Type': 'application/octet-stream',
-          'x-mesh-stage-path': destinationPath,
+          'x-mesh-stage-path': encodeStagePathHeader(destinationPath),
           'x-mesh-stage-offset': String(offset),
         },
       });
@@ -748,7 +841,7 @@ export async function writeFileAtomicStreamedUnlocked(
           await invoke<number>('append_mesh_stage_chunk', chunk, {
             headers: {
               'Content-Type': 'application/octet-stream',
-              'x-mesh-stage-path': tempPath,
+              'x-mesh-stage-path': encodeStagePathHeader(tempPath),
               'x-mesh-stage-offset': String(written),
             },
           });
@@ -895,6 +988,58 @@ export async function readPrintLayerPreviewPngFromPath(
   });
 
   return new Uint8Array(result);
+}
+
+/**
+ * Reads several layer previews in one round trip, decoded in parallel on the native side.
+ *
+ * The native answer is a run of length-prefixed PNGs in the order asked for; an empty entry is a
+ * layer that would not decode, and the caller reads those one at a time.
+ */
+export async function readPrintLayerPreviewPngsFromPath(
+  sourcePath: string,
+  layerNumbers: readonly number[],
+  formatHint: string,
+): Promise<Uint8Array[]> {
+  const safeLayerNumbers = layerNumbers.map((layerNumber) => Math.max(1, Math.floor(layerNumber)));
+  if (safeLayerNumbers.length === 0) return [];
+
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native slicer is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  const packed = new Uint8Array(await core.invoke<ArrayBuffer>('read_print_layer_pngs', {
+    sourcePath,
+    layerNumbers: safeLayerNumbers,
+    formatHint,
+  }));
+
+  const layers: Uint8Array[] = [];
+  const view = new DataView(packed.buffer, packed.byteOffset, packed.byteLength);
+  let offset = 0;
+  while (offset + 4 <= packed.byteLength) {
+    const length = view.getUint32(offset, true);
+    offset += 4;
+    if (offset + length > packed.byteLength) break;
+    layers.push(packed.slice(offset, offset + length));
+    offset += length;
+  }
+
+  return layers;
+}
+
+/**
+ * Which of these paths already exist on disk, for a caller about to write over them. Without the
+ * desktop runtime nothing is on disk, so nothing exists.
+ */
+export async function existingNativePaths(paths: readonly string[]): Promise<boolean[]> {
+  if (paths.length === 0) return [];
+
+  const core = await loadTauriCore();
+  if (!core) return paths.map(() => false);
+
+  return core.invoke<boolean[]>('existing_paths', { paths: [...paths] });
 }
 
 export async function deletePrintTempArtifactPath(sourcePath: string): Promise<boolean> {

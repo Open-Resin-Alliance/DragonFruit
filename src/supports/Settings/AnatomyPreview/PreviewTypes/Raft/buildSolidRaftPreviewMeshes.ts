@@ -1,28 +1,24 @@
 import * as THREE from 'three';
 import type { RaftSettings, SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
-import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
-import { generateChamferedBase } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBase';
-import { generatePerimeterWall } from '@/supports/Rafts/Crenelated/geometry/generatePerimeterWall';
-import { generateCrenelatedWallManual } from '@/supports/Rafts/Crenelated/geometry/generateCrenelatedWallManual';
+import { buildRaftFootprintMeshes } from '@/supports/Rafts/Crenelated/geometry/generateRaftFromFootprint';
+import type { PolygonWithHoles } from '@/supports/Rafts/Crenelated/geometry/polygonSet2d';
 
 export function buildSolidRaftPreviewMeshes(args: {
     circles: SupportBaseCircle[];
     raftSettings: RaftSettings;
     baseColor: string;
     wallColor: string;
+    /** Model plate footprint; the raft is trimmed where a model stands on the plate. */
+    clearance?: readonly PolygonWithHoles[] | null;
 }): { baseMesh: THREE.Mesh; wallMesh: THREE.Mesh | null } | null {
-    const chamferInset = Math.max(0, args.raftSettings.thickness) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, args.raftSettings.chamferAngle))));
-    const wallInset = args.raftSettings.wallEnabled ? Math.max(0, args.raftSettings.wallThickness) : 0;
-    const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
-
-    const profile = computeFootprint(args.circles, { marginMm: dynamicMargin, samplesPerCircle: 24 });
-    if (!profile || profile.length < 3) return null;
-
-    const baseMesh = generateChamferedBase(profile, {
-        thickness: args.raftSettings.thickness,
-        chamferAngle: args.raftSettings.chamferAngle,
+    const parts = buildRaftFootprintMeshes({
+        circles: args.circles,
+        raft: args.raftSettings,
+        clearance: args.clearance,
     });
+    if (!parts.baseMesh) return null;
 
+    const baseMesh = parts.baseMesh;
     baseMesh.material = new THREE.MeshStandardMaterial({
         color: args.baseColor,
         emissive: args.baseColor,
@@ -36,24 +32,8 @@ export function buildSolidRaftPreviewMeshes(args: {
     baseMesh.castShadow = false;
     baseMesh.receiveShadow = true;
 
-    let wallMesh: THREE.Mesh | null = null;
-    if (args.raftSettings.wallEnabled) {
-        const useCrenels = args.raftSettings.crenulationSpacing > 0 && args.raftSettings.crenulationGapWidth > 0;
-        wallMesh = useCrenels
-            ? generateCrenelatedWallManual(profile, {
-                wallHeight: args.raftSettings.wallHeight,
-                wallThickness: args.raftSettings.wallThickness,
-                crenulationGapWidth: args.raftSettings.crenulationGapWidth,
-                crenulationSpacing: args.raftSettings.crenulationSpacing,
-                thickness: args.raftSettings.thickness,
-                chamferAngle: args.raftSettings.chamferAngle,
-            })
-            : generatePerimeterWall(profile, {
-                wallHeight: args.raftSettings.wallHeight,
-                wallThickness: args.raftSettings.wallThickness,
-                thickness: args.raftSettings.thickness,
-            });
-
+    const wallMesh = parts.wallMesh;
+    if (wallMesh) {
         wallMesh.material = new THREE.MeshStandardMaterial({
             color: args.wallColor,
             roughness: 0.9,

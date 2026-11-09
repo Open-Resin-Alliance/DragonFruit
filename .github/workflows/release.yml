@@ -185,6 +185,17 @@ jobs:
 
   build-tauri:
     name: Build ${{ matrix.artifact_name }}
+    # The shipped profile, stated here as well as in Cargo.toml so that
+    # `swatinem/rust-cache` keys on it (see `env-vars` below): the compile check
+    # links thin and keeps its artifacts under a different key.
+    env:
+      CARGO_PROFILE_RELEASE_LTO: fat
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
+      # The matrix already carries these per platform; they are stated at job level
+      # so `swatinem/rust-cache` sees them (see `env-vars`) and a macOS release reads
+      # the same cache the warmer writes.
+      CMAKE_OSX_ARCHITECTURES: ${{ matrix.cmake_archs || '' }}
+      DF_BUILD_TARGET_TRIPLE: ${{ matrix.df_build_triple || '' }}
     needs:
       - detect-version-bump
     if: needs.detect-version-bump.outputs.should_release == 'true'
@@ -200,7 +211,9 @@ jobs:
             df_build_triple: universal-apple-darwin
           - platform: windows-latest
             build_kind: tauri
-            args: --target x86_64-pc-windows-msvc --bundles nsis,msi
+            # The signing overlay is CI-only: it points `bundle.windows.signCommand`
+            # at Azure Artifact Signing, which a local build has no credentials for.
+            args: --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.windows-signing.conf.json
             artifact_name: dragonfruit-windows-x64
           - platform: ubuntu-22.04
             build_kind: flatpak
@@ -209,6 +222,9 @@ jobs:
     permissions:
       actions: write
       contents: write
+      # Windows code signing logs in to Azure with the workflow's OIDC token;
+      # the federated credential is what replaces a stored client secret.
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -224,12 +240,24 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      # Pinned, not `@stable`: the floating channel is what churns the Rust cache
+      # key (see warm-rust-cache.yml).
+      - name: Read the pinned Rust toolchain
+        id: rust_toolchain
+        # bash, not the runner's default shell: Windows would run this as pwsh,
+        # where `$(sed …)` is a module path, and the step died there.
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.rust_toolchain.outputs.channel }}
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Install Apple Certificate
@@ -239,20 +267,123 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASS }}
 
+      # `swatinem/rust-cache` hashes every toolchain `rustup` lists, not only the
+      # one the build uses, and the runner image ships its own `stable` (1.98.1
+      # when this was written). Pinning the channel alone left the key to move
+      # whenever the image moved that one; removing the rest leaves the pinned
+      # toolchain as the only Rust input to the key.
+      - name: Drop the runner's other Rust toolchains
+        shell: bash
+        env:
+          PINNED: ${{ steps.rust_toolchain.outputs.channel }}
+        run: |
+          rustup default "$PINNED"
+          rustup toolchain list | awk '{print $1}' | while read -r tc; do
+            case "$tc" in
+              # `system` is a rustc outside rustup, which rustup cannot remove.
+              "$PINNED"-* | system) ;;
+              *) rustup toolchain uninstall "$tc" || echo "::warning::could not uninstall $tc" ;;
+            esac
+          done
+          rustup toolchain list
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: |
+            ./src-tauri -> target
+            ./rust/dragonfruit-voxl-thumbnail -> target
           shared-key: tauri
+          # The profile and the target are part of the artifacts, so they are part
+          # of the key: without this the job restores a cache built the other way,
+          # cannot reuse any of it, and skips saving its own.
+          env-vars: CARGO_PROFILE_RELEASE_LTO CARGO_PROFILE_RELEASE_CODEGEN_UNITS DF_BUILD_TARGET_TRIPLE CMAKE_OSX_ARCHITECTURES
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # Next asks for this on every run ("No build cache found"): its compiler and
+      # fetch caches live in `.next/cache`, and restoring that across runs is worth
+      # a minute or two of each frontend build. Keyed on the lockfile and the
+      # sources, with a prefix restore so a commit that changes sources still
+      # reuses what it can, which is most of it.
+      - name: Cache Next.js build
+        uses: actions/cache@v6
+        with:
+          path: .next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('src/**/*.ts', 'src/**/*.tsx', 'next.config.ts', 'tsconfig.json') }}
+          restore-keys: |
+            next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
 
       - name: Enable Windows long paths
         if: runner.os == 'Windows'
         run: |
           git config --system core.longpaths true
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
+
+      # Windows installers are signed with Azure Artifact Signing. The login is
+      # OIDC: no client secret is stored, the federated credential on the app
+      # registration trusts this repository and ref. `scripts/sign-windows.ps1`
+      # then picks the login up through DefaultAzureCredential's CLI credential.
+      - name: Azure login (Artifact Signing)
+        if: matrix.platform == 'windows-latest'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # The same PowerShell module `azure/artifact-signing-action` installs;
+      # it is invoked per file from the Tauri bundler instead of once over a
+      # folder, so the signature lands before the updater artifacts are made.
+      - name: Install the Artifact Signing module
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
+
+      # The bundler discards the signer's stderr: any non-zero exit becomes
+      # "failed to run pwsh", with no reason attached. Signing a throwaway
+      # binary first turns a broken signer into a two-minute failure that
+      # prints its own error, instead of a nine-minute build that says nothing.
+      - name: Sign a probe executable
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+        run: |
+          # csc, not Add-Type: PowerShell 7 cannot emit an assembly ("Both the
+          # assembly types 'ConsoleApplication' and 'WindowsApplication' are not
+          # currently supported"), and this step runs on 7.
+          $probe = Join-Path $env:RUNNER_TEMP 'signing-probe.exe'
+          $source = Join-Path $env:RUNNER_TEMP 'signing-probe.cs'
+          'public static class Probe { public static void Main() {} }' |
+            Out-File -FilePath $source -Encoding ascii
+          & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
+            /nologo /target:exe "/out:$probe" $source | Out-Null
+          $overlay = Get-Content src-tauri/tauri.windows-signing.conf.json -Raw | ConvertFrom-Json
+          $signCommand = $overlay.bundle.windows.signCommand
+          $arguments = @($signCommand.args | ForEach-Object { if ($_ -eq '%1') { $probe } else { $_ } })
+          & $signCommand.cmd @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "The signing command exited $LASTEXITCODE."
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $probe
+          if (-not $signature.SignerCertificate) {
+            throw "The probe came back unsigned: $($signature.StatusMessage)"
+          }
+          if ($signature.Status -eq 'HashMismatch') {
+            throw 'The probe signature does not match its contents.'
+          }
+          if (-not $signature.TimeStamperCertificate) {
+            throw 'The probe is signed but not timestamped.'
+          }
+          # The subject carries the certificate holder's name and locality, and
+          # these logs are public. The thumbprint identifies the certificate
+          # without naming anyone; the full subject is on the artifact itself.
+          Write-Host "Probe signed: status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
 
       - name: Build Tauri bundle
         if: matrix.build_kind == 'tauri'
@@ -266,9 +397,55 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: MHNF3GA2MM
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
         with:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
+
+      # Tauri discards the signer's stderr, so a failed signing call says only
+      # "failed to run pwsh". The script writes what happened to this file; an
+      # absent or empty one means it never started.
+      - name: Show the signing log
+        if: always() && matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'dragonfruit-sign.log'
+          if (Test-Path $log) { Get-Content $log } else { Write-Host 'the signing script never ran' }
+
+      - name: Verify Windows installer runtime payloads
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/verify-windows-bundles.ps1 -RequireSignature
+
+      # A release that silently ships unsigned installers is worse than a
+      # failed one: SmartScreen would warn on every download and nothing in the
+      # pipeline would say why.
+      - name: Verify Windows binaries are signed
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Not the executable in target/release: the bundler restores the
+          # unsigned original there after building each package type, and the
+          # signed copy lives inside the installers. verify-windows-bundles.ps1
+          # checks that one.
+          $target = 'src-tauri/target/x86_64-pc-windows-msvc/release'
+          $files = @(Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe', '*.msi')
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if (-not $signature.SignerCertificate) {
+              throw "$($file.Name) is not signed."
+            }
+            if ($signature.Status -eq 'HashMismatch') {
+              throw "$($file.Name) has a signature that does not match its contents."
+            }
+            if (-not $signature.TimeStamperCertificate) {
+              throw "$($file.Name) is signed but not timestamped; the signature dies with the certificate."
+            }
+            Write-Host "$($file.Name): status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
+          }
 
       - name: Embed QuickLook extension + verify universal bundle
         if: matrix.platform == 'macos-latest'

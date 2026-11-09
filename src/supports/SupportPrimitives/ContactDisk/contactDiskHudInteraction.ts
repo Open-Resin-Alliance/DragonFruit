@@ -1,4 +1,5 @@
 import { setHoveredState } from '../../state';
+import { hasWindow } from '@/utils/dom';
 
 let contactDiskHudHoverActive = false;
 let contactDiskHudDraggingActive = false;
@@ -8,7 +9,7 @@ let contactDiskHudPlacementSuppressUntilMs = 0;
 const CONTACT_DISK_HUD_POST_DRAG_SUPPRESS_MS = 250;
 
 function emitHudInteractionEvent() {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
     window.dispatchEvent(new CustomEvent('contact-disk-hud-interaction-change', {
         detail: {
             hovered: contactDiskHudHoverActive,

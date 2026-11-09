@@ -64,7 +64,7 @@ describe('Full-Resolution Mesh Embedding (ORIG Chunk)', () => {
       assert.equal(countVoxlChunks(bin, 'MESH'), 1, 'must contain 1 MESH chunk');
       assert.equal(countVoxlChunks(bin, 'ORIG'), 1, 'must contain 1 ORIG chunk');
 
-      const parsed = parseVoxlBinaryV2(bin);
+      const parsed = await parseVoxlBinaryV2(bin);
       assert.ok(parsed.meshBytes.has('m0'), 'meshBytes must contain m0');
       assert.deepEqual([...parsed.meshBytes.get('m0')!], [...PREVIEW_MESH], 'preview mesh bytes must match');
 
@@ -99,7 +99,7 @@ describe('Full-Resolution Mesh Embedding (ORIG Chunk)', () => {
       { precompressed, precompressedOriginal, embedOriginalMesh: true },
     );
 
-    const parsed = parseVoxlBinaryV2(bin);
+    const parsed = await parseVoxlBinaryV2(bin);
     assert.equal(parsed.document.models.length, 1);
     assert.equal(parsed.document.models[0].name, 'm0');
     assert.deepEqual([...parsed.meshBytes.get('m0')!], [...PREVIEW_MESH]);
@@ -137,7 +137,7 @@ describe('Full-Resolution Mesh Embedding (ORIG Chunk)', () => {
     assert.equal(countVoxlChunks(bin, 'MESH'), 1);
     assert.equal(countVoxlChunks(bin, 'ORIG'), 0, 'ORIG chunk must be omitted when embedOriginalMesh is false');
 
-    const parsed = parseVoxlBinaryV2(bin);
+    const parsed = await parseVoxlBinaryV2(bin);
     assert.equal(parsed.originalMeshBytes, undefined, 'originalMeshBytes must be undefined when ORIG chunk is absent');
   });
 

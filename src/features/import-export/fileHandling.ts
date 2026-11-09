@@ -1,4 +1,9 @@
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
+import {
+  isSideloadedFileName,
+  isSideloadedSceneFileName,
+  sideloadedSceneExtensions,
+} from '@/features/plugins/sideloadedFileTypeRegistry';
 
 // Plugin file types are derived from the filtered getter so plugins gated behind
 // disabled experiments (e.g. chitubox-import) are excluded from drop targets,
@@ -57,6 +62,7 @@ export function getNativeSceneDialogExtensions(): string[] {
   return [
     'voxl',
     ...PLUGIN_SCENE_FILE_TYPES.map((ft) => ft.fileExtension.replace(/^\./, '').toLowerCase()),
+    ...sideloadedSceneExtensions().map((ext) => ext.replace(/^\./, '')),
     'zip',
   ];
 }
@@ -70,6 +76,9 @@ export function getWebSceneAcceptString(): string {
   const extensions = new Set(['.voxl', '.lys', '.zip']);
   for (const ft of PLUGIN_SCENE_FILE_TYPES) {
     extensions.add(ft.fileExtension.toLowerCase());
+  }
+  for (const extension of sideloadedSceneExtensions()) {
+    extensions.add(extension.toLowerCase());
   }
   return [...extensions].join(',');
 }
@@ -96,7 +105,10 @@ export function isDragonfruitTempArtifactPath(path: string | null | undefined): 
 }
 
 export function isSupportedPrepareDropName(name: string): boolean {
-  return PREPARE_DROP_EXTENSIONS.has(getFileExtension(name));
+  // Compiled-in formats answer from a set built at module load; a sideloaded
+  // package's extension only exists after the app has listed what is installed,
+  // so it is asked separately.
+  return PREPARE_DROP_EXTENSIONS.has(getFileExtension(name)) || isSideloadedFileName(name);
 }
 
 export function getDroppedFileMimeType(name: string): string {
@@ -112,7 +124,8 @@ export function getDroppedFileMimeType(name: string): string {
 export function isSceneFileName(name: string): boolean {
   const ext = getFileExtension(name);
   if (ext === '.voxl') return true;
-  return PLUGIN_SCENE_FILE_TYPES.some((ft) => ft.fileExtension === ext);
+  if (PLUGIN_SCENE_FILE_TYPES.some((ft) => ft.fileExtension === ext)) return true;
+  return isSideloadedSceneFileName(name);
 }
 
 export function normalizeActiveVoxlScenePath(path: string | null | undefined): string | null {

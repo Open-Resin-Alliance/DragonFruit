@@ -1,7 +1,8 @@
 import { createTypedHistory } from '@/history/typedHistory';
 import type { SupportHistoryPayloadMap } from './actionTypes';
+import { SUPPORT_HISTORY_LABELS } from './supportHistoryLabels';
 
-const supportHistory = createTypedHistory<SupportHistoryPayloadMap>();
+const supportHistory = createTypedHistory<SupportHistoryPayloadMap>(SUPPORT_HISTORY_LABELS);
 
 /**
  * Push a support history entry with the payload its type requires. The compiler

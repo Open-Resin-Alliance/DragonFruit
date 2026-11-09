@@ -2,6 +2,8 @@
 
 import React from "react";
 import { Languages } from "lucide-react";
+import { useLingui } from "@lingui/react";
+import { msg } from "@lingui/core/macro";
 import { SelectDropdown } from "@/components/ui/SelectDropdown";
 import { useLocale } from "@/components/I18nClientProvider";
 import { SUPPORTED_LOCALES, LOCALE_LABELS, type Locale } from "@/i18n";
@@ -23,6 +25,7 @@ export function LanguageSwitcher({
   value?: Locale;
   onChange?: (locale: Locale) => void;
 }) {
+  const { _ } = useLingui();
   const { locale, setLocale } = useLocale();
   const currentValue = value ?? locale;
   const handleChange = onChange ?? setLocale;
@@ -32,8 +35,8 @@ export function LanguageSwitcher({
       value={currentValue}
       options={OPTIONS}
       onChange={handleChange}
-      ariaLabel="Language"
-      title="Language"
+      ariaLabel={_(msg`Language`)}
+      title={_(msg`Language`)}
       // Fixed width so the trigger and the (width-matched) menu are the same
       // compact size; menuAlign right then drops the menu cleanly below it.
       className={`w-36 ${className}`}

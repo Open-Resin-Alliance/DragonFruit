@@ -1,50 +1,34 @@
 import React from 'react';
 import type { SupportState } from '../types';
-import type { KickstandState } from '../SupportTypes/Kickstand/types';
+import { createEmptySupportCollections, SUPPORT_COLLECTION_KEYS, type SupportCollectionKey } from '../supportTypeRegistry';
 import { computeSupportRenderLookup, type SupportRenderLookupInput, type SupportRenderLookupSnapshot } from './supportRenderLookupMath';
 import { isSupportEditInteractionActive } from './gizmoInteractionLock';
 import { getSupportWorkerRuntimeCapabilities } from './supportWorkerCapabilities';
 import { isSupportWorkerSafetyModeEnabled } from './supportWorkerSafetyMode';
+import { noteActivity } from '@/utils/debug/heartbeatContext';
 import type {
   RecordDelta,
   SupportLookupCollections,
   SupportLookupInputDelta,
-  SupportLookupKickstandCollections,
   SupportRenderLookupWorkerRequestMessage,
   SupportRenderLookupWorkerResponseMessage,
 } from './supportRenderLookup.worker.shared';
 
 interface UseSupportRenderLookupOptions {
-  state: Pick<SupportState, 'roots' | 'trunks' | 'branches' | 'leaves' | 'twigs' | 'sticks' | 'braces' | 'knots'>;
-  kickstandState: Pick<KickstandState, 'kickstands' | 'knots'>;
+  state: Pick<SupportState, SupportCollectionKey>;
   activePreviewSupport?: {
-    kind: 'trunk' | 'branch' | 'kickstand' | null;
     support: { segments: Array<{ id: string }> } | null;
   } | null;
 }
 
 type WorkerCollectionsRef = {
   state: SupportLookupCollections;
-  kickstandState: SupportLookupKickstandCollections;
   activePreviewSupport: SupportRenderLookupInput['activePreviewSupport'];
 };
 
 function createEmptyWorkerCollectionsRef(): WorkerCollectionsRef {
   return {
-    state: {
-      roots: {},
-      trunks: {},
-      branches: {},
-      leaves: {},
-      twigs: {},
-      sticks: {},
-      braces: {},
-      knots: {},
-    },
-    kickstandState: {
-      kickstands: {},
-      knots: {},
-    },
+    state: createEmptySupportCollections(),
     activePreviewSupport: null,
   };
 }
@@ -93,44 +77,28 @@ function buildInputDelta(
   workerCollectionsRef: WorkerCollectionsRef,
   forceFullSync: boolean,
 ): SupportLookupInputDelta | null {
-  const stateDelta = {
-    roots: diffRecordByRef(workerCollectionsRef.state.roots, latest.state.roots, forceFullSync),
-    trunks: diffRecordByRef(workerCollectionsRef.state.trunks, latest.state.trunks, forceFullSync),
-    branches: diffRecordByRef(workerCollectionsRef.state.branches, latest.state.branches, forceFullSync),
-    leaves: diffRecordByRef(workerCollectionsRef.state.leaves, latest.state.leaves, forceFullSync),
-    twigs: diffRecordByRef(workerCollectionsRef.state.twigs, latest.state.twigs, forceFullSync),
-    sticks: diffRecordByRef(workerCollectionsRef.state.sticks, latest.state.sticks, forceFullSync),
-    braces: diffRecordByRef(workerCollectionsRef.state.braces, latest.state.braces, forceFullSync),
-    knots: diffRecordByRef(workerCollectionsRef.state.knots, latest.state.knots, forceFullSync),
-  };
-
-  const kickstandStateDelta = {
-    kickstands: diffRecordByRef(workerCollectionsRef.kickstandState.kickstands, latest.kickstandState.kickstands, forceFullSync),
-    knots: diffRecordByRef(workerCollectionsRef.kickstandState.knots, latest.kickstandState.knots, forceFullSync),
-  };
+  const stateDelta: Record<string, unknown> = {};
+  let hasStateDelta = false;
+  for (const key of SUPPORT_COLLECTION_KEYS) {
+    const diff = diffRecordByRef(
+      workerCollectionsRef.state[key] as Record<string, unknown>,
+      latest.state[key] as Record<string, unknown>,
+      forceFullSync,
+    );
+    if (diff) {
+      stateDelta[key] = diff;
+      hasStateDelta = true;
+    }
+  }
 
   const activePreviewSupportChanged = forceFullSync || workerCollectionsRef.activePreviewSupport !== latest.activePreviewSupport;
 
-  const hasStateDelta = Boolean(
-    stateDelta.roots ||
-    stateDelta.trunks ||
-    stateDelta.branches ||
-    stateDelta.leaves ||
-    stateDelta.twigs ||
-    stateDelta.sticks ||
-    stateDelta.braces ||
-    stateDelta.knots,
-  );
-
-  const hasKickstandDelta = Boolean(kickstandStateDelta.kickstands || kickstandStateDelta.knots);
-
-  if (!hasStateDelta && !hasKickstandDelta && !activePreviewSupportChanged) {
+  if (!hasStateDelta && !activePreviewSupportChanged) {
     return null;
   }
 
   return {
-    state: hasStateDelta ? stateDelta : undefined,
-    kickstandState: hasKickstandDelta ? kickstandStateDelta : undefined,
+    state: hasStateDelta ? (stateDelta as SupportLookupInputDelta['state']) : undefined,
     activePreviewSupport: activePreviewSupportChanged ? latest.activePreviewSupport : undefined,
     activePreviewSupportChanged,
   };
@@ -138,20 +106,16 @@ function buildInputDelta(
 
 function applyDeltaToWorkerCollectionsRef(target: WorkerCollectionsRef, delta: SupportLookupInputDelta) {
   if (delta.state) {
-    applyRecordDeltaInPlace(target.state.roots, delta.state.roots);
-    applyRecordDeltaInPlace(target.state.trunks, delta.state.trunks);
-    applyRecordDeltaInPlace(target.state.branches, delta.state.branches);
-    applyRecordDeltaInPlace(target.state.leaves, delta.state.leaves);
-    applyRecordDeltaInPlace(target.state.twigs, delta.state.twigs);
-    applyRecordDeltaInPlace(target.state.sticks, delta.state.sticks);
-    applyRecordDeltaInPlace(target.state.braces, delta.state.braces);
-    applyRecordDeltaInPlace(target.state.knots, delta.state.knots);
+    for (const key of SUPPORT_COLLECTION_KEYS) {
+      const diff = delta.state[key as keyof typeof delta.state];
+      if (!diff) continue;
+      applyRecordDeltaInPlace(
+        (target.state as unknown as Record<string, MutableRecord<unknown>>)[key],
+        diff as RecordDelta<unknown>,
+      );
+    }
   }
 
-  if (delta.kickstandState) {
-    applyRecordDeltaInPlace(target.kickstandState.kickstands, delta.kickstandState.kickstands);
-    applyRecordDeltaInPlace(target.kickstandState.knots, delta.kickstandState.knots);
-  }
 
   if (delta.activePreviewSupportChanged) {
     target.activePreviewSupport = delta.activePreviewSupport ?? null;
@@ -315,6 +279,7 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
 
     if (supportsWorkerSafeMode || !workerCapabilities.hasWorker || typeof Worker === 'undefined') {
       terminateWorker();
+      noteActivity('support-mode:render-lookup-main-thread');
       setLookup(computeSupportRenderLookup(latestOptionsRef.current));
       return;
     }
@@ -394,19 +359,8 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
     if (postLatestRequestRef.current) {
       postLatestRequestRef.current();
     }
-  }, [
-    options.state.roots,
-    options.state.trunks,
-    options.state.branches,
-    options.state.leaves,
-    options.state.twigs,
-    options.state.sticks,
-    options.state.braces,
-    options.state.knots,
-    options.kickstandState.kickstands,
-    options.kickstandState.knots,
-    options.activePreviewSupport,
-  ]);
+    // `options.state` is rebuilt whenever any collection identity changes.
+  }, [options.state, options.activePreviewSupport]);
 
   React.useEffect(() => {
     if (!supportsWorkerSafeMode) return;

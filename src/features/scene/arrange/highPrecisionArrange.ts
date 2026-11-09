@@ -65,6 +65,13 @@ export type HighPrecisionArrangeInput = {
   widthMm: number;
   depthMm: number;
   originMode: 'front_left' | 'center';
+  /**
+   * Where the plate being packed sits, in world millimetres: the cascade offset from
+   * the first plate. The models' transforms are world coordinates while the packing
+   * frame is the plate's own, so without this a later plate's models come out packed
+   * onto the first plate.
+   */
+  plateOffsetMm?: { dxMm: number; dyMm: number };
   arrangeSpacingMm: number;
   arrangeAllowRotateOnZ: boolean;
   arrangeAnchorMode: ArrangeAnchorMode;
@@ -114,9 +121,11 @@ export function computeHighPrecisionArrangeResult(input: HighPrecisionArrangeInp
   const minSpacing = spacing + SAT_EPS_MM;
   const PERF_COMPLEX_SCENE = visibleModels.length >= 30;
 
-  const rawMinX = originMode === 'front_left' ? 0 : -widthMm * 0.5;
+  const plateDxMm = input.plateOffsetMm?.dxMm ?? 0;
+  const plateDyMm = input.plateOffsetMm?.dyMm ?? 0;
+  const rawMinX = (originMode === 'front_left' ? 0 : -widthMm * 0.5) + plateDxMm;
   const rawMaxX = rawMinX + widthMm;
-  const rawMinY = originMode === 'front_left' ? 0 : -depthMm * 0.5;
+  const rawMinY = (originMode === 'front_left' ? 0 : -depthMm * 0.5) + plateDyMm;
   const rawMaxY = rawMinY + depthMm;
   const minX = rawMinX + Math.max(0, input.safetyMarginMm?.left ?? 0);
   const maxX = rawMaxX - Math.max(0, input.safetyMarginMm?.right ?? 0);

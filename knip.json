@@ -1,0 +1,29 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "lingui.config.ts",
+    "src/locales/*.js",
+    "docs/javascripts/*.js",
+    "docs/stylesheets/*.css",
+    ".github/guts/{corrections,evaluate}.mjs",
+    "scripts/dragonfruit-ts-cli.ts",
+    "scripts/bench/visualize-stats.mjs",
+    "scripts/island-debug-export.ts",
+    "scripts/island-ipc-debug.ts",
+    "scripts/island-stl-bench.ts",
+    "plugins/chitubox-import/tools/*.ts",
+    "plugins/sirayatech/scripts/*.mjs"
+  ],
+  "ignoreDependencies": ["@lingui/swc-plugin"],
+  "ignoreBinaries": [
+    "appstreamcli",
+    "desktop-file-validate",
+    "flatpak",
+    "flatpak-builder",
+    "hdiutil",
+    "lipo",
+    "plutil",
+    "rustc",
+    "tasklist"
+  ]
+}

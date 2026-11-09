@@ -1,14 +1,19 @@
 "use client";
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { Settings, RotateCcw } from 'lucide-react';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { Button, Card, CardHeader, IconButton, Spinner } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import type { UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
 import { ISLAND_LAYER_COLORS, markerIdFor } from '@/volumeAnalysis/Islands/islandPuckMarkers';
+import { Trans } from '@lingui/react/macro';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 
 const SECTION_CARD: React.CSSProperties = {
   borderColor: 'var(--border-subtle)',
@@ -61,6 +66,8 @@ interface IslandsPanelProps {
 }
 
 export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: IslandsPanelProps) {
+  const { _ } = useLingui();
+  const fmt = useLocaleFormat();
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const [showSettings, setShowSettings] = React.useState(false);
 
@@ -72,6 +79,8 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
     setShowMinimaOnly,
     showIntersection,
     setShowIntersection,
+    advancedMode,
+    setAdvancedMode,
     filterToggles,
     setFilterToggles,
     orderedIslands,
@@ -106,7 +115,6 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
     applySettings,
     resetSettings,
     applyingSettings,
-    hasPendingChanges,
   } = islands;
 
   const totalDetected = tableStats?.allTotal ?? 0;
@@ -128,33 +136,15 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
         <CardHeader
           left={(
             <>
-              <IconButton
-                onClick={() => setExpanded(!expanded)}
-                className="!p-0.5"
-                title={expanded ? 'Collapse card' : 'Expand card'}
-              >
-                <svg
-                  className="w-3 h-3 transform transition-transform"
-                  style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  {expanded ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  )}
-                </svg>
-              </IconButton>
-              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Islands</h3>
+              <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Islands`)}</h3>
             </>
           )}
           right={(
             <IconButton
               onClick={() => setShowSettings(true)}
               className="!p-0.5"
-              title="Scan settings"
+              title={_(msg`Scan settings`)}
             >
               <Settings className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
             </IconButton>
@@ -172,29 +162,27 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                 }}
               >
                 <div className="flex items-center gap-2 px-3 py-2 border rounded-md shadow-md" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <svg className="animate-spin h-4 w-4" style={{ color: 'var(--accent)' }} viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  <span className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>Recalculating…</span>
+                  <Spinner size="md" style={{ color: 'var(--accent)' }} />
+                  <span className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Recalculating…`)}</span>
                 </div>
               </div>
             )}
 
             {/* Scan button */}
-            <button
+            <Button
               type="button"
               onClick={() => { void islands.onRunScan(); }}
               disabled={!hasGeometry || scanning}
-              className="ui-button w-full !h-8 text-[11px] disabled:opacity-50"
+              size="auto"
+              className="w-full !h-8 text-[11px] disabled:opacity-50"
               style={{
                 borderColor: 'var(--accent)',
                 background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
                 color: 'var(--accent)',
               }}
             >
-              {scanning ? 'Scanning…' : 'Scan Islands'}
-            </button>
+              {scanning ? <Trans>Scanning…</Trans> : <Trans>Scan Islands</Trans>}
+            </Button>
 
 
             {/* --- Post-scan content --- */}
@@ -204,9 +192,9 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                 <div className="rounded-md border p-2" style={SECTION_CARD}>
                   <div className="grid grid-cols-3 gap-2">
                     {([
-                      { label: 'Voxels', key: 'voxel', color: ISLAND_LAYER_COLORS.voxel, count: tableStats?.voxelTotal ?? 0 },
-                      { label: 'Minima', key: 'geom', color: ISLAND_LAYER_COLORS.minima, count: tableStats?.geomTotal ?? 0 },
-                      { label: 'Coincident', key: 'coincident', color: ISLAND_LAYER_COLORS.intersection, count: tableStats?.coincidentTotal ?? 0 },
+                      { label: _(msg`Voxels`), key: 'voxel', color: ISLAND_LAYER_COLORS.voxel, count: tableStats?.voxelTotal ?? 0 },
+                      { label: _(msg`Minima`), key: 'geom', color: ISLAND_LAYER_COLORS.minima, count: tableStats?.geomTotal ?? 0 },
+                      { label: _(msg`Coincident`), key: 'coincident', color: ISLAND_LAYER_COLORS.intersection, count: tableStats?.coincidentTotal ?? 0 },
                     ] as const).map(s => (
                       <div key={s.key} className="text-center min-w-0">
                         <div className="flex items-center justify-center gap-1 mb-0.5">
@@ -230,7 +218,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                       disabled={orderedIslands.length === 0 || selectedIndex <= 0}
                       className="flex-1 h-8 rounded border flex items-center justify-center transition-colors disabled:opacity-40"
                       style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-strong)' }}
-                      title="Previous (B)"
+                      title={_(msg`Previous (B)`)}
                     >
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -254,7 +242,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                       disabled={orderedIslands.length === 0 || selectedIndex >= orderedIslands.length - 1}
                       className="flex-1 h-8 rounded border flex items-center justify-center transition-colors disabled:opacity-40"
                       style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-strong)' }}
-                      title="Next (N)"
+                      title={_(msg`Next (N)`)}
                     >
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -262,16 +250,17 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                     </button>
                   </div>
                 </div>
-
-                {/* Display toggles (no header label — the chips are self-explanatory) */}
+                {/* Display toggles (advanced only — the chips are self-explanatory) */}
+                {advancedMode && (
                 <div className="rounded-md border p-2" style={SECTION_CARD}>
                   <div className="grid grid-cols-2 gap-1.5">
-                    <ToggleBtn label="Voxels" checked={showVoxelOnly} onChange={setShowVoxelOnly} color={ISLAND_LAYER_COLORS.voxel} hint="Slicing islands and suspended areas detected from layer contours" />
-                    <ToggleBtn label="Minima" checked={showMinimaOnly} onChange={setShowMinimaOnly} color={ISLAND_LAYER_COLORS.minima} hint="Individual lowest-vertex triangles on the mesh surface" />
-                    <ToggleBtn label="Coincident" checked={showIntersection} onChange={setShowIntersection} color={ISLAND_LAYER_COLORS.intersection} hint="Regions where both voxel and geometric islands overlap" />
-                    <ToggleBtn label="Overhangs" checked={showOverhangs} onChange={setShowOverhangs} color="#ffa500" hint="Shallow surfaces detected by the mesh-normal classifier (the surfaces auto-supports grid)" />
+                    <ToggleBtn label={_(msg`Voxels`)} checked={showVoxelOnly} onChange={setShowVoxelOnly} color={ISLAND_LAYER_COLORS.voxel} hint={_(msg`Slicing islands and suspended areas detected from layer contours`)} />
+                    <ToggleBtn label={_(msg`Minima`)} checked={showMinimaOnly} onChange={setShowMinimaOnly} color={ISLAND_LAYER_COLORS.minima} hint={_(msg`Individual lowest-vertex triangles on the mesh surface`)} />
+                    <ToggleBtn label={_(msg`Coincident`)} checked={showIntersection} onChange={setShowIntersection} color={ISLAND_LAYER_COLORS.intersection} hint={_(msg`Regions where both voxel and geometric islands overlap`)} />
+                    <ToggleBtn label={_(msg`Overhangs`)} checked={showOverhangs} onChange={setShowOverhangs} color="#ffa500" hint={_(msg`Shallow surfaces detected by the mesh-normal classifier (the surfaces auto-supports grid)`)} />
                   </div>
                 </div>
+                )}
 
                 {/* Filter toggles live in Scan Settings (supported + plate) */}
 
@@ -288,7 +277,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                   background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
                 }}
               >
-                Scan the model to detect unsupported islands
+                {_(msg`Scan the model to detect unsupported islands`)}
               </div>
             )}
           </div>
@@ -298,48 +287,60 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
       {/* Settings Modal */}
       <StructuredDialogModal
         open={showSettings}
-        ariaLabel="Scan settings"
-        title="Scan Settings"
-        subtitle="Configure island detection parameters"
+        ariaLabel={_(msg`Scan Settings`)}
+        title={_(msg`Scan Settings`)}
+        subtitle={_(msg`Configure island detection parameters`)}
         iconTone="neutral"
         onClose={() => setShowSettings(false)}
         onBackdropClick={() => setShowSettings(false)}
         actions={
           <>
-            <button
+            <Button
               type="button"
               onClick={() => setShowSettings(false)}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
+              size="md"
             >
-              Cancel
-            </button>
-            <button
+              {_(msg`Cancel`)}
+            </Button>
+            <Button
               type="button"
               onClick={() => { applySettings(); setShowSettings(false); }}
-              disabled={!hasPendingChanges}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
+              variant="tinted-accent"
+              size="md"
+              className="inline-flex items-center justify-center gap-1.5"
             >
-              Apply
-            </button>
+              {_(msg`Apply`)}
+            </Button>
           </>
         }
       >
         <div className="space-y-3">
 
+          {/* Display section */}
+          <div className="rounded-md border p-2.5" style={SECTION_CARD}>
+            <SectionHeader title={_(msg`Display`)} />
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={advancedMode}
+                onChange={(e) => setAdvancedMode(e.target.checked)}
+                className="ui-checkbox !w-4 !h-4"
+              />
+              <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>{_(msg`Advanced mode`)}</span>
+            </label>
+            <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>{_(msg`Shows the Voxels, Minima, Coincident, and Overhangs layer toggles.`)}</p>
+          </div>
+
           {/* Scan section */}
           <div className="rounded-md border p-2.5" style={SECTION_CARD}>
-            <SectionHeader title="Scan" />
+            <SectionHeader title={_(msg`Scan`)} />
             <div className="space-y-3">
               {/* Resolution */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Resolution</span>
-                  <span className="text-[11px] tabular-nums font-semibold" style={{ color: 'var(--text-strong)' }}>{draftPxMm.toFixed(2)} mm/px</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{_(msg`Resolution`)}</span>
+                  <span className="text-[11px] tabular-nums font-semibold" style={{ color: 'var(--text-strong)' }}>{fmt.quantity(draftPxMm, 2, 'mmPerPx')}</span>
                 </div>
                 <input type="range" min="0.03" max="0.5" step="0.01" value={draftPxMm} onChange={(e) => setDraftPxMm(parseFloat(e.target.value))} disabled={scanning} className="ui-range w-full" />
               </div>
@@ -347,8 +348,8 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
               {/* Support Buffer */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Support buffer</span>
-                  <span className="text-[11px] tabular-nums font-semibold" style={{ color: 'var(--text-strong)' }}>{draftSupportBufMm.toFixed(2)} mm</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{_(msg`Support buffer`)}</span>
+                  <span className="text-[11px] tabular-nums font-semibold" style={{ color: 'var(--text-strong)' }}>{fmt.quantity(draftSupportBufMm, 2, 'mm')}</span>
                 </div>
                 <input type="range" min="0" max="1" step="0.05" value={draftSupportBufMm} onChange={(e) => setDraftSupportBufMm(parseFloat(e.target.value))} disabled={scanning} className="ui-range w-full" />
               </div>
@@ -357,7 +358,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
 
           {/* Filters section */}
           <div className="rounded-md border p-2.5" style={SECTION_CARD}>
-            <SectionHeader title="Filters" />
+            <SectionHeader title={_(msg`Filters`)} />
             <div className="space-y-3">
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
@@ -366,7 +367,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                   onChange={(e) => setFilterToggles({ ...filterToggles, showAlreadySupported: e.target.checked })}
                   className="ui-checkbox !w-4 !h-4"
                 />
-                <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>Show already-supported islands</span>
+                <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>{_(msg`Show already-supported islands`)}</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
@@ -375,20 +376,20 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                   onChange={(e) => setFilterToggles({ ...filterToggles, showPlateContact: e.target.checked })}
                   className="ui-checkbox !w-4 !h-4"
                 />
-                <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>Show plate-contact islands</span>
+                <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>{_(msg`Show plate-contact islands`)}</span>
               </label>
             </div>
           </div>
 
           {/* Clustering section */}
           <div className="rounded-md border p-2.5" style={SECTION_CARD}>
-            <SectionHeader title="Clustering" />
+            <SectionHeader title={_(msg`Clustering`)} />
             <div className="space-y-3">
 
               {/* Scale markers with area */}
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input type="checkbox" checked={draftScaleMarkersWithArea} onChange={(e) => setDraftScaleMarkersWithArea(e.target.checked)} className="ui-checkbox !w-4 !h-4" />
-                <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>Scale markers with area</span>
+                <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>{_(msg`Scale markers with area`)}</span>
               </label>
 
               {/* Consolidate — indented under scale */}
@@ -401,7 +402,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                     disabled={!draftScaleMarkersWithArea}
                     className="ui-checkbox !w-4 !h-4"
                   />
-                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>Consolidate</span>
+                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>{_(msg`Consolidate`)}</span>
                 </label>
                 {draftScaleMarkersWithArea && draftConsolidateVoxel && (
                   <div className="relative">
@@ -423,7 +424,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
               <div className="space-y-1.5">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input type="checkbox" checked={draftEnableContourRegions} onChange={(e) => setDraftEnableContourRegions(e.target.checked)} className="ui-checkbox !w-4 !h-4" />
-                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>Contoured regions</span>
+                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>{_(msg`Contoured regions`)}</span>
                 </label>
                 {draftEnableContourRegions && (
                   <div className="relative">
@@ -445,7 +446,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
               <div className="space-y-1.5">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input type="checkbox" checked={draftRemoveSupportedAreaClusters} onChange={(e) => setDraftRemoveSupportedAreaClusters(e.target.checked)} className="ui-checkbox !w-4 !h-4" />
-                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>Remove supported clusters</span>
+                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>{_(msg`Remove supported clusters`)}</span>
                 </label>
                 {draftRemoveSupportedAreaClusters && (
                   <div className="relative">
@@ -458,7 +459,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                       max={10.0}
                       showStepper={false}
                     />
-                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>mm²</span>
+                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>{/* i18n-ignore: unit */}mm²</span>
                   </div>
                 )}
               </div>
@@ -467,7 +468,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
               <div className="space-y-1.5">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input type="checkbox" checked={draftReduceIntersection} onChange={(e) => setDraftReduceIntersection(e.target.checked)} className="ui-checkbox !w-4 !h-4" />
-                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>Reduce intersections</span>
+                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>{_(msg`Reduce intersections`)}</span>
                 </label>
                 {draftReduceIntersection && (
                   <div className="relative">
@@ -480,21 +481,23 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                       max={2.0}
                       showStepper={false}
                     />
-                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>mm²</span>
+                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>{/* i18n-ignore: unit */}mm²</span>
                   </div>
                 )}
               </div>
             </div>
           </div>
 
-          <button
+          <Button
             type="button"
             onClick={resetSettings}
-            className="ui-button ui-button-secondary w-full !h-8 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+            variant="secondary"
+            size="auto"
+            className="w-full !h-8 px-3 text-xs inline-flex items-center justify-center gap-1.5"
           >
             <RotateCcw className="w-3 h-3" />
-            Reset defaults
-          </button>
+            {_(msg`Reset defaults`)}
+          </Button>
         </div>
       </StructuredDialogModal>
     </>

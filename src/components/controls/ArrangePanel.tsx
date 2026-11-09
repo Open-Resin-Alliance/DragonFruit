@@ -1,9 +1,15 @@
 import React from 'react';
-import { LayoutGrid, Loader2, RotateCw } from 'lucide-react';
+import { LayoutGrid, RotateCw } from 'lucide-react';
+import { useLingui } from '@lingui/react';
+import { msg, plural } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { Trans } from '@lingui/react/macro';
 import { MiniStepperField } from '@/components/ui/miniStepperField';
-import { Button, Card, CardHeader, IconButton, Select } from '@/components/atoms';
+import { Button, Card, CardHeader, Select, Spinner } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
+import type { ArrangePlateFillMode } from '@/features/scene/arrange/useArrangeManager';
 
 export type ArrangeAnchorMode = 'center' | 'front_left' | 'front_right' | 'back_left' | 'back_right';
 export type ArrangeLayoutMode = 'auto' | 'array';
@@ -12,6 +18,8 @@ export type ArrangePrecisionMode = 'standard' | 'high_precision';
 interface ArrangePanelProps {
   precisionMode: ArrangePrecisionMode;
   onPrecisionModeChange: (value: ArrangePrecisionMode) => void;
+  fillMode: ArrangePlateFillMode;
+  onFillModeChange: (value: ArrangePlateFillMode) => void;
   layoutMode: ArrangeLayoutMode;
   onLayoutModeChange: (value: ArrangeLayoutMode) => void;
   spacingMm: number;
@@ -40,9 +48,18 @@ interface ArrangePanelProps {
   disableArrangeActions?: boolean;
 }
 
+type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
+
+/** A module-scope helper because it interpolates: React Compiler renames inline `msg` locals in production. */
+function formatModelCount(translate: Translate, count: number): string {
+  return translate(msg`${plural(count, { one: '# model', other: '# models' })}`);
+}
+
 export function ArrangePanel({
   precisionMode,
   onPrecisionModeChange,
+  fillMode,
+  onFillModeChange,
   layoutMode,
   onLayoutModeChange,
   spacingMm,
@@ -70,6 +87,7 @@ export function ArrangePanel({
   isApplying = false,
   disableArrangeActions = false,
 }: ArrangePanelProps) {
+  const { _ } = useLingui();
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const isArrangeAllDisabled = modelCount <= 0 || isApplying || disableArrangeActions;
   const isArrangeSelectedDisabled = selectedModelCount === 0 || isApplying || disableArrangeActions;
@@ -120,32 +138,14 @@ export function ArrangePanel({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setExpanded((prev) => !prev)}
-              className="!p-0.5"
-              title={expanded ? 'Collapse card' : 'Expand card'}
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {expanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Arrange</h3>
+            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded((prev) => !prev)} />
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Arrange`)}</h3>
           </>
         )}
         right={(
           <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
             <LayoutGrid className="w-3 h-3" style={{ color: 'var(--accent)' }} />
-            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{modelCount} model{modelCount === 1 ? '' : 's'}</span>
+            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatModelCount(_, modelCount)}</span>
           </div>
         )}
       />
@@ -153,63 +153,97 @@ export function ArrangePanel({
       {expanded && (
         <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
           <div className="rounded-md border p-2" style={accentCardStyle}>
-            <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout Mode</div>
+            <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}><Trans>Layout Mode</Trans></div>
             <div className="grid grid-cols-2 gap-1">
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+              <Button
+                variant="secondary"
+                size="auto"
+                className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('auto')}
                 disabled={isApplying}
                 style={isApplying ? disabledModeStyle : (layoutMode === 'auto' ? activeModeStyle : undefined)}
               >
-                Auto
-              </button>
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                <Trans>Auto</Trans>
+              </Button>
+              <Button
+                variant="secondary"
+                size="auto"
+                className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('array')}
                 disabled={isApplying}
                 style={isApplying ? disabledModeStyle : (layoutMode === 'array' ? activeModeStyle : undefined)}
               >
-                Manual
-              </button>
+                <Trans>Manual</Trans>
+              </Button>
             </div>
           </div>
 
           {layoutMode === 'auto' && (
             <div className="rounded-md border p-2" style={accentCardStyle}>
-              <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Arrange Mode</div>
+              <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}><Trans>Plate Mode</Trans></div>
               <div className="grid grid-cols-2 gap-1">
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  onClick={() => onFillModeChange('plates')}
+                  disabled={isApplying}
+                  style={isApplying ? disabledModeStyle : (fillMode === 'plates' ? activeModeStyle : undefined)}
+                  title={_(msg({ message: 'Use the plates the scene already has before adding more', comment: 'Tooltip on the Arrange panel\'s plate mode choice. It fills partly used plates around the models already on them.' }))}
+                >
+                  <Trans>Multi-Plate</Trans>
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  onClick={() => onFillModeChange('plate')}
+                  disabled={isApplying}
+                  style={isApplying ? disabledModeStyle : (fillMode === 'plate' ? activeModeStyle : undefined)}
+                  title={_(msg({ message: 'Arrange only the plate being worked on', comment: 'Tooltip on the Arrange panel\'s plate mode choice. Overflow goes onto new plates, and no other plate is touched.' }))}
+                >
+                  <Trans>This Plate</Trans>
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {layoutMode === 'auto' && (
+            <div className="rounded-md border p-2" style={accentCardStyle}>
+              <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}><Trans>Arrange Mode</Trans></div>
+              <div className="grid grid-cols-2 gap-1">
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() => onPrecisionModeChange('standard')}
                   disabled={isApplying}
                   style={isApplying ? disabledModeStyle : (precisionMode === 'standard' ? activeModeStyle : undefined)}
-                  title="Current arrange algorithm"
+                  title={_(msg`Current arrange algorithm`)}
                 >
-                  Standard
-                </button>
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  <Trans>Standard</Trans>
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() => {
                     onPrecisionModeChange('high_precision');
                     onAllowRotateOnZChange(true);
                   }}
                   disabled={isApplying}
                   style={isApplying ? disabledModeStyle : (precisionMode === 'high_precision' ? activeModeStyle : undefined)}
-                  title="Hull-based SAT packing for tighter fit"
+                  title={_(msg`Hull-based SAT packing for tighter fit`)}
                 >
-                  High-Precision
-                </button>
+                  <Trans>High-Precision</Trans>
+                </Button>
               </div>
             </div>
           )}
 
           {layoutMode === 'auto' ? (
           <div className="rounded-md border p-2" style={panelCardStyle}>
-            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange Distance</label>
+            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}><Trans>Arrange Distance</Trans></label>
             <ScrollableNumberField
               className="mt-1"
               value={spacingMm}
@@ -219,9 +253,9 @@ export function ArrangePanel({
               step={0.1}
               unit="mm"
               disabled={isApplying}
-              ariaLabel="Arrange distance"
-              decreaseTitle="Decrease spacing"
-              increaseTitle="Increase spacing"
+              ariaLabel={_(msg`Arrange Distance`)}
+              decreaseTitle={_(msg`Decrease spacing`)}
+              increaseTitle={_(msg`Increase spacing`)}
             />
           </div>
 
@@ -229,8 +263,8 @@ export function ArrangePanel({
             <div className="rounded-md border p-2" style={panelCardStyle}>
               <div className="grid grid-cols-[24px_minmax(0,1fr)_minmax(0,1fr)] gap-1 items-center text-[10px] uppercase tracking-wide mb-1" style={{ color: 'var(--text-muted)' }}>
                 <span />
-                <span className="text-center">Count</span>
-                <span className="text-center">Gap</span>
+                <span className="text-center"><Trans>Count</Trans></span>
+                <span className="text-center"><Trans context="Arrange array spacing">Gap</Trans></span>
               </div>
 
               {([
@@ -260,18 +294,18 @@ export function ArrangePanel({
           )}
 
           <div className="rounded-md border p-2" style={panelCardStyle}>
-            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Placement Anchor</div>
+            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}><Trans>Placement Anchor</Trans></div>
             <Select
               value={anchorMode}
               onChange={(e) => onAnchorModeChange(e.target.value as ArrangeAnchorMode)}
               disabled={isApplying}
               className="mt-1 w-full !h-8 px-2 text-xs"
             >
-              <option value="center">Center</option>
-              <option value="front_left">Front Left</option>
-              <option value="front_right">Front Right</option>
-              <option value="back_left">Back Left</option>
-              <option value="back_right">Back Right</option>
+              <option value="center">{_(msg({ message: 'Center', context: 'Placement anchor' }))}</option>
+              <option value="front_left">{_(msg`Front Left`)}</option>
+              <option value="front_right">{_(msg`Front Right`)}</option>
+              <option value="back_left">{_(msg`Back Left`)}</option>
+              <option value="back_right">{_(msg`Back Right`)}</option>
             </Select>
           </div>
 
@@ -283,8 +317,8 @@ export function ArrangePanel({
               onClick={() => onAllowRotateOnZChange(!allowRotateOnZ)}
               disabled={isApplying || precisionMode === 'high_precision'}
               title={precisionMode === 'high_precision'
-                ? 'High-Precision mode requires Z-rotation and keeps it enabled'
-                : 'Allow auto-arrange to rotate models by 90° on Z when beneficial'}
+                ? _(msg`High-Precision mode requires Z-rotation and keeps it enabled`)
+                : _(msg`Allow auto-arrange to rotate models by 90° on Z when beneficial`)}
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -292,7 +326,7 @@ export function ArrangePanel({
                     className="h-3.5 w-3.5"
                     style={{ color: precisionMode === 'high_precision' ? 'var(--text-muted)' : 'var(--accent)' }}
                   />
-                  <span className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Allow Z-rotation</span>
+                  <span className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}><Trans>Allow Z-rotation</Trans></span>
                 </div>
                 <span
                   className="rounded-full border px-2 py-0.5 text-[10px]"
@@ -302,7 +336,7 @@ export function ArrangePanel({
                     background: allowRotateOnZ ? 'color-mix(in srgb, var(--accent), transparent 88%)' : 'transparent',
                   }}
                 >
-                  {precisionMode === 'high_precision' ? 'ON (Required)' : (allowRotateOnZ ? 'ON' : 'OFF')}
+                  {precisionMode === 'high_precision' ? _(msg`ON (Required)`) : (allowRotateOnZ ? _(msg`ON`) : _(msg`OFF`))}
                 </span>
               </div>
             </button>
@@ -317,18 +351,18 @@ export function ArrangePanel({
               disabled={isArrangeAllDisabled}
               style={isArrangeAllDisabled ? disabledActionStyle : undefined}
               title={disableArrangeActions
-                ? 'Reduce Total Copies to 1 before arranging'
+                ? _(msg`Reduce Total Copies to 1 before arranging`)
                 : (modelCount <= 1
-                  ? 'Need at least 2 visible models to arrange'
-                  : 'Arrange all visible models')}
+                  ? _(msg`Need at least 2 visible models to arrange`)
+                  : _(msg`Arrange all visible models`))}
             >
               {isApplying ? (
                 <span className="inline-flex items-center gap-1.5">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Arranging…
+                  <Spinner />
+                  <Trans>Arranging…</Trans>
                 </span>
               ) : (
-                'Arrange All'
+                <Trans>Arrange All</Trans>
               )}
             </Button>
 
@@ -340,18 +374,18 @@ export function ArrangePanel({
               disabled={isArrangeSelectedDisabled}
               style={isArrangeSelectedDisabled ? disabledActionStyle : undefined}
               title={disableArrangeActions
-                ? 'Reduce Total Copies to 1 before arranging'
+                ? _(msg`Reduce Total Copies to 1 before arranging`)
                 : (selectedModelCount === 0
-                  ? 'Select a model to arrange selected'
-                  : 'Arrange selected models only')}
+                  ? _(msg`Select a model to arrange selected`)
+                  : _(msg`Arrange selected models only`))}
             >
               {isApplying ? (
                 <span className="inline-flex items-center gap-1.5">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Arranging…
+                  <Spinner />
+                  <Trans>Arranging…</Trans>
                 </span>
               ) : (
-                'Arrange Selected'
+                <Trans>Arrange Selected</Trans>
               )}
             </Button>
           </div>

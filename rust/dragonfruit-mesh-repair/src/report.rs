@@ -40,8 +40,35 @@ pub struct MeshHealthReport {
     /// If any defect classes remain after repair, they are listed here as
     /// human-readable strings so the UI can surface them.
     pub residual_issues: Vec<String>,
+    /// Set when the mesh was repaired as a plate: one entry per part, each with its own verdict.
+    /// Empty for a single-object mesh, which is most of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<MeshPartReport>,
     pub fully_repaired: bool,
+    /// Set when the mesh the caller is handed came from the rebuild route rather than from the local
+    /// pipeline: the surface was resolved into a solid, which is a different object rather than the
+    /// same one repaired. A report that does not say so is describing the wrong mesh, which is why
+    /// this is a field and not a line in `residual_issues`.
+    #[serde(default)]
+    pub rebuilt: bool,
+    /// True when the caller asked the repair to stop and it stopped at a stage
+    /// boundary. The mesh is then partly repaired, and `fully_repaired` describes
+    /// what is actually in it rather than what the run intended.
+    pub cancelled: bool,
     pub total_ms: f64,
+}
+
+/// One part of a plate, and what repairing it on its own came to.
+///
+/// The whole-file verdict is one answer for a file that is many objects; this is the answer per
+/// object, which is the one a user can act on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeshPartReport {
+    pub index: usize,
+    pub triangles_before: usize,
+    pub triangles_after: usize,
+    pub fully_repaired: bool,
+    pub residual_issues: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,7 +94,10 @@ impl MeshHealthReport {
             model_is_manifold: None,
             model_manifold_status: None,
             residual_issues: Vec::new(),
+            parts: Vec::new(),
             fully_repaired: false,
+            rebuilt: false,
+            cancelled: false,
             total_ms: 0.0,
         }
     }

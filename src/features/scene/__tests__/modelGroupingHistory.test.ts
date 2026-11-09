@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { i18n } from '@/i18n';
 import {
   applyModelGrouping,
   applyModelUngrouping,
@@ -26,7 +27,7 @@ test('applyModelGrouping reports a changed transition for undo history', () => {
   assert.equal(result.changed, true);
   assert.equal(result.activeModelId, 'model-a');
   assert.deepEqual(result.selectedModelIds, ['model-a', 'model-b']);
-  assert.equal(result.description, 'Group 2 Models');
+  assert.equal(i18n._(result.description!), 'Group 2 models');
   assert.equal(result.models.find((model) => model.id === 'model-a')?.groupId, 'group-new');
   assert.equal(result.models.find((model) => model.id === 'model-b')?.groupName, 'Alpha');
 });
@@ -40,7 +41,7 @@ test('applyModelUngrouping reports a changed transition for undo history', () =>
   });
 
   assert.equal(result.changed, true);
-  assert.equal(result.description, 'Ungroup Model Gamma');
+  assert.equal(i18n._(result.description!), 'Ungroup Gamma');
   assert.equal(result.models.find((model) => model.id === 'model-c')?.groupId, undefined);
   assert.equal(result.models.find((model) => model.id === 'model-c')?.groupName, undefined);
 });
@@ -54,6 +55,6 @@ test('applyModelGroupUngrouping reports a changed transition for undo history', 
   });
 
   assert.equal(result.changed, true);
-  assert.equal(result.description, 'Ungroup Existing');
+  assert.equal(i18n._(result.description!), 'Ungroup Existing');
   assert.equal(result.models.find((model) => model.id === 'model-c')?.groupId, undefined);
 });

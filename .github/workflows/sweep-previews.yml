@@ -1,0 +1,115 @@
+name: Sweep previews
+
+# Housekeeping for what build-preview.yml leaves behind: preview/pr-N branches
+# imported from external PRs, and the preview_* prereleases with their tags.
+# Neither has anything to do with a /preview comment, so they no longer hang
+# off one. Like every scheduled workflow, this runs from the default branch
+# (main) only; workflow_dispatch runs it from any ref for a manual pass.
+on:
+  schedule:
+    - cron: "43 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: sweep-previews
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sweep preview branches whose PR has closed
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const PREFIX = 'preview/pr-';
+
+            const refs = await github.paginate(github.rest.git.listMatchingRefs, {
+              owner,
+              repo,
+              ref: `heads/${PREFIX}`,
+              per_page: 100,
+            });
+
+            for (const { ref } of refs) {
+              const branch = ref.replace('refs/heads/', '');
+              const number = Number(branch.slice(PREFIX.length));
+
+              if (!Number.isInteger(number) || number <= 0) {
+                core.warning(`Skipping ${branch}: no PR number in the name.`);
+                continue;
+              }
+
+              let pr;
+              try {
+                ({ data: pr } = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: number,
+                }));
+              } catch (e) {
+                if (e.status !== 404) throw e;
+                core.warning(`Skipping ${branch}: PR #${number} does not exist.`);
+                continue;
+              }
+
+              if (pr.state === 'open') continue;
+
+              await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch}` });
+              core.info(`Deleted ${branch}: PR #${number} is ${pr.state}.`);
+            }
+
+      - name: Sweep preview releases whose branch is gone
+        # After the branch sweep, so a preview/pr-N branch removed there takes
+        # its release with it in the same run, but not skipped when that step
+        # fails. The tag is derived from the branch name the way the derive job
+        # in build-preview.yml does it; that mapping is lossy, so a release is
+        # kept whenever any live branch maps onto its tag. Branch names only
+        # ever feed that keep set — what gets deleted comes from the release
+        # list. GitHub refuses to delete a tag from the web UI while a release
+        # points at it, hence release first, tag second.
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const PREFIX = 'preview_';
+            const tagFor = (branch) =>
+              `${PREFIX}${branch.replaceAll('/', '_').replace(/^preview_/, '')}`;
+
+            const branches = await github.paginate(github.rest.repos.listBranches, {
+              owner,
+              repo,
+              per_page: 100,
+            });
+            // An empty or truncated listing would read as "every branch is
+            // gone" and take every preview with it.
+            if (!branches.some(({ name }) => name === 'dev')) {
+              core.setFailed('Branch list does not include dev; refusing to sweep.');
+              return;
+            }
+            const liveTags = new Set(branches.map(({ name }) => tagFor(name)));
+
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner,
+              repo,
+              per_page: 100,
+            });
+
+            for (const release of releases) {
+              const tag = release.tag_name;
+              if (!tag.startsWith(PREFIX) || liveTags.has(tag)) continue;
+
+              try {
+                await github.rest.repos.deleteRelease({ owner, repo, release_id: release.id });
+                await github.rest.git.deleteRef({ owner, repo, ref: `tags/${tag}` });
+                core.info(`Deleted release and tag ${tag}: no branch maps onto it.`);
+              } catch (e) {
+                core.warning(`Could not delete ${tag}: ${e.message}`);
+              }
+            }

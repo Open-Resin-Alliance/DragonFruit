@@ -12,7 +12,6 @@ const srcPublic = path.resolve(projectRoot, 'public');
 const srcPlugins = path.resolve(projectRoot, 'plugins');
 const dstPlugins = path.resolve(frontendDistRoot, 'plugins');
 const nextDev = path.resolve(nextRoot, 'dev');
-const nextCache = path.resolve(nextRoot, 'cache');
 
 function skipNodeModules(sourcePath) {
       return path.basename(sourcePath) !== 'node_modules';
@@ -55,10 +54,14 @@ async function main() {
             await cp(srcPlugins, dstPlugins, { recursive: true, force: true, filter: skipNodeModules });
       }
 
-      // Tauri embeds everything under frontendDist. Next dev/cache artifacts can include
+      // Tauri embeds everything under frontendDist. Next dev artifacts can include
       // transient turbopack files that disappear between builds and break asset embedding.
+      //
+      // `.next/cache` stays: frontendDist is the curated copy above, so nothing in it is
+      // embedded, and it is Turbopack's persistent build cache, which CI restores between
+      // runs. Deleting it here left `actions/cache` with nothing to save. Locally, a build
+      // over the cache of the previous commit took 15.8 s against 25-29 s cold.
       await rm(nextDev, { recursive: true, force: true });
-      await rm(nextCache, { recursive: true, force: true });
 
       console.log(`[prepare-tauri-frontend] Prepared ${path.relative(projectRoot, dstIndex)} from ${path.relative(projectRoot, srcIndex)}`);
       console.log(`[prepare-tauri-frontend] Mirrored ${path.relative(projectRoot, srcNextStatic)} -> ${path.relative(projectRoot, dstNextStatic)}`);
@@ -68,7 +71,7 @@ async function main() {
       if (hasPlugins) {
             console.log(`[prepare-tauri-frontend] Copied plugin assets from ${path.relative(projectRoot, srcPlugins)} to ${path.relative(projectRoot, dstPlugins)}`);
       }
-      console.log(`[prepare-tauri-frontend] Removed transient build caches from ${path.relative(projectRoot, nextRoot)} and prepared ${path.relative(projectRoot, frontendDistRoot)}`);
+      console.log(`[prepare-tauri-frontend] Removed transient dev artifacts from ${path.relative(projectRoot, nextRoot)} and prepared ${path.relative(projectRoot, frontendDistRoot)}`);
 }
 
 main().catch((err) => {

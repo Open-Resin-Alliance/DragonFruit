@@ -19,6 +19,7 @@
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 const projectRoot = process.cwd();
@@ -47,11 +48,63 @@ async function checkDirectoriesExist(directories) {
       return missing;
 }
 
+/** A listed directory covers a submodule when either path contains the other. */
+function covers(directory, submodulePath) {
+      const dir = directory.replace(/\/+$/, '');
+      if (dir === '' || dir === '.') return true;
+      return (
+            submodulePath === dir ||
+            submodulePath.startsWith(`${dir}/`) ||
+            dir.startsWith(`${submodulePath}/`)
+      );
+}
+
+/**
+ * An uninitialized submodule is an empty directory, so it survives the existence
+ * check above and then ESLint refuses the whole run with "all of the files
+ * matching the glob pattern are ignored" — a message that says nothing about the
+ * cause. Worse, once a listed entry sits *above* the submodules (`plugins` rather
+ * than `plugins/ctb`), the directory is no longer empty and the run goes green
+ * having linted a fraction of what it claims to cover.
+ *
+ * So read the submodule paths from .gitmodules rather than inferring them from
+ * the list, and check the ones any listed directory reaches.
+ */
+async function uninitializedSubmodules(directories) {
+      let raw;
+      try {
+            raw = await fs.readFile(path.join(projectRoot, '.gitmodules'), 'utf8');
+      } catch {
+            return [];
+      }
+      const submodulePaths = [...raw.matchAll(/^\s*path\s*=\s*(.+)$/gm)].map((match) => match[1].trim());
+      const uninitialized = [];
+      for (const submodulePath of submodulePaths) {
+            if (!directories.some((directory) => covers(directory, submodulePath))) continue;
+            try {
+                  const contents = await fs.readdir(path.join(projectRoot, submodulePath));
+                  if (contents.length === 0) uninitialized.push(submodulePath);
+            } catch {
+                  // Not on disk at all — checkDirectoriesExist already reports it if it was listed.
+            }
+      }
+      return uninitialized;
+}
+
 function runEslint(directories) {
+      // Run the installed ESLint through this Node binary rather than `npx`:
+      // Windows has no extensionless `npx` to spawn, and shelling out would add
+      // quoting hazards for directory names.
+      const require = createRequire(import.meta.url);
+      const eslintBin = path.join(
+            path.dirname(require.resolve('eslint/package.json')),
+            'bin',
+            'eslint.js',
+      );
       return new Promise((resolve, reject) => {
             const child = spawn(
-                  'npx',
-                  ['eslint', '--max-warnings', '0', ...directories],
+                  process.execPath,
+                  [eslintBin, '--max-warnings', '0', ...directories],
                   { cwd: projectRoot, stdio: 'inherit' },
             );
             child.on('error', reject);
@@ -73,6 +126,14 @@ async function main() {
             console.error('[lint-clean] Listed directories that no longer exist:');
             for (const directory of missing) console.error(`  - ${directory}`);
             console.error(`Update ${LIST_FILE} to follow the rename — do not just drop the entry.`);
+            process.exit(1);
+      }
+
+      const uninitialized = await uninitializedSubmodules(directories);
+      if (uninitialized.length > 0) {
+            console.error('[lint-clean] Submodules under lint control are not checked out:');
+            for (const submodulePath of uninitialized) console.error(`  - ${submodulePath}`);
+            console.error('Run `git submodule update --init --recursive` and try again.');
             process.exit(1);
       }
 

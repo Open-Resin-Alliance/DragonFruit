@@ -9,6 +9,7 @@ import {
 } from '../codec-v2';
 import type { BuildVoxlDocumentInput, VoxlModelRuntimeLike } from '../types';
 import type { DragonfruitImportFormat } from '@/supports/types';
+import { unzlibSync } from 'fflate';
 
 const EMPTY_SUPPORTS: DragonfruitImportFormat = {
   version: 1,
@@ -68,7 +69,7 @@ test('dedup: N identical meshes → 1 chunk, V3, all models resolve to the same 
   assert.equal(readVersion(bin), VOXL_V3, 'deduped file must be V3');
   assert.equal(countMeshChunks(bin), 1, '3 identical meshes must collapse to 1 chunk');
 
-  const { document, meshBytes: out } = parseVoxlBinaryV2(bin);
+  const { document, meshBytes: out } = await parseVoxlBinaryV2(bin);
   assert.equal(document.models.length, 3, 'all 3 models must survive');
   for (const id of ['m0', 'm1', 'm2']) {
     assert.deepEqual([...(out.get(id) ?? [])], [...MESH_A], `${id} resolves to the shared mesh`);
@@ -83,7 +84,7 @@ test('mixed: two unique meshes + one duplicate → 2 chunks, V3, correct mapping
   assert.equal(countMeshChunks(bin), 2);
   assert.equal(readVersion(bin), VOXL_V3);
 
-  const { meshBytes: out } = parseVoxlBinaryV2(bin);
+  const { meshBytes: out } = await parseVoxlBinaryV2(bin);
   assert.deepEqual([...out.get('a')!], [...MESH_A]);
   assert.deepEqual([...out.get('b')!], [...MESH_B]);
   assert.deepEqual([...out.get('a2')!], [...MESH_A], 'duplicate maps to owner A, not B');
@@ -104,7 +105,37 @@ test('missing SHA → never deduped (cannot prove identity), stays V2', async ()
   const bin = await serializeVoxlDocumentV2(input(['a', 'a2']), meshBytes);
   assert.equal(readVersion(bin), VOXL_V2);
   assert.equal(countMeshChunks(bin), 2, 'without hashes, identical meshes are NOT collapsed');
-  const { meshBytes: out } = parseVoxlBinaryV2(bin);
+  const { meshBytes: out } = await parseVoxlBinaryV2(bin);
   assert.deepEqual([...out.get('a')!], [...MESH_A]);
   assert.deepEqual([...out.get('a2')!], [...MESH_A]);
+});
+
+/**
+ * A deferred parse reports *where* each mesh chunk is, so the native loader can read
+ * and inflate it. What this pins is the arithmetic: reading the range out of the same
+ * file and inflating it must produce exactly the bytes the eager parse hands over —
+ * and the V3 dedup must survive as two models reporting one range.
+ */
+test('deferred mesh chunks point at the bytes an eager parse would inflate', async () => {
+  const meshBytes = new Map<number, Uint8Array>([[0, MESH_A], [1, MESH_A], [2, MESH_B]]);
+  const sha = new Map<number, string>([[0, SHA_A], [1, SHA_A], [2, SHA_B]]);
+  const bin = await serializeVoxlDocumentV2(input(['m0', 'm1', 'm2']), meshBytes, sha);
+
+  const eager = await parseVoxlBinaryV2(bin);
+  const deferred = await parseVoxlBinaryV2(bin, { deferMeshChunks: true });
+
+  assert.equal(deferred.meshBytes.size, 0, 'nothing is inflated when the chunks are deferred');
+  const ranges = deferred.meshRanges;
+  assert.ok(ranges && ranges.size === 3, 'every embedded model reports a range');
+
+  for (const id of ['m0', 'm1', 'm2']) {
+    const range = ranges.get(id);
+    assert.ok(range, `${id} has a range`);
+    const stored = bin.subarray(range.offset, range.offset + range.compressedSize);
+    const unpacked: Uint8Array = range.compression === 1 ? unzlibSync(stored) : stored;
+    assert.equal(unpacked.byteLength, range.uncompressedSize, `${id} range length`);
+    assert.deepEqual([...unpacked], [...(eager.meshBytes.get(id) ?? [])], `${id} range contents`);
+  }
+  // The dedup pair points at one chunk: same range, not two copies of it.
+  assert.deepEqual(ranges.get('m0'), ranges.get('m1'));
 });

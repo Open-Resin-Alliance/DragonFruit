@@ -2,14 +2,17 @@
 
 import React from 'react';
 import * as THREE from 'three';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
+import { supportAnswersPointer } from '@/features/scene/plates/plateInteractivity';
 import { useSyncExternalStore } from 'react';
 import { subscribe, getSnapshot } from '@/supports/state';
-import { getKickstandSnapshot, subscribeToKickstandStore } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
 import { convexHull2d } from '../geometry/convexHull2d';
-import { computeFootprint } from '../geometry/computeFootprint';
+import { computeRaftFootprintPolygons, inflateModelPlateClearance, raftBandTopMm, raftWallBaseHeightMm } from '../geometry/computeRaftFootprint';
+import { collectModelPlateFootprint, type PlateFootprintSource } from '../geometry/modelPlateFootprint';
+import { generateWallFromPolygons, isUntrimmedFootprint } from '../geometry/generateRaftFromFootprint';
 import { buildLineRaftEdgePairs } from '../geometry/buildLineRaftEdgePairs';
-import { generateUnionedLineRaftMesh } from '../geometry/generateUnionedLineRaftMesh';
+import { filterLineRaftEdges, generateUnionedLineRaftMesh } from '../geometry/generateUnionedLineRaftMesh';
 import { generateChamferedBeam } from '../geometry/generateChamferedBeam';
 import { generatePerimeterWall } from '../geometry/generatePerimeterWall';
 import { generateCrenelatedWallManual } from '../geometry/generateCrenelatedWallManual';
@@ -110,8 +113,6 @@ function buildNonCrossingEdges(points: THREE.Vector2[], maxDegree: number, maxLe
 }
 
 interface LineRaftRendererProps {
-  clipLower?: number | null;
-  clipUpper?: number | null;
   passive?: boolean;
   colorized?: boolean;
   hoverized?: boolean;
@@ -125,11 +126,15 @@ interface LineRaftRendererProps {
   excludeModelIds?: string[];
   navigationLodActive?: boolean;
   onModelPointerSelect?: (modelId: string, e: any) => void;
+  /** Models on another bed: their raft answers no pointer. */
+  pointerSceneryModelIds?: ReadonlySet<string>;
+  /** Models whose plate footprint the raft has to clear. */
+  plateClearanceTargets?: readonly PlateFootprintSource[];
 }
 
+const EMPTY_PLATE_CLEARANCE_TARGETS: readonly PlateFootprintSource[] = Object.freeze([]);
+
 export default function LineRaftRenderer({
-  clipLower = null,
-  clipUpper = null,
   passive = false,
   colorized = true,
   hoverized = false,
@@ -143,9 +148,10 @@ export default function LineRaftRenderer({
   excludeModelIds = [],
   navigationLodActive = false,
   onModelPointerSelect,
+  pointerSceneryModelIds,
+  plateClearanceTargets = EMPTY_PLATE_CLEARANCE_TARGETS,
 }: LineRaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
-  const kickstandState = useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
   const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
@@ -212,24 +218,9 @@ export default function LineRaftRenderer({
     setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
   }, [immediatePrepareActiveModelId, passive, selectedModelIds]);
 
-  // Initialize clipping planes once (update in-place to avoid recreation)
-  const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
-
-  React.useEffect(() => {
-    const planes: THREE.Plane[] = [];
-
-    if (clipLower != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-    }
-
-    if (clipUpper != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-    }
-
-    clippingPlanesRef.current = planes;
-  }, [clipLower, clipUpper]);
-
-  const clippingPlanes = clippingPlanesRef.current;
+  // The scene's two shared planes: stable identity and length, so a scrub moves
+  // their constants without recompiling a material.
+  const clippingPlanes = getSceneClipPlanes();
 
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const excludedModelIdSet = React.useMemo(() => new Set(excludeModelIds.filter((id): id is string => Boolean(id))), [excludeModelIds]);
@@ -240,11 +231,7 @@ export default function LineRaftRenderer({
   const raftMeshes = React.useMemo(() => {
     if (raft.bottomMode !== 'line') return null;
 
-    const rootsByModel = collectRaftBaseCirclesByModel({
-      roots: Object.values(supportState.roots),
-      anchors: Object.values(supportState.anchors),
-      kickstandRoots: Object.values(kickstandState.roots),
-    }, {
+    const rootsByModel = collectRaftBaseCirclesByModel(supportState, {
       modelFilterId,
       excludeModelId,
       excludedModelIds: excludedModelIdSet,
@@ -252,39 +239,44 @@ export default function LineRaftRenderer({
     });
 
     const meshes: Array<{ beamMeshes: THREE.Mesh[]; wallMesh: THREE.Mesh | null }> = [];
+    const clearance = collectModelPlateFootprint(plateClearanceTargets, raftBandTopMm(raft));
+    const clearanceCut = inflateModelPlateClearance(clearance);
 
     for (const [modelKey, circles] of rootsByModel) {
       if (circles.length === 0) continue;
       const modelId = fromRaftModelKey(modelKey, 'unknown') ?? modelKey;
       const nodes2d = circles.map((circle) => new THREE.Vector2(circle.x, circle.y));
 
-    // Footprint polygon wraps around the *outer edge* of all supports.
-    // Important: the border is chamfered (bottom inset). To ensure the *bottom* of the chamfer
-    // still covers the support disks, we expand the footprint by the chamfer inset amount.
-    const chamferInset = Math.max(0, raft.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raft.chamferAngle))));
-    const wallInset = raft.wallEnabled ? Math.max(0, raft.wallThickness) : 0;
-    const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
+      // Footprint polygon wraps around the *outer edge* of all supports, trimmed
+      // where a model stands on the plate.
+      const footprint = computeRaftFootprintPolygons({ circles, raft, clearance });
+      if (footprint.length === 0) continue;
+      const hasBorderRing = true;
 
-    const profile = computeFootprint(circles, { marginMm: dynamicMargin, samplesPerCircle: 24 });
-    const hasBorderRing = !!profile && profile.length >= 3;
+      const edgePairs = buildLineRaftEdgePairs(nodes2d, {
+        hasBorderRing,
+        keepFactor: 8,
+        absMaxLen: 220,
+        enforceConnected: true,
+      });
 
-    const edgePairs = buildLineRaftEdgePairs(nodes2d, {
-      hasBorderRing,
-      keepFactor: 8,
-      absMaxLen: 220,
-      enforceConnected: true,
-    });
+      // Beam height: explicit line height setting
+      const beamHeight = Math.max(0.01, raft.lineHeightMm);
 
-    // Beam height: explicit line height setting
-    const beamHeight = Math.max(0.01, raft.lineHeightMm);
-
-    const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]);
-    const unionMesh = generateUnionedLineRaftMesh(unionEdges, {
-      widthMm: raft.lineWidthMm,
-      heightMm: beamHeight,
-      // Interior network only: keep this unioned mesh flat to avoid sloppy chamfer stitching.
-      borderProfile: null,
-    });
+      // Beams a model on the plate is in the way of are never drawn: cutting them
+    // would leave severed ends to close up again, and two clusters either side of
+    // a model should stay two clusters.
+    const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = filterLineRaftEdges(
+      edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]),
+      clearanceCut,
+      raft.lineWidthMm,
+    );
+      const unionMesh = generateUnionedLineRaftMesh(unionEdges, {
+        widthMm: raft.lineWidthMm,
+        heightMm: beamHeight,
+        // Interior network only: keep this unioned mesh flat to avoid sloppy chamfer stitching.
+        borderProfile: null,
+      });
     unionMesh.renderOrder = ghostRenderOrder;
     unionMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: true, clippingPlanes });
     unionMesh.castShadow = false;
@@ -316,23 +308,35 @@ export default function LineRaftRenderer({
     // Wall: perimeter only (never along internal beams)
     let wallMesh: THREE.Mesh | null = null;
     if (raft.wallEnabled) {
-      if (profile && profile.length >= 3) {
+      const wallBaseHeight = raftWallBaseHeightMm(raft);
+      if (isUntrimmedFootprint(footprint)) {
         const useCrenels = raft.crenulationSpacing > 0 && raft.crenulationGapWidth > 0;
         wallMesh = useCrenels
-          ? generateCrenelatedWallManual(profile, {
+          ? generateCrenelatedWallManual(footprint[0].outer, {
               wallHeight: raft.wallHeight,
               wallThickness: raft.wallThickness,
               crenulationGapWidth: raft.crenulationGapWidth,
               crenulationSpacing: raft.crenulationSpacing,
-              thickness: beamHeight,
+              thickness: wallBaseHeight,
               chamferAngle: raft.chamferAngle,
             })
-          : generatePerimeterWall(profile, {
+          : generatePerimeterWall(footprint[0].outer, {
               wallHeight: raft.wallHeight,
               wallThickness: raft.wallThickness,
-              thickness: beamHeight,
+              thickness: wallBaseHeight,
             });
+      } else {
+        wallMesh = generateWallFromPolygons(footprint, {
+          thickness: wallBaseHeight,
+          chamferAngle: raft.chamferAngle,
+          wallHeight: raft.wallHeight,
+          wallThickness: raft.wallThickness,
+          crenulationGapWidth: raft.crenulationGapWidth,
+          crenulationSpacing: raft.crenulationSpacing,
+        });
+      }
 
+      if (wallMesh) {
         wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: true, clippingPlanes });
   wallMesh.renderOrder = ghostRenderOrder;
         wallMesh.castShadow = false;
@@ -346,10 +350,11 @@ export default function LineRaftRenderer({
     }
 
     return meshes;
-  }, [excludeModelId, excludedModelIdSet, modelFilterId, raft, supportState, kickstandState.roots, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
+  }, [excludeModelId, excludedModelIdSet, modelFilterId, plateClearanceTargets, raft, supportState, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
 
   const handleClick = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId;
+    if (!supportAnswersPointer(modelId, pointerSceneryModelIds)) return;
     if (!modelId || !onModelPointerSelect) return;
 
     e.stopPropagation();
@@ -359,17 +364,18 @@ export default function LineRaftRenderer({
     }
 
     onModelPointerSelect(modelId, e);
-  }, [onModelPointerSelect]);
+  }, [onModelPointerSelect, pointerSceneryModelIds]);
 
   const handlePointerMove = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId ?? null;
+    if (!supportAnswersPointer(modelId ?? undefined, pointerSceneryModelIds)) return;
     window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
       detail: {
         modelId,
         category: 'raft',
       },
     }));
-  }, []);
+  }, [pointerSceneryModelIds]);
 
   const handlePointerOut = React.useCallback(() => {
     window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {

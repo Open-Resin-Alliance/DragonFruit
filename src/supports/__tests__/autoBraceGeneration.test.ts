@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { resetKickstandsInState } from '@/supports/state';
 import test from 'node:test';
 
 import { buildAutoBracedSnapshot } from '../autoBracing/autoBrace';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
-import { resetKickstandStore } from '../SupportTypes/Kickstand/kickstandStore';
+import { createEmptySupportCollections } from '../supportTypeRegistry';
 import type { Roots, SupportState, Trunk } from '../types';
 
 function createRoot(id: string, modelId: string, x: number, y = 0): Roots {
@@ -23,6 +24,7 @@ function createRoot(id: string, modelId: string, x: number, y = 0): Roots {
 function createTrunk(id: string, modelId: string, rootId: string, segmentId: string, x: number, y = 0, topZ = 4): Trunk {
     return {
         id,
+        typeId: 'trunk',
         modelId,
         rootId,
         segments: [
@@ -41,15 +43,7 @@ function createTrunk(id: string, modelId: string, rootId: string, segmentId: str
 
 function createEmptySnapshot(): SupportState {
     return {
-        roots: {},
-        trunks: {},
-        branches: {},
-        leaves: {},
-        twigs: {},
-        sticks: {},
-        braces: {},
-        anchors: {},
-        knots: {},
+        ...createEmptySupportCollections(),
         selectedId: null,
         selectedCategory: null,
         hoveredId: null,
@@ -90,12 +84,15 @@ test('buildAutoBracedSnapshot replaces old braces and generates braces with vali
         diameter: 1.1,
     };
 
+    // Marked as auto-bracing's own: a run replaces what it generated. An
+    // unmarked brace is hand-placed and is now kept, which this test predates.
     snapshot.braces['brace-old'] = {
         id: 'brace-old',
         modelId,
         startKnotId: 'k-old-a',
         endKnotId: 'k-old-b',
         profile: { diameter: 0.9 },
+        generatedBy: 'autoBracing',
     };
 
     const settings = createDefaultAutoBracingSettings();
@@ -251,7 +248,7 @@ test('dense grid forests brace trunks together instead of spawning kickstands', 
     // A 10×10 tall trunk grid at 2.24 mm spacing (the auto-grid shape).
     // Voronoi cells can isolate single trunks; bracing must pair model-wide
     // so every trunk finds a second brace axis — zero kickstands, braces on.
-    resetKickstandStore();
+    resetKickstandsInState();
     const snapshot = createEmptySnapshot();
     const spacing = 2.24;
     for (let r = 0; r < 10; r++) {
@@ -267,7 +264,54 @@ test('dense grid forests brace trunks together instead of spawning kickstands', 
     const result = buildAutoBracedSnapshot(snapshot, createDefaultAutoBracingSettings());
 
     assert.ok(result.generatedBraceCount > 0, 'the grid gets braced');
-    assert.equal(Object.keys(result.kickstand.kickstands).length, 0,
+    assert.equal(Object.keys(result.snapshot.kickstands).length, 0,
         'every grid trunk finds two brace axes — no kickstands needed');
 });
 
+/** Three trunks in a row: the minimum auto-bracing will act on. */
+function buildLadder() {
+    const snapshot = createEmptySnapshot();
+    const modelId = 'model-a';
+    for (const [i, id] of ['a', 'b', 'c'].entries()) {
+        const root = createRoot(`root-${id}`, modelId, i * 2);
+        const trunk = createTrunk(`trunk-${id}`, modelId, root.id, `seg-${id}`, i * 2, 0, 10);
+        snapshot.roots[root.id] = root;
+        snapshot.trunks[trunk.id] = trunk;
+    }
+    return { snapshot, modelId };
+}
+
+
+test('a generated kickstand is braced to the trunk it stabilises', () => {
+    const snapshot = createEmptySnapshot();
+    const modelId = 'model-a';
+    // A tall collinear run: one axis of trunk-to-trunk bracing cannot satisfy
+    // the two-axis rule, so the generative pass adds a kickstand. That
+    // kickstand must then get a real brace from its own shaft to the trunk —
+    // a column beside the trunk with only its terminal section is a post.
+    for (let i = 0; i < 3; i++) {
+        const x = i * 2;
+        const root = createRoot(`root-${i}`, modelId, x);
+        const trunk = createTrunk(`trunk-${i}`, modelId, root.id, `seg-${i}`, x, 0, 30);
+        snapshot.roots[root.id] = root;
+        snapshot.trunks[trunk.id] = trunk;
+    }
+
+    const result = buildAutoBracedSnapshot(snapshot, createDefaultAutoBracingSettings());
+    const built = result.snapshot;
+    assert.ok(Object.keys(built.kickstands).length > 0, 'a tall one-axis run needs a kickstand');
+
+    const kickstandSegmentIds = new Set(
+        Object.values(built.kickstands).flatMap((kickstand) => kickstand.segments.map((segment) => segment.id)),
+    );
+    const bracedToKickstand = Object.values(built.braces).filter((brace) => {
+        const start = built.knots[brace.startKnotId];
+        const end = built.knots[brace.endKnotId];
+        return (start && kickstandSegmentIds.has(start.parentShaftId))
+            || (end && kickstandSegmentIds.has(end.parentShaftId));
+    });
+    assert.ok(
+        bracedToKickstand.length > 0,
+        'a generated kickstand must be braced to its host trunk, not just touch it at the terminal knot',
+    );
+});

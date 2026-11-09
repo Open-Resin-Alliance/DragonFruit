@@ -5,6 +5,7 @@ import * as THREE from 'three';
 
 import { initializeBVH, accelerateGeometry } from '../../utils/bvh';
 import { SDFCache } from '../PlacementLogic/Pathfinding/SDFCache';
+import { ColumnClearanceMap } from '../PlacementLogic/Pathfinding/ColumnClearanceMap';
 
 function makeSphereMesh(): THREE.Mesh {
     initializeBVH();
@@ -90,4 +91,138 @@ test('refreshMatrix invalidates cached distances after a move', () => {
     // Sphere now at (0,0,10): the same world point is on/inside the sphere.
     const after = sdf.distanceAt(0, 0, 8);
     assert.ok(after <= 0.5, `expected near-zero/inside after move, got ${after}`);
+});
+
+test('a prewarmed clearance is ready without disturbing the one in use', () => {
+    const mesh = makeSphereMesh();
+    const sdf = new SDFCache(mesh, { cellSize: 0.5 });
+
+    const built: number[] = [];
+    const build = ColumnClearanceMap.build;
+    ColumnClearanceMap.build = ((meshArg, clearanceMm, cellMm) => {
+        built.push(clearanceMm);
+        return build(meshArg, clearanceMm, cellMm);
+    }) as typeof ColumnClearanceMap.build;
+
+    try {
+        // Hovering at the active preset's clearance, then building the map for a
+        // pinned preset while the thread is idle, then switching to it: the
+        // switch must find the map already there.
+        assert.equal(sdf.enableColumnMap(0.9, 0.2), true);
+        sdf.prewarmColumnMap(1.1, 0.2);
+        assert.equal(sdf.enableColumnMap(0.9, 0.2), true);
+        assert.equal(sdf.enableColumnMap(1.1, 0.2), true);
+        assert.deepEqual(built, [0.9, 1.1], 'the switch must reuse the prewarmed map');
+    } finally {
+        ColumnClearanceMap.build = build;
+    }
+});
+
+test('a clearance already built is reused instead of built again', () => {
+    const mesh = makeSphereMesh();
+    const sdf = new SDFCache(mesh, { cellSize: 0.5 });
+
+    const built: number[] = [];
+    const build = ColumnClearanceMap.build;
+    ColumnClearanceMap.build = ((meshArg, clearanceMm, cellMm) => {
+        built.push(clearanceMm);
+        return build(meshArg, clearanceMm, cellMm);
+    }) as typeof ColumnClearanceMap.build;
+
+    try {
+        assert.equal(sdf.enableColumnMap(0.9, 0.2), true);
+        assert.equal(sdf.enableColumnMap(1.4, 0.2), true);
+        // The clearance comes from the shaft diameter, so this is the cycle a
+        // preset switch makes: away from a preset and back to it. The build is
+        // tens of milliseconds over every vertex, and it must not repeat.
+        assert.equal(sdf.enableColumnMap(0.9, 0.2), true);
+        assert.deepEqual(built, [0.9, 1.4], 'the third call must reuse the map built for 0.9');
+    } finally {
+        ColumnClearanceMap.build = build;
+    }
+});
+
+test('columnBlocked gives the segment march verdict for vertical columns', () => {
+    const mesh = makeSphereMesh(); // r=2, centre (0,0,5)
+    const columnSdf = new SDFCache(mesh, { cellSize: 0.5 });
+    const segmentSdf = new SDFCache(mesh, { cellSize: 0.5 });
+
+    let checked = 0;
+    for (const clearance of [0.2, 0.6, 1.1]) {
+        for (let gx = -4; gx <= 4; gx += 0.7) {
+            for (let gy = -4; gy <= 4; gy += 0.7) {
+                for (const [top, bottom] of [[8, 0], [6.2, 3.1], [5, 4.5], [9, 8.2]] as const) {
+                    checked++;
+                    assert.equal(
+                        columnSdf.columnBlocked(gx, gy, top, bottom, clearance),
+                        segmentSdf.segmentBlocked(gx, gy, top, gx, gy, bottom, clearance),
+                        `column (${gx},${gy}) ${top}->${bottom} clearance ${clearance}`,
+                    );
+                }
+            }
+        }
+    }
+    assert.ok(checked > 100, 'the sweep must exercise the column path');
+});
+
+test('a model move invalidates the column maps built at the old pose', () => {
+    const mesh = makeSphereMesh();
+    const sdf = new SDFCache(mesh, { cellSize: 0.5 });
+
+    const built: number[] = [];
+    const build = ColumnClearanceMap.build;
+    ColumnClearanceMap.build = ((meshArg, clearanceMm, cellMm) => {
+        built.push(clearanceMm);
+        return build(meshArg, clearanceMm, cellMm);
+    }) as typeof ColumnClearanceMap.build;
+
+    try {
+        assert.equal(sdf.enableColumnMap(0.9, 0.2), true);
+        mesh.position.set(0, 0, 10);
+        mesh.updateMatrixWorld(true);
+        assert.equal(sdf.refreshMatrix(), true);
+        assert.equal(sdf.enableColumnMap(0.9, 0.2), true);
+        assert.deepEqual(built, [0.9, 0.9], 'the map must be rebuilt for the new pose');
+    } finally {
+        ColumnClearanceMap.build = build;
+    }
+});
+
+test('an installed worker map is used without building on the main thread', () => {
+    const mesh = makeSphereMesh();
+    const sdf = new SDFCache(mesh, { cellSize: 0.5 });
+
+    const built: number[] = [];
+    const build = ColumnClearanceMap.build;
+    ColumnClearanceMap.build = ((meshArg, clearanceMm, cellMm) => {
+        built.push(clearanceMm);
+        return build(meshArg, clearanceMm, cellMm);
+    }) as typeof ColumnClearanceMap.build;
+
+    try {
+        const map = ColumnClearanceMap.build(mesh, 0.9, 0.2);
+        assert.ok(map);
+        sdf.installColumnMap(0.9, map);
+        assert.equal(sdf.hasColumnMap(0.9, 0.2), true);
+        assert.equal(sdf.enableColumnMap(0.9, 0.2), true);
+        assert.deepEqual(built, [0.9], 'the installed map must be the only build');
+    } finally {
+        ColumnClearanceMap.build = build;
+    }
+});
+
+test('tryUseColumnMap never builds one, enableColumnMap still does', () => {
+    const mesh = makeSphereMesh();
+    const sdf = new SDFCache(mesh, { cellSize: 0.5 });
+
+    // The placement path calls this on a hover: reporting "no map" must not turn
+    // the hover into the whole vertex walk that prewarming exists to avoid.
+    assert.equal(sdf.tryUseColumnMap(1.2, 0.2), false, 'a missing map is not built');
+    assert.equal(sdf.hasColumnMap(1.2, 0.2), false, 'and it is not cached as a side effect');
+
+    assert.equal(sdf.enableColumnMap(1.2, 0.2), true, 'the explicit call still builds');
+    assert.equal(sdf.hasColumnMap(1.2, 0.2), true);
+
+    // Once built, the same clearance is activated rather than rebuilt.
+    assert.equal(sdf.tryUseColumnMap(1.2, 0.2), true);
 });

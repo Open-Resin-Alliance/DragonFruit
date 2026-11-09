@@ -77,6 +77,10 @@ fn default_model_triangle_count() -> u32 {
     0
 }
 
+fn default_tank_count() -> u32 {
+    1
+}
+
 fn default_dither_device_gamma() -> f64 {
     3.0
 }
@@ -187,6 +191,20 @@ pub struct SliceJobV3 {
     /// metadata is available.
     #[serde(default)]
     pub aa_on_supports: bool,
+    /// How many resin tanks the machine feeds this job from.
+    ///
+    /// `1` is a single-material machine and the historical behaviour. A job with
+    /// more tanks must carry `triangle_tank_index` so every model triangle names
+    /// the tank it prints from; support geometry is always Tank 1.
+    #[serde(default = "default_tank_count")]
+    pub tank_count: u32,
+    /// Tank index per triangle, aligned with `triangles_xyz`.
+    ///
+    /// Empty means "every triangle in tank 0", which is what a single-material
+    /// job sends. Entries for support triangles are ignored: support geometry
+    /// always prints from Tank 1 (index 0).
+    #[serde(default)]
+    pub triangle_tank_index: Vec<u32>,
     /// Number of model triangles at the front of `triangles_xyz`.
     ///
     /// Triangles after this index are treated as support/raft geometry.
@@ -364,6 +382,60 @@ impl SliceJobV3 {
         self.z_blur_sigma.max(0.05)
     }
 
+    /// Bit depth the dither palette should target, or `None` when dithering must
+    /// not run at all.
+    ///
+    /// Dithering exists to fake grey levels the panel cannot emit, so it is only
+    /// meaningful below 8 bits. A job that declares 8 bits or more gets `None`
+    /// instead of a palette clamped down to 7, which would quantize the layer
+    /// *below* the panel's own resolution. A missing bit depth also disables it:
+    /// substituting a default would silently quantize to a depth nobody asked for.
+    #[inline]
+    pub fn effective_dither_bit_depth(&self) -> Option<u32> {
+        if !self.dither_enabled {
+            return None;
+        }
+        match self.dither_bit_depth {
+            Some(bits) if bits >= 8 => None,
+            Some(bits) => Some(bits.max(2)),
+            None => None,
+        }
+    }
+
+    /// Triangles in the job.
+    #[inline]
+    pub fn triangle_count(&self) -> usize {
+        self.triangles_xyz.len() / 9
+    }
+
+    /// True when the job draws more than one tank's film.
+    #[inline]
+    pub fn is_multi_tank(&self) -> bool {
+        self.tank_count > 1
+    }
+
+    /// Whether `index` is support geometry, given the model/support split.
+    #[inline]
+    pub fn is_support_triangle(&self, index: usize) -> bool {
+        self.model_triangle_count > 0 && index >= self.model_triangle_count as usize
+    }
+
+    /// The tank a triangle prints from.
+    ///
+    /// Support geometry always prints from Tank 1, whatever the model assignment
+    /// says; a missing assignment also falls back to Tank 1.
+    #[inline]
+    pub fn tank_for_triangle(&self, index: usize) -> u32 {
+        if self.is_support_triangle(index) || self.triangle_tank_index.is_empty() {
+            return 0;
+        }
+        self.triangle_tank_index
+            .get(index)
+            .copied()
+            .unwrap_or(0)
+            .min(self.tank_count.saturating_sub(1))
+    }
+
     #[inline]
     pub fn normalized_custom_cure_lut(&self) -> Option<[u8; 256]> {
         let custom = self.z_blend_custom_lut.as_ref()?;
@@ -391,7 +463,43 @@ impl SliceJobV3 {
 
 #[cfg(test)]
 mod tests {
-    use super::dynamic_minimum_alpha_lut;
+    use super::{dynamic_minimum_alpha_lut, SliceJobV3};
+
+    fn dither_job(enabled: bool, bit_depth: Option<u32>) -> SliceJobV3 {
+        SliceJobV3 {
+            dither_enabled: enabled,
+            dither_bit_depth: bit_depth,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn effective_dither_bit_depth_passes_through_low_bit_depths() {
+        assert_eq!(dither_job(true, Some(3)).effective_dither_bit_depth(), Some(3));
+        assert_eq!(dither_job(true, Some(7)).effective_dither_bit_depth(), Some(7));
+        // Below the 2-bit floor there is no meaningful palette; clamp up rather
+        // than build one with a single level.
+        assert_eq!(dither_job(true, Some(1)).effective_dither_bit_depth(), Some(2));
+    }
+
+    #[test]
+    fn effective_dither_bit_depth_refuses_to_dither_at_8_bits_or_deeper() {
+        // Clamping 8 down to 7 would quantize a panel that can already emit
+        // every grey level, so the whole dither pass is skipped instead.
+        assert_eq!(dither_job(true, Some(8)).effective_dither_bit_depth(), None);
+        assert_eq!(dither_job(true, Some(10)).effective_dither_bit_depth(), None);
+        assert_eq!(dither_job(true, Some(12)).effective_dither_bit_depth(), None);
+    }
+
+    #[test]
+    fn effective_dither_bit_depth_refuses_to_guess_a_missing_depth() {
+        assert_eq!(dither_job(true, None).effective_dither_bit_depth(), None);
+    }
+
+    #[test]
+    fn effective_dither_bit_depth_is_none_when_dithering_is_off() {
+        assert_eq!(dither_job(false, Some(3)).effective_dither_bit_depth(), None);
+    }
 
     #[test]
     fn dynamic_minimum_alpha_lut_maps_nonzero_to_minimum_window() {
@@ -441,7 +549,8 @@ impl RenderedLayersV3 {
 ///
 /// Values are kept lightweight to enable near-zero-overhead aggregation in the
 /// hot scanline fill path.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LayerAreaStatsV3 {
     pub total_solid_pixels: u32,
     pub total_solid_area_mm2: f64,

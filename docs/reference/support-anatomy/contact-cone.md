@@ -24,6 +24,8 @@ The contact cone is the terminal piece that interfaces a support with the model.
 - The contact face touches the model only.
 - The socket side connects to a joint only.
 - It does not connect directly to a shaft.
+- The contact point is the highest point of the support: the cone leaves it
+  downward, and its socket end stays at or below the tip.
 
 ## Related
 

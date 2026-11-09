@@ -6,7 +6,7 @@ import { signedArea2d } from './signedArea2d';
  * Input polygon must be CCW, non-self-intersecting, convex.
  * Returns a new CCW polygon of same vertex count.
  */
-export function insetConvexPolygon(poly: THREE.Vector2[], d: number): THREE.Vector2[] {
+export function insetConvexPolygon(poly: readonly THREE.Vector2[], d: number): THREE.Vector2[] {
   if (poly.length < 3 || Math.abs(d) < 1e-5) return poly.map(p => p.clone());
 
   // Normalize winding so the "left normal" is consistently inward.

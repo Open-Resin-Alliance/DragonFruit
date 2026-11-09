@@ -81,7 +81,6 @@ function BuiltinPreviewMesh({
   shaderType,
   matcapVariant,
   flatUseVertexColors,
-  toonSteps,
   materialRoughness,
   xrayOpacity,
   heatmapMinAngle,
@@ -102,7 +101,6 @@ function BuiltinPreviewMesh({
   shaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
   flatUseVertexColors: boolean;
-  toonSteps: number;
   materialRoughness: number;
   xrayOpacity: number;
   heatmapMinAngle: number;
@@ -169,7 +167,6 @@ function BuiltinPreviewMesh({
             meshColor={meshColor}
             matcapVariant={matcapVariant}
             flatUseVertexColors={flatUseVertexColors}
-            toonSteps={toonSteps}
             materialRoughness={materialRoughness}
             clippingPlanes={[]}
             xrayOpacity={xrayOpacity}
@@ -210,7 +207,6 @@ function BuiltinPreviewMesh({
           meshColor={meshColor}
           matcapVariant={matcapVariant}
           flatUseVertexColors={flatUseVertexColors}
-          toonSteps={toonSteps}
           materialRoughness={materialRoughness}
           clippingPlanes={[]}
           xrayOpacity={xrayOpacity}
@@ -232,7 +228,6 @@ function StlPreviewMesh({
   shaderType,
   matcapVariant,
   flatUseVertexColors,
-  toonSteps,
   materialRoughness,
   xrayOpacity,
   heatmapMinAngle,
@@ -253,7 +248,6 @@ function StlPreviewMesh({
   shaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
   flatUseVertexColors: boolean;
-  toonSteps: number;
   materialRoughness: number;
   xrayOpacity: number;
   heatmapMinAngle: number;
@@ -310,7 +304,6 @@ function StlPreviewMesh({
             meshColor={meshColor}
             matcapVariant={matcapVariant}
             flatUseVertexColors={flatUseVertexColors}
-            toonSteps={toonSteps}
             materialRoughness={materialRoughness}
             clippingPlanes={[]}
             xrayOpacity={xrayOpacity}
@@ -351,7 +344,6 @@ function StlPreviewMesh({
           meshColor={meshColor}
           matcapVariant={matcapVariant}
           flatUseVertexColors={flatUseVertexColors}
-          toonSteps={toonSteps}
           materialRoughness={materialRoughness}
           clippingPlanes={[]}
           xrayOpacity={xrayOpacity}
@@ -371,7 +363,6 @@ function PreviewContent({
   matcapVariant,
   flatUseVertexColors,
   useVertexColors,
-  toonSteps,
   meshColor,
   materialRoughness,
   previewModel,
@@ -394,7 +385,6 @@ function PreviewContent({
   matcapVariant: MatcapVariant;
   flatUseVertexColors: boolean;
   useVertexColors: boolean;
-  toonSteps: number;
   meshColor: string;
   materialRoughness: number;
   previewModel: string;
@@ -437,7 +427,6 @@ function PreviewContent({
             shaderType={shaderType}
             matcapVariant={matcapVariant}
             flatUseVertexColors={flatUseVertexColors}
-            toonSteps={toonSteps}
             materialRoughness={materialRoughness}
             xrayOpacity={xrayOpacity}
             heatmapMinAngle={heatmapMinAngle}
@@ -460,7 +449,6 @@ function PreviewContent({
             shaderType={shaderType}
             matcapVariant={matcapVariant}
             flatUseVertexColors={flatUseVertexColors}
-            toonSteps={toonSteps}
             materialRoughness={materialRoughness}
             xrayOpacity={xrayOpacity}
             heatmapMinAngle={heatmapMinAngle}
@@ -486,7 +474,6 @@ export function MeshShaderPreviewCanvas({
   matcapVariant,
   flatUseVertexColors,
   useVertexColors = true,
-  toonSteps,
   meshColor,
   materialRoughness,
   previewModel,
@@ -510,7 +497,6 @@ export function MeshShaderPreviewCanvas({
   matcapVariant: MatcapVariant;
   flatUseVertexColors: boolean;
   useVertexColors?: boolean;
-  toonSteps: number;
   meshColor: string;
   materialRoughness: number;
   previewModel: string;
@@ -559,7 +545,6 @@ export function MeshShaderPreviewCanvas({
           matcapVariant={matcapVariant}
           flatUseVertexColors={flatUseVertexColors}
           useVertexColors={useVertexColors}
-          toonSteps={toonSteps}
           meshColor={meshColor}
           materialRoughness={materialRoughness}
           previewModel={previewModel}

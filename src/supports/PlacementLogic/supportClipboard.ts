@@ -1,30 +1,29 @@
+import type { MessageDescriptor } from '@lingui/core';
 import * as THREE from 'three';
-import { getSnapshot, setSnapshot, transformSupportsForModel } from '@/supports/state';
-import type { Brace, Branch, Knot, Leaf, Roots, Stick, SupportState, Trunk, Twig } from '@/supports/types';
-import {
-  getKickstandSnapshot,
-  setKickstandSnapshot,
-} from '@/supports/SupportTypes/Kickstand/kickstandStore';
-import type { Kickstand, KickstandState } from '@/supports/SupportTypes/Kickstand/types';
+import { buildSupportDeltaTransform, getSnapshot, setSnapshot, transformSupportRecord, type SupportDeltaTransform } from '@/supports/state';
+import type { Knot, Roots, Segment, SupportState, Vec3 } from '@/supports/types';
+import type { Kickstand } from '@/supports/SupportTypes/Kickstand/types';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '@/supports/history/supportEditHistory';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { v4 as uuidv4 } from 'uuid';
+import { clonePlainData } from '@/utils/plainDataClone';
+import { MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, type SupportCollectionKey, type SupportTypeDescriptor } from '@/supports/supportTypeRegistry';
+import { PASTE_SUPPORTS_LABEL } from '@/supports/history/supportHistoryLabels';
 
+/**
+ * One array per collection, keyed off the registry.
+ *
+ * `kickstandRoots`/`kickstandKnots` stay separate because a kickstand owns its
+ * root and host knot, and paste remaps those as a unit.
+ */
 type SupportClipboardPayload = {
-  roots: Roots[];
-  trunks: Trunk[];
-  branches: Branch[];
-  leaves: Leaf[];
-  twigs: Twig[];
-  sticks: Stick[];
-  braces: Brace[];
-  knots: Knot[];
+  [K in SupportCollectionKey]: SupportState[K][string][];
+} & {
   kickstandRoots: Roots[];
   kickstandKnots: Knot[];
-  kickstands: Kickstand[];
 };
 
 export type SupportModelBounds2D = {
@@ -33,13 +32,6 @@ export type SupportModelBounds2D = {
   minY: number;
   maxY: number;
 };
-
-function clonePlain<T>(value: T): T {
-  if (typeof structuredClone === 'function') {
-    return structuredClone(value) as T;
-  }
-  return JSON.parse(JSON.stringify(value)) as T;
-}
 
 function getOrCreateMappedId(sourceId: string, idMap: Map<string, string>): string {
   const mapped = idMap.get(sourceId);
@@ -63,326 +55,245 @@ function remapSupportJoint<T extends { id: string; pos: { x: number; y: number; 
 
 function extractSupportClipboardPayload(modelId: string): SupportClipboardPayload | null {
   const state = getSnapshot();
-  const kickstandState = getKickstandSnapshot();
+  const snapshot = getSnapshot();
 
-  const roots = Object.values(state.roots).filter((item) => item.modelId === modelId).map(clonePlain);
-  const trunks = Object.values(state.trunks).filter((item) => item.modelId === modelId).map(clonePlain);
-  const branches = Object.values(state.branches).filter((item) => item.modelId === modelId).map(clonePlain);
-  const leaves = Object.values(state.leaves).filter((item) => item.modelId === modelId).map(clonePlain);
-  const twigs = Object.values(state.twigs).filter((item) => item.modelId === modelId).map(clonePlain);
-  const sticks = Object.values(state.sticks).filter((item) => item.modelId === modelId).map(clonePlain);
-  const braces = Object.values(state.braces).filter((item) => item.modelId === modelId).map(clonePlain);
-
-  const kickstands = Object.values(kickstandState.kickstands)
+  // Every modelId-bearing collection, so a new type is copied unnamed.
+  const owned = {} as { [K in SupportCollectionKey]: SupportState[K][string][] };
+  for (const key of SUPPORT_COLLECTION_KEYS) {
+    (owned as Record<string, unknown[]>)[key] = [];
+  }
+  for (const key of MODEL_ID_COLLECTION_KEYS) {
+    const record = state[key] as Record<string, { modelId?: string }>;
+    (owned as Record<string, unknown[]>)[key] = Object.values(record)
+      .filter((item) => item.modelId === modelId)
+      .map((item) => clonePlainData(item));
+  }
+  const kickstands = Object.values(snapshot.kickstands)
     .filter((item) => item.modelId === modelId)
-    .map(clonePlain);
+    .map((item) => clonePlainData(item));
   const kickstandRootIds = new Set(kickstands.map((item) => item.rootId));
   const kickstandKnotIds = new Set(kickstands.map((item) => item.hostKnotId));
-  const kickstandRoots = Object.values(kickstandState.roots)
+  const kickstandRoots = Object.values(snapshot.roots)
     .filter((item) => kickstandRootIds.has(item.id))
-    .map(clonePlain);
-  const kickstandKnots = Object.values(kickstandState.knots)
+    .map((item) => clonePlainData(item));
+  const kickstandKnots = Object.values(snapshot.knots)
     .filter((item) => kickstandKnotIds.has(item.id))
-    .map(clonePlain);
+    .map((item) => clonePlainData(item));
 
+  // Every type's segments, by what the registry declares: a shafted type
+  // contributes its segment ids, a prefixed one its own id under that prefix.
   const includedSegmentIds = new Set<string>();
-  trunks.forEach((item) => item.segments.forEach((segment) => includedSegmentIds.add(segment.id)));
-  branches.forEach((item) => item.segments.forEach((segment) => includedSegmentIds.add(segment.id)));
-  twigs.forEach((item) => item.segments.forEach((segment) => includedSegmentIds.add(segment.id)));
-  sticks.forEach((item) => item.segments.forEach((segment) => includedSegmentIds.add(segment.id)));
-  braces.forEach((item) => includedSegmentIds.add(`braceSegment:${item.id}`));
+  for (const descriptor of SUPPORT_TYPES) {
+    const entities = (owned as Record<string, { id: string; segments?: Segment[] }[]>)[descriptor.location.key] ?? [];
+    for (const entity of entities) {
+      if (descriptor.segmentSelectionPrefix) {
+        includedSegmentIds.add(`${descriptor.segmentSelectionPrefix}${entity.id}`);
+        continue;
+      }
+      for (const segment of entity.segments ?? []) includedSegmentIds.add(segment.id);
+    }
+  }
 
+  // Knots named by a declared edge onto `knots`, whichever type declares it.
   const referencedKnotIds = new Set<string>();
-  branches.forEach((item) => referencedKnotIds.add(item.parentKnotId));
-  leaves.forEach((item) => referencedKnotIds.add(item.parentKnotId));
-  braces.forEach((item) => {
-    referencedKnotIds.add(item.startKnotId);
-    referencedKnotIds.add(item.endKnotId);
-  });
+  for (const descriptor of SUPPORT_TYPES) {
+    const fields = descriptor.edges
+      .filter((edge) => edge.to === 'knots')
+      .map((edge) => edge.field);
+    if (fields.length === 0) continue;
 
-  const leafIds = new Set(leaves.map((item) => item.id));
-  const braceIds = new Set(braces.map((item) => item.id));
+    const entities = (owned as unknown as Record<string, Record<string, unknown>[]>)[descriptor.location.key] ?? [];
+    for (const entity of entities) {
+      for (const field of fields) {
+        const value = entity[field];
+        if (typeof value === 'string' && value) referencedKnotIds.add(value);
+      }
+    }
+  }
+
+  // Ids of the types a knot can ride instead of a real segment, by prefix.
+  const idsByKnotHostPrefix = new Map<string, Set<string>>();
+  for (const descriptor of SUPPORT_TYPES) {
+    if (!descriptor.knotHostPrefix) continue;
+    const entities = (owned as unknown as Record<string, { id: string }[]>)[descriptor.location.key] ?? [];
+    idsByKnotHostPrefix.set(descriptor.knotHostPrefix, new Set(entities.map((entity) => entity.id)));
+  }
 
   const knots = Object.values(state.knots)
     .filter((item) => {
       if (referencedKnotIds.has(item.id)) return true;
       if (includedSegmentIds.has(item.parentShaftId)) return true;
-      if (item.parentShaftId.startsWith('leafCone:')) {
-        const leafId = item.parentShaftId.slice('leafCone:'.length);
-        return leafIds.has(leafId);
-      }
-      if (item.parentShaftId.startsWith('braceSegment:')) {
-        const braceId = item.parentShaftId.slice('braceSegment:'.length);
-        return braceIds.has(braceId);
+
+      for (const [prefix, ids] of idsByKnotHostPrefix) {
+        if (item.parentShaftId.startsWith(prefix)) {
+          return ids.has(item.parentShaftId.slice(prefix.length));
+        }
       }
       return false;
     })
-    .map(clonePlain);
+    .map((item) => clonePlainData(item));
 
-  const hasData = roots.length > 0
-    || trunks.length > 0
-    || branches.length > 0
-    || leaves.length > 0
-    || twigs.length > 0
-    || sticks.length > 0
-    || braces.length > 0
+  const hasData = SUPPORT_COLLECTION_KEYS.some((key) => owned[key].length > 0)
     || knots.length > 0
-    || kickstands.length > 0
     || kickstandRoots.length > 0
     || kickstandKnots.length > 0;
 
   if (!hasData) return null;
 
   return {
-    roots,
-    trunks,
-    branches,
-    leaves,
-    twigs,
-    sticks,
-    braces,
+    ...owned,
     knots,
     kickstandRoots,
     kickstandKnots,
-    kickstands,
   };
 }
 
+/**
+ * One payload cloned onto `targetModelId` and merged into `base`.
+ *
+ * `delta` moves the clone as it is made, which is what a copy needs: the
+ * entities are new, so their geometry can be carried straight to the target's
+ * transform instead of being merged and then walked again in the store.
+ */
 function mergeSupportClipboardPayload(
   payload: SupportClipboardPayload,
   targetModelId: string,
-): { mergedState: SupportState; mergedKickstandState: KickstandState } {
-  const state = getSnapshot();
-  const kickstandState = getKickstandSnapshot();
+  options?: { base?: SupportState; delta?: SupportDeltaTransform | null },
+): { mergedState: SupportState } {
+  const state = options?.base ?? getSnapshot();
+  const delta = options?.delta ?? null;
 
-  const rootIdMap = new Map<string, string>();
-  const knotIdMap = new Map<string, string>();
-  const branchIdMap = new Map<string, string>();
-  const leafIdMap = new Map<string, string>();
-  const twigIdMap = new Map<string, string>();
-  const stickIdMap = new Map<string, string>();
-  const braceIdMap = new Map<string, string>();
+  const idMapsByCollection = new Map<SupportCollectionKey, Map<string, string>>();
+  for (const key of SUPPORT_COLLECTION_KEYS) idMapsByCollection.set(key, new Map());
+  const mapFor = (key: SupportCollectionKey) => idMapsByCollection.get(key)!;
+
+  const rootIdMap = mapFor('roots');
+  const knotIdMap = mapFor('knots');
+  const segmentIdMap = new Map<string, string>();
+  const jointIdMap = new Map<string, string>();
   const kickstandRootIdMap = new Map<string, string>();
   const kickstandKnotIdMap = new Map<string, string>();
   const kickstandIdMap = new Map<string, string>();
-  const segmentIdMap = new Map<string, string>();
-  const jointIdMap = new Map<string, string>();
 
   const clonedRoots = payload.roots.map((root) => {
     const id = uuidv4();
     rootIdMap.set(root.id, id);
-    return {
-      ...clonePlain(root),
-      id,
-      modelId: targetModelId,
-    };
+    const cloned = { ...clonePlainData(root), id, modelId: targetModelId };
+    return (delta ? transformSupportRecord('roots', cloned, delta) : cloned) as Roots;
   });
 
-  const clonedTrunks = payload.trunks.map((trunk) => {
-    const id = uuidv4();
-    const clonedSegments = trunk.segments.map((segment) => {
-      const segmentId = uuidv4();
-      segmentIdMap.set(segment.id, segmentId);
-      return {
-        ...clonePlain(segment),
-        id: segmentId,
-        topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
-        bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
-      };
-    });
-
-    return {
-      ...clonePlain(trunk),
-      id,
-      modelId: targetModelId,
-      rootId: getOrCreateMappedId(trunk.rootId, rootIdMap),
-      segments: clonedSegments,
-      contactCone: trunk.contactCone
-        ? {
-            ...clonePlain(trunk.contactCone),
-            id: uuidv4(),
-            socketJointId: trunk.contactCone.socketJointId
-              ? getOrCreateMappedId(trunk.contactCone.socketJointId, jointIdMap)
-              : trunk.contactCone.socketJointId,
-          }
-        : trunk.contactCone,
-    } as Trunk;
-  });
-
+  // Knot ids are claimed before the entities that point at them, so an edge
+  // resolves to the knot's real new id rather than minting a placeholder.
   payload.knots.forEach((knot) => {
     knotIdMap.set(knot.id, uuidv4());
   });
 
-  const clonedBranches = payload.branches.map((branch) => {
+  /**
+   * One support entity, re-identified for the target model.
+   *
+   * Everything the clone touches is declared: `hasSegments` says whether to
+   * walk shafts, `contactFields` names the contact primitives, and `edges`
+   * names each id-bearing field and the collection it points into. A type is
+   * copied by declaring it. The stump is the one type with no edges and an
+   * inline root, so it appears in no id-remapping list.
+   */
+  const cloneEntity = (descriptor: SupportTypeDescriptor, entity: Record<string, unknown>) => {
     const id = uuidv4();
-    branchIdMap.set(branch.id, id);
+    mapFor(descriptor.location.key).set(entity.id as string, id);
 
-    const clonedSegments = branch.segments.map((segment) => {
-      const segmentId = uuidv4();
-      segmentIdMap.set(segment.id, segmentId);
-      return {
-        ...clonePlain(segment),
-        id: segmentId,
-        topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
-        bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
+    const next: Record<string, unknown> = { ...clonePlainData(entity), id, modelId: targetModelId };
+
+    if (descriptor.hasSegments) {
+      next.segments = ((entity.segments as Segment[] | undefined) ?? []).map((segment) => {
+        const segmentId = uuidv4();
+        segmentIdMap.set(segment.id, segmentId);
+        return {
+          ...clonePlainData(segment),
+          id: segmentId,
+          topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
+          bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
+        };
+      });
+    }
+
+    // A stump carries a bare `joint` outside its segments; nothing else does.
+    const ownJoint = entity.joint as { id: string } | undefined;
+    if (ownJoint) next.joint = remapSupportJoint(ownJoint as never, jointIdMap);
+
+    for (const field of descriptor.contactFields) {
+      const contact = entity[field] as { id: string; socketJointId?: string } | undefined;
+      if (!contact) continue;
+      next[field] = {
+        ...clonePlainData(contact),
+        id: uuidv4(),
+        ...(contact.socketJointId
+          ? { socketJointId: getOrCreateMappedId(contact.socketJointId, jointIdMap) }
+          : {}),
       };
-    });
+    }
 
-    return {
-      ...clonePlain(branch),
-      id,
-      modelId: targetModelId,
-      parentKnotId: getOrCreateMappedId(branch.parentKnotId, knotIdMap),
-      segments: clonedSegments,
-      contactCone: branch.contactCone
-        ? {
-            ...clonePlain(branch.contactCone),
-            id: uuidv4(),
-            socketJointId: branch.contactCone.socketJointId
-              ? getOrCreateMappedId(branch.contactCone.socketJointId, jointIdMap)
-              : branch.contactCone.socketJointId,
-          }
-        : branch.contactCone,
-    } as Branch;
-  });
+    for (const edge of descriptor.edges) {
+      const value = entity[edge.field];
+      if (typeof value !== 'string' || !value) continue;
+      // A `segment` edge names a shaft segment, not a collection member.
+      next[edge.field] = edge.to === 'segment'
+        ? getOrCreateMappedId(value, segmentIdMap)
+        : getOrCreateMappedId(value, mapFor(edge.to));
+    }
 
-  const clonedLeaves = payload.leaves.map((leaf) => {
-    const id = uuidv4();
-    leafIdMap.set(leaf.id, id);
-    return {
-      ...clonePlain(leaf),
-      id,
-      modelId: targetModelId,
-      parentKnotId: getOrCreateMappedId(leaf.parentKnotId, knotIdMap),
-      contactCone: {
-        ...clonePlain(leaf.contactCone),
-        id: uuidv4(),
-        socketJointId: leaf.contactCone.socketJointId
-          ? getOrCreateMappedId(leaf.contactCone.socketJointId, jointIdMap)
-          : leaf.contactCone.socketJointId,
-      },
-    } as Leaf;
-  });
+    return delta ? transformSupportRecord(descriptor.id, next, delta) : next;
+  };
 
-  const clonedTwigs = payload.twigs.map((twig) => {
-    const id = uuidv4();
-    twigIdMap.set(twig.id, id);
-
-    const clonedSegments = twig.segments.map((segment) => {
-      const segmentId = uuidv4();
-      segmentIdMap.set(segment.id, segmentId);
-      return {
-        ...clonePlain(segment),
-        id: segmentId,
-        topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
-        bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
-      };
-    });
-
-    return {
-      ...clonePlain(twig),
-      id,
-      modelId: targetModelId,
-      segments: clonedSegments,
-      contactDiskA: {
-        ...clonePlain(twig.contactDiskA),
-        id: uuidv4(),
-      },
-      contactDiskB: {
-        ...clonePlain(twig.contactDiskB),
-        id: uuidv4(),
-      },
-    } as Twig;
-  });
-
-  const clonedSticks = payload.sticks.map((stick) => {
-    const id = uuidv4();
-    stickIdMap.set(stick.id, id);
-
-    const clonedSegments = stick.segments.map((segment) => {
-      const segmentId = uuidv4();
-      segmentIdMap.set(segment.id, segmentId);
-      return {
-        ...clonePlain(segment),
-        id: segmentId,
-        topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
-        bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
-      };
-    });
-
-    return {
-      ...clonePlain(stick),
-      id,
-      modelId: targetModelId,
-      segments: clonedSegments,
-      contactConeA: {
-        ...clonePlain(stick.contactConeA),
-        id: uuidv4(),
-        socketJointId: stick.contactConeA.socketJointId
-          ? getOrCreateMappedId(stick.contactConeA.socketJointId, jointIdMap)
-          : stick.contactConeA.socketJointId,
-      },
-      contactConeB: {
-        ...clonePlain(stick.contactConeB),
-        id: uuidv4(),
-        socketJointId: stick.contactConeB.socketJointId
-          ? getOrCreateMappedId(stick.contactConeB.socketJointId, jointIdMap)
-          : stick.contactConeB.socketJointId,
-      },
-    } as Stick;
-  });
-
-  const clonedBraces = payload.braces.map((brace) => {
-    const id = uuidv4();
-    braceIdMap.set(brace.id, id);
-    return {
-      ...clonePlain(brace),
-      id,
-      modelId: targetModelId,
-      startKnotId: getOrCreateMappedId(brace.startKnotId, knotIdMap),
-      endKnotId: getOrCreateMappedId(brace.endKnotId, knotIdMap),
-    } as Brace;
-  });
+  /** Cloned entities per collection, keyed the way the merge writes them. */
+  const clonedByCollection = new Map<SupportCollectionKey, Record<string, unknown>[]>();
+  for (const descriptor of SUPPORT_TYPES) {
+    const key = descriptor.location.key;
+    const source = (payload as unknown as Record<string, Record<string, unknown>[]>)[key] ?? [];
+    clonedByCollection.set(key, source.map((entity) => cloneEntity(descriptor, entity)));
+  }
 
   const clonedKnots = payload.knots.map((knot) => {
     const id = knotIdMap.get(knot.id) ?? uuidv4();
 
+    // A knot names a shaft segment, or one of the prefixed pseudo-shafts a
+    // type declares as its `knotHostPrefix` -- resolved through the
+    // prefix owner's own id map.
     let parentShaftId = knot.parentShaftId;
-    if (parentShaftId.startsWith('leafCone:')) {
-      const leafId = parentShaftId.slice('leafCone:'.length);
-      parentShaftId = `leafCone:${getOrCreateMappedId(leafId, leafIdMap)}`;
-    } else if (parentShaftId.startsWith('braceSegment:')) {
-      const braceId = parentShaftId.slice('braceSegment:'.length);
-      parentShaftId = `braceSegment:${getOrCreateMappedId(braceId, braceIdMap)}`;
+    const prefixOwner = SUPPORT_TYPES.find((descriptor) => descriptor.knotHostPrefix
+      && parentShaftId.startsWith(descriptor.knotHostPrefix));
+
+    if (prefixOwner) {
+      const prefix = prefixOwner.knotHostPrefix!;
+      const ownerId = parentShaftId.slice(prefix.length);
+      parentShaftId = `${prefix}${getOrCreateMappedId(ownerId, mapFor(prefixOwner.location.key))}`;
     } else {
       parentShaftId = getOrCreateMappedId(parentShaftId, segmentIdMap);
     }
 
-    return {
-      ...clonePlain(knot),
+    const cloned = {
+      ...clonePlainData(knot),
       id,
       parentShaftId,
-    } as Knot;
+    };
+    return (delta ? transformSupportRecord('knots', cloned, delta) : cloned) as Knot;
   });
 
   const clonedKickstandRoots = payload.kickstandRoots.map((root) => {
     const id = uuidv4();
     kickstandRootIdMap.set(root.id, id);
-    return {
-      ...clonePlain(root),
-      id,
-      modelId: targetModelId,
-    };
+    const cloned = { ...clonePlainData(root), id, modelId: targetModelId };
+    return (delta ? transformSupportRecord('roots', cloned, delta) : cloned) as Roots;
   });
 
   const clonedKickstandKnots = payload.kickstandKnots.map((knot) => {
     const id = uuidv4();
     kickstandKnotIdMap.set(knot.id, id);
-    return {
-      ...clonePlain(knot),
+    const cloned = {
+      ...clonePlainData(knot),
       id,
       parentShaftId: getOrCreateMappedId(knot.parentShaftId, segmentIdMap),
     };
+    return (delta ? transformSupportRecord('knots', cloned, delta) : cloned) as Knot;
   });
 
   const clonedKickstands = payload.kickstands.map((kickstand) => {
@@ -392,88 +303,121 @@ function mergeSupportClipboardPayload(
     const clonedSegments = kickstand.segments.map((segment) => {
       const segmentId = getOrCreateMappedId(segment.id, segmentIdMap);
       return {
-        ...clonePlain(segment),
+        ...clonePlainData(segment),
         id: segmentId,
         topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
         bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
       };
     });
 
-    return {
-      ...clonePlain(kickstand),
+    const cloned = {
+      ...clonePlainData(kickstand),
       id,
       modelId: targetModelId,
       rootId: getOrCreateMappedId(kickstand.rootId, kickstandRootIdMap),
       hostKnotId: getOrCreateMappedId(kickstand.hostKnotId, kickstandKnotIdMap),
       hostSegmentId: getOrCreateMappedId(kickstand.hostSegmentId, segmentIdMap),
       segments: clonedSegments,
-    } as Kickstand;
+    };
+    return (delta ? transformSupportRecord('kickstand', cloned, delta) : cloned) as Kickstand;
   });
 
-  const mergedState: SupportState = {
-    ...state,
-    roots: {
-      ...state.roots,
-      ...Object.fromEntries(clonedRoots.map((item) => [item.id, item])),
-    },
-    trunks: {
-      ...state.trunks,
-      ...Object.fromEntries(clonedTrunks.map((item) => [item.id, item])),
-    },
-    branches: {
-      ...state.branches,
-      ...Object.fromEntries(clonedBranches.map((item) => [item.id, item])),
-    },
-    leaves: {
-      ...state.leaves,
-      ...Object.fromEntries(clonedLeaves.map((item) => [item.id, item])),
-    },
-    twigs: {
-      ...state.twigs,
-      ...Object.fromEntries(clonedTwigs.map((item) => [item.id, item])),
-    },
-    sticks: {
-      ...state.sticks,
-      ...Object.fromEntries(clonedSticks.map((item) => [item.id, item])),
-    },
-    braces: {
-      ...state.braces,
-      ...Object.fromEntries(clonedBraces.map((item) => [item.id, item])),
-    },
-    knots: {
-      ...state.knots,
-      ...Object.fromEntries(clonedKnots.map((item) => [item.id, item])),
-    },
+  // Every entity collection, from the registry.
+  const mergedState: SupportState = { ...state };
+  for (const key of SUPPORT_COLLECTION_KEYS) {
+    // Kickstands remap through their own root/knot maps, so they arrive
+    // already cloned rather than through the generic entity clone.
+    const cloned = key === 'roots'
+      ? clonedRoots
+      : key === 'knots'
+        ? clonedKnots
+        : key === 'kickstands'
+          ? clonedKickstands
+          : clonedByCollection.get(key) ?? [];
+    if (cloned.length === 0) continue;
+
+    (mergedState as unknown as Record<string, Record<string, unknown>>)[key] = {
+      ...(state[key] as unknown as Record<string, unknown>),
+      ...Object.fromEntries((cloned as { id: string }[]).map((item) => [item.id, item])),
+    };
+  }
+
+  // A kickstand's root and host knot live in the shared collections, so they
+  // merge alongside every other primitive rather than through a second write.
+  mergedState.roots = {
+    ...mergedState.roots,
+    ...Object.fromEntries(clonedKickstandRoots.map((item) => [item.id, item])),
+  };
+  mergedState.knots = {
+    ...mergedState.knots,
+    ...Object.fromEntries(clonedKickstandKnots.map((item) => [item.id, item])),
   };
 
-  const mergedKickstandState: KickstandState = {
-    ...kickstandState,
-    kickstands: {
-      ...kickstandState.kickstands,
-      ...Object.fromEntries(clonedKickstands.map((item) => [item.id, item])),
-    },
-    roots: {
-      ...kickstandState.roots,
-      ...Object.fromEntries(clonedKickstandRoots.map((item) => [item.id, item])),
-    },
-    knots: {
-      ...kickstandState.knots,
-      ...Object.fromEntries(clonedKickstandKnots.map((item) => [item.id, item])),
-    },
-  };
-
-  return { mergedState, mergedKickstandState };
+  return { mergedState };
 }
 
 export function captureModelSupportsToClipboard(modelId: string): SupportClipboardPayload | null {
   return extractSupportClipboardPayload(modelId);
 }
 
+/**
+ * The ground a model's supports stand on: its roots and the raft around them.
+ * `estimateSupportBoundsForModel` spans everything it carries, most of it in the air.
+ */
+export function estimateRaftBoundsForModel(modelId: string): SupportModelBounds2D | null {
+    if (!modelId) return null;
+
+    const state = getSnapshot();
+    const roots = Object.values(state.roots).filter((root) => root.modelId === modelId);
+    if (roots.length === 0) return null;
+
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    const expand = (x: number, y: number, radius = 0) => {
+        const r = Math.max(0, radius);
+        minX = Math.min(minX, x - r);
+        maxX = Math.max(maxX, x + r);
+        minY = Math.min(minY, y - r);
+        maxY = Math.max(maxY, y + r);
+    };
+
+    for (const root of roots) {
+        expand(root.transform.pos.x, root.transform.pos.y, Math.max(0.001, root.diameter / 2));
+    }
+
+    const raftSettings = getRaftSettings();
+    if (raftSettings.bottomMode !== 'off') {
+        const circles: SupportBaseCircle[] = roots.map((root) => ({
+            x: root.transform.pos.x,
+            y: root.transform.pos.y,
+            r: root.diameter / 2,
+        }));
+
+        const thickness = raftSettings.bottomMode === 'line' ? raftSettings.lineHeightMm : raftSettings.thickness;
+        const chamferInset = Math.max(0, thickness) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))));
+        const wallInset = raftSettings.wallEnabled ? Math.max(0, raftSettings.wallThickness) : 0;
+        const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
+
+        const baseProfile = computeFootprint(circles, { marginMm: dynamicMargin, samplesPerCircle: 24 });
+        if (baseProfile && baseProfile.length >= 3) {
+            const outerProfile = raftSettings.wallEnabled
+                ? computeRaftOuterBoundary(baseProfile, raftSettings)
+                : baseProfile;
+            for (const point of outerProfile) expand(point.x, point.y);
+        }
+    }
+
+    return Number.isFinite(minX) ? { minX, maxX, minY, maxY } : null;
+}
+
 export function estimateSupportBoundsForModel(modelId: string): SupportModelBounds2D | null {
   if (!modelId) return null;
 
   const state = getSnapshot();
-  const kickstandState = getKickstandSnapshot();
+  const snapshot = getSnapshot();
   const raftSettings = getRaftSettings();
 
   let minX = Number.POSITIVE_INFINITY;
@@ -530,26 +474,24 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
 
   const knotBelongsToModel = (knot: Knot) => {
     const parentShaftId = knot.parentShaftId;
-    if (parentShaftId.startsWith('leafCone:')) {
-      const leafId = parentShaftId.slice('leafCone:'.length);
-      return state.leaves[leafId]?.modelId === modelId;
-    }
-    if (parentShaftId.startsWith('braceSegment:')) {
-      const braceId = parentShaftId.slice('braceSegment:'.length);
-      return state.braces[braceId]?.modelId === modelId;
+
+    // A knot riding a declared pseudo-shaft belongs to whatever that host does.
+    for (const descriptor of SUPPORT_TYPES) {
+      const prefix = descriptor.knotHostPrefix;
+      if (!prefix || !parentShaftId.startsWith(prefix)) continue;
+      const hosts = state[descriptor.location.key] as unknown as Record<string, { modelId?: string }>;
+      return hosts?.[parentShaftId.slice(prefix.length)]?.modelId === modelId;
     }
 
-    for (const trunk of Object.values(state.trunks)) {
-      if (trunk.modelId === modelId && trunk.segments.some((segment) => segment.id === parentShaftId)) return true;
-    }
-    for (const branch of Object.values(state.branches)) {
-      if (branch.modelId === modelId && branch.segments.some((segment) => segment.id === parentShaftId)) return true;
-    }
-    for (const twig of Object.values(state.twigs)) {
-      if (twig.modelId === modelId && twig.segments.some((segment) => segment.id === parentShaftId)) return true;
-    }
-    for (const stick of Object.values(state.sticks)) {
-      if (stick.modelId === modelId && stick.segments.some((segment) => segment.id === parentShaftId)) return true;
+    // Every shafted type, so a knot riding a stump or kickstand resolves too.
+    for (const descriptor of SUPPORT_TYPES) {
+      if (!descriptor.hasSegments) continue;
+      const collection = state[descriptor.location.key] as unknown as Record<string, { modelId: string; segments?: Segment[] }>;
+
+      for (const entity of Object.values(collection ?? {})) {
+        if (entity.modelId !== modelId) continue;
+        if (entity.segments?.some((segment) => segment.id === parentShaftId)) return true;
+      }
     }
 
     return false;
@@ -560,12 +502,12 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
     .forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
 
   const kickstandHostKnotIds = new Set(
-    Object.values(kickstandState.kickstands)
+    Object.values(snapshot.kickstands)
       .filter((kickstand) => kickstand.modelId === modelId)
       .map((kickstand) => kickstand.hostKnotId),
   );
 
-  Object.values(kickstandState.knots)
+  Object.values(snapshot.knots)
     .filter((knot) => kickstandHostKnotIds.has(knot.id))
     .forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
 
@@ -576,42 +518,89 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
     });
   };
 
-  Object.values(state.trunks).filter((trunk) => trunk.modelId === modelId).forEach((trunk) => {
-    expandSegments(trunk.segments as any[]);
-    if (trunk.contactCone) {
-      expand(trunk.contactCone.pos, Math.max(0.001, trunk.contactCone.profile.contactDiameterMm / 2));
+  // Every type's shafts and declared contacts. A cone carries its contact
+  // diameter on its profile, a disk directly on itself.
+  for (const descriptor of SUPPORT_TYPES) {
+    const collection = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+
+    for (const entity of Object.values(collection ?? {})) {
+      if (entity.modelId !== modelId) continue;
+      if (descriptor.hasSegments) expandSegments((entity.segments ?? []) as any[]);
+
+      for (const field of descriptor.contactFields) {
+        const contact = entity[field] as {
+          pos: Vec3;
+          contactDiameterMm?: number;
+          profile?: { contactDiameterMm: number };
+        } | undefined;
+        if (!contact) continue;
+
+        const diameter = contact.contactDiameterMm ?? contact.profile?.contactDiameterMm ?? 0;
+        expand(contact.pos, Math.max(0.001, diameter / 2));
+      }
     }
-  });
+  }
 
-  Object.values(state.branches).filter((branch) => branch.modelId === modelId).forEach((branch) => {
-    expandSegments(branch.segments as any[]);
-    if (branch.contactCone) {
-      expand(branch.contactCone.pos, Math.max(0.001, branch.contactCone.profile.contactDiameterMm / 2));
-    }
-  });
-
-  Object.values(state.leaves).filter((leaf) => leaf.modelId === modelId).forEach((leaf) => {
-    if (!leaf.contactCone) return;
-    expand(leaf.contactCone.pos, Math.max(0.001, leaf.contactCone.profile.contactDiameterMm / 2));
-  });
-
-  Object.values(state.twigs).filter((twig) => twig.modelId === modelId).forEach((twig) => {
-    expandSegments(twig.segments as any[]);
-    expand(twig.contactDiskA.pos, Math.max(0.001, twig.contactDiskA.contactDiameterMm / 2));
-    expand(twig.contactDiskB.pos, Math.max(0.001, twig.contactDiskB.contactDiameterMm / 2));
-  });
-
-  Object.values(state.sticks).filter((stick) => stick.modelId === modelId).forEach((stick) => {
-    expandSegments(stick.segments as any[]);
-    expand(stick.contactConeA.pos, Math.max(0.001, stick.contactConeA.profile.contactDiameterMm / 2));
-    expand(stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
-  });
-
-  Object.values(kickstandState.kickstands)
+  Object.values(snapshot.kickstands)
     .filter((kickstand) => kickstand.modelId === modelId)
     .forEach((kickstand) => expandSegments(kickstand.segments as any[]));
 
   return hasAny ? { minX, maxX, minY, maxY } : null;
+}
+
+/** One paste: a payload, the model it lands on, and where that model sits. */
+export type SupportPasteTarget = {
+  payload: SupportClipboardPayload;
+  targetModelId: string;
+  sourceTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 };
+  targetTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 };
+};
+
+/**
+ * Paste supports for one or more targets in a single store write.
+ *
+ * Each clone is moved from the source model's transform to its target's while
+ * it is made, so nothing has to walk the store again, and every target lands in
+ * one merged state: a duplicate of N copies costs one write and one history
+ * entry rather than N of each.
+ */
+export function pasteModelSupports(
+  targets: readonly SupportPasteTarget[],
+  options?: {
+    recordHistory?: boolean;
+    historyDescription?: MessageDescriptor;
+  },
+): number {
+  const before = captureSupportEditSnapshot();
+
+  let mergedState = getSnapshot();
+  let pastedCount = 0;
+
+  for (const target of targets) {
+    if (!target.payload || !target.targetModelId) continue;
+
+    // Every collection, from the registry.
+    const hasSupports = SUPPORT_COLLECTION_KEYS
+      .reduce((total, key) => total + (target.payload[key]?.length ?? 0), 0);
+    if (hasSupports === 0) continue;
+
+    const delta = buildSupportDeltaTransform(target.sourceTransform, target.targetTransform);
+    mergedState = mergeSupportClipboardPayload(target.payload, target.targetModelId, {
+      base: mergedState,
+      delta,
+    }).mergedState;
+    pastedCount += hasSupports;
+  }
+
+  if (pastedCount === 0) return 0;
+
+  setSnapshot(mergedState);
+
+  const shouldRecordHistory = options?.recordHistory ?? true;
+  if (shouldRecordHistory) {
+    pushSupportEditHistory(options?.historyDescription ?? PASTE_SUPPORTS_LABEL, before, captureSupportEditSnapshot());
+  }
+  return pastedCount;
 }
 
 export function pasteModelSupportsFromClipboard(
@@ -621,35 +610,12 @@ export function pasteModelSupportsFromClipboard(
   targetTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
   options?: {
     recordHistory?: boolean;
-    historyDescription?: string;
+    historyDescription?: MessageDescriptor;
   },
 ): number {
   if (!payload || !targetModelId) return 0;
 
-  const before = captureSupportEditSnapshot();
-
-  const hasSupports = payload.roots.length
-    + payload.trunks.length
-    + payload.branches.length
-    + payload.leaves.length
-    + payload.twigs.length
-    + payload.sticks.length
-    + payload.braces.length
-    + payload.kickstands.length;
-
-  if (hasSupports === 0) return 0;
-
-  const { mergedState, mergedKickstandState } = mergeSupportClipboardPayload(payload, targetModelId);
-  setSnapshot(mergedState);
-  setKickstandSnapshot(mergedKickstandState);
-
-  transformSupportsForModel(targetModelId, sourceTransform, targetTransform);
-
-  const shouldRecordHistory = options?.recordHistory ?? true;
-  if (shouldRecordHistory) {
-    pushSupportEditHistory(options?.historyDescription ?? 'Paste supports', before, captureSupportEditSnapshot());
-  }
-  return hasSupports;
+  return pasteModelSupports([{ payload, targetModelId, sourceTransform, targetTransform }], options);
 }
 
 export type { SupportClipboardPayload };

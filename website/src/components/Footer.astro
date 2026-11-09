@@ -1,0 +1,175 @@
+---
+import { LINKS, SITE, docs } from '../data/site';
+
+const year = new Date().getFullYear();
+---
+
+<footer class="site-footer">
+  <div class="shell">
+    <div class="site-footer__grid">
+      <div class="site-footer__brand">
+        <a class="brand" href="/" aria-label={`${SITE.name} home`}>
+          <img
+            class="brand__icon"
+            src="/brand/simple_icon.svg"
+            alt={`${SITE.name} logo`}
+            width="64"
+            height="64"
+            loading="lazy"
+            decoding="async"
+          />
+        </a>
+        <p class="site-footer__blurb">{SITE.motto}</p>
+        <p class="mono muted">AGPL-3.0-or-later</p>
+      </div>
+
+      <nav class="site-footer__col" aria-label="Project">
+        <h2 class="site-footer__title">Project</h2>
+        <ul>
+          <li><a href={LINKS.releases} rel="noopener noreferrer" target="_blank">Releases</a></li>
+          <li><a href="/builds/">Preview Builds</a></li>
+          <li><a href={LINKS.issues} rel="noopener noreferrer" target="_blank">Issues</a></li>
+          <li><a href={LINKS.plugins} rel="noopener noreferrer" target="_blank">Plugin registry</a></li>
+          <li><a href={LINKS.license} rel="noopener noreferrer" target="_blank">Licence</a></li>
+        </ul>
+      </nav>
+
+      <nav class="site-footer__col" aria-label="Documentation">
+        <h2 class="site-footer__title">Documentation</h2>
+        <ul>
+          <li><a href={docs('getting-started/installation/')}>Installation</a></li>
+          <li><a href={docs('getting-started/quick-start/')}>Quick start</a></li>
+          <li><a href={docs('reference/support-anatomy/')}>Support anatomy</a></li>
+          <li><a href={docs('dev/contributing/')}>Contributing</a></li>
+        </ul>
+      </nav>
+
+      <nav class="site-footer__col" aria-label="Community">
+        <h2 class="site-footer__title">Community</h2>
+        <ul>
+          <li><a href={LINKS.discord} rel="noopener noreferrer" target="_blank">Discord</a></li>
+          <li><a href={LINKS.collective} rel="noopener noreferrer" target="_blank">Open Collective</a></li>
+          <li><a href={LINKS.translate} rel="noopener noreferrer" target="_blank">Translations</a></li>
+          <li><a href={LINKS.org} rel="noopener noreferrer" target="_blank">openresin.org</a></li>
+        </ul>
+      </nav>
+    </div>
+
+    <div class="site-footer__bottom">
+      <p class="muted">
+        © {year} {SITE.org} and{' '}
+        <a href={LINKS.contributors} rel="noopener noreferrer" target="_blank">contributors</a>.
+      </p>
+      <p class="mono muted">
+        <a href={LINKS.github} rel="noopener noreferrer" target="_blank">GitHub source</a>
+      </p>
+    </div>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    margin-top: 5rem;
+    padding: 3.5rem 0 2rem;
+    border-top: 1px solid var(--border);
+    background: transparent;
+    font-size: 0.9375rem;
+  }
+
+  .site-footer__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(0, 1fr));
+    gap: 2.5rem;
+  }
+
+  .site-footer__brand {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    max-width: 34ch;
+  }
+
+  .brand {
+    display: inline-flex;
+  }
+
+  .brand__icon {
+    block-size: 56px;
+    inline-size: auto;
+  }
+
+  .site-footer__blurb {
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  .site-footer__title {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted-2);
+    margin-bottom: 0.9rem;
+  }
+
+  .site-footer__col ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .site-footer__col a {
+    color: var(--muted);
+    transition: color 0.15s var(--ease);
+  }
+
+  .site-footer__col a:hover {
+    color: var(--ink);
+  }
+
+  /* The back-to-top control floats over this corner, and the GitHub source link ends
+     exactly there. It only needs the room while the button is up, which is while the
+     page is scrolled - so the last line steps aside for it then, and sits flush when
+     the footer is on a page short enough that no button is offered. */
+  :global(html:has([data-back-to-top][data-visible])) .site-footer__bottom {
+    padding-inline-end: 4rem;
+    transition: padding-inline-end 0.2s var(--ease);
+  }
+
+  .site-footer__bottom {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.5rem;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.8125rem;
+  }
+
+  .site-footer__bottom a {
+    text-decoration: underline;
+    text-decoration-color: var(--border-strong);
+    text-underline-offset: 2px;
+  }
+
+  .site-footer__bottom a:hover {
+    text-decoration-color: var(--brand-pink);
+  }
+
+  @media (max-width: 860px) {
+    .site-footer__grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 2rem;
+    }
+
+    .site-footer__brand {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

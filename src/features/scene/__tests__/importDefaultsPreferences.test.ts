@@ -7,10 +7,37 @@ import {
   normalizeImportDefaultsSettings,
   type ImportDefaultsSettings,
 } from '@/features/scene/importDefaultsPreferences';
-import type { DragonfruitImportFormat } from '@/supports/types';
+import {
+  getSupportTypeDescriptor,
+  SUPPORT_COLLECTION_KEYS,
+  type SupportCollectionKey,
+  type SupportTypeId,
+} from '@/supports/supportTypeRegistry';
+import type { DragonfruitImportFormat, SupportCollectionByType } from '@/supports/types';
+
+/** Collection keys come from the registry; `roots` and `knots` are primitives. */
+function emptyWireCollections(): Pick<DragonfruitImportFormat, SupportCollectionKey> {
+  const collections = {} as Record<string, unknown[]>;
+  for (const key of SUPPORT_COLLECTION_KEYS) collections[key] = [];
+  return collections as unknown as Pick<DragonfruitImportFormat, SupportCollectionKey>;
+}
+
+/** What the wire format carries under a type's collection key. */
+type WireEntities<K extends SupportTypeId> =
+  DragonfruitImportFormat[SupportCollectionByType[K] & keyof DragonfruitImportFormat];
+
+/** Fill one collection, keyed by the type that declares it. */
+function setCollection<K extends SupportTypeId>(
+  payload: DragonfruitImportFormat,
+  typeId: K,
+  entities: WireEntities<K>,
+): void {
+  (payload as unknown as Record<string, unknown>)[getSupportTypeDescriptor(typeId).location.key] = entities;
+}
 
 function makePayload(): DragonfruitImportFormat {
-  return {
+  const payload: DragonfruitImportFormat = {
+    ...emptyWireCollections(),
     version: 1,
     meta: {
       source: 'unit-test',
@@ -34,84 +61,82 @@ function makePayload(): DragonfruitImportFormat {
         coneHeight: 1,
       },
     ],
-    trunks: [
-      {
-        id: 'trunk-a',
-        modelId: 'm1',
-        rootId: 'root-a',
-        baseDiameterMm: 1.25,
-        segments: [
-          {
-            id: 'seg-a',
-            diameter: 1.25,
-            topJoint: { id: 'ja', pos: { x: 0, y: 0, z: 5 }, diameter: 1.35 },
-          },
-        ],
-      },
-      {
-        id: 'trunk-b',
-        modelId: 'm1',
-        rootId: 'root-b',
-        segments: [
-          {
-            id: 'seg-b',
-            diameter: 2.1,
-            topJoint: { id: 'jb', pos: { x: 10, y: 0, z: 5 }, diameter: 2.2 },
-          },
-        ],
-      },
-    ],
-    branches: [],
-    leaves: [],
-    twigs: [],
-    sticks: [],
-    braces: [],
-    knots: [],
-    kickstands: [
-      {
-        root: {
-          id: 'kick-root-a',
-          modelId: 'm1',
-          transform: { pos: { x: -5, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
-          diameter: 5,
-          diskHeight: 1,
-          coneHeight: 1,
-        },
-        hostKnot: {
-          id: 'kick-knot-a',
-          parentShaftId: 'seg-a',
-          t: 0.5,
-          pos: { x: 0, y: 0, z: 4 },
-          diameter: 1,
-        },
-        kickstand: {
-          id: 'kickstand-a',
-          modelId: 'm1',
-          rootId: 'kick-root-a',
-          hostKnotId: 'kick-knot-a',
-          hostSegmentId: 'seg-a',
-          hostMinT: 0,
-          segments: [
-            {
-              id: 'kick-seg-a',
-              type: 'straight',
-              diameter: 0.9,
-              topJoint: {
-                id: 'kick-ja',
-                pos: { x: -2, y: 0, z: 4 },
-                diameter: 0.9,
-              },
-            },
-          ],
-          profile: {
-            bodyDiameterMm: 0.9,
-            terminalStartDiameterMm: 0.9,
-            terminalEndDiameterMm: 1,
-          },
-        },
-      },
-    ],
   };
+
+  setCollection(payload, 'trunk', [
+    {
+      id: 'trunk-a',
+      modelId: 'm1',
+      rootId: 'root-a',
+      baseDiameterMm: 1.25,
+      segments: [
+        {
+          id: 'seg-a',
+          diameter: 1.25,
+          topJoint: { id: 'ja', pos: { x: 0, y: 0, z: 5 }, diameter: 1.35 },
+        },
+      ],
+    },
+    {
+      id: 'trunk-b',
+      modelId: 'm1',
+      rootId: 'root-b',
+      segments: [
+        {
+          id: 'seg-b',
+          diameter: 2.1,
+          topJoint: { id: 'jb', pos: { x: 10, y: 0, z: 5 }, diameter: 2.2 },
+        },
+      ],
+    },
+  ]);
+
+  setCollection(payload, 'kickstand', [
+    {
+      root: {
+        id: 'kick-root-a',
+        modelId: 'm1',
+        transform: { pos: { x: -5, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+        diameter: 5,
+        diskHeight: 1,
+        coneHeight: 1,
+      },
+      hostKnot: {
+        id: 'kick-knot-a',
+        parentShaftId: 'seg-a',
+        t: 0.5,
+        pos: { x: 0, y: 0, z: 4 },
+        diameter: 1,
+      },
+      kickstand: {
+        id: 'kickstand-a',
+        modelId: 'm1',
+        rootId: 'kick-root-a',
+        hostKnotId: 'kick-knot-a',
+        hostSegmentId: 'seg-a',
+        hostMinT: 0,
+        segments: [
+          {
+            id: 'kick-seg-a',
+            type: 'straight',
+            diameter: 0.9,
+            topJoint: {
+              id: 'kick-ja',
+              pos: { x: -2, y: 0, z: 4 },
+              diameter: 0.9,
+            },
+          },
+        ],
+        profile: {
+          bodyDiameterMm: 0.9,
+          terminalStartDiameterMm: 0.9,
+          terminalEndDiameterMm: 1,
+        },
+      },
+    },
+  ]);
+
+  return payload;
 }
 
 test('normalizeImportDefaultsSettings falls back to safe defaults', () => {

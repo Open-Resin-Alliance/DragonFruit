@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { isSupportEditInteractionActive } from './gizmoInteractionLock';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
+import { hasWindow } from '@/utils/dom';
 
 type PointerIntersectionLike = {
     object?: THREE.Object3D | null;
@@ -87,7 +88,7 @@ function ensureImmediateModelHoverDedupeHooks(w: ImmediateModelHoverWindow) {
 }
 
 export function emitImmediateModelHover(modelId: string | null) {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
 
     if (shouldSuppressImmediateModelHover(modelId)) return;
 

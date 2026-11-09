@@ -1,5 +1,9 @@
-// Main exports
-export { SupportSidebar } from './SupportSidebar';
+// This barrel must stay free of React components. Engine modules and the
+// plugin submodules import it for `getSettings` / `createDefaultSettings` /
+// `SupportSettings`, and the unit tests run under tsx with no Lingui macro
+// transform — re-exporting the sidebar dragged the whole (translated) settings
+// UI into those import graphs and blew the suite up. Import components from
+// their own module: `@/supports/Settings/SupportSidebar`, `.../components`.
 
 // Types
 export type {
@@ -49,6 +53,3 @@ export {
     setActivePreset,
     subscribeToPresets,
 } from './presets';
-
-// Components (for direct use if needed)
-export * from './components';

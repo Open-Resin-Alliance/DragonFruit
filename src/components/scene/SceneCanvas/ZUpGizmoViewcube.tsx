@@ -28,6 +28,7 @@ type FaceTypeProps = { hover: boolean; index: number } & GenericProps;
 type EdgeCubeProps = { dimensions: XYZ; position: Vector3 } & Omit<GenericProps, 'font' & 'color'>;
 
 const colors = { bg: '#f0f0f0', hover: '#999', text: 'black', stroke: 'black' };
+// i18n-ignore: fallback only; SceneCanvas passes the translated face labels.
 const defaultFaces = ['Front', 'Back', 'Right', 'Left', 'Top', 'Bottom'];
 /** Face canvas is 128px wide; leave a margin so the label never touches the stroked border. */
 const FACE_LABEL_MAX_WIDTH = 112;

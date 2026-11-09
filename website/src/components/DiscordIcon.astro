@@ -1,0 +1,25 @@
+---
+/**
+ * Discord glyph. Inherits `currentColor`; the path is the standard Discord
+ * logo mark used for icon buttons and the Discord call-to-action.
+ */
+interface Props {
+  size?: number;
+  class?: string;
+}
+
+const { size = 17, class: className = '' } = Astro.props;
+---
+
+<svg
+  class={className}
+  viewBox="0 0 24 24"
+  width={size}
+  height={size}
+  aria-hidden="true"
+  fill="currentColor"
+>
+  <path
+    d="M20.3 4.4A19.8 19.8 0 0 0 15.4 2.9l-.6 1.3a18.3 18.3 0 0 0-5.5 0L8.6 2.9A19.7 19.7 0 0 0 3.6 4.4 20.3 20.3 0 0 0 .1 18.1l.1.1a19.9 19.9 0 0 0 6 3v-.1c.5-.7.9-1.4 1.2-2a.1.1 0 0 0 0-.1 13.1 13.1 0 0 1-1.9-.9.1.1 0 0 1 0-.1l.4-.3h.1a14.2 14.2 0 0 0 12.1 0h.1l.4.3a.1.1 0 0 1 0 .1 12.3 12.3 0 0 1-2 .9.1.1 0 0 0 0 .1 16 16 0 0 0 1.3 2h.1a19.8 19.8 0 0 0 6-3v-.1 0a20.1 20.1 0 0 0-3.6-13.7ZM8 15.3c-1.2 0-2.2-1.1-2.2-2.4S6.8 10.5 8 10.5s2.2 1.1 2.2 2.4S9.2 15.3 8 15.3Zm8 0c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4Z"
+  ></path>
+</svg>

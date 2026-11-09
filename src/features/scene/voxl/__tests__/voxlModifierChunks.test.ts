@@ -6,7 +6,7 @@ import {
   serializeVoxlDocumentV2Streaming,
   parseVoxlBinaryV2,
   VOXL_V2,
-  VOXL_V2_SEMANTIC_REVISION,
+  VOXL_V3_SEMANTIC_REVISION,
   VOXL_V2_INLINE_REVISION,
 } from '../codec-v2';
 import { countVoxlChunks, readVoxlVersion, testInput, testModel, withFrozenClock } from './voxlTestSupport';
@@ -54,7 +54,7 @@ test('modifier snapshots move into HSRC/CAVT/PSRC chunks and round-trip byte-for
   assert.equal(countVoxlChunks(bin, 'CAVT'), 1);
   assert.equal(countVoxlChunks(bin, 'PSRC'), 1);
 
-  const { document } = parseVoxlBinaryV2(bin);
+  const { document } = await parseVoxlBinaryV2(bin);
   const mm = document.models[0].meshModifiers!;
   assert.equal(mm.hollowing!.sourcePositionsBase64, SOURCE, 'source snapshot round-trips exactly');
   assert.equal(mm.hollowing!.cavityPositionsBase64, CAVITY, 'cavity snapshot round-trips exactly');
@@ -76,7 +76,7 @@ test('identical snapshots across models collapse to one chunk per type, and both
   // Modifier-blob dedup is invisible to old readers → no header bump.
   assert.equal(readVoxlVersion(bin), VOXL_V2, 'modifier dedup must not bump the header');
 
-  const { document } = parseVoxlBinaryV2(bin);
+  const { document } = await parseVoxlBinaryV2(bin);
   for (const m of document.models) {
     assert.equal(m.meshModifiers!.hollowing!.sourcePositionsBase64, SOURCE);
     assert.equal(m.meshModifiers!.hollowing!.cavityPositionsBase64, CAVITY);
@@ -93,7 +93,7 @@ test('distinct snapshots keep distinct chunks and map to the right owner', async
   assert.equal(countVoxlChunks(bin, 'HSRC'), 2, 'differing source snapshots must not share a chunk');
   assert.equal(countVoxlChunks(bin, 'CAVT'), 1, 'shared cavity snapshot still dedups');
 
-  const { document } = parseVoxlBinaryV2(bin);
+  const { document } = await parseVoxlBinaryV2(bin);
   assert.equal(document.models[0].meshModifiers!.hollowing!.sourcePositionsBase64, SOURCE);
   assert.equal(document.models[1].meshModifiers!.hollowing!.sourcePositionsBase64, otherSource);
 });
@@ -109,7 +109,7 @@ test('chunkModifierSnapshots:false keeps snapshots inline (2.1 layout) and still
   assert.equal(countVoxlChunks(bin, 'CAVT'), 0);
   assert.equal(countVoxlChunks(bin, 'PSRC'), 0);
 
-  const { document } = parseVoxlBinaryV2(bin);
+  const { document } = await parseVoxlBinaryV2(bin);
   const mm = document.models[0].meshModifiers!;
   assert.equal(mm.hollowing!.sourcePositionsBase64, SOURCE);
   assert.equal(mm.hollowing!.cavityPositionsBase64, CAVITY);
@@ -129,18 +129,18 @@ test('the chunking flag is byte-neutral for scenes without modifier snapshots', 
   });
 });
 
-test('sourceVersion distinguishes chunked (2.2) from inline (2.1) — the no-downgrade signal', async () => {
+test('sourceVersion distinguishes chunked (3.1) from inline (2.1) — the no-downgrade signal', async () => {
   const model = testModel('m0', { meshModifiers: hollowMods(SOURCE, CAVITY) });
 
   const chunked = await serializeVoxlDocumentV2(testInput([model]), new Map(), undefined, {
     chunkModifierSnapshots: true,
   });
-  assert.equal(parseVoxlBinaryV2(chunked).sourceVersion, VOXL_V2_SEMANTIC_REVISION, 'chunked file reads as 2.2');
+  assert.equal((await parseVoxlBinaryV2(chunked)).sourceVersion, VOXL_V3_SEMANTIC_REVISION, 'chunked file reads as 3.1');
 
   const inline = await serializeVoxlDocumentV2(testInput([model]), new Map(), undefined, {
     chunkModifierSnapshots: false,
   });
-  assert.equal(parseVoxlBinaryV2(inline).sourceVersion, VOXL_V2_INLINE_REVISION, 'inline file reads as 2.1');
+  assert.equal((await parseVoxlBinaryV2(inline)).sourceVersion, VOXL_V2_INLINE_REVISION, 'inline file reads as 2.1');
 });
 
 test('buffered and streaming writers stay byte-identical with modifier chunks', async () => {

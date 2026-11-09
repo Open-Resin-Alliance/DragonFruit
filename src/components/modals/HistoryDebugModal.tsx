@@ -1,7 +1,9 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
 import { X } from 'lucide-react';
+import { IconButton } from '@/components/atoms';
 import type { HistoryDebugEvent } from '@/history/types';
 import { formatHistoryLabel } from '@/history/formatHistoryLabel';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
@@ -43,6 +45,7 @@ export function HistoryDebugModal({
   onClearUndoRedoStacks,
   onClearAll,
 }: HistoryDebugModalProps) {
+  const { _ } = useLingui();
   useEscapeToClose(isOpen, onClose);
 
   const historyDebugEventsNewestFirst = React.useMemo(
@@ -158,19 +161,14 @@ export function HistoryDebugModal({
             </div>
           </div>
 
-          <button
-            type="button"
-            className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-1)',
-              color: 'var(--text-muted)',
-            }}
+          <IconButton
+            variant="surface"
+            size="sm"
             aria-label="Close history debug"
             onClick={onClose}
           >
             <X className="w-4 h-4" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -328,7 +326,7 @@ export function HistoryDebugModal({
 
                       {(event.actionType || event.actionDescription) ? (
                         <div className="mt-1 text-xs leading-tight" style={{ color: 'var(--text-strong)' }}>
-                          <span className="font-semibold">{formatHistoryLabel(event.actionDescription || event.actionType || '')}</span>
+                          <span className="font-semibold">{event.actionDescription ? _(event.actionDescription) : formatHistoryLabel(event.actionType ?? '')}</span>
                           {event.actionDescription && event.actionType ? (
                             <span style={{ color: 'var(--text-muted)' }}> · {formatHistoryLabel(event.actionType)}</span>
                           ) : null}

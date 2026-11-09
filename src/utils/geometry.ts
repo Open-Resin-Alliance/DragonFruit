@@ -147,3 +147,15 @@ export function computeBoundsZ(geometry: THREE.BufferGeometry, matrix: THREE.Mat
 
     return { min: minZ, max: maxZ };
 }
+
+/**
+ * Number of triangles a geometry draws. An indexed geometry shares vertices
+ * between triangles, so its position count over three is not a triangle count
+ * (and need not even be a whole number); the index is what lists the corners.
+ */
+export function countTriangles(geometry: THREE.BufferGeometry): number {
+    const index = geometry.getIndex();
+    if (index) return Math.floor(index.count / 3);
+    const position = geometry.getAttribute('position');
+    return position ? Math.floor(position.count / 3) : 0;
+}

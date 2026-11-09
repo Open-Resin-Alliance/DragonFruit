@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree, ThreeEvent } from '@react-three/fiber';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 interface UseBezierHandleDragProps {
     jointPosition: THREE.Vector3;
@@ -54,7 +55,7 @@ export function useBezierHandleDrag({
         const y = -((clientY - rect.top) / rect.height) * 2 + 1;
 
         pointerNdcRef.current.set(x, y);
-        raycasterRef.current.setFromCamera(pointerNdcRef.current, camera);
+        setPickRayFromCamera(raycasterRef.current, pointerNdcRef.current, camera);
 
         const target = new THREE.Vector3();
         return raycasterRef.current.ray.intersectPlane(dragPlane.current, target);

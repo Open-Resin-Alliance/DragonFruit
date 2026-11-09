@@ -9,7 +9,7 @@
  * content process.
  *
  * Two floats in a shared buffer cost eight bytes and nothing for the collector
- * to trace. Coordinates are millimetres in world space, well inside the range
+ * to trace. Coordinates are millimeters in world space, well inside the range
  * where `Float32Array` keeps sub-micron precision.
  */
 export interface VoxelFootprint {
@@ -34,8 +34,41 @@ export function footprintZ(footprint: VoxelFootprint, index: number): number | n
     return footprint.z ? footprint.z[index] : null;
 }
 
+/**
+ * Unique integer key for an integer cell of a 2D grid — the footprint's own
+ * 0.25 mm cells (`Math.round(mm * 4)`) and any coarser bucketing alike.
+ *
+ * Numeric because these keys are the hot path of mask probes (erosion,
+ * boundary extraction, tip bucketing): the string form allocated a template
+ * literal per lookup, which on a large region is millions of them.
+ */
+export function cellKey(cx: number, cy: number): number {
+    return (cx + 32768) * 65536 + (cy + 32768);
+}
+
 export function isEmptyFootprint(footprint: VoxelFootprint | undefined): boolean {
     return !footprint || footprint.count === 0;
+}
+
+/** World-space XY bounds of a footprint, without materialising its points. */
+export function footprintBounds(
+    footprint: VoxelFootprint,
+): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    if (footprint.count === 0) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const xy = footprint.xy;
+    for (let i = 0; i < footprint.count; i++) {
+        const x = xy[i * 2];
+        const y = xy[i * 2 + 1];
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+    }
+    return { minX, minY, maxX, maxY };
 }
 
 /**

@@ -58,6 +58,18 @@ function appendWithWordOverlap(currentLabel: string, nextPart: string): string {
   return `${current} ${incoming}`;
 }
 
+/**
+ * Family and name without the brand: what a menu grouped by brand needs on the
+ * row, e.g. "Standard V3 Blue".
+ */
+export function resolveMaterialFamilyNameLabel(material: MaterialLabelInput | null | undefined): string | null {
+  if (!material) return null;
+  const resinFamilyLabel = formatResinFamilyLabel(material.resinFamily);
+  const name = (material.name ?? '').trim();
+  const label = appendWithWordOverlap(resinFamilyLabel, name).trim();
+  return label.length > 0 ? label : null;
+}
+
 export function resolveCompositeMaterialLabel(material: MaterialLabelInput | null | undefined): string | null {
   if (!material) return null;
 

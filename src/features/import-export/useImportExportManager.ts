@@ -1,7 +1,9 @@
 import React from 'react';
+import * as THREE from 'three';
 import { detectIsIOS } from '@/hooks/usePlatform';
 import { suppressSceneAutosave } from '@/hooks/useSceneAutosave';
 import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
+import { readNativeFileSize } from '@/utils/pluginNetworkBridge';
 import {
   pickOpenFilesWithNativeDialog,
   readPrintArtifactBytesFromPath,
@@ -81,9 +83,11 @@ export function useImportExportManager({
   deps,
 }: UseImportExportManagerOptions) {
 
-  const exportThumbnailCaptureRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);
+  /** The canvas's shot of the scene; the optional bounds frame a bed other than the active one. */
+  const exportThumbnailCaptureRef = React.useRef<((volumeBoundsOverride?: THREE.Box3 | null) => Promise<Uint8Array | null>) | null>(null);
 
-  const exportThumbnailCaptureRunnerRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);
+  /** The canvas's shot of the scene. The optional bounds frame a bed other than the active one. */
+  const exportThumbnailCaptureRunnerRef = React.useRef<((volumeBoundsOverride?: THREE.Box3 | null) => Promise<Uint8Array | null>) | null>(null);
 
   const [isPrepareDragActive, setIsPrepareDragActive] = React.useState(false);
 
@@ -122,24 +126,24 @@ export function useImportExportManager({
     atMs: 0,
   });
 
-    const handleRegisterExportThumbnailCapture = React.useCallback((capture: (() => Promise<Uint8Array | null>) | null) => {
+    const handleRegisterExportThumbnailCapture = React.useCallback((capture: ((volumeBoundsOverride?: THREE.Box3 | null) => Promise<Uint8Array | null>) | null) => {
       exportThumbnailCaptureRef.current = capture;
     }, []);
 
-    const captureExportThumbnailPng = React.useCallback(async () => {
+    const captureExportThumbnailPng = React.useCallback(async (volumeBoundsOverride?: THREE.Box3 | null) => {
       const runCapture = exportThumbnailCaptureRunnerRef.current;
       if (!runCapture) return null;
-      return runCapture();
+      return runCapture(volumeBoundsOverride);
     }, []);
 
   const importSceneFilesWithPluginWarning = React.useCallback(async (
     filesInput: FileList | File[],
-    options?: { resultingScenePath?: string | null; sourcePaths?: Array<string | null | undefined> },
+    options?: { resultingScenePath?: string | null; sourcePaths?: Array<string | null | undefined>; pluginWarningConfirmed?: boolean },
   ): Promise<boolean> => {
     const sceneFiles = Array.from(filesInput);
     if (sceneFiles.length === 0) return false;
 
-    const proceed = await maybeConfirmPluginImportWarning(sceneFiles);
+    const proceed = options?.pluginWarningConfirmed || await maybeConfirmPluginImportWarning(sceneFiles);
     if (!proceed) return false;
 
     // Fresh imports can emit a burst of history/model-count changes while meshes are
@@ -352,6 +356,7 @@ export function useImportExportManager({
           const importedFromSource = await importSceneFilesWithPluginWarning([restoredFile], {
             resultingScenePath: sourcePath,
             sourcePaths: [sourcePath],
+            pluginWarningConfirmed: true,
           });
 
           if (importedFromSource) {
@@ -405,12 +410,29 @@ export function useImportExportManager({
     setTimeout(resolve, 0);
   }), []);
 
-  const createPathBackedStlFile = React.useCallback((sourcePath: string, name: string): File => {
-    const file = new File([], name, {
+  /**
+   * A mesh File that carries its on-disk path, so the native loader can read it
+   * directly instead of the renderer parsing bytes in the webview.
+   *
+   * STL passes no bytes: the path is the whole story, and a 4M-triangle STL
+   * never enters webview memory. OBJ and 3MF still pass their bytes, because the
+   * renderer's own loaders remain the fallback until the native loader has proven
+   * itself on every file they accept.
+   */
+  const createPathBackedMeshFile = React.useCallback((sourcePath: string, name: string, sizeBytes?: number | null, bytes?: ArrayBuffer): File => {
+    const file = new File(bytes ? [new Uint8Array(bytes)] : [], name, {
       type: getDroppedFileMimeType(name),
       lastModified: Date.now(),
     });
     (file as File & { filePath?: string }).filePath = sourcePath;
+    // A byte-less file holds no data, so its own `size` is 0 — which is how
+    // every readout of an STL imported on desktop said "0 B". The native picker
+    // reports only the path, so the length comes from the core's metadata command.
+    // Read it here rather than at the display, because `size` is what the model is
+    // built from.
+    if (typeof sizeBytes === 'number' && Number.isFinite(sizeBytes) && sizeBytes > 0) {
+      Object.defineProperty(file, 'size', { value: sizeBytes });
+    }
     return file;
   }, []);
 
@@ -460,13 +482,11 @@ export function useImportExportManager({
 
           const name = resolvedName;
           if (getFileExtensionLower(name) === '.stl') {
-            files.push(createPathBackedStlFile(sourcePath, name));
+            // Metadata only: the STL path stays path-backed and never reads the mesh.
+            files.push(createPathBackedMeshFile(sourcePath, name, await readNativeFileSize(sourcePath)));
           } else {
             const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-            files.push(new File([new Uint8Array(bytes)], name, {
-              type: getDroppedFileMimeType(name),
-              lastModified: Date.now(),
-            }));
+            files.push(createPathBackedMeshFile(sourcePath, name, null, bytes));
           }
         } catch (error) {
           console.warn(`[Picker] Failed reading picked file path: ${entry.path}`, error);
@@ -489,7 +509,7 @@ export function useImportExportManager({
       console.warn(`[Picker] Native ${category} picker failed, falling back to web input.`, error);
       return null;
     }
-  }, [createPathBackedStlFile, deps.current.isDesktopRuntime, waitForUiTick]);
+  }, [createPathBackedMeshFile, deps.current.isDesktopRuntime, waitForUiTick]);
 
   const pickFilesWithWebInput = React.useCallback((accept: string, multiple: boolean): Promise<File[]> => {
     return new Promise((resolve) => {
@@ -871,10 +891,7 @@ export function useImportExportManager({
       const ext = getFileExtension(file.name);
       return ext === '.stl' || ext === '.obj' || ext === '.3mf';
     });
-    const sceneFiles = supportedFiles.filter((file) => {
-      const ext = getFileExtension(file.name);
-      return SCENE_FILE_EXTENSIONS.some((sceneExt) => ext === `.${sceneExt}`);
-    });
+    const sceneFiles = supportedFiles.filter((file) => isSceneFileName(file.name));
 
     const buildSyntheticFileChangeEvent = (nextFiles: File[]): React.ChangeEvent<HTMLInputElement> => {
       const dt = new DataTransfer();
@@ -940,13 +957,11 @@ export function useImportExportManager({
         try {
           const name = getFileNameFromPath(sourcePath);
           if (getFileExtensionLower(name) === '.stl') {
-            files.push(createPathBackedStlFile(sourcePath, name));
+            // Metadata only: the STL path stays path-backed and never reads the mesh.
+            files.push(createPathBackedMeshFile(sourcePath, name, await readNativeFileSize(sourcePath)));
           } else {
             const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-            files.push(new File([new Uint8Array(bytes)], name, {
-              type: getDroppedFileMimeType(name),
-              lastModified: Date.now(),
-            }));
+            files.push(createPathBackedMeshFile(sourcePath, name, null, bytes));
           }
         } catch (error) {
           console.warn(`[DragDrop] Failed reading dropped file path: ${sourcePath}`, error);
@@ -957,7 +972,7 @@ export function useImportExportManager({
     } catch {
       return [] as File[];
     }
-  }, [createPathBackedStlFile]);
+  }, [createPathBackedMeshFile]);
 
   const sceneModeRef = React.useRef(scene.mode);
   const createFilesFromTauriDroppedPathsRef = React.useRef(createFilesFromTauriDroppedPaths);
@@ -1196,7 +1211,13 @@ export function useImportExportManager({
     void handleDroppedPrepareFiles(files);
   }, [handleDroppedPrepareFiles, scene.mode]);
 
-  const runExportThumbnailCapture = React.useCallback(async () => {
+  /**
+   * Runs the canvas's shot, with the selection and slice layer set up for a clean picture.
+   *
+   * `volumeBoundsOverride` is passed through: the slicing panel frames the bed it is slicing, so a
+   * batch's files each carry their own bed rather than whichever one is active.
+   */
+  const runExportThumbnailCapture = React.useCallback(async (volumeBoundsOverride?: THREE.Box3 | null) => {
     const capture = exportThumbnailCaptureRef.current;
     if (!capture) return null;
 
@@ -1241,7 +1262,7 @@ export function useImportExportManager({
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       }
 
-      return await capture();
+      return await capture(volumeBoundsOverride);
     } finally {
       if (shouldResetLayer) {
         deps.current.slicing.setLayerIndex(previousLayerIndex);

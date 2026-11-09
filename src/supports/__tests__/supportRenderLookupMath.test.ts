@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { computeSupportRenderLookup } from '../interaction/supportRenderLookupMath';
+import { createEmptySupportCollections } from '../supportTypeRegistry';
 
 describe('computeSupportRenderLookup', () => {
   it('maps brace segment IDs back to brace support IDs', () => {
@@ -9,12 +10,7 @@ describe('computeSupportRenderLookup', () => {
 
     const snapshot = computeSupportRenderLookup({
       state: {
-        roots: {},
-        trunks: {},
-        branches: {},
-        leaves: {},
-        twigs: {},
-        sticks: {},
+        ...createEmptySupportCollections(),
         braces: {
           [braceId]: {
             id: braceId,
@@ -28,10 +24,6 @@ describe('computeSupportRenderLookup', () => {
           'knot-b': { id: 'knot-b', parentShaftId: 'segment-b', pos: { x: 1, y: 0, z: 0 } },
         },
       } as any,
-      kickstandState: {
-        kickstands: {},
-        knots: {},
-      },
       activePreviewSupport: null,
     });
 

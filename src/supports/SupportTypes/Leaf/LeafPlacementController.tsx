@@ -2,42 +2,37 @@ import { useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'r
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { subscribe, getSnapshot, addKnot, addLeaf } from '../../state';
-import { pushSupportHistory } from '@/supports/history/supportHistory';
+import { addSupportEntityWithHistory, asOneSupportEdit, subscribe, getSnapshot, addKnot } from '../../state';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import type { Vec3, Knot, Joint, Segment } from '../../types';
 import { leafPlacementStore, useLeafPlacementState } from './leafPlacementState';
 import { LEAF_HOTKEY_REARM_EVENT } from './useLeafPlacement';
 import { buildLeafData } from './leafBuilder';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '../Twig/twigTaper';
-import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { v4 as uuidv4 } from 'uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
-import { buildKickstandPathSnapTargets, buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
-import { useKickstandStoreState } from '../Kickstand/kickstandStore';
+import { buildKickstandPathSnapTargets, buildPrimarySnapTargetIndex, ALL_SNAP_TYPES, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
+import { cascadeExtras, getSupportTypeDescriptor, LEAF_SPROUT_HOST_TYPES, parseSegmentSelectionId, resolveSupportTypeIdOf, type SupportCollectionKey } from '../../supportTypeRegistry';
+import { LEAF_PLACEMENT_OWNER } from '../../interaction/shared/placement/hotkeys/supportPlacementRouting';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewVecKey, previewNormalKey, quantizePreviewValue } from '../shared/previewSignature';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import { findClosestMeshToPoint, calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
+import { markPlacementSurface } from '../../PlacementLogic/placementSurface';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
     point?: Vec3 | null;
 }
 
-type PlacementSurface = 'interior' | 'exterior';
-
-function markContactPlacementSurface<T extends { placementSurface?: PlacementSurface } | undefined>(contact: T, surface?: PlacementSurface): T {
-    if (!contact || !surface) return contact;
-    return { ...contact, placementSurface: surface } as T;
-}
 
 // Pooled scratch objects — reused each frame to avoid per-frame GC pressure.
 const _buildPlate = new THREE.Plane();
@@ -51,7 +46,6 @@ interface LeafPlacementControllerProps {
 export function LeafPlacementController({ activeModelId }: LeafPlacementControllerProps = {}) {
     const { isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface, sproutParentingLockHeld } = useLeafPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
-    const kickstandState = useKickstandStoreState();
     const { getHotkey } = useHotkeyConfig();
     const leafBinding = getHotkey('SUPPORTS', 'LEAF_PLACEMENT');
 
@@ -83,25 +77,16 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
 
         return [
             ...buildSupportPathSnapTargets(supportState, {
-                includeTrunks: true,
-                includeBranches: true,
-                includeBraces: true,
-                includeTwigs: true,
-                includeSticks: true,
+                snapTypes: ALL_SNAP_TYPES,
                 placementSurface,
             }),
-            ...buildKickstandPathSnapTargets(kickstandState),
+            ...buildKickstandPathSnapTargets(supportState),
         ];
     }, [
         stage,
         sproutParentingLockHeld,
         placementSurface,
-        supportState.trunks,
-        supportState.branches,
-        supportState.braces,
-        supportState.twigs,
-        supportState.sticks,
-        kickstandState.kickstands,
+        supportState,
     ]);
 
     const targetById = useMemo(() => {
@@ -212,7 +197,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
             return;
         }
 
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
 
         let currentTipPos = tipPosition;
         let currentNormal = surfaceNormal;
@@ -287,8 +272,9 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 }
 
                 // If snapped to a brace, compute local tapered host diameter.
-                if (resolvedSnap.targetId.startsWith('braceSegment:')) {
-                    const braceId = resolvedSnap.targetId.slice('braceSegment:'.length);
+                const spanTarget = parseSegmentSelectionId(resolvedSnap.targetId);
+                if (spanTarget) {
+                    const braceId = spanTarget.entityId;
                     const brace = supportState.braces[braceId];
                     const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
                     const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
@@ -344,8 +330,9 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                         t = projected.t;
                         hostDiameterMm = hoveredTarget.pathSegment.radius * 2;
 
-                        if (segmentId.startsWith('braceSegment:')) {
-                            const braceId = segmentId.slice('braceSegment:'.length);
+                        const spanSegment = parseSegmentSelectionId(segmentId);
+                        if (spanSegment) {
+                            const braceId = spanSegment.entityId;
                             const brace = supportState.braces[braceId];
                             const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
                             const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
@@ -565,46 +552,29 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     let minJointDist = Infinity;
                     let isBottom = false;
 
-                    for (const trunk of Object.values(supportState.trunks)) {
-                        for (const seg of trunk.segments) {
-                            if (seg.bottomJoint) {
-                                const dist = getDistance(clickPos, seg.bottomJoint.pos);
-                                if (dist < minJointDist) {
+                    /**
+                     * The types whose real segments may host a sprout knot.
+                     *
+                     * A brace hosts a kickstand on its selectable span, but it
+                     * carries no segments for this walk, so the registry keeps
+                     * it out of the leaf set.
+                     */
+                    const leafSproutHosts = LEAF_SPROUT_HOST_TYPES;
+
+                    for (const typeId of leafSproutHosts) {
+                        const key = getSupportTypeDescriptor(typeId).location.key as SupportCollectionKey;
+                        const collection = supportState[key] as unknown as Record<string, { segments?: Segment[] }>;
+
+                        for (const entity of Object.values(collection ?? {})) {
+                            for (const seg of entity.segments ?? []) {
+                                for (const [joint, bottom] of [[seg.bottomJoint, true], [seg.topJoint, false]] as const) {
+                                    if (!joint) continue;
+                                    const dist = getDistance(clickPos, joint.pos);
+                                    if (dist >= minJointDist) continue;
                                     minJointDist = dist;
-                                    closestJoint = seg.bottomJoint;
+                                    closestJoint = joint;
                                     closestJointSeg = seg;
-                                    isBottom = true;
-                                }
-                            }
-                            if (seg.topJoint) {
-                                const dist = getDistance(clickPos, seg.topJoint.pos);
-                                if (dist < minJointDist) {
-                                    minJointDist = dist;
-                                    closestJoint = seg.topJoint;
-                                    closestJointSeg = seg;
-                                    isBottom = false;
-                                }
-                            }
-                        }
-                    }
-                    for (const branch of Object.values(supportState.branches)) {
-                        for (const seg of branch.segments) {
-                            if (seg.bottomJoint) {
-                                const dist = getDistance(clickPos, seg.bottomJoint.pos);
-                                if (dist < minJointDist) {
-                                    minJointDist = dist;
-                                    closestJoint = seg.bottomJoint;
-                                    closestJointSeg = seg;
-                                    isBottom = true;
-                                }
-                            }
-                            if (seg.topJoint) {
-                                const dist = getDistance(clickPos, seg.topJoint.pos);
-                                if (dist < minJointDist) {
-                                    minJointDist = dist;
-                                    closestJoint = seg.topJoint;
-                                    closestJointSeg = seg;
-                                    isBottom = false;
+                                    isBottom = bottom;
                                 }
                             }
                         }
@@ -682,14 +652,11 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     hostDiameterMm,
                     mesh: resolveTipMesh(tipPosition),
                 });
-                const markedLeaf = placementSurface
-                    ? {
-                        ...leaf,
-                        contactCone: markContactPlacementSurface(leaf.contactCone, placementSurface),
-                    }
-                    : leaf;
-
-                addLeaf(markedLeaf);
+                // The built leaf stamps its own `typeId`, so the controller reads
+                // it back rather than restating the name: the surface mark and the
+                // history action below both name the type the leaf declares.
+                const leafTypeId = resolveSupportTypeIdOf(leaf) ?? LEAF_PLACEMENT_OWNER;
+                const markedLeaf = markPlacementSurface(leafTypeId, leaf, placementSurface);
 
                 // Reload pattern: create new knot at the same position and lock junctionHubId to it
                 const newParentKnotId = uuidv4();
@@ -697,16 +664,17 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     ...parentKnot,
                     id: newParentKnotId,
                 };
-                addKnot(newParentKnot);
-                leafPlacementStore.setJunctionHub(newParentKnotId, true);
-
-                pushSupportHistory({
-                    type: SUPPORT_ADD_LEAF,
-                    payload: {
-                        leaf: markedLeaf,
-                        knot: snap.junctionHubIsNew ? parentKnot : undefined,
-                    },
+                // The knot recorded is the one the leaf hangs from, not the
+                // reload knot added here, and only when this click made it.
+                asOneSupportEdit(() => {
+                    addKnot(newParentKnot);
+                    addSupportEntityWithHistory(
+                        leafTypeId,
+                        markedLeaf,
+                        snap.junctionHubIsNew ? cascadeExtras(leafTypeId, 'knots', [parentKnot]) : undefined,
+                    );
                 });
+                leafPlacementStore.setJunctionHub(newParentKnotId, true);
 
                 clearSupportSelection();
                 e.stopPropagation();
@@ -758,22 +726,14 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     hostDiameterMm,
                     mesh: resolveTipMesh(tipPosition),
                 });
-                const markedLeaf = placementSurface
-                    ? {
-                        ...leaf,
-                        contactCone: markContactPlacementSurface(leaf.contactCone, placementSurface),
-                    }
-                    : leaf;
+                // Same derivation as the sprout path above: the type the leaf
+                // declares, read back off the entity it just stamped.
+                const leafTypeId = resolveSupportTypeIdOf(leaf) ?? LEAF_PLACEMENT_OWNER;
+                const markedLeaf = markPlacementSurface(leafTypeId, leaf, placementSurface);
 
-                addKnot(parentKnot);
-                addLeaf(markedLeaf);
-
-                pushSupportHistory({
-                    type: SUPPORT_ADD_LEAF,
-                    payload: {
-                        leaf: markedLeaf,
-                        knot: parentKnot,
-                    },
+                asOneSupportEdit(() => {
+                    addKnot(parentKnot);
+                    addSupportEntityWithHistory(leafTypeId, markedLeaf, cascadeExtras(leafTypeId, 'knots', [parentKnot]));
                 });
 
                 if (snap.sproutParentingLockHeld) {

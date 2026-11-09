@@ -4,7 +4,6 @@ import React from 'react';
 import * as THREE from 'three';
 import { useSyncExternalStore } from 'react';
 import { subscribe, getSnapshot } from '@/supports/state';
-import { getKickstandSnapshot, subscribeToKickstandStore } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
 import { computeFootprint } from '../geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '../geometry/computeRaftOuterBoundary';
@@ -27,11 +26,6 @@ const FOOTPRINT_BORDER_OUTLINE_PADDING_MM = 0.1;
 const FOOTPRINT_SILHOUETTE_CACHE_MAX_ENTRIES = 32;
 
 const sharedFootprintSilhouetteCache = new Map<string, THREE.Vector2[]>();
-
-type IdleWindow = Window & {
-  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
-  cancelIdleCallback?: (handle: number) => void;
-};
 
 /**
  * Convex hull using monotonic chain algorithm
@@ -128,10 +122,15 @@ function computeLocalModelFootprintHull(
   modelGeometry: GeometryWithBounds,
   modelTransform: ModelTransform,
 ): THREE.Vector2[] {
+  // The border is a visual aid, so it uses the cached 1024-point sample instead
+  // of a per-model scan of the position attribute. Placement sizing keeps the
+  // full scan (`computeProjectedFootprintSize`); one border per selected model
+  // must not cost milliseconds each.
   return computeProjectedFootprintHull(
     modelGeometry,
     modelTransform.rotation,
     modelTransform.scale,
+    { scan: 'sampled' },
   );
 }
 
@@ -162,17 +161,19 @@ export default function FootprintBorderRenderer({
   color = '#3b82f6',
 }: FootprintBorderRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
-  const kickstandState = useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
-  const [localModelFootprintHull, setLocalModelFootprintHull] = React.useState<THREE.Vector2[]>([]);
-  const hullCacheKeyRef = React.useRef<string | null>(null);
+  // The sampled hull is cheap (1024 points) and cached per geometry + rotation
+  // + scale, so it is computed in render instead of being deferred to an idle
+  // callback: a deferred outline made selecting a model feel like a second
+  // action. The cache also survives unmounts, so a re-selection is a map hit.
+  const localModelFootprintHull = React.useMemo(() => {
+    if (!modelGeometry || !modelTransform) return [];
+    const cacheKey = makeFootprintSilhouetteCacheKey(modelGeometry, modelTransform);
+    return getOrComputeLocalModelFootprintHull(modelGeometry, modelTransform, cacheKey);
+  }, [modelGeometry, modelTransform]);
 
   const supportFootprintPoints = React.useMemo(() => {
-    const circlesByModel = collectRaftBaseCirclesByModel({
-      roots: Object.values(supportState.roots),
-      anchors: Object.values(supportState.anchors),
-      kickstandRoots: Object.values(kickstandState.roots),
-    }, modelId != null
+    const circlesByModel = collectRaftBaseCirclesByModel(supportState, modelId != null
       ? { modelFilterId: modelId, fallbackModelKey: RAFT_UNASSIGNED_MODEL_KEY }
       : { fallbackModelKey: RAFT_UNASSIGNED_MODEL_KEY });
 
@@ -187,63 +188,7 @@ export default function FootprintBorderRenderer({
 
     const raftOuterBoundary = computeRaftOuterBoundary(baseProfile, raft);
     return raftOuterBoundary && raftOuterBoundary.length >= 3 ? raftOuterBoundary : [];
-  }, [modelId, raft, supportState.anchors, supportState.roots, kickstandState.roots]);
-
-  React.useEffect(() => {
-    if (!modelGeometry || !modelTransform) {
-      hullCacheKeyRef.current = null;
-      setLocalModelFootprintHull([]);
-      return;
-    }
-
-    const cacheKey = makeFootprintSilhouetteCacheKey(modelGeometry, modelTransform);
-    hullCacheKeyRef.current = cacheKey;
-
-    const cachedHull = getCachedFootprintSilhouette(cacheKey);
-    if (cachedHull) {
-      setLocalModelFootprintHull(cachedHull);
-      return;
-    }
-
-    setLocalModelFootprintHull([]);
-
-    let cancelled = false;
-    const idleWindow = typeof window !== 'undefined' ? window as IdleWindow : null;
-    const run = () => {
-      if (cancelled) return;
-      const nextHull = getOrComputeLocalModelFootprintHull(modelGeometry, modelTransform, cacheKey);
-      if (!cancelled && hullCacheKeyRef.current === cacheKey) setLocalModelFootprintHull(nextHull);
-    };
-
-    let cancelSchedule: () => void;
-    if (idleWindow?.requestIdleCallback) {
-      const delayHandle = window.setTimeout(() => {
-        if (cancelled) return;
-        const handle = idleWindow.requestIdleCallback(run);
-        cancelSchedule = () => idleWindow.cancelIdleCallback?.(handle);
-      }, 1400);
-      cancelSchedule = () => window.clearTimeout(delayHandle);
-    } else if (typeof window !== 'undefined') {
-      const handle = window.setTimeout(run, 1400);
-      cancelSchedule = () => window.clearTimeout(handle);
-    } else {
-      run();
-      cancelSchedule = () => {};
-    }
-
-    return () => {
-      cancelled = true;
-      cancelSchedule();
-    };
-  }, [
-    modelGeometry,
-    modelTransform?.rotation.x,
-    modelTransform?.rotation.y,
-    modelTransform?.rotation.z,
-    modelTransform?.scale.x,
-    modelTransform?.scale.y,
-    modelTransform?.scale.z,
-  ]);
+  }, [modelId, raft, supportState.stumps, supportState.roots]);
 
   const modelFootprintHull = React.useMemo(() => {
     if (!modelTransform || localModelFootprintHull.length < 3) return [];
@@ -253,11 +198,7 @@ export default function FootprintBorderRenderer({
       point.x + offsetX,
       point.y + offsetY,
     ));
-  }, [
-    localModelFootprintHull,
-    modelTransform?.position.x,
-    modelTransform?.position.y,
-  ]);
+  }, [localModelFootprintHull, modelTransform]);
 
   const borderLine = React.useMemo(() => {
     if (raft.bottomMode === 'off' || !raft.showFootprintBorder) return null;

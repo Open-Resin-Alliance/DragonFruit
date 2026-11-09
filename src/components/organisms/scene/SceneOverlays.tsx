@@ -5,6 +5,7 @@ import { HolePunchGizmo } from '@/features/hole-punching/HolePunchGizmo';
 import { HollowVoxelEditOverlay } from '@/components/scene/HollowVoxelEditOverlay';
 import { HollowVoxelPreview } from '@/components/scene/HollowVoxelPreview';
 import { getUniformScaleFactorForThickness } from '@/utils/geometryScaling';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import type { HolePunchPlacementState } from '@/features/hole-punching/holePunchGeometry';
 import type { HolePunchPanelState } from '@/features/hole-punching/HolePunchPanel';
 import type { HollowPreviewState } from '@/features/hollowing/hollowingPreviewTypes';
@@ -125,6 +126,13 @@ function WorldSpaceVoxelEditOverlay({
 export type SceneOverlaysProps = {
   /** Raycast helper supplied by SceneCanvas via the renderSceneOverlays render-prop. */
   raycastActiveModelFromRay: (ray: THREE.Ray) => THREE.Intersection | null;
+  /**
+   * Whether the active model is being dragged. The hole punch markers are placed
+   * at committed world points, and a drag moves the model imperatively without
+   * touching those, so they would sit still and snap on release. They are markers,
+   * so they stand down for the gesture instead.
+   */
+  modelDragging?: boolean;
 
   scene: SceneManager;
   transformMgr: TransformManager;
@@ -175,6 +183,7 @@ export type SceneOverlaysProps = {
  */
 export function SceneOverlays({
   raycastActiveModelFromRay,
+  modelDragging = false,
   scene,
   transformMgr,
   ghostData,
@@ -212,7 +221,7 @@ export function SceneOverlays({
     ? scene.models.find((model) => model.id === hollowPreview.modelId) ?? null
     : null;
   const activeModelId = scene.activeModel?.id ?? null;
-  const isInHollowingTool = scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing';
+  const isInHollowingTool = (scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing';
   const showDraftHolePunchMarkers = (
     interiorView
     || (
@@ -239,7 +248,7 @@ export function SceneOverlays({
     <>
       {ghostData && LysGhostOverlay ? <LysGhostOverlay data={ghostData} visible /> : null}
 
-      {placedPunches.map((placement) => {
+      {!modelDragging && placedPunches.map((placement) => {
         const isApplied = appliedHolePunchPlacementIds.has(placement.id);
         // Draft markers (blue, unapplied) always show so the user
         // can see what needs applying. Applied markers (orange/grey)
@@ -284,7 +293,7 @@ export function SceneOverlays({
         );
       })}
 
-      {showDraftHolePunchMarkers && hoverPunchPreview && (
+      {!modelDragging && showDraftHolePunchMarkers && hoverPunchPreview && (
         <HolePunchPreviewCylinder
           key="hole-punch-hover-preview"
           position={hoverPunchPreview.worldPoint}
@@ -297,7 +306,7 @@ export function SceneOverlays({
         />
       )}
 
-      {isInHollowingTool && selectedHolePunchPlacementIds.length === 1 && (() => {
+      {!modelDragging && isInHollowingTool && selectedHolePunchPlacementIds.length === 1 && (() => {
         const selectedPlacement = placedPunches.find(
           (p) => selectedHolePunchPlacementIdSet.has(p.id),
         );
@@ -320,7 +329,7 @@ export function SceneOverlays({
         );
       })()}
 
-      {hollowPreview && previewModel && hollowingEditMode && !(isHollowingApplied && !isHollowingDirty) && (
+      {!modelDragging && hollowPreview && previewModel && hollowingEditMode && !(isHollowingApplied && !isHollowingDirty) && (
         <WorldSpaceVoxelEditOverlay
           voxelCenters={hollowPreview.removedVoxelCenters}
           blockedVoxelCenters={hollowPreview.blockedVoxelCenters}
@@ -328,7 +337,7 @@ export function SceneOverlays({
           blockedVoxelIndexSet={blockedPreviewVoxelInstanceIdSet}
           modelTransform={{
             position: previewModel.transform.position,
-            quaternion: new THREE.Quaternion().setFromEuler(previewModel.transform.rotation),
+            quaternion: quaternionFromGlobalEuler(previewModel.transform.rotation),
             scale: previewModel.transform.scale,
           }}
           geometryCenter={previewModel.geometry.center}
@@ -344,7 +353,7 @@ export function SceneOverlays({
               voxelSizeMm={hollowPreview.report.voxelSizeMm}
               modelTransform={{
                 position: previewModel.transform.position,
-                quaternion: new THREE.Quaternion().setFromEuler(previewModel.transform.rotation),
+                quaternion: quaternionFromGlobalEuler(previewModel.transform.rotation),
                 scale: previewModel.transform.scale,
               }}
               geometryCenter={previewModel.geometry.center}
@@ -352,7 +361,7 @@ export function SceneOverlays({
           )}
           <group
             position={previewModel.transform.position}
-            quaternion={new THREE.Quaternion().setFromEuler(previewModel.transform.rotation)}
+            quaternion={quaternionFromGlobalEuler(previewModel.transform.rotation)}
             scale={previewModel.transform.scale}
           >
             {!hollowPreview.previewVoxelSpheres && (

@@ -1,4 +1,4 @@
-export type AutoBracingPattern = 'singleDiagonal' | 'crossDiagonal';
+export type AutoBracingPattern = 'singleDiagonal' | 'crossDiagonal' | 'zigZag';
 
 export interface AutoBracingSettings {
     braceDiameterMm: number;
@@ -11,6 +11,11 @@ export interface AutoBracingSettings {
     maxBraceLengthMm: number;
     debugSectionColorsEnabled: boolean;
     debugVoronoiSeedsEnabled: boolean;
+    /**
+     * Remove existing bracing before generating. Only braces and kickstands
+     * this tool generated are removed; `generatedBy` distinguishes them.
+     */
+    removeExistingBracing: boolean;
 }
 
 type NumericConstraint = {
@@ -30,14 +35,15 @@ type NumericAutoBracingSettingKey =
     | 'maxBraceLengthMm';
 
 export const AUTO_BRACING_PATTERN_OPTIONS: readonly AutoBracingPattern[] = [
-    'singleDiagonal',
     'crossDiagonal',
+    'singleDiagonal',
+    'zigZag',
 ];
 
 export const AUTO_BRACING_CONSTRAINTS = {
-    braceDiameterMm: { min: 0.5, max: 2.0, step: 0.05, defaultValue: 0.7 },
+    braceDiameterMm: { min: 0.5, max: 2.0, step: 0.05, defaultValue: 1.0 },
     initialDistanceMm: { min: 0.1, max: 25, step: 0.1, defaultValue: 2.0 },
-    patternIntervalMm: { min: 1.0, max: 50, step: 0.1, defaultValue: 10.0 },
+    patternIntervalMm: { min: 1.0, max: 50, step: 0.1, defaultValue: 8.0 },
     seedSpacingMm: { min: 2.0, max: 60, step: 0.5, defaultValue: 10.0 },
     seedJitterMm: { min: 0.0, max: 20, step: 0.25, defaultValue: 1.0 },
     maxBraceLengthMm: { min: 1.0, max: 50, step: 0.1, defaultValue: 10.0 },
@@ -59,6 +65,18 @@ export const AUTO_BRACING_HARD_RULES = {
     minAxisSeparationDeg: 45,
     targetAxisSeparationDeg: 90,
     kickstandMeshClearanceMm: 0.5,
+    // A zig-zag link rises by its own horizontal span, so a pair of nearly
+    // coincident trunks used to stack one 45° stub per fraction of a mm —
+    // hundreds of near-parallel links filling the gap. Two floors keep that
+    // from happening without starving close-but-real pairs of bracing:
+    //  * the chain never climbs less than minZigZagRiseMm per link — a pitch
+    //    below one brace thickness is unprintable mush; the link simply
+    //    steepens and still starts where the previous one ended, and
+    //  * supports closer than minPairSpanMm are one post (raised to the brace
+    //    diameter, since two surfaces that overlap cannot be bridged).
+    // Both are deliberately small: they only reject degenerate pairs.
+    minZigZagRiseMm: 1.0,
+    minPairSpanMm: 0.7,
 };
 
 function precisionFromStep(step: number): number {
@@ -85,9 +103,8 @@ function clampNumeric(value: unknown, constraint: NumericConstraint): number {
 
     return Math.min(constraint.max, Math.max(constraint.min, rounded));
 }
-
 function normalizePattern(value: unknown, fallback: AutoBracingPattern): AutoBracingPattern {
-    if (value === 'singleDiagonal' || value === 'crossDiagonal') {
+    if (value === 'singleDiagonal' || value === 'crossDiagonal' || value === 'zigZag') {
         return value;
     }
     return fallback;
@@ -100,15 +117,16 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
 export function createDefaultAutoBracingSettings(): AutoBracingSettings {
     return {
         braceDiameterMm: AUTO_BRACING_CONSTRAINTS.braceDiameterMm.defaultValue,
-        initialPattern: 'singleDiagonal',
+        initialPattern: 'crossDiagonal',
         initialDistanceMm: AUTO_BRACING_CONSTRAINTS.initialDistanceMm.defaultValue,
-        repeatingPattern: 'singleDiagonal',
+        repeatingPattern: 'crossDiagonal',
         patternIntervalMm: AUTO_BRACING_CONSTRAINTS.patternIntervalMm.defaultValue,
         seedSpacingMm: AUTO_BRACING_CONSTRAINTS.seedSpacingMm.defaultValue,
         seedJitterMm: AUTO_BRACING_CONSTRAINTS.seedJitterMm.defaultValue,
         maxBraceLengthMm: AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm.defaultValue,
         debugSectionColorsEnabled: false,
         debugVoronoiSeedsEnabled: false,
+        removeExistingBracing: true,
     };
 }
 
@@ -127,6 +145,7 @@ export function normalizeAutoBracingSettings(input?: Partial<AutoBracingSettings
         maxBraceLengthMm: clampNumeric(source.maxBraceLengthMm, AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm),
         debugSectionColorsEnabled: normalizeBoolean(source.debugSectionColorsEnabled, defaults.debugSectionColorsEnabled),
         debugVoronoiSeedsEnabled: normalizeBoolean(source.debugVoronoiSeedsEnabled, defaults.debugVoronoiSeedsEnabled),
+        removeExistingBracing: normalizeBoolean(source.removeExistingBracing, defaults.removeExistingBracing),
     };
 }
 

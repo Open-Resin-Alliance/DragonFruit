@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Plural } from '@lingui/react/macro';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Card, CardHeader, IconButton, Input } from '@/components/atoms';
+import { Card, CardHeader, ColorSwatchInput, Input } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 
 type IslandOverlayControlsProps = {
@@ -34,6 +38,7 @@ export function IslandOverlayControls({
   onTaperChange,
   islandCount
 }: IslandOverlayControlsProps) {
+  const { _ } = useLingui();
   const [expanded, setExpanded] = useFloatingPanelCollapse(enabled);
   const [editingColor, setEditingColor] = useState(color);
 
@@ -47,26 +52,8 @@ export function IslandOverlayControls({
       <CardHeader
         left={(
           <>
-            <IconButton
-            onClick={() => setExpanded(!expanded)}
-            className="!p-0.5"
-            title={expanded ? 'Collapse card' : 'Expand card'}
-          >
-            <svg
-              className="w-3 h-3 transform transition-transform"
-              style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              {expanded ? (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              ) : (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              )}
-            </svg>
-            </IconButton>
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Island Overlay</h3>
+            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded(!expanded)} />
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{_(msg`Island Overlay`)}</h3>
           </>
         )}
         right={(
@@ -85,9 +72,11 @@ export function IslandOverlayControls({
                   background: 'var(--surface-1)',
                   color: 'var(--text-muted)',
                 }}
-            title="Toggle Island Overlay"
+            title={_(msg`Toggle Island Overlay`)}
           >
-            {enabled ? 'ON' : 'OFF'}
+            {enabled
+              ? _(msg({ message: 'ON', comment: 'Toggle state on a narrow uppercase button. Keep it very short.' }))
+              : _(msg({ message: 'OFF', comment: 'Toggle state on a narrow uppercase button. Keep it very short.' }))}
           </button>
         )}
       />
@@ -96,13 +85,13 @@ export function IslandOverlayControls({
         <div className="px-2.5 pt-2 pb-3 space-y-2.5">
           {islandCount > 0 && (
             <div className="ui-meta">
-              {islandCount} island{islandCount !== 1 ? 's' : ''} detected
+              <Plural value={islandCount} one="# island detected" other="# islands detected" />
             </div>
           )}
 
           <div className="space-y-1">
             <label className="ui-meta flex justify-between">
-              <span>Brush Size</span>
+              <span>{_(msg`Brush Size`)}</span>
               <div className="flex items-center gap-1">
                 <NumberInput
                   value={brushRadiusMm}
@@ -128,18 +117,15 @@ export function IslandOverlayControls({
           </div>
 
           <div className="space-y-1">
-            <label className="ui-meta">Color</label>
+            <label className="ui-meta">{_(msg`Color`)}</label>
             <div className="flex gap-1.5 items-center">
-              <input
-                type="color"
+              <ColorSwatchInput
                 value={color}
-                onChange={(e) => {
-                  const newColor = e.target.value;
+                onChange={(newColor) => {
                   setEditingColor(newColor);
                   onColorChange(newColor);
                 }}
-                className="w-10 h-8 rounded border cursor-pointer p-0"
-                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                className="h-8 w-10"
               />
               <Input
                 type="text"
@@ -166,7 +152,7 @@ export function IslandOverlayControls({
 
           <div className="space-y-1">
             <label className="ui-meta flex justify-between">
-              <span>Opacity</span>
+              <span>{_(msg`Opacity`)}</span>
               <span style={{ color: 'var(--text-strong)' }}>{Math.round(opacity * 100)}%</span>
             </label>
             <input
@@ -182,7 +168,7 @@ export function IslandOverlayControls({
 
           <div className="space-y-1">
             <label className="ui-meta flex justify-between">
-              <span>Taper</span>
+              <span>{_(msg`Taper`)}</span>
               <span style={{ color: 'var(--text-strong)' }}>{Math.round((1 - taper) * 100)}%</span>
             </label>
             <input

@@ -1,7 +1,32 @@
 ﻿"use client";
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { useOutsideDismiss } from '@/hooks/useOutsideDismiss';
+import { clampToViewport } from '@/utils/math';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+
+/** min-width 136px + 10px offset + margin. */
+const THUMB_EDIT_POPOVER_WIDTH = 156;
+
+type Translate = (descriptor: MessageDescriptor) => string;
+
+/**
+ * Tooltip on the minimal rail. Module-level so React Compiler cannot rename the interpolated
+ * locals and desync the message ids (see AGENTS.md).
+ */
+function formatMinimalRailTitle(translate: Translate, layer: number, height: string, crossSection: 'none' | 'on' | 'off'): string {
+  if (crossSection === 'on') {
+    return translate(msg`Layer ${layer} • ${height} • Right-click a handle to type an exact value • Double-click to turn the cross-section off`);
+  }
+  if (crossSection === 'off') {
+    return translate(msg`Layer ${layer} • ${height} • Right-click a handle to type an exact value • Double-click to turn the cross-section back on`);
+  }
+  return translate(msg`Layer ${layer} • ${height} • Right-click a handle to type an exact value`);
+}
 
 type LayerSliderProps = {
   min: number;
@@ -30,11 +55,21 @@ type LayerSliderProps = {
 };
 
 export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, currentHeightMm, maxHeightMm, className, showValue = false, docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm, compactMinimalRail = false, allowTrackClickJump = false }: LayerSliderProps) {
+  const { _ } = useLingui();
+  const fmt = useLocaleFormat();
   const isMinimalRail = embedded && docked;
   const isCompactMinimalRail = isMinimalRail && compactMinimalRail;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const valueRef = React.useRef(value);
+  // While a scrub is live the owner may defer its own state (the scene publishes
+  // the clip imperatively instead), so the slider draws the value it just sent.
+  const scrubActiveRef = React.useRef(false);
+  // The live drag values. The owner may defer its own state during a scrub (the
+  // scene publishes the clip imperatively instead), so the slider keeps what it
+  // just sent and hands the committed value back on release.
+  const [liveValue, setLiveValue] = React.useState<number | null>(null);
+  const [liveLowerValue, setLiveLowerValue] = React.useState<number | null>(null);
   const [inputValue, setInputValue] = React.useState(String(Math.round(value)));
   const [showError, setShowError] = React.useState(false);
   const [isShiftHeld, setIsShiftHeld] = React.useState(false);
@@ -56,9 +91,9 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const openThumbEditRef = React.useRef<((thumb: 'upper' | 'lower') => void) | null>(null);
 
   const formatMm = React.useCallback((mm: number) => {
-    if (!Number.isFinite(mm)) return '0';
-    return mm.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
-  }, []);
+    if (!Number.isFinite(mm)) return fmt.unit('mm', '0');
+    return fmt.unit('mm', fmt.number(mm, { maximumFractionDigits: 2 }));
+  }, [fmt]);
 
   // Update input value when slider value changes externally
   React.useEffect(() => {
@@ -87,6 +122,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     const floor = lowerValueRef.current ?? min;
     const next = Math.max(clamp(snap(rawNext)), floor);
     if (next === valueRef.current) return;
+    if (scrubActiveRef.current) {
+      valueRef.current = next;
+      setLiveValue(next);
+    }
     onChange(next);
   }, [clamp, min, onChange, snap]);
 
@@ -99,6 +138,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     if (!onLowerChange) return;
     const next = Math.min(clamp(snap(rawNext)), valueRef.current);
     if (next === lowerValueRef.current) return;
+    if (scrubActiveRef.current) {
+      lowerValueRef.current = next;
+      setLiveLowerValue(next);
+    }
     onLowerChange(next);
   }, [clamp, onLowerChange, snap]);
 
@@ -140,10 +183,18 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     const finalUpper = clamp(snap(snappedUpper));
     const finalLower = Math.min(clamp(snap(snappedLower)), finalUpper);
 
-    if (finalLower !== lowerValueRef.current) {
+    const lowerChanged = finalLower !== lowerValueRef.current;
+    const upperChanged = finalUpper !== valueRef.current;
+    if (scrubActiveRef.current) {
+      lowerValueRef.current = finalLower;
+      valueRef.current = finalUpper;
+      setLiveLowerValue(finalLower);
+      setLiveValue(finalUpper);
+    }
+    if (lowerChanged) {
       onLowerChange(finalLower);
     }
-    if (finalUpper !== valueRef.current) {
+    if (upperChanged) {
       onChange(finalUpper);
     }
   }, [clamp, max, min, onChange, onLowerChange, snap]);
@@ -203,9 +254,11 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     // sliders docked at the right screen edge would otherwise clip it off-screen.
     const rect = containerRef.current?.getBoundingClientRect();
     if (rect) {
-      const popoverSpace = 156; // min-width 136px + 10px offset + margin
-      const spaceRight = window.innerWidth - rect.right;
-      setEditPopoverSide(spaceRight >= popoverSpace || spaceRight >= rect.left ? 'right' : 'left');
+      const { overflowRight } = clampToViewport(
+        { x: rect.right + 10, y: rect.top },
+        { width: THUMB_EDIT_POPOVER_WIDTH, height: 0 },
+      );
+      setEditPopoverSide(overflowRight ? 'left' : 'right');
     }
     setEditMode('layer');
     setEditRawValue(String(Math.round(currentLayer)));
@@ -218,7 +271,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
   const commitThumbEdit = React.useCallback(() => {
     if (!editingThumb) return;
-    const parsed = parseFloat(editRawValue);
+    const parsed = fmt.parse(editRawValue);
     if (!isNaN(parsed) && parsed >= 0) {
       const lhMm = layerHeightMm ?? 0;
       const targetLayer = (editMode === 'mm' && lhMm > 0)
@@ -228,21 +281,21 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       else emitLowerChange(targetLayer);
     }
     setEditingThumb(null);
-  }, [editingThumb, editRawValue, editMode, layerHeightMm, emitChange, emitLowerChange]);
+  }, [editingThumb, editRawValue, editMode, layerHeightMm, emitChange, emitLowerChange, fmt]);
 
   const switchEditMode = React.useCallback((newMode: 'layer' | 'mm') => {
     if (newMode === editMode || !layerHeightMm || layerHeightMm <= 0) return;
-    const current = parseFloat(editRawValue);
+    const current = fmt.parse(editRawValue);
     if (!isNaN(current) && current >= 0) {
       if (newMode === 'mm') {
-        setEditRawValue((current * layerHeightMm).toFixed(3).replace(/\.?0+$/, ''));
+        setEditRawValue(fmt.field(current * layerHeightMm, 3));
       } else {
         setEditRawValue(String(Math.round(current / layerHeightMm)));
       }
     }
     setEditMode(newMode);
     requestAnimationFrame(() => { editInputRef.current?.select(); });
-  }, [editMode, editRawValue, layerHeightMm]);
+  }, [editMode, editRawValue, layerHeightMm, fmt]);
 
   // Auto-focus the input when a thumb edit popover opens
   React.useEffect(() => {
@@ -255,16 +308,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   }, [editingThumb]);
 
   // Dismiss + commit when clicking outside the popover
-  React.useEffect(() => {
-    if (!editingThumb) return;
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (editPopoverRef.current && !editPopoverRef.current.contains(e.target as Node)) {
-        commitThumbEdit();
-      }
-    };
-    document.addEventListener('mousedown', handleOutsideClick);
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
-  }, [editingThumb, commitThumbEdit]);
+  useOutsideDismiss(editingThumb !== null, commitThumbEdit, { ignoreRef: editPopoverRef });
   const onPointerDown = React.useCallback((e: React.MouseEvent) => {
     // Right-click: open the thumb popover if near a thumb, then let onContextMenu handle the rest
     if (e.button === 2) {
@@ -295,6 +339,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     if (e.button !== 0) return; // only left-click drags
     e.preventDefault();
     e.stopPropagation();
+    scrubActiveRef.current = true;
     onScrubStart?.();
     // Start with current shift state
     setIsDraggingThumb(true);
@@ -469,6 +514,9 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       setIsDraggingThumb(false);
       dragShiftModeRef.current = false;
       setIsShiftHeld(false);
+      scrubActiveRef.current = false;
+      setLiveValue(null);
+      setLiveLowerValue(null);
       onScrubEnd?.();
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
@@ -572,10 +620,37 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     }
   }, []);
 
+  // Only a jump glides. A wheel or arrow step lands where it is: eased, every step of a
+  // scroll restarts the glide, and the thumb trails the layer the viewport already shows.
+  const [glide, setGlide] = React.useState({ value, lowerValue, eased: false });
+  if (glide.value !== value || glide.lowerValue !== lowerValue) {
+    const near = 2 * (step || 1);
+    const eased = Math.abs(value - glide.value) > near
+      || Math.abs((lowerValue ?? 0) - (glide.lowerValue ?? 0)) > near;
+    setGlide({ value, lowerValue, eased });
+  }
+  const easesPosition = glide.eased && !isDraggingThumb;
+
   const thumbColor = crossSectionEnabled ? 'var(--accent)' : 'var(--text-muted)';
-  const percent = Math.min(100, Math.max(0, ((value - min) / Math.max(1, (max - min))) * 100));
-  const lowerPercent = lowerValue != null
-    ? Math.min(100, Math.max(0, ((lowerValue - min) / Math.max(1, (max - min))) * 100))
+  // A live scrub draws the value the slider just sent, not the owner's committed
+  // one: the owner defers that until the thumb is released.
+  const displayValue = liveValue ?? value;
+  const displayHeightMm = liveValue != null && typeof layerHeightMm === 'number'
+    ? Math.min(
+      Math.max(displayValue * layerHeightMm, 0),
+      typeof maxHeightMm === 'number' ? maxHeightMm : Number.POSITIVE_INFINITY,
+    )
+    : currentHeightMm;
+  const percent = Math.min(100, Math.max(0, ((displayValue - min) / Math.max(1, (max - min))) * 100));
+  const displayLowerValue = liveLowerValue ?? lowerValue;
+  const displayLowerHeightMm = liveLowerValue != null && typeof layerHeightMm === 'number'
+    ? Math.min(
+      Math.max((displayLowerValue ?? 0) * layerHeightMm, 0),
+      typeof maxHeightMm === 'number' ? maxHeightMm : Number.POSITIVE_INFINITY,
+    )
+    : lowerCurrentHeightMm;
+  const lowerPercent = displayLowerValue != null
+    ? Math.min(100, Math.max(0, ((displayLowerValue - min) / Math.max(1, (max - min))) * 100))
     : null;
   const EDGE_BADGE_HIDE_EPS = 1e-6;
   const hideUpperFloatingBadge = percent <= EDGE_BADGE_HIDE_EPS || percent >= (100 - EDGE_BADGE_HIDE_EPS);
@@ -604,12 +679,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     ? { marginLeft: '10px' }
     : { marginRight: '10px' };
   const minimalRailTitle = React.useMemo(() => {
-    const mmLabel = typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : '—';
-    const toggleHint = onToggleCrossSection
-      ? ` • Double-click to turn the cross-section ${crossSectionEnabled ? 'off' : 'back on'}`
-      : '';
-    return `Layer ${value} • ${mmLabel} • Right-click a handle to type an exact value${toggleHint}`;
-  }, [crossSectionEnabled, currentHeightMm, formatMm, onToggleCrossSection, value]);
+    const mmLabel = typeof displayHeightMm === 'number' ? formatMm(displayHeightMm) : '—';
+    const crossSection = onToggleCrossSection ? (crossSectionEnabled ? 'on' : 'off') : 'none';
+    return formatMinimalRailTitle(_, Math.round(displayValue), mmLabel, crossSection);
+  }, [_, crossSectionEnabled, displayHeightMm, displayValue, formatMm, onToggleCrossSection]);
   const railClassName = `relative mx-auto ${embedded ? (expandToContainer ? 'flex-1 h-full min-h-[300px]' : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`;
 
   return (
@@ -639,10 +712,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           <div className={embedded ? 'mb-1.5' : 'mb-2'}>
             <div className="flex items-center justify-between">
               <div className={`${embedded ? 'text-[10px]' : 'text-[11px]'} font-semibold uppercase tracking-wide`} style={{ color: 'var(--text-muted)' }}>
-                Layer
+                {_(msg`Layer`)}
               </div>
               <div className="text-xs font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
-                {value}
+                {Math.round(displayValue)}
               </div>
             </div>
 
@@ -653,11 +726,11 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 background: 'color-mix(in srgb, var(--surface-1), transparent 12%)',
               }}
             >
-              {typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : '—'}
+              {typeof displayHeightMm === 'number' ? formatMm(displayHeightMm) : '—'}
             </div>
             {typeof maxHeightMm === 'number' && !embedded && (
               <div className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
-                Max {formatMm(maxHeightMm)} mm
+                Max {formatMm(maxHeightMm)}
               </div>
             )}
           </div>
@@ -720,10 +793,14 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
             {/* Progress fill */}
             <div
-              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full transition-[background,box-shadow] duration-200"
+              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full"
               style={{
                 bottom: `${lowerPercent ?? 0}%`,
                 height: `${percent - (lowerPercent ?? 0)}%`,
+                // Glides with the thumbs, or it reaches a jump's end while they are still on the way.
+                transition: easesPosition
+                  ? 'bottom 170ms cubic-bezier(0.22, 1, 0.36, 1), height 170ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms, box-shadow 200ms'
+                  : 'background 200ms, box-shadow 200ms',
                 background: crossSectionEnabled
                   ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))'
                   : 'linear-gradient(180deg, color-mix(in srgb, var(--text-muted), white 10%), var(--text-muted))',
@@ -740,11 +817,11 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
                 style={{
                   top: `${100 - lowerPercent}%`,
-                  transition: isDraggingThumb ? 'none' : 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)',
+                  transition: easesPosition ? 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
                 }}
               >
                 <div className="relative">
-                  {showValue && typeof lowerCurrentHeightMm === 'number' && !hideLowerFloatingBadge && (
+                  {showValue && typeof displayLowerHeightMm === 'number' && !hideLowerFloatingBadge && (
                     <div
                       className={isMinimalRail
                         ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${minimalRailBadgeClass} pointer-events-none top-3`
@@ -757,7 +834,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                             color: 'var(--text-strong)',
                           }}
                     >
-                      {isMinimalRail ? `${lowerValue}` : `${formatMm(lowerCurrentHeightMm)} mm`}
+                      {isMinimalRail ? `${Math.round(displayLowerValue ?? 0)}` : formatMm(displayLowerHeightMm ?? 0)}
                     </div>
                   )}
                   <div
@@ -795,7 +872,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                               : { background: 'color-mix(in srgb, var(--surface-2), transparent 20%)', color: 'var(--text-muted)' }}
                             onMouseDown={e => e.preventDefault()}
                             onClick={() => switchEditMode('layer')}
-                          >Layer #</button>
+                          >{_(msg`Layer #`)}</button>
                           <button
                             className="flex-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors"
                             style={editMode === 'mm'
@@ -824,7 +901,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                           background: 'color-mix(in srgb, var(--surface-1), transparent 10%)',
                           color: 'var(--text-strong)',
                         }}
-                        placeholder={editMode === 'layer' ? 'Layer #' : 'Height mm'}
+                        placeholder={editMode === 'layer' ? _(msg`Layer #`) : _(msg`Height mm`)}
                       />
                     </div>
                   )}
@@ -837,11 +914,11 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
               style={{
                 top: `${100 - percent}%`,
-                transition: isDraggingThumb ? 'none' : 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)',
+                transition: easesPosition ? 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
               }}
             >
               <div className="relative">
-                {showValue && typeof currentHeightMm === 'number' && !hideUpperFloatingBadge && (
+                {showValue && typeof displayHeightMm === 'number' && !hideUpperFloatingBadge && (
                   <div
                     className={isMinimalRail
                       ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${minimalRailBadgeClass} pointer-events-none ${shouldPlaceCurrentBadgeBelowThumb ? 'top-3' : '-top-5'}`
@@ -855,8 +932,8 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                         }}
                   >
                     {isMinimalRail
-                      ? `${value}`
-                      : `${formatMm(currentHeightMm)} mm`}
+                      ? `${Math.round(displayValue)}`
+                      : formatMm(displayHeightMm)}
                   </div>
                 )}
             <div
@@ -894,7 +971,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                         : { background: 'color-mix(in srgb, var(--surface-2), transparent 20%)', color: 'var(--text-muted)' }}
                       onMouseDown={e => e.preventDefault()}
                       onClick={() => switchEditMode('layer')}
-                    >Layer #</button>
+                    >{_(msg`Layer #`)}</button>
                     <button
                       className="flex-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors"
                       style={editMode === 'mm'
@@ -923,7 +1000,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                     background: 'color-mix(in srgb, var(--surface-1), transparent 10%)',
                     color: 'var(--text-strong)',
                   }}
-                  placeholder={editMode === 'layer' ? 'Layer #' : 'Height mm'}
+                  placeholder={editMode === 'layer' ? _(msg`Layer #`) : _(msg`Height mm`)}
                 />
               </div>
             )}

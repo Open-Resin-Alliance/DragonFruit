@@ -4,6 +4,14 @@ import { useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 
+/**
+ * three-mesh-bvh's accelerated raycast reads this flag; the type comes from its
+ * own module augmentation, which this package does not apply to `Raycaster`.
+ */
+function enableFirstHitRaycasts(raycaster: THREE.Raycaster): void {
+  (raycaster as THREE.Raycaster & { firstHitOnly?: boolean }).firstHitOnly = true;
+}
+
 export function SceneRenderBindings({
   rendererRef,
   sceneRef,
@@ -15,7 +23,17 @@ export function SceneRenderBindings({
   onWebGlContextLost?: (event: WebGLContextEvent) => void;
   onWebGlContextRestored?: (event: Event) => void;
 }) {
-  const { gl, scene } = useThree();
+  const { gl, scene, raycaster } = useThree();
+
+  React.useEffect(() => {
+    // R3F raycasts every model with a pointer handler on every pointer move, and
+    // three-mesh-bvh otherwise collects *all* hits per mesh. Hover only needs the
+    // nearest hit of each object, and `firstHitOnly` stops the BVH at the first
+    // triangle instead of walking the rest of the geometry. Each object still
+    // contributes its nearest hit, so the sorted intersection list and the
+    // behind-the-model checks keep their ordering.
+    enableFirstHitRaycasts(raycaster);
+  }, [raycaster]);
 
   React.useEffect(() => {
     rendererRef.current = gl;

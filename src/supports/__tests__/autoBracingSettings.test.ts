@@ -17,8 +17,8 @@ test('auto-bracing defaults are created from the SSOT constraint defaults', () =
     assert.equal(settings.seedSpacingMm, AUTO_BRACING_CONSTRAINTS.seedSpacingMm.defaultValue);
     assert.equal(settings.seedJitterMm, AUTO_BRACING_CONSTRAINTS.seedJitterMm.defaultValue);
     assert.equal(settings.maxBraceLengthMm, AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm.defaultValue);
-    assert.equal(settings.initialPattern, 'singleDiagonal');
-    assert.equal(settings.repeatingPattern, 'singleDiagonal');
+    assert.equal(settings.initialPattern, 'crossDiagonal');
+    assert.equal(settings.repeatingPattern, 'crossDiagonal');
     assert.equal(settings.debugSectionColorsEnabled, false);
     assert.equal(settings.debugVoronoiSeedsEnabled, false);
 });
@@ -32,7 +32,9 @@ test('normalizeAutoBracingSettings clamps numeric values and restores invalid pa
         seedJitterMm: 999,
         maxBraceLengthMm: -1,
         initialPattern: 'invalid-pattern' as any,
-        repeatingPattern: 'crossDiagonal',
+        // A valid value that is not the default, so the assertion below proves
+        // normalization kept it rather than restoring the default.
+        repeatingPattern: 'singleDiagonal',
         debugSectionColorsEnabled: 'yes' as any,
         debugVoronoiSeedsEnabled: 'yes' as any,
     });
@@ -43,8 +45,8 @@ test('normalizeAutoBracingSettings clamps numeric values and restores invalid pa
     assert.equal(normalized.seedSpacingMm, AUTO_BRACING_CONSTRAINTS.seedSpacingMm.max);
     assert.equal(normalized.seedJitterMm, AUTO_BRACING_CONSTRAINTS.seedJitterMm.max);
     assert.equal(normalized.maxBraceLengthMm, AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm.min);
-    assert.equal(normalized.initialPattern, 'singleDiagonal');
-    assert.equal(normalized.repeatingPattern, 'crossDiagonal');
+    assert.equal(normalized.initialPattern, 'crossDiagonal');
+    assert.equal(normalized.repeatingPattern, 'singleDiagonal');
     assert.equal(normalized.debugSectionColorsEnabled, false);
     assert.equal(normalized.debugVoronoiSeedsEnabled, false);
 });
@@ -53,13 +55,13 @@ test('applyAutoBracingSettingsPatch keeps untouched fields and normalizes patche
     const base = createDefaultAutoBracingSettings();
     const patched = applyAutoBracingSettingsPatch(base, {
         seedSpacingMm: 8.6,
-        initialPattern: 'crossDiagonal',
+        initialPattern: 'zigZag',
         debugSectionColorsEnabled: true,
         debugVoronoiSeedsEnabled: true,
     });
 
     assert.equal(patched.seedSpacingMm, 8.5);
-    assert.equal(patched.initialPattern, 'crossDiagonal');
+    assert.equal(patched.initialPattern, 'zigZag');
     assert.equal(patched.debugSectionColorsEnabled, true);
     assert.equal(patched.debugVoronoiSeedsEnabled, true);
     assert.equal(patched.repeatingPattern, base.repeatingPattern);

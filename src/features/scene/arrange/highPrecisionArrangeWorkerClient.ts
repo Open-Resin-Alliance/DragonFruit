@@ -113,6 +113,7 @@ const serializeInput = (input: HighPrecisionArrangeInput): HighPrecisionArrangeW
   widthMm: input.widthMm,
   depthMm: input.depthMm,
   originMode: input.originMode,
+  plateOffsetMm: input.plateOffsetMm,
   arrangeSpacingMm: input.arrangeSpacingMm,
   arrangeAllowRotateOnZ: input.arrangeAllowRotateOnZ,
   arrangeAnchorMode: input.arrangeAnchorMode,
@@ -151,9 +152,4 @@ export async function computeHighPrecisionArrangeResultWorker(input: HighPrecisi
       reject(err);
     }
   });
-}
-
-export async function computeHighPrecisionArrangeUpdatesWorker(input: HighPrecisionArrangeInput): Promise<HighPrecisionArrangeUpdate[]> {
-  const result = await computeHighPrecisionArrangeResultWorker(input);
-  return result.updates;
 }

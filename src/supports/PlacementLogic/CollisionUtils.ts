@@ -132,6 +132,42 @@ export function checkShaftCollision(
 }
 
 /**
+ * Clearance for a SHORT bridge (a twig) between two model surfaces.
+ *
+ * `checkShaftCollision` fires whiskers offset from the axis by `radius`. A
+ * twig's socket sits ON the surface it touches, so for any canted twig — the
+ * normal case, since it bridges two features a couple of millimeters apart —
+ * a whisker offset towards the lower surface starts *inside* the material and
+ * the exit hit reads as a collision. Every canted twig was refused this way,
+ * automatically and by hand. Check the middle of the span instead: the sockets
+ * are anchored on surfaces by construction, and for a twig at most
+ * `stickVsTwigCutoffMm` long the middle is what would cross anything.
+ */
+export function checkShortBridgeCollision(
+    start: Vec3,
+    end: Vec3,
+    radius: number,
+    mesh: THREE.Mesh,
+): CollisionResult {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dz = end.z - start.z;
+    const length = Math.hypot(dx, dy, dz);
+    const inset = Math.min(radius + 0.1, length * 0.35);
+    if (length <= inset * 2.2) return { hit: false };
+
+    const ux = dx / length;
+    const uy = dy / length;
+    const uz = dz / length;
+    return checkShaftCollision(
+        { x: start.x + ux * inset, y: start.y + uy * inset, z: start.z + uz * inset },
+        { x: end.x - ux * inset, y: end.y - uy * inset, z: end.z - uz * inset },
+        radius,
+        mesh,
+    );
+}
+
+/**
  * Checks if a Bezier curve collides with a mesh.
  * Approximates the curve as a series of straight segments.
  */

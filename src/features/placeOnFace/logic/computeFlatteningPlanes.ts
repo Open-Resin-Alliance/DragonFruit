@@ -31,7 +31,18 @@ export function computeFlatteningPlanes(geometry: THREE.BufferGeometry): Flatten
   const cellSize = Math.max(0.1, maxDim / 40.0);
   const invCellSize = 1.0 / cellSize;
 
-  const cellMap = new Set<string>();
+  // Cell indices are taken relative to the grid's own corner, which keeps them
+  // small (the box spans at most 41 cells an axis) and lets three of them pack
+  // into 7 bits each as one exact integer key. The key used to be a
+  // `${cx},${cy},${cz}` string built once per *vertex*: 2.6M strings on an
+  // 869k-triangle model, 240ms of this function's 250ms, against 50ms for the
+  // integer (measured on that model; 500ms against 108ms on a 1.8M-triangle one).
+  // Same cells, same points, in the same order.
+  const baseX = Math.round(bbox.min.x * invCellSize);
+  const baseY = Math.round(bbox.min.y * invCellSize);
+  const baseZ = Math.round(bbox.min.z * invCellSize);
+
+  const cellMap = new Set<number>();
   const points: THREE.Vector3[] = [];
 
   for (let i = 0; i < vertexCount; i++) {
@@ -43,7 +54,7 @@ export function computeFlatteningPlanes(geometry: THREE.BufferGeometry): Flatten
     const cx = Math.round(x * invCellSize);
     const cy = Math.round(y * invCellSize);
     const cz = Math.round(z * invCellSize);
-    const hash = `${cx},${cy},${cz}`;
+    const hash = ((cx - baseX) << 14) | ((cy - baseY) << 7) | (cz - baseZ);
     
     // Only keep ONE exact original point per cell
     if (!cellMap.has(hash)) {

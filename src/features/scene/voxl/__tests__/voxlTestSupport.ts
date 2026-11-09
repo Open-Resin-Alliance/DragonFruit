@@ -1,3 +1,4 @@
+import { unzlibSync } from 'fflate';
 import type { BuildVoxlDocumentInput, VoxlModelRuntimeLike } from '../types';
 import type { DragonfruitImportFormat } from '@/supports/types';
 
@@ -68,6 +69,28 @@ export async function withFrozenClock<T>(fn: () => Promise<T>): Promise<T> {
 /** Reads the container version from a serialized VOXL document. */
 export const readVoxlVersion = (bytes: Uint8Array): number =>
   new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(4, true);
+
+/**
+ * Decodes one chunk's text payload from a serialized VOXL binary container.
+ * Lets a test assert on the wire JSON the writer emitted (e.g. that a key is
+ * absent) rather than only on the reader's normalised document.
+ */
+export function readVoxlChunkText(bytes: Uint8Array, type: string, index = 0): string {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const chunkCount = view.getUint32(8, true);
+  for (let i = 0; i < chunkCount; i += 1) {
+    const base = 16 + i * 20;
+    const tag = String.fromCharCode(bytes[base], bytes[base + 1], bytes[base + 2], bytes[base + 3]);
+    if (tag !== type || view.getUint16(base + 4, true) !== index) continue;
+    const compression = view.getUint16(base + 6, true);
+    const offset = view.getUint32(base + 8, true);
+    const compressedSize = view.getUint32(base + 12, true);
+    const raw = bytes.subarray(offset, offset + compressedSize);
+    const payload = compression === 1 ? unzlibSync(raw) : raw;
+    return new TextDecoder().decode(payload);
+  }
+  throw new Error(`chunk ${type}[${index}] not found`);
+}
 
 /** Counts chunks of a given 4-char type in a serialized VOXL document. */
 export function countVoxlChunks(bytes: Uint8Array, type: string): number {

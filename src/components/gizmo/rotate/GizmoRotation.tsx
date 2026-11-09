@@ -28,6 +28,7 @@ import {
 } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 /**
  * Radius around the projected gizmo centre where the pointer's angle is not a
@@ -547,7 +548,7 @@ export function GizmoRotation({
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
         -(((e.clientY - rect.top) / rect.height) * 2 - 1),
       );
-      dragRaycaster.setFromCamera(dragNdc, camera);
+      setPickRayFromCamera(dragRaycaster, dragNdc, camera);
       const hitPlane = rayToRingLocal(
         dragRaycaster.ray.origin,
         dragRaycaster.ray.direction,

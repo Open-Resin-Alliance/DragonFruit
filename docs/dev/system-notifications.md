@@ -2,7 +2,7 @@
 
 Top-right, frosted-glass **System Notifications** for cross-cutting, out-of-flow events that should not block the editor: update available, print done, long-running printer errors. They are the fourth notification path in the app — distinct from the three bottom-corner toast paths documented in [Notifications and Toasts](notifications.md).
 
-Reach for System Notifications when the message is **system-level, not editor-state**: the user can be in any mode or tab and still needs to see it, and the action is to open a destination (Settings → Updates, printer monitor) rather than to undo an editor operation. For editor-state feedback (saving, undo/redo, import report, per-component validation) use the existing `useEditorToasts` / `SupportToasts` / inline `ToastViewport` paths instead.
+Reach for System Notifications when the message is **system-level, not editor-state**: the user can be in any mode or tab and still needs to see it, and the action is to open a destination (Settings → Updates, printer monitor) rather than to undo an editor operation. For editor-state feedback (saving, undo/redo, import report, per-component validation) use the existing `useEditorToasts` / inline `ToastViewport` paths instead.
 
 ## Public surface
 
@@ -92,7 +92,7 @@ Suppression when already in `Settings → Updates` is done by the *caller* (`Glo
 - **Id is the contract.** `pushSystemNotification` upserts by `id`. Re-pushing `update-available` with a new `progressPct` updates the same card; a new `print-done` id creates a second card stacked below with `gap-3`. Use stable ids (`print-done-${plateId}`) so a second completion for the same plate replaces rather than duplicates.
 - **Leaf store.** `systemNotificationStore.ts` must stay a leaf — no imports from `@/features/updater/*`, `@/features/printing/*`, or `@/components/*`. Features import from the store, not the other way around. This is what lets the updater, printer monitor, and any future system-level feature share the same stack without cycles.
 - **Reload semantics.** `isAllowSameVersionEnabled` is in-memory until reload (not `localStorage`). `Ctrl+Shift+U` enables it for the session so `fetchUpdateInfo(channel, true)` via `src-tauri/src/updater_channel.rs` `version_comparator >=` returns `current → current` with real GitHub `body` (`body_len=5461` dev) and `Update & Restart` flushes `window.__df_flushAutosave` before `downloadAndInstall`. A reload clears the flag.
-- **Boundaries.** Do not use System Notifications for editor toasts (saving, undo/redo, import report, `SupportToasts`). Those stay bottom-center with `Toast`/`ToastViewport` and `useEditorToasts` as documented in `notifications.md`. System Notifications are top-right, frosted, and for destinations.
+- **Boundaries.** Do not use System Notifications for editor toasts (saving, undo/redo, import report). Those stay bottom-center with `Toast`/`ToastViewport` and `useEditorToasts` as documented in `notifications.md`. System Notifications are top-right, frosted, and for destinations.
 
 ## Related pages
 

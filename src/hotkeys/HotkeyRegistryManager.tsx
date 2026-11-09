@@ -161,16 +161,23 @@ export function setupHotkeyListeners() {
 
         const isPrimaryModifier = getPrimaryModifierKey() === 'meta' ? e.metaKey : e.ctrlKey;
         
-        // Prevent browser default behaviors
+        // Prevent browser default behaviors. `p` is here because Ctrl+Shift+P is
+        // the profiler's binding and the platform reads it as Print; without the
+        // suppression the print dialog opens over the app instead.
         if (
             (isPrimaryModifier && ['s', 'a', 'c', 'v', 'z', 'y'].includes(key)) ||
             ['delete', 'backspace', 'arrowup', 'arrowdown'].includes(key) ||
-            (e.shiftKey && isPrimaryModifier && ['d', 'c', 'x', 'a', 'n', 'm', 'k'].includes(key))
+            (e.shiftKey && isPrimaryModifier && ['d', 'c', 'x', 'a', 'n', 'm', 'k', 'p'].includes(key))
         ) {
             e.preventDefault();
         }
 
-        hotkeyStore.getState().pressKey(e.key);
+        hotkeyStore.getState().pressKey(e.key, {
+            ctrlKey: e.ctrlKey,
+            metaKey: e.metaKey,
+            shiftKey: e.shiftKey,
+            altKey: e.altKey,
+        });
 
         if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
             window.dispatchEvent(new CustomEvent('app-hotkey-keydown', {

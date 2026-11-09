@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import type { ModelHollowingModifier } from './types';
 
 // The world↔local scaling helpers live in utils/geometryScaling (shared with
@@ -26,8 +27,9 @@ export function hashBlockedVoxelIndices(indices: readonly number[]): string {
   return `${indices.length}:${(hash >>> 0).toString(16)}`;
 }
 
+/** Canonical scene orientation as a tuple (matches the renderer). */
 export function getRotationQuatTuple(rotation: THREE.Euler): RotationQuatTuple {
-  const quat = new THREE.Quaternion().setFromEuler(rotation);
+  const quat = quaternionFromGlobalEuler(rotation);
   return [quat.x, quat.y, quat.z, quat.w];
 }
 

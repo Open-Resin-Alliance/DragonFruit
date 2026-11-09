@@ -1,0 +1,108 @@
+name: Issue guts
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to classify
+        required: true
+        type: number
+      dry_run:
+        description: Only show the probabilities, don't label
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: issue-guts-${{ github.event.issue.number || inputs.issue }}
+
+jobs:
+  classify:
+    name: Classify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      labels: ${{ steps.jev.outputs.labels }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Ask Jev
+        id: jev
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          NUMBER: ${{ github.event.issue.number || inputs.issue }}
+        run: node .github/guts/classify.mjs "$NUMBER"
+
+  label:
+    name: Label
+    needs: classify
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Apply labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number || inputs.issue }}
+          LABELS: ${{ needs.classify.outputs.labels }}
+        run: |
+          # Labels can only be areas from .github/guts/areas.json, so creating missing ones is safe.
+          IFS=, read -ra wanted <<< "$LABELS"
+          for l in "${wanted[@]}"; do
+            gh label create "$l" --color c5def5 2>/dev/null || true
+          done
+          gh issue edit "$NUMBER" --add-label "$LABELS"
+
+      - name: Add missing title prefix
+        # Also on a manual run, so re-running an issue whose first run failed
+        # finishes the job; it only ever adds a missing prefix.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number || inputs.issue }}
+          # Passed through env, never inlined, because title and body are user input.
+          TITLE: ${{ github.event.issue.title }}
+          BODY: ${{ github.event.issue.body }}
+        run: |
+          # A manual run has no issue in its event; read it from the API.
+          if [[ "$GITHUB_EVENT_NAME" != issues ]]; then
+            TITLE=$(gh issue view "$NUMBER" --json title --jq .title)
+            BODY=$(gh issue view "$NUMBER" --json body --jq .body)
+          fi
+
+          # Adds [BUG] or [FEAT] to issues created from the issue forms, in case
+          # the reporter deleted the pre-filled prefix. Each form leaves a heading
+          # only it produces.
+          if grep -qF '### Steps to reproduce' <<< "$BODY"; then
+            prefix='[BUG]'
+          elif grep -qF '### What problem are you trying to solve?' <<< "$BODY"; then
+            prefix='[FEAT]'
+          else
+            echo "Not from an issue form; leaving the title alone."
+            exit 0
+          fi
+
+          # Already prefixed (any capitalisation)? Nothing to do.
+          if [[ "${TITLE,,}" == "${prefix,,}"* ]]; then
+            echo "Title already starts with $prefix."
+            exit 0
+          fi
+
+          gh issue edit "$NUMBER" --title "$prefix $TITLE"
+          echo "Renamed #$NUMBER to: $prefix $TITLE"

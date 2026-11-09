@@ -1,6 +1,9 @@
 import React from 'react';
+import JSZip from 'jszip';
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
-import type { PrinterProfile } from '@/features/profiles/profileStore';
+import { getProfileStoreSnapshot, type PrinterProfile } from '@/features/profiles/profileStore';
+import { readPrintArtifactBytesFromPath } from '@/features/slicing/tauri/nativeSlicerBridge';
+import type { SliceExportArtifact } from '@/features/slicing/sliceExportOrchestrator';
 
 type SceneManager = ReturnType<typeof useSceneCollectionManager>;
 
@@ -11,33 +14,122 @@ type PreviewTargetResolution = {
   viewportHeight: number;
 } | null;
 
-/** Late/cross-cutting dependencies the preview manager reads at event/effect
- *  time via deps.current.*. `printingPreviewTargetResolution` is owned by Home
- *  (it derives from the active printer profile + slicing artifact) and is
- *  defined AFTER this hook's call site, so it is injected through the deps ref
- *  to break the ordering cycle. Read inside the hi-res settled-canvas effect. */
-export type PrintingPreviewManagerDeps = {
-  /** Read at effect time; not reactive. Owned by Home (profile + artifact). */
-  printingPreviewTargetResolution: PreviewTargetResolution;
-};
-
 export type UsePrintingPreviewManagerOptions = {
   scene: SceneManager;
   activePrinterProfile: PrinterProfile | null | undefined;
   /** Total sliced layers; owned by Home/slicing. */
   printingPreviewTotalLayers: number;
-  /** Per-layer preview PNG object URLs; owned by Home/slicing loader. */
-  printingLayerPreviewUrls: Array<string | null>;
-  deps: React.MutableRefObject<PrintingPreviewManagerDeps>;
+  /** The preview of a layer of the plate on screen, once read; owned by `useSlicedPlates`. */
+  layerPreviewUrlAt: (layerNumber: number) => string | null;
+  /** The slice of the plate on screen; owned by `useSlicedPlates`. */
+  printingArtifact: SliceExportArtifact | null;
 };
+
+/** Fallback tints when a tank's material has no colour of its own. */
+const TANK_PREVIEW_COLOURS = ['#60a5fa', '#facc15', '#f87171', '#34d399', '#c084fc', '#fb923c'];
+
+/**
+ * A multi-tank slice stores one image per tank per layer (`layer_00001_tank_1.png`,
+ * …). The preview colours each of them with its tank's resin and stacks them, so the
+ * layer shows what each geometry prints as instead of a white mask.
+ */
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const normalized = hex.trim().replace('#', '');
+  const value = normalized.length === 3
+    ? normalized.split('').map((char) => char + char).join('')
+    : normalized;
+  const int = Number.parseInt(value.slice(0, 6), 16);
+  if (!Number.isFinite(int)) return { r: 255, g: 255, b: 255 };
+  return { r: (int >> 16) & 0xff, g: (int >> 8) & 0xff, b: int & 0xff };
+}
+
+async function composeMultiTankLayerPreview(
+  entries: Array<{ tankIndex: number; blob: Blob }>,
+  colours: readonly string[],
+): Promise<string> {
+  const decoded = await Promise.all(entries.map(async (entry) => {
+    const url = URL.createObjectURL(entry.blob);
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    return { ...entry, image, url };
+  }));
+  try {
+    const width = Math.max(1, decoded[0]?.image.naturalWidth || 1);
+    const height = Math.max(1, decoded[0]?.image.naturalHeight || 1);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('the preview canvas is unavailable');
+
+    for (const tank of decoded) {
+      const tinted = document.createElement('canvas');
+      tinted.width = width;
+      tinted.height = height;
+      const tintCtx = tinted.getContext('2d');
+      if (!tintCtx) continue;
+      // The tank PNGs are opaque grayscale masks: the intensity is the coverage, so
+      // transparency has to be derived from it. Filling over them would paint the
+      // whole rectangle.
+      tintCtx.drawImage(tank.image, 0, 0, width, height);
+      const pixels = tintCtx.getImageData(0, 0, width, height);
+      const tint = hexToRgb(colours[tank.tankIndex] ?? TANK_PREVIEW_COLOURS[tank.tankIndex % TANK_PREVIEW_COLOURS.length]);
+      const data = pixels.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const coverage = data[i];
+        data[i] = tint.r;
+        data[i + 1] = tint.g;
+        data[i + 2] = tint.b;
+        data[i + 3] = coverage;
+      }
+      tintCtx.putImageData(pixels, 0, 0);
+      ctx.drawImage(tinted, 0, 0);
+    }
+
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('the preview could not be encoded');
+    return URL.createObjectURL(blob);
+  } finally {
+    for (const tank of decoded) URL.revokeObjectURL(tank.url);
+  }
+}
 
 export function usePrintingPreviewManager({
   scene,
   activePrinterProfile,
   printingPreviewTotalLayers,
-  printingLayerPreviewUrls,
-  deps,
+  layerPreviewUrlAt,
+  printingArtifact,
 }: UsePrintingPreviewManagerOptions) {
+  /** The printer's display, in pixels and in millimetres: what a layer image is drawn onto. */
+  const printingPreviewTargetResolution = React.useMemo<PreviewTargetResolution>(() => {
+    const printerWidth = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionX ?? 0));
+    const printerHeight = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionY ?? 0));
+    const pixelSizeX = Math.max(0.0001, Number(activePrinterProfile?.pixelSize?.x ?? 1));
+    const pixelSizeY = Math.max(0.0001, Number(activePrinterProfile?.pixelSize?.y ?? 1));
+    const hasPrintableArtifact = (printingArtifact?.outputName ?? '').trim().length > 0;
+
+    if (!hasPrintableArtifact || printerWidth <= 0 || printerHeight <= 0) {
+      return null;
+    }
+
+    return {
+      widthPx: printerWidth,
+      heightPx: printerHeight,
+      viewportWidth: printerWidth * pixelSizeX,
+      viewportHeight: printerHeight * pixelSizeY,
+    };
+  }, [
+    activePrinterProfile?.display?.resolutionX,
+    activePrinterProfile?.display?.resolutionY,
+    activePrinterProfile?.pixelSize?.x,
+    activePrinterProfile?.pixelSize?.y,
+    printingArtifact?.outputName,
+  ]);
+  const targetViewportWidth = printingPreviewTargetResolution?.viewportWidth;
+  const targetViewportHeight = printingPreviewTargetResolution?.viewportHeight;
+
   // ---- moved: stateA ----
   const [printingSelectedLayer, setPrintingSelectedLayer] = React.useState(1);
   const [printingDisplayedLayer, setPrintingDisplayedLayer] = React.useState(1);
@@ -55,6 +147,12 @@ export function usePrintingPreviewManager({
   // ---- moved: refsC ----
   const printingPreviewViewportRef = React.useRef<HTMLDivElement | null>(null);
   const printingPreviewCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  /** Composite preview of the displayed layer for a multi-tank slice, and its URL. */
+  const [multiTankPreview, setMultiTankPreview] = React.useState<{ layer: number; url: string } | null>(null);
+  const multiTankPreviewRef = React.useRef<{ layer: number; url: string } | null>(null);
+  const multiTankZipRef = React.useRef<{ path: string; zip: JSZip } | null>(null);
+  /** Composed layer URLs, so scrubbing back over a layer is instant. */
+  const multiTankPreviewCacheRef = React.useRef(new Map<number, string>());
   const printingPreviewSettleTimeoutRef = React.useRef<number | null>(null);
   const printingPreviewSettledRef = React.useRef(false);
   const printingPreviewCanvasRenderNonceRef = React.useRef(0);
@@ -172,10 +270,121 @@ export function usePrintingPreviewManager({
   }, [printingPreviewTotalLayers]);
 
   // ---- moved: selectedUrlPngLoaded ----
+  const tankPreviewColours = React.useMemo(() => {
+    if (activePrinterProfile?.materialMode !== 'multiTank') return [];
+    const profiles = getProfileStoreSnapshot().materialProfiles;
+    const byId = new Map(profiles.map((profile) => [profile.id, profile.color]));
+    return (activePrinterProfile.tankMaterials ?? []).map((materialId, index) => (
+      byId.get(materialId) ?? TANK_PREVIEW_COLOURS[index % TANK_PREVIEW_COLOURS.length]
+    ));
+  }, [activePrinterProfile?.materialMode, activePrinterProfile?.tankMaterials]);
+
+  const multiTankArtifactPath = activePrinterProfile?.materialMode === 'multiTank'
+    ? printingArtifact?.nativeTempPath ?? null
+    : null;
+
+  React.useEffect(() => {
+    if (!multiTankArtifactPath) {
+      if (multiTankPreviewRef.current) {
+        URL.revokeObjectURL(multiTankPreviewRef.current.url);
+        multiTankPreviewRef.current = null;
+      }
+      multiTankZipRef.current = null;
+      setMultiTankPreview(null);
+      return;
+    }
+
+    const layer = printingDisplayedLayer;
+    const cached = multiTankPreviewCacheRef.current.get(layer);
+    if (cached) {
+      if (multiTankPreviewRef.current?.url !== cached) {
+        multiTankPreviewRef.current = { layer, url: cached };
+      }
+      setMultiTankPreview({ layer, url: cached });
+      return;
+    }
+    // While the pointer is moving the GPU cross-section is the preview; composing
+    // images for every intermediate layer is what made scrubbing stutter. The
+    // settled layer is composed once, when the scrub ends.
+    if (isPrintingLayerScrubbing || !isPrintingPreviewSettled) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        let zip = multiTankZipRef.current?.path === multiTankArtifactPath
+          ? multiTankZipRef.current.zip
+          : null;
+        if (!zip) {
+          const bytes = await readPrintArtifactBytesFromPath(multiTankArtifactPath);
+          zip = await JSZip.loadAsync(bytes);
+          multiTankZipRef.current = { path: multiTankArtifactPath, zip };
+        }
+        const prefix = `layer_${String(layer).padStart(5, '0')}_tank_`;
+        const entries = Object.values(zip.files)
+          .filter((file) => !file.dir && file.name.startsWith(prefix) && file.name.endsWith('.png'))
+          .map((file) => ({
+            tankIndex: Number(file.name.slice(prefix.length, -4)) - 1,
+            file,
+          }))
+          .filter((entry) => Number.isFinite(entry.tankIndex) && entry.tankIndex >= 0)
+          .sort((a, b) => a.tankIndex - b.tankIndex);
+        if (entries.length === 0) {
+          if (!cancelled) setMultiTankPreview(null);
+          return;
+        }
+        const blobs = await Promise.all(entries.map(async (entry) => ({
+          tankIndex: entry.tankIndex,
+          blob: await entry.file.async('blob'),
+        })));
+        const url = await composeMultiTankLayerPreview(blobs, tankPreviewColours);
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        if (multiTankPreviewRef.current) URL.revokeObjectURL(multiTankPreviewRef.current.url);
+        const next = { layer, url };
+        multiTankPreviewRef.current = next;
+        const cache = multiTankPreviewCacheRef.current;
+        cache.set(layer, url);
+        if (cache.size > 12) {
+          const oldest = cache.keys().next().value;
+          if (oldest !== undefined && oldest !== layer) {
+            const evicted = cache.get(oldest);
+            cache.delete(oldest);
+            if (evicted && evicted !== url) URL.revokeObjectURL(evicted);
+          }
+        }
+        setMultiTankPreview(next);
+      } catch {
+        if (!cancelled) setMultiTankPreview(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isPrintingLayerScrubbing,
+    isPrintingPreviewSettled,
+    multiTankArtifactPath,
+    printingDisplayedLayer,
+    tankPreviewColours,
+  ]);
+
+  React.useEffect(() => () => {
+    for (const url of multiTankPreviewCacheRef.current.values()) URL.revokeObjectURL(url);
+    multiTankPreviewCacheRef.current.clear();
+    multiTankPreviewRef.current = null;
+  }, []);
+
   const selectedPrintingLayerPreviewUrl = React.useMemo(() => {
     if (printingDisplayedLayer < 1) return null;
-    return printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null;
-  }, [printingLayerPreviewUrls, printingDisplayedLayer]);
+    if (multiTankPreview?.layer === printingDisplayedLayer) return multiTankPreview.url;
+    // While a multi-tank composite is being built, the white single-image mask is
+    // not shown: it would flash an uncoloured layer first.
+    if (multiTankArtifactPath) return null;
+    return layerPreviewUrlAt(printingDisplayedLayer);
+  }, [layerPreviewUrlAt, multiTankArtifactPath, multiTankPreview, printingDisplayedLayer]);
 
   const isPrintingPngLoaded = React.useMemo(() => {
     if (!selectedPrintingLayerPreviewUrl) return false;
@@ -544,33 +753,28 @@ export function usePrintingPreviewManager({
     const viewport = printingPreviewViewportRef.current;
     if (!canvas || !viewport) return;
 
-    const rect = viewport.getBoundingClientRect();
-    const viewportWidth = Math.max(1, Math.round(rect.width));
-    const viewportHeight = Math.max(1, Math.round(rect.height));
-    const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const canvasWidth = Math.max(1, Math.round(viewportWidth * dpr));
-    const canvasHeight = Math.max(1, Math.round(viewportHeight * dpr));
+    // Drawn again whenever the pane changes size: the canvas keeps the pixel size it was given,
+    // and CSS stretches it to the new box until something redraws it.
+    const draw = (image: HTMLImageElement) => {
+      const rect = viewport.getBoundingClientRect();
+      const viewportWidth = Math.max(1, Math.round(rect.width));
+      const viewportHeight = Math.max(1, Math.round(rect.height));
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const canvasWidth = Math.max(1, Math.round(viewportWidth * dpr));
+      const canvasHeight = Math.max(1, Math.round(viewportHeight * dpr));
 
-    if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
-      canvas.width = canvasWidth;
-      canvas.height = canvasHeight;
-    }
+      if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+      }
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const renderNonce = ++printingPreviewCanvasRenderNonceRef.current;
-    let cancelled = false;
-    const image = new Image();
-    image.decoding = 'async';
-    image.onload = () => {
-      if (cancelled) return;
-      if (renderNonce !== printingPreviewCanvasRenderNonceRef.current) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return false;
 
       const naturalWidth = Math.max(1, image.naturalWidth || 1);
       const naturalHeight = Math.max(1, image.naturalHeight || 1);
-      const logicalSourceWidth = Math.max(1, deps.current.printingPreviewTargetResolution?.viewportWidth ?? naturalWidth);
-      const logicalSourceHeight = Math.max(1, deps.current.printingPreviewTargetResolution?.viewportHeight ?? naturalHeight);
+      const logicalSourceWidth = Math.max(1, targetViewportWidth ?? naturalWidth);
+      const logicalSourceHeight = Math.max(1, targetViewportHeight ?? naturalHeight);
       const baseScale = Math.min(viewportWidth / logicalSourceWidth, viewportHeight / logicalSourceHeight);
       const drawWidth = logicalSourceWidth * baseScale;
       const drawHeight = logicalSourceHeight * baseScale;
@@ -585,26 +789,47 @@ export function usePrintingPreviewManager({
       ctx.scale(printingPreviewMirrorScale.x, printingPreviewMirrorScale.y);
       ctx.drawImage(image, -drawWidth * 0.5, -drawHeight * 0.5, drawWidth, drawHeight);
       ctx.restore();
+      return true;
+    };
+
+    const renderNonce = ++printingPreviewCanvasRenderNonceRef.current;
+    let cancelled = false;
+    let loaded: HTMLImageElement | null = null;
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = () => {
+      if (cancelled) return;
+      if (renderNonce !== printingPreviewCanvasRenderNonceRef.current) return;
+      if (!draw(image)) return;
+      loaded = image;
       setIsPrintingSettledCanvasReady(true);
     };
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(() => {
+          if (!cancelled && loaded) draw(loaded);
+        });
+    resizeObserver?.observe(viewport);
     image.src = selectedPrintingLayerPreviewUrl;
 
     return () => {
       cancelled = true;
+      resizeObserver?.disconnect();
     };
   }, [
     printingPreviewMirrorScale.x,
     printingPreviewMirrorScale.y,
     printingPreviewPan.x,
     printingPreviewPan.y,
-    deps.current.printingPreviewTargetResolution?.viewportHeight,
-    deps.current.printingPreviewTargetResolution?.viewportWidth,
+    targetViewportHeight,
+    targetViewportWidth,
     printingPreviewZoom,
     selectedPrintingLayerPreviewUrl,
     usePrintingSettledHiResCanvas,
   ]);
 
   return {
+    printingPreviewTargetResolution,
     printingSelectedLayer,
     setPrintingSelectedLayer,
     printingDisplayedLayer,

@@ -2,7 +2,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 
-import { evaluateNativeRepairQualityGate, loadMeshGeometry, processGeometry } from '../useStlGeometry';
+import {
+  classificationForPayload,
+  evaluateNativeRepairQualityGate,
+  loadMeshGeometry,
+  processGeometry,
+} from '../useStlGeometry';
 import type { MeshHealthReport } from '@/utils/meshRepair';
 
 function ensureProgressEventPolyfill() {
@@ -117,6 +122,8 @@ function makeReport(overrides?: {
     model_triangle_count: null,
     residual_issues: [],
     fully_repaired: false,
+    rebuilt: false,
+    cancelled: false,
     total_ms: 0,
   };
 }
@@ -270,5 +277,201 @@ describe('processGeometry classification bypass', () => {
     });
     assert.equal(classifyCalled, true, 'should run classification');
     assert.equal(repairCalled, false, 'should not run repair');
+  });
+
+  /**
+   * A VOXL entry's baked classification is the answer the native pass would
+   * produce for these exact triangles, so re-running the classifier can only
+   * reproduce it — at the cost of staging the whole mesh across the IPC
+   * boundary. These two tests pin that the split is restored instead.
+   */
+  it('uses a baked classification instead of running the native classifier', async () => {
+    // Four triangles laid out model-first: the baked boundary puts the first
+    // three in the model section and the last one in the support section.
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([
+      0,0,0, 1,0,0, 0,1,0,
+      0,0,1, 1,0,1, 0,1,1,
+      0,0,2, 1,0,2, 0,1,2,
+      0,0,3, 1,0,3, 0,1,3,
+    ], 3));
+    let classifyCalled = false;
+    let repairCalled = false;
+
+    const result = await processGeometry(geom, {
+      bakedClassification: { ...makeReport(), model_triangle_count: 3 },
+      _isTauriRuntime: () => true,
+      _classifyFromGeometry: async () => { classifyCalled = true; return null; },
+      _repairFromGeometry: async () => { repairCalled = true; return null; },
+    });
+
+    assert.equal(classifyCalled, false, 'baked classification must not be recomputed');
+    assert.equal(repairCalled, false, 'should not run repair');
+    assert.equal(result.meshDefects?.nativeRepairReport?.model_triangle_count, 3);
+    assert.equal(
+      result.meshDefects?.modelSectionGeometry?.getAttribute('position').count,
+      9,
+      'model section must hold the first 3 triangles',
+    );
+    assert.equal(
+      result.meshDefects?.supportSectionGeometry?.getAttribute('position').count,
+      3,
+      'support section must hold the trailing triangle',
+    );
+  });
+
+  it('honours a baked classification that found no split', async () => {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+    let classifyCalled = false;
+
+    const result = await processGeometry(geom, {
+      // null (not undefined): classified, and there is no boundary to split at.
+      bakedClassification: { ...makeReport(), model_triangle_count: null },
+      _isTauriRuntime: () => true,
+      _classifyFromGeometry: async () => { classifyCalled = true; return null; },
+    });
+
+    assert.equal(classifyCalled, false, 'a no-split classification is still an answer');
+    assert.ok(result.meshDefects?.nativeRepairReport);
+    assert.equal(result.meshDefects?.supportSectionGeometry, undefined);
+    assert.equal(result.meshDefects?.modelSectionGeometry, undefined);
+  });
+});
+
+describe('processGeometry parts flow', () => {
+  /**
+   * A plate imports as one model with many components, and the whole-file repair returns one verdict
+   * for all of them. When the caller asks for the parts flow, the import has to go through the
+   * part-by-part runner — not the whole-file one — and the joined result is what lands in the scene.
+   */
+  it('runs the part-by-part repair when the user asks for it', async () => {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([
+      0,0,0, 1,0,0, 0,1,0,
+      0,0,1, 1,0,1, 0,1,1,
+    ], 3));
+
+    let partsCalled = false;
+    let confirmAsked = 0;
+    const report = { ...makeReport(), fully_repaired: true, parts: [
+      { index: 0, triangles_before: 2, triangles_after: 2, fully_repaired: true, residual_issues: [] },
+      { index: 1, triangles_before: 2, triangles_after: 2, fully_repaired: false, residual_issues: ['inconsistent winding'] },
+    ] };
+
+    const result = await processGeometry(geom, {
+      sourcePath: 'C:/models/plate.stl',
+      _isTauriRuntime: () => true,
+      _analyzeFromGeometry: async () => ({
+        triangle_count: 2,
+        vertex_count: 6,
+        non_manifold_edges: 0,
+        non_manifold_vertices: 0,
+        boundary_edges: 0,
+        boundary_loops: 0,
+        inconsistent_edges: 12,
+        degenerate_triangles: 0,
+        duplicate_triangles: 0,
+        component_count: 7,
+        self_intersections: 0,
+        signed_volume: 1,
+        is_watertight: true,
+        timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
+      }),
+      onConfirmHeavyRepair: async () => {
+        confirmAsked += 1;
+        return 'repair_parts';
+      },
+      // `_repairFromGeometry` is deliberately not injected: injecting it is what switches the import
+      // off the loader path, and the loader path is the one the parts runner needs (it reads the file).
+      _repairPartsFromPath: async () => {
+        partsCalled = true;
+        return { report, positions: new Float32Array([0,0,0, 1,0,0, 0,1,0, 0,0,1, 1,0,1, 0,1,1]) };
+      },
+    });
+
+    assert.equal(confirmAsked, 1, 'the user is asked before a heavy repair');
+    assert.equal(partsCalled, true, 'the part-by-part runner is the one that runs');
+    assert.equal(result.meshDefects?.nativeRepairReport?.parts?.length, 2);
+  });
+
+  it('falls back to the whole-file repair when the import has no source path', async () => {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+
+    let partsCalled = false;
+    let wholeCalled = false;
+    await processGeometry(geom, {
+      _isTauriRuntime: () => true,
+      _analyzeFromGeometry: async () => ({
+        triangle_count: 1,
+        vertex_count: 3,
+        non_manifold_edges: 0,
+        non_manifold_vertices: 0,
+        boundary_edges: 0,
+        boundary_loops: 0,
+        inconsistent_edges: 3,
+        degenerate_triangles: 0,
+        duplicate_triangles: 0,
+        component_count: 4,
+        self_intersections: 0,
+        signed_volume: 1,
+        is_watertight: true,
+        timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
+      }),
+      onConfirmHeavyRepair: async () => 'repair_parts',
+      _repairFromGeometry: async () => {
+        wholeCalled = true;
+        return null;
+      },
+      _repairPartsFromPath: async () => {
+        partsCalled = true;
+        return null;
+      },
+    });
+
+    assert.equal(partsCalled, false, 'no source path, so the parts runner cannot read the file');
+    assert.equal(wholeCalled, true, 'the staged whole-file repair runs instead');
+  });
+});
+
+describe('classificationForPayload', () => {
+  it('uses the stored report when it still describes the payload', () => {
+    const stored = makeReport({ preTriangles: 725694, postTriangles: 725694 });
+    const chosen = classificationForPayload(undefined, stored, 725694);
+    assert.equal(chosen, stored, 'a report for these triangles is the answer');
+  });
+
+  it('prefers the loader report when the loader classified', () => {
+    const loader = makeReport({ postTriangles: 10 });
+    const stored = makeReport({ postTriangles: 10 });
+    assert.equal(classificationForPayload(loader, stored, 10), loader);
+  });
+
+  it('drops a stored report that describes a different mesh', () => {
+    // A file written under another refinement rule: a section boundary is a
+    // triangle index, so its report is about triangles this mesh does not have.
+    const stored = makeReport({ preTriangles: 500, postTriangles: 500 });
+    assert.equal(classificationForPayload(undefined, stored, 725694), undefined);
+  });
+
+  it('honours a repaired report, whose pre count is the mesh that was sent in', () => {
+    // A repair changes the topology, so `post` — the mesh the pass ended with —
+    // is the one the boundary addresses. Checking `pre` dropped every repaired
+    // model's split and reclassified it, which reorders the soup.
+    const stored = { ...makeReport({ preTriangles: 900, postTriangles: 10 }), model_triangle_count: 4 };
+    assert.equal(classificationForPayload(undefined, stored, 10), stored);
+  });
+
+  it('keeps a stored split, which the payload is already ordered by', () => {
+    // The writer stamps a report only when the predicate holds for the exact
+    // payload stored, and the classifier reorders as it reports, so the boundary
+    // addresses this mesh's own triangle order.
+    const stored = { ...makeReport({ postTriangles: 10 }), model_triangle_count: 4 };
+    assert.equal(classificationForPayload(undefined, stored, 10), stored);
+  });
+
+  it('has no report to offer when neither side has one', () => {
+    assert.equal(classificationForPayload(undefined, undefined, 10), undefined);
   });
 });

@@ -9,7 +9,8 @@ import { RootsRenderer } from '../SupportPrimitives/Roots/RootsRenderer';
 import { ContactConeRenderer, getSocketPosition, getFinalSocketPosition } from '../SupportPrimitives/ContactCone';
 import { ContactDiskRenderer } from '../SupportPrimitives/ContactDisk';
 import { KnotRenderer } from '../SupportPrimitives/Knot/KnotRenderer';
-import { getSettings } from '../Settings';
+import { getSettings } from '../Settings/state';
+import { contactEndpointsFor, type SupportTypeId } from '../supportTypeRegistry';
 import { useSyncExternalStore } from 'react';
 
 /**
@@ -32,6 +33,29 @@ export interface SupportData {
     error?: LimitationCode;
     warning?: WarningCode;
     angle?: number;
+}
+
+/**
+ * The renderable form of a bridging entity, keyed on its declared contacts.
+ *
+ * Which fields hold an entity's contacts, and whether they are cones or disks,
+ * is declared per type -- so a caller holding a `typeId` builds this without
+ * naming either the type or its contact fields.
+ */
+export function supportDataForEntity(
+    typeId: SupportTypeId,
+    entity: { id: string; segments: Segment[] },
+): SupportData {
+    const data: SupportData = { id: entity.id, segments: entity.segments };
+    const fields = entity as unknown as Record<string, unknown>;
+
+    for (const { kind, field } of contactEndpointsFor(typeId)) {
+        const contact = fields[field];
+        if (!contact) continue;
+        if (kind === 'cone') (data.contactCones ??= []).push(contact as ContactCone);
+        else (data.contactDisks ??= []).push(contact as ContactDisk);
+    }
+    return data;
 }
 
 // --- Anatomy Highlight Colors ---
@@ -315,7 +339,8 @@ export function SupportBuilder({
             )}
 
             {/* Roots (if present) */}
-            {data.roots && !hidePlateContactPrimitives && (
+            {data.roots && (
+                <group visible={!hidePlateContactPrimitives}>
                 <RootsRenderer
                     root={data.roots}
                     shaftDiameter={shaftDiameter}
@@ -330,6 +355,7 @@ export function SupportBuilder({
                     raycast={nullRaycast}
                     raftOverride={raftOverride}
                 />
+                </group>
             )}
 
             {/* Segments */}

@@ -8,6 +8,7 @@ import type { GizmoAxis as AxisType } from '../types';
 import { getCachedConeGeometry, getCachedMoveShaftGeometry, getCachedSphereGeometry } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 interface GizmoMoveProps {
   axis: AxisType;
@@ -157,7 +158,7 @@ export function GizmoMove({
     );
 
     const raycaster = raycasterRef.current;
-    raycaster.setFromCamera(ndc, camera);
+    setPickRayFromCamera(raycaster, ndc, camera);
 
     // Use the world-space axis direction if provided (rotated gizmo),
     // otherwise fall back to the hardcoded world axis (existing behavior).

@@ -2,7 +2,7 @@
 
 A survey of common patterns for shipping **nightly / dev / RC / stable** channels,
 written against where DragonFruit's own release pipeline stands today
-(`.github/workflows/release.yml` and `build-nightly.yml`, branch `fix/updater`).
+(`.github/workflows/release.yml` and `build-preview.yml`, branch `fix/updater`).
 
 ## 1. Where DragonFruit is right now
 
@@ -13,8 +13,8 @@ written against where DragonFruit's own release pipeline stands today
   release, `latest.json` updater feed). This used to be two near-duplicate
   workflows (`dev-prerelease.yml` + `main-release.yml`) that were just merged —
   a good move, that duplication was the main structural smell.
-- **`build-nightly.yml`** — a separate, manually triggered (or `/nightly` PR-comment
-  triggered) build from *any* branch, publishing a rolling `nightly_{branch}` tag
+- **`build-preview.yml`** — a separate, manually triggered (or `/preview` PR-comment
+  triggered) build from *any* branch, publishing a rolling `preview_{branch}` tag
   that gets deleted and recreated on every run. Not wired into the updater feed.
 - There is no RC concept, no changelog automation, and no maintenance/LTS branch —
   "release" always means "the tip of `main` or `dev`, whatever it currently is."
@@ -77,9 +77,9 @@ It's aimed at users who want to run "whatever trunk looks like today," and it
 usually keeps a single rolling tag/release (today's build replaces
 yesterday's), sometimes retaining a short window of dated builds for bisection.
 
-DragonFruit's `build-nightly.yml` is doing something different despite the
+DragonFruit's `build-preview.yml` is doing something different despite the
 name: it's a **PR/feature-branch preview build**, triggered on demand or by a
-`/nightly` comment, useful for "let a reviewer download this exact branch and
+`/preview` comment, useful for "let a reviewer download this exact branch and
 try it." That's a legitimate and common pattern too (GitHub itself calls these
 "PR build artifacts," and projects like Deno and Prettier post download links
 on PRs), but it's solving a different problem than a scheduled trunk nightly.
@@ -102,7 +102,7 @@ families, and the split tracks cadence pretty cleanly:
 No mainstream project keeps a schedule-word name for a build that isn't
 actually on that schedule — a "Nightly" that visibly skips days erodes trust
 fast, so projects either make the cadence match the word or drop schedule
-language entirely. DragonFruit's nightly workflow isn't scheduled at all today
+language entirely. DragonFruit's preview workflow isn't scheduled at all today
 (it's dispatch/comment-triggered per branch), which puts it squarely in the
 second camp: **`preview`** or **`branch-preview`** is the honest name here,
 independent of whether a real cron gets added later.
@@ -181,8 +181,8 @@ and that DragonFruit doesn't have any version of yet:
    backport fixes onto it, and promote the same commit to stable once it's
    soaked — instead of `dev_x.y.z` and `vx.y.z` being two labels for what is
    effectively one continuously-moving line.
-2. **Rename `build-nightly.yml` to `build-preview.yml`** (tag prefix
-   `preview_` or `branch-preview_`) — it's an on-demand, per-branch build
-   today, not a scheduled trunk build, so a schedule-word name doesn't fit.
-   This is a pure rename with no behavior change, and removes the recurring
-   "why is this called nightly" confusion for free.
+2. ~~**Rename `build-nightly.yml` to `build-preview.yml`**~~ — **done.** It's
+   an on-demand, per-branch build, not a scheduled trunk build, so a
+   schedule-word name never fit. The workflow, the `preview_` tag prefix, the
+   `preview-build` label and the `/preview` command all carry the new name;
+   `/nightly` and `nightly-build` are retired.

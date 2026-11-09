@@ -1,3 +1,4 @@
+import type { MessageDescriptor } from '@lingui/core';
 import React from 'react';
 import type { SceneImportReport } from '@/features/scene/useSceneCollectionManager';
 
@@ -15,6 +16,13 @@ import type { SceneImportReport } from '@/features/scene/useSceneCollectionManag
  * (isSceneSaveInProgress / isPreSliceSceneSaveInProgress / isAutosaving) and the
  * scene import report via the single options object below.
  */
+/** Who got oriented — the stack renders the message, never this. */
+export type OrientationToastReport = {
+    id: number;
+    status: 'applied' | 'already-optimal';
+    modelName: string;
+};
+
 export type UseEditorToastsOptions = {
   /** External save-progress state, read by the save-toast machinery effect. */
   isSceneSaveInProgress: boolean;
@@ -24,19 +32,44 @@ export type UseEditorToastsOptions = {
   sceneImportReport: SceneImportReport | null;
 };
 
+/**
+ * Keeps an `animated` toast in the tree for `tailMs` after it is told to hide.
+ *
+ * A toast whose presence and whose `visible` flag are the same boolean is torn
+ * out of the tree in the commit that hides it, so its fade-out never gets to run
+ * and it blinks away. Holding the element for one transition is what the other
+ * toasts get for free from the gap between their fade timer and their clear
+ * timer; this is that gap for the ones that have no second timer.
+ */
+export function useTrailingMount(visible: boolean, tailMs = 240): boolean {
+  const [mounted, setMounted] = React.useState(visible);
+  React.useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      return;
+    }
+    const timeout = window.setTimeout(() => setMounted(false), tailMs);
+    return () => window.clearTimeout(timeout);
+  }, [tailMs, visible]);
+  return mounted;
+}
+
 export function useEditorToasts({
   isSceneSaveInProgress,
   isPreSliceSceneSaveInProgress,
   isAutosaving,
   sceneImportReport,
 }: UseEditorToastsOptions) {
-  const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
+  const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; label: MessageDescriptor; direction: 'undo' | 'redo' } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
   const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
   const [exportSuccessToast, setExportSuccessToast] = React.useState<{ id: number; path: string } | null>(null);
   const [isExportSuccessToastVisible, setIsExportSuccessToastVisible] = React.useState(false);
   const [exportErrorToast, setExportErrorToast] = React.useState<{ id: number; text: string } | null>(null);
   const [isExportErrorToastVisible, setIsExportErrorToastVisible] = React.useState(false);
+  const [orientationToast, setOrientationToast] = React.useState<OrientationToastReport | null>(null);
+  const [isOrientationToastVisible, setIsOrientationToastVisible] = React.useState(false);
+  const orientationToastFadeTimeoutRef = React.useRef<number | null>(null);
   const [isSaveToastVisible, setIsSaveToastVisible] = React.useState(false);
   const [isSaveToastAnimatedVisible, setIsSaveToastAnimatedVisible] = React.useState(false);
   // A mode rather than a label: the wording is resolved where it is rendered,
@@ -259,6 +292,18 @@ export function useEditorToasts({
     }, 4500);
   }, []);
 
+  const showOrientationToast = React.useCallback((report: Omit<OrientationToastReport, 'id'>) => {
+    setOrientationToast({ ...report, id: Date.now() });
+    setIsOrientationToastVisible(true);
+    if (orientationToastFadeTimeoutRef.current !== null) {
+      window.clearTimeout(orientationToastFadeTimeoutRef.current);
+    }
+    orientationToastFadeTimeoutRef.current = window.setTimeout(() => {
+      setIsOrientationToastVisible(false);
+      orientationToastFadeTimeoutRef.current = null;
+    }, 6000);
+  }, []);
+
   return {
     historyActionToast,
     setHistoryActionToast,
@@ -287,6 +332,7 @@ export function useEditorToasts({
     sceneImportToastFadeTimeoutRef,
     exportSuccessToastFadeTimeoutRef,
     exportErrorToastFadeTimeoutRef,
+    orientationToastFadeTimeoutRef,
     saveToastHideTimeoutRef,
     saveToastClearTimeoutRef,
     saveToastEnterRafRef,
@@ -301,5 +347,8 @@ export function useEditorToasts({
     setPrintingMonitorError,
     handleExportSuccess,
     showOperationError,
+    orientationToast,
+    isOrientationToastVisible,
+    showOrientationToast,
   };
 }

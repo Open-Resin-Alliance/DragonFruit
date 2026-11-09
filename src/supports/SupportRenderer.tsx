@@ -1,39 +1,101 @@
 "use client";
 
-import React, { useSyncExternalStore, forwardRef, useImperativeHandle, useEffect, useMemo } from 'react';
+import React, { useSyncExternalStore, forwardRef, useImperativeHandle, useCallback, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
-import { addKnot, addRoot, removeRootById, subscribe, getSnapshot, updateKnot } from './state';
-import { TrunkRenderer } from './SupportTypes/Trunk/TrunkRenderer';
-import { BranchRenderer } from './SupportTypes/Branch/BranchRenderer';
-import { LeafRenderer } from './SupportTypes/Leaf/LeafRenderer';
-import { BraceRenderer } from './SupportTypes/Brace/BraceRenderer';
-import { TwigRenderer } from './SupportTypes/Twig/TwigRenderer';
-import { StickRenderer } from './SupportTypes/Stick/StickRenderer';
-import { KickstandRenderer } from './SupportTypes/Kickstand/KickstandRenderer';
-import { AnchorRenderer } from './SupportTypes/Anchor/AnchorRenderer';
+import { useThree, type ThreeEvent } from '@react-three/fiber';
+import { LineMaterial, LineSegments2, LineSegmentsGeometry } from 'three-stdlib';
+import { subscribe, getSnapshot,
+  getKickstandKnots,
+  getKickstandRoots,
+  type SupportState,
+} from './state';
+import { noteActivity } from '@/utils/debug/heartbeatContext';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
+import {
+    buildSupportPlacementPreviewBatch,
+    resolvePlacementPreviewMaterial,
+    type InteriorContactPoint,
+    type PlacementPreviewBatch,
+    type PlacementPreviewDisk,
+    type PlacementPreviewTaperedShaft,
+    type InteriorContactFilter,
+    type PlacementSurface,
+    type Vec3Like,
+} from './supportPlacementPreviewMath';
+import { buildSegmentPreviewBatch } from './previewGeometry/seam';
+import { createCavityTester } from './interiorSupportGeometry';
+import './previewGeometry/registerBuiltinPreviewBuilders';
+import {
+    anyContactMatches,
+    contactEndpointsFor,
+    parseKnotHostId,
+    isConeKnotHost,
+    isSpanKnotHost,
+    knotHostId,
+    spanKnotHostType,
+    coneKnotHostType,
+    getSupportTypeBySelectionCategory,
+    getSupportTypeDescriptor,
+    SUPPORT_COLLECTION_KEYS,
+    SUPPORT_TYPES,
+    type SupportCollectionKey,
+    type SupportEndpoint,
+    type SupportTypeId,
+} from './supportTypeRegistry';
+import { buildKnotIndex, selectedIdsForType, type CollectionLookup, type SelectionInputs } from './interaction/shared/selection/selectedIdsByType';
+import { resolveSegmentEndpoints, type EndpointHosts } from './SupportPrimitives/Knot/segmentEndpoints';
+import './detailRenderer/registerBuiltinDetailRenderers';
+import { detailRenderersFor, type DetailRendererContext } from './detailRenderer/seam';
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
+import { InstancedJointBatch } from './instanced/InstancedJointBatch';
+import { InstancedShaftBatch } from './instanced/InstancedShaftBatch';
+import { InstancedContactConeBatch } from './instanced/InstancedContactConeBatch';
+import { InstancedRootBatch } from './instanced/InstancedRootBatch';
+import {
+    SUPPORT_DETAIL_DRAG_PREVIEW,
+    SUPPORT_INSTANCED_CONES,
+    SUPPORT_INSTANCED_CONE_DRAG,
+    SUPPORT_INSTANCED_DRAG,
+    SUPPORT_INSTANCED_JOINTS,
+    SUPPORT_INSTANCED_ROOTS,
+    SUPPORT_INSTANCED_SHAFTS,
+} from './instanced/flags';
+import { InstancedJointDragBatch } from './instanced/InstancedJointDragBatch';
+import { InstancedConeDragBatch } from './instanced/InstancedConeDragBatch';
+import { DraggedSupportContext } from './instanced/dragSuppression';
+import { getJointDragSession, getJointDragSessionServerSnapshot, subscribeJointDragSession } from './instanced/instanceDragWriter';
+import { getConeDragSession, getConeDragSessionServerSnapshot, subscribeConeDragSession } from './instanced/coneDragWriter';
+import type { JointDragSceneContext } from './instanced/instanceDragWriter';
+import type { DragHostKnot, JointDragSlotMap } from './instanced/dragSlots';
+import type { SupportInstanceBatch } from './instanced/supportInstanceBatch';
+import { buildJointSlotIndex } from './instanced/jointSlots';
+import { buildConeSlotIndex } from './instanced/coneSlots';
+import { buildRootSlotIndex, type RootSlotGroup } from './instanced/rootSlots';
+import { buildShaftSlotIndex, type ShaftSlotGroup } from './instanced/shaftSlots';
 import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roots/InstancedRootsGroup';
-import { InstancedContactConeGroup, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
+import { inlineRootBatchInstance } from './SupportPrimitives/Roots/inlineRootBatch';
+import { batchesInView, BATCHED_PASSES } from './rendering/batchCoverage';
+import { InstancedContactConeGroup, coneAxisSpan, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
 import { useBracePlacementState } from './SupportTypes/Brace/bracePlacementState';
+import { braceSpanDiameters } from './SupportTypes/Brace/braceSpanDiameters';
 import { useLeafPlacementState } from './SupportTypes/Leaf/leafPlacementState';
-import { useKickstandStoreState } from './SupportTypes/Kickstand/kickstandStore';
 import { useKickstandPlacementState } from './SupportTypes/Kickstand/kickstandPlacementState';
 import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteraction';
 import { useKnotInteraction } from './SupportPrimitives/Knot/useKnotInteraction';
 import { useActiveJointDragPreview, useJointDragPreviewOverrides } from './interaction/jointDragPreview';
 import { useActiveKnotDragPreview } from './interaction/knotDragPreview';
 import { useActiveTwigDragPreview } from './SupportTypes/Twig/twigDragPreview';
-import { buildBranchCandidateKnotIdsByBranchId, buildBranchesByParentKnotId, buildBraceIdsByKnotId, buildLeafIdsByParentKnotId, collectPreviewLeavesById, computeCascadedPreviewKnotOverrides } from './interaction/supportPreviewOverlay';
+import { buildBranchCandidateKnotIdsByBranchId, buildEntitiesByHostKnot, collectPreviewLeavesById, computeCascadedPreviewKnotOverrides } from './interaction/supportPreviewOverlay';
 import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationManager';
 import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
 import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
 import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
-import { ContactDisk, SupportMode, BezierSegment, type Brace, type Knot, type Leaf, type Twig, type SupportOrigin } from './types';
+import { ContactDisk, SupportMode, BezierSegment, type Stump, type Brace, type Knot, type Leaf, type Roots, type Segment, type SupportEntityAny, type Twig, type SupportOrigin, type Vec3 } from './types';
 import { resolveTwigDiameterAtSegmentT } from './SupportTypes/Twig/twigTaper';
 import { bezierSegmentToBatchedShaft, braceBezierToBatchedShaft } from './Curves/batchedBezierShaft';
-import type { SupportData } from './rendering';
-import type { BracePreviewData } from './SupportTypes/Brace/bracePlacementState';
+import { isCurvedBatchedShaft } from './Curves/batchedBezierTubeGeometry';
+import { EMPTY_PLACEMENT_PREVIEWS, type SupportData, type SupportPlacementPreviews } from './rendering';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
 import { emitSupportModelPointerHover, emitSupportModelPointerSelect, handleSupportClick } from './interaction/clickHandlers';
@@ -54,14 +116,19 @@ import { setSceneHoveredSupportId as setSharedSceneHoveredSupportId, useSceneHov
 import { useSupportRenderLookup } from './interaction/useSupportRenderLookup';
 import { setInteriorSupportInteractionActive } from './interaction/pointerOcclusion';
 import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
+import { supportAnswersPointer, SCENERY_DIM } from '@/features/scene/plates/plateInteractivity';
 
 interface SupportRendererProps {
     mode?: SupportMode;
     navigationLodActive?: boolean;
     hidePlateContactPrimitives?: boolean;
-    clipLower?: number | null;
-    clipUpper?: number | null;
     supportColorsByModelId?: Record<string, string>;
+    /**
+     * Models on another bed. Their supports are drawn dimmed and answer no pointer, the
+     * same rule the proxy batches follow, so a bed nobody is working on reads as scenery
+     * in the support workspace too.
+     */
+    pointerSceneryModelIds?: ReadonlySet<string>;
     hoverTintColor?: string;
     hoverTintStrength?: number;
     selectedTintStrength?: number;
@@ -78,11 +145,8 @@ interface SupportRendererProps {
     disableSelectionAndHover?: boolean;
     ghostOpacity?: number;
     ghostRenderOrder?: number;
-    trunkPlacementPreview?: SupportData | null;
-    branchPlacementPreview?: SupportData | null;
-    leafPlacementPreview?: SupportData | null;
-    bracePlacementPreview?: BracePreviewData | null;
-    kickstandPlacementPreview?: SupportData | null;
+    /** Live placement previews, keyed by type. */
+    placementPreviews?: SupportPlacementPreviews;
     interiorView?: boolean;
     cavityGeometryByModelId?: Map<string, THREE.BufferGeometry>;
     modelWorldInverseById?: Map<string, THREE.Matrix4>;
@@ -91,127 +155,11 @@ interface SupportRendererProps {
 interface SupportPlacementPreviewLayerProps {
     mode?: SupportMode;
     hidePlateContactPrimitives?: boolean;
-    trunkPlacementPreview?: SupportData | null;
-    branchPlacementPreview?: SupportData | null;
-    leafPlacementPreview?: SupportData | null;
-    bracePlacementPreview?: BracePreviewData | null;
-    kickstandPlacementPreview?: SupportData | null;
+    /** Live placement previews, keyed by type. */
+    placementPreviews?: SupportPlacementPreviews;
 }
 
-interface PlacementPreviewTaperedShaft {
-    id: string;
-    start: Vec3Like;
-    end: Vec3Like;
-    diameterStart: number;
-    diameterEnd: number;
-}
 
-interface PlacementPreviewDisk {
-    id: string;
-    pos: Vec3Like;
-    surfaceNormal: Vec3Like;
-    coneAxis: Vec3Like;
-    profile: ContactDiskProfile;
-    contactDiameterMm: number;
-    diskLengthOverride?: number;
-}
-
-interface PlacementPreviewBatch {
-    id: string;
-    color: string;
-    opacity: number;
-    shafts: InstancedShaft[];
-    taperedShafts: PlacementPreviewTaperedShaft[];
-    disks: PlacementPreviewDisk[];
-    joints: InstancedJoint[];
-    roots: InstancedRoot[];
-    cones: InstancedContactCone[];
-}
-
-interface Vec3Like { x: number; y: number; z: number; }
-
-type PlacementSurface = 'interior' | 'exterior';
-type InteriorContactPoint = {
-    pos: Vec3Like;
-    placementSurface?: PlacementSurface;
-};
-type InteriorContactFilter = (contact: InteriorContactPoint | null | undefined, modelId?: string) => boolean;
-
-function recomputeLeafPreviewContactCone(
-    leaf: Leaf,
-    previewKnot: Knot,
-    twigBySegmentId: Map<string, Twig>,
-) {
-    const cone = leaf.contactCone;
-    if (!cone?.surfaceNormal) return leaf;
-
-    const previewKnotPos = previewKnot.pos;
-    const tip = new THREE.Vector3(cone.pos.x, cone.pos.y, cone.pos.z);
-    const sn = new THREE.Vector3(cone.surfaceNormal.x, cone.surfaceNormal.y, cone.surfaceNormal.z);
-    const knot = new THREE.Vector3(previewKnotPos.x, previewKnotPos.y, previewKnotPos.z);
-
-    let axis = knot.clone().sub(tip);
-    if (axis.lengthSq() < 0.000001) {
-        axis.set(sn.x, sn.y, sn.z);
-    }
-    axis.normalize();
-
-    let finalLength = Math.max(0.1, knot.distanceTo(tip));
-
-    for (let i = 0; i < 3; i++) {
-        const axisVec3 = { x: axis.x, y: axis.y, z: axis.z };
-        const thickness = cone.profile.type === 'disk'
-            ? calculateDiskThickness(cone.surfaceNormal, axisVec3, cone.profile)
-            : 0;
-
-        const start = tip.clone().add(sn.clone().multiplyScalar(thickness));
-        const coneVec = knot.clone().sub(start);
-        const len = coneVec.length();
-        if (len > 0.000001) {
-            axis = coneVec.normalize();
-            finalLength = Math.max(0.1, len);
-        }
-    }
-
-    // If the parent knot sits on a tapered twig, the leaf's wide-end diameter
-    // (bodyDiameterMm) must live-track the twig's local diameter at the knot's
-    // current slide T. Otherwise the cone "neck" stays frozen at the placement
-    // diameter while the knot visibly grows/shrinks.
-    let nextBodyDiameterMm = cone.profile.bodyDiameterMm;
-    const hostTwig = previewKnot.parentShaftId ? twigBySegmentId.get(previewKnot.parentShaftId) : undefined;
-    if (hostTwig && previewKnot.t !== undefined) {
-        const localTwigDia = resolveTwigDiameterAtSegmentT(hostTwig, previewKnot.parentShaftId, previewKnot.t);
-        if (localTwigDia !== null) {
-            nextBodyDiameterMm = localTwigDia;
-        }
-    }
-
-    const oldNormal = cone.normal;
-    const oldLen = cone.profile.lengthMm;
-    const oldBodyDia = cone.profile.bodyDiameterMm;
-    if (
-        oldLen === finalLength
-        && oldBodyDia === nextBodyDiameterMm
-        && oldNormal.x === axis.x
-        && oldNormal.y === axis.y
-        && oldNormal.z === axis.z
-    ) {
-        return leaf;
-    }
-
-    return {
-        ...leaf,
-        contactCone: {
-            ...cone,
-            normal: { x: axis.x, y: axis.y, z: axis.z },
-            profile: {
-                ...cone.profile,
-                lengthMm: finalLength,
-                bodyDiameterMm: nextBodyDiameterMm,
-            },
-        },
-    };
-}
 
 interface SupportShaftSet {
     supportId: string;
@@ -225,6 +173,18 @@ interface SupportJointSet {
     joints: InstancedJoint[];
 }
 
+/**
+ * The fields the scene-batched pointer handlers read from a root.
+ *
+ * The legacy per-colour groups pass their `InstancedRoot` and the capacity batch
+ * passes its slot record; both carry these, so neither has to pretend to be the
+ * other to reach the same click and hover path.
+ */
+type SceneBatchedRootRef = { supportId?: string; modelId?: string };
+
+/** The fields the scene-batched pointer handlers read from a cone; see `SceneBatchedRootRef`. */
+type SceneBatchedConeRef = { id: string; supportId?: string; modelId?: string };
+
 const BATCHED_SHAFT_RADIAL_SEGMENTS = 10;
 const BATCHED_SHAFT_LOW_RADIAL_SEGMENTS = 6;
 const BATCHED_SHAFT_HIGH_INSTANCE_THRESHOLD = 1200;
@@ -232,18 +192,52 @@ const BATCHED_JOINT_WIDTH_SEGMENTS = 12;
 const BATCHED_JOINT_HEIGHT_SEGMENTS = 10;
 const MULTI_SELECTION_DETAIL_THRESHOLD = 24;
 const BULK_MULTI_SELECTED_COLOR = '#80fffd';
-/** Debug origin coloring (AutoSupport "Origin Colors" toggle): red = anchor
+
+/**
+ * Whether a support should be drawn as selected, by any of three routes: it is
+ * in its type's selected set, the bulk marquee colour stands in for the sets
+ * past the detail threshold, or a drag is currently over it. A detail renderer
+ * dims anything it is not told is selected, overwriting its colour.
+ */
+export function supportIsDrawnSelected(input: {
+    inSelectedSet: boolean;
+    bulkSelected: boolean;
+    marqueePreview: boolean;
+}): boolean {
+    return input.inSelectedSet || input.bulkSelected || input.marqueePreview;
+}
+
+/**
+ * Whether a type's live marquee highlight can be drawn as a batched overlay.
+ *
+ * The overlay reaches whatever the batched passes carry in this view, so the
+ * question is `batchesInView`, not the raw flags: a type with no batched form
+ * takes the preview through its own detail renderer instead — which a simple
+ * view has none of, so a type the passes carry there must use the overlay. See
+ * `sharedRenderProps`.
+ */
+export function typeHasBatchedMarqueeOverlay(typeId: SupportTypeId, simpleRender: boolean): boolean {
+    const descriptor = getSupportTypeDescriptor(typeId);
+    return BATCHED_PASSES.some((pass) => batchesInView(pass, descriptor, simpleRender));
+}
+/** Debug origin coloring (AutoSupport "Origin Colors" toggle): red = near-plate
  *  band, orange = overhang (grid infill / organic Poisson / fanned overhang),
  *  blue = island (voxel/minima), purple = standalone overhang trunks. */
 const ORIGIN_COLORS: Record<SupportOrigin, string> = {
-    anchor: '#ff3b30',
+    // Spelled so the Record keeps checking that every origin has a colour.
+    stump: '#ff3b30',
     overhang: '#ff9f0a',
     island: '#0a84ff',
     standalone: '#bf5af2',
+    reinforcement: '#30d5c8',
 };
 /** Origin coloring: gray = entity generated before origin stamping existed —
  * regenerate the supports to get colors. */
 const ORIGIN_NO_ORIGIN_COLOR = '#8e8e93';
+/** Origin coloring: a type that records no origin at all, so the question does
+ * not apply. Distinct from every ORIGIN_COLORS hue and from the gray above, or
+ * a debug mode for telling types apart would put two of them side by side. */
+const ORIGIN_NOT_APPLICABLE_COLOR = '#2e4a5c';
 const SCENE_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
 /** Leaf base knots rendered in the scene batch: KnotRenderer subtracts the
  *  full JOINT_DIAMETER_OFFSET_MM from the knot diameter while the batch
@@ -251,10 +245,123 @@ const SCENE_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
  *  pre-compensate to keep the exact KnotRenderer sphere size. */
 const KNOT_BATCH_DIAMETER_PRECOMPENSATION_MM = SCENE_JOINT_DIAMETER_BLEND_MM - JOINT_DIAMETER_OFFSET_MM;
 const EMPTY_SUPPORT_ID_LIST: readonly string[] = Object.freeze([]);
-const EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID: Record<string, never> = Object.freeze({});
+/** A tip drag hides cones only; no joint id of the support is suppressed. */
+const EMPTY_DRAGGED_PRIMITIVE_IDS: ReadonlySet<string> = new Set<string>();
+const EMPTY_KNOT_DRAG_SHAFT_SEGMENTS_BY_ID: Record<string, never> = Object.freeze({});
+const FREEZE_DEPENDENT_PREVIEW_DURING_JOINT_DRAG = true;
 
-/** Simple line vector for debugSimpleSupportRender — like J×2 pathfinding debug, but for all shafts. */
-function SimpleShaftLines({ shafts, color }: { shafts: InstancedShaft[]; color: string }) {
+/**
+ * The two types this layer batches by hand: the leaf, whose joint is the host
+ * knot it hangs from rather than a shaft joint, and the brace, whose shaft is
+ * its own span between two knots.
+ */
+const LEAF_TYPE_ID = coneKnotHostType();
+const BRACE_TYPE_ID = spanKnotHostType();
+
+/** The leaf's placement-preview batch, whose joints are tinted green while the
+ *  leaf placement is still waiting for its sprout tip. The batch id is the one
+ *  `buildPlacementPreviewBatches` builds from the same descriptor. */
+const LEAF_PREVIEW_BATCH_ID = `placement-preview:${LEAF_TYPE_ID}`;
+
+/** The root's axis as the line the navigation view draws for it: the plate
+ *  contact up to the top of the root cone, which is where the member's shaft
+ *  starts, so the line runs into the shaft instead of stopping above the plate. */
+function rootNavigationSpan(root: InstancedRoot): { start: Vec3; end: Vec3 } {
+    return {
+        start: root.basePos,
+        end: {
+            x: root.basePos.x,
+            y: root.basePos.y,
+            z: root.basePos.z + root.effectiveDiskHeight + root.coneHeight,
+        },
+    };
+}
+
+/**
+ * The navigation view's vector thickness, in screen pixels. `LineBasicMaterial`
+ * ignores `linewidth` in WebGL, so the vectors are fat lines (`LineSegments2`),
+ * which also carry their width in screen space.
+ */
+const NAVIGATION_LINE_WIDTH_PX = 2;
+
+/** The navigation view's contact discs, blue against the member colours. */
+const NAVIGATION_CONTACT_COLOR = '#3b82f6';
+
+/**
+ * How many line widths a simple view's pick target spans.
+ *
+ * A simple view answers the pointer through a slim tube along the member's
+ * line rather than through the member's own geometry: a trunk is millimetres
+ * wide, and the pointer there is aiming at a two-pixel vector, so the member's
+ * girth answers clicks well away from the line the eye is following. Three
+ * widths keeps a little forgiveness without reaching for the neighbouring
+ * support.
+ */
+const NAVIGATION_PICK_LINE_WIDTHS = 3;
+
+/**
+ * World units per screen pixel at a point, for the active projection.
+ *
+ * Null when the camera is neither projection this scene builds, in which case
+ * the caller leaves the geometry as it is rather than guessing a tube size.
+ */
+function worldUnitsPerPixelAt(camera: THREE.Camera, viewportHeightPx: number, point: Vec3): number | null {
+    const height = Math.max(1, viewportHeightPx);
+
+    if (camera instanceof THREE.OrthographicCamera) {
+        return ((camera.top - camera.bottom) / Math.max(1e-6, camera.zoom)) / height;
+    }
+
+    if (camera instanceof THREE.PerspectiveCamera) {
+        const distance = Math.max(0.001, Math.hypot(
+            camera.position.x - point.x,
+            camera.position.y - point.y,
+            camera.position.z - point.z,
+        ));
+        return (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * distance) / height;
+    }
+
+    return null;
+}
+
+/**
+ * The same shafts, as the slim tubes a simple view answers the pointer with:
+ * three line widths across, measured at the shaft's own distance so the tube
+ * reads the same size on screen as the vector it belongs to.
+ *
+ * Capped at the member's own diameter, because a line thick enough to rival a
+ * thin trunk would otherwise hand out a *bigger* target than the geometry does.
+ * The member's girth stays for the full view, where the pointer is aiming at
+ * the solid it sees.
+ */
+function slimPickShafts(
+    shafts: readonly InstancedShaft[],
+    camera: THREE.Camera,
+    viewportHeightPx: number,
+): InstancedShaft[] {
+    return shafts.map((shaft) => {
+        const perPixel = worldUnitsPerPixelAt(camera, viewportHeightPx, {
+            x: (shaft.start.x + shaft.end.x) / 2,
+            y: (shaft.start.y + shaft.end.y) / 2,
+            z: (shaft.start.z + shaft.end.z) / 2,
+        });
+        if (perPixel === null) return shaft;
+
+        const tubeDiameter = perPixel * NAVIGATION_LINE_WIDTH_PX * NAVIGATION_PICK_LINE_WIDTHS;
+        if (tubeDiameter >= shaft.diameter) return shaft;
+
+        return { ...shaft, diameter: tubeDiameter };
+    });
+}
+
+/**
+ * The line vector the simple and navigation views draw for a member. It is
+ * never the pointer target: a slim tube along the same vector is mounted at
+ * zero alpha beside it (see `slimPickShafts`), so the pointer hits the line it
+ * is aiming at rather than the member's full girth.
+ */
+function SimpleShaftLines({ shafts, color }: { shafts: readonly { start: Vec3; end: Vec3 }[]; color: string }) {
+    const viewport = useThree((state) => state.size);
     const line = React.useMemo(() => {
         if (shafts.length === 0) return null;
         const positions: number[] = [];
@@ -262,383 +369,85 @@ function SimpleShaftLines({ shafts, color }: { shafts: InstancedShaft[]; color: 
             positions.push(s.start.x, s.start.y, s.start.z, s.end.x, s.end.y, s.end.z);
         }
         if (positions.length === 0) return null;
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthWrite: false, depthTest: true });
-        const obj = new THREE.LineSegments(geometry, material);
+        const geometry = new LineSegmentsGeometry();
+        geometry.setPositions(positions);
+        const material = new LineMaterial({
+            // The typings take a hex number here; the material hands it to
+            // `Color`, which reads it as sRGB like the string form would.
+            color: new THREE.Color(color).getHex(),
+            linewidth: NAVIGATION_LINE_WIDTH_PX,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            depthTest: true,
+        });
+        const obj = new LineSegments2(geometry, material);
         obj.frustumCulled = false;
         obj.renderOrder = 999;
         return obj;
     }, [shafts, color]);
+    // The width is screen-space, so the material needs the viewport it draws
+    // into. Handed over here rather than in the memo, which would rebuild the
+    // geometry on every resize.
+    React.useLayoutEffect(() => {
+        if (!line) return;
+        (line.material as LineMaterial).resolution.set(viewport.width, viewport.height);
+    }, [line, viewport.width, viewport.height]);
     React.useEffect(() => () => { line?.geometry.dispose(); (line?.material as THREE.Material)?.dispose(); }, [line]);
     if (!line || shafts.length === 0) return null;
     return <primitive object={line} />;
 }
 
-const PLACEMENT_PREVIEW_COLOR = '#00ff00';
-const PLACEMENT_PREVIEW_ERROR_COLOR = '#ff0000';
-const PLACEMENT_PREVIEW_WARNING_COLOR = '#ffcc00';
-const PLACEMENT_PREVIEW_ORANGE_COLOR = '#c7722f';
-const PLACEMENT_PREVIEW_OPACITY = 0.5;
-const PLACEMENT_PREVIEW_ERROR_OPACITY = 0.15;
-const FREEZE_DEPENDENT_PREVIEW_DURING_JOINT_DRAG = true;
-function resolvePlacementPreviewMaterial(preview: SupportData): { color: string; opacity: number } {
-    if (preview.error) {
-        return {
-            color: PLACEMENT_PREVIEW_ERROR_COLOR,
-            opacity: PLACEMENT_PREVIEW_ERROR_OPACITY,
-        };
-    }
 
-    // Leaf previews have a knot + contactCone but no shaft segments. The
-    // surface-steepness gradient is calibrated for trunk-style placements;
-    // for leaves the angle has the opposite semantic and always resolves to
-    // orange. Treat leaves like trunks/branches and fall through to the
-    const isLeafPreview = preview.segments.length === 0 && !!preview.knot && !!preview.contactCone;
 
-    let angle = isLeafPreview ? undefined : preview.angle;
-    if (!isLeafPreview && angle === undefined && preview.contactCone) {
-        const normal = new THREE.Vector3(
-            preview.contactCone.normal.x,
-            preview.contactCone.normal.y,
-            preview.contactCone.normal.z,
-        );
-        const up = new THREE.Vector3(0, 0, 1);
-        angle = normal.angleTo(up) * (180 / Math.PI);
-    }
 
-    if (angle !== undefined) {
-        const startAngle = 91;
-        const midAngle = 120;
-        const endAngle = 180;
-
-        let finalColor: THREE.Color;
-        if (angle <= midAngle) {
-            const t = Math.max(0, (angle - startAngle) / (midAngle - startAngle));
-            const c1 = new THREE.Color(PLACEMENT_PREVIEW_ORANGE_COLOR);
-            const c2 = new THREE.Color(PLACEMENT_PREVIEW_WARNING_COLOR);
-            finalColor = c1.lerp(c2, t);
-        } else {
-            const t = Math.min(1, (angle - midAngle) / (endAngle - midAngle));
-            const c1 = new THREE.Color(PLACEMENT_PREVIEW_WARNING_COLOR);
-            const c2 = new THREE.Color(PLACEMENT_PREVIEW_COLOR);
-            finalColor = c1.lerp(c2, t);
-        }
-
-        return {
-            color: `#${finalColor.getHexString()}`,
-            opacity: PLACEMENT_PREVIEW_OPACITY,
-        };
-    }
-
-    if (preview.warning) {
-        return {
-            color: PLACEMENT_PREVIEW_WARNING_COLOR,
-            opacity: PLACEMENT_PREVIEW_OPACITY,
-        };
-    }
-
-    return {
-        color: PLACEMENT_PREVIEW_COLOR,
-        opacity: PLACEMENT_PREVIEW_OPACITY,
-    };
-}
-
-function buildSupportPlacementPreviewBatch(
-    id: string,
-    preview: SupportData,
+/**
+ * One batch per live placement preview, in registry order.
+ *
+ * A segment-shaped preview (brace) is a bare start-to-end pair, so it takes a
+ * different builder -- declared as `previewShape`, not tested by name.
+ */
+function buildPlacementPreviewBatches(
+    placementPreviews: SupportPlacementPreviews,
     hasSolidBottom: boolean,
     raftThickness: number,
-): PlacementPreviewBatch | null {
-    const shafts: InstancedShaft[] = [];
-    const taperedShafts: PlacementPreviewTaperedShaft[] = [];
-    const disks: PlacementPreviewDisk[] = [];
-    const jointsMap = new Map<string, InstancedJoint>();
-    const roots: InstancedRoot[] = [];
-    const cones: InstancedContactCone[] = [];
+    hidePlateContactPrimitives: boolean,
+): PlacementPreviewBatch[] {
+    const next: PlacementPreviewBatch[] = [];
 
-    // Twig placements carry two ContactDisks (one per end). The disks define
-    // the rod's true per-end diameters; segment.diameter is a placeholder.
-    // Use the disk contact diameters to draw a tapered shaft so the preview
-    // matches what the finished twig will look like.
-    const twigDiskA = preview.contactDisks && preview.contactDisks.length === 2 ? preview.contactDisks[0] : null;
-    const twigDiskB = preview.contactDisks && preview.contactDisks.length === 2 ? preview.contactDisks[1] : null;
-    const isTwigPreview = !!(twigDiskA && twigDiskB);
+    for (const descriptor of SUPPORT_TYPES) {
+        if (!descriptor.hasPlacementPreview) continue;
+        const preview = placementPreviews[descriptor.id];
+        if (!preview) continue;
 
-    if (preview.contactDisks) {
-        for (const disk of preview.contactDisks) {
-            disks.push({
-                id: disk.id,
-                pos: disk.pos,
-                surfaceNormal: disk.surfaceNormal,
-                coneAxis: disk.coneAxis,
-                profile: disk.profile,
-                contactDiameterMm: disk.contactDiameterMm,
-                diskLengthOverride: disk.diskLengthOverride,
-            });
-        }
-    }
+        const id = `placement-preview:${descriptor.id}`;
 
-    let currentStart: THREE.Vector3;
-
-    if (preview.roots) {
-        const root = preview.roots;
-        const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
-        const effectiveDiskHeight = Math.max(0.001, root.diskHeight);
-        const verticalOffset = 0;
-        const shaftDiameter = Math.max(0.001, preview.segments[0]?.diameter ?? root.diameter);
-
-        roots.push({
-            id: root.id,
-            supportId: id,
-            modelId: root.modelId,
-            basePos: {
-                x: basePos.x,
-                y: basePos.y,
-                z: basePos.z + verticalOffset,
-            },
-            bottomRadius: Math.max(0.001, root.diameter / 2),
-            topRadius: shaftDiameter / 2,
-            effectiveDiskHeight,
-            coneHeight: Math.max(0, root.coneHeight),
-        });
-
-        currentStart = basePos.clone().add(new THREE.Vector3(0, 0, verticalOffset + effectiveDiskHeight + Math.max(0, root.coneHeight)));
-    } else if (preview.startPos) {
-        currentStart = new THREE.Vector3(preview.startPos.x, preview.startPos.y, preview.startPos.z);
-    } else if (preview.contactCones && preview.contactCones.length > 0) {
-        const socketPos = getFinalSocketPosition(preview.contactCones[0]);
-        currentStart = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-    } else if (preview.contactCone) {
-        const socketPos = getFinalSocketPosition(preview.contactCone);
-        currentStart = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-    } else if (preview.segments[0]?.bottomJoint) {
-        const p = preview.segments[0].bottomJoint.pos;
-        currentStart = new THREE.Vector3(p.x, p.y, p.z);
-    } else {
-        currentStart = new THREE.Vector3(0, 0, 0);
-    }
-
-    if (preview.knot) {
-        // Leaves carry preview.knot but have no shaft segments â€” without
-        // including the knot here the preview's parent ball is invisible
-        // when snapping a leaf onto another support (trunk, twig, etc.).
-        jointsMap.set(preview.knot.id, {
-            id: preview.knot.id,
-            pos: preview.knot.pos,
-            diameter: Math.max(0.001, preview.knot.diameter ?? ((preview.segments[0]?.diameter ?? 1) + 0.1)),
-            supportId: id,
-        });
-    }
-
-    for (const segment of preview.segments) {
-        if (segment.bottomJoint) {
-            jointsMap.set(segment.bottomJoint.id, {
-                id: segment.bottomJoint.id,
-                pos: segment.bottomJoint.pos,
-                diameter: segment.bottomJoint.diameter,
-                supportId: id,
-            });
-        }
-        if (segment.topJoint) {
-            jointsMap.set(segment.topJoint.id, {
-                id: segment.topJoint.id,
-                pos: segment.topJoint.pos,
-                diameter: segment.topJoint.diameter,
-                supportId: id,
-            });
-        }
-    }
-
-    // Twig taper: precompute per-segment start/end diameters lerped along the
-    // cumulative-length parameter so a multi-segment twig still presents one
-    // continuous Aâ†’B taper.
-    let twigSegmentDiameters: Array<{ start: number; end: number }> | null = null;
-    if (isTwigPreview) {
-        const segLengths: number[] = [];
-        let total = 0;
-        for (const seg of preview.segments) {
-            const a = seg.bottomJoint?.pos;
-            const b = seg.topJoint?.pos;
-            if (!a || !b) { segLengths.push(0); continue; }
-            const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
-            const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-            segLengths.push(len);
-            total += len;
-        }
-        twigSegmentDiameters = [];
-        const dA = twigDiskA!.contactDiameterMm;
-        const dB = twigDiskB!.contactDiameterMm;
-        let cursor = 0;
-        for (let i = 0; i < preview.segments.length; i++) {
-            const sStart = total > 1e-8 ? cursor / total : 0;
-            cursor += segLengths[i];
-            const sEnd = total > 1e-8 ? cursor / total : 1;
-            twigSegmentDiameters.push({
-                start: dA + (dB - dA) * sStart,
-                end: dA + (dB - dA) * sEnd,
-            });
-        }
-    }
-
-    const lastSegmentIndex = preview.segments.length - 1;
-    preview.segments.forEach((segment, index) => {
-        if (segment.bottomJoint) {
-            currentStart = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
-        }
-
-        let endPoint: THREE.Vector3;
-        if (segment.topJoint) {
-            endPoint = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
-        } else if (preview.contactCone && index === lastSegmentIndex) {
-            const socketPos = getFinalSocketPosition(preview.contactCone);
-            endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-        } else if (preview.contactCones && preview.contactCones.length > 0 && index === lastSegmentIndex) {
-            const socketPos = getFinalSocketPosition(preview.contactCones[preview.contactCones.length - 1]);
-            endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-        } else {
-            endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 10));
-        }
-
-        if (segment.type === 'bezier') {
-            shafts.push(
-                bezierSegmentToBatchedShaft(
-                    segment as BezierSegment,
-                    { x: currentStart.x, y: currentStart.y, z: currentStart.z },
-                    { x: endPoint.x, y: endPoint.y, z: endPoint.z },
-                    id,
-                ),
+        // A segment-shaped preview comes from the type's own registered builder;
+        // everything else shares the generic provisional-support batch.
+        if (descriptor.previewShape === 'segment') {
+            const segmentBatch = buildSegmentPreviewBatch(
+                descriptor.id,
+                id,
+                // The builder takes the preview as `unknown`: the shape is the type's own.
+                preview,
+                { maxShaftDiameterMm: getAutoBracingSettings().braceDiameterMm },
             );
-        } else if (twigSegmentDiameters) {
-            const dia = twigSegmentDiameters[index];
-            taperedShafts.push({
-                id: segment.id,
-                start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
-                end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
-                diameterStart: dia.start,
-                diameterEnd: dia.end,
-            });
-        } else {
-            shafts.push({
-                id: segment.id,
-                start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
-                end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
-                diameter: segment.diameter,
-                supportId: id,
-            });
+            if (segmentBatch) next.push(segmentBatch);
+            continue;
         }
 
-        currentStart = endPoint;
-    });
-
-    const allCones = preview.contactCones?.length
-        ? preview.contactCones
-        : preview.contactCone
-            ? [preview.contactCone]
-            : [];
-
-    allCones.forEach((cone, index) => {
-        cones.push({
-            id: cone.id ?? `${id}:cone:${index}`,
-            supportId: id,
-            pos: cone.pos,
-            normal: cone.normal,
-            surfaceNormal: cone.surfaceNormal,
-            diskLengthOverride: cone.diskLengthOverride,
-            profile: cone.profile,
-        });
-    });
-
-    if (shafts.length === 0 && taperedShafts.length === 0 && disks.length === 0 && jointsMap.size === 0 && roots.length === 0 && cones.length === 0) {
-        return null;
+        const batch = buildSupportPlacementPreviewBatch(id, preview as SupportData, hasSolidBottom, raftThickness);
+        if (!batch) continue;
+        next.push(hidePlateContactPrimitives ? { ...batch, roots: [] } : batch);
     }
 
-    const { color, opacity } = resolvePlacementPreviewMaterial(preview);
-    return {
-        id,
-        color,
-        opacity,
-        shafts,
-        taperedShafts,
-        disks,
-        joints: Array.from(jointsMap.values()),
-        roots,
-        cones,
-    };
-}
-
-function buildBracePlacementPreviewBatch(id: string, preview: BracePreviewData): PlacementPreviewBatch | null {
-    const start = preview.start;
-    const end = preview.end;
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    const dz = end.z - start.z;
-    const lenSq = dx * dx + dy * dy + dz * dz;
-    const braceDia = getAutoBracingSettings().braceDiameterMm;
-    const startDiameter = Math.min(braceDia, Math.max(0.001, preview.startDiameterMm));
-    const endDiameter = Math.min(braceDia, Math.max(0.001, preview.endDiameterMm));
-    const knotStartDiameter = Math.max(0.001, preview.startDiameterMm + 0.1);
-    const knotEndDiameter = Math.max(0.001, preview.endDiameterMm + 0.1);
-
-    const joints: InstancedJoint[] = [
-        {
-            id: `${id}:start-joint`,
-            pos: start,
-            diameter: knotStartDiameter,
-            supportId: id,
-        },
-    ];
-
-    const shafts: InstancedShaft[] = [];
-    const taperedShafts: PlacementPreviewTaperedShaft[] = [];
-    if (lenSq >= 1e-6) {
-        if (Math.abs(startDiameter - endDiameter) > 1e-4) {
-            taperedShafts.push({
-                id: `${id}:shaft`,
-                start,
-                end,
-                diameterStart: startDiameter,
-                diameterEnd: endDiameter,
-            });
-        } else {
-            shafts.push({
-                id: `${id}:shaft`,
-                start,
-                end,
-                diameter: (startDiameter + endDiameter) / 2,
-                supportId: id,
-            });
-        }
-
-        joints.push({
-            id: `${id}:end-joint`,
-            pos: end,
-            diameter: knotEndDiameter,
-            supportId: id,
-        });
-    }
-
-    return {
-        id,
-        color: PLACEMENT_PREVIEW_COLOR,
-        opacity: PLACEMENT_PREVIEW_OPACITY,
-        shafts,
-        taperedShafts,
-        disks: [],
-        joints,
-        roots: [],
-        cones: [],
-    };
+    return next;
 }
 
 export function SupportPlacementPreviewLayer({
     mode,
     hidePlateContactPrimitives = false,
-    trunkPlacementPreview = null,
-    branchPlacementPreview = null,
-    leafPlacementPreview = null,
-    bracePlacementPreview = null,
-    kickstandPlacementPreview = null,
+    placementPreviews = EMPTY_PLACEMENT_PREVIEWS,
 }: SupportPlacementPreviewLayerProps) {
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     const { sproutParentingLockHeld, stage: leafStage } = useLeafPlacementState();
@@ -646,44 +455,10 @@ export function SupportPlacementPreviewLayer({
     const placementPreviewBatches = useMemo(() => {
         if (mode !== 'support') return [] as PlacementPreviewBatch[];
 
-        const hasSolidBottom = raftSettings.bottomMode === 'solid';
-        const raftThickness = raftSettings.thickness ?? 0;
-        const next: PlacementPreviewBatch[] = [];
-
-        const pushSupportPreview = (id: string, preview: SupportData | null) => {
-            if (!preview) return;
-            const batch = buildSupportPlacementPreviewBatch(id, preview, hasSolidBottom, raftThickness);
-            if (!batch) return;
-
-            if (hidePlateContactPrimitives) {
-                next.push({
-                    ...batch,
-                    roots: [],
-                });
-                return;
-            }
-
-            next.push(batch);
-        };
-
-        pushSupportPreview('placement-preview:trunk', trunkPlacementPreview);
-        pushSupportPreview('placement-preview:branch', branchPlacementPreview);
-        pushSupportPreview('placement-preview:leaf', leafPlacementPreview);
-        pushSupportPreview('placement-preview:kickstand', kickstandPlacementPreview);
-
-        if (bracePlacementPreview) {
-            const braceBatch = buildBracePlacementPreviewBatch('placement-preview:brace', bracePlacementPreview);
-            if (braceBatch) next.push(braceBatch);
-        }
-
-        return next;
+        return buildPlacementPreviewBatches(placementPreviews, raftSettings.bottomMode === 'solid', raftSettings.thickness ?? 0, hidePlateContactPrimitives);
     }, [
         mode,
-        trunkPlacementPreview,
-        branchPlacementPreview,
-        leafPlacementPreview,
-        bracePlacementPreview,
-        kickstandPlacementPreview,
+        placementPreviews,
         raftSettings.bottomMode,
         raftSettings.thickness,
         hidePlateContactPrimitives,
@@ -761,23 +536,23 @@ export function SupportPlacementPreviewLayer({
                         <InstancedJointGroup
                             joints={batch.joints}
                             color={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? '#00ff00'
                                     : batch.color
                             }
                             emissive={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? '#00ff00'
                                     : batch.color
                             }
                             emissiveIntensity={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? 0.5
                                     : 0.08
                             }
                             transparent
                             opacity={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? 0.70
                                     : batch.opacity
                             }
@@ -811,13 +586,104 @@ export function SupportPlacementPreviewLayer({
     );
 }
 
-export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], marqueeCandidateModelIds = EMPTY_SUPPORT_ID_LIST, hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 100000, trunkPlacementPreview = null, branchPlacementPreview = null, leafPlacementPreview = null, bracePlacementPreview = null, kickstandPlacementPreview = null, interiorView = false, cavityGeometryByModelId, modelWorldInverseById }, ref) => {
+/**
+ * The dependency list a support derivation carries: the entity collections it
+ * reads, in a fixed order, by identity, then anything else it depends on.
+ *
+ * The snapshot object is rebuilt on every store write - a hover included, since
+ * `setHoveredState` writes the same store - so depending on it re-runs the
+ * derivation for a write that changed nothing it reads. Hovering across the
+ * supports re-partitioned every batch and rebuilt every merged tube for it. These
+ * are the collections themselves, which is what the derivation actually reads;
+ * every collection a lookup can be asked for is in `SUPPORT_COLLECTION_KEYS`.
+ */
+function supportCollectionRefs(state: SupportState, ...extra: unknown[]): readonly unknown[] {
+    return [...SUPPORT_COLLECTION_KEYS.map((key) => state[key]), ...extra];
+}
+
+/**
+ * A snapshot that only changes when something other than hover changes.
+ *
+ * SupportRenderer reads the whole support store, so a hover write used to hand
+ * it a new snapshot, invalidate every collection-derived memo, re-traverse the
+ * scene for clipping and rebuild a ~1000-element tree — measured at 84–112 ms of
+ * React commit per hovered support. Hover is visual state; the world does not
+ * change, so the heavy derivations take this snapshot instead. Live `state` is
+ * still read for the hover overlays and the selected-support primitive hover.
+ */
+function statesEqualExceptHover(a: SupportState, b: SupportState): boolean {
+    if (a === b) return true;
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const key of aKeys) {
+        if (key === 'hoveredId' || key === 'hoveredCategory') continue;
+        if ((a as unknown as Record<string, unknown>)[key]
+            !== (b as unknown as Record<string, unknown>)[key]) return false;
+    }
+    return true;
+}
+
+let cachedNonHoverSnapshot: SupportState | null = null;
+function getSnapshotWithoutHover(): SupportState {
+    const next = getSnapshot();
+    if (cachedNonHoverSnapshot && statesEqualExceptHover(cachedNonHoverSnapshot, next)) {
+        return cachedNonHoverSnapshot;
+    }
+    cachedNonHoverSnapshot = next;
+    return next;
+}
+
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, activeModelId = null, selectedModelIds = [], marqueeCandidateModelIds = EMPTY_SUPPORT_ID_LIST, hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 100000, placementPreviews = EMPTY_PLACEMENT_PREVIEWS, interiorView = false, cavityGeometryByModelId, modelWorldInverseById, pointerSceneryModelIds }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
+    const stableState = useSyncExternalStore(subscribe, getSnapshotWithoutHover);
+    noteActivity('support-mode:renderer');
     const resolvedSelection = useResolvedSelectionState();
-    const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
-    const simpleRender = settings.debugSimpleSupportRender;
+    // These debug flags are all this renderer reads from the support settings, and
+    // a preset switch rewrites the whole settings object. Each snapshot is the flag
+    // itself, so a preset that leaves them alone no longer re-renders the renderer
+    // and every batch group under it.
+    const discsOnly = useSyncExternalStore(subscribeToSettings, () => getSettingsSnapshot().navigationDiscsOnly, () => getSettingsSnapshot().navigationDiscsOnly);
+    const debugSimple = useSyncExternalStore(subscribeToSettings, () => getSettingsSnapshot().debugSimpleSupportRender, () => getSettingsSnapshot().debugSimpleSupportRender);
+    const debugOriginColors = useSyncExternalStore(subscribeToSettings, () => !!getSettingsSnapshot().autoSupport?.debugSupportOriginColors, () => !!getSettingsSnapshot().autoSupport?.debugSupportOriginColors);
+    const debugSectionColors = useSyncExternalStore(subscribeToSettings, () => getSettingsSnapshot().autoBracing.debugSectionColorsEnabled, () => getSettingsSnapshot().autoBracing.debugSectionColorsEnabled);
+    const debugVoronoiSeeds = useSyncExternalStore(subscribeToSettings, () => getSettingsSnapshot().autoBracing.debugVoronoiSeedsEnabled, () => getSettingsSnapshot().autoBracing.debugVoronoiSeedsEnabled);
+    // The simple views size their pick tubes in screen pixels, so they need the
+    // projection and the viewport the lines are drawn into.
+    const camera = useThree((three) => three.camera);
+    const viewport = useThree((three) => three.size);
+    // The eye button's navigation view is the simple render plus cones reduced
+    // to lines, so it takes every gate below and adds the cone handling.
+    const simpleRender = debugSimple || discsOnly;
+    /**
+     * Whether the instanced shaft batch owns the straight and tapered shafts.
+     *
+     * The simple and navigation views keep the legacy line-and-pick-tube pass:
+     * their pick tubes are re-sized per viewport, which is a second slot list
+     * that changes with the camera. So the batch is Support-mode full detail only.
+     */
+    const shaftBatchActive = SUPPORT_INSTANCED_SHAFTS && !simpleRender;
+    /**
+     * Whether the instanced contact-cone batch owns the unselected cones.
+     *
+     * Support-mode full detail only, like the shaft and joint batches: the
+     * simple and navigation views draw the contact primitive alone and add a
+     * line where the body was, which is a different primitive set, not a
+     * different transform.
+     */
+    const coneBatchActive = SUPPORT_INSTANCED_CONES && !simpleRender;
+    /**
+     * Whether the instanced root batch owns the unselected plate roots.
+     *
+     * Same `!simpleRender` gate: a simple or navigation root is disk-only and
+     * adds a line up its axis, so the batch does not model it.
+     */
+    const rootBatchActive = SUPPORT_INSTANCED_ROOTS && !simpleRender;
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
-    const kickstandState = useKickstandStoreState();
+    // The knots kickstands host and the roots they own, derived from the
+    // registry's edges rather than a kickstand-specific store.
+    const kickstandKnotsById = useSyncExternalStore(subscribe, getKickstandKnots, getKickstandKnots);
+    const kickstandRootsById = useSyncExternalStore(subscribe, getKickstandRoots, getKickstandRoots);
     const activeJointDragPreview = useActiveJointDragPreview();
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
@@ -839,11 +705,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const useMultiSelectionDetail = hasSupportMultiSelection && effectiveSelectedSupportIds.length <= MULTI_SELECTION_DETAIL_THRESHOLD;
     const dimNonSelected = selectedId !== null || hasSupportMultiSelection;
     const hideUnselectedKnots = selectedId !== null || hasSupportMultiSelection;
-    // Twigs participate in scene-batched shaft rendering like other supports.
-    // TwigRenderer still mounts (to draw the disks + joints, which have no
-    // scene-batched equivalent); it just defers its straight shafts to the
-    // batched pipeline via deferStraightShaftsToSceneBatch.
-    const enableTwigSceneBatching = true;
 
     const interactionHooksEnabled = !passive;
     const [gizmoInteractionLockActive, setGizmoInteractionLockActive] = React.useState(false);
@@ -873,6 +734,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const isInteractable = supportPointerInteractable && !supportInteractionSuppressed;
     const isPreparePointerInteractable = interactionHooksEnabled && mode === 'prepare' && !navigationLodActive;
     const isPointerInteractable = supportPointerInteractable || isPreparePointerInteractable;
+    // The pointer guards read the set through a ref: they are one-line early returns in
+    // handlers that already close over a dozen values, and what they ask ("is this model
+    // scenery?") is answered by the current render either way.
+    const pointerSceneryRef = React.useRef(pointerSceneryModelIds);
+    pointerSceneryRef.current = pointerSceneryModelIds;
+
+
     const ghostOpacityClamped = Math.max(0.05, Math.min(1, ghostOpacity));
     const ghostTransparent = ghostOpacityClamped < 0.999;
     const selectedModelIdSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
@@ -895,37 +763,24 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const marqueeHoveredSupportIdSet = useMemo(() => new Set(marqueeHoveredSupportIds), [marqueeHoveredSupportIds]);
     const activeKnotDragPreview = useActiveKnotDragPreview();
     const activeTwigDragPreview = useActiveTwigDragPreview();
-    const supportRenderLookupInput = useMemo(() => ({
-        state: {
-            roots: state.roots,
-            trunks: state.trunks,
-            branches: state.branches,
-            leaves: state.leaves,
-            twigs: state.twigs,
-            sticks: state.sticks,
-            braces: state.braces,
-            knots: state.knots,
-        },
-        kickstandState: {
-            kickstands: kickstandState.kickstands,
-            knots: kickstandState.knots,
-        },
-        // Keep worker lookups driven by committed state only.
-        // Drag previews are resolved locally in this renderer to avoid per-frame
-        // structured-clone payload churn during joint dragging.
-        activePreviewSupport: null,
-    }), [
-        state.roots,
-        state.trunks,
-        state.branches,
-        state.leaves,
-        state.twigs,
-        state.sticks,
-        state.braces,
-        state.knots,
-        kickstandState.kickstands,
-        kickstandState.knots,
-    ]);
+    // Collections picked by SUPPORT_COLLECTION_KEYS. `state` is the dependency
+    // because the picked object rebuilds whenever any collection identity changes.
+    const supportRenderLookupInput = useMemo(() => {
+        const picked = {} as Record<string, unknown>;
+        for (const key of SUPPORT_COLLECTION_KEYS) picked[key] = state[key];
+        return {
+            state: picked as Pick<typeof state, SupportCollectionKey>,
+            kickstandState: {
+                kickstands: state.kickstands,
+                knots: kickstandKnotsById,
+            },
+            // Keep worker lookups driven by committed state only.
+            // Drag previews are resolved locally in this renderer to avoid per-frame
+            // structured-clone payload churn during joint dragging.
+            activePreviewSupport: null,
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- the collections it copies, not the snapshot: keying on `state` rebuilt this input - and with it the worker request - on every hover, for collections that had not moved.
+    }, supportCollectionRefs(state, kickstandKnotsById));
     const supportRenderLookup = useSupportRenderLookup(supportRenderLookupInput);
 
     const trunkList = useMemo(() => Object.values(state.trunks), [state.trunks]);
@@ -949,52 +804,48 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
         return map;
     }, [twigList, activeTwigDragPreview]);
-    const stickList = useMemo(() => Object.values(state.sticks), [state.sticks]);
     const braceList = useMemo(() => Object.values(state.braces), [state.braces]);
-    const anchorList = useMemo(() => Object.values(state.anchors), [state.anchors]);
-    const kickstandList = useMemo(() => Object.values(kickstandState.kickstands), [kickstandState.kickstands]);
+    const stumpList = useMemo(() => Object.values(state.stumps), [state.stumps]);
+    const kickstandList = useMemo(() => Object.values(state.kickstands), [state.kickstands]);
+    // Cavity classification for supports that carry no `placementSurface`
+    // (auto-generated and imported ones). Built lazily per cavity and reused
+    // for every contact.
+    const cavityTester = useMemo(
+        () => createCavityTester(cavityGeometryByModelId, modelWorldInverseById),
+        [cavityGeometryByModelId, modelWorldInverseById],
+    );
     const matchesInteriorContact = useMemo<InteriorContactFilter>(() => {
         if (!interiorView) return () => true;
+        // Interior view needs a cavity; without one, keep the layer's old
+        // contract of showing everything rather than hiding it all.
+        if (!cavityGeometryByModelId || cavityGeometryByModelId.size === 0) return () => true;
 
-        return (contact, _modelId) => {
+        return (contact, modelId) => {
             if (!contact) return false;
             if (contact.placementSurface === 'interior') return true;
             if (contact.placementSurface === 'exterior') return false;
-            // placementSurface is undefined for imported (LYS) supports — show them
-            // in interior view so the user can see how all supports relate to the
-            // cavity. The BVH/raycasting tests are unreliable on non-watertight
-            // cavity meshes.
-            return true;
+            // Unstamped: ask the cavity, the same test the Prepare proxy uses.
+            return cavityTester.isOnInteriorSide(contact.pos, modelId);
         };
-    }, [interiorView, cavityGeometryByModelId, modelWorldInverseById]);
-    const knotList = useMemo(() => Object.values(state.knots), [state.knots]);
-    const kickstandKnotList = useMemo(() => Object.values(kickstandState.knots), [kickstandState.knots]);
+    }, [interiorView, cavityGeometryByModelId, cavityTester]);
     const matchesInteriorBrace = useMemo(() => {
         if (!interiorView) return (_brace: Brace) => true;
 
+        // Every shafted type, by its declared contacts.
         const directSegmentInteriorById = new Map<string, boolean>();
-        for (const trunk of Object.values(state.trunks)) {
-            const isInterior = matchesInteriorContact(trunk.contactCone, trunk.modelId);
-            for (const segment of trunk.segments) directSegmentInteriorById.set(segment.id, isInterior);
-        }
-        for (const branch of Object.values(state.branches)) {
-            const isInterior = matchesInteriorContact(branch.contactCone, branch.modelId);
-            for (const segment of branch.segments) directSegmentInteriorById.set(segment.id, isInterior);
-        }
-        for (const twig of Object.values(state.twigs)) {
-            const isInterior = matchesInteriorContact(twig.contactDiskA, twig.modelId)
-                || matchesInteriorContact(twig.contactDiskB, twig.modelId);
-            for (const segment of twig.segments) directSegmentInteriorById.set(segment.id, isInterior);
-        }
-        for (const stick of Object.values(state.sticks)) {
-            const isInterior = matchesInteriorContact(stick.contactConeA, stick.modelId)
-                || matchesInteriorContact(stick.contactConeB, stick.modelId);
-            for (const segment of stick.segments) directSegmentInteriorById.set(segment.id, isInterior);
+        for (const descriptor of SUPPORT_TYPES) {
+            if (!descriptor.hasSegments) continue;
+            const collection = state[descriptor.location.key] as unknown as Record<string, { modelId: string; segments?: Segment[] }>;
+            for (const entity of Object.values(collection ?? {})) {
+                const isInterior = anyContactMatches(descriptor.id, entity, (contact: unknown) =>
+                    matchesInteriorContact(contact as Parameters<typeof matchesInteriorContact>[0], entity.modelId));
+                for (const segment of entity.segments ?? []) directSegmentInteriorById.set(segment.id, isInterior);
+            }
         }
 
         const resolveKnotInterior = (knotId?: string, visitedBraceIds?: Set<string>): boolean => {
             if (!knotId) return false;
-            const knot = state.knots[knotId] ?? kickstandState.knots[knotId];
+            const knot = state.knots[knotId];
             if (!knot) return false;
             return resolveParentShaftInterior(knot.parentShaftId, visitedBraceIds);
         };
@@ -1002,14 +853,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const resolveParentShaftInterior = (parentShaftId?: string, visitedBraceIds?: Set<string>): boolean => {
             if (!parentShaftId) return false;
 
-            if (parentShaftId.startsWith('leafCone:')) {
-                const leafId = parentShaftId.slice('leafCone:'.length);
-                const leaf = state.leaves[leafId];
+            const host = parseKnotHostId(parentShaftId);
+
+            if (host && isConeKnotHost(host.typeId)) {
+                const leaf = state.leaves[host.entityId];
                 return !!leaf && matchesInteriorContact(leaf.contactCone, leaf.modelId);
             }
 
-            if (parentShaftId.startsWith('braceSegment:')) {
-                const braceId = parentShaftId.slice('braceSegment:'.length);
+            if (host && isSpanKnotHost(host.typeId)) {
+                const braceId = host.entityId;
                 const brace = state.braces[braceId];
                 if (!brace) return false;
                 if (brace.placementSurface === 'interior') return true;
@@ -1030,16 +882,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (brace.placementSurface === 'exterior') return false;
             return resolveKnotInterior(brace.startKnotId) || resolveKnotInterior(brace.endKnotId);
         };
-    }, [interiorView, state.trunks, state.branches, state.leaves, state.twigs, state.sticks, state.braces, state.knots, kickstandState.knots, matchesInteriorContact]);
+        // The loop above walks every shafted type from the registry, so the
+        // whole snapshot is the dependency.
+    }, [interiorView, stableState, matchesInteriorContact]);
 
-    const entitySegmentModelIdById = useMemo(() => {
-        const map = new Map<string, string | undefined>();
-        for (const [id, modelId] of Object.entries(supportRenderLookup.entitySegmentModelIdById)) {
-            map.set(id, modelId);
-        }
-        return map;
-    }, [supportRenderLookup.entitySegmentModelIdById]);
-
+    const knotList = useMemo(() => Object.values(state.knots), [state.knots]);
+    const kickstandKnotList = useMemo(() => Object.values(kickstandKnotsById), [kickstandKnotsById]);
     const entityModelIdByKnotId = useMemo(() => {
         const map = new Map<string, string | undefined>();
         for (const [id, modelId] of Object.entries(supportRenderLookup.entityModelIdByKnotId)) {
@@ -1052,37 +900,32 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (modelId) return modelId;
         if (!supportId) return undefined;
 
-        const trunk = state.trunks[supportId];
-        if (trunk?.modelId) return trunk.modelId;
+        // Every type: its own modelId, the root it owns, then its `hostedBy` knots.
+        for (const descriptor of SUPPORT_TYPES) {
+            const collection = (state as unknown as Record<string, Record<string, { modelId?: string }>>)[descriptor.location.key];
+            const entity = collection?.[supportId] as Record<string, unknown> | undefined;
+            if (!entity) continue;
 
-        const branch = state.branches[supportId];
-        if (branch) return branch.modelId ?? entityModelIdByKnotId.get(branch.parentKnotId);
+            if (typeof entity.modelId === 'string' && entity.modelId) return entity.modelId;
 
-        const leaf = state.leaves[supportId];
-        if (leaf) return leaf.modelId ?? entityModelIdByKnotId.get(leaf.parentKnotId);
+            // A root-owning type resolves its model from that root.
+            if (descriptor.ownsRoot) {
+                const rootId = entity.rootId as string | undefined;
+                const rootModelId = rootId ? state.roots[rootId]?.modelId : undefined;
+                if (rootModelId) return rootModelId;
+            }
 
-        const brace = state.braces[supportId];
-        if (brace) {
-            return brace.modelId
-                ?? entityModelIdByKnotId.get(brace.startKnotId)
-                ?? entityModelIdByKnotId.get(brace.endKnotId);
-        }
-
-        const twig = state.twigs[supportId];
-        if (twig?.modelId) return twig.modelId;
-
-        const stick = state.sticks[supportId];
-        if (stick?.modelId) return stick.modelId;
-
-        const kickstand = kickstandState.kickstands[supportId];
-        if (kickstand) {
-            return kickstand.modelId
-                ?? kickstandState.roots[kickstand.rootId]?.modelId
-                ?? entityModelIdByKnotId.get(kickstand.hostKnotId);
+            for (const edge of descriptor.edges) {
+                if (edge.to !== 'knots' || edge.ownership !== 'hostedBy') continue;
+                const knotId = entity[edge.field] as string | undefined;
+                const viaKnot = knotId ? entityModelIdByKnotId.get(knotId) : undefined;
+                if (viaKnot) return viaKnot;
+            }
+            return undefined;
         }
 
         return undefined;
-    }, [state.trunks, state.branches, state.leaves, state.braces, state.twigs, state.sticks, kickstandState.kickstands, kickstandState.roots, entityModelIdByKnotId]);
+    }, [stableState, entityModelIdByKnotId]);
 
     const isModelVisible = React.useCallback((modelId?: string, supportId?: string) => {
         const resolvedModelId = resolveSupportModelId(modelId, supportId);
@@ -1310,12 +1153,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const supportIdByContactDiskId = useMemo(() => {
         const map = new Map<string, string>();
         for (const [id, supportId] of Object.entries(supportRenderLookup.supportIdByContactDiskId)) map.set(id, supportId);
-        // Add anchor contact cones (not indexed by render lookup worker)
-        for (const anchor of anchorList) {
-            if (anchor.contactCone?.id) map.set(anchor.contactCone.id, anchor.id);
+        // Add the near-plate type's contact cones (not indexed by the render lookup worker)
+        for (const stump of stumpList) {
+            if (stump.contactCone?.id) map.set(stump.contactCone.id, stump.id);
         }
         return map;
-    }, [supportRenderLookup.supportIdByContactDiskId, anchorList]);
+    }, [supportRenderLookup.supportIdByContactDiskId, stumpList]);
 
     const hoveredSupportIdFromPicking = useMemo(() => {
         return resolveHoveredSupportOwnerId(
@@ -1491,66 +1334,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         hoveredIdForVisual,
     ]);
 
-    // Backfill Kickstand root/knot into global support state so raft + knot tools include them.
-    useEffect(() => {
-        if (!interactionHooksEnabled) return;
-
-        const rootDiffers = (
-            a: { modelId?: string; diameter: number; diskHeight: number; coneHeight: number; transform: { pos: { x: number; y: number; z: number } } },
-            b: { modelId?: string; diameter: number; diskHeight: number; coneHeight: number; transform: { pos: { x: number; y: number; z: number } } },
-        ) => {
-            return a.modelId !== b.modelId
-                || a.diameter !== b.diameter
-                || a.diskHeight !== b.diskHeight
-                || a.coneHeight !== b.coneHeight
-                || a.transform.pos.x !== b.transform.pos.x
-                || a.transform.pos.y !== b.transform.pos.y
-                || a.transform.pos.z !== b.transform.pos.z;
-        };
-
-        const knotDiffers = (
-            a: { t?: number; parentShaftId: string; diameter?: number; pos: { x: number; y: number; z: number } },
-            b: { t?: number; parentShaftId: string; diameter?: number; pos: { x: number; y: number; z: number } },
-        ) => {
-            return a.parentShaftId !== b.parentShaftId
-                || a.t !== b.t
-                || a.diameter !== b.diameter
-                || a.pos.x !== b.pos.x
-                || a.pos.y !== b.pos.y
-                || a.pos.z !== b.pos.z;
-        };
-
-        for (const kickstand of kickstandList) {
-            const root = kickstandState.roots[kickstand.rootId];
-            if (root) {
-                const existingRoot = state.roots[root.id] as typeof root | undefined;
-                if (!existingRoot || rootDiffers(existingRoot, root)) {
-                    addRoot(root);
-                }
-            }
-
-            const hostKnot = kickstandState.knots[kickstand.hostKnotId];
-            if (hostKnot) {
-                const existingKnot = state.knots[hostKnot.id] as typeof hostKnot | undefined;
-                if (!existingKnot) {
-                    addKnot(hostKnot);
-                } else if (knotDiffers(existingKnot, hostKnot)) {
-                    updateKnot(hostKnot);
-                }
-            }
-        }
-
-        const trunkRootIds = new Set(Object.values(state.trunks).map((trunk) => trunk.rootId));
-        const kickstandRootIds = new Set(Object.values(kickstandState.kickstands).map((kickstand) => kickstand.rootId));
-        for (const rootId of Object.keys(state.roots)) {
-            if (trunkRootIds.has(rootId)) continue;
-            if (kickstandRootIds.has(rootId)) continue;
-            removeRootById(rootId);
-        }
-    }, [kickstandState.kickstands, kickstandState.roots, kickstandState.knots, state.roots, state.knots, state.trunks, interactionHooksEnabled]);
+    /**
+     * The scene-owned values a joint drag needs, published for the gesture
+     * layer. A ref, not a prop or a context value: `useJointInteraction` runs
+     * before the producer memos below exist, and the gesture reads it at pointer
+     * down, long after this render's layout effect has filled it.
+     */
+    const jointDragSceneRef = React.useRef<JointDragSceneContext | null>(null);
+    /**
+     * The scene's joint batch, handed up by `InstancedJointBatch`. The drag
+     * writer moves the leaf host-knot balls that ride the dragged support's own
+     * segments through it — they are scene geometry and never resized here.
+     */
+    const [sceneJointBatch, setSceneJointBatch] = React.useState<SupportInstanceBatch | null>(null);
+    const handleSceneJointBatchReady = React.useCallback(
+        (batch: SupportInstanceBatch | null) => setSceneJointBatch(batch),
+        [],
+    );
 
     // Enable joint dragging
-    useJointInteraction(isInteractable);
+    useJointInteraction(isInteractable, jointDragSceneRef);
     // Enable knot sliding
     useKnotInteraction(isInteractable);
 
@@ -1558,22 +1361,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const groupRef = React.useRef<THREE.Group>(null);
     useImperativeHandle(ref, () => groupRef.current!);
 
-    // Derive clipping planes synchronously so a freshly mounted renderer
-    // (e.g. after support refresh key changes) is clipped correctly on its
-    // very first render, without waiting for a post-commit effect.
-    const clippingPlanes = useMemo(() => {
-        const planes: THREE.Plane[] = [];
-
-        if (clipLower != null) {
-            planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-        }
-
-        if (clipUpper != null) {
-            planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-        }
-
-        return planes;
-    }, [clipLower, clipUpper]);
+    // The scene's two clip planes, shared and stable. Their constants move with
+    // the slider; the array identity and length never change, so a scrub never
+    // recompiles a support material and a plane parking outside the scene does
+    // not change the shader either.
+    const clippingPlanes = getSceneClipPlanes();
 
     const resolveBaseColor = useMemo(() => {
         const baseHex = '#9a9a9a';
@@ -1584,9 +1376,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             .lerp(new THREE.Color(hoverTintHex), 0.35 * MARQUEE_CANDIDATE_TINT_FACTOR)
             .getStyle();
 
+        const sceneryColor = new THREE.Color(baseHex).multiplyScalar(SCENERY_DIM).getStyle();
+
         return (modelId?: string) => {
             const isSelectedModelSupport = !!modelId && selectedModelIdSet.has(modelId);
             if (isSelectedModelSupport) return selectedHex;
+            if (!supportAnswersPointer(modelId, pointerSceneryModelIds)) return sceneryColor;
 
             const isHoveredModelSupport = !!effectiveHoverModelId && !!modelId && modelId === effectiveHoverModelId;
             if (isHoveredModelSupport) return hoveredColor;
@@ -1598,19 +1393,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             return baseHex;
         };
-    }, [effectiveHoverModelId, marqueeCandidateModelIdSet, selectedModelIdSet]);
-
-    const debugOriginColors = !!settings.autoSupport?.debugSupportOriginColors;
+    }, [effectiveHoverModelId, marqueeCandidateModelIdSet, selectedModelIdSet, pointerSceneryModelIds]);
 
     // Support id → origin lookup for the debug origin coloring.
     const originById = useMemo(() => {
+        // Every type that records an origin, declared as `hasOrigin`.
         const map = new Map<string, SupportOrigin>();
-        for (const t of trunkList) if (t.origin) map.set(t.id, t.origin);
-        for (const b of branchList) if (b.origin) map.set(b.id, b.origin);
-        for (const l of leafList) if (l.origin) map.set(l.id, l.origin);
-        for (const a of anchorList) if (a.origin) map.set(a.id, a.origin);
+        for (const descriptor of SUPPORT_TYPES) {
+            if (!descriptor.hasOrigin) continue;
+            const collection = state[descriptor.location.key] as unknown as Record<string, { id: string; origin?: SupportOrigin }>;
+            for (const entity of Object.values(collection ?? {})) {
+                if (entity.origin) map.set(entity.id, entity.origin);
+            }
+        }
         return map;
-    }, [trunkList, branchList, leafList, anchorList]);
+    }, [state]);
 
     const originColorFor = React.useCallback((supportId: string): string | null => {
         if (!debugOriginColors) return null;
@@ -1618,20 +1415,30 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return origin ? ORIGIN_COLORS[origin] : ORIGIN_NO_ORIGIN_COLOR;
     }, [debugOriginColors, originById]);
 
-    const resolveSceneSupportColor = React.useCallback((modelId: string | undefined, supportId: string) => {
-        if (hasSupportMultiSelection && !useMultiSelectionDetail && selectedSupportIdSet.has(supportId)) {
-            return BULK_MULTI_SELECTED_COLOR;
-        }
+    /** Whether the bulk marquee colour is what marks this support selected. */
+    const isBulkSelected = React.useCallback((supportId: string) => (
+        hasSupportMultiSelection && !useMultiSelectionDetail && selectedSupportIdSet.has(supportId)
+    ), [hasSupportMultiSelection, useMultiSelectionDetail, selectedSupportIdSet]);
 
-        // Debug origin coloring: anchor / overhang / island / standalone
-        // (gray = pre-stamping entity → regenerate). originColorFor is
-        // non-null whenever the mode is on.
+    const resolveSceneSupportColor = React.useCallback((
+        modelId: string | undefined,
+        supportId: string,
+        typeId?: SupportTypeId,
+    ) => {
+        if (isBulkSelected(supportId)) return BULK_MULTI_SELECTED_COLOR;
+
+        // Debug origin coloring: anchor / overhang / island / standalone, gray
+        // for an entity stamped before origins existed, and a separate slate
+        // for a type that records no origin at all -- reusing the model colour
+        // put braces next to the overhang orange.
         if (debugOriginColors) {
-            return originColorFor(supportId) ?? ORIGIN_NO_ORIGIN_COLOR;
+            return typeId && !getSupportTypeDescriptor(typeId).hasOrigin
+                ? ORIGIN_NOT_APPLICABLE_COLOR
+                : originColorFor(supportId) ?? ORIGIN_NO_ORIGIN_COLOR;
         }
 
         return dimNonSelected ? '#666666' : resolveBaseColor(modelId);
-    }, [hasSupportMultiSelection, useMultiSelectionDetail, selectedSupportIdSet, dimNonSelected, resolveBaseColor, debugOriginColors, originColorFor]);
+    }, [isBulkSelected, dimNonSelected, resolveBaseColor, debugOriginColors, originColorFor]);
 
     const resolveModelDropOffsetZ = React.useCallback((modelId?: string) => {
         if (!modelId) return 0;
@@ -1669,65 +1476,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return map;
     }, [trunkList]);
 
-    const branchIdsByParentKnotIdForSelection = useMemo(() => {
-        const map = new Map<string, string[]>();
-        for (const branch of branchList) {
-            const list = map.get(branch.parentKnotId);
-            if (list) {
-                list.push(branch.id);
-            } else {
-                map.set(branch.parentKnotId, [branch.id]);
-            }
-        }
-        return map;
-    }, [branchList]);
-
-    const leafIdsByParentKnotIdForSelection = useMemo(() => {
-        const map = new Map<string, string[]>();
-        for (const leaf of leafList) {
-            const list = map.get(leaf.parentKnotId);
-            if (list) {
-                list.push(leaf.id);
-            } else {
-                map.set(leaf.parentKnotId, [leaf.id]);
-            }
-        }
-        return map;
-    }, [leafList]);
-
-    const braceIdsByKnotIdForSelection = useMemo(() => {
-        const map = new Map<string, string[]>();
-        for (const brace of braceList) {
-            const startList = map.get(brace.startKnotId);
-            if (startList) {
-                startList.push(brace.id);
-            } else {
-                map.set(brace.startKnotId, [brace.id]);
-            }
-
-            const endList = map.get(brace.endKnotId);
-            if (endList) {
-                endList.push(brace.id);
-            } else {
-                map.set(brace.endKnotId, [brace.id]);
-            }
-        }
-        return map;
-    }, [braceList]);
-
-    const kickstandIdsByHostKnotIdForSelection = useMemo(() => {
-        const map = new Map<string, string[]>();
-        for (const kickstand of kickstandList) {
-            const list = map.get(kickstand.hostKnotId);
-            if (list) {
-                list.push(kickstand.id);
-            } else {
-                map.set(kickstand.hostKnotId, [kickstand.id]);
-            }
-        }
-        return map;
-    }, [kickstandList]);
-
     const fallbackSupportIdByPrimitiveForSelection = useMemo(() => {
         const map = new Map<string, string>();
 
@@ -1742,7 +1490,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         for (const brace of braceList) {
-            map.set(`braceSegment:${brace.id}`, brace.id);
+            map.set(knotHostId(spanKnotHostType(), brace.id), brace.id);
         }
 
         return map;
@@ -1759,15 +1507,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             return trunkIdByRootIdForSelection.get(selectedId) ?? null;
         }
 
-        if (
-            selectedCategory === 'trunk'
-            || selectedCategory === 'branch'
-            || selectedCategory === 'leaf'
-            || selectedCategory === 'twig'
-            || selectedCategory === 'stick'
-            || selectedCategory === 'brace'
-            || selectedCategory === 'anchor'
-        ) {
+        if (getSupportTypeBySelectionCategory(selectedCategory)) {
             return selectedId;
         }
 
@@ -1782,181 +1522,47 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         trunkIdByRootIdForSelection,
     ]);
 
-    const selectedTrunkIds = useMemo(() => {
-        const selected = new Set<string>();
-        if (useMultiSelectionDetail) {
-            for (const supportId of selectedSupportIdSet) {
-                if (state.trunks[supportId]) selected.add(supportId);
-            }
-        }
+    // Selection resolution, derived. The kickstand collection still lives in
+    // its own store, so the lookup routes that one key there.
+    const selectionCollections = useCallback<CollectionLookup>((key) => (
+        key === 'kickstands'
+            ? (state.kickstands as unknown as Record<string, unknown>)
+            : ((state as unknown as Record<string, Record<string, unknown>>)[key])
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- the collections it reads, not the snapshot: keying on `state` rebuilt the knot index, the per-type selection sets and every batch partition on every hover.
+    ), supportCollectionRefs(state));
 
-        if (singleSelectedSupportId && state.trunks[singleSelectedSupportId]) {
-            selected.add(singleSelectedSupportId);
-        }
+    const selectionKnotIndex = useMemo(
+        () => buildKnotIndex(selectionCollections),
+        [selectionCollections],
+    );
 
-        return selected;
-    }, [singleSelectedSupportId, selectedSupportIdSet, state.trunks, useMultiSelectionDetail]);
-
-    const selectedBranchIds = useMemo(() => {
-        const selected = new Set<string>();
-        if (useMultiSelectionDetail) {
-            for (const supportId of selectedSupportIdSet) {
-                if (state.branches[supportId]) selected.add(supportId);
-            }
-        }
-
-        if (singleSelectedSupportId && state.branches[singleSelectedSupportId]) {
-            selected.add(singleSelectedSupportId);
-        }
-
-        if (selectedCategory === 'knot' && selectedId) {
-            const branchIds = branchIdsByParentKnotIdForSelection.get(selectedId) ?? [];
-            for (const id of branchIds) selected.add(id);
-        }
-
-        return selected;
-    }, [
-        branchIdsByParentKnotIdForSelection,
-        selectedCategory,
-        selectedId,
-        selectedSupportIdSet,
-        singleSelectedSupportId,
-        state.branches,
-        useMultiSelectionDetail,
-    ]);
-
-    const selectedBraceIds = useMemo(() => {
-        const selected = new Set<string>();
-        if (useMultiSelectionDetail) {
-            for (const supportId of selectedSupportIdSet) {
-                if (state.braces[supportId]) selected.add(supportId);
-            }
-        }
-
-        if (singleSelectedSupportId && state.braces[singleSelectedSupportId]) {
-            selected.add(singleSelectedSupportId);
-        }
-
-        if (selectedCategory === 'segment' && selectedId?.startsWith('braceSegment:')) {
-            selected.add(selectedId.slice('braceSegment:'.length));
-        }
-
-        if (selectedCategory === 'knot' && selectedId) {
-            const braceIds = braceIdsByKnotIdForSelection.get(selectedId) ?? [];
-            for (const id of braceIds) selected.add(id);
-        }
-
-        return selected;
-    }, [
-        braceIdsByKnotIdForSelection,
-        selectedCategory,
-        selectedId,
-        selectedSupportIdSet,
-        singleSelectedSupportId,
-        state.braces,
-        useMultiSelectionDetail,
-    ]);
-
-    const selectedTwigIds = useMemo(() => {
-        const selected = new Set<string>();
-        if (useMultiSelectionDetail) {
-            for (const supportId of selectedSupportIdSet) {
-                if (state.twigs[supportId]) selected.add(supportId);
-            }
-        }
-
-        if (singleSelectedSupportId && state.twigs[singleSelectedSupportId]) {
-            selected.add(singleSelectedSupportId);
-        }
-
-        return selected;
-    }, [singleSelectedSupportId, selectedSupportIdSet, state.twigs, useMultiSelectionDetail]);
-
-    const selectedStickIds = useMemo(() => {
-        const selected = new Set<string>();
-        if (useMultiSelectionDetail) {
-            for (const supportId of selectedSupportIdSet) {
-                if (state.sticks[supportId]) selected.add(supportId);
-            }
-        }
-
-        if (singleSelectedSupportId && state.sticks[singleSelectedSupportId]) {
-            selected.add(singleSelectedSupportId);
-        }
-
-        return selected;
-    }, [singleSelectedSupportId, selectedSupportIdSet, state.sticks, useMultiSelectionDetail]);
-
-    const selectedAnchorIds = useMemo(() => {
-        const selected = new Set<string>();
-        if (useMultiSelectionDetail) {
-            for (const supportId of selectedSupportIdSet) {
-                if (state.anchors[supportId]) selected.add(supportId);
-            }
-        }
-
-        if (singleSelectedSupportId && state.anchors[singleSelectedSupportId]) {
-            selected.add(singleSelectedSupportId);
-        }
-
-        return selected;
-    }, [singleSelectedSupportId, selectedSupportIdSet, state.anchors, useMultiSelectionDetail]);
-
-    const selectedKickstandIds = useMemo(() => {
-        const selected = new Set<string>();
-        if (useMultiSelectionDetail) {
-            for (const supportId of selectedSupportIdSet) {
-                if (kickstandState.kickstands[supportId]) selected.add(supportId);
-            }
-        }
-
-        if (singleSelectedSupportId && kickstandState.kickstands[singleSelectedSupportId]) {
-            selected.add(singleSelectedSupportId);
-        }
-
-        if (selectedCategory === 'knot' && selectedId) {
-            const kickstandIds = kickstandIdsByHostKnotIdForSelection.get(selectedId) ?? [];
-            for (const id of kickstandIds) selected.add(id);
-        }
-
-        return selected;
-    }, [
-        kickstandIdsByHostKnotIdForSelection,
-        kickstandState.kickstands,
-        selectedCategory,
-        selectedId,
+    const selectionInputs = useMemo<SelectionInputs>(() => ({
         selectedSupportIdSet,
         singleSelectedSupportId,
         useMultiSelectionDetail,
-    ]);
-
-    const selectedLeafIds = useMemo(() => {
-        const selected = new Set<string>();
-        if (useMultiSelectionDetail) {
-            for (const supportId of selectedSupportIdSet) {
-                if (state.leaves[supportId]) selected.add(supportId);
-            }
-        }
-
-        if (singleSelectedSupportId && state.leaves[singleSelectedSupportId]) {
-            selected.add(singleSelectedSupportId);
-        }
-
-        if (selectedCategory === 'knot' && selectedId) {
-            const leafIds = leafIdsByParentKnotIdForSelection.get(selectedId) ?? [];
-            for (const id of leafIds) selected.add(id);
-        }
-
-        return selected;
-    }, [
-        leafIdsByParentKnotIdForSelection,
         selectedCategory,
         selectedId,
-        selectedSupportIdSet,
-        singleSelectedSupportId,
-        state.leaves,
-        useMultiSelectionDetail,
-    ]);
+    }), [selectedSupportIdSet, singleSelectedSupportId, useMultiSelectionDetail, selectedCategory, selectedId]);
+
+    const selectedIdsByType = useMemo(() => {
+        const byType = new Map<SupportTypeId, Set<string>>();
+        for (const descriptor of SUPPORT_TYPES) {
+            byType.set(
+                descriptor.id,
+                selectedIdsForType(descriptor.id, selectionInputs, selectionCollections, selectionKnotIndex),
+            );
+        }
+        return byType;
+    }, [selectionInputs, selectionCollections, selectionKnotIndex]);
+
+    const EMPTY_SELECTION: ReadonlySet<string> = useMemo(() => new Set(), []);
+    const selectedOf = useCallback(
+        (typeId: SupportTypeId) => selectedIdsByType.get(typeId) ?? EMPTY_SELECTION,
+        [selectedIdsByType, EMPTY_SELECTION],
+    );
+
+    const selectedLeafIds = selectedOf(LEAF_TYPE_ID);
+    const selectedBraceIds = selectedOf(BRACE_TYPE_ID);
 
     const knotIdsByParentShaftId = useMemo(() => {
         const map = new Map<string, string[]>();
@@ -1984,24 +1590,34 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             const kickstandIds = kickstandKnotIdsByParentShaftId.get(segment.id) ?? [];
             for (const knotId of kickstandIds) {
-                const knot = kickstandState.knots[knotId];
+                const knot = state.knots[knotId];
                 if (knot) result[knotId] = knot;
             }
         }
 
         return result;
-    }, [activeJointDragPreview, knotIdsByParentShaftId, kickstandKnotIdsByParentShaftId, state.knots, kickstandState.knots]);
+    }, [activeJointDragPreview, knotIdsByParentShaftId, kickstandKnotIdsByParentShaftId, state.knots]);
 
     const basePreviewKnotOverrides = useJointDragPreviewOverrides({
         roots: state.roots,
         knots: state.knots,
-        kickstandKnots: kickstandState.knots,
+        kickstandKnots: kickstandKnotsById,
         candidateKnots: previewCandidateKnots,
     });
 
-    const branchesByParentKnotId = useMemo(() => buildBranchesByParentKnotId(branchList), [branchList]);
-    const leafIdsByParentKnotId = useMemo(() => buildLeafIdsByParentKnotId(leafList), [leafList]);
-    const braceIdsByKnotId = useMemo(() => buildBraceIdsByKnotId(braceList), [braceList]);
+    // One derived index over each entity's type and its declared host-knot edges.
+    const branchesByParentKnotId = useMemo(
+        () => buildEntitiesByHostKnot(branchList, (branch) => branch),
+        [branchList],
+    );
+    const leafIdsByParentKnotId = useMemo(
+        () => buildEntitiesByHostKnot(leafList, (leaf) => leaf.id),
+        [leafList],
+    );
+    const braceIdsByKnotId = useMemo(
+        () => buildEntitiesByHostKnot(braceList, (brace) => brace.id),
+        [braceList],
+    );
     const branchCandidateKnotIdsByBranchId = useMemo(
         () => buildBranchCandidateKnotIdsByBranchId(branchList, knotIdsByParentShaftId),
         [branchList, knotIdsByParentShaftId],
@@ -2054,20 +1670,25 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             previewKnotOverrides,
             leafIdsByParentKnotId,
             leavesById: state.leaves,
-            recomputeLeafPreviewContactCone: (leaf, previewKnot) =>
-                recomputeLeafPreviewContactCone(leaf, previewKnot, twigBySegmentId),
+            twigBySegmentId,
         });
     }, [hasPreviewKnotOverrides, previewKnotOverrideIds, previewKnotOverrides, leafIdsByParentKnotId, state.leaves, twigBySegmentId]);
 
-    const activePreviewTrunk = activeJointDragPreview?.kind === 'trunk'
-        ? (activeJointDragPreview.support as (typeof state.trunks)[string])
-        : null;
-    const activePreviewBranch = activeJointDragPreview?.kind === 'branch'
-        ? (activeJointDragPreview.support as (typeof state.branches)[string])
-        : null;
-    const activePreviewKickstand = activeJointDragPreview?.kind === 'kickstand'
-        ? (activeJointDragPreview.support as (typeof kickstandState.kickstands)[string])
-        : null;
+    // One joint-drag preview, for whichever type is being dragged. It replaces
+    // that entity in its own render list below. Memoised on what it reads: a
+    // fresh object each render would rebuild every list on every render.
+    const activePreviewEntity = useMemo(() => (activeJointDragPreview
+        ? { typeId: activeJointDragPreview.kind as SupportTypeId, support: activeJointDragPreview.support as { id: string } }
+        : null), [activeJointDragPreview]);
+
+    /**
+     * The preview substituted into the scene's render lists. With the detail
+     * renderer owning its own preview, the list keeps the committed entity: the
+     * preview would otherwise invalidate every producer and rewrite every
+     * instanced batch on each publish, which was the per-frame cost of a joint
+     * drag. Null here is stable, so the list memo does not re-run at all.
+     */
+    const previewEntityForLists = SUPPORT_DETAIL_DRAG_PREVIEW ? null : activePreviewEntity;
 
     const renderLeavesById = useMemo(() => {
         if (previewLeavesById.size === 0) return state.leaves;
@@ -2079,11 +1700,178 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [state.leaves, previewLeavesById]);
 
     const renderBracesById = state.braces;
-    // Historically braces were ghosted during joint-drag preview because their
-    // live geometry couldn't be trusted. Now that brace endpoint knots ride
-    // the live preview overrides (see enableBraceLivePreview), the brace can
-    // render at its true live position instead of going transparent.
-    const ghostedBraceIdSet = useMemo(() => new Set<string>(), []);
+    /**
+     * Braces hosted on the dragged support's segments are frozen during a joint
+     * drag (the dependent-preview cascade is off), so they would otherwise sit
+     * at their old positions as if they were still correct. Ghost them for the
+     * gesture: the existing brace renderer fades them and drops their pointer
+     * interaction, which reads as "this will be recalculated on release".
+     *
+     * The instanced drag does not publish `activeJointDragPreview`, so the
+     * gesture's own session supplies the segment ids.
+     */
+    const ghostJointDragSession = useSyncExternalStore(
+        subscribeJointDragSession,
+        getJointDragSession,
+        getJointDragSessionServerSnapshot,
+    );
+    const ghostedBraceIdSet = useMemo(() => {
+        const ids = new Set<string>();
+        const slotMap = ghostJointDragSession && !ghostJointDragSession.ended
+            ? ghostJointDragSession.slotMap
+            : null;
+        if (!slotMap) return ids;
+
+        // A knot can name a segment *or* a joint as its parent shaft, and a
+        // pseudo-shaft (`segment:<id>`, `brace:<id>`, …) names its host entity.
+        // The old segment-only lookup missed branches hanging off a joint.
+        const draggedHostIds = new Set<string>([
+            ...slotMap.segments.map((slot) => slot.id),
+            ...slotMap.joints.map((slot) => slot.id),
+        ]);
+        const onDraggedSupport = (knot: Knot): boolean => {
+            if (draggedHostIds.has(knot.parentShaftId)) return true;
+            if (parseKnotHostId(knot.parentShaftId)?.entityId === slotMap.supportId) return true;
+            // The host lookup is the same index the renderer's selection/hover
+            // uses: if it says this knot belongs to the dragged support, the knot
+            // is on it whatever id its parentShaftId spells.
+            if (supportRenderLookup.supportIdByKnotId[knot.id] === slotMap.supportId) return true;
+            if (supportRenderLookup.supportIdBySegmentId[knot.parentShaftId] === slotMap.supportId) return true;
+            return supportRenderLookup.supportIdByJointId[knot.parentShaftId] === slotMap.supportId;
+        };
+
+        for (const knot of Object.values(state.knots)) {
+            if (!onDraggedSupport(knot)) continue;
+            for (const braceId of braceIdsByKnotId.get(knot.id) ?? []) ids.add(braceId);
+        }
+        return ids;
+    }, [braceIdsByKnotId, ghostJointDragSession, state.knots, supportRenderLookup]);
+
+    /**
+     * Every entity hosted on a knot of the dragged support: branches, leaves,
+     * twigs, braces and kickstands. Their geometry is frozen for the gesture and
+     * recalculated on release, so they are drawn translucent; the effect below
+     * dims their materials without touching any renderer.
+     */
+    const ghostedDependentSupportIdSet = useMemo(() => {
+        const ids = new Set<string>(ghostedBraceIdSet);
+        const slotMap = ghostJointDragSession && !ghostJointDragSession.ended
+            ? ghostJointDragSession.slotMap
+            : null;
+        if (!slotMap) return ids;
+
+        const draggedHostIds = new Set<string>([
+            ...slotMap.segments.map((slot) => slot.id),
+            ...slotMap.joints.map((slot) => slot.id),
+        ]);
+        const onDraggedSupport = (knot: Knot): boolean => {
+            if (draggedHostIds.has(knot.parentShaftId)) return true;
+            if (parseKnotHostId(knot.parentShaftId)?.entityId === slotMap.supportId) return true;
+            // The host lookup is the same index the renderer's selection/hover
+            // uses: if it says this knot belongs to the dragged support, the knot
+            // is on it whatever id its parentShaftId spells.
+            if (supportRenderLookup.supportIdByKnotId[knot.id] === slotMap.supportId) return true;
+            if (supportRenderLookup.supportIdBySegmentId[knot.parentShaftId] === slotMap.supportId) return true;
+            return supportRenderLookup.supportIdByJointId[knot.parentShaftId] === slotMap.supportId;
+        };
+
+        const entitiesByHostKnot = new Map<string, Array<{ id: string; segments?: Array<{ id: string }> }>>();
+        for (const collection of Object.values(state)) {
+            if (!collection || typeof collection !== 'object') continue;
+            for (const entity of Object.values(collection as Record<string, unknown>)) {
+                if (!entity || typeof entity !== 'object') continue;
+                const record = entity as {
+                    id?: unknown;
+                    parentKnotId?: unknown;
+                    hostKnotId?: unknown;
+                    segments?: Array<{ id: string }>;
+                };
+                if (typeof record.id !== 'string') continue;
+                const host = typeof record.parentKnotId === 'string'
+                    ? record.parentKnotId
+                    : typeof record.hostKnotId === 'string'
+                        ? record.hostKnotId
+                        : null;
+                if (!host) continue;
+                const list = entitiesByHostKnot.get(host) ?? [];
+                list.push({ id: record.id, segments: record.segments });
+                entitiesByHostKnot.set(host, list);
+            }
+        }
+
+        const pendingKnotIds: string[] = [];
+        const visitedKnots = new Set<string>();
+        for (const knot of Object.values(state.knots)) {
+            if (onDraggedSupport(knot)) pendingKnotIds.push(knot.id);
+        }
+
+        while (pendingKnotIds.length > 0) {
+            const knotId = pendingKnotIds.pop()!;
+            if (visitedKnots.has(knotId)) continue;
+            visitedKnots.add(knotId);
+            const hosted = entitiesByHostKnot.get(knotId);
+            if (!hosted) continue;
+            for (const entity of hosted) {
+                ids.add(entity.id);
+                for (const segment of entity.segments ?? []) {
+                    for (const childKnotId of knotIdsByParentShaftId.get(segment.id) ?? []) {
+                        if (!visitedKnots.has(childKnotId)) pendingKnotIds.push(childKnotId);
+                    }
+                }
+            }
+        }
+
+        return ids;
+    }, [ghostedBraceIdSet, ghostJointDragSession, knotIdsByParentShaftId, state, supportRenderLookup]);
+
+    /** What the ghost pass changed, so the next pass restores the originals. */
+    const ghostedDependentMaterialsRef = React.useRef(new Map<THREE.Material, {
+        transparent: boolean;
+        opacity: number;
+        depthWrite: boolean;
+    }>());
+
+    React.useLayoutEffect(() => {
+        const root = groupRef.current;
+        if (!root) return;
+
+        for (const [material, original] of ghostedDependentMaterialsRef.current) {
+            material.transparent = original.transparent;
+            material.opacity = original.opacity;
+            material.depthWrite = original.depthWrite;
+            material.needsUpdate = true;
+        }
+        ghostedDependentMaterialsRef.current.clear();
+
+        if (ghostedDependentSupportIdSet.size === 0) return;
+
+        root.traverse((object) => {
+            const mesh = object as THREE.Mesh;
+            if (!mesh.material) return;
+            let current: THREE.Object3D | null = object;
+            let ghosted = false;
+            while (current && current !== root) {
+                if (current.userData?.ghostedDependent === true) { ghosted = true; break; }
+                current = current.parent;
+            }
+            if (!ghosted) return;
+
+            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            for (const material of materials) {
+                if (ghostedDependentMaterialsRef.current.has(material)) continue;
+                ghostedDependentMaterialsRef.current.set(material, {
+                    transparent: material.transparent,
+                    opacity: material.opacity,
+                    depthWrite: material.depthWrite,
+                });
+                material.transparent = true;
+                material.opacity = Math.min(0.32, material.opacity);
+                material.depthWrite = false;
+                material.needsUpdate = true;
+            }
+        });
+    }, [ghostedDependentSupportIdSet, stableState]);
+
     const renderKnotsById = useMemo(() => {
         if (!hasPreviewKnotOverrides) return state.knots;
         const knots = Object.create(state.knots) as typeof state.knots;
@@ -2092,14 +1880,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
         return knots;
     }, [state.knots, previewKnotOverrides, previewKnotOverrideIds, hasPreviewKnotOverrides]);
-    const renderKickstandKnotsById = useMemo(() => {
-        if (!hasPreviewKnotOverrides) return kickstandState.knots;
-        const knots = Object.create(kickstandState.knots) as typeof kickstandState.knots;
-        for (const knotId of previewKnotOverrideIds) {
-            knots[knotId] = previewKnotOverrides[knotId];
-        }
-        return knots;
-    }, [kickstandState.knots, previewKnotOverrides, previewKnotOverrideIds, hasPreviewKnotOverrides]);
 
     // Live brace render: enable whenever any current preview override touches a
     // brace endpoint knot, regardless of which interaction produced it (direct
@@ -2117,101 +1897,90 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return enableBraceLivePreview ? renderKnotsById : state.knots;
     }, [enableBraceLivePreview, renderKnotsById, state.knots]);
 
-    const knotDragPreviewBranchSegmentsById = activeKnotDragPreview?.branchSegmentsById ?? EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID;
-    const knotDragPreviewBranchIds = useMemo(() => Object.keys(knotDragPreviewBranchSegmentsById), [knotDragPreviewBranchSegmentsById]);
+    const knotDragPreviewShaftSegmentsById = activeKnotDragPreview?.shaftSegmentsById ?? EMPTY_KNOT_DRAG_SHAFT_SEGMENTS_BY_ID;
+    const knotDragPreviewShaftIds = useMemo(() => Object.keys(knotDragPreviewShaftSegmentsById), [knotDragPreviewShaftSegmentsById]);
     const branchListWithKnotDragPreview = useMemo(() => {
-        if (knotDragPreviewBranchIds.length === 0) return branchList;
+        if (knotDragPreviewShaftIds.length === 0) return branchList;
         return branchList.map((branch) => {
-            const previewSegments = knotDragPreviewBranchSegmentsById[branch.id];
+            const previewSegments = knotDragPreviewShaftSegmentsById[branch.id];
             if (!previewSegments || previewSegments === branch.segments) return branch;
             return { ...branch, segments: previewSegments };
         });
-    }, [branchList, knotDragPreviewBranchSegmentsById, knotDragPreviewBranchIds]);
+    }, [branchList, knotDragPreviewShaftSegmentsById, knotDragPreviewShaftIds]);
 
-    const renderTrunkList = useMemo(() => {
-        const filterInteriorTrunks = (list: typeof trunkList) => interiorView
-            ? list.filter((trunk) => matchesInteriorContact(trunk.contactCone, trunk.modelId))
-            : list;
+    /**
+     * Entities a knot drag has reflowed, by entity id. A knot drag can change
+     * several at once, unlike a joint drag; both producers key by entity id.
+     */
+    const knotDragOverridesById = useMemo(() => {
+        const overrides = new Map<string, SupportEntityAny>();
+        for (const [leafId, leaf] of previewLeavesById) {
+            overrides.set(leafId, leaf as unknown as SupportEntityAny);
+        }
+        for (const branch of branchListWithKnotDragPreview) {
+            if (branch !== state.branches[branch.id]) {
+                overrides.set(branch.id, branch as unknown as SupportEntityAny);
+            }
+        }
+        return overrides;
+    }, [previewLeavesById, branchListWithKnotDragPreview, state.branches]);
 
-        if (!activePreviewTrunk) return filterInteriorTrunks(trunkList);
+    /**
+     * What each type renders: its stored entities with any live preview
+     * substituted, filtered for interior view by the rule it declares. The
+     * source is the active joint-drag preview plus the list-reflowing knot ones.
+     */
+    const renderListByType = useMemo(() => {
+        const lists = {} as Record<SupportTypeId, readonly SupportEntityAny[]>;
 
-        let replaced = false;
-        const result = trunkList.map((trunk) => {
-            if (trunk.id !== activePreviewTrunk.id) return trunk;
-            replaced = true;
-            return activePreviewTrunk;
-        });
+        for (const descriptor of SUPPORT_TYPES) {
+            if (descriptor.interiorVisibility === 'hidden' && interiorView) {
+                lists[descriptor.id] = [];
+                continue;
+            }
 
-        if (!replaced) result.push(activePreviewTrunk);
-        return filterInteriorTrunks(result);
-    }, [trunkList, activePreviewTrunk, interiorView, matchesInteriorContact]);
+            let list = Object.values(state[descriptor.location.key]) as readonly SupportEntityAny[];
 
-    const renderBranchList = useMemo(() => {
-        const filterInteriorBranches = (list: typeof branchListWithKnotDragPreview) => interiorView
-            ? list.filter((branch) => matchesInteriorContact(branch.contactCone, branch.modelId))
-            : list;
+            // A knot drag can reflow several entities of a type at once.
+            if (knotDragOverridesById.size > 0) {
+                list = list.map((entity) => knotDragOverridesById.get(entity.id) ?? entity);
+            }
 
-        if (!activePreviewBranch) return filterInteriorBranches(branchListWithKnotDragPreview);
+            if (previewEntityForLists?.typeId === descriptor.id) {
+                const preview = previewEntityForLists.support as SupportEntityAny;
+                let replaced = false;
+                const next = list.map((entity) => {
+                    if (entity.id !== preview.id) return entity;
+                    replaced = true;
+                    return preview;
+                });
+                if (!replaced) next.push(preview);
+                list = next;
+            }
 
-        let replaced = false;
-        const result = branchListWithKnotDragPreview.map((branch) => {
-            if (branch.id !== activePreviewBranch.id) return branch;
-            replaced = true;
-            return activePreviewBranch;
-        });
+            if (!interiorView) {
+                lists[descriptor.id] = list;
+                continue;
+            }
 
-        if (!replaced) result.push(activePreviewBranch);
-        return filterInteriorBranches(result);
-    }, [branchListWithKnotDragPreview, activePreviewBranch, interiorView, matchesInteriorContact]);
+            lists[descriptor.id] = descriptor.interiorVisibility === 'inherited'
+                ? list.filter((entity) => matchesInteriorBrace(entity as unknown as Brace))
+                : list.filter((entity) => anyContactMatches(descriptor.id, entity,
+                    (contact: unknown) => matchesInteriorContact(
+                        contact as ContactDisk,
+                        (entity as { modelId?: string }).modelId,
+                    )));
+        }
 
-    const renderLeafList = useMemo(() => {
-        const result = previewLeavesById.size === 0
-            ? leafList
-            : leafList.map((leaf) => previewLeavesById.get(leaf.id) ?? leaf);
-        return interiorView
-            ? result.filter((leaf) => matchesInteriorContact(leaf.contactCone, leaf.modelId))
-            : result;
-    }, [leafList, previewLeavesById, interiorView, matchesInteriorContact]);
-    const renderTwigList = useMemo(() => {
-        return interiorView
-            ? twigList.filter((twig) =>
-                matchesInteriorContact(twig.contactDiskA, twig.modelId)
-                || matchesInteriorContact(twig.contactDiskB, twig.modelId),
-            )
-            : twigList;
-    }, [twigList, interiorView, matchesInteriorContact]);
-    const renderStickList = useMemo(() => {
-        return interiorView
-            ? stickList.filter((stick) =>
-                matchesInteriorContact(stick.contactConeA, stick.modelId)
-                || matchesInteriorContact(stick.contactConeB, stick.modelId),
-            )
-            : stickList;
-    }, [stickList, interiorView, matchesInteriorContact]);
-    const renderBraceList = useMemo(() => {
-        return interiorView
-            ? braceList.filter((brace) => matchesInteriorBrace(brace))
-            : braceList;
-    }, [braceList, interiorView, matchesInteriorBrace]);
-    const renderAnchorList = useMemo(() => {
-        return interiorView
-            ? anchorList.filter((anchor) => matchesInteriorContact(anchor.contactCone, anchor.modelId))
-            : anchorList;
-    }, [anchorList, interiorView, matchesInteriorContact]);
-    const renderKickstandList = useMemo(() => {
-        if (interiorView) return [];
-        if (!activePreviewKickstand) return kickstandList;
+        return lists;
+    }, [stableState, knotDragOverridesById, previewEntityForLists, interiorView, matchesInteriorContact, matchesInteriorBrace]);
 
-        let replaced = false;
-        const result = kickstandList.map((kickstand) => {
-            if (kickstand.id !== activePreviewKickstand.id) return kickstand;
-            replaced = true;
-            return activePreviewKickstand;
-        });
-
-        if (!replaced) result.push(activePreviewKickstand);
-        return result;
-    }, [kickstandList, activePreviewKickstand, interiorView]);
+    /*
+     * Thin typed reads of `renderListByType`, for the call sites below that
+     * still name a list. They go as those sites move to the map.
+     */
+    const renderLeafList = renderListByType[LEAF_TYPE_ID] as unknown as Leaf[];
+    const renderBraceList = renderListByType[BRACE_TYPE_ID] as unknown as Brace[];
 
     const renderKnotList = useMemo(() => {
         if (!hasPreviewKnotOverrides) return knotList;
@@ -2223,123 +1992,96 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [hasPreviewKnotOverrides, kickstandKnotList, previewKnotOverrides]);
 
     const resolvePreviewKnot = React.useCallback((knotId: string) => {
-        return previewKnotOverrides[knotId] ?? state.knots[knotId] ?? kickstandState.knots[knotId] ?? null;
-    }, [previewKnotOverrides, state.knots, kickstandState.knots]);
+        return previewKnotOverrides[knotId] ?? state.knots[knotId] ?? null;
+    }, [previewKnotOverrides, state.knots]);
 
-    const trunkShaftsBySupport = useMemo(() => {
+    /** Reads a dotted path off an entity, for declared diameter sources. */
+    const readNumberPath = useCallback((entity: unknown, path: string): number | null => {
+        let value: unknown = entity;
+        for (const key of path.split('.')) {
+            if (value == null || typeof value !== 'object') return null;
+            value = (value as Record<string, unknown>)[key];
+        }
+        return typeof value === 'number' ? value : null;
+    }, []);
+
+    /**
+     * Batched shafts for a type whose segments need no taper: each one runs
+     * from the declared start to the declared end at its own diameter.
+     *
+     * Twig and kickstand keep their own builders -- they taper between contact
+     * diameters and decide batchability from it.
+     */
+    const buildPlainShaftSet = useCallback(<T extends { id: string; modelId?: string; segments: Segment[] }>(
+        typeId: SupportTypeId,
+        list: readonly T[],
+        hostsFor: (entity: T) => EndpointHosts,
+    ) => {
         const result = new Map<string, SupportShaftSet>();
-        const hasSolidBottom = raftSettings.bottomMode === 'solid';
-        const raftThickness = raftSettings.thickness ?? 0;
 
-        for (const trunk of renderTrunkList) {
-            if (!isModelVisible(trunk.modelId, trunk.id)) continue;
+        for (const entity of list) {
+            if (!isModelVisible(entity.modelId, entity.id)) continue;
 
-            const root = state.roots[trunk.rootId];
-            if (!root) continue;
-
+            const hosts = hostsFor(entity);
             const shafts: InstancedShaft[] = [];
 
-            const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
-            const effectiveDiskHeight = Math.max(0.001, root.diskHeight);
-            const verticalOffset = 0;
-            let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, verticalOffset + effectiveDiskHeight + Math.max(0, root.coneHeight)));
+            const taper = getSupportTypeDescriptor(typeId).shaftTaper;
+            let fullyBatchable = true;
 
-            for (const segment of trunk.segments) {
-                if (segment.bottomJoint) {
-                    currentStart = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
-                }
+            entity.segments.forEach((segment, index) => {
+                const endpoints = resolveSegmentEndpoints(entity, segment, index, hosts);
+                if (!endpoints) return;
 
-                let endPoint: THREE.Vector3;
-                if (segment.topJoint) {
-                    endPoint = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
-                } else if (trunk.contactCone) {
-                    const socketPos = getFinalSocketPosition(trunk.contactCone);
-                    endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-                } else {
-                    endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 10));
+                const start = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
+                const end = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
+
+                // A declared taper on this segment: the legacy instanced batch
+                // has one diameter, so a shaft whose ends differ leaves it. Where
+                // the instanced shaft batch draws the type, a taper is a cone
+                // instance instead, so the segment keeps both ends and stays in
+                // the batch -- except a curved one: a merged bezier tube has one
+                // radius, so a tapered curve still goes to its detail renderer.
+                // The simple views have no batch, so there the drop still holds.
+                let diameter = segment.diameter;
+                let diameterEnd: number | undefined;
+                const tapersHere = taper
+                    && (taper.segments === 'all' || index === entity.segments.length - 1);
+                if (tapersHere) {
+                    const [a, b] = taper.from.map((path) => readNumberPath(entity, path));
+                    if (a != null && b != null && Math.abs(a - b) >= 1e-6) {
+                        if (!shaftBatchActive || segment.type === 'bezier') {
+                            fullyBatchable = false;
+                            return;
+                        }
+                        diameter = a;
+                        diameterEnd = b;
+                    }
                 }
 
                 if (segment.type === 'bezier') {
-                    shafts.push(bezierSegmentToBatchedShaft(segment, currentStart, endPoint, trunk.id, trunk.modelId));
-                    currentStart = endPoint;
-                    continue;
+                    shafts.push(bezierSegmentToBatchedShaft(segment, start, end, entity.id, entity.modelId));
+                    return;
                 }
 
                 shafts.push({
                     id: segment.id,
-                    start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
-                    end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
-                    diameter: segment.diameter,
-                    supportId: trunk.id,
-                    modelId: trunk.modelId,
+                    start: { x: start.x, y: start.y, z: start.z },
+                    end: { x: end.x, y: end.y, z: end.z },
+                    diameter,
+                    ...(diameterEnd !== undefined ? { diameterEnd } : {}),
+                    supportId: entity.id,
+                    modelId: entity.modelId,
                 });
+            });
 
-                currentStart = endPoint;
-            }
-
-            if (shafts.length > 0) {
-                result.set(trunk.id, {
-                    supportId: trunk.id,
-                    modelId: trunk.modelId,
-                    shafts,
-                });
+            if (fullyBatchable && shafts.length > 0) {
+                result.set(entity.id, { supportId: entity.id, modelId: entity.modelId, shafts });
             }
         }
 
         return result;
-    }, [raftSettings.bottomMode, raftSettings.thickness, renderTrunkList, state.roots, isModelVisible]);
+    }, [isModelVisible, shaftBatchActive]);
 
-    const branchShaftsBySupport = useMemo(() => {
-        const result = new Map<string, SupportShaftSet>();
-
-        for (const branch of renderBranchList) {
-            if (!isModelVisible(branch.modelId, branch.id)) continue;
-            const parentKnot = renderKnotsById[branch.parentKnotId];
-            if (!parentKnot) continue;
-
-            const shafts: InstancedShaft[] = [];
-            let currentStart = new THREE.Vector3(parentKnot.pos.x, parentKnot.pos.y, parentKnot.pos.z);
-
-            for (const segment of branch.segments) {
-                let endPoint: THREE.Vector3;
-                if (segment.topJoint) {
-                    endPoint = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
-                } else if (branch.contactCone) {
-                    const socketPos = getFinalSocketPosition(branch.contactCone);
-                    endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-                } else {
-                    endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 5));
-                }
-
-                if (segment.type === 'bezier') {
-                    shafts.push(bezierSegmentToBatchedShaft(segment, currentStart, endPoint, branch.id, branch.modelId));
-                    currentStart = endPoint;
-                    continue;
-                }
-
-                shafts.push({
-                    id: segment.id,
-                    start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
-                    end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
-                    diameter: segment.diameter,
-                    supportId: branch.id,
-                    modelId: branch.modelId,
-                });
-
-                currentStart = endPoint;
-            }
-
-            if (shafts.length > 0) {
-                result.set(branch.id, {
-                    supportId: branch.id,
-                    modelId: branch.modelId,
-                    shafts,
-                });
-            }
-        }
-
-        return result;
-    }, [renderBranchList, renderKnotsById, isModelVisible]);
 
     const braceShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
@@ -2355,31 +2097,24 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const endKnot = braceRenderKnotsById[brace.endKnotId];
             if (!startKnot || !endKnot) continue;
 
-            const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
-            const startHostDiameter = Math.min(
-                profileDiameter,
-                Math.max(
-                    0.001,
-                    (startKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
-                ),
-            );
-            const endHostDiameter = Math.min(
-                profileDiameter,
-                Math.max(
-                    0.001,
-                    (endKnot.diameter ?? (profileDiameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM,
-                ),
-            );
-            const isTaperedBrace = Math.abs(startHostDiameter - endHostDiameter) > 1e-4;
+            const {
+                startDiameterMm: startHostDiameter,
+                endDiameterMm: endHostDiameter,
+                isTapered: isTaperedBrace,
+            } = braceSpanDiameters(brace, startKnot, endKnot);
 
-            // Tapered braces are rendered in the detailed path so we can preserve
-            // dynamic start/end diameters. Uniform braces remain batched for speed.
-            if (isTaperedBrace) {
+            // A tapered brace carries both ends: the instanced batch draws the
+            // taper as a cone instance, so it stays in the batch. Without that
+            // batch -- or for a curved brace, whose merged tube has one radius --
+            // the brace keeps its dynamic start/end diameters on the detailed path.
+            if (isTaperedBrace && (!shaftBatchActive || brace.curve?.type === 'bezier')) {
                 continue;
             }
 
-            const diameter = (startHostDiameter + endHostDiameter) * 0.5;
-            const segmentId = `braceSegment:${brace.id}`;
+            const diameter = isTaperedBrace
+                ? startHostDiameter
+                : (startHostDiameter + endHostDiameter) * 0.5;
+            const segmentId = knotHostId(spanKnotHostType(), brace.id);
             const shafts = brace.curve?.type === 'bezier'
                 ? [braceBezierToBatchedShaft(
                     segmentId,
@@ -2397,6 +2132,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     start: startKnot.pos,
                     end: endKnot.pos,
                     diameter,
+                    ...(isTaperedBrace ? { diameterEnd: endHostDiameter } : {}),
                     supportId: brace.id,
                     modelId: brace.modelId,
                 }];
@@ -2409,266 +2145,85 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [renderBraceList, braceRenderKnotsById, isModelVisible]);
+    }, [renderBraceList, braceRenderKnotsById, isModelVisible, shaftBatchActive]);
 
-    const twigShaftsBySupport = useMemo(() => {
-        if (!enableTwigSceneBatching) {
-            return new Map<string, SupportShaftSet>();
+    /**
+     * Plain shaft sets per type, keyed by type id then by support. `ownsRoot`
+     * means it leaves a root, a `hostedBy` knot edge that it hangs from one;
+     * only where those live still differs.
+     */
+    const plainShaftsByType = useMemo(() => {
+        const byType = {} as Record<SupportTypeId, Map<string, SupportShaftSet>>;
+
+        for (const descriptor of SUPPORT_TYPES) {
+            if (!batchesInView('shaft', descriptor, simpleRender)) continue;
+
+            // Roots are looked up by the entity's own rootId, so the shared
+            // collection answers for every type; only the knot index differs,
+            // because kickstand knots carry drag-preview overrides.
+            const knotEdge = descriptor.edges.find(
+                (edge) => edge.to === 'knots' && edge.ownership === 'hostedBy',
+            );
+
+            byType[descriptor.id] = buildPlainShaftSet(
+                descriptor.id,
+                renderListByType[descriptor.id] as readonly { id: string; modelId?: string; segments: Segment[] }[],
+                (entity) => {
+                    const fields = entity as unknown as Record<string, string | undefined>;
+                    const hosts: EndpointHosts = {};
+                    if (descriptor.ownsRoot) hosts.root = state.roots[fields.rootId ?? ''];
+                    if (knotEdge) hosts.hostKnot = renderKnotsById[fields[knotEdge.field] ?? ''];
+                    return hosts;
+                },
+            );
         }
 
-        const result = new Map<string, SupportShaftSet>();
-
-        const getDiskTipCenter = (disk: ContactDisk) => {
-            const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
-            return {
-                x: disk.pos.x + disk.surfaceNormal.x * thickness,
-                y: disk.pos.y + disk.surfaceNormal.y * thickness,
-                z: disk.pos.z + disk.surfaceNormal.z * thickness,
-            };
-        };
-
-        for (const twig of renderTwigList) {
-            if (!isModelVisible(twig.modelId, twig.id)) continue;
-
-            const shafts: InstancedShaft[] = [];
-            let fullyBatchable = true;
-
-            for (const segment of twig.segments) {
-                let startPoint: THREE.Vector3;
-                let endPoint: THREE.Vector3;
-                // Twig shaft tapers between the two contact disks (matches
-                // TwigRenderer). Batchability is decided by whether the two
-                // ends are equal.
-                const diameterStart = twig.contactDiskA.contactDiameterMm;
-                const diameterEnd = twig.contactDiskB.contactDiameterMm;
-
-                if (segment.bottomJoint) {
-                    startPoint = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
-                } else {
-                    const diskATipCenter = getDiskTipCenter(twig.contactDiskA);
-                    startPoint = new THREE.Vector3(diskATipCenter.x, diskATipCenter.y, diskATipCenter.z);
-                }
-
-                if (segment.topJoint) {
-                    endPoint = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
-                } else {
-                    const diskBTipCenter = getDiskTipCenter(twig.contactDiskB);
-                    endPoint = new THREE.Vector3(diskBTipCenter.x, diskBTipCenter.y, diskBTipCenter.z);
-                }
-
-                const isUniformDiameter = Math.abs(diameterStart - diameterEnd) < 1e-6;
-                if (!isUniformDiameter) {
-                    fullyBatchable = false;
-                }
-
-                if (segment.type === 'bezier') {
-                    shafts.push(bezierSegmentToBatchedShaft(segment, startPoint, endPoint, twig.id, twig.modelId));
-                } else if (isUniformDiameter) {
-                    shafts.push({
-                        id: segment.id,
-                        start: { x: startPoint.x, y: startPoint.y, z: startPoint.z },
-                        end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
-                        diameter: segment.diameter,
-                        supportId: twig.id,
-                        modelId: twig.modelId,
-                    });
-                }
-            }
-
-            if (fullyBatchable && shafts.length > 0) {
-                result.set(twig.id, {
-                    supportId: twig.id,
-                    modelId: twig.modelId,
-                    shafts,
-                });
-            }
-        }
-
-        return result;
-    }, [renderTwigList, isModelVisible, enableTwigSceneBatching]);
-
-    const stickShaftsBySupport = useMemo(() => {
-        const result = new Map<string, SupportShaftSet>();
-
-        for (const stick of renderStickList) {
-            if (!isModelVisible(stick.modelId, stick.id)) continue;
-
-            const shafts: InstancedShaft[] = [];
-
-            for (const segment of stick.segments) {
-                const startPoint = segment.bottomJoint
-                    ? new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z)
-                    : (() => {
-                        const socket = getFinalSocketPosition(stick.contactConeA);
-                        return new THREE.Vector3(socket.x, socket.y, socket.z);
-                    })();
-
-                const endPoint = segment.topJoint
-                    ? new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z)
-                    : (() => {
-                        const socket = getFinalSocketPosition(stick.contactConeB);
-                        return new THREE.Vector3(socket.x, socket.y, socket.z);
-                    })();
-
-                if (segment.type === 'bezier') {
-                    shafts.push(bezierSegmentToBatchedShaft(segment, startPoint, endPoint, stick.id, stick.modelId));
-                } else {
-                    shafts.push({
-                        id: segment.id,
-                        start: { x: startPoint.x, y: startPoint.y, z: startPoint.z },
-                        end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
-                        diameter: segment.diameter,
-                        supportId: stick.id,
-                        modelId: stick.modelId,
-                    });
-                }
-            }
-
-            if (shafts.length > 0) {
-                result.set(stick.id, {
-                    supportId: stick.id,
-                    modelId: stick.modelId,
-                    shafts,
-                });
-            }
-        }
-
-        return result;
-    }, [renderStickList, isModelVisible]);
-
-    const kickstandShaftsBySupport = useMemo(() => {
-        const result = new Map<string, SupportShaftSet>();
-        const hasSolidBottom = raftSettings.bottomMode === 'solid';
-        const raftThickness = raftSettings.thickness ?? 0;
-
-        for (const kickstand of renderKickstandList) {
-            if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
-
-            const root = kickstandState.roots[kickstand.rootId];
-            const hostKnot = renderKickstandKnotsById[kickstand.hostKnotId];
-            if (!root || !hostKnot) continue;
-
-            const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
-            const effectiveDiskHeight = Math.max(0.001, root.diskHeight);
-            const verticalOffset = 0;
-            let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, verticalOffset + effectiveDiskHeight + Math.max(0, root.coneHeight)));
-
-            const shafts: InstancedShaft[] = [];
-            let fullyBatchable = true;
-
-            kickstand.segments.forEach((segment, index) => {
-                const isLast = index === kickstand.segments.length - 1;
-
-                const endPoint = segment.topJoint
-                    ? new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z)
-                    : new THREE.Vector3(hostKnot.pos.x, hostKnot.pos.y, hostKnot.pos.z);
-
-                const diameterStart = isLast ? kickstand.profile.terminalStartDiameterMm : undefined;
-                const diameterEnd = isLast ? kickstand.profile.terminalEndDiameterMm : undefined;
-                const isUniformDiameter = (diameterStart == null && diameterEnd == null)
-                    || (diameterStart != null && diameterEnd != null && Math.abs(diameterStart - diameterEnd) < 1e-6);
-
-                if (!isUniformDiameter) {
-                    fullyBatchable = false;
-                }
-
-                if (segment.type === 'bezier') {
-                    shafts.push(bezierSegmentToBatchedShaft(segment, currentStart, endPoint, kickstand.id, kickstand.modelId));
-                } else if (isUniformDiameter) {
-                    shafts.push({
-                        id: segment.id,
-                        start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
-                        end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
-                        diameter: segment.diameter,
-                        supportId: kickstand.id,
-                        modelId: kickstand.modelId,
-                    });
-                }
-
-                currentStart = endPoint;
-            });
-
-            if (fullyBatchable && shafts.length > 0) {
-                result.set(kickstand.id, {
-                    supportId: kickstand.id,
-                    modelId: kickstand.modelId,
-                    shafts,
-                });
-            }
-        }
-
-        return result;
-    }, [renderKickstandList, kickstandState.roots, renderKickstandKnotsById, isModelVisible, raftSettings.bottomMode, raftSettings.thickness]);
+        return byType;
+    }, [
+        renderListByType,
+        buildPlainShaftSet,
+        state.roots,
+        renderKnotsById,
+        simpleRender,
+    ]);
 
     const segmentModelIdById = useMemo(() => {
         const map = new Map<string, string | undefined>();
 
-        for (const trunk of renderTrunkList) {
-            for (const segment of trunk.segments) {
-                map.set(segment.id, trunk.modelId);
-            }
-        }
-
-        for (const branch of renderBranchList) {
-            for (const segment of branch.segments) {
-                map.set(segment.id, branch.modelId);
-            }
-        }
-
-        for (const twig of renderTwigList) {
-            for (const segment of twig.segments) {
-                map.set(segment.id, twig.modelId);
-            }
-        }
-
-        for (const stick of renderStickList) {
-            for (const segment of stick.segments) {
-                map.set(segment.id, stick.modelId);
-            }
-        }
-
-        for (const kickstand of renderKickstandList) {
-            for (const segment of kickstand.segments) {
-                map.set(segment.id, kickstand.modelId);
+        // Every type with a shaft, not the five that were listed by hand --
+        // anchor has segments too, and a knot riding one resolved to no model.
+        for (const descriptor of SUPPORT_TYPES) {
+            if (!descriptor.hasSegments) continue;
+            for (const entity of renderListByType[descriptor.id]) {
+                const shafted = entity as { modelId?: string; segments?: { id: string }[] };
+                for (const segment of shafted.segments ?? []) {
+                    map.set(segment.id, shafted.modelId);
+                }
             }
         }
 
         return map;
-    }, [renderTrunkList, renderBranchList, renderTwigList, renderStickList, renderKickstandList]);
+    }, [renderListByType]);
 
     const modelIdByKnotId = useMemo(() => {
         const map = new Map<string, string | undefined>();
 
-        for (const knot of renderKnotList) {
-            const parentShaftId = knot.parentShaftId;
-            let modelId: string | undefined;
+        // A knot rides either a declared pseudo-shaft or a real segment.
+        const modelIdOfParentShaft = (parentShaftId: string): string | undefined => {
+            const host = parseKnotHostId(parentShaftId);
+            if (host && isSpanKnotHost(host.typeId)) return renderBracesById[host.entityId]?.modelId;
+            if (host && isConeKnotHost(host.typeId)) return renderLeavesById[host.entityId]?.modelId;
+            return segmentModelIdById.get(parentShaftId);
+        };
 
-            if (parentShaftId.startsWith('braceSegment:')) {
-                const braceId = parentShaftId.slice('braceSegment:'.length);
-                modelId = renderBracesById[braceId]?.modelId;
-            } else if (parentShaftId.startsWith('leafCone:')) {
-                const leafId = parentShaftId.slice('leafCone:'.length);
-                modelId = renderLeavesById[leafId]?.modelId;
-            } else {
-                modelId = segmentModelIdById.get(parentShaftId);
-            }
+        for (const knot of renderKnotList) {
+            const modelId = modelIdOfParentShaft(knot.parentShaftId);
 
             map.set(knot.id, modelId);
         }
 
         for (const knot of renderKickstandKnotList) {
-            const parentShaftId = knot.parentShaftId;
-            let modelId: string | undefined;
-
-            if (parentShaftId.startsWith('braceSegment:')) {
-                const braceId = parentShaftId.slice('braceSegment:'.length);
-                modelId = renderBracesById[braceId]?.modelId;
-            } else if (parentShaftId.startsWith('leafCone:')) {
-                const leafId = parentShaftId.slice('leafCone:'.length);
-                modelId = renderLeavesById[leafId]?.modelId;
-            } else {
-                modelId = segmentModelIdById.get(parentShaftId);
-            }
+            const modelId = modelIdOfParentShaft(knot.parentShaftId);
 
             map.set(knot.id, modelId);
         }
@@ -2676,297 +2231,117 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return map;
     }, [renderKnotList, renderBracesById, renderLeavesById, renderKickstandKnotList, segmentModelIdById]);
 
+    /**
+     * Contact cones for the batched pass, keyed by support.
+     *
+     * Which fields to read comes from the declared contact endpoints. A simple
+     * view also carries the types whose own renderer draws them otherwise: the
+     * renderers are all skipped there, so the batch is what is left.
+     */
     const contactConesBySupport = useMemo(() => {
         const result = new Map<string, { supportId: string; modelId?: string; cones: InstancedContactCone[] }>();
 
-        for (const trunk of renderTrunkList) {
-            const modelId = trunk.modelId;
-            if (!isModelVisible(modelId)) continue;
-            if (!trunk.contactCone) continue;
+        const collect = <T extends { id: string; modelId?: string }>(
+            typeId: SupportTypeId,
+            list: readonly T[],
+            resolveModelId: (entity: T) => string | undefined,
+        ) => {
+            for (const entity of list) {
+                const modelId = resolveModelId(entity);
+                if (!isModelVisible(modelId)) continue;
 
-            result.set(trunk.id, {
-                supportId: trunk.id,
-                modelId,
-                cones: [{
-                    id: trunk.contactCone.id,
-                    supportId: trunk.id,
-                    modelId,
-                    pos: trunk.contactCone.pos,
-                    normal: trunk.contactCone.normal,
-                    surfaceNormal: trunk.contactCone.surfaceNormal,
-                    diskLengthOverride: trunk.contactCone.diskLengthOverride,
-                    profile: trunk.contactCone.profile,
-                }],
-            });
-        }
-
-        for (const branch of renderBranchList) {
-            const modelId = branch.modelId ?? modelIdByKnotId.get(branch.parentKnotId);
-            if (!isModelVisible(modelId)) continue;
-            if (!branch.contactCone) continue;
-
-            result.set(branch.id, {
-                supportId: branch.id,
-                modelId,
-                cones: [{
-                    id: branch.contactCone.id,
-                    supportId: branch.id,
-                    modelId,
-                    pos: branch.contactCone.pos,
-                    normal: branch.contactCone.normal,
-                    surfaceNormal: branch.contactCone.surfaceNormal,
-                    diskLengthOverride: branch.contactCone.diskLengthOverride,
-                    profile: branch.contactCone.profile,
-                }],
-            });
-        }
-
-        for (const stick of renderStickList) {
-            const modelId = stick.modelId;
-            if (!isModelVisible(modelId)) continue;
-
-            result.set(stick.id, {
-                supportId: stick.id,
-                modelId,
-                cones: [
-                    {
-                        id: stick.contactConeA.id,
-                        supportId: stick.id,
+                const record = entity as unknown as Record<string, InstancedContactCone | undefined>;
+                const cones: InstancedContactCone[] = [];
+                for (const { kind, field } of contactEndpointsFor(typeId)) {
+                    if (kind !== 'cone') continue;
+                    const cone = record[field];
+                    if (!cone) continue;
+                    cones.push({
+                        id: cone.id,
+                        supportId: entity.id,
                         modelId,
-                        pos: stick.contactConeA.pos,
-                        normal: stick.contactConeA.normal,
-                        surfaceNormal: stick.contactConeA.surfaceNormal,
-                        diskLengthOverride: stick.contactConeA.diskLengthOverride,
-                        profile: stick.contactConeA.profile,
-                    },
-                    {
-                        id: stick.contactConeB.id,
-                        supportId: stick.id,
-                        modelId,
-                        pos: stick.contactConeB.pos,
-                        normal: stick.contactConeB.normal,
-                        surfaceNormal: stick.contactConeB.surfaceNormal,
-                        diskLengthOverride: stick.contactConeB.diskLengthOverride,
-                        profile: stick.contactConeB.profile,
-                    },
-                ],
-            });
-        }
+                        pos: cone.pos,
+                        normal: cone.normal,
+                        surfaceNormal: cone.surfaceNormal,
+                        diskLengthOverride: cone.diskLengthOverride,
+                        profile: cone.profile,
+                    });
+                }
 
-        for (const previewLeaf of renderLeafList) {
-            const modelId = previewLeaf.modelId ?? modelIdByKnotId.get(previewLeaf.parentKnotId);
-            if (!isModelVisible(modelId)) continue;
+                if (cones.length > 0) result.set(entity.id, { supportId: entity.id, modelId, cones });
+            }
+        };
 
-            result.set(previewLeaf.id, {
-                supportId: previewLeaf.id,
-                modelId,
-                cones: [{
-                    id: previewLeaf.contactCone.id,
-                    supportId: previewLeaf.id,
-                    modelId,
-                    pos: previewLeaf.contactCone.pos,
-                    normal: previewLeaf.contactCone.normal,
-                    surfaceNormal: previewLeaf.contactCone.surfaceNormal,
-                    diskLengthOverride: previewLeaf.contactCone.diskLengthOverride,
-                    profile: previewLeaf.contactCone.profile,
-                }],
-            });
+        // A knot-hosted type resolves its model through the host when it
+        // carries none of its own; the rest read it directly.
+        for (const descriptor of SUPPORT_TYPES) {
+            if (!batchesInView('cone', descriptor, simpleRender)) continue;
+            collect(descriptor.id, renderListByType[descriptor.id], (entity) => (
+                descriptor.lower.kind === 'knot'
+                    ? entity.modelId ?? modelIdByKnotId.get((entity as { parentKnotId?: string }).parentKnotId ?? '')
+                    : entity.modelId
+            ));
         }
 
         return result;
-    }, [renderTrunkList, renderBranchList, renderStickList, renderLeafList, modelIdByKnotId, isModelVisible]);
+    }, [renderListByType, modelIdByKnotId, isModelVisible, simpleRender]);
 
-    const trunkJointsBySupport = useMemo(() => {
+    /**
+     * A type's shaft joints, keyed by support. `segmentsCarryBothJoints`
+     * decides whether the bottom joint counts: on a hosted shaft it is a
+     * render artefact, and the real lower end is the root or host knot.
+     */
+    const collectShaftJoints = useCallback(<T extends { id: string; modelId?: string; segments: Segment[] }>(
+        typeId: SupportTypeId,
+        list: readonly T[],
+    ) => {
+        const includeBottom = getSupportTypeDescriptor(typeId).segmentsCarryBothJoints;
         const result = new Map<string, SupportJointSet>();
 
-        for (const trunk of renderTrunkList) {
-            if (!isModelVisible(trunk.modelId, trunk.id)) continue;
+        for (const entity of list) {
+            if (!isModelVisible(entity.modelId, entity.id)) continue;
 
             const seen = new Set<string>();
             const joints: InstancedJoint[] = [];
 
-            for (const segment of trunk.segments) {
-                if (segment.topJoint && !seen.has(segment.topJoint.id)) {
-                    seen.add(segment.topJoint.id);
-                    joints.push({
-                        id: segment.topJoint.id,
-                        pos: segment.topJoint.pos,
-                        diameter: segment.topJoint.diameter,
-                        supportId: trunk.id,
-                        modelId: trunk.modelId,
-                    });
-                }
+            const take = (joint?: { id: string; pos: Vec3; diameter: number }) => {
+                if (!joint || seen.has(joint.id)) return;
+                seen.add(joint.id);
+                joints.push({
+                    id: joint.id,
+                    pos: joint.pos,
+                    diameter: joint.diameter,
+                    supportId: entity.id,
+                    modelId: entity.modelId,
+                });
+            };
+
+            for (const segment of entity.segments) {
+                if (includeBottom) take(segment.bottomJoint);
+                take(segment.topJoint);
             }
 
             if (joints.length > 0) {
-                result.set(trunk.id, {
-                    supportId: trunk.id,
-                    modelId: trunk.modelId,
-                    joints,
-                });
+                result.set(entity.id, { supportId: entity.id, modelId: entity.modelId, joints });
             }
         }
 
         return result;
-    }, [renderTrunkList, isModelVisible]);
+    }, [isModelVisible]);
 
-    const branchJointsBySupport = useMemo(() => {
-        const result = new Map<string, SupportJointSet>();
-
-        for (const branch of renderBranchList) {
-            if (!isModelVisible(branch.modelId, branch.id)) continue;
-
-            const seen = new Set<string>();
-            const joints: InstancedJoint[] = [];
-
-            for (const segment of branch.segments) {
-                if (segment.topJoint && !seen.has(segment.topJoint.id)) {
-                    seen.add(segment.topJoint.id);
-                    joints.push({
-                        id: segment.topJoint.id,
-                        pos: segment.topJoint.pos,
-                        diameter: segment.topJoint.diameter,
-                        supportId: branch.id,
-                        modelId: branch.modelId,
-                    });
-                }
-            }
-
-            if (joints.length > 0) {
-                result.set(branch.id, {
-                    supportId: branch.id,
-                    modelId: branch.modelId,
-                    joints,
-                });
-            }
+    /** Shaft joints per batching type, keyed by type id then by support. */
+    const shaftJointsByType = useMemo(() => {
+        const byType = {} as Record<SupportTypeId, ReturnType<typeof collectShaftJoints>>;
+        for (const descriptor of SUPPORT_TYPES) {
+            if (!descriptor.batchesShaft) continue;
+            // The flag admits only types whose segments carry the joints.
+            byType[descriptor.id] = collectShaftJoints(
+                descriptor.id,
+                renderListByType[descriptor.id] as readonly { id: string; modelId?: string; segments: Segment[] }[],
+            );
         }
-
-        return result;
-    }, [renderBranchList, isModelVisible]);
-
-    const twigJointsBySupport = useMemo(() => {
-        const result = new Map<string, SupportJointSet>();
-
-        for (const twig of renderTwigList) {
-            if (!isModelVisible(twig.modelId, twig.id)) continue;
-
-            const seen = new Set<string>();
-            const joints: InstancedJoint[] = [];
-
-            for (const segment of twig.segments) {
-                if (segment.bottomJoint && !seen.has(segment.bottomJoint.id)) {
-                    seen.add(segment.bottomJoint.id);
-                    joints.push({
-                        id: segment.bottomJoint.id,
-                        pos: segment.bottomJoint.pos,
-                        diameter: segment.bottomJoint.diameter,
-                        supportId: twig.id,
-                        modelId: twig.modelId,
-                    });
-                }
-
-                if (segment.topJoint && !seen.has(segment.topJoint.id)) {
-                    seen.add(segment.topJoint.id);
-                    joints.push({
-                        id: segment.topJoint.id,
-                        pos: segment.topJoint.pos,
-                        diameter: segment.topJoint.diameter,
-                        supportId: twig.id,
-                        modelId: twig.modelId,
-                    });
-                }
-            }
-
-            if (joints.length > 0) {
-                result.set(twig.id, {
-                    supportId: twig.id,
-                    modelId: twig.modelId,
-                    joints,
-                });
-            }
-        }
-
-        return result;
-    }, [renderTwigList, isModelVisible]);
-
-    const stickJointsBySupport = useMemo(() => {
-        const result = new Map<string, SupportJointSet>();
-
-        for (const stick of renderStickList) {
-            if (!isModelVisible(stick.modelId, stick.id)) continue;
-
-            const seen = new Set<string>();
-            const joints: InstancedJoint[] = [];
-
-            for (const segment of stick.segments) {
-                if (segment.bottomJoint && !seen.has(segment.bottomJoint.id)) {
-                    seen.add(segment.bottomJoint.id);
-                    joints.push({
-                        id: segment.bottomJoint.id,
-                        pos: segment.bottomJoint.pos,
-                        diameter: segment.bottomJoint.diameter,
-                        supportId: stick.id,
-                        modelId: stick.modelId,
-                    });
-                }
-
-                if (segment.topJoint && !seen.has(segment.topJoint.id)) {
-                    seen.add(segment.topJoint.id);
-                    joints.push({
-                        id: segment.topJoint.id,
-                        pos: segment.topJoint.pos,
-                        diameter: segment.topJoint.diameter,
-                        supportId: stick.id,
-                        modelId: stick.modelId,
-                    });
-                }
-            }
-
-            if (joints.length > 0) {
-                result.set(stick.id, {
-                    supportId: stick.id,
-                    modelId: stick.modelId,
-                    joints,
-                });
-            }
-        }
-
-        return result;
-    }, [renderStickList, isModelVisible]);
-
-    const kickstandJointsBySupport = useMemo(() => {
-        const result = new Map<string, SupportJointSet>();
-
-        for (const kickstand of renderKickstandList) {
-            if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
-
-            const seen = new Set<string>();
-            const joints: InstancedJoint[] = [];
-
-            for (const segment of kickstand.segments) {
-                if (segment.topJoint && !seen.has(segment.topJoint.id)) {
-                    seen.add(segment.topJoint.id);
-                    joints.push({
-                        id: segment.topJoint.id,
-                        pos: segment.topJoint.pos,
-                        diameter: segment.topJoint.diameter,
-                        supportId: kickstand.id,
-                        modelId: kickstand.modelId,
-                    });
-                }
-            }
-
-            if (joints.length > 0) {
-                result.set(kickstand.id, {
-                    supportId: kickstand.id,
-                    modelId: kickstand.modelId,
-                    joints,
-                });
-            }
-        }
-
-        return result;
-    }, [renderKickstandList, isModelVisible]);
+        return byType;
+    }, [renderListByType, collectShaftJoints]);
 
     /** Unselected leaf base knots as batch-ready joints: one instanced draw
      *  instead of a mounted KnotRenderer per leaf. Read through
@@ -2998,12 +2373,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return result;
     }, [renderLeafList, isModelVisible, renderKnotsById, modelIdByKnotId]);
 
-    const sceneBatchedJointGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId: string | null; color: string; joints: InstancedJoint[] }>();
+    /**
+     * The joint set a support id belongs to, whichever type owns it.
+     *
+     * Ids are unique across types, so the first set holding one is the answer.
+     * The leaf is checked last because its joint is a host knot rather than a
+     * shaft joint, collected separately.
+     */
+    const jointSetForSupport = React.useCallback((supportId: string) => {
+        for (const descriptor of SUPPORT_TYPES) {
+            const jointSet = shaftJointsByType[descriptor.id]?.get(supportId);
+            if (jointSet) return jointSet;
+        }
+        return leafJointsBySupport.get(supportId) ?? null;
+    }, [shaftJointsByType, leafJointsBySupport]);
 
-        const pushJoints = (modelId: string | null, color: string, joints: InstancedJoint[]) => {
-            const key = `${modelId ?? '__unassigned__'}:${color}`;
-            const existing = grouped.get(key);
+    const sceneBatchedJointGroups = useMemo(() => {
+        const grouped = new Map<string, { color: string; joints: InstancedJoint[] }>();
+
+        const pushJoints = (color: string, joints: InstancedJoint[]) => {
+            const existing = grouped.get(color);
             const adjusted = joints.map((joint) => ({
                 ...joint,
                 pos: applyDropToVec3Like(joint.pos, joint.modelId),
@@ -3012,165 +2401,150 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (existing) {
                 existing.joints.push(...adjusted);
             } else {
-                grouped.set(key, { modelId, color, joints: adjusted });
+                grouped.set(color, { color, joints: adjusted });
             }
         };
 
-        for (const trunk of renderTrunkList) {
-            if (!isModelVisible(trunk.modelId, trunk.id)) continue;
-            if (selectedTrunkIds.has(trunk.id)) continue;
-            const jointSet = trunkJointsBySupport.get(trunk.id);
-            if (!jointSet) continue;
+        // Every batching type walks its own list the same way. The leaf is not
+        // one of them: its joint is a host knot, collected separately, and it
+        // takes its model from that set rather than from itself.
+        for (const descriptor of SUPPORT_TYPES) {
+            const jointsBySupport = shaftJointsByType[descriptor.id];
+            if (!jointsBySupport) continue;
 
-            const color = resolveSceneSupportColor(trunk.modelId, trunk.id);
-            pushJoints(trunk.modelId ?? null, color, jointSet.joints);
-        }
+            const selectedIds = selectedOf(descriptor.id);
+            for (const entity of renderListByType[descriptor.id]) {
+                if (!isModelVisible(entity.modelId, entity.id)) continue;
+                if (selectedIds.has(entity.id)) continue;
+                if (ghostedDependentSupportIdSet.has(entity.id)) continue;
+                const jointSet = jointsBySupport.get(entity.id);
+                if (!jointSet) continue;
 
-        for (const branch of renderBranchList) {
-            if (!isModelVisible(branch.modelId, branch.id)) continue;
-            if (selectedBranchIds.has(branch.id)) continue;
-            const jointSet = branchJointsBySupport.get(branch.id);
-            if (!jointSet) continue;
-
-            const color = resolveSceneSupportColor(branch.modelId, branch.id);
-            pushJoints(branch.modelId ?? null, color, jointSet.joints);
-        }
-
-        for (const twig of renderTwigList) {
-            if (!isModelVisible(twig.modelId, twig.id)) continue;
-            if (selectedTwigIds.has(twig.id)) continue;
-            const jointSet = twigJointsBySupport.get(twig.id);
-            if (!jointSet) continue;
-
-            const color = resolveSceneSupportColor(twig.modelId, twig.id);
-            pushJoints(twig.modelId ?? null, color, jointSet.joints);
-        }
-
-        for (const stick of renderStickList) {
-            if (!isModelVisible(stick.modelId, stick.id)) continue;
-            if (selectedStickIds.has(stick.id)) continue;
-            const jointSet = stickJointsBySupport.get(stick.id);
-            if (!jointSet) continue;
-
-            const color = resolveSceneSupportColor(stick.modelId, stick.id);
-            pushJoints(stick.modelId ?? null, color, jointSet.joints);
-        }
-
-        for (const kickstand of renderKickstandList) {
-            if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
-            if (selectedKickstandIds.has(kickstand.id)) continue;
-            const jointSet = kickstandJointsBySupport.get(kickstand.id);
-            if (!jointSet) continue;
-
-            const color = resolveSceneSupportColor(kickstand.modelId, kickstand.id);
-            pushJoints(kickstand.modelId ?? null, color, jointSet.joints);
+                const color = resolveSceneSupportColor(entity.modelId, entity.id, descriptor.id);
+                pushJoints(color, jointSet.joints);
+            }
         }
 
         for (const leaf of renderLeafList) {
             if (!isModelVisible(leaf.modelId, leaf.id)) continue;
             if (selectedLeafIds.has(leaf.id)) continue;
+            if (ghostedDependentSupportIdSet.has(leaf.id)) continue;
             const jointSet = leafJointsBySupport.get(leaf.id);
             if (!jointSet) continue;
 
-            const color = resolveSceneSupportColor(jointSet.modelId, leaf.id);
-            pushJoints(jointSet.modelId ?? null, color, jointSet.joints);
+            const color = resolveSceneSupportColor(jointSet.modelId, leaf.id, LEAF_TYPE_ID);
+            pushJoints(color, jointSet.joints);
         }
 
         return Array.from(grouped.values());
     }, [
         disableSelectionAndHover,
-        renderTrunkList,
-        renderBranchList,
-        renderTwigList,
-        renderStickList,
-        renderKickstandList,
-        isModelVisible,
-        selectedTrunkIds,
-        selectedBranchIds,
-        selectedTwigIds,
-        selectedStickIds,
-        selectedKickstandIds,
-        trunkJointsBySupport,
-        branchJointsBySupport,
-        twigJointsBySupport,
-        stickJointsBySupport,
-        kickstandJointsBySupport,
-        leafJointsBySupport,
-        selectedLeafIds,
         renderLeafList,
+        renderListByType,
+        isModelVisible,
+        selectedOf,
+        selectedLeafIds,
+        shaftJointsByType,
+        leafJointsBySupport,
         applyDropToVec3Like,
         dimNonSelected,
         resolveSceneSupportColor,
+        ghostedDependentSupportIdSet,
     ]);
 
-    const sceneBatchedTwigShaftGroups = useMemo(() => {
-        if (!enableTwigSceneBatching) {
-            return [] as Array<{ modelId?: string; color: string; shafts: InstancedShaft[] }>;
+    /**
+     * The one instanced joint batch's slot list: the producer's joints
+     * flattened, in its draw order, so slot index is instance id.
+     *
+     * `sceneBatchedJointGroups` already applied model visibility, the
+     * selected-support exclusion, the leaf host-knot set, the model drop offset
+     * and the scene diameter blend, and it re-derives through
+     * `leafJointsBySupport` when `renderKnotsById` changes — so a knot-drag
+     * preview moves the batch's balls without a second dependency here.
+     *
+     * Null while the flag is off: the legacy per-colour batches and the two
+     * joint overlays keep rendering exactly as they did.
+     */
+    const jointSlotIndex = useMemo(() => (
+        SUPPORT_INSTANCED_JOINTS ? buildJointSlotIndex(sceneBatchedJointGroups) : null
+    ), [sceneBatchedJointGroups]);
+
+    /**
+     * The scene knots as a joint drag needs them: the writer moves the leaf
+     * host-knot balls that ride the dragged support's own segments, because
+     * those are scene-batch instances and would otherwise freeze mid-drag.
+     *
+     * Positions stay in entity space; the writer applies the model drop itself.
+     */
+    const jointDragHostKnots = React.useMemo<DragHostKnot[]>(() => {
+        if (!SUPPORT_INSTANCED_DRAG) return [];
+        const knots: DragHostKnot[] = [];
+        for (const knot of Object.values(state.knots)) {
+            knots.push({
+                id: knot.id,
+                parentShaftId: knot.parentShaftId,
+                pos: knot.pos,
+                ...(knot.t !== undefined ? { t: knot.t } : {}),
+                ...(knot.diameter !== undefined ? { diameter: knot.diameter } : {}),
+            });
         }
+        return knots;
+    }, [state.knots]);
 
-        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
+    const jointDragScene = React.useMemo<JointDragSceneContext>(() => ({
+        hostKnots: jointDragHostKnots,
+        // The scene batch's instance per joint id, so a knot ball on a moving
+        // segment can be written at the instance the scene already draws it.
+        sharedJointSlotById: jointSlotIndex?.byPrimitive ?? null,
+        dropOffsetZFor: resolveModelDropOffsetZ,
+    }), [jointDragHostKnots, jointSlotIndex, resolveModelDropOffsetZ]);
 
-        for (const twig of renderTwigList) {
-            if (!isModelVisible(twig.modelId, twig.id)) continue;
-            const shaftSet = twigShaftsBySupport.get(twig.id);
+    React.useLayoutEffect(() => {
+        jointDragSceneRef.current = jointDragScene;
+        return () => {
+            jointDragSceneRef.current = null;
+        };
+    }, [jointDragScene]);
+
+    /**
+     * Groups a type's unselected shafts by model and colour for instanced
+     * drawing.
+     */
+    const groupShaftsForSceneBatch = useCallback(<T extends { id: string; modelId?: string }>(
+        typeId: SupportTypeId,
+        list: readonly T[],
+        shaftsBySupport: Map<string, { modelId?: string; shafts: InstancedShaft[] }>,
+        selectedIds: ReadonlySet<string>,
+        skip?: (entity: T) => boolean,
+    ) => {
+        const grouped = new Map<string, { color: string; shafts: InstancedShaft[] }>();
+
+        for (const entity of list) {
+            if (!isModelVisible(entity.modelId, entity.id)) continue;
+            if (selectedIds.has(entity.id)) continue;
+            if (skip?.(entity)) continue;
+            // A dependent support is drawn by its detail renderer in ghost form
+            // during a drag; leaving its shafts in the batch would draw the same
+            // geometry opaque beside it.
+            if (ghostedDependentSupportIdSet.has(entity.id)) continue;
+
+            const shaftSet = shaftsBySupport.get(entity.id);
             if (!shaftSet) continue;
-            if (selectedTwigIds.has(twig.id)) continue;
 
-            const color = resolveSceneSupportColor(shaftSet.modelId, twig.id);
-            const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const groupKey = `${modelKey}:${color}`;
-            const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
+            const color = resolveSceneSupportColor(shaftSet.modelId, entity.id, typeId);
+            const existing = grouped.get(color) ?? { color, shafts: [] };
             existing.shafts.push(...shaftSet.shafts.map(applyDropToInstancedShaft));
-            if (existing.shafts.length > 0) grouped.set(groupKey, existing);
+            if (existing.shafts.length > 0) grouped.set(color, existing);
         }
 
         return Array.from(grouped.values());
-    }, [renderTwigList, twigShaftsBySupport, selectedTwigIds, isModelVisible, applyDropToInstancedShaft, enableTwigSceneBatching, resolveSceneSupportColor]);
+    }, [isModelVisible, resolveSceneSupportColor, applyDropToInstancedShaft, ghostedDependentSupportIdSet]);
 
-    const sceneBatchedStickShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
-
-        for (const stick of renderStickList) {
-            if (!isModelVisible(stick.modelId, stick.id)) continue;
-            const shaftSet = stickShaftsBySupport.get(stick.id);
-            if (!shaftSet) continue;
-            if (selectedStickIds.has(stick.id)) continue;
-
-            const color = resolveSceneSupportColor(shaftSet.modelId, stick.id);
-            const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const groupKey = `${modelKey}:${color}`;
-            const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
-            existing.shafts.push(...shaftSet.shafts.map(applyDropToInstancedShaft));
-            if (existing.shafts.length > 0) grouped.set(groupKey, existing);
-        }
-
-        return Array.from(grouped.values());
-    }, [renderStickList, stickShaftsBySupport, selectedStickIds, isModelVisible, applyDropToInstancedShaft, resolveSceneSupportColor]);
-
-    const sceneBatchedKickstandShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
-
-        for (const kickstand of renderKickstandList) {
-            if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
-            const shaftSet = kickstandShaftsBySupport.get(kickstand.id);
-            if (!shaftSet) continue;
-            if (selectedKickstandIds.has(kickstand.id)) continue;
-
-            const color = resolveSceneSupportColor(shaftSet.modelId, kickstand.id);
-            const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const groupKey = `${modelKey}:${color}`;
-            const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
-            existing.shafts.push(...shaftSet.shafts.map(applyDropToInstancedShaft));
-            if (existing.shafts.length > 0) grouped.set(groupKey, existing);
-        }
-
-        return Array.from(grouped.values());
-    }, [renderKickstandList, kickstandShaftsBySupport, selectedKickstandIds, isModelVisible, applyDropToInstancedShaft, resolveSceneSupportColor]);
 
     const sceneBatchedBraceShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { color: string; shafts: InstancedShaft[] }>();
 
-        const sectionColorsEnabled = !!settings.autoBracing.debugSectionColorsEnabled;
+        const sectionColorsEnabled = !!debugSectionColors;
         const splitByDebugSection = sectionColorsEnabled && !dimNonSelected;
 
         for (const brace of renderBraceList) {
@@ -3180,21 +2554,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             if (selectedBraceIds.has(brace.id) || ghostedBraceIdSet.has(brace.id)) continue;
 
-            const modelKey = shaftSet.modelId ?? '__unassigned__';
             const debugSection = splitByDebugSection
                 ? (brace.debugSection ?? null)
                 : null;
             const color = debugSection
                 ? AUTO_BRACING_DEBUG_SECTION_COLORS[debugSection]
-                : resolveSceneSupportColor(shaftSet.modelId, brace.id);
-            const groupKey = `${modelKey}:${color}`;
+                : resolveSceneSupportColor(shaftSet.modelId, brace.id, BRACE_TYPE_ID);
 
-            const existing = grouped.get(groupKey);
+            const existing = grouped.get(color);
             if (existing) {
                 existing.shafts.push(...shaftSet.shafts.map(applyDropToInstancedShaft));
             } else {
-                grouped.set(groupKey, {
-                    modelId: shaftSet.modelId,
+                grouped.set(color, {
                     color,
                     shafts: shaftSet.shafts.map(applyDropToInstancedShaft),
                 });
@@ -3202,273 +2573,288 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [renderBraceList, braceShaftsBySupport, selectedBraceIds, ghostedBraceIdSet, isModelVisible, applyDropToInstancedShaft, settings.autoBracing.debugSectionColorsEnabled, dimNonSelected, resolveSceneSupportColor]);
+    }, [renderBraceList, braceShaftsBySupport, selectedBraceIds, ghostedBraceIdSet, isModelVisible, applyDropToInstancedShaft, debugSectionColors, dimNonSelected, resolveSceneSupportColor]);
 
-    const sceneBatchedTrunkShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
+    /** Scene-batched shaft groups per type, from that type's shaft set. */
+    /** Stable empty set, so a non-batching type does not remount readers. */
+    const EMPTY_SHAFT_SET = useMemo(() => new Map<string, SupportShaftSet>(), []);
 
-        for (const trunk of renderTrunkList) {
-            if (!isModelVisible(trunk.modelId, trunk.id)) continue;
-            const shaftSet = trunkShaftsBySupport.get(trunk.id);
+    /** Stable empty groups, so a non-batching type does not remount readers. */
+    const EMPTY_SHAFT_GROUPS = useMemo<ReturnType<typeof groupShaftsForSceneBatch>>(() => [], []);
+
+    const sceneBatchedShaftGroupsByType = useMemo(() => {
+        noteActivity('support-mode:shaft-batches');
+        const byType = {} as Record<SupportTypeId, ReturnType<typeof groupShaftsForSceneBatch>>;
+        for (const descriptor of SUPPORT_TYPES) {
+            const shaftSet = plainShaftsByType[descriptor.id];
             if (!shaftSet) continue;
+            byType[descriptor.id] = groupShaftsForSceneBatch(
+                descriptor.id,
+                renderListByType[descriptor.id],
+                shaftSet,
+                selectedOf(descriptor.id),
+            );
+        }
+        return byType;
+    }, [plainShaftsByType, renderListByType, selectedOf, groupShaftsForSceneBatch]);
 
-            if (selectedTrunkIds.has(trunk.id)) continue;
+    /** A type's groups, or none when it does not batch plainly. */
+    const sceneBatchedShaftsOf = React.useCallback(
+        (typeId: SupportTypeId) => sceneBatchedShaftGroupsByType[typeId] ?? EMPTY_SHAFT_GROUPS,
+        [sceneBatchedShaftGroupsByType, EMPTY_SHAFT_GROUPS],
+    );
 
-            const color = resolveSceneSupportColor(shaftSet.modelId, trunk.id);
-            const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const groupKey = `${modelKey}:${color}`;
-            const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
-            existing.shafts.push(...shaftSet.shafts.map(applyDropToInstancedShaft));
+    /**
+     * The one instanced shaft batch's slot list: the producer's groups flattened,
+     * in the order the per-type pass draws them, so instance id is what a pointer
+     * event reports.
+     *
+     * The groups already applied model visibility, the selected/ghosted
+     * exclusion, the model drop offset, the taper diameters and the per-support
+     * colour, so nothing here re-filters (a second filter would be a second
+     * answer). Registry order, because that is the order the legacy pass draws
+     * and therefore the order the layers sit in; the brace's own set stands in
+     * for it exactly as it does there.
+     *
+     * Null when the batch is not the owner: the legacy per-colour groups and both
+     * shaft overlays keep rendering exactly as they did.
+     */
+    const shaftSlotIndex = useMemo(() => {
+        if (!shaftBatchActive) return null;
+        noteActivity('support-mode:shaft-slot-index');
 
-            if (existing.shafts.length > 0) grouped.set(groupKey, existing);
+        const groups: ShaftSlotGroup[] = [];
+        let braceGroupsAdded = false;
+        for (const descriptor of SUPPORT_TYPES) {
+            if (getSupportTypeDescriptor(descriptor.id).segmentSelectionPrefix) {
+                if (braceGroupsAdded) continue;
+                braceGroupsAdded = true;
+                groups.push(...sceneBatchedBraceShaftGroups);
+                continue;
+            }
+            groups.push(...sceneBatchedShaftsOf(descriptor.id));
         }
 
-        return Array.from(grouped.values());
-    }, [renderTrunkList, trunkShaftsBySupport, selectedTrunkIds, isModelVisible, applyDropToInstancedShaft, resolveSceneSupportColor]);
+        return buildShaftSlotIndex(groups);
+    }, [shaftBatchActive, sceneBatchedBraceShaftGroups, sceneBatchedShaftsOf]);
 
-    const sceneBatchedBranchShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
+    /**
+     * The pick tubes the simple views mount at zero alpha, per batch, keyed by
+     * the batch's own shaft array. Built here rather than in the render pass so
+     * a zoom, which changes every tube's size, rebuilds them once per change.
+     */
+    const slimPickShaftsByBatch = useMemo(() => {
+        const byBatch = new Map<readonly InstancedShaft[], InstancedShaft[]>();
+        if (!simpleRender) return byBatch;
 
-        for (const branch of renderBranchList) {
-            if (!isModelVisible(branch.modelId)) continue;
-            const shaftSet = branchShaftsBySupport.get(branch.id);
-            if (!shaftSet) continue;
-
-            if (selectedBranchIds.has(branch.id)) continue;
-
-            const color = resolveSceneSupportColor(shaftSet.modelId, branch.id);
-            const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const groupKey = `${modelKey}:${color}`;
-            const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
-            existing.shafts.push(...shaftSet.shafts.map(applyDropToInstancedShaft));
-
-            if (existing.shafts.length > 0) {
-                grouped.set(groupKey, existing);
+        for (const groups of Object.values(sceneBatchedShaftGroupsByType)) {
+            for (const group of groups) {
+                byBatch.set(group.shafts, slimPickShafts(group.shafts, camera, viewport.height));
             }
         }
+        for (const group of sceneBatchedBraceShaftGroups) {
+            byBatch.set(group.shafts, slimPickShafts(group.shafts, camera, viewport.height));
+        }
 
-        return Array.from(grouped.values());
-    }, [renderBranchList, branchShaftsBySupport, selectedBranchIds, isModelVisible, applyDropToInstancedShaft, resolveSceneSupportColor]);
+        return byBatch;
+    }, [camera, simpleRender, viewport.height, sceneBatchedShaftGroupsByType, sceneBatchedBraceShaftGroups]);
 
-    const sceneBatchedTrunkRootGroups = useMemo(() => {
-        if (hidePlateContactPrimitivesEffective) return [] as Array<{ modelId: string | null; color: string; roots: InstancedRoot[] }>;
+    /**
+     * Plate roots for the batched pass, grouped by model and colour.
+     *
+     * Both root-owning types build these identically; only the shaft-diameter
+     * fallback differs, and the store the root comes from.
+     */
+    const groupRootsForSceneBatch = useCallback(<T extends { id: string; modelId?: string; rootId?: string; segments?: Segment[] }>(
+        typeId: SupportTypeId,
+        list: readonly T[],
+        selectedIds: ReadonlySet<string>,
+        roots: Record<string, Roots>,
+        inlineRoot: SupportEndpoint | null,
+        fallbackShaftDiameter: (entity: T) => number,
+    ) => {
+        const grouped = new Map<string, { color: string; roots: InstancedRoot[] }>();
 
-        const grouped = new Map<string, { modelId: string | null; color: string; roots: InstancedRoot[] }>();
-        const hasSolidBottom = raftSettings.bottomMode === 'solid';
-        const raftThickness = raftSettings.thickness ?? 0;
+        for (const entity of list) {
+            if (!isModelVisible(entity.modelId, entity.id)) continue;
+            if (selectedIds.has(entity.id)) continue;
 
-        for (const trunk of renderTrunkList) {
-            if (!isModelVisible(trunk.modelId)) continue;
-            if (selectedTrunkIds.has(trunk.id)) continue;
+            // A type whose plate geometry is on the entity has no `Roots` row to
+            // look up; its dimensions come off the fields its endpoint declares.
+            const inline = inlineRoot
+                ? inlineRootBatchInstance(inlineRoot, entity as unknown as { id: string; modelId?: string } & Record<string, unknown>)
+                : null;
+            const root = roots[entity.rootId ?? ''];
+            if (!inline && !root) continue;
 
-            const root = state.roots[trunk.rootId];
-            if (!root) continue;
+            const shaftDiameter = Math.max(0.001, entity.segments?.[0]?.diameter ?? fallbackShaftDiameter(entity));
+            const color = resolveSceneSupportColor(entity.modelId, entity.id, typeId);
+            const existing = grouped.get(color) ?? { color, roots: [] };
 
-            const shaftDiameter = Math.max(0.001, trunk.segments[0]?.diameter ?? 1.5);
-            const topRadius = shaftDiameter / 2;
-            const bottomRadius = Math.max(0.001, root.diameter / 2);
-            const effectiveDiskHeight = Math.max(0.001, root.diskHeight);
-            const verticalOffset = 0;
+            const instance: InstancedRoot = inline ?? {
+                id: root!.id,
+                supportId: entity.id,
+                modelId: entity.modelId,
+                basePos: {
+                    x: root!.transform.pos.x,
+                    y: root!.transform.pos.y,
+                    z: root!.transform.pos.z,
+                },
+                bottomRadius: Math.max(0.001, root!.diameter / 2),
+                topRadius: shaftDiameter / 2,
+                effectiveDiskHeight: Math.max(0.001, root!.diskHeight),
+                coneHeight: Math.max(0, root!.coneHeight),
+            };
 
-            const color = resolveSceneSupportColor(trunk.modelId, trunk.id);
-            const modelKey = `${trunk.modelId ?? '__unassigned__'}:${color}`;
-            const existing = grouped.get(modelKey) ?? { modelId: trunk.modelId ?? null, color, roots: [] };
             existing.roots.push({
-                id: root.id,
-                supportId: trunk.id,
-                modelId: trunk.modelId,
-                basePos: applyDropToVec3Like({
-                    x: root.transform.pos.x,
-                    y: root.transform.pos.y,
-                    z: root.transform.pos.z + verticalOffset,
-                }, trunk.modelId),
-                bottomRadius,
-                topRadius,
-                effectiveDiskHeight,
-                coneHeight: Math.max(0, root.coneHeight),
+                ...instance,
+                basePos: applyDropToVec3Like(instance.basePos, entity.modelId),
             });
-            grouped.set(modelKey, existing);
+            grouped.set(color, existing);
         }
 
         return Array.from(grouped.values());
     }, [
-        hidePlateContactPrimitivesEffective,
-        raftSettings.bottomMode,
-        raftSettings.thickness,
-        renderTrunkList,
-        state.roots,
-        dimNonSelected,
-        resolveBaseColor,
-        resolveSceneSupportColor,
-        applyDropToVec3Like,
-        selectedTrunkIds,
-        restrictToActiveModel,
-        activeModelId,
+        hidePlateContactPrimitivesEffective, isModelVisible,
+        resolveSceneSupportColor, applyDropToVec3Like,
     ]);
 
-    const sceneBatchedKickstandRootGroups = useMemo(() => {
-        if (hidePlateContactPrimitivesEffective) return [] as Array<{ modelId: string | null; color: string; roots: InstancedRoot[] }>;
-
-        const grouped = new Map<string, { modelId: string | null; color: string; roots: InstancedRoot[] }>();
-        const hasSolidBottom = raftSettings.bottomMode === 'solid';
-        const raftThickness = raftSettings.thickness ?? 0;
-
-        for (const kickstand of renderKickstandList) {
-            if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
-            if (selectedKickstandIds.has(kickstand.id)) continue;
-
-            const root = kickstandState.roots[kickstand.rootId];
-            if (!root) continue;
-
-            const shaftDiameter = Math.max(
-                0.001,
-                kickstand.segments[0]?.diameter ?? kickstand.profile.bodyDiameterMm,
+    /**
+     * Plate roots for the batched pass, keyed by type. Only the shaft-diameter
+     * fallback differs, declared as `shaftFallback.fallbackDiameterMm`.
+     */
+    const sceneBatchedRootGroupsByType = useMemo(() => {
+        const byType = {} as Record<SupportTypeId, Array<{ color: string; roots: InstancedRoot[] }>>;
+        for (const descriptor of SUPPORT_TYPES) {
+            // A type carrying its root as geometry on the entity (the stump's
+            // frustum) is not a root-owning one: there is no row for the plate
+            // pass to find, so its disc and axis line are read off the fields its
+            // endpoint declares.
+            const inlineRoot = descriptor.lower.kind === 'inlineRoot' ? descriptor.lower : null;
+            if (!batchesInView('root', descriptor, simpleRender)) continue;
+            const list = renderListByType[descriptor.id] as readonly { id: string; modelId?: string; rootId: string; segments?: Segment[] }[];
+            byType[descriptor.id] = groupRootsForSceneBatch(
+                descriptor.id,
+                list,
+                selectedOf(descriptor.id),
+                state.roots,
+                inlineRoot,
+                (entity) => {
+                    const fallback = descriptor.shaftFallback.fallbackDiameterMm;
+                    if (typeof fallback === 'number') return fallback;
+                    if (fallback) return readNumberPath(entity, fallback.path) ?? 1.5;
+                    return 1.5;
+                },
             );
-            const topRadius = shaftDiameter / 2;
-            const bottomRadius = Math.max(0.001, root.diameter / 2);
-            const effectiveDiskHeight = Math.max(0.001, root.diskHeight);
-            const verticalOffset = 0;
-
-            const color = resolveSceneSupportColor(kickstand.modelId, kickstand.id);
-            const modelKey = `${kickstand.modelId ?? '__unassigned__'}:${color}`;
-            const existing = grouped.get(modelKey) ?? { modelId: kickstand.modelId ?? null, color, roots: [] };
-            existing.roots.push({
-                id: root.id,
-                supportId: kickstand.id,
-                modelId: kickstand.modelId,
-                basePos: applyDropToVec3Like({
-                    x: root.transform.pos.x,
-                    y: root.transform.pos.y,
-                    z: root.transform.pos.z + verticalOffset,
-                }, kickstand.modelId),
-                bottomRadius,
-                topRadius,
-                effectiveDiskHeight,
-                coneHeight: Math.max(0, root.coneHeight),
-            });
-            grouped.set(modelKey, existing);
         }
+        return byType;
+    }, [renderListByType, selectedOf, state.roots, groupRootsForSceneBatch, readNumberPath, simpleRender]);
 
-        return Array.from(grouped.values());
-    }, [
-        hidePlateContactPrimitivesEffective,
-        raftSettings.bottomMode,
-        raftSettings.thickness,
-        renderKickstandList,
-        kickstandState.roots,
-        selectedKickstandIds,
-        dimNonSelected,
-        resolveBaseColor,
-        resolveSceneSupportColor,
-        applyDropToVec3Like,
-        restrictToActiveModel,
-        activeModelId,
-    ]);
+    /**
+     * The one instanced root batch's slot list: the producer's root groups
+     * flattened in registry order, so slot index is draw order.
+     *
+     * `sceneBatchedRootGroupsByType` already applied the hide-plate switch, model
+     * visibility, the selected-support exclusion, the inline-root mapping, the
+     * model drop offset and the per-type shaft-diameter fallback. The writer
+     * applies the 0.01 mm render lift, because that is a rendering offset the
+     * producer's `basePos` never carries.
+     *
+     * Null while the flag is off or the view is simple: the legacy per-colour
+     * groups, their axis lines and the two root overlays keep rendering exactly
+     * as they did.
+     */
+    const rootSlotIndex = useMemo(() => {
+        if (!rootBatchActive) return null;
+        noteActivity('support-mode:root-slot-index');
+        const groups: RootSlotGroup[] = [];
+        for (const descriptor of SUPPORT_TYPES) {
+            const typeGroups = sceneBatchedRootGroupsByType[descriptor.id];
+            if (typeGroups) groups.push(...typeGroups);
+        }
+        return buildRootSlotIndex(groups);
+    }, [rootBatchActive, sceneBatchedRootGroupsByType]);
 
     const sceneBatchedContactConeGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId: string | null; color: string; cones: InstancedContactCone[] }>();
+        const grouped = new Map<string, { color: string; cones: InstancedContactCone[] }>();
 
-        const pushCone = (modelId: string | null, color: string, cone: InstancedContactCone) => {
-            const key = `${modelId ?? '__unassigned__'}:${color}`;
-            const existing = grouped.get(key);
-            if (existing) {
-                existing.cones.push(cone);
-            } else {
-                grouped.set(key, { modelId, color, cones: [cone] });
+        const collect = <T extends { id: string }>(
+            typeId: SupportTypeId,
+            list: readonly T[],
+            selectedIds: ReadonlySet<string>,
+        ) => {
+            for (const entity of list) {
+                if (selectedIds.has(entity.id)) continue;
+                if (ghostedDependentSupportIdSet.has(entity.id)) continue;
+                const coneSet = contactConesBySupport.get(entity.id);
+                if (!coneSet) continue;
+
+                const color = resolveSceneSupportColor(coneSet.modelId, entity.id, typeId);
+                const existing = grouped.get(color)
+                    ?? { color, cones: [] as InstancedContactCone[] };
+
+                for (const cone of coneSet.cones) {
+                    existing.cones.push({ ...cone, pos: applyDropToVec3Like(cone.pos, cone.modelId) });
+                }
+                grouped.set(color, existing);
             }
         };
 
-        for (const trunk of renderTrunkList) {
-            if (selectedTrunkIds.has(trunk.id)) continue;
-            const coneSet = contactConesBySupport.get(trunk.id);
-            if (!coneSet) continue;
-
-            const color = resolveSceneSupportColor(coneSet.modelId, trunk.id);
-            coneSet.cones.forEach((cone) => pushCone(coneSet.modelId ?? null, color, {
-                ...cone,
-                pos: applyDropToVec3Like(cone.pos, cone.modelId),
-            }));
-        }
-
-        for (const branch of renderBranchList) {
-            if (selectedBranchIds.has(branch.id)) continue;
-            const coneSet = contactConesBySupport.get(branch.id);
-            if (!coneSet) continue;
-
-            const color = resolveSceneSupportColor(coneSet.modelId, branch.id);
-            coneSet.cones.forEach((cone) => pushCone(coneSet.modelId ?? null, color, {
-                ...cone,
-                pos: applyDropToVec3Like(cone.pos, cone.modelId),
-            }));
-        }
-
-        for (const stick of renderStickList) {
-            if (selectedStickIds.has(stick.id)) continue;
-            const coneSet = contactConesBySupport.get(stick.id);
-            if (!coneSet) continue;
-
-            const color = resolveSceneSupportColor(coneSet.modelId, stick.id);
-            coneSet.cones.forEach((cone) => pushCone(coneSet.modelId ?? null, color, {
-                ...cone,
-                pos: applyDropToVec3Like(cone.pos, cone.modelId),
-            }));
-        }
-
-        for (const leaf of renderLeafList) {
-            if (selectedLeafIds.has(leaf.id)) continue;
-            const coneSet = contactConesBySupport.get(leaf.id);
-            if (!coneSet) continue;
-
-            const color = resolveSceneSupportColor(coneSet.modelId, leaf.id);
-            coneSet.cones.forEach((cone) => pushCone(coneSet.modelId ?? null, color, {
-                ...cone,
-                pos: applyDropToVec3Like(cone.pos, cone.modelId),
-            }));
+        // Every type is offered: `collect` reads the cone-set map, which already
+        // holds exactly the types the pass carries, so a second copy of that rule
+        // here is a second chance to disagree with it (the stump's contact disc
+        // went missing that way).
+        for (const descriptor of SUPPORT_TYPES) {
+            collect(
+                descriptor.id,
+                renderListByType[descriptor.id] as readonly { id: string }[],
+                selectedOf(descriptor.id),
+            );
         }
 
         return Array.from(grouped.values());
     }, [
-        renderTrunkList,
-        renderBranchList,
-        renderStickList,
-        renderLeafList,
-        contactConesBySupport,
-        selectedTrunkIds,
-        selectedBranchIds,
-        selectedStickIds,
-        selectedLeafIds,
-        applyDropToVec3Like,
-        dimNonSelected,
-        resolveBaseColor,
-        resolveSceneSupportColor,
+        renderListByType, selectedOf,
+        contactConesBySupport, resolveSceneSupportColor, applyDropToVec3Like,
+        ghostedDependentSupportIdSet,
     ]);
 
-    const sceneBatchedShaftInstanceCount = useMemo(() => {
-        const countGroups = [
-            sceneBatchedTrunkShaftGroups,
-            sceneBatchedBranchShaftGroups,
-            sceneBatchedBraceShaftGroups,
-            sceneBatchedTwigShaftGroups,
-            sceneBatchedStickShaftGroups,
-            sceneBatchedKickstandShaftGroups,
-        ];
+    /**
+     * The one instanced contact-cone batch's slot list: the producer's groups
+     * flattened in its draw order, so slot index is draw order.
+     *
+     * `sceneBatchedContactConeGroups` already applied model visibility, the
+     * selected-support exclusion, the knot-host model fallback, the colour and
+     * the model drop offset, and it re-derives through `contactConesBySupport`
+     * when a drag preview moves a cone — so a moving contact point moves the
+     * batch's slot without a second dependency here.
+     *
+     * The nib's penetration is deliberately not part of this list: it follows the
+     * active material profile, so the batch resolves it through
+     * `useContactPenetrationResolver` at write time.
+     *
+     * Null while the flag is off or the view is simple: the legacy per-colour
+     * groups, their axis lines and the two cone overlays keep rendering exactly
+     * as they did.
+     */
+    const coneSlotIndex = useMemo(() => {
+        if (!coneBatchActive) return null;
+        noteActivity('support-mode:cone-slot-index');
+        return buildConeSlotIndex(sceneBatchedContactConeGroups);
+    }, [coneBatchActive, sceneBatchedContactConeGroups]);
 
+    const sceneBatchedShaftInstanceCount = useMemo(() => {
+        // Every batched group counts, plus brace, which batches its own.
         let total = 0;
-        for (const groups of countGroups) {
-            for (const group of groups) {
-                total += group.shafts.length;
-            }
+        for (const groups of Object.values(sceneBatchedShaftGroupsByType)) {
+            for (const group of groups) total += group.shafts.length;
+        }
+        for (const group of sceneBatchedBraceShaftGroups) {
+            total += group.shafts.length;
         }
 
         return total;
-    }, [
-        sceneBatchedTrunkShaftGroups,
-        sceneBatchedBranchShaftGroups,
-        sceneBatchedBraceShaftGroups,
-        sceneBatchedTwigShaftGroups,
-        sceneBatchedStickShaftGroups,
-        sceneBatchedKickstandShaftGroups,
-    ]);
+    }, [sceneBatchedShaftGroupsByType, sceneBatchedBraceShaftGroups]);
 
     const sceneBatchedShaftRadialSegments = sceneBatchedShaftInstanceCount >= BATCHED_SHAFT_HIGH_INSTANCE_THRESHOLD
         ? BATCHED_SHAFT_LOW_RADIAL_SEGMENTS
@@ -3477,48 +2863,34 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const placementPreviewBatches = useMemo(() => {
         if (mode !== 'support') return [] as PlacementPreviewBatch[];
 
-        const hasSolidBottom = raftSettings.bottomMode === 'solid';
-        const raftThickness = raftSettings.thickness ?? 0;
-        const next: PlacementPreviewBatch[] = [];
-
-        const pushSupportPreview = (id: string, preview: SupportData | null) => {
-            if (!preview) return;
-            const batch = buildSupportPlacementPreviewBatch(id, preview, hasSolidBottom, raftThickness);
-            if (!batch) return;
-
-            if (hidePlateContactPrimitivesEffective) {
-                next.push({
-                    ...batch,
-                    roots: [],
-                });
-                return;
-            }
-
-            next.push(batch);
-        };
-
-        pushSupportPreview('placement-preview:trunk', trunkPlacementPreview);
-        pushSupportPreview('placement-preview:branch', branchPlacementPreview);
-        pushSupportPreview('placement-preview:leaf', leafPlacementPreview);
-        pushSupportPreview('placement-preview:kickstand', kickstandPlacementPreview);
-
-        if (bracePlacementPreview) {
-            const braceBatch = buildBracePlacementPreviewBatch('placement-preview:brace', bracePlacementPreview);
-            if (braceBatch) next.push(braceBatch);
-        }
-
-        return next;
+        return buildPlacementPreviewBatches(placementPreviews, raftSettings.bottomMode === 'solid', raftSettings.thickness ?? 0, hidePlateContactPrimitivesEffective);
     }, [
         mode,
-        trunkPlacementPreview,
-        branchPlacementPreview,
-        leafPlacementPreview,
-        bracePlacementPreview,
-        kickstandPlacementPreview,
+        placementPreviews,
         raftSettings.bottomMode,
         raftSettings.thickness,
         hidePlateContactPrimitivesEffective,
     ]);
+
+    /** A type's plain shaft set, empty when it does not batch plainly. */
+    const plainShaftsOf = React.useCallback(
+        (typeId: SupportTypeId) => plainShaftsByType[typeId] ?? EMPTY_SHAFT_SET,
+        [plainShaftsByType, EMPTY_SHAFT_SET],
+    );
+
+    /**
+     * The shaft set a support id belongs to, whichever type owns it.
+     *
+     * Ids are UUIDs, unique across types, so the first set holding one is the
+     * answer and the order the types are consulted in does not matter.
+     */
+    const shaftSetForSupport = React.useCallback((supportId: string) => {
+        for (const descriptor of SUPPORT_TYPES) {
+            const shaftSet = plainShaftsByType[descriptor.id]?.get(supportId);
+            if (shaftSet) return shaftSet;
+        }
+        return braceShaftsBySupport.get(supportId) ?? null;
+    }, [plainShaftsByType, braceShaftsBySupport]);
 
     const hoveredSupportShaftSet = useMemo(() => {
         if (!isInteractable) return null;
@@ -3527,35 +2899,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const hoveredSupportId = hoveredSupportIdForVisual;
         if (!hoveredSupportId) return null;
 
-        const trunkSet = trunkShaftsBySupport.get(hoveredSupportId);
-        if (trunkSet) return trunkSet;
-
-        const branchSet = branchShaftsBySupport.get(hoveredSupportId);
-        if (branchSet) return branchSet;
-
-        const braceSet = braceShaftsBySupport.get(hoveredSupportId);
-        if (braceSet) return braceSet;
-
-        const twigSet = twigShaftsBySupport.get(hoveredSupportId);
-        if (twigSet) return twigSet;
-
-        const stickSet = stickShaftsBySupport.get(hoveredSupportId);
-        if (stickSet) return stickSet;
-
-        const kickstandSet = kickstandShaftsBySupport.get(hoveredSupportId);
-        if (kickstandSet) return kickstandSet;
-
-        return null;
-    }, [isInteractable, hoveredSupportIdForVisual, hoveredSupportIsSelected, trunkShaftsBySupport, branchShaftsBySupport, braceShaftsBySupport, twigShaftsBySupport, stickShaftsBySupport, kickstandShaftsBySupport]);
+        return shaftSetForSupport(hoveredSupportId);
+    }, [isInteractable, hoveredSupportIdForVisual, hoveredSupportIsSelected, shaftSetForSupport]);
 
     const hoveredSupportOverlayShafts = useMemo(() => {
         if (!hoveredSupportShaftSet) return [] as InstancedShaft[];
 
-        return hoveredSupportShaftSet.shafts.map((shaft) => ({
+        // The instanced batch draws the hover state per instance for straight
+        // and tapered shafts; a second mesh over the same rods would double-draw
+        // them. Curves stay here — a merged tube has one material, so the batch
+        // cannot lift it per curve.
+        const shafts = shaftBatchActive
+            ? hoveredSupportShaftSet.shafts.filter(isCurvedBatchedShaft)
+            : hoveredSupportShaftSet.shafts;
+        if (shafts.length === 0) return [] as InstancedShaft[];
+
+        return shafts.map((shaft) => ({
             ...applyDropToInstancedShaft(shaft),
             diameter: shaft.diameter * 1.02,
         }));
-    }, [hoveredSupportShaftSet, applyDropToInstancedShaft]);
+    }, [hoveredSupportShaftSet, applyDropToInstancedShaft, shaftBatchActive]);
 
     const hoveredSupportConeSet = useMemo(() => {
         if (!isInteractable) return null;
@@ -3568,12 +2931,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [isInteractable, hoveredSupportIdForVisual, hoveredSupportIsSelected, contactConesBySupport]);
 
     const hoveredSupportOverlayCones = useMemo(() => {
+        // The instanced batch draws the hover state per instance; a second mesh
+        // over the same cones would double-draw them. The overlay's set is the
+        // batch's exactly: unselected supports only.
+        if (coneBatchActive) return [] as InstancedContactCone[];
         if (!hoveredSupportConeSet) return [] as InstancedContactCone[];
         return hoveredSupportConeSet.cones.map((cone) => ({
             ...cone,
             pos: applyDropToVec3Like(cone.pos, cone.modelId),
         }));
-    }, [hoveredSupportConeSet, applyDropToVec3Like]);
+    }, [hoveredSupportConeSet, applyDropToVec3Like, coneBatchActive]);
 
     const hoveredSupportJointSet = useMemo(() => {
         if (!isInteractable) return null;
@@ -3582,38 +2949,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const hoveredSupportId = hoveredSupportIdForVisual;
         if (!hoveredSupportId) return null;
 
-        const trunkSet = trunkJointsBySupport.get(hoveredSupportId);
-        if (trunkSet) return trunkSet;
-
-        const branchSet = branchJointsBySupport.get(hoveredSupportId);
-        if (branchSet) return branchSet;
-
-        const twigSet = twigJointsBySupport.get(hoveredSupportId);
-        if (twigSet) return twigSet;
-
-        const stickSet = stickJointsBySupport.get(hoveredSupportId);
-        if (stickSet) return stickSet;
-
-        const kickstandSet = kickstandJointsBySupport.get(hoveredSupportId);
-        if (kickstandSet) return kickstandSet;
-
-        const leafSet = leafJointsBySupport.get(hoveredSupportId);
-        if (leafSet) return leafSet;
-
-        return null;
+        return jointSetForSupport(hoveredSupportId);
     }, [
         isInteractable,
         hoveredSupportIdForVisual,
         hoveredSupportIsSelected,
-        trunkJointsBySupport,
-        branchJointsBySupport,
-        twigJointsBySupport,
-        stickJointsBySupport,
-        kickstandJointsBySupport,
-        leafJointsBySupport,
+        jointSetForSupport,
     ]);
 
     const hoveredSupportOverlayJoints = useMemo(() => {
+        // The instanced batch draws the hover state per instance; a second mesh
+        // over the same balls would double-draw them.
+        if (SUPPORT_INSTANCED_JOINTS) return [] as InstancedJoint[];
         if (!hoveredSupportJointSet) return [] as InstancedJoint[];
 
         return hoveredSupportJointSet.joints.map((joint) => ({
@@ -3654,9 +3001,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             };
         }
 
-        const kickstand = kickstandState.kickstands[supportId];
+        const kickstand = state.kickstands[supportId];
         if (kickstand) {
-            const root = kickstandState.roots[kickstand.rootId];
+            const root = state.roots[kickstand.rootId];
             if (!root) return null;
 
             const shaftDiameter = Math.max(
@@ -3684,14 +3031,25 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             };
         }
 
+        // A type whose root is geometry on the entity (the stump) has no `Roots`
+        // row, so its instance comes off the fields its endpoint declares - the
+        // same mapping the batched pass uses.
+        for (const descriptor of SUPPORT_TYPES) {
+            if (descriptor.lower.kind !== 'inlineRoot') continue;
+            const entity = (state[descriptor.location.key] as Record<string, SupportEntityAny | undefined>)[supportId];
+            if (!entity) continue;
+
+            const root = inlineRootBatchInstance(descriptor.lower, entity as never);
+            if (!root) return null;
+            return { ...root, basePos: applyDropToVec3Like(root.basePos, entity.modelId) };
+        }
+
         return null;
     }, [
         raftSettings.bottomMode,
         raftSettings.thickness,
-        state.trunks,
-        state.roots,
-        kickstandState.kickstands,
-        kickstandState.roots,
+        state,
+        kickstandRootsById,
         applyDropToVec3Like,
     ]);
 
@@ -3703,12 +3061,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (!hoveredSupportId) return [] as InstancedRoot[];
 
         const overlay = buildHighlightedRootOverlay(hoveredSupportId);
+        // A root the batch owns already draws its own hover colour. The overlay
+        // must stay for the ones it does not: a *selected* trunk or kickstand
+        // root (the producer excludes selected supports) and an inline-root
+        // stump (which owns no root row). Membership in the slot list is the
+        // exact test for "the batch draws this support's root".
+        if (overlay && rootSlotIndex && rootSlotIndex.bySupport.has(overlay.supportId ?? '')) {
+            return [] as InstancedRoot[];
+        }
         return overlay ? [overlay] : [];
     }, [
         hidePlateContactPrimitivesEffective,
         isInteractable,
         hoveredSupportIdForVisual,
         buildHighlightedRootOverlay,
+        rootSlotIndex,
     ]);
 
     const additionalMarqueeHoveredSupportIds = useMemo(() => {
@@ -3721,23 +3088,24 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         const overlays: InstancedShaft[] = [];
         for (const supportId of additionalMarqueeHoveredSupportIds) {
-            const shaftSet = trunkShaftsBySupport.get(supportId)
-                ?? branchShaftsBySupport.get(supportId)
-                ?? braceShaftsBySupport.get(supportId)
-                ?? twigShaftsBySupport.get(supportId)
-                ?? stickShaftsBySupport.get(supportId)
-                ?? kickstandShaftsBySupport.get(supportId)
-                ?? null;
+            const shaftSet = shaftSetForSupport(supportId);
             if (!shaftSet) continue;
-            overlays.push(...shaftSet.shafts.map((shaft) => ({
+            // Straight and tapered shafts are the batch's marquee state; only the
+            // curves still need a mesh over the merged tube.
+            const shafts = shaftBatchActive
+                ? shaftSet.shafts.filter(isCurvedBatchedShaft)
+                : shaftSet.shafts;
+            overlays.push(...shafts.map((shaft) => ({
                 ...applyDropToInstancedShaft(shaft),
                 diameter: shaft.diameter * 1.02,
             })));
         }
         return overlays;
-    }, [additionalMarqueeHoveredSupportIds, trunkShaftsBySupport, branchShaftsBySupport, braceShaftsBySupport, twigShaftsBySupport, stickShaftsBySupport, kickstandShaftsBySupport, applyDropToInstancedShaft]);
+    }, [additionalMarqueeHoveredSupportIds, shaftSetForSupport, applyDropToInstancedShaft, shaftBatchActive]);
 
     const marqueeHoveredOverlayCones = useMemo(() => {
+        // The batch owns the cone marquee state too; see hoveredSupportOverlayCones.
+        if (coneBatchActive) return [] as InstancedContactCone[];
         if (additionalMarqueeHoveredSupportIds.length === 0) return [] as InstancedContactCone[];
 
         const overlays: InstancedContactCone[] = [];
@@ -3750,20 +3118,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })));
         }
         return overlays;
-    }, [additionalMarqueeHoveredSupportIds, contactConesBySupport, applyDropToVec3Like]);
+    }, [additionalMarqueeHoveredSupportIds, contactConesBySupport, applyDropToVec3Like, coneBatchActive]);
 
     const marqueeHoveredOverlayJoints = useMemo(() => {
+        // The instanced batch draws the marquee state per instance; see
+        // hoveredSupportOverlayJoints.
+        if (SUPPORT_INSTANCED_JOINTS) return [] as InstancedJoint[];
         if (additionalMarqueeHoveredSupportIds.length === 0) return [] as InstancedJoint[];
 
         const overlays: InstancedJoint[] = [];
         for (const supportId of additionalMarqueeHoveredSupportIds) {
-            const jointSet = trunkJointsBySupport.get(supportId)
-                ?? branchJointsBySupport.get(supportId)
-                ?? twigJointsBySupport.get(supportId)
-                ?? stickJointsBySupport.get(supportId)
-                ?? kickstandJointsBySupport.get(supportId)
-                ?? leafJointsBySupport.get(supportId)
-                ?? null;
+            const jointSet = jointSetForSupport(supportId);
             if (!jointSet) continue;
             overlays.push(...jointSet.joints.map((joint) => ({
                 ...joint,
@@ -3772,7 +3137,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })));
         }
         return overlays;
-    }, [additionalMarqueeHoveredSupportIds, trunkJointsBySupport, branchJointsBySupport, twigJointsBySupport, stickJointsBySupport, kickstandJointsBySupport, leafJointsBySupport, applyDropToVec3Like]);
+    }, [additionalMarqueeHoveredSupportIds, jointSetForSupport, applyDropToVec3Like]);
 
     const marqueeHoveredOverlayRoots = useMemo(() => {
         if (hidePlateContactPrimitivesEffective) return [] as InstancedRoot[];
@@ -3781,6 +3146,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const overlays: InstancedRoot[] = [];
 
         for (const supportId of additionalMarqueeHoveredSupportIds) {
+            // Only the roots the batch does not own; see hoveredSupportOverlayRoots.
+            if (rootSlotIndex && rootSlotIndex.bySupport.has(supportId)) continue;
             const overlay = buildHighlightedRootOverlay(supportId);
             if (overlay) overlays.push(overlay);
         }
@@ -3790,6 +3157,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         hidePlateContactPrimitivesEffective,
         additionalMarqueeHoveredSupportIds,
         buildHighlightedRootOverlay,
+        rootSlotIndex,
     ]);
 
     const handleSceneBatchedShaftClick = React.useCallback((shaft: InstancedShaft, event: { nativeEvent?: Event }) => {
@@ -3815,6 +3183,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         });
 
         if (!isPointerInteractable) return;
+        if (!supportAnswersPointer(shaft.modelId, pointerSceneryRef.current)) return;
         if (isPreparePointerInteractable) {
             emitSupportModelPointerSelect(shaft.modelId ?? null);
             return;
@@ -3853,6 +3222,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const handleSceneBatchedShaftPointerMove = React.useCallback((shaft: InstancedShaft, event: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
         if (!isPointerInteractable) return;
+        if (!supportAnswersPointer(shaft.modelId, pointerSceneryRef.current)) return;
         if (orbitInteractionActiveRef.current) return;
 
         const jointDragInteractionActive = typeof window !== 'undefined' && !!(window as any).__jointGizmoDragging;
@@ -3960,8 +3330,153 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         );
     }, [isPointerInteractable, mode, supportSelectionAndHoverSuppressed]);
 
-    const handleSceneBatchedRootClick = React.useCallback((root: InstancedRoot, event: { nativeEvent?: Event }) => {
+    /** Base colour for a detail-rendered support, origin overlay included. */
+    const resolveDetailSupportColor = useCallback((
+        typeId: SupportTypeId,
+        supportId: string,
+        modelId?: string,
+    ) => {
+        // Past MULTI_SELECTION_DETAIL_THRESHOLD the per-type selected sets are
+        // left empty, so the bulk colour is the only thing marking a selection.
+        // The renderer's dim gate overwrites the colour unless it is also told
+        // the support is selected -- see `supportIsDrawnSelected`.
+        if (isBulkSelected(supportId)) return BULK_MULTI_SELECTED_COLOR;
+
+        if (!debugOriginColors) return resolveBaseColor(modelId);
+        return getSupportTypeDescriptor(typeId).hasOrigin
+            ? originColorFor(supportId) ?? ORIGIN_NO_ORIGIN_COLOR
+            : ORIGIN_NOT_APPLICABLE_COLOR;
+    }, [
+        isBulkSelected,
+        debugOriginColors,
+        originColorFor,
+        resolveBaseColor,
+    ]);
+
+    /**
+     * The dragged support's colour, for the drag batch's non-joint primitives.
+     *
+     * A joint drag only starts on the selected support's joints, and the detail
+     * renderer draws those primitives with its selected colour. The drag batch is
+     * the only thing drawing them during the gesture, so it must use the same
+     * selected colour — using the base/detail colour here made the moved segment
+     * orange while its own unsuppressed neighbours and joints were cyan.
+     * Joints still override this with dragged-blue/sibling-grey.
+     */
+    const resolveJointDragPreviewColor = React.useCallback(
+        () => BULK_MULTI_SELECTED_COLOR,
+        [],
+    );
+
+    /** The props every detail renderer takes identically. */
+    /**
+     * The props every detail renderer takes, for one entity.
+     *
+     * Hover is resolved here rather than at each block: the pointer hover and
+     * the marquee both count, and seven blocks wrote that same pair out.
+     */
+    const sharedRenderProps = useCallback((
+        typeId: SupportTypeId,
+        entity: { id: string; modelId?: string },
+        isSelected: boolean,
+    ) => {
+        // The bulk marquee colour and an in-progress drag both mark a support
+        // selected without the per-type set -- see `supportIsDrawnSelected`.
+        const bulkSelected = isBulkSelected(entity.id);
+        const marqueePreview = marqueeHoveredSupportIdSet.has(entity.id)
+            && !typeHasBatchedMarqueeOverlay(typeId, simpleRender);
+        const drawnSelected = supportIsDrawnSelected({
+            inSelectedSet: isSelected,
+            bulkSelected,
+            marqueePreview,
+        });
+
+        return {
+            isSelected: drawnSelected,
+            // Keyed on the real selection: a previewed or bulk-marked support
+            // must not expose what a selection does, such as the contact-disk HUD.
+            selectedId: isSelected ? selectedId : null,
+            dimNonSelected,
+            isHovered: hoveredSupportIdForVisual === entity.id
+                || marqueeHoveredSupportIdSet.has(entity.id),
+            baseColor: resolveDetailSupportColor(typeId, entity.id, entity.modelId),
+            suppressHover,
+            isInteractable,
+        };
+    }, [
+        selectedId,
+        dimNonSelected,
+        hoveredSupportIdForVisual,
+        marqueeHoveredSupportIdSet,
+        resolveDetailSupportColor,
+        isBulkSelected,
+        suppressHover,
+        isInteractable,
+        simpleRender,
+    ]);
+
+    /** Draws one type's batched shaft groups. Six identical blocks became this. */
+    const renderSceneBatchedShafts = useCallback((
+        typeId: string,
+        groups: ReadonlyArray<{ color: string; shafts: InstancedShaft[] }>,
+        options?: { detailedOnly?: boolean },
+    ) => {
+        // The instanced batch draws every type's straight and tapered shafts
+        // (and mounts the merged curve tubes itself), so the per-type pass has
+        // nothing left to draw in Support mode. The simple views still use it.
+        if (shaftBatchActive) return null;
+        // The detailed-only groups are the brace curves. The simple view drops
+        // them; the navigation view keeps them as the lines everything else is.
+        if (options?.detailedOnly && simpleRender && !discsOnly) return null;
+        // One instanced group per colour, never per model: the drop offset is
+        // baked into each instance. An instance count in the key would remount
+        // the mesh and reallocate its buffers on every edit.
+        return groups.map((group) => (
+            <group key={`scene-${typeId}-batch:${group.color}:${simpleRender ? 'simple' : 'full'}`}>
+                {simpleRender ? (
+                    <>
+                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
+                        {/* The line is the picture, the pick tube is the pointer
+                            target: it stays mounted at zero alpha, sized to the
+                            line rather than to the member, so hover and click
+                            answer where the eye is. */}
+                        <InstancedShaftGroup
+                            shafts={slimPickShaftsByBatch.get(group.shafts) ?? group.shafts}
+                            color={group.color}
+                            transparent
+                            opacity={0}
+                            radialSegments={sceneBatchedShaftRadialSegments}
+                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                        />
+                    </>
+                ) : (
+                    <InstancedShaftGroup
+                        shafts={group.shafts}
+                        color={group.color}
+                        transparent={ghostTransparent}
+                        opacity={ghostOpacityClamped}
+                        radialSegments={sceneBatchedShaftRadialSegments}
+                        onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                        onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                        onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    />
+                )}
+            </group>
+        ));
+    }, [
+        shaftBatchActive,
+        simpleRender, ghostTransparent, ghostOpacityClamped, sceneBatchedShaftRadialSegments,
+        slimPickShaftsByBatch,
+        isPointerInteractable, handleSceneBatchedShaftClick,
+        handleSceneBatchedShaftPointerMove, handleSceneBatchedShaftPointerOut,
+    ]);
+
+
+    const handleSceneBatchedRootClick = React.useCallback((root: SceneBatchedRootRef, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
+        if (!supportAnswersPointer(root.modelId, pointerSceneryRef.current)) return;
         if (isPreparePointerInteractable) {
             emitSupportModelPointerSelect(root.modelId ?? null);
             return;
@@ -3971,8 +3486,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         handleSupportClick(event, root.supportId, isInteractable);
     }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed]);
 
-    const handleSceneBatchedRootPointerMove = React.useCallback((root: InstancedRoot) => {
+    const handleSceneBatchedRootPointerMove = React.useCallback((root: SceneBatchedRootRef) => {
         if (!isPointerInteractable) return;
+        if (!supportAnswersPointer(root.modelId, pointerSceneryRef.current)) return;
         if (orbitInteractionActiveRef.current) return;
 
         applySceneHoverWriteDecision(
@@ -3992,8 +3508,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         );
     }, [isPointerInteractable, primitiveHoverOnSelectedSupport, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
 
-    const handleSceneBatchedConeClick = React.useCallback((cone: InstancedContactCone, event: { nativeEvent?: Event }) => {
+    const handleSceneBatchedConeClick = React.useCallback((cone: SceneBatchedConeRef, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
+        if (!supportAnswersPointer(cone.modelId, pointerSceneryRef.current)) return;
         if (isPreparePointerInteractable) {
             emitSupportModelPointerSelect(cone.modelId ?? null);
             return;
@@ -4024,8 +3541,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         handleSupportClick(event, cone.supportId, isInteractable);
     }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed, braceAltActive, state.leaves]);
 
-    const handleSceneBatchedConePointerMove = React.useCallback((cone: InstancedContactCone, event?: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
+    const handleSceneBatchedConePointerMove = React.useCallback((cone: SceneBatchedConeRef, event?: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
         if (!isPointerInteractable) return;
+        if (!supportAnswersPointer(cone.modelId, pointerSceneryRef.current)) return;
         if (orbitInteractionActiveRef.current) return;
 
         // Brace tool: emit brace-leaf-hover for an unselected leaf's batched cone
@@ -4064,7 +3582,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     // Cone pointer-out: clear the brace tool's leaf hover (so a leaf preview
     // doesn't stick once the cursor leaves the cone), then fall through to the
     // shared shaft pointer-out cleanup for the rest of the hover state.
-    const handleSceneBatchedConePointerOut = React.useCallback((cone: InstancedContactCone | null) => {
+    const handleSceneBatchedConePointerOut = React.useCallback((cone: SceneBatchedConeRef | null) => {
         if (braceAltActive && cone?.supportId && state.leaves[cone.supportId]) {
             window.dispatchEvent(new CustomEvent('brace-leaf-leave', {
                 detail: { leafId: cone.supportId },
@@ -4075,6 +3593,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const handleSceneBatchedJointClick = React.useCallback((joint: InstancedJoint, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
+        if (!supportAnswersPointer(joint.modelId, pointerSceneryRef.current)) return;
         if (isPreparePointerInteractable) {
             emitSupportModelPointerSelect(joint.modelId ?? null);
             return;
@@ -4086,6 +3605,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const handleSceneBatchedJointPointerMove = React.useCallback((joint: InstancedJoint) => {
         if (!isPointerInteractable) return;
+        if (!supportAnswersPointer(joint.modelId, pointerSceneryRef.current)) return;
         if (orbitInteractionActiveRef.current) return;
 
         applySceneHoverWriteDecision(
@@ -4109,7 +3629,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const root = groupRef.current;
         if (!root) return;
 
-        const nextClippingPlanes = clippingPlanes.length > 0 ? clippingPlanes : null;
+        const nextClippingPlanes = clippingPlanes;
 
         const applyMaterialClipping = (material: THREE.Material) => {
             const clipMaterial = material as THREE.Material & { clippingPlanes?: THREE.Plane[] | null };
@@ -4213,52 +3733,189 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         // Re-apply clipping when committed support geometry collections change.
         // Without this, newly added meshes can miss clipping until some other
         // dependency (like slider movement) forces a re-run.
-        state.roots,
-        state.trunks,
-        state.branches,
-        state.leaves,
-        state.twigs,
-        state.sticks,
-        state.braces,
-        state.anchors,
-        state.knots,
-        kickstandState.roots,
-        kickstandState.kickstands,
-        kickstandState.knots,
+        //
+        // `stableState` is the whole store snapshot without hover, so one
+        // identity covers every collection the effect reads and a hover does
+        // not re-traverse the whole support scene.
+        stableState,
+        kickstandRootsById,
+        kickstandKnotsById,
     ]);
 
+    /**
+     * The live scene state the per-type detail renderers close over. Built
+     * once and folded into the registered factories by the seam.
+     */
+    const detailRendererContext = useMemo<DetailRendererContext>(() => ({
+        roots: state.roots,
+        renderKnotsById,
+        braceRenderKnotsById,
+        simpleRender,
+        navigationView: discsOnly,
+        hideUnselectedKnots,
+        hidePlateContactPrimitivesEffective,
+        ghostedBraceIdSet,
+        ghostOpacityClamped,
+        suppressHover,
+        isInteractable,
+        debugSectionColorsEnabled: debugSectionColors,
+        braceShaftsBySupport,
+    }), [
+        state.roots,
+        renderKnotsById,
+        braceRenderKnotsById,
+        simpleRender,
+        discsOnly,
+        hideUnselectedKnots,
+        hidePlateContactPrimitivesEffective,
+        ghostedBraceIdSet,
+        ghostOpacityClamped,
+        suppressHover,
+        isInteractable,
+        debugSectionColors,
+        braceShaftsBySupport,
+    ]);
+
+    const detailRenderers = useMemo(
+        () => detailRenderersFor(detailRendererContext),
+        [detailRendererContext],
+    );
+
+    /**
+     * One type's detail renderers for this frame.
+     *
+     * Ordering between types still matters (each batched-shaft pass sits at a
+     * specific point), so the JSX below calls this per type rather than looping
+     * over the whole registry in one place.
+     */
+    const renderDetailFor = useCallback((typeId: SupportTypeId) => {
+        const entry = detailRenderers[typeId];
+        if (!entry) return null;
+        // A renderer takes its entity under the type's declared singular name.
+        const entityProp = getSupportTypeDescriptor(typeId).singular;
+
+        const Component = entry.component;
+        const selected = selectedOf(typeId);
+        const batchable = entry.batchedIds ?? plainShaftsOf(typeId);
+        const list = renderListByType[typeId] as readonly { id: string; modelId?: string }[];
+        // The instanced drag batch draws the moving geometry, but the detail
+        // renderer still owns everything around it (roots, disks, HUD). Give it
+        // the live preview entity directly: the part-drag event it normally
+        // subscribes to is not published on the instanced path, and leaving the
+        // committed entity here is what kept the old support visible beside the
+        // moving one.
+        const previewEntity = activePreviewEntity?.typeId === typeId
+            ? activePreviewEntity.support as { id: string; modelId?: string }
+            : null;
+
+        return list.map((baseEntity) => {
+            const entity = previewEntity && baseEntity.id === previewEntity.id
+                ? previewEntity
+                : baseEntity;
+            if (!isModelVisible(entity.modelId, entity.id)) return null;
+
+            const isSelected = selected.has(entity.id);
+            const context = { entity: entity as never, isSelected, isBatchable: batchable.has(entity.id), isGhosted: ghostedDependentSupportIdSet.has(entity.id) };
+
+            if (entry.skip?.(context)) return null;
+            const hosts = entry.hosts ? entry.hosts(entity as never) : {};
+            if (!hosts) return null;
+
+            return (
+                <group
+                    key={entity.id}
+                    userData={{
+                        noClipping: entry.noClipping?.(context) ?? false,
+                        ghostedDependent: ghostedDependentSupportIdSet.has(entity.id),
+                    }}
+                >
+                    <Component
+                        {...{ [entityProp]: entity }}
+                        {...hosts}
+                        {...sharedRenderProps(typeId, entity, isSelected)}
+                        {...(entry.extraProps?.(context) ?? {})}
+                        {...(ghostedDependentSupportIdSet.has(entity.id) ? { ghosted: true } : {})}
+                    />
+                </group>
+            );
+        });
+    }, [
+        detailRenderers,
+        selectedOf,
+        plainShaftsOf,
+        renderListByType,
+        activePreviewEntity,
+        isModelVisible,
+        sharedRenderProps,
+        ghostedDependentSupportIdSet,
+    ]);
+
+    // The private drag batches' primitives: every detail shaft of a dragged
+    // support hides while a joint gesture runs, and exactly the grabbed cone
+    // hides while a tip drag runs. Context, because the external suppression
+    // store proved unreliable across the lazy chunks the detail renderers live
+    // in.
+    const jointDragSession = useSyncExternalStore(
+        subscribeJointDragSession,
+        getJointDragSession,
+        getJointDragSessionServerSnapshot,
+    );
+    // A contact-disk (tip) drag draws one cone and nothing else: it must not
+    // hide the support's shafts or joints, which the drag never moves.
+    const coneDragSession = useSyncExternalStore(
+        subscribeConeDragSession,
+        getConeDragSession,
+        getConeDragSessionServerSnapshot,
+    );
+    const jointDrag = jointDragSession && !jointDragSession.ended ? jointDragSession.slotMap : null;
+    const coneDrag = coneDragSession && !coneDragSession.ended ? coneDragSession.slotMap : null;
+    const draggedSupport = jointDrag || coneDrag
+        ? {
+            supportId: jointDrag?.supportId ?? null,
+            jointIds: jointDrag
+                ? new Set(jointDrag.joints.map((slot) => slot.id))
+                : EMPTY_DRAGGED_PRIMITIVE_IDS,
+            // The union of both gestures. They cannot overlap (different
+            // pointer-down targets, and the pointer is captured by one), so at
+            // most one of them contributes.
+            coneIds: new Set([
+                ...(jointDrag?.cones.map((slot) => slot.id) ?? []),
+                ...(coneDrag?.cones.map((slot) => slot.id) ?? []),
+            ]),
+        }
+        : null;
+
     return (
+        <DraggedSupportContext.Provider value={draggedSupport}>
         <group ref={groupRef}>
             {/* Joint Creation Manager */}
             <JointCreationManager />
 
             {/* Joint Gizmo */}
-            <JointGizmo />
+            <JointGizmo sceneRef={jointDragSceneRef} />
             {/* Knot Gizmo (for sliding knots along shafts) */}
             <KnotGizmo />
             <BezierGizmoManager />
 
-            {/* Render Trunks */}
-            {sceneBatchedTrunkShaftGroups.map((group) => (
-                <group key={`scene-trunk-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
-                    {simpleRender ? (
-                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
-                    ) : (
-                        <InstancedShaftGroup
-                            shafts={group.shafts}
-                            color={group.color}
-                            transparent={ghostTransparent}
-                            opacity={ghostOpacityClamped}
-                            radialSegments={sceneBatchedShaftRadialSegments}
-                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
-                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                        />
-                    )}
-                </group>
-            ))}
-            {!simpleRender && sceneBatchedJointGroups.map((group) => (
-                <group key={`scene-joint-batch:${group.modelId ?? 'none'}:${group.color}:${group.joints.length}`} userData={{ modelId: group.modelId ?? null }}>
+            {/* Joints are solids with no line form, so a simple view does not draw
+                them at all. Unmounted, not faded: a zero-alpha batch left mounted
+                for picking is what kept showing joint spheres after a mode switch,
+                because the fade is a material prop on an already-built mesh. */}
+            {!simpleRender && (jointSlotIndex ? (
+                <InstancedJointBatch
+                    index={jointSlotIndex}
+                    hoveredSupportId={hoveredSupportJointSet?.supportId ?? null}
+                    marqueeSupportIds={additionalMarqueeHoveredSupportIds}
+                    clippingPlanes={clippingPlanes}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    onJointClick={isPointerInteractable ? handleSceneBatchedJointClick : undefined}
+                    onJointPointerMove={isPointerInteractable ? handleSceneBatchedJointPointerMove : undefined}
+                    onJointPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onBatchReady={SUPPORT_INSTANCED_DRAG ? handleSceneJointBatchReady : undefined}
+                />
+            ) : sceneBatchedJointGroups.map((group) => (
+                <group key={`scene-joint-batch:${group.color}`}>
                     <InstancedJointGroup
                         joints={group.joints}
                         color={group.color}
@@ -4271,25 +3928,74 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         onJointPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                     />
                 </group>
-            ))}
-            {!simpleRender && sceneBatchedTrunkRootGroups.map((group) => (
-                <group key={`scene-trunk-root-batch:${group.modelId ?? 'none'}:${group.color}:${group.roots.length}`} userData={{ modelId: group.modelId ?? null }}>
-                    <InstancedRootsGroup
-                        roots={group.roots}
-                        color={group.color}
-                        transparent={ghostTransparent}
-                        opacity={ghostOpacityClamped}
-                        onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
-                        onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
-                        onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                    />
-                </group>
-            ))}
+            )))}
+            {/*
+              The joint drag's own geometry, mounted beside the scene joint batch
+              so the transparent sort order is unchanged. It draws nothing
+              without a live gesture (its own store subscription decides), never
+              enters the pick clone, and its instances are written per frame by
+              `writeJointDragFrame` — no React commit per frame.
 
-            {!simpleRender && sceneBatchedKickstandRootGroups.map((group) => (
-                <group key={`scene-kickstand-root-batch:${group.modelId ?? 'none'}:${group.color}:${group.roots.length}`} userData={{ modelId: group.modelId ?? null }}>
+              No clipping planes on purpose: a joint drag only starts on a
+              selected support, and every draggable type's detail group is
+              clip-exempt (`noClipping`, always for trunk/branch and on selection
+              for the rest), so the batch has to draw unclipped to match what the
+              detail renderers show in a cross-section.
+            */}
+            {SUPPORT_INSTANCED_DRAG && !simpleRender && (
+                <InstancedJointDragBatch
+                    sharedJointBatch={sceneJointBatch}
+                    resolveColor={resolveJointDragPreviewColor}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    renderOrder={ghostRenderOrder}
+                />
+            )}
+            {/*
+              The contact-disk (tip) drag's own cone, mounted beside the joint
+              drag batch so the transparent sort order is unchanged. It draws
+              nothing without a live gesture (its own store subscription
+              decides), never enters the pick clone, and its one instance is
+              written per hit by `writeConeDragFrame` — no React commit per
+              frame. Shafts and joints of the dragged support stay on their
+              detail renderers: a tip drag never moves them.
+
+              No clipping planes on purpose, for the same reason as the joint
+              batch: a tip drag only starts from the selected cone's HUD, and a
+              selected support's detail group is clip-exempt (`noClipping`).
+            */}
+            {SUPPORT_INSTANCED_CONE_DRAG && !simpleRender && (
+                <InstancedConeDragBatch
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    renderOrder={ghostRenderOrder}
+                />
+            )}
+            {rootSlotIndex ? (
+                // Hidden rather than dropped: the batch is built once and the
+                // crossing only flips a boolean.
+                <group visible={!hidePlateContactPrimitivesEffective}>
+                <InstancedRootBatch
+                    index={rootSlotIndex}
+                    hoveredSupportId={isInteractable ? hoveredSupportIdForVisual : null}
+                    marqueeSupportIds={additionalMarqueeHoveredSupportIds}
+                    clippingPlanes={clippingPlanes}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    renderOrder={ghostRenderOrder}
+                    onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
+                    onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
+                    onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+                </group>
+            ) : Object.entries(sceneBatchedRootGroupsByType).flatMap(([typeId, groups]) => groups.map((group) => (
+                // Hidden rather than dropped: rebuilding the root batches when
+                // the camera crosses the plate cost a full support rebuild.
+                <group key={`scene-${typeId}-root-batch:${group.color}`} visible={!hidePlateContactPrimitivesEffective}>
                     <InstancedRootsGroup
                         roots={group.roots}
+                        diskOnly={simpleRender}
+                        discColor={discsOnly ? NAVIGATION_CONTACT_COLOR : undefined}
                         color={group.color}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
@@ -4297,12 +4003,33 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
                         onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                     />
+                    {discsOnly && (
+                        <SimpleShaftLines
+                            shafts={group.roots.map(rootNavigationSpan)}
+                            color={group.color}
+                        />
+                    )}
                 </group>
-            ))}
-            {sceneBatchedContactConeGroups.map((group) => (
-                <group key={`scene-cone-batch:${group.modelId ?? 'none'}:${group.color}:${group.cones.length}`} userData={{ modelId: group.modelId ?? null }}>
+            )))}
+            {coneSlotIndex ? (
+                <InstancedContactConeBatch
+                    index={coneSlotIndex}
+                    hoveredSupportId={hoveredSupportConeSet?.supportId ?? null}
+                    marqueeSupportIds={additionalMarqueeHoveredSupportIds}
+                    clippingPlanes={clippingPlanes}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    renderOrder={ghostRenderOrder}
+                    onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
+                    onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
+                    onConePointerOut={isPointerInteractable ? handleSceneBatchedConePointerOut : undefined}
+                />
+            ) : sceneBatchedContactConeGroups.map((group) => (
+                <group key={`scene-cone-batch:${group.color}:${discsOnly ? 'discs' : 'full'}`}>
                     <InstancedContactConeGroup
                         cones={group.cones}
+                        discsOnly={discsOnly}
+                        discColor={discsOnly ? NAVIGATION_CONTACT_COLOR : undefined}
                         color={group.color}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
@@ -4310,6 +4037,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
                         onConePointerOut={isPointerInteractable ? handleSceneBatchedConePointerOut : undefined}
                     />
+                    {discsOnly && (
+                        // The cone body the group leaves out, as the axis it
+                        // occupies: socket to contact, so it continues the
+                        // shaft's line instead of stopping short of it.
+                        <SimpleShaftLines
+                            shafts={group.cones.map(coneAxisSpan)}
+                            color={group.color}
+                        />
+                    )}
                 </group>
             ))}
 
@@ -4381,23 +4117,23 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         <InstancedJointGroup
                             joints={batch.joints}
                             color={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? '#00ff00'
                                     : batch.color
                             }
                             emissive={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? '#00ff00'
                                     : batch.color
                             }
                             emissiveIntensity={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? 0.5
                                     : 0.08
                             }
                             transparent
                             opacity={
-                                batch.id === 'placement-preview:leaf' && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
+                                batch.id === LEAF_PREVIEW_BATCH_ID && (sproutParentingLockHeld || leafStage === 'awaitingSproutTip')
                                     ? 0.70
                                     : batch.opacity
                             }
@@ -4459,7 +4195,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!simpleRender && hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
+            {!SUPPORT_INSTANCED_JOINTS && !debugSimple && hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
                 <InstancedJointGroup
                     key={`scene-joint-hover-overlay:${hoveredSupportJointSet.supportId}:${hoveredSupportOverlayJoints.length}`}
                     joints={hoveredSupportOverlayJoints}
@@ -4476,7 +4212,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!simpleRender && hoveredSupportOverlayRoots.length > 0 && (
+            {!debugSimple && hoveredSupportOverlayRoots.length > 0 && (
                 <InstancedRootsGroup
                     key={`scene-root-hover-overlay:${hoveredSupportOverlayRoots.map((root) => root.supportId ?? root.id).join(':')}:${hoveredSupportOverlayRoots.length}`}
                     roots={hoveredSupportOverlayRoots}
@@ -4522,7 +4258,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!simpleRender && marqueeHoveredOverlayJoints.length > 0 && (
+            {!SUPPORT_INSTANCED_JOINTS && !debugSimple && marqueeHoveredOverlayJoints.length > 0 && (
                 <InstancedJointGroup
                     key={`scene-marquee-overlay-joints:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayJoints.length}`}
                     joints={marqueeHoveredOverlayJoints}
@@ -4539,7 +4275,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {!simpleRender && marqueeHoveredOverlayRoots.length > 0 && (
+            {!debugSimple && marqueeHoveredOverlayRoots.length > 0 && (
                 <InstancedRootsGroup
                     key={`scene-marquee-overlay-roots:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayRoots.length}`}
                     roots={marqueeHoveredOverlayRoots}
@@ -4554,372 +4290,45 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
-            {renderTrunkList.map(trunk => {
-                if (!isModelVisible(trunk.modelId, trunk.id)) return null;
-                const root = state.roots[trunk.rootId];
-                if (!root) return null;
 
-                const effectiveSelected = selectedTrunkIds.has(trunk.id);
-                const renderDetailedTrunk = effectiveSelected && !simpleRender;
-                if (!renderDetailedTrunk) return null;
+            {/*
+              Every unselected support's straight and tapered shafts, one draw
+              per shape, plus the merged curve tubes. Mounted once for the whole
+              scene; the per-type loop below then only runs detail renderers in
+              Support mode.
+            */}
+            {shaftSlotIndex && (
+                <InstancedShaftBatch
+                    index={shaftSlotIndex}
+                    hoveredSupportId={hoveredSupportShaftSet?.supportId ?? null}
+                    marqueeSupportIds={additionalMarqueeHoveredSupportIds}
+                    clippingPlanes={clippingPlanes}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    radialSegments={sceneBatchedShaftRadialSegments}
+                    onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            )}
 
-                const isTrunkHovered = hoveredSupportIdForVisual === trunk.id
-                    || marqueeHoveredSupportIdSet.has(trunk.id);
-                const deferTrunkInteractionToSceneBatch = !effectiveSelected;
-
+            {/*
+              The per-type detail and batched-shaft passes, in registry order.
+              A type that addresses its shaft as a selectable segment (brace)
+              batches its own set -- a curve, drawn only in the detailed pass;
+              every other type batches plainly or not at all.
+            */}
+            {SUPPORT_TYPES.map((descriptor) => {
+                const ownBatchedSet = getSupportTypeDescriptor(descriptor.id).segmentSelectionPrefix;
                 return (
-                    // noClipping: this trunk is actively selected/edited â€” exempt it
-                    // from cross-section clipping so it always renders fully visible.
-                    <group key={trunk.id} userData={{ noClipping: true }}>
-                    <TrunkRenderer
-                        key={trunk.id}
-                        trunk={trunk}
-                        root={root}
-                        isSelected={effectiveSelected}
-                        selectedId={effectiveSelected ? selectedId : null}
-                        dimNonSelected={dimNonSelected}
-                        isHovered={isTrunkHovered}
-                        baseColor={originColorFor(trunk.id) ?? resolveBaseColor(trunk.modelId)}
-                        suppressHover={suppressHover}
-                        isInteractable={isInteractable}
-                        deferStraightShaftsToSceneBatch={!effectiveSelected}
-                        deferInteractionToSceneBatch={deferTrunkInteractionToSceneBatch}
-                        deferRootsToSceneBatch={!effectiveSelected}
-                        deferContactConesToSceneBatch={!effectiveSelected && !!trunk.contactCone}
-                        hidePlateContactPrimitives={hidePlateContactPrimitivesEffective}
-                    />
-                    </group>
-                );
-            })}
-
-            {/* Render Branches */}
-            {sceneBatchedBranchShaftGroups.map((group) => (
-                <group key={`scene-branch-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
-                    {simpleRender ? (
-                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
-                    ) : (
-                        <InstancedShaftGroup
-                            shafts={group.shafts}
-                            color={group.color}
-                            transparent={ghostTransparent}
-                            opacity={ghostOpacityClamped}
-                            radialSegments={sceneBatchedShaftRadialSegments}
-                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
-                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                        />
-                    )}
-                </group>
-            ))}
-
-            {renderBranchList.map(branch => {
-                if (!isModelVisible(branch.modelId, branch.id)) return null;
-                const knot = renderKnotsById[branch.parentKnotId];
-                if (!knot) return null;
-                const effectiveSelected = selectedBranchIds.has(branch.id);
-                const renderDetailedBranch = effectiveSelected && !simpleRender;
-                if (!renderDetailedBranch) return null;
-
-                const isBranchHovered = hoveredSupportIdForVisual === branch.id
-                    || marqueeHoveredSupportIdSet.has(branch.id);
-                const deferBranchInteractionToSceneBatch = !effectiveSelected;
-                const showKnots = simpleRender ? false : (!hideUnselectedKnots || effectiveSelected);
-
-                return (
-                    <group key={branch.id} userData={{ noClipping: true }}>
-                    <BranchRenderer
-                        key={branch.id}
-                        branch={branch}
-                        parentKnot={knot}
-                        isSelected={effectiveSelected}
-                        selectedId={effectiveSelected ? selectedId : null}
-                        dimNonSelected={dimNonSelected}
-                        isHovered={isBranchHovered}
-                        baseColor={originColorFor(branch.id) ?? resolveBaseColor(branch.modelId)}
-                        showKnots={showKnots}
-                        suppressHover={suppressHover}
-                        isInteractable={isInteractable}
-                        deferStraightShaftsToSceneBatch={!effectiveSelected}
-                        deferInteractionToSceneBatch={deferBranchInteractionToSceneBatch}
-                        deferContactConesToSceneBatch={!effectiveSelected && !!branch.contactCone}
-                    />
-                    </group>
-                );
-            })}
-
-            {/* Render Leaves */}
-            {renderLeafList.map(leaf => {
-                if (!isModelVisible(leaf.modelId, leaf.id)) return null;
-                const knot = renderKnotsById[leaf.parentKnotId];
-                if (!knot) return null;
-
-                const effectiveSelected = selectedLeafIds.has(leaf.id);
-                // Only the selected leaf mounts LeafRenderer. Unselected
-                // leaves are fully scene-batched: cones via
-                // deferContactConesToSceneBatch, base knots via
-                // leafJointsBySupport → sceneBatchedJointGroups (the junction
-                // ball stays visible without a per-leaf KnotRenderer).
-                if (!effectiveSelected) return null;
-                const showKnots = !simpleRender;
-
-                return (
-                    <group key={leaf.id} userData={{ noClipping: true }}>
-                    <LeafRenderer
-                        key={leaf.id}
-                        leaf={leaf}
-                        parentKnot={knot}
-                        selectedId={selectedId}
-                        isSelected={effectiveSelected}
-                        dimNonSelected={dimNonSelected}
-                        baseColor={originColorFor(leaf.id) ?? resolveBaseColor(leaf.modelId)}
-                        showKnots={showKnots}
-                        suppressHover={suppressHover}
-                        isInteractable={isInteractable}
-                        deferContactConesToSceneBatch={!effectiveSelected && !!leaf.contactCone}
-                    />
-                    </group>
-                );
-            })}
-
-            {/* Render Twigs.
-             *
-             * Unlike Trunks/Branches, twigs always mount TwigRenderer (even
-             * when scene-batched), because the contact disks and joints have
-             * no scene-batched equivalent and would otherwise vanish for
-             * unselected twigs. TwigRenderer defers its shafts to the
-             * scene batch via deferStraightShaftsToSceneBatch.
-             */}
-            {renderTwigList.map(twig => {
-                if (!isModelVisible(twig.modelId, twig.id)) return null;
-                const effectiveSelected = selectedTwigIds.has(twig.id);
-                const isTwigBatchable = twigShaftsBySupport.has(twig.id);
-
-                const isTwigHovered = hoveredSupportIdForVisual === twig.id
-                    || marqueeHoveredSupportIdSet.has(twig.id);
-                const deferTwigInteractionToSceneBatch = !effectiveSelected && isTwigBatchable;
-
-                return (
-                    <group key={twig.id} userData={{ noClipping: effectiveSelected }}>
-                    <TwigRenderer
-                        key={twig.id}
-                        twig={twig}
-                        isSelected={effectiveSelected}
-                        selectedId={effectiveSelected ? selectedId : null}
-                        dimNonSelected={dimNonSelected}
-                        isHovered={isTwigHovered}
-                        baseColor={resolveBaseColor(twig.modelId)}
-                        suppressHover={suppressHover}
-                        isInteractable={isInteractable}
-                        deferStraightShaftsToSceneBatch={!effectiveSelected && isTwigBatchable}
-                        deferInteractionToSceneBatch={deferTwigInteractionToSceneBatch}
-                    />
-                    </group>
-                );
-            })}
-
-            {sceneBatchedTwigShaftGroups.map((group) => (
-                <group key={`scene-twig-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
-                    {simpleRender ? (
-                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
-                    ) : (
-                        <InstancedShaftGroup
-                            shafts={group.shafts}
-                            color={group.color}
-                            transparent={ghostTransparent}
-                            opacity={ghostOpacityClamped}
-                            radialSegments={sceneBatchedShaftRadialSegments}
-                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
-                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                        />
-                    )}
-                </group>
-            ))}
-            {/* Render Sticks */}
-            {renderStickList.map(stick => {
-                if (!isModelVisible(stick.modelId, stick.id)) return null;
-                const effectiveSelected = selectedStickIds.has(stick.id);
-                const isStickBatchable = stickShaftsBySupport.has(stick.id);
-                const renderDetailedStick = (effectiveSelected || !isStickBatchable) && !simpleRender;
-                if (!renderDetailedStick) return null;
-
-                const isStickHovered = hoveredSupportIdForVisual === stick.id
-                    || marqueeHoveredSupportIdSet.has(stick.id);
-                const deferStickInteractionToSceneBatch = !effectiveSelected && isStickBatchable;
-
-                return (
-                    <group key={stick.id} userData={{ noClipping: effectiveSelected }}>
-                    <StickRenderer
-                        key={stick.id}
-                        stick={stick}
-                        isSelected={effectiveSelected}
-                        selectedId={effectiveSelected ? selectedId : null}
-                        dimNonSelected={dimNonSelected}
-                        isHovered={isStickHovered}
-                        baseColor={resolveBaseColor(stick.modelId)}
-                        suppressHover={suppressHover}
-                        isInteractable={isInteractable}
-                        deferStraightShaftsToSceneBatch={!effectiveSelected && isStickBatchable}
-                        deferInteractionToSceneBatch={deferStickInteractionToSceneBatch}
-                        deferContactConesToSceneBatch={!effectiveSelected}
-                    />
-                    </group>
-                );
-            })}
-
-            {sceneBatchedStickShaftGroups.map((group) => (
-                <group key={`scene-stick-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
-                    {simpleRender ? (
-                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
-                    ) : (
-                        <InstancedShaftGroup
-                            shafts={group.shafts}
-                            color={group.color}
-                            transparent={ghostTransparent}
-                            opacity={ghostOpacityClamped}
-                            radialSegments={sceneBatchedShaftRadialSegments}
-                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
-                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                        />
-                    )}
-                </group>
-            ))}
-
-            {/* Render Braces */}
-            {!simpleRender && sceneBatchedBraceShaftGroups.map((group) => (
-                <group key={`scene-brace-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
-                    <InstancedShaftGroup
-                        shafts={group.shafts}
-                        color={group.color}
-                        transparent={ghostTransparent}
-                        opacity={ghostOpacityClamped}
-                        radialSegments={sceneBatchedShaftRadialSegments}
-                        onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
-                        onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                        onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                    />
-                </group>
-            ))}
-
-            {!simpleRender && renderBraceList.map(brace => {
-                if (!isModelVisible(brace.modelId, brace.id)) return null;
-                const effectiveSelected = selectedBraceIds.has(brace.id);
-                const isBraceBatchable = braceShaftsBySupport.has(brace.id);
-                const isBraceGhosted = ghostedBraceIdSet.has(brace.id);
-                const renderDetailedBrace = effectiveSelected || !isBraceBatchable || isBraceGhosted;
-                if (!renderDetailedBrace) return null;
-
-                const isBraceHovered = hoveredSupportIdForVisual === brace.id
-                    || marqueeHoveredSupportIdSet.has(brace.id);
-                const deferBraceInteractionToSceneBatch = !effectiveSelected && isBraceBatchable;
-                const showKnots = !hideUnselectedKnots || effectiveSelected;
-                const braceStartKnot = braceRenderKnotsById[brace.startKnotId];
-                const braceEndKnot = braceRenderKnotsById[brace.endKnotId];
-                if (!braceStartKnot || !braceEndKnot) return null;
-
-                return (
-                    <group key={brace.id} userData={{ noClipping: effectiveSelected }}>
-                        <BraceRenderer
-                            key={brace.id}
-                            brace={brace}
-                            startKnot={braceStartKnot}
-                            endKnot={braceEndKnot}
-                            isSelected={effectiveSelected}
-                            ghosted={isBraceGhosted}
-                            ghostOpacity={ghostOpacityClamped}
-                            dimNonSelected={dimNonSelected}
-                            baseColor={resolveBaseColor(brace.modelId)}
-                            showKnots={showKnots}
-                            suppressHover={suppressHover || isBraceGhosted}
-                            isHovered={isBraceHovered}
-                            isInteractable={isInteractable && !isBraceGhosted}
-                            deferStraightShaftToSceneBatch={!effectiveSelected && isBraceBatchable && !isBraceGhosted}
-                            deferInteractionToSceneBatch={deferBraceInteractionToSceneBatch || isBraceGhosted}
-                            debugSectionColors={settings.autoBracing.debugSectionColorsEnabled}
-                        />
-                    </group>
-                );
-            })}
-            {/* Render Kickstands */}
-            {renderKickstandList.map((kickstand) => {
-                if (!isModelVisible(kickstand.modelId, kickstand.id)) return null;
-                const root = kickstandState.roots[kickstand.rootId];
-                const hostKnot = renderKickstandKnotsById[kickstand.hostKnotId];
-                if (!root || !hostKnot) return null;
-
-                const effectiveSelected = selectedKickstandIds.has(kickstand.id);
-                const isKickstandBatchable = kickstandShaftsBySupport.has(kickstand.id);
-                const renderDetailedKickstand = (effectiveSelected || !isKickstandBatchable) && !simpleRender;
-                if (!renderDetailedKickstand) return null;
-
-                const isKickstandHovered = hoveredSupportIdForVisual === kickstand.id
-                    || marqueeHoveredSupportIdSet.has(kickstand.id);
-                const deferKickstandInteractionToSceneBatch = !effectiveSelected && isKickstandBatchable;
-                const showKnot = simpleRender ? false : (!hideUnselectedKnots || effectiveSelected);
-
-                return (
-                    <group key={kickstand.id} userData={{ noClipping: effectiveSelected }}>
-                    <KickstandRenderer
-                        key={kickstand.id}
-                        kickstand={kickstand}
-                        root={root}
-                        hostKnot={hostKnot}
-                        isSelected={effectiveSelected}
-                        selectedId={effectiveSelected ? selectedId : null}
-                        dimNonSelected={dimNonSelected}
-                        isHovered={isKickstandHovered}
-                        baseColor={resolveBaseColor(kickstand.modelId)}
-                        showKnot={showKnot}
-                        suppressHover={suppressHover}
-                        isInteractable={isInteractable}
-                        deferStraightShaftsToSceneBatch={!effectiveSelected && isKickstandBatchable}
-                        deferInteractionToSceneBatch={deferKickstandInteractionToSceneBatch}
-                        hidePlateContactPrimitives={hidePlateContactPrimitivesEffective}
-                    />
-                    </group>
-                );
-            })}
-
-            {sceneBatchedKickstandShaftGroups.map((group) => (
-                <group key={`scene-kickstand-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
-                    {simpleRender ? (
-                        <SimpleShaftLines shafts={group.shafts} color={group.color} />
-                    ) : (
-                        <InstancedShaftGroup
-                            shafts={group.shafts}
-                            color={group.color}
-                            transparent={ghostTransparent}
-                            opacity={ghostOpacityClamped}
-                            radialSegments={sceneBatchedShaftRadialSegments}
-                            onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
-                            onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                            onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                        />
-                    )}
-                </group>
-            ))}
-            {/* Render Anchors */}
-            {renderAnchorList.map(anchor => {
-                if (!isModelVisible(anchor.modelId, anchor.id)) return null;
-                const effectiveSelected = selectedAnchorIds.has(anchor.id);
-                const isAnchorHovered = hoveredSupportIdForVisual === anchor.id
-                    || marqueeHoveredSupportIdSet.has(anchor.id);
-
-                return (
-                    <group key={anchor.id}>
-                    <AnchorRenderer
-                        key={anchor.id}
-                        anchor={anchor}
-                        isSelected={effectiveSelected}
-                        selectedId={effectiveSelected ? selectedId : null}
-                        dimNonSelected={dimNonSelected}
-                        isHovered={isAnchorHovered}
-                        baseColor={originColorFor(anchor.id) ?? resolveBaseColor(anchor.modelId)}
-                        suppressHover={suppressHover}
-                        isInteractable={isInteractable}
-                    />
-                    </group>
+                    <React.Fragment key={descriptor.id}>
+                        {renderSceneBatchedShafts(
+                            descriptor.id,
+                            ownBatchedSet ? sceneBatchedBraceShaftGroups : sceneBatchedShaftsOf(descriptor.id),
+                            ownBatchedSet ? { detailedOnly: true } : undefined,
+                        )}
+                        {renderDetailFor(descriptor.id)}
+                    </React.Fragment>
                 );
             })}
 
@@ -4930,12 +4339,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
               - If needed later, this block can be safely commented out or removed.
             */}
             <VoronoiSeedDebugMarkers
-                enabled={!!settings.autoBracing.debugVoronoiSeedsEnabled}
+                enabled={debugVoronoiSeeds}
                 ghostRenderOrder={ghostRenderOrder}
                 isModelVisible={isModelVisible}
                 applyDropToVec3Like={applyDropToVec3Like}
             />
         </group>
+        </DraggedSupportContext.Provider>
     );
 });
 

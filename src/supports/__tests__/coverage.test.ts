@@ -7,6 +7,7 @@ import {
     computeRegionCoverage,
     findUncoveredClusters,
     buildGapFillCandidates,
+    coverageRadiusForArea,
     TIP_COVERAGE_RADIUS_MM,
     REGION_COVERAGE_TARGET,
 } from '../autoSupport/coverage';
@@ -103,4 +104,40 @@ test('fully covered region gets no gap-fill candidates', () => {
 
 test('coverage target constant is below 1 so edge voxels do not force infinite fill', () => {
     assert.ok(REGION_COVERAGE_TARGET > 0 && REGION_COVERAGE_TARGET < 1);
+});
+
+test('tip influence grows with height above the tip', () => {
+    const region = rectRegion('o0', -10, 10, -10, 10);
+    // Same center tip at the region plane: 3mm disc.
+    const flat = computeRegionCoverage(region, [{ x: 0, y: 0, z: 10 }]);
+    // Same tip 15mm below the region: 5mm disc covers ~2.8× the area.
+    const grown = computeRegionCoverage(region, [{ x: 0, y: 0, z: -5 }]);
+    assert.ok(grown > flat * 2, `grown coverage ${grown} > 2× flat ${flat}`);
+    const expected = (Math.PI * 25) / 400;
+    assert.ok(Math.abs(grown - expected) < 0.02, `grown coverage ${grown} ≈ ${expected}`);
+});
+
+test('coverageRadiusForArea shrinks discs on large regions', () => {
+    assert.equal(coverageRadiusForArea(0), TIP_COVERAGE_RADIUS_MM, 'empty area keeps base');
+    assert.equal(coverageRadiusForArea(8), TIP_COVERAGE_RADIUS_MM, 'cell reference keeps base');
+    assert.equal(coverageRadiusForArea(32), TIP_COVERAGE_RADIUS_MM / 2, '32mm² halves the radius');
+    assert.equal(coverageRadiusForArea(400), TIP_COVERAGE_RADIUS_MM / 2, 'floored at half radius');
+});
+test('gap-fill packs large flats denser than small regions', () => {
+    // 4mm tip grid over a 20×20 footprint: at the small-region radius
+    // (3mm) the discs overlap to full coverage → no fills; at the
+    // large-region radius (1.5mm) only ~44% is covered → fills emitted.
+    const tips = [];
+    for (let x = -10; x <= 10; x += 4) {
+        for (let y = -10; y <= 10; y += 4) {
+            tips.push({ x, y, z: 10 });
+        }
+    }
+    const settings = createDefaultAutoSupportSettings();
+    const smallGaps = buildGapFillCandidates(
+        [{ ...rectRegion('small', -10, 10, -10, 10), areaMm2: 4 }], settings, tips);
+    const bigGaps = buildGapFillCandidates(
+        [{ ...rectRegion('big', -10, 10, -10, 10), areaMm2: 400 }], settings, tips);
+    assert.equal(smallGaps.length, 0, 'small region fully covered at 3mm discs');
+    assert.ok(bigGaps.length > 0, 'large flat needs fills at 1.5mm discs');
 });

@@ -26,7 +26,6 @@ export function CameraFocusController({ selectedIslandId, islandMarkers, onClear
 
   const preFocusPositionRef = useRef<THREE.Vector3 | null>(null);
   const preFocusTargetRef = useRef<THREE.Vector3 | null>(null);
-  const preFocusZoomRef = useRef<number | null>(null);
   const wasClearedByManualInteractionRef = useRef(false);
 
   const hasMarkers = islandMarkers.length > 0;
@@ -43,7 +42,6 @@ export function CameraFocusController({ selectedIslandId, islandMarkers, onClear
           animatingRef,
           preFocusPositionRef,
           preFocusTargetRef,
-          preFocusZoomRef,
           wasManual: wasClearedByManualInteractionRef.current,
         });
         wasClearedByManualInteractionRef.current = false;
@@ -67,7 +65,6 @@ export function CameraFocusController({ selectedIslandId, islandMarkers, onClear
       animatingRef,
       preFocusPositionRef,
       preFocusTargetRef,
-      preFocusZoomRef,
     });
   }, [selectedIslandId, hasMarkers, camera, controls, scene]);
 

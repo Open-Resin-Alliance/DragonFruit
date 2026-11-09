@@ -1,15 +1,19 @@
 /**
- * VOXL V2 Binary Container Codec
+ * VOXL V3 Binary Container Codec
  *
  * Binary chunk-based container that eliminates base64 overhead for mesh data
- * and enables independent compression per section.
+ * and enables independent compression per section. This module is the current
+ * (V3-generation) writer; it reads both the V2 and V3 compat floors, and the
+ * `version` field it writes is the floor, not the generation — see the
+ * `VOXL_V2`/`VOXL_V3` doc block below.
  *
  * Layout:
  *   [16-byte header] [chunk directory] [chunk data…]
  *
  * Header (16 bytes):
  *   0..3   magic     "VOXL" (ASCII: 0x56 0x4F 0x58 0x4C)
- *   4..5   version   uint16 LE (2)
+ *   4..5   version   uint16 LE (2; 3 when MESH chunks are shared — the
+ *                     compat floor, i.e. the minimum reader generation)
  *   6..7   flags     uint16 LE (reserved, 0)
  *   8..11  count     uint32 LE (number of chunks)
  *   12..15 reserved  uint32 LE (0)
@@ -26,6 +30,8 @@
  */
 
 import { unzlibSync, zlib as zlibAsync } from 'fflate';
+import { runWithConcurrency } from '@/utils/runWithConcurrency';
+import { logToNativeFile } from '@/utils/nativeLog';
 import {
   VOXL_MAGIC,
   type BuildVoxlDocumentInput,
@@ -34,13 +40,13 @@ import {
   type VoxlMeta,
   type VoxlModelEntry,
   type VoxlSceneState,
-  type VoxlCompressionRef,
-  type VoxlCompressedDocumentEnvelopeV1,
   type PrecompressedChunk,
+  type VoxlMeshRange,
 } from './types';
 import type { DragonfruitImportFormat } from '@/supports/types';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import { base64ToBytes, bytesToBase64 } from '@/utils/base64';
+import { loadTauriCore } from '@/utils/tauriMeshBridge';
 import { sha256Hex } from './meshChunkStore';
 import type { VoxlChunkCache, CachedChunkPayload } from './voxlChunkCache';
 
@@ -57,23 +63,39 @@ const compressAsync = (data: Uint8Array, level: ZlibCompressionLevel): Promise<U
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-export const VOXL_V2 = 2;
-export const VOXL_V2_SEMANTIC_REVISION = 2.2;
 /**
- * Semantic revision reported for a binary V2 file that has NO modifier-snapshot
- * chunks — either a genuinely pre-2.2 ("2.1") file with inline base64, or a
- * 2.2-capable write of a scene that had no snapshots to chunk (byte-identical).
+ * The container `version` header field is the *compat floor* — the minimum
+ * reader generation that can interpret the file — not the writer's generation.
+ * A generation-N reader understands everything at or below N.
+ *
+ * - `VOXL_V2` — a V2-generation reader suffices (no shared MESH chunks).
+ * - `VOXL_V3` — a V3-generation reader is required: identical-geometry MESH
+ *   dedup removed at least one chunk, so duplicate models point at an owner
+ *   chunk via `meshRef.chunkIndex`. A V2 reader maps MESH chunks 1:1 to model
+ *   index and would silently drop the duplicates, so the floor is raised.
+ *   All-unique scenes keep writing `VOXL_V2` and stay old-readable.
+ *
+ * The authoring revision below is a separate axis; see
+ * `docs/dev/voxl-format-spec.md`.
+ */
+export const VOXL_V2 = 2;
+export const VOXL_V3 = 3;
+
+/**
+ * Authoring revision at which modifier position snapshots moved out of the
+ * `MODL` JSON into raw `HSRC`/`CAVT`/`PSRC` chunks. Additive — older readers
+ * ignore unknown chunks and still open the file without the snapshots — so it
+ * did not raise the container floor. Reported as `ParsedVoxlResult.sourceVersion`
+ * when a file actually carries those chunks.
+ */
+export const VOXL_V3_SEMANTIC_REVISION = 3.1;
+/**
+ * Revision reported for a binary file with NO modifier-snapshot chunks —
+ * either a genuinely older ("2.1") file with inline base64, or a current write
+ * of a scene that had no snapshots to chunk (byte-identical to that layout).
  * Save-time format preservation treats such files as "inline".
  */
 export const VOXL_V2_INLINE_REVISION = 2.1;
-/**
- * Container version written when identical-geometry MESH chunk dedup removed
- * at least one chunk (duplicate models share one chunk via meshRef.chunkIndex).
- * Bumped from 2 so older readers — which map MESH chunks 1:1 to model index —
- * fail the strict version check cleanly instead of silently dropping the
- * duplicate models. All-unique scenes keep writing V2 and stay old-readable.
- */
-export const VOXL_V3 = 3;
 
 const HEADER_SIZE = 16;
 const DIR_ENTRY_SIZE = 20;
@@ -92,13 +114,15 @@ const CHUNK_MESH = 'MESH';
 export const CHUNK_ORIG = 'ORIG';
 const CHUNK_SUPP = 'SUPP';
 const CHUNK_EXTD = 'EXTD';
-// VOXL 2.2 modifier-snapshot chunks: the large Float32 position snapshots that
+// VOXL 3.1 modifier-snapshot chunks: the large Float32 position snapshots that
 // hollowing / hole-punch bakes into meshModifiers, moved OUT of the MODL JSON
 // (where they were base64 strings that summed past V8's ~512 MiB single-string
 // ceiling) and into raw-bytes chunks indexed by owning model, like MESH.
 const CHUNK_HSRC = 'HSRC'; // hollowing.sourcePositions (raw Float32 bytes)
 const CHUNK_CAVT = 'CAVT'; // hollowing.cavityPositions (raw Float32 bytes)
 const CHUNK_PSRC = 'PSRC'; // holePunchSourcePositions  (raw Float32 bytes)
+const CHUNK_BODY = 'BODY'; // split 3MF bodies, raw positions + indices (V3.4)
+const CHUNK_MATP = 'MATP'; // material profiles the scene references (V3.4)
 
 // ─── Internal Types ───────────────────────────────────────────────────────────
 
@@ -279,9 +303,9 @@ export interface VoxlSerializeOptions {
   originalMeshBytes?: Map<number, Uint8Array>;
   embedOriginalMesh?: boolean;
   /**
-   * VOXL 2.2 modifier-snapshot chunking. `true` (default) moves the large
+   * VOXL 3.1 modifier-snapshot chunking. `true` (default) moves the large
    * hollow/hole position snapshots out of MODL into HSRC/CAVT/PSRC chunks.
-   * `false` keeps them inline as base64 (the pre-2.2 = "2.1" layout), used by
+   * `false` keeps them inline as base64 (the pre-3.1 = "2.1" layout), used by
    * autosave to preserve the loaded file's format; the caller escalates to
    * `true` if the inline write throws (e.g. the MODL string ceiling). Scenes
    * without modifier snapshots serialize identically either way.
@@ -386,6 +410,88 @@ interface PreparedDocument {
  * streaming writers so they cannot drift — the byte-identity gate between them
  * is the whole point of sub-phase E.
  */
+/**
+ * `BODY` payload (V3.4): `u32 count`, then per body `u32 positionFloats`,
+ * `f32[positionFloats]`, `u32 indexCount`, `u32[indexCount]`. Positions are in
+ * the merged model's own space, which is what the renderer and slicer expect.
+ */
+function encodeBodyChunk(
+  bodies: Array<{ positions: Float32Array; index?: Uint32Array | null }>,
+  center?: { x: number; y: number; z: number },
+): Uint8Array {
+  let byteLength = 4 + 12;
+  for (const body of bodies) {
+    byteLength += 4 + body.positions.byteLength + 4 + (body.index?.byteLength ?? 0);
+  }
+  const out = new Uint8Array(byteLength);
+  const view = new DataView(out.buffer);
+  let offset = 0;
+  view.setUint32(offset, bodies.length, true);
+  offset += 4;
+  view.setFloat32(offset, center?.x ?? 0, true);
+  view.setFloat32(offset + 4, center?.y ?? 0, true);
+  view.setFloat32(offset + 8, center?.z ?? 0, true);
+  offset += 12;
+  for (const body of bodies) {
+    view.setUint32(offset, body.positions.length, true);
+    offset += 4;
+    out.set(
+      new Uint8Array(body.positions.buffer, body.positions.byteOffset, body.positions.byteLength),
+      offset,
+    );
+    offset += body.positions.byteLength;
+    const index = body.index ?? new Uint32Array(0);
+    view.setUint32(offset, index.length, true);
+    offset += 4;
+    out.set(
+      new Uint8Array(index.buffer, index.byteOffset, index.byteLength),
+      offset,
+    );
+    offset += index.byteLength;
+  }
+  return out;
+}
+
+/** Inverse of `encodeBodyChunk`: raw positions/indices per body, in file order. */
+export type DecodedVoxlBodyChunk = {
+  /** Centre of the merged mesh when the bodies were captured, in its own space. */
+  center: { x: number; y: number; z: number };
+  bodies: Array<{ positions: Float32Array; index: Uint32Array | null }>;
+};
+
+export function decodeVoxlBodyChunk(bytes: Uint8Array): DecodedVoxlBodyChunk {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+  const readU32 = () => {
+    const value = view.getUint32(offset, true);
+    offset += 4;
+    return value;
+  };
+  const out: Array<{ positions: Float32Array; index: Uint32Array | null }> = [];
+  const center = { x: 0, y: 0, z: 0 };
+  if (bytes.byteLength < 16) return { center, bodies: out };
+  const count = readU32();
+  center.x = view.getFloat32(offset, true);
+  center.y = view.getFloat32(offset + 4, true);
+  center.z = view.getFloat32(offset + 8, true);
+  offset += 12;
+  for (let i = 0; i < count; i += 1) {
+    const positionFloats = readU32();
+    const positions = new Float32Array(positionFloats);
+    new Uint8Array(positions.buffer).set(bytes.subarray(offset, offset + positionFloats * 4));
+    offset += positionFloats * 4;
+    const indexCount = readU32();
+    let index: Uint32Array | null = null;
+    if (indexCount > 0) {
+      index = new Uint32Array(indexCount);
+      new Uint8Array(index.buffer).set(bytes.subarray(offset, offset + indexCount * 4));
+    }
+    offset += indexCount * 4;
+    out.push({ positions, index });
+  }
+  return { center, bodies: out };
+}
+
 async function prepareVoxlDocumentV2(
   input: BuildVoxlDocumentInput,
   meshBytes: Map<number, Uint8Array>,
@@ -408,11 +514,19 @@ async function prepareVoxlDocumentV2(
     updatedAt: nowIso,
     units: 'mm',
     coordinateSystem: 'right-handed-z-up',
+    ...(input.meta?.printer ? { printer: input.meta.printer } : {}),
   };
 
+  const plates = input.plates;
   const scene: VoxlSceneState = {
     activeModelId: input.activeModelId,
     selectedModelIds: [...input.selectedModelIds],
+    ...(plates && plates.length > 0 ? { plates } : {}),
+    ...(input.activePlateId ? { activePlateId: input.activePlateId } : {}),
+    // One plate is still expressible as the older shorthand, so a reader that
+    // only knows `plateName` keeps showing the name. With several plates the
+    // shorthand cannot say which one it names, so it is left out.
+    ...(plates?.length === 1 && plates[0].name ? { plateName: plates[0].name } : {}),
   };
 
   // ── Identical-geometry MESH chunk dedup ───────────────────────────────
@@ -449,7 +563,7 @@ async function prepareVoxlDocumentV2(
   }
   const dedupRemovedChunks = chunkCandidateCount > dedupedChunkIndices.length;
 
-  // ── Modifier-snapshot chunks (V2.2): HSRC / CAVT / PSRC ────────────────
+  // ── Modifier-snapshot chunks (V3.1): HSRC / CAVT / PSRC ────────────────
   // The hollowing/hole-punch bake stores three full-mesh position snapshots as
   // base64 inside meshModifiers. Summed across models these blow past V8's
   // ~512 MiB single-string ceiling when JSON.stringify(models) concatenates
@@ -473,7 +587,7 @@ async function prepareVoxlDocumentV2(
   const holeSourceOwner = new Map<string, number>();
 
   // Skipped entirely when chunkModifierSnapshots is false: the base64 blobs stay
-  // inline in the MODL entries (pre-2.2 "2.1" layout) and no HSRC/CAVT/PSRC
+  // inline in the MODL entries (pre-3.1 "2.1" layout) and no HSRC/CAVT/PSRC
   // chunk is emitted. Autosave uses this to preserve an old file's format.
   for (let i = 0; chunkModifierSnapshots && i < input.models.length; i += 1) {
     const mm = input.models[i].meshModifiers;
@@ -582,15 +696,41 @@ async function prepareVoxlDocumentV2(
       // Written only when true (Ph0.1 D2): a scene with nothing stale must
       // serialize to exactly the bytes it did before the flag existed.
       ...(m.geometryStale === true ? { geometryStale: true } : {}),
+      // Written only for a model that is not on the scene's first plate, so a
+      // single-plate scene's bytes are unchanged and the first plate needs no
+      // membership field at all.
+      ...(m.plateId && plates?.[0]?.id && m.plateId !== plates[0].id ? { plateId: m.plateId } : {}),
       transform: {
         position: { x: m.transform.position.x, y: m.transform.position.y, z: m.transform.position.z },
         rotation: { x: m.transform.rotation.x, y: m.transform.rotation.y, z: m.transform.rotation.z },
         scale: { x: m.transform.scale.x, y: m.transform.scale.y, z: m.transform.scale.z },
       },
+      // Written only when true, so a scene that never used Auto-Lift keeps its bytes.
+      ...(m.autoLift === true ? { autoLift: true } : {}),
+      // Only meaningful while auto-lift is on; a manual model's restore height is
+      // its current transform.
+      ...(m.autoLift === true && typeof m.liftRestoreMm === 'number'
+        ? { liftRestoreMm: m.liftRestoreMm }
+        : {}),
       meshModifiers: strippedModifiersByModel.get(i) ?? m.meshModifiers,
       mesh: meshRef,
       isSupportGeometry: m.isSupportGeometry,
       linkGroupId: m.linkGroupId,
+      // Written only when set, so a single-material scene's bytes do not move.
+      ...(m.materialProfileId ? { materialProfileId: m.materialProfileId } : {}),
+      ...(m.materialBaseColor ? { materialBaseColor: m.materialBaseColor } : {}),
+      // V3.4 multi-body material state; written only for a model with bodies so a
+      // single-material scene's bytes do not move.
+      ...(m.bodies && m.bodies.length > 0
+        ? {
+          bodyCount: m.bodies.length,
+          ...(m.bodyMaterialProfileIds
+            ? { bodyMaterialProfileIds: m.bodyMaterialProfileIds.map((id) => id ?? null) }
+            : {}),
+          ...(m.bodyColors ? { bodyColors: m.bodyColors.map((color) => color ?? null) } : {}),
+        }
+        : {}),
+      classification: m.classification,
     };
   });
 
@@ -616,6 +756,21 @@ async function prepareVoxlDocumentV2(
   pending.push({ type: CHUNK_META, index: 0, raw: textEncoder.encode(JSON.stringify(meta)), compress: false });
   pending.push({ type: CHUNK_SCNE, index: 0, raw: textEncoder.encode(JSON.stringify(scene)), compress: false });
   pending.push({ type: CHUNK_MODL, index: 0, raw: textEncoder.encode(JSON.stringify(models)), compress: true });
+  // V3.4: one BODY chunk per model that carries split bodies, and the material
+  // profiles the scene references so their ids survive a round trip.
+  input.models.forEach((m, index) => {
+    if (m.bodies && m.bodies.length > 0) {
+      pending.push({
+        type: CHUNK_BODY,
+        index,
+        raw: encodeBodyChunk(m.bodies, m.bodyCenter),
+        compress: true,
+      });
+    }
+  });
+  if (input.materials && input.materials.length > 0) {
+    pending.push({ type: CHUNK_MATP, index: 0, raw: textEncoder.encode(JSON.stringify(input.materials)), compress: true });
+  }
 
   // One MESH chunk per UNIQUE mesh (owner index), sorted by index. Duplicates
   // reference an owner via meshRef.chunkIndex and get no chunk of their own.
@@ -645,7 +800,7 @@ async function prepareVoxlDocumentV2(
     }
   }
 
-  // V2.2 modifier-snapshot chunks (owners only; duplicates were pointer-linked
+  // V3.1 modifier-snapshot chunks (owners only; duplicates were pointer-linked
   // above). Insertion order is deterministic (models ascending, HSRC/CAVT/PSRC
   // per model), so both writers stay byte-identical. The base64 decode is
   // deferred via `rawThunk` so a cache hit (the common transform-edit case)
@@ -954,6 +1109,9 @@ export async function serializeVoxlDocumentV2Streaming(
 
 // ─── V2 Binary Reader ─────────────────────────────────────────────────────────
 
+/** Mesh chunks inflated at once while parsing (see `parseVoxlBinaryV2`). */
+const BULK_INFLATE_CONCURRENCY = 4;
+
 class LazyOriginalMeshBytesMap extends Map<string, Uint8Array> {
   private chunks: Map<string, PrecompressedChunk>;
   
@@ -993,13 +1151,66 @@ class LazyOriginalMeshBytesMap extends Map<string, Uint8Array> {
 }
 
 /**
+ * Inflate one chunk with the platform's own decompressor.
+ *
+ * `DecompressionStream`, not `fflate`'s async pool: the app's webview reports
+ * `crossOriginIsolated`, and `fflate` then waits for its workers through
+ * `SharedArrayBuffer`/`Atomics` — blocking the very main thread the pool was
+ * supposed to free. Measured at scene open, that showed up as 2.8-10 s stalls and
+ * a wedged content process. The native stream is genuinely off-thread, streams its
+ * output instead of cloning one large buffer back, and is the faster of the two
+ * besides (70 ms against 93 ms for 24 MB in Node).
+ */
+async function inflateChunk(entry: ChunkDirEntry, raw: Uint8Array): Promise<Uint8Array> {
+  const source = new ReadableStream<BufferSource>({
+    start(controller) {
+      // `BufferSource` insists on an `ArrayBuffer`-backed view, which TS's
+      // typed-array generics cannot see through a `subarray`; the bytes are the
+      // same either way.
+      controller.enqueue(raw as BufferSource);
+      controller.close();
+    },
+  });
+  const stream = source.pipeThrough<Uint8Array>(new DecompressionStream('deflate'));
+  const inflated = new Uint8Array(await new Response(stream).arrayBuffer());
+  if (inflated.byteLength !== entry.uncompressedSize) {
+    throw new Error(
+      `VOXL V2: chunk ${entry.type}[${entry.index}] size mismatch after decompression ` +
+      `(${inflated.byteLength} of ${entry.uncompressedSize} bytes).`,
+    );
+  }
+  return inflated;
+}
+
+/**
  * Parse a VOXL V2 binary container into a `ParsedVoxlResult`.
  *
  * The returned `document` uses V1 schema shape so the rest of the app can
  * consume it uniformly.  Mesh bytes for `embedded-chunk` models are provided
  * separately in `meshBytes` to avoid base64 round-trips.
+ *
+ * **The mesh chunks are inflated in parallel, off the main thread.** A referenced
+ * MESH chunk is a whole STL payload — 782 MB across a 15-model scene, compressed
+ * in the container — and inflating them one after another was 4.6 s of that
+ * scene's load, all of it before any model work started. They are independent
+ * zlib streams, so they all go to `fflate`'s pool at once and the loops below read
+ * the resolved bytes; anything not pre-listed still inflates synchronously.
  */
-export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
+export async function parseVoxlBinaryV2(
+  data: Uint8Array,
+  options: {
+    /**
+     * Leave the MESH chunks where they are and report their locations instead of
+     * inflating them (default: inflate, which is what a caller holding only the
+     * bytes needs). The native loader reads and inflates a range itself, so a scene
+     * opened from a path pays neither the 677 MB of heap nor the ~2 s of inflate
+     * this parse used to do before any model work started. The V3.1 modifier
+     * snapshots (HSRC/CAVT/PSRC) are *document* state — they are base64-encoded into
+     * the document below — so those still inflate here.
+     */
+    deferMeshChunks?: boolean;
+  } = {},
+): Promise<ParsedVoxlResult> {
   if (data.length < HEADER_SIZE) {
     throw new Error('Invalid VOXL V2 file: too small.');
   }
@@ -1048,7 +1259,13 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
 
   // ── Chunk reader helpers ──────────────────────────────────────────────
 
+  /** Chunk bytes inflated ahead of the loops, keyed `type:index`. */
+  const preinflated = new Map<string, Uint8Array>();
+  const chunkKey = (type: string, index: number) => `${type}:${index}`;
+
   function readChunk(entry: ChunkDirEntry): Uint8Array {
+    const ready = preinflated.get(chunkKey(entry.type, entry.index));
+    if (ready) return ready;
     const raw = data.subarray(entry.offset, entry.offset + entry.compressedSize);
 
     if (entry.compression === COMPRESSION_ZLIB) {
@@ -1083,10 +1300,50 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
   if (!supports) throw new Error('VOXL V2: missing SUPP chunk.');
 
   const extensions = readJsonChunk<Record<string, unknown>>(CHUNK_EXTD) ?? {};
+  // V3.4: material profiles with their ids, and one BODY payload per model that
+  // carries split bodies.
+  const materials = readJsonChunk<unknown[]>(CHUNK_MATP) ?? undefined;
+  const bodyChunks = new Map<string, Uint8Array>();
+  for (const entry of entries) {
+    if (entry.type !== CHUNK_BODY) continue;
+    const model = models[entry.index];
+    if (model) bodyChunks.set(model.id, readChunk(entry));
+  }
+
+  // ── Inflate the bulk chunks, in parallel ──────────────────────────────
+  // The JSON above is small and stays synchronous. Everything below it is mesh
+  // data: one STL per MESH chunk, plus the V3.1 position snapshots. Scheduling
+  // them together is what turns a serial 4.6 s into the pool's throughput; ORIG
+  // chunks stay packed on purpose (they are decompressed on demand, if at all).
+  const deferMeshChunks = options.deferMeshChunks === true;
+  const bulkChunks = entries.filter(
+    (entry) => entry.compression === COMPRESSION_ZLIB
+      && ((entry.type === CHUNK_MESH && !deferMeshChunks)
+        || entry.type === CHUNK_HSRC
+        || entry.type === CHUNK_CAVT
+        || entry.type === CHUNK_PSRC),
+  );
+  if (bulkChunks.length > 0) {
+    const started = performance.now();
+    // Four at a time: the chunks are 20-48 MB compressed and up to 129 MB
+    // inflated, so a whole scene in flight at once peaks at most of a gigabyte
+    // for no extra throughput.
+    await runWithConcurrency(bulkChunks, BULK_INFLATE_CONCURRENCY, async (entry) => {
+      const raw = data.subarray(entry.offset, entry.offset + entry.compressedSize);
+      preinflated.set(chunkKey(entry.type, entry.index), await inflateChunk(entry, raw));
+    });
+    const bulkBytes = bulkChunks.reduce((sum, entry) => sum + entry.uncompressedSize, 0);
+    const timing =
+      `[voxl] inflated ${bulkChunks.length} bulk chunks (${(bulkBytes / 1_000_000).toFixed(0)} MB) ` +
+      `in ${(performance.now() - started).toFixed(0)}ms`;
+    console.log(timing);
+    void logToNativeFile('info', timing);
+  }
 
   // ── Resolve MESH chunks ───────────────────────────────────────────────
 
   const meshBytesMap = new Map<string, Uint8Array>();
+  const meshRangesMap = new Map<string, VoxlMeshRange>();
   // Decompress each MESH chunk at most once even when many models share it
   // (dedup) — the shared bytes are handed to every referencing model.
   const chunkBytesByIndex = new Map<number, Uint8Array>();
@@ -1097,17 +1354,26 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
       // V3 duplicates point at an owner chunk via chunkIndex; V2/legacy files
       // map 1:1, so a missing chunkIndex means "my own model index".
       const chunkIdx = typeof model.mesh.chunkIndex === 'number' ? model.mesh.chunkIndex : i;
+      const meshEntry = entries.find((e) => e.type === CHUNK_MESH && e.index === chunkIdx);
+      if (!meshEntry) continue;
+      if (deferMeshChunks) {
+        // Where it is, not what it is: the native loader reads and inflates it.
+        // Dedup survives — a V3 duplicate points at the owner's chunk, so both
+        // report the same range.
+        meshRangesMap.set(model.id, {
+          offset: meshEntry.offset,
+          compressedSize: meshEntry.compressedSize,
+          uncompressedSize: meshEntry.uncompressedSize,
+          compression: meshEntry.compression,
+        });
+        continue;
+      }
       let bytes = chunkBytesByIndex.get(chunkIdx);
       if (!bytes) {
-        const meshEntry = entries.find((e) => e.type === CHUNK_MESH && e.index === chunkIdx);
-        if (meshEntry) {
-          bytes = readChunk(meshEntry);
-          chunkBytesByIndex.set(chunkIdx, bytes);
-        }
+        bytes = readChunk(meshEntry);
+        chunkBytesByIndex.set(chunkIdx, bytes);
       }
-      if (bytes) {
-        meshBytesMap.set(model.id, bytes);
-      }
+      meshBytesMap.set(model.id, bytes);
     }
   }
 
@@ -1138,7 +1404,7 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
     }
   }
 
-  // ── Re-attach V2.2 modifier-snapshot chunks (HSRC/CAVT/PSRC) ──────────
+  // ── Re-attach V3.1 modifier-snapshot chunks (HSRC/CAVT/PSRC) ──────────
   // The writer moved these Float32 position snapshots out of the MODL JSON into
   // raw-bytes chunks (§ CHUNK_HSRC). A snapshot lives in a chunk when its
   // *PositionCount is non-zero but the matching *Base64 is absent. Resolve the
@@ -1182,10 +1448,10 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
     delete mm.holePunchSourceChunkIndex;
   }
 
-  // A file is 2.2 iff it actually carries modifier-snapshot chunks; otherwise it
-  // is the inline ("2.1") layout — including 2.2-capable writes of scenes that
+  // A file is 3.1 iff it actually carries modifier-snapshot chunks; otherwise it
+  // is the inline ("2.1") layout — including 3.1-capable writes of scenes that
   // simply had no snapshots to chunk (byte-identical either way). Save-time
-  // format preservation keys off this: a 2.2 file must never be autosaved back
+  // format preservation keys off this: a 3.1 file must never be autosaved back
   // to inline.
   const hasModifierChunks = entries.some(
     (e) => e.type === CHUNK_HSRC || e.type === CHUNK_CAVT || e.type === CHUNK_PSRC,
@@ -1204,11 +1470,14 @@ export function parseVoxlBinaryV2(data: Uint8Array): ParsedVoxlResult {
       models,
       supports,
       extensions,
+      ...(materials ? { materials } : {}),
     },
     meshBytes: meshBytesMap,
+    ...(deferMeshChunks ? { meshRanges: meshRangesMap } : {}),
     ...(lazyOriginalMeshBytesMap ? { originalMeshBytes: lazyOriginalMeshBytesMap } : {}),
     ...(originalMeshChunksMap.size > 0 ? { originalMeshChunks: originalMeshChunksMap } : {}),
-    sourceVersion: hasModifierChunks ? VOXL_V2_SEMANTIC_REVISION : VOXL_V2_INLINE_REVISION,
+    ...(bodyChunks.size > 0 ? { bodyChunks } : {}),
+    sourceVersion: hasModifierChunks ? VOXL_V3_SEMANTIC_REVISION : VOXL_V2_INLINE_REVISION,
   };
 }
 
@@ -1291,10 +1560,10 @@ export async function readSidecarFileBytes(filePath: string): Promise<Uint8Array
       }
     }
 
-    if (typeof window !== 'undefined' && '__TAURI_IPC__' in window) {
+    const core = await loadTauriCore();
+    if (core) {
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const ab = await invoke<ArrayBuffer>('read_print_file_bytes', { path: filePath });
+        const ab = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath: filePath });
         if (ab) return new Uint8Array(ab);
       } catch {
         // Fall through

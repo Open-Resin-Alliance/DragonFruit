@@ -16,6 +16,22 @@ Support type is determined by:
 3. Use braces/kickstands where lateral stability is needed.
 4. Validate support angles and warnings before finalizing.
 
+## Supports below the build plate
+
+A trunk whose contact cone or socket joint extends below Z=0 is shown as an
+invalid red preview with **Cannot Place Support** feedback. An ordinary click
+does not add it, with or without grid snapping. The slicer does not automatically
+shorten the cone or move the support to hide the problem. Adjust the cone length
+or model height until the support clears the plate. As with other invalid
+placements, the existing explicit force-place override remains available.
+
+To check this case, raise a model 5 mm, set the contact-cone length to 6 mm, and
+hover beneath a near-horizontal underside. The below-plate preview must be
+invalid and an ordinary click must leave the support count unchanged. Repeat
+with grid mode on and off; reducing the cone length enough to clear the plate
+must restore valid placement.
+
+
 ## Hotkey families (summary)
 
 - **No modifier**: default trunk/root placement.

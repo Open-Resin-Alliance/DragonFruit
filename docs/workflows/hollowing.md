@@ -1,11 +1,11 @@
 # Hollowing and Hole Punch Workflow
 
-Hollowing removes interior volume from a model, reducing material and print time. Drain holes and blocker regions let you control where cavities open to the outside.
+Hollowing removes interior volume from a model, reducing material and print time. Drain holes and solid areas let you control where cavities open to the outside.
 
 ## Recommended sequence
 
 1. Import your model and enter **Prepare** mode.
-2. Switch to **Hollow** mode in the transform toolbar.
+2. Switch to **Hollow** in the tool rail under the app bar (or down the left edge, if the rail is parked there).
 3. Configure hollowing settings (wall thickness, voxel size, mode).
 4. Review the cavity preview before applying.
 5. Place hole punches for drainage or venting.
@@ -46,26 +46,26 @@ The minimum wall thickness of the hollow shell in mm.
 
 ---
 
-## Blockers (Protected Regions)
+## Solid Areas
 
-Blockers mark voxels that should stay solid during hollowing. Use them to:
+Solid areas mark voxels that should stay solid during hollowing. Use them to:
 
 - Preserve screw bosses, mounting points, or other critical features.
 - Keep solid columns inside the cavity for structural support.
 - Prevent hollowing from carving into thin walls.
 
-### To place blockers:
+### To mark solid areas:
 
-1. Click **Blockers** in the hollowing panel to enter edit mode.
-2. Click individual voxel spheres to toggle them blocked (blue).
-3. Drag a lasso / marquee to block/unblock many voxels at once.
-4. Use **Undo** (Ctrl+Z) / **Redo** (Ctrl+Y) while editing.
-5. Press **Done** to commit blockers and update the preview.
-6. Clear all blockers with the **Clear** button.
+1. Click **Solid Areas** in the hollowing panel to enter edit mode.
+2. Click individual voxel spheres to toggle them solid (blue).
+3. Drag a lasso to mark many voxels at once; **Alt**+lasso releases them.
+4. Use **Undo** (Ctrl+Z) / **Redo** (Ctrl+Shift+Z) to step through your edits, while editing or after **Done**; undoing a step after **Done** reopens the edit mode.
+5. Press **Done** to commit them and update the preview.
+6. Clear them all with the **Clear** button.
 
-Blocked voxels appear as **blue spheres**; unblocked cavity voxels appear as **yellow spheres**.
+Solid voxels appear as **blue spheres**; hollow cavity voxels appear as **yellow spheres**.
 
-> **Note:** Changing shell thickness or voxel size while blockers are applied will show a warning — blockers are cleared when the voxel grid changes.
+> **Note:** Changing shell thickness or voxel size while solid areas are marked will show a warning — they are cleared when the voxel grid changes.
 
 ---
 
@@ -79,6 +79,15 @@ Hole punches create cylindrical openings through the shell for drainage, venting
 2. A preview cylinder appears showing the hole position and orientation.
 3. Adjust radius and depth in the hole punch panel.
 4. Click and drag the hole punch handles to reposition.
+
+Click an existing hole punch to select it rather than place another hole. This also
+works from inside the cavity, including when the slice viewer clips away the front
+of the model. In interior view, click a cavity surface away from existing punches
+to place a new hole.
+
+Dragging a punch body snaps it to the nearest model surface within the visible
+slice-view bounds and aligns it to that surface's normal. This works in exterior
+and interior view. Use the gizmo arrows for axis-constrained movement instead.
 
 ### Oval holes
 

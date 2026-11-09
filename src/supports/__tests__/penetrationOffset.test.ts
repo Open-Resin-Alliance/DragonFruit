@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { calculateTipOffset } from '../rendering/calculateTipOffset';
-import { MaterialAntiAliasingSettings } from '@/features/profiles/profileStore';
+import { DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS, type MaterialAntiAliasingSettings } from '@/features/profiles/profileStore';
+import { resolveEffectiveAaSettings } from '@/features/slicing/resolveEffectiveAaSettings';
 
 test('calculateTipOffset correctly resolves penetration offset based on mode', () => {
     // 1. Test Disabled Mode (should default to 0.05 mm)
@@ -20,6 +21,8 @@ test('calculateTipOffset correctly resolves penetration offset based on mode', (
     // 2. Test Manual Mode (should return tipOffsetMm)
     const manualSettings: MaterialAntiAliasingSettings = {
         tipOffsetMode: 'manual',
+        enableCustomSettings: true,
+        enableOverride: true,
         tipOffsetMm: 0.150,
         tipOffsetDisplayInUi: false,
     } as any;
@@ -34,6 +37,7 @@ test('calculateTipOffset correctly resolves penetration offset based on mode', (
         tipOffsetMm: 0.05,
         tipOffsetDisplayInUi: false,
         enableCustomSettings: true,
+        enableOverride: true,
         useCustomZBlurRadius: true,
         zBlurRadiusLayers: 1,
     } as any;
@@ -47,9 +51,25 @@ test('calculateTipOffset correctly resolves penetration offset based on mode', (
         tipOffsetMm: 0.05,
         tipOffsetDisplayInUi: false,
         enableCustomSettings: true,
+        enableOverride: true,
         useCustomZBlurRadius: true,
         zBlurRadiusLayers: 3,
     } as any;
 
     assert.strictEqual(calculateTipOffset(autoSettingsSmooth, 0.04, 0.02), 0.280);
+});
+
+test('Override Auto off computes automatic offset despite stored Disabled or Manual', () => {
+    for (const tipOffsetMode of ['disabled', 'manual'] as const) {
+        const settings: MaterialAntiAliasingSettings = {
+            ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+            enableCustomSettings: false,
+            enableOverride: false,
+            tipOffsetMode,
+            tipOffsetMm: 0.7,
+            zBlurRadiusLayers: 8,
+        };
+        assert.strictEqual(resolveEffectiveAaSettings(settings, 0.05, 0.019).tipOffsetMode, 'auto');
+        assert.strictEqual(calculateTipOffset(settings, 0.05, 0.019), 0.25);
+    }
 });

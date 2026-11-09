@@ -1,6 +1,8 @@
 import JSZip from 'jszip';
+import { asciiFileBaseName } from '@/features/slicing/plateSliceNaming';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { type MaterialProfile, type PrinterProfile, getActiveMaterialProfile, getActivePrinterProfile } from '@/features/profiles/profileStore';
 import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
 import {
@@ -8,25 +10,30 @@ import {
   type PngCompressionStrategy,
 } from '@/components/settings/performancePreferences';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
-import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import { SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
-import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
-import { generateChamferedBase } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBase';
-import { generatePerimeterWall } from '@/supports/Rafts/Crenelated/geometry/generatePerimeterWall';
-import { generateCrenelatedWallManual } from '@/supports/Rafts/Crenelated/geometry/generateCrenelatedWallManual';
-import { generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
+import { buildRaftFootprintMeshes } from '@/supports/Rafts/Crenelated/geometry/generateRaftFromFootprint';
+import { collectModelPlateFootprint, type PlateFootprintSource } from '@/supports/Rafts/Crenelated/geometry/modelPlateFootprint';
+import { inflateModelPlateClearance, raftBandTopMm } from '@/supports/Rafts/Crenelated/geometry/computeRaftFootprint';
+import { filterLineRaftEdges, generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
 import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBeam';
 import { buildLineRaftEdgePairs } from '@/supports/Rafts/Crenelated/geometry/buildLineRaftEdgePairs';
-import type { ContactDisk } from '@/supports/types';
+import type { ContactDisk, Segment, SupportState, Vec3 } from '@/supports/types';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
-import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
-import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { resolveSegmentEndpoints, type ShaftEntity } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
+import {
+  buildSliceJobManifestNodes,
+  describeSliceJobModel,
+  resolveSliceLayerCount,
+  resolveSliceRasterSettings,
+  type SliceJobManifestModel,
+  type SliceRasterSettings,
+} from '@/features/slicing/sliceJobAssembly';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
 
-const MAX_CANVAS_PIXELS = 24_000_000;
 const DEFAULT_MESH_CHUNK_TARGET_BYTES = 64 * 1024 * 1024;
 const MIN_MESH_CHUNK_TARGET_BYTES = 16 * 1024 * 1024;
 const MAX_MESH_CHUNK_TARGET_BYTES = 256 * 1024 * 1024;
@@ -36,11 +43,18 @@ export type RasterLayerZipExportOptions = {
   printerProfile: PrinterProfile;
   materialProfile: MaterialProfile;
   filenameBase: string;
+  supportTipShrinkPercent?: number;
   outputMode?: 'download' | 'return';
   abortSignal?: AbortSignal;
   onProgress?: (done: number, total: number, phase: string) => void;
   flushBinaryMeshChunk?: (chunk: Uint8Array) => Promise<void>;
   meshChunkTargetBytes?: number;
+  /**
+   * Where the plate being sliced sits in the cascade. The rasterizer maps the
+   * origin to the plate centre, so a plate that is not the first one has to be
+   * handed geometry shifted back to the origin; models and their supports alike.
+   */
+  plateOffsetMm?: { dxMm: number; dyMm: number };
 };
 
 function normalizeMeshChunkTargetBytes(value: number | null | undefined): number {
@@ -100,7 +114,7 @@ type RasterizedLayerEntry = {
 };
 
 type RasterizationResult = {
-  settings: EffectiveSettings;
+  settings: SliceRasterSettings;
   totalLayers: number;
   tallestObjectHeightMm: number;
   visibleModels: LoadedModel[];
@@ -128,6 +142,10 @@ export type SolidSliceMeshForWasm = {
   mirrorX: boolean;
   mirrorY: boolean;
   modelTriangleCount: number;
+  /** Resin tanks this job prints; `1` unless the printer splits its resin. */
+  tankCount: number;
+  /** Tank per triangle, aligned with `trianglesXYZ`. Absent on single-tank jobs. */
+  triangleTankIndex?: Uint32Array;
   buildWidthMm: number;
   buildDepthMm: number;
   layerHeightMm: number;
@@ -142,7 +160,8 @@ export type SolidSliceMeshForWasm = {
     maxY: number;
     maxZ: number;
   };
-  metadataJson: string;
+  /** The sliced models as the job metadata names them. */
+  models: SliceJobManifestModel[];
 };
 
 type RasterTriangle = {
@@ -190,95 +209,6 @@ type SliceSegment2D = {
   wind: number;
 };
 
-type EffectiveSettings = {
-  widthPx: number;
-  heightPx: number;
-  sourceResolutionX: number;
-  sourceResolutionY: number;
-  xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
-  mirrorX: boolean;
-  mirrorY: boolean;
-  layerHeightMm: number;
-  totalLayers: number;
-  tallestObjectHeightMm: number;
-};
-
-function resolvePluginPackedWidth(printerProfile: PrinterProfile): {
-  widthPx: number;
-  sourceResolutionX: number;
-  sourceResolutionY: number;
-  xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
-} {
-  const sourceResolutionX = Math.max(1, Math.round(printerProfile.display.resolutionX));
-  const sourceResolutionY = Math.max(1, Math.round(printerProfile.display.resolutionY));
-
-  const explicitBitDepth = Number(printerProfile.bitDepth?.bits);
-  let bitDepth = Number.isFinite(explicitBitDepth) && explicitBitDepth > 0
-    ? Math.round(explicitBitDepth)
-    : 0;
-
-  if (bitDepth <= 0) {
-    const fingerprint = [
-      printerProfile.name,
-      printerProfile.manufacturer,
-      printerProfile.officialPresetId,
-      printerProfile.id,
-    ]
-      .filter((value): value is string => typeof value === 'string' && value.length > 0)
-      .join(' ')
-      .toLowerCase();
-
-    if (/\b3\s*[-_ ]?bit\b|\b3b\b|16k3b|gray3/.test(fingerprint)) {
-      bitDepth = 3;
-    } else if (/\b8\s*[-_ ]?bit\b|\b8b\b|rgb8/.test(fingerprint)) {
-      bitDepth = 8;
-    } else {
-      const divisibleBy2 = sourceResolutionX % 2 === 0;
-      const divisibleBy3 = sourceResolutionX % 3 === 0;
-
-      if (divisibleBy2 && !divisibleBy3) {
-        bitDepth = 3;
-      } else if (divisibleBy3 && !divisibleBy2) {
-        bitDepth = 8;
-      } else if (divisibleBy2 && divisibleBy3) {
-        // Ambiguous resolution: prefer Mono/3-bit path for Athena-class NanoDLP printers.
-        bitDepth = /rgb|color/.test(fingerprint) ? 8 : 3;
-      } else {
-        // Failsafe: NanoDLP path should remain packed; default to 3-bit packing.
-        bitDepth = 3;
-      }
-    }
-  }
-
-  if (bitDepth === 8) {
-    // NanoDLP RGB 8-bit path packs 3 subpixels into 1 RGB output pixel on X.
-    return {
-      widthPx: Math.max(1, Math.floor(sourceResolutionX / 3)),
-      sourceResolutionX,
-      sourceResolutionY,
-      xPackingMode: 'rgb8_div3',
-    };
-  }
-
-  if (bitDepth === 3) {
-    // NanoDLP 3-bit path packs 2 source subpixels into 1 grayscale output pixel on X.
-    return {
-      widthPx: Math.max(1, Math.floor(sourceResolutionX / 2)),
-      sourceResolutionX,
-      sourceResolutionY,
-      xPackingMode: 'gray3_div2',
-    };
-  }
-
-  // Unknown/unsupported bit-depth values still default to 3-bit packed path for NanoDLP.
-  return {
-    widthPx: Math.max(1, Math.floor(sourceResolutionX / 2)),
-    sourceResolutionX,
-    sourceResolutionY,
-    xPackingMode: 'gray3_div2',
-  };
-}
-
 function clampLayerIndex(index: number, totalLayers: number): number {
   if (index < 0) return 0;
   if (index >= totalLayers) return totalLayers - 1;
@@ -322,13 +252,6 @@ function sameIndexSet(a: number[] | null, b: number[]): boolean {
   return true;
 }
 
-function safeFilenameBase(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return 'slice_export';
-  const cleaned = trimmed.replace(/[^a-z0-9-_]+/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
-  return cleaned || 'slice_export';
-}
-
 function triggerBlobDownload(blob: Blob, filename: string): void {
   const nav = typeof navigator !== 'undefined'
     ? (navigator as Navigator & { msSaveOrOpenBlob?: (payload: Blob, name?: string) => boolean })
@@ -366,6 +289,9 @@ class TriangleFloatCollector {
 
   private triangleCountValue = 0;
 
+  /** Tank per triangle, aligned with the published triangle order. */
+  private tankValues: number[] = [];
+
   private maxZValue = -Infinity;
 
   private minXValue = Infinity;
@@ -384,14 +310,28 @@ class TriangleFloatCollector {
   
   private chunkElementLimit = Number.POSITIVE_INFINITY;
 
+  /**
+   * World -> plate-local shift, applied to every triangle this collector takes.
+   * Slicing a plate that is not the first one in the cascade has to hand the
+   * rasterizer geometry centred on the origin, and both the models and their
+   * supports arrive in world coordinates, so the shift lives here rather than at
+   * each producer.
+   */
+  private readonly offsetX: number;
+
+  private readonly offsetY: number;
+
   constructor(
     initialTriangleCapacity: number,
     flushCallback?: (chunk: Uint8Array) => Promise<void>,
     chunkTargetBytes?: number,
+    plateOffsetMm?: { dxMm: number; dyMm: number },
   ) {
     const safeTriangleCapacity = Math.max(1, Math.floor(initialTriangleCapacity));
     this.data = new Float32Array(safeTriangleCapacity * 9);
     this.flushCallback = flushCallback;
+    this.offsetX = -(plateOffsetMm?.dxMm ?? 0);
+    this.offsetY = -(plateOffsetMm?.dyMm ?? 0);
 
     if (flushCallback) {
       const normalizedChunkBytes = normalizeMeshChunkTargetBytes(chunkTargetBytes);
@@ -431,8 +371,15 @@ class TriangleFloatCollector {
     cx: number,
     cy: number,
     cz: number,
+    tank = 0,
   ): void {
     this.ensureCapacity(9);
+    ax += this.offsetX;
+    ay += this.offsetY;
+    bx += this.offsetX;
+    by += this.offsetY;
+    cx += this.offsetX;
+    cy += this.offsetY;
     const base = this.cursor;
     this.data[base] = ax;
     this.data[base + 1] = ay;
@@ -445,6 +392,7 @@ class TriangleFloatCollector {
     this.data[base + 8] = cz;
     this.cursor = base + 9;
     this.triangleCountValue += 1;
+    this.tankValues.push(tank);
 
     const triMaxZ = Math.max(az, bz, cz);
     if (triMaxZ > this.maxZValue) {
@@ -464,7 +412,7 @@ class TriangleFloatCollector {
     if (triMaxY > this.maxYValue) this.maxYValue = triMaxY;
   }
 
-  appendWorldTriangles(triangles: WorldTriangle[]): void {
+  appendWorldTriangles(triangles: WorldTriangle[], tank = 0): void {
     for (let i = 0; i < triangles.length; i += 1) {
       const tri = triangles[i];
       this.pushTriangle(
@@ -477,8 +425,14 @@ class TriangleFloatCollector {
         tri.cx,
         tri.cy,
         tri.cz,
+        tank,
       );
     }
+  }
+
+  /** The tank each triangle prints from, in publish order. */
+  get tankIndices(): Uint32Array {
+    return Uint32Array.from(this.tankValues);
   }
 
   async finalize(): Promise<Float32Array> {
@@ -663,15 +617,6 @@ function appendJointSphere(
   geom.dispose();
 }
 
-function getDiskTipCenter(disk: ContactDisk): THREE.Vector3 {
-  const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
-  return new THREE.Vector3(
-    disk.pos.x + disk.surfaceNormal.x * thickness,
-    disk.pos.y + disk.surfaceNormal.y * thickness,
-    disk.pos.z + disk.surfaceNormal.z * thickness,
-  );
-}
-
 type SupportSliceTessellation = {
   shaftRadialSegments: number;
   bezierRadialSegments: number;
@@ -681,21 +626,30 @@ type SupportSliceTessellation = {
   jointRadialSegments: number;
 };
 
-function resolveSupportSliceTessellation(
+/** Exported for `local-only/slice-goldens/`; not part of the public surface. */
+export function resolveSupportSliceTessellation(
   supportState: ReturnType<typeof getSupportSnapshot>,
-  kickstandState: ReturnType<typeof getKickstandSnapshot>,
+  kickstandState: SupportState,
 ): SupportSliceTessellation {
+  // How much geometry the scene will emit, which decides the detail level.
   let segmentCount = 0;
-  for (const trunk of Object.values(supportState.trunks)) segmentCount += trunk.segments.length;
-  for (const branch of Object.values(supportState.branches)) segmentCount += branch.segments.length;
-  for (const twig of Object.values(supportState.twigs)) segmentCount += twig.segments.length;
-  for (const stick of Object.values(supportState.sticks)) segmentCount += stick.segments.length;
-  for (const kickstand of Object.values(kickstandState.kickstands)) segmentCount += kickstand.segments.length;
+  let shaftlessCount = 0;
+
+  for (const descriptor of SUPPORT_TYPES) {
+    const collection = supportState[descriptor.location.key] as unknown as Record<string, { segments?: unknown[] }>;
+    const entities = Object.values(collection ?? {});
+
+    if (!descriptor.hasSegments) {
+      // A leaf or brace is one primitive rather than a chain of them.
+      shaftlessCount += entities.length;
+      continue;
+    }
+    for (const entity of entities) segmentCount += entity.segments?.length ?? 0;
+  }
 
   const primitiveCount = segmentCount
     + Object.keys(supportState.roots).length
-    + Object.keys(supportState.leaves).length
-    + Object.keys(supportState.braces).length;
+    + shaftlessCount;
 
   if (segmentCount >= 20_000 || primitiveCount >= 24_000) {
     return {
@@ -791,6 +745,7 @@ function appendContactConePrimitive(
   },
   radialSegments = 12,
   penetrationMm = 0,
+  tipScale = 1,
 ): void {
   const socket = getFinalSocketPosition(cone as any);
   const effectiveNormal = cone.surfaceNormal ?? cone.normal;
@@ -803,7 +758,7 @@ function appendContactConePrimitive(
   const g = createFrustumGeometryBetween(
     start,
     end,
-    Math.max(0.05, cone.profile.contactDiameterMm * 0.5),
+    Math.max(0.05, cone.profile.contactDiameterMm * 0.5 * tipScale),
     Math.max(0.05, cone.profile.bodyDiameterMm * 0.5),
     Math.max(4, Math.floor(radialSegments)),
   );
@@ -817,9 +772,10 @@ function appendContactDiskPrimitive(
   disk: ContactDisk,
   radialSegments: number,
   penetrationMm = 0.05,
+  tipScale = 1,
 ): void {
   const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
-  const radius = Math.max(0.01, disk.contactDiameterMm * 0.5);
+  const radius = Math.max(0.01, disk.contactDiameterMm * 0.5 * tipScale);
 
   const center = getDiskCenter(disk.pos, disk.surfaceNormal, thickness);
   const rotation = getDiskRotation(disk.surfaceNormal);
@@ -848,21 +804,24 @@ function appendContactDiskPrimitive(
   sphereGeom.dispose();
 }
 
-
-function buildSupportAndRaftWorldTriangles(
+/** Exported for `local-only/slice-goldens/`; not part of the public surface. */
+export function buildSupportAndRaftWorldTriangles(
   visibleModelIds: Set<string>,
   collector?: TriangleFloatCollector,
+  supportTipShrinkPercent = 0,
+  /** Visible models, whose plate footprint the raft has to clear. */
+  plateClearanceModels: readonly PlateFootprintSource[] = [],
 ): WorldTriangle[] {
   if (visibleModelIds.size === 0) return [];
 
   const out: WorldTriangle[] = [];
   const supportState = getSupportSnapshot();
-  const kickstandState = getKickstandSnapshot();
   const sink: TriangleSink = collector ?? out;
+  const tipScale = 1 - supportTipShrinkPercent / 100;
   const raftSettings = getRaftSettings();
   const hasSolidBottom = raftSettings.bottomMode === 'solid';
   const raftThickness = raftSettings.thickness;
-  const tessellation = resolveSupportSliceTessellation(supportState, kickstandState);
+  const tessellation = resolveSupportSliceTessellation(supportState, supportState);
   const segmentTessellation = {
     shaftRadialSegments: tessellation.shaftRadialSegments,
     bezierRadialSegments: tessellation.bezierRadialSegments,
@@ -891,7 +850,7 @@ function buildSupportAndRaftWorldTriangles(
     }
   }
 
-  for (const kickstand of Object.values(kickstandState.kickstands)) {
+  for (const kickstand of Object.values(supportState.kickstands)) {
     if (!visibleModelIds.has(kickstand.modelId)) continue;
     visibleRootIds.add(kickstand.rootId);
     if (!rootModelKeyById.has(kickstand.rootId)) {
@@ -906,7 +865,7 @@ function buildSupportAndRaftWorldTriangles(
       rootTopRadiusByRootId.set(trunk.rootId, Math.max(0.05, firstDiameter! * 0.5));
     }
   }
-  for (const kickstand of Object.values(kickstandState.kickstands)) {
+  for (const kickstand of Object.values(supportState.kickstands)) {
     const firstDiameter = kickstand.segments[0]?.diameter;
     if (Number.isFinite(firstDiameter) && firstDiameter! > 0) {
       rootTopRadiusByRootId.set(kickstand.rootId, Math.max(0.05, firstDiameter! * 0.5));
@@ -945,253 +904,122 @@ function buildSupportAndRaftWorldTriangles(
     }
   }
 
-  for (const trunk of Object.values(supportState.trunks)) {
-    if (!visibleModelIds.has(trunk.modelId)) continue;
-    const root = supportState.roots[trunk.rootId];
-    if (!root) continue;
-
-    for (let i = 0; i < trunk.segments.length; i += 1) {
-      const seg = trunk.segments[i];
-      const endpoints = getTrunkSegmentEndpoints(trunk, seg, i, root);
-      if (!endpoints) continue;
-      appendSegmentPrimitive(
-        sink,
-        new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z),
-        new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z),
-        Math.max(0.05, seg.diameter),
-        seg as any,
-        segmentTessellation,
-      );
-
-      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
-        seenJointIds.add(seg.bottomJoint.id);
-        appendJointSphere(
-          sink,
-          seg.bottomJoint.pos,
-          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
-        seenJointIds.add(seg.topJoint.id);
-        appendJointSphere(
-          sink,
-          seg.topJoint.pos,
-          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-    }
-
-    if (trunk.contactCone) {
-      appendContactConePrimitive(sink, trunk.contactCone as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
-    }
-  }
-
-  for (const branch of Object.values(supportState.branches)) {
-    const modelId = branch.modelId;
-    if (!modelId || !visibleModelIds.has(modelId)) continue;
-    const parentKnot = supportState.knots[branch.parentKnotId];
-    if (!parentKnot) continue;
-
-    for (let i = 0; i < branch.segments.length; i += 1) {
-      const seg = branch.segments[i];
-      const endpoints = getBranchSegmentEndpoints(branch, seg, i, parentKnot);
-      if (!endpoints) continue;
-      appendSegmentPrimitive(
-        sink,
-        new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z),
-        new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z),
-        Math.max(0.05, seg.diameter),
-        seg as any,
-        segmentTessellation,
-      );
-
-      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
-        seenJointIds.add(seg.bottomJoint.id);
-        appendJointSphere(
-          sink,
-          seg.bottomJoint.pos,
-          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
-        seenJointIds.add(seg.topJoint.id);
-        appendJointSphere(
-          sink,
-          seg.topJoint.pos,
-          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-    }
-
-    if (branch.contactCone) {
-      appendContactConePrimitive(sink, branch.contactCone as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
-    }
-  }
-
-  for (const twig of Object.values(supportState.twigs)) {
-    if (!visibleModelIds.has(twig.modelId)) continue;
-    for (const seg of twig.segments) {
-      const start = seg.bottomJoint
-        ? new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z)
-        : getDiskTipCenter(twig.contactDiskA);
-      const end = seg.topJoint
-        ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
-        : getDiskTipCenter(twig.contactDiskB);
-      appendSegmentPrimitive(sink, start, end, Math.max(0.05, seg.diameter), seg as any, segmentTessellation);
-
-      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
-        seenJointIds.add(seg.bottomJoint.id);
-        appendJointSphere(
-          sink,
-          seg.bottomJoint.pos,
-          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
-        seenJointIds.add(seg.topJoint.id);
-        appendJointSphere(
-          sink,
-          seg.topJoint.pos,
-          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-    }
-    appendContactDiskPrimitive(sink, twig.contactDiskA, tessellation.contactConeRadialSegments, tipPenetrationMm);
-    appendContactDiskPrimitive(sink, twig.contactDiskB, tessellation.contactConeRadialSegments, tipPenetrationMm);
-  }
-
-  for (const stick of Object.values(supportState.sticks)) {
-    if (!visibleModelIds.has(stick.modelId)) continue;
-    for (const seg of stick.segments) {
-      const start = seg.bottomJoint
-        ? new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z)
-        : new THREE.Vector3(...Object.values(getFinalSocketPosition(stick.contactConeA)) as [number, number, number]);
-      const end = seg.topJoint
-        ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
-        : new THREE.Vector3(...Object.values(getFinalSocketPosition(stick.contactConeB)) as [number, number, number]);
-      appendSegmentPrimitive(sink, start, end, Math.max(0.05, seg.diameter), seg as any, segmentTessellation);
-
-      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
-        seenJointIds.add(seg.bottomJoint.id);
-        appendJointSphere(
-          sink,
-          seg.bottomJoint.pos,
-          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
-        seenJointIds.add(seg.topJoint.id);
-        appendJointSphere(
-          sink,
-          seg.topJoint.pos,
-          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
-    }
-
-    appendContactConePrimitive(sink, stick.contactConeA as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
-    appendContactConePrimitive(sink, stick.contactConeB as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
-  }
-
-  for (const brace of Object.values(supportState.braces)) {
-    const modelId = brace.modelId;
-    if (!modelId || !visibleModelIds.has(modelId)) continue;
-    const startKnot = supportState.knots[brace.startKnotId];
-    const endKnot = supportState.knots[brace.endKnotId];
-    if (!startKnot || !endKnot) continue;
-    // Mirror renderer: derive visual diameter from host knot diameters, not raw profile.diameter.
-    const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1);
-    const startHostDia = Math.max(0.05, (startKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
-    const endHostDia = Math.max(0.05, (endKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
-    const braceDiameter = (startHostDia + endHostDia) * 0.5;
-    appendSegmentPrimitive(
-      sink,
-      new THREE.Vector3(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z),
-      new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z),
-      braceDiameter,
-      brace.curve as any,
-      segmentTessellation,
-    );
-  }
-
-  for (const leaf of Object.values(supportState.leaves)) {
-    const modelId = leaf.modelId;
-    if (!modelId || !visibleModelIds.has(modelId)) continue;
-    appendContactConePrimitive(sink, leaf.contactCone as any, tessellation.contactConeRadialSegments, tipPenetrationMm);
-  }
-
-  // Anchors carry their own root (they never appear in supportState.roots),
-  // so without this walk they vanish from every slice. Mirror AnchorRenderer:
-  // root frustum + joint sphere + contact cone.
-  for (const anchor of Object.values(supportState.anchors)) {
-    if (!visibleModelIds.has(anchor.modelId)) continue;
-
-    const baseRadius = Math.max(0.05, anchor.rootBaseDiameter * 0.5);
-    const topRadius = Math.max(0.05, anchor.rootTopDiameter * 0.5);
-    const base = new THREE.Vector3(anchor.rootPos.x, anchor.rootPos.y, anchor.rootPos.z);
-    const top = base.clone().add(new THREE.Vector3(0, 0, Math.max(0.01, anchor.rootHeight)));
-    const rootGeom = createFrustumGeometryBetween(base, top, baseRadius, topRadius, tessellation.rootRadialSegments);
-    if (rootGeom) {
-      appendGeometryTriangles(sink, rootGeom);
-      rootGeom.dispose();
-    }
-
+  /**
+   * Every support's root, shaft, joints and contacts, in registry order.
+   *
+   * One loop rather than several because `seenJointIds` deduplicates joint
+   * spheres across all types: a joint shared between a kickstand and the trunk
+   * it braces is emitted by whichever type reaches it first, so the iteration
+   * order is part of the output.
+   */
+  const emitJoint = (joint: { id: string; pos: Vec3; diameter: number } | undefined | null) => {
+    if (!joint || seenJointIds.has(joint.id)) return;
+    seenJointIds.add(joint.id);
     appendJointSphere(
       sink,
-      anchor.joint.pos,
-      Math.max(0.001, anchor.joint.diameter - JOINT_BLEND_MM),
+      joint.pos,
+      Math.max(0.001, joint.diameter - JOINT_BLEND_MM),
       tessellation.jointRadialSegments,
     );
-    appendContactConePrimitive(sink, anchor.contactCone, tessellation.contactConeRadialSegments, tipPenetrationMm);
-  }
+  };
 
-  for (const kickstand of Object.values(kickstandState.kickstands)) {
-    const modelId = kickstand.modelId;
-    if (!modelId || !visibleModelIds.has(modelId)) continue;
-    const root = kickstandState.roots[kickstand.rootId];
-    const hostKnot = kickstandState.knots[kickstand.hostKnotId];
-    if (!root || !hostKnot) continue;
+  for (const descriptor of SUPPORT_TYPES) {
+    const collection = supportState[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
 
-    let currentStart = new THREE.Vector3(
-      root.transform.pos.x,
-      root.transform.pos.y,
-      root.transform.pos.z + root.diskHeight + root.coneHeight,
-    );
+    for (const entity of Object.values(collection ?? {})) {
+      const modelId = entity.modelId as string | undefined;
+      if (!modelId || !visibleModelIds.has(modelId)) continue;
 
-    for (const seg of kickstand.segments) {
-      const endPoint = seg.topJoint
-        ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
-        : new THREE.Vector3(hostKnot.pos.x, hostKnot.pos.y, hostKnot.pos.z);
-      appendSegmentPrimitive(sink, currentStart, endPoint, Math.max(0.05, seg.diameter), seg as any, segmentTessellation);
+      // The hosts an endpoint kind needs. A type declaring neither still
+      // resolves, because its segments carry both their own joints.
+      const root = descriptor.ownsRoot
+        ? supportState.roots[entity.rootId as string] ?? null
+        : null;
+      // Which field names the knot is declared by the edges, not assumed:
+      // trunks have none, branches use parentKnotId, kickstands hostKnotId,
+      // braces startKnotId and endKnotId.
+      const knotEdges = descriptor.edges.filter((edge) => edge.to === 'knots');
+      const knotAt = (position: number) => {
+        const edge = knotEdges[position];
+        return edge ? supportState.knots[entity[edge.field] as string] ?? null : null;
+      };
+      const hostKnot = knotAt(0);
 
-      if (seg.bottomJoint && !seenJointIds.has(seg.bottomJoint.id)) {
-        seenJointIds.add(seg.bottomJoint.id);
-        appendJointSphere(
+      // A type that owns a plate root or hangs from a knot cannot be placed
+      // without it; each old per-type loop skipped on this same condition.
+      if (descriptor.lower.kind === 'plateRoot' && !root) continue;
+      if (descriptor.lower.kind === 'knot' && !hostKnot) continue;
+
+      // An inline root belongs to the entity rather than to supportState.roots,
+      // so the shared root walk above never sees it.
+      if (descriptor.lower.kind === 'inlineRoot') {
+        const base = new THREE.Vector3(
+          (entity.rootPos as Vec3).x,
+          (entity.rootPos as Vec3).y,
+          (entity.rootPos as Vec3).z,
+        );
+        const top = base.clone().add(new THREE.Vector3(0, 0, Math.max(0.01, entity.rootHeight as number)));
+        const rootGeom = createFrustumGeometryBetween(
+          base,
+          top,
+          Math.max(0.05, (entity.rootBaseDiameter as number) * 0.5),
+          Math.max(0.05, (entity.rootTopDiameter as number) * 0.5),
+          tessellation.rootRadialSegments,
+        );
+        if (rootGeom) {
+          appendGeometryTriangles(sink, rootGeom);
+          rootGeom.dispose();
+        }
+        emitJoint(entity.joint as Parameters<typeof emitJoint>[0]);
+      }
+
+      const segments = (entity.segments as Segment[] | undefined) ?? [];
+      const shaft = entity as unknown as ShaftEntity;
+      segments.forEach((seg, index) => {
+        const endpoints = resolveSegmentEndpoints(shaft, seg, index, { root, hostKnot });
+        if (!endpoints) return;
+
+        appendSegmentPrimitive(
           sink,
-          seg.bottomJoint.pos,
-          Math.max(0.001, seg.bottomJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
+          new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z),
+          new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z),
+          Math.max(0.05, seg.diameter),
+          seg as any,
+          segmentTessellation,
+        );
+
+        emitJoint(seg.bottomJoint);
+        emitJoint(seg.topJoint);
+      });
+
+      // A brace spans its two knots instead of carrying a shaft. Its diameter
+      // mirrors the renderer: derived from the host knots, not profile.diameter.
+      if (descriptor.lower.kind === 'knot' && descriptor.upper.kind === 'knot' && !descriptor.hasSegments) {
+        const endKnot = knotAt(1);
+        if (!hostKnot || !endKnot) continue;
+        const profileDiameter = Math.max(0.001, (entity.profile as { diameter?: number } | undefined)?.diameter ?? 1);
+        const startHostDia = Math.max(0.05, (hostKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
+        const endHostDia = Math.max(0.05, (endKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
+        appendSegmentPrimitive(
+          sink,
+          new THREE.Vector3(hostKnot.pos.x, hostKnot.pos.y, hostKnot.pos.z),
+          new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z),
+          (startHostDia + endHostDia) * 0.5,
+          entity.curve as any,
+          segmentTessellation,
         );
       }
-      if (seg.topJoint && !seenJointIds.has(seg.topJoint.id)) {
-        seenJointIds.add(seg.topJoint.id);
-        appendJointSphere(
-          sink,
-          seg.topJoint.pos,
-          Math.max(0.001, seg.topJoint.diameter - JOINT_BLEND_MM),
-          tessellation.jointRadialSegments,
-        );
-      }
 
-      currentStart = endPoint;
+      for (const field of descriptor.contactFields) {
+        const contact = entity[field];
+        if (!contact) continue;
+        const kind = field === descriptor.lower.field ? descriptor.lower.kind : descriptor.upper.kind;
+        if (kind === 'disk') {
+          appendContactDiskPrimitive(sink, contact as ContactDisk, tessellation.contactConeRadialSegments, tipPenetrationMm, tipScale);
+        } else {
+          appendContactConePrimitive(sink, contact as any, tessellation.contactConeRadialSegments, tipPenetrationMm, tipScale);
+        }
+      }
     }
   }
 
@@ -1210,59 +1038,25 @@ function buildSupportAndRaftWorldTriangles(
       rootsByModel.set(modelKey, arr);
     }
 
-    for (const root of Object.values(kickstandState.roots)) {
-      const rootVisibleByModel = visibleModelIds.has(root.modelId);
-      const rootVisibleByLink = visibleRootIds.has(root.id);
-      if (!rootVisibleByModel && !rootVisibleByLink) continue;
-
-      const modelKey = rootModelKeyById.get(root.id) ?? root.modelId ?? `__root_${root.id}`;
-      const arr = rootsByModel.get(modelKey) ?? [];
-      arr.push({ x: root.transform.pos.x, y: root.transform.pos.y, r: root.diameter * 0.5 });
-      rootsByModel.set(modelKey, arr);
-    }
+    // A model standing on the plate keeps the sliced raft out of itself, exactly
+    // as the viewport does — preview and print must not disagree.
+    const clearance = collectModelPlateFootprint(
+      plateClearanceModels,
+      raftBandTopMm(raft),
+    );
+    const clearanceCut = inflateModelPlateClearance(clearance);
 
     for (const circles of rootsByModel.values()) {
       if (circles.length === 0) continue;
-      const clampedChamfer = Math.min(90, Math.max(45, raft.chamferAngle));
-      const thickness = raft.bottomMode === 'line' ? raft.lineHeightMm : raft.thickness;
-      const chamferInset = Math.max(0, thickness) * Math.tan((Math.PI / 180) * (90 - clampedChamfer));
-      const wallInset = raft.wallEnabled ? Math.max(0, raft.wallThickness) : 0;
-      const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
 
-      const profile = computeFootprint(circles as any, {
-        marginMm: dynamicMargin,
-        samplesPerCircle: 24,
-      });
-      if (!profile || profile.length < 3) continue;
+      const parts = buildRaftFootprintMeshes({ circles, raft, clearance });
+      if (!parts.baseMesh && parts.footprint.length === 0) continue;
 
-      if (raft.bottomMode === 'solid') {
-        const baseMesh = generateChamferedBase(profile, {
-          thickness: raft.thickness,
-          chamferAngle: raft.chamferAngle,
-        });
-        appendGeometryTriangles(sink, baseMesh.geometry);
-
-        if (raft.wallEnabled) {
-          const useCrenels = raft.crenulationSpacing > 0 && raft.crenulationGapWidth > 0;
-          const wallMesh = useCrenels
-            ? generateCrenelatedWallManual(profile, {
-              wallHeight: raft.wallHeight,
-              wallThickness: raft.wallThickness,
-              crenulationGapWidth: raft.crenulationGapWidth,
-              crenulationSpacing: raft.crenulationSpacing,
-              thickness: raft.thickness,
-              chamferAngle: raft.chamferAngle,
-            })
-            : generatePerimeterWall(profile, {
-              wallHeight: raft.wallHeight,
-              wallThickness: raft.wallThickness,
-              thickness: raft.thickness,
-            });
-          appendGeometryTriangles(sink, wallMesh.geometry);
-        }
+      if (parts.baseMesh) {
+        appendGeometryTriangles(sink, parts.baseMesh.geometry);
       } else if (raft.bottomMode === 'line') {
         const nodes2d = circles.map((c) => new THREE.Vector2(c.x, c.y));
-        const hasBorderRing = !!profile && profile.length >= 3;
+        const hasBorderRing = parts.footprint.length > 0;
         const edgePairs = buildLineRaftEdgePairs(nodes2d, {
           hasBorderRing,
           keepFactor: 8,
@@ -1272,7 +1066,14 @@ function buildSupportAndRaftWorldTriangles(
 
         const beamHeight = Math.max(0.01, raft.lineHeightMm);
 
-        const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]);
+        // Beams a model on the plate is in the way of are never drawn: cutting them
+    // would leave severed ends to close up again, and two clusters either side of
+    // a model should stay two clusters.
+    const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = filterLineRaftEdges(
+      edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]),
+      clearanceCut,
+      raft.lineWidthMm,
+    );
         const unionMesh = generateUnionedLineRaftMesh(unionEdges, {
           widthMm: raft.lineWidthMm,
           heightMm: beamHeight,
@@ -1284,9 +1085,9 @@ function buildSupportAndRaftWorldTriangles(
         if (unionHasGeometry) {
           appendGeometryTriangles(sink, unionMesh.geometry);
         } else {
-          for (const [a, b] of edgePairs) {
-            const start = new THREE.Vector3(nodes2d[a].x, nodes2d[a].y, 0);
-            const end = new THREE.Vector3(nodes2d[b].x, nodes2d[b].y, 0);
+          for (const [a, b] of unionEdges) {
+            const start = new THREE.Vector3(a.x, a.y, 0);
+            const end = new THREE.Vector3(b.x, b.y, 0);
             const beam = generateChamferedBeam(start, end, {
               widthMm: raft.lineWidthMm,
               heightMm: beamHeight,
@@ -1295,25 +1096,10 @@ function buildSupportAndRaftWorldTriangles(
             appendGeometryTriangles(sink, beam.geometry);
           }
         }
+      }
 
-        if (raft.wallEnabled) {
-          const useCrenels = raft.crenulationSpacing > 0 && raft.crenulationGapWidth > 0;
-          const wallMesh = useCrenels
-            ? generateCrenelatedWallManual(profile, {
-              wallHeight: raft.wallHeight,
-              wallThickness: raft.wallThickness,
-              crenulationGapWidth: raft.crenulationGapWidth,
-              crenulationSpacing: raft.crenulationSpacing,
-              thickness: raft.lineHeightMm,
-              chamferAngle: raft.chamferAngle,
-            })
-            : generatePerimeterWall(profile, {
-              wallHeight: raft.wallHeight,
-              wallThickness: raft.wallThickness,
-              thickness: raft.lineHeightMm,
-            });
-          appendGeometryTriangles(sink, wallMesh.geometry);
-        }
+      if (parts.wallMesh) {
+        appendGeometryTriangles(sink, parts.wallMesh.geometry);
       }
     }
   }
@@ -1360,7 +1146,7 @@ async function nanodlpPackRgbaToPngBlob(
   sourceWidthPx: number,
   sourceHeightPx: number,
   outputWidthPx: number,
-  packingMode: EffectiveSettings['xPackingMode'],
+  packingMode: SliceRasterSettings['xPackingMode'],
 ): Promise<Blob> {
   const outCanvas = getCanvas(outputWidthPx, sourceHeightPx);
   const outCtx = outCanvas.getContext('2d', { willReadFrequently: false }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
@@ -1450,7 +1236,7 @@ async function canvasToPngBlob(canvas: OffscreenCanvas | HTMLCanvasElement): Pro
 
 function buildTriangles(
   models: LoadedModel[],
-  settings: EffectiveSettings,
+  settings: SliceRasterSettings,
   printer: PrinterProfile,
 ): RasterTriangle[] {
   const widthMm = Math.max(1, printer.buildVolumeMm.width);
@@ -1639,7 +1425,7 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
   }
 
   const visibleModelIds = new Set(models.filter((model) => model.visible).map((model) => model.id));
-  const supportAndRaftTriangles = buildSupportAndRaftWorldTriangles(visibleModelIds);
+  const supportAndRaftTriangles = buildSupportAndRaftWorldTriangles(visibleModelIds, undefined, 0, models);
   // Avoid stack overflow from spreading huge arrays - push one by one instead
   for (let i = 0; i < supportAndRaftTriangles.length; i++) {
     triangles.push(supportAndRaftTriangles[i]);
@@ -1648,11 +1434,67 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
   return triangles;
 }
 
+/**
+ * Appends one 3MF body as model geometry, in the merged model's own space: the
+ * bodies were processed in that space, so the same centre subtraction and model
+ * matrix place them exactly where the merged mesh would.
+ */
+function appendBodyTrianglesInModelSpace(
+  model: LoadedModel,
+  body: GeometryWithBounds,
+  collector: TriangleFloatCollector,
+  tank: number,
+): void {
+  const matrix = composeModelMatrix(model.transform);
+  const flipWinding = matrix.determinant() < 0;
+  const center = model.geometry.center;
+  const geometry = body.geometry;
+  const position = geometry.getAttribute('position');
+  const index = geometry.getIndex();
+  if (!position) return;
+
+  const v0 = new THREE.Vector3();
+  const v1 = new THREE.Vector3();
+  const v2 = new THREE.Vector3();
+  const readVertex = (vertexIndex: number, target: THREE.Vector3) => {
+    target.set(
+      position.getX(vertexIndex) - center.x,
+      position.getY(vertexIndex) - center.y,
+      position.getZ(vertexIndex) - center.z,
+    );
+    target.applyMatrix4(matrix);
+    return target;
+  };
+  const push = () => (
+    flipWinding
+      ? collector.pushTriangle(v0.x, v0.y, v0.z, v2.x, v2.y, v2.z, v1.x, v1.y, v1.z, tank)
+      : collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z, tank)
+  );
+
+  if (index) {
+    const idx = index.array;
+    for (let i = 0; i + 2 < idx.length; i += 3) {
+      readVertex(Number(idx[i]), v0);
+      readVertex(Number(idx[i + 1]), v1);
+      readVertex(Number(idx[i + 2]), v2);
+      push();
+    }
+  } else {
+    for (let i = 0; i + 2 < position.count; i += 3) {
+      readVertex(i, v0);
+      readVertex(i + 1, v1);
+      readVertex(i + 2, v2);
+      push();
+    }
+  }
+}
+
 function appendModelTrianglesInRange(
   model: LoadedModel,
   collector: TriangleFloatCollector,
   startTri: number,
   endTri: number,
+  tank = 0,
 ): void {
   const matrix = composeModelMatrix(model.transform);
   // A negative-determinant model transform (a mirror / negative scale, e.g.
@@ -1685,8 +1527,8 @@ function appendModelTrianglesInRange(
 
   const push = () =>
     flipWinding
-      ? collector.pushTriangle(v0.x, v0.y, v0.z, v2.x, v2.y, v2.z, v1.x, v1.y, v1.z)
-      : collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+      ? collector.pushTriangle(v0.x, v0.y, v0.z, v2.x, v2.y, v2.z, v1.x, v1.y, v1.z, tank)
+      : collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z, tank);
 
   if (index) {
     const idx = index.array;
@@ -1946,7 +1788,7 @@ function buildLayerSegmentsFromWorldTriangles(
   triangles: WorldTriangle[],
   triangleIndices: number[],
   zMm: number,
-  settings: EffectiveSettings,
+  settings: SliceRasterSettings,
   printer: PrinterProfile,
 ): SliceSegment2D[] {
   const widthMm = Math.max(1, printer.buildVolumeMm.width);
@@ -2104,52 +1946,6 @@ function rasterizeSolidSegmentsToImage(
   }
 }
 
-function resolveEffectiveSettings(options: RasterLayerZipExportOptions): EffectiveSettings {
-  const sourceResolutionX = Math.max(1, Math.round(options.printerProfile.display.resolutionX));
-  const sourceResolutionY = Math.max(1, Math.round(options.printerProfile.display.resolutionY));
-
-  const resolvedFormat = resolveSlicingFormatDefinition({
-    printerProfile: options.printerProfile,
-    materialProfile: options.materialProfile,
-  });
-  const usesPluginOwnedEncoding = resolvedFormat.ownership === 'plugin';
-  const xPackingStrategy = resolvedFormat.xPackingStrategy ?? 'none';
-
-  const packed = xPackingStrategy === 'bitdepth-packed-x'
-    ? resolvePluginPackedWidth(options.printerProfile)
-    : {
-      widthPx: sourceResolutionX,
-      sourceResolutionX,
-      sourceResolutionY,
-      xPackingMode: 'none' as const,
-    };
-
-  let widthPx = packed.widthPx;
-  let heightPx = packed.sourceResolutionY;
-
-  const pixelCount = widthPx * heightPx;
-  if (pixelCount > MAX_CANVAS_PIXELS && !usesPluginOwnedEncoding) {
-    const scale = Math.sqrt(MAX_CANVAS_PIXELS / pixelCount);
-    widthPx = Math.max(1, Math.floor(widthPx * scale));
-    heightPx = Math.max(1, Math.floor(heightPx * scale));
-  }
-
-  const layerHeightMm = Math.max(0.001, Number(options.materialProfile.layerHeightMm) || 0.05);
-
-  return {
-    widthPx,
-    heightPx,
-    sourceResolutionX: packed.sourceResolutionX,
-    sourceResolutionY: packed.sourceResolutionY,
-    xPackingMode: packed.xPackingMode,
-    mirrorX: options.printerProfile.display.mirrorX === true,
-    mirrorY: options.printerProfile.display.mirrorY === true,
-    layerHeightMm,
-    totalLayers: 1,
-    tallestObjectHeightMm: layerHeightMm,
-  };
-}
-
 async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promise<RasterizationResult> {
   throwIfAborted(options.abortSignal);
   const visibleModels = options.models.filter((model) => model.visible);
@@ -2157,7 +1953,7 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
     throw new Error('No visible models available for slicing.');
   }
 
-  const settings = resolveEffectiveSettings(options);
+  const settings = resolveSliceRasterSettings(options);
   const triangles = buildWorldTriangles(visibleModels);
   if (triangles.length === 0) {
     throw new Error('Unable to prepare world-space triangles from visible models.');
@@ -2168,10 +1964,11 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
     maxZ = Math.max(maxZ, triangles[i].zMax);
   }
 
-  const buildHeight = Math.max(0, maxZ);
-  const maxBuildHeight = Math.max(0, Number(options.printerProfile.buildVolumeMm.height) || 0);
-  const tallestObjectHeightMm = Math.min(buildHeight, maxBuildHeight);
-  const totalLayers = Math.max(1, Math.ceil(tallestObjectHeightMm / settings.layerHeightMm));
+  const { totalLayers, tallestObjectHeightMm } = resolveSliceLayerCount({
+    maxZMm: maxZ,
+    printerProfile: options.printerProfile,
+    layerHeightMm: settings.layerHeightMm,
+  });
 
   const rasterWidthPx = settings.sourceResolutionX;
   const rasterHeightPx = settings.sourceResolutionY;
@@ -2300,51 +2097,12 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
       'JS fallback generates solid cross-sections via plane intersections and scanline fill.',
       'Used when plugin-owned WASM encoding path is unavailable or fails.',
     ],
-    printer: {
-      id: options.printerProfile.id,
-      name: options.printerProfile.name,
-      resolutionX: options.printerProfile.display.resolutionX,
-      resolutionY: options.printerProfile.display.resolutionY,
-      buildVolumeMm: options.printerProfile.buildVolumeMm,
-      bitDepth: options.printerProfile.bitDepth,
-      outputFormat: options.printerProfile.display.outputFormat,
-      formatVersion: options.printerProfile.display.formatVersion,
-      mirrorX: options.printerProfile.display.mirrorX === true,
-      mirrorY: options.printerProfile.display.mirrorY === true,
-    },
-    material: {
-      id: options.materialProfile.id,
-      name: options.materialProfile.name,
-      layerHeightMm: options.materialProfile.layerHeightMm,
-      normalExposureSec: options.materialProfile.normalExposureSec,
-      bottomExposureSec: options.materialProfile.bottomExposureSec,
-      bottomLayerCount: options.materialProfile.bottomLayerCount,
-      liftDistanceMm: options.materialProfile.liftDistanceMm,
-      liftSpeedMmMin: options.materialProfile.liftSpeedMmMin,
-      retractSpeedMmMin: options.materialProfile.retractSpeedMmMin,
-    },
-    effective: {
-      widthPx: settings.widthPx,
-      heightPx: settings.heightPx,
-      sourceResolutionX: settings.sourceResolutionX,
-      sourceResolutionY: settings.sourceResolutionY,
-      xPackingMode: settings.xPackingMode,
-      mirrorX: settings.mirrorX,
-      mirrorY: settings.mirrorY,
-      layerHeightMm: settings.layerHeightMm,
-      totalLayers,
-      tallestObjectHeightMm,
-    },
-    models: visibleModels.map((model) => ({
-      id: model.id,
-      name: model.name,
-      polygonCount: model.polygonCount,
-      transform: {
-        position: { x: model.transform.position.x, y: model.transform.position.y, z: model.transform.position.z },
-        rotation: { x: model.transform.rotation.x, y: model.transform.rotation.y, z: model.transform.rotation.z },
-        scale: { x: model.transform.scale.x, y: model.transform.scale.y, z: model.transform.scale.z },
-      },
-    })),
+    ...buildSliceJobManifestNodes({
+      printerProfile: options.printerProfile,
+      materialProfile: options.materialProfile,
+      settings,
+      scene: { totalLayers, tallestObjectHeightMm, models: visibleModels.map(describeSliceJobModel) },
+    }),
   };
 
   emitMeshPrepDiagnostic('Mesh prep: complete', 4, 4, {
@@ -2392,10 +2150,10 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     visibleModelCount: visibleModels.length,
   });
 
-  const settings = resolveEffectiveSettings(options);
+  const settings = resolveSliceRasterSettings(options);
   const perfSettings = getSavedSlicingPerformanceSettings();
 
-  const modelTriangleCount = countModelWorldTriangles(visibleModels);
+  const modelTriangleEstimate = countModelWorldTriangles(visibleModels);
   console.warn('[SupportAA] collector input partitions', {
     models: visibleModels.map((model) => {
       const totalTriangles = getModelTriangleCount(model);
@@ -2415,22 +2173,51 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
         scale: model.transform.scale.toArray(),
       };
     }),
-    modelTriangleCount,
+    modelTriangleEstimate,
   });
+  // Preserve closed surfaces, including their out-of-volume portions. The
+  // rasterizer needs those crossings to determine winding at the plate edge.
   const collector = new TriangleFloatCollector(
-    modelTriangleCount + 4096,
+    modelTriangleEstimate + 4096,
     options.flushBinaryMeshChunk,
     options.meshChunkTargetBytes,
+    options.plateOffsetMm,
+  );
+
+  // A multi-tank printer prints a body from the tank its material sits in. The
+  // mapping is the material's position in the printer's tank list; anything
+  // unassigned (or a single-tank printer) falls back to Tank 1.
+  const tankMaterials = options.printerProfile.tankMaterials ?? [];
+  const multiTank = options.printerProfile.materialMode === 'multiTank' && tankMaterials.length > 1;
+  const tankForMaterial = (materialId: string | undefined): number => {
+    if (!multiTank || !materialId) return 0;
+    const index = tankMaterials.indexOf(materialId);
+    return index >= 0 ? index : 0;
+  };
+  const usesBodyTanks = (model: LoadedModel): boolean => (
+    multiTank
+    && (model.splitBodies?.length ?? 0) > 1
+    && (model.bodyMaterialProfileIds?.some((id) => !!id) ?? false)
   );
 
   // Push model-only triangles first (across all models), then support-only.
   // This produces the same collector layout as manually splitting before slicing.
   for (const model of visibleModels) {
+    if (usesBodyTanks(model)) {
+      model.splitBodies?.forEach((body, index) => {
+        const materialId = model.bodyMaterialProfileIds?.[index] ?? model.materialProfileId;
+        appendBodyTrianglesInModelSpace(model, body, collector, tankForMaterial(materialId));
+      });
+      continue;
+    }
     const modelTriCount = effectiveModelTriangleCount(model);
     if (modelTriCount > 0) {
-      appendModelTrianglesInRange(model, collector, 0, modelTriCount);
+      appendModelTrianglesInRange(model, collector, 0, modelTriCount, tankForMaterial(model.materialProfileId));
     }
   }
+  // The native side splits the buffer here, before support-classified meshes
+  // and generated support/raft geometry are appended.
+  const modelTriangleCount = collector.triangleCount;
   for (const model of visibleModels) {
     const totalTris = getModelTriangleCount(model);
     const modelTriCount = effectiveModelTriangleCount(model);
@@ -2439,12 +2226,12 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     }
   }
   emitMeshPrepDiagnostic('Mesh prep: models', 1, 4, {
-    modelTriangleEstimate: modelTriangleCount,
+    modelTriangleEstimate,
     triangleCountAfterModels: collector.triangleCount,
   });
 
   const visibleModelIds = new Set(visibleModels.map((model) => model.id));
-  buildSupportAndRaftWorldTriangles(visibleModelIds, collector);
+  buildSupportAndRaftWorldTriangles(visibleModelIds, collector, options.supportTipShrinkPercent ?? 0, visibleModels);
   emitMeshPrepDiagnostic('Mesh prep: supports', 2, 4, {
     triangleCountAfterSupports: collector.triangleCount,
   });
@@ -2457,10 +2244,11 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     ? Math.max(0, collector.maxZ)
     : 0;
 
-  const buildHeight = maxZ;
-  const maxBuildHeight = Math.max(0, Number(options.printerProfile.buildVolumeMm.height) || 0);
-  const tallestObjectHeightMm = Math.min(buildHeight, maxBuildHeight);
-  const totalLayers = Math.max(1, Math.ceil(tallestObjectHeightMm / settings.layerHeightMm));
+  const { totalLayers, tallestObjectHeightMm } = resolveSliceLayerCount({
+    maxZMm: maxZ,
+    printerProfile: options.printerProfile,
+    layerHeightMm: settings.layerHeightMm,
+  });
 
   const trianglesXYZ = await collector.finalize();
   console.warn('[SupportAA] collector finalized', {
@@ -2499,61 +2287,6 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     totalCollectorTris: collector.triangleCount,
   });
 
-  const manifest = {
-    version: 2,
-    createdAt: new Date().toISOString(),
-    mode: 'wasm_solid_slice_v0',
-    notes: [
-      'Solid cross-sections are generated in Rust/WASM from transformed triangle meshes.',
-      'Container packaging is encoded by plugin-owned format encoders.',
-    ],
-    printer: {
-      id: options.printerProfile.id,
-      name: options.printerProfile.name,
-      resolutionX: options.printerProfile.display.resolutionX,
-      resolutionY: options.printerProfile.display.resolutionY,
-      buildVolumeMm: options.printerProfile.buildVolumeMm,
-      bitDepth: options.printerProfile.bitDepth,
-      outputFormat: options.printerProfile.display.outputFormat,
-      formatVersion: options.printerProfile.display.formatVersion,
-      mirrorX: options.printerProfile.display.mirrorX === true,
-      mirrorY: options.printerProfile.display.mirrorY === true,
-    },
-    material: {
-      id: options.materialProfile.id,
-      name: options.materialProfile.name,
-      layerHeightMm: options.materialProfile.layerHeightMm,
-      normalExposureSec: options.materialProfile.normalExposureSec,
-      bottomExposureSec: options.materialProfile.bottomExposureSec,
-      bottomLayerCount: options.materialProfile.bottomLayerCount,
-      liftDistanceMm: options.materialProfile.liftDistanceMm,
-      liftSpeedMmMin: options.materialProfile.liftSpeedMmMin,
-      retractSpeedMmMin: options.materialProfile.retractSpeedMmMin,
-    },
-    effective: {
-      widthPx: settings.widthPx,
-      heightPx: settings.heightPx,
-      sourceResolutionX: settings.sourceResolutionX,
-      sourceResolutionY: settings.sourceResolutionY,
-      xPackingMode: settings.xPackingMode,
-      mirrorX: settings.mirrorX,
-      mirrorY: settings.mirrorY,
-      layerHeightMm: settings.layerHeightMm,
-      totalLayers,
-      tallestObjectHeightMm,
-    },
-    models: visibleModels.map((model) => ({
-      id: model.id,
-      name: model.name,
-      polygonCount: model.polygonCount,
-      transform: {
-        position: { x: model.transform.position.x, y: model.transform.position.y, z: model.transform.position.z },
-        rotation: { x: model.transform.rotation.x, y: model.transform.rotation.y, z: model.transform.rotation.z },
-        scale: { x: model.transform.scale.x, y: model.transform.scale.y, z: model.transform.scale.z },
-      },
-    })),
-  };
-
   return {
     sourceWidthPx: settings.sourceResolutionX,
     sourceHeightPx: settings.sourceResolutionY,
@@ -2564,6 +2297,8 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     mirrorX: settings.mirrorX,
     mirrorY: settings.mirrorY,
     modelTriangleCount,
+    tankCount: multiTank ? tankMaterials.length : 1,
+    ...(multiTank ? { triangleTankIndex: collector.tankIndices } : {}),
     buildWidthMm: Math.max(1, options.printerProfile.buildVolumeMm.width),
     buildDepthMm: Math.max(1, options.printerProfile.buildVolumeMm.depth),
     layerHeightMm: settings.layerHeightMm,
@@ -2571,7 +2306,7 @@ export async function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOp
     tallestObjectHeightMm,
     trianglesXYZ,
     meshBounds: collector.meshBounds,
-    metadataJson: JSON.stringify(manifest),
+    models: visibleModels.map(describeSliceJobModel),
   };
 }
 
@@ -2727,7 +2462,7 @@ export async function exportRasterLayerZip(options: RasterLayerZipExportOptions)
 
   throwIfAborted(options.abortSignal);
 
-  const outputName = `${safeFilenameBase(options.filenameBase)}_layers.zip`;
+  const outputName = `${asciiFileBaseName(options.filenameBase)}_layers.zip`;
   if (options.outputMode !== 'return') {
     triggerBlobDownload(outputBlob, outputName);
   }

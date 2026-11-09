@@ -125,3 +125,47 @@ test('high-precision arrange reuses cached hull SAT data without changing packed
     'expected reused cached hull SAT data to preserve packed output exactly',
   );
 });
+
+test('high-precision arrange packs an offset plate inside that plate, and leaves the first plate empty', () => {
+  // Plate 2 sits one footprint + gap to the right of plate 1: 60mm wide, 20mm gap.
+  const plateOffsetMm = { dxMm: 80, dyMm: 0 };
+  const buildTargets = (x: number): ArrangeModel[] => [
+    buildModel('a', 10, 10, buildTransform(x, -20, 0)),
+    buildModel('b', 10, 10, buildTransform(x, 0, 0)),
+    buildModel('c', 10, 10, buildTransform(x, 20, 0)),
+  ];
+  const plateTwoModels = buildTargets(110);
+
+  const run = (plateOffset?: { dxMm: number; dyMm: number }) => computeHighPrecisionArrangeResult({
+    visibleModels: plateTwoModels,
+    sceneModels: plateTwoModels,
+    widthMm: 60,
+    depthMm: 60,
+    originMode: 'center' as const,
+    ...(plateOffset ? { plateOffsetMm: plateOffset } : {}),
+    arrangeSpacingMm: 1,
+    arrangeAllowRotateOnZ: false,
+    arrangeAnchorMode: 'center' as const,
+    getArrangeTransform: (model: ArrangeModel) => model.transform,
+    hullCache: new Map(),
+    safetyMarginMm: { front: 0, back: 0, left: 0, right: 0 },
+  });
+
+  const onSecondPlate = run(plateOffsetMm);
+  assert.equal(onSecondPlate.updates.length, 3, 'expected all three models to be placed');
+  for (const update of onSecondPlate.updates) {
+    const { x, y } = update.transform.position;
+    // Plate 2's own frame: plate 1's [-30, 30] shifted by the cascade offset.
+    assert.ok(x >= 50 && x <= 110, `expected ${update.id}.x on plate 2, got ${x}`);
+    assert.ok(y >= -30 && y <= 30, `expected ${update.id}.y on plate 2, got ${y}`);
+  }
+
+  // Without the offset the same models pack into plate 1's frame — the frame is the
+  // only thing that moved, which is what made a plate-2 arrange drop its models on plate 1.
+  const onFirstPlate = run();
+  assert.equal(onFirstPlate.updates.length, 3, 'expected all three models to be placed');
+  for (const update of onFirstPlate.updates) {
+    const { x } = update.transform.position;
+    assert.ok(x >= -30 && x <= 30, `expected ${update.id}.x on plate 1, got ${x}`);
+  }
+});

@@ -6,8 +6,9 @@ import * as THREE from 'three';
 /**
  * Axis labels for X, Y, Z axes using sprites (no font loading)
  */
-export function AxisLabels({ size = 100 }: { size?: number }) {
-  const labelOffset = size + 2;
+export function AxisLabels({ size = 100, scale = 1 }: { size?: number; scale?: number }) {
+  const labelOffset = size + 2 * scale;
+  const labelSize = 6 * scale;
 
   // Create canvas-based texture for each label
   const createLabelTexture = (text: string, color: string) => {
@@ -38,21 +39,21 @@ export function AxisLabels({ size = 100 }: { size?: number }) {
     <>
       {/* X axis - Red */}
       {xTexture && (
-        <sprite position={[labelOffset, 0, 0]} scale={[6, 6, 1]} renderOrder={30} raycast={nullRaycast}>
+        <sprite position={[labelOffset, 0, 0]} scale={[labelSize, labelSize, 1]} renderOrder={30} raycast={nullRaycast}>
           <spriteMaterial map={xTexture} transparent sizeAttenuation={true} depthTest depthWrite={false} toneMapped={false} />
         </sprite>
       )}
 
       {/* Y axis - Green */}
       {yTexture && (
-        <sprite position={[0, labelOffset, 0]} scale={[6, 6, 1]} renderOrder={30} raycast={nullRaycast}>
+        <sprite position={[0, labelOffset, 0]} scale={[labelSize, labelSize, 1]} renderOrder={30} raycast={nullRaycast}>
           <spriteMaterial map={yTexture} transparent sizeAttenuation={true} depthTest depthWrite={false} toneMapped={false} />
         </sprite>
       )}
 
       {/* Z axis - Blue */}
       {zTexture && (
-        <sprite position={[0, 0, labelOffset]} scale={[6, 6, 1]} renderOrder={30} raycast={nullRaycast}>
+        <sprite position={[0, 0, labelOffset]} scale={[labelSize, labelSize, 1]} renderOrder={30} raycast={nullRaycast}>
           <spriteMaterial map={zTexture} transparent sizeAttenuation={true} depthTest depthWrite={false} toneMapped={false} />
         </sprite>
       )}

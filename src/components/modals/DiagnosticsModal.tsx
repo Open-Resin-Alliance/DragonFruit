@@ -3,9 +3,12 @@
 import React from 'react';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { X } from 'lucide-react';
+import { IconButton } from '@/components/atoms';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
-import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import { countSupportCollections, implicitSegmentCount, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
+import type { SupportCollectionKey } from '@/supports/supportTypeRegistry';
+import type { Segment } from '@/supports/types';
 import { getPickingDiagnosticsSnapshot } from '@/components/picking/pickingDiagnostics';
 import {
   DIAGNOSTICS_BENCHMARK_PROGRESS_EVENT,
@@ -14,6 +17,8 @@ import {
   type DiagnosticsBenchmarkResult,
   type DiagnosticsBenchmarkStressProfile,
 } from '@/components/modals/diagnosticsBenchmarkEvents';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+import type { UnitFormat } from '@/utils/unitFormatting';
 
 type DiagnosticsModalProps = {
   isOpen: boolean;
@@ -40,16 +45,12 @@ type RuntimeStats = {
   supportStats: SupportDiagnosticsStats;
 };
 
-type SupportDiagnosticsStats = {
-  roots: number;
-  trunks: number;
-  branches: number;
-  leaves: number;
-  twigs: number;
-  sticks: number;
-  braces: number;
-  kickstands: number;
-  knots: number;
+/**
+ * Per-collection counts come from the registry, so a type added later is
+ * reported without being listed here. Anchors were missing from the
+ * hand-written list and always read zero.
+ */
+type SupportDiagnosticsStats = Record<SupportCollectionKey, number> & {
   segmentCount: number;
   jointCount: number;
   estimatedRenderablePrimitives: number;
@@ -64,15 +65,7 @@ type SupportDiagnosticsStats = {
 };
 
 const EMPTY_SUPPORT_STATS: SupportDiagnosticsStats = {
-  roots: 0,
-  trunks: 0,
-  branches: 0,
-  leaves: 0,
-  twigs: 0,
-  sticks: 0,
-  braces: 0,
-  kickstands: 0,
-  knots: 0,
+  ...(Object.fromEntries(SUPPORT_COLLECTION_KEYS.map((key) => [key, 0])) as Record<SupportCollectionKey, number>),
   segmentCount: 0,
   jointCount: 0,
   estimatedRenderablePrimitives: 0,
@@ -90,67 +83,58 @@ const GRAPH_WINDOW_SECONDS = 120;
 const SAMPLE_INTERVAL_MS = 250;
 const MAX_GRAPH_POINTS = Math.floor((GRAPH_WINDOW_SECONDS * 1000) / SAMPLE_INTERVAL_MS);
 
-function formatBytes(bytes: number | null): string {
+function formatBytes(bytes: number | null, fmt: UnitFormat): string {
   if (bytes == null || !Number.isFinite(bytes)) return 'N/A';
   const abs = Math.max(0, bytes);
   const KB = 1024;
   const MB = KB * 1024;
   const GB = MB * 1024;
 
-  if (abs >= GB) return `${(abs / GB).toFixed(2)} GB`;
-  if (abs >= MB) return `${(abs / MB).toFixed(2)} MB`;
-  if (abs >= KB) return `${(abs / KB).toFixed(1)} KB`;
-  return `${abs.toFixed(0)} B`;
+  if (abs >= GB) return fmt.quantity(abs / GB, 2, 'GB');
+  if (abs >= MB) return fmt.quantity(abs / MB, 2, 'MB');
+  if (abs >= KB) return fmt.quantity(abs / KB, 1, 'KB');
+  return fmt.quantity(abs, 0, 'B');
 }
 
-function formatPercent(value: number | null): string {
+function formatPercent(value: number | null, fmt: UnitFormat): string {
   if (value == null || !Number.isFinite(value)) return 'N/A';
-  return `${(value * 100).toFixed(1)}%`;
+  return fmt.quantity(value * 100, 1, 'percent');
 }
 
-function formatMs(value: number | null | undefined, digits = 2): string {
+function formatMs(value: number | null | undefined, fmt: UnitFormat, digits = 2): string {
   if (value == null || !Number.isFinite(value)) return 'N/A';
-  return `${value.toFixed(digits)} ms`;
+  return fmt.quantity(value, digits, 'ms');
 }
 
-function formatFps(value: number | null | undefined, digits = 1): string {
+function formatFps(value: number | null | undefined, fmt: UnitFormat, digits = 1): string {
   if (value == null || !Number.isFinite(value)) return 'N/A';
-  return `${value.toFixed(digits)} fps`;
+  return fmt.quantity(value, digits, 'fps');
 }
 
 function computeSupportDiagnostics(): SupportDiagnosticsStats {
   const supportState = getSupportSnapshot();
-  const kickstandState = getKickstandSnapshot();
   const picking = getPickingDiagnosticsSnapshot();
 
-  const trunks = Object.values(supportState.trunks);
-  const branches = Object.values(supportState.branches);
-  const twigs = Object.values(supportState.twigs);
-  const sticks = Object.values(supportState.sticks);
-  const braces = Object.values(supportState.braces);
-  const kickstands = Object.values(kickstandState.kickstands);
-
-  const segmentCount =
-    trunks.reduce((sum, trunk) => sum + trunk.segments.length, 0)
-    + branches.reduce((sum, branch) => sum + branch.segments.length, 0)
-    + twigs.reduce((sum, twig) => sum + twig.segments.length, 0)
-    + sticks.reduce((sum, stick) => sum + stick.segments.length, 0)
-    + kickstands.reduce((sum, kickstand) => sum + kickstand.segments.length, 0)
-    + braces.length;
-
+  // Every type's segments and joints. A brace has no segments but draws one
+  // shaft, so it counts as one each.
   const uniqueJointIds = new Set<string>();
-  const collectSegmentJoints = (segments: Array<{ topJoint?: { id: string } | null; bottomJoint?: { id: string } | null }>) => {
-    for (const segment of segments) {
-      if (segment.topJoint?.id) uniqueJointIds.add(segment.topJoint.id);
-      if (segment.bottomJoint?.id) uniqueJointIds.add(segment.bottomJoint.id);
-    }
-  };
+  let segmentCount = 0;
 
-  trunks.forEach((trunk) => collectSegmentJoints(trunk.segments));
-  branches.forEach((branch) => collectSegmentJoints(branch.segments));
-  twigs.forEach((twig) => collectSegmentJoints(twig.segments));
-  sticks.forEach((stick) => collectSegmentJoints(stick.segments));
-  kickstands.forEach((kickstand) => collectSegmentJoints(kickstand.segments));
+  for (const descriptor of SUPPORT_TYPES) {
+    const collection = supportState[descriptor.location.key] as unknown as Record<string, { segments?: Segment[] }>;
+
+    for (const entity of Object.values(collection ?? {})) {
+      if (!descriptor.hasSegments) {
+        segmentCount += implicitSegmentCount(descriptor);
+        continue;
+      }
+      for (const segment of entity.segments ?? []) {
+        segmentCount += 1;
+        if (segment.topJoint?.id) uniqueJointIds.add(segment.topJoint.id);
+        if (segment.bottomJoint?.id) uniqueJointIds.add(segment.bottomJoint.id);
+      }
+    }
+  }
 
   const estimatedRenderablePrimitives =
     segmentCount
@@ -168,15 +152,7 @@ function computeSupportDiagnostics(): SupportDiagnosticsStats {
     + picking.registrationsByCategory.raft;
 
   return {
-    roots: Object.keys(supportState.roots).length,
-    trunks: trunks.length,
-    branches: branches.length,
-    leaves: Object.keys(supportState.leaves).length,
-    twigs: twigs.length,
-    sticks: sticks.length,
-    braces: braces.length,
-    kickstands: kickstands.length,
-    knots: Object.keys(supportState.knots).length,
+    ...(countSupportCollections(supportState) as Record<SupportCollectionKey, number>),
     segmentCount,
     jointCount: uniqueJointIds.size,
     estimatedRenderablePrimitives,
@@ -242,6 +218,7 @@ export function DiagnosticsModal({
   totalPolygons,
   selectedPolygons,
 }: DiagnosticsModalProps) {
+  const fmt = useLocaleFormat();
   useEscapeToClose(isOpen, onClose);
 
   const [stats, setStats] = React.useState<RuntimeStats>({
@@ -454,53 +431,49 @@ export function DiagnosticsModal({
               Runtime telemetry for DragonFruit (toggle with Ctrl+Shift+D)
             </p>
           </div>
-          <button
+          <IconButton
+            variant="surface"
+            size="sm"
             onClick={onClose}
-            className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-1)',
-              color: 'var(--text-muted)',
-            }}
             aria-label="Close diagnostics"
           >
             <X className="w-4 h-4" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="max-h-[calc(88vh-58px)] overflow-y-auto custom-scrollbar p-4 space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>FPS</div>
-              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.fps.toFixed(1)}</div>
+              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{fmt.fixed(stats.fps, 1)}</div>
             </div>
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Frame Time</div>
-              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.frameTimeMs.toFixed(2)} ms</div>
+              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{fmt.quantity(stats.frameTimeMs, 2, 'ms')}</div>
             </div>
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Used JS Heap</div>
-              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{formatBytes(stats.usedJsHeapBytes)}</div>
+              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{formatBytes(stats.usedJsHeapBytes, fmt)}</div>
             </div>
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Heap Usage</div>
-              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{formatPercent(heapUsageRatio)}</div>
+              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{formatPercent(heapUsageRatio, fmt)}</div>
             </div>
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>CPU Usage (est.)</div>
-              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.cpuUsageEstimate.toFixed(0)}%</div>
+              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{fmt.quantity(stats.cpuUsageEstimate, 0, 'percent')}</div>
             </div>
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Support Segments</div>
-              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.supportStats.segmentCount.toLocaleString()}</div>
+              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{fmt.number(stats.supportStats.segmentCount)}</div>
             </div>
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Support Pickers</div>
-              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingRegisteredSupportRelated.toLocaleString()}</div>
+              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{fmt.number(stats.supportStats.pickingRegisteredSupportRelated)}</div>
             </div>
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Picking Avg</div>
-              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingAvgMs.toFixed(3)} ms</div>
+              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{fmt.quantity(stats.supportStats.pickingAvgMs, 3, 'ms')}</div>
             </div>
           </div>
 
@@ -566,21 +539,21 @@ export function DiagnosticsModal({
                   <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                     <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Overall Avg</div>
                     <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      {formatFps(benchmarkResult.overall.fpsAvg)}
+                      {formatFps(benchmarkResult.overall.fpsAvg, fmt)}
                     </div>
-                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{formatMs(benchmarkResult.overall.frameTimeAvgMs)}</div>
+                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{formatMs(benchmarkResult.overall.frameTimeAvgMs, fmt)}</div>
                   </div>
                   <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                     <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Overall P95</div>
                     <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      {formatMs(benchmarkResult.overall.frameTimeP95Ms)}
+                      {formatMs(benchmarkResult.overall.frameTimeP95Ms, fmt)}
                     </div>
                     <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Projection: {benchmarkResult.projectionMode}</div>
                   </div>
                   <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                     <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Run Duration</div>
                     <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      {(benchmarkResult.totalDurationMs / 1000).toFixed(2)}s
+                      {fmt.quantity(benchmarkResult.totalDurationMs / 1000, 2, 's')}
                     </div>
                     <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                       Camera feel: {benchmarkResult.cameraFeelPreset} • Stress: {benchmarkResult.stressProfile}
@@ -604,11 +577,11 @@ export function DiagnosticsModal({
                       {benchmarkResult.phases.map((phase) => (
                         <tr key={phase.phase} style={{ borderTop: '1px solid var(--border-subtle)', background: 'var(--surface-1)' }}>
                           <td className="px-2 py-1.5" style={{ color: 'var(--text-strong)' }}>{phase.phase}</td>
-                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-strong)' }}>{phase.stats.fpsAvg.toFixed(1)}</td>
-                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{phase.stats.fpsMin.toFixed(1)}</td>
-                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-strong)' }}>{phase.stats.frameTimeAvgMs.toFixed(2)} ms</td>
-                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{phase.stats.frameTimeP95Ms.toFixed(2)} ms</td>
-                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{phase.stats.frameTimeMaxMs.toFixed(2)} ms</td>
+                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-strong)' }}>{fmt.fixed(phase.stats.fpsAvg, 1)}</td>
+                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt.fixed(phase.stats.fpsMin, 1)}</td>
+                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-strong)' }}>{fmt.quantity(phase.stats.frameTimeAvgMs, 2, 'ms')}</td>
+                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt.quantity(phase.stats.frameTimeP95Ms, 2, 'ms')}</td>
+                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{fmt.quantity(phase.stats.frameTimeMaxMs, 2, 'ms')}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -645,8 +618,8 @@ export function DiagnosticsModal({
                 <div>Models: <span style={{ color: 'var(--text-strong)' }}>{modelCount}</span></div>
                 <div>Visible Models: <span style={{ color: 'var(--text-strong)' }}>{visibleModelCount}</span></div>
                 <div>Selected Models: <span style={{ color: 'var(--text-strong)' }}>{selectedModelCount}</span></div>
-                <div>Total Triangles: <span style={{ color: 'var(--text-strong)' }}>{totalPolygons.toLocaleString()}</span></div>
-                <div>Selected Triangles: <span style={{ color: 'var(--text-strong)' }}>{selectedPolygons.toLocaleString()}</span></div>
+                <div>Total Triangles: <span style={{ color: 'var(--text-strong)' }}>{fmt.number(totalPolygons)}</span></div>
+                <div>Selected Triangles: <span style={{ color: 'var(--text-strong)' }}>{fmt.number(selectedPolygons)}</span></div>
               </div>
             </div>
 
@@ -655,8 +628,8 @@ export function DiagnosticsModal({
               <div className="space-y-1 text-[12px]" style={{ color: 'var(--text-muted)' }}>
                 <div>Logical CPU Cores: <span style={{ color: 'var(--text-strong)' }}>{hardwareConcurrency ?? 'N/A'}</span></div>
                 <div>Device Memory: <span style={{ color: 'var(--text-strong)' }}>{deviceMemory ? `${deviceMemory} GB` : 'N/A'}</span></div>
-                <div>Total JS Heap: <span style={{ color: 'var(--text-strong)' }}>{formatBytes(stats.totalJsHeapBytes)}</span></div>
-                <div>JS Heap Limit: <span style={{ color: 'var(--text-strong)' }}>{formatBytes(stats.heapLimitBytes)}</span></div>
+                <div>Total JS Heap: <span style={{ color: 'var(--text-strong)' }}>{formatBytes(stats.totalJsHeapBytes, fmt)}</span></div>
+                <div>JS Heap Limit: <span style={{ color: 'var(--text-strong)' }}>{formatBytes(stats.heapLimitBytes, fmt)}</span></div>
                 <div>User Agent: <span style={{ color: 'var(--text-strong)' }}>{navigator.userAgent}</span></div>
               </div>
             </div>
@@ -666,32 +639,26 @@ export function DiagnosticsModal({
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[12px] font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>Support Stats</div>
               <div className="space-y-1 text-[12px]" style={{ color: 'var(--text-muted)' }}>
-                <div>Trunks: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.trunks.toLocaleString()}</span></div>
-                <div>Branches: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.branches.toLocaleString()}</span></div>
-                <div>Leaves: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.leaves.toLocaleString()}</span></div>
-                <div>Twigs: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.twigs.toLocaleString()}</span></div>
-                <div>Sticks: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.sticks.toLocaleString()}</span></div>
-                <div>Braces: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.braces.toLocaleString()}</span></div>
-                <div>Kickstands: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.kickstands.toLocaleString()}</span></div>
-                <div>Roots: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.roots.toLocaleString()}</span></div>
-                <div>Knots: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.knots.toLocaleString()}</span></div>
-                <div>Segments: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.segmentCount.toLocaleString()}</span></div>
-                <div>Joints: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.jointCount.toLocaleString()}</span></div>
-                <div>Estimated Render Primitives: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.estimatedRenderablePrimitives.toLocaleString()}</span></div>
+                {SUPPORT_COLLECTION_KEYS.map((key) => (
+                  <div key={key}>{key.charAt(0).toUpperCase()}{key.slice(1)}: <span style={{ color: 'var(--text-strong)' }}>{fmt.number(stats.supportStats[key])}</span></div>
+                ))}
+                <div>Segments: <span style={{ color: 'var(--text-strong)' }}>{fmt.number(stats.supportStats.segmentCount)}</span></div>
+                <div>Joints: <span style={{ color: 'var(--text-strong)' }}>{fmt.number(stats.supportStats.jointCount)}</span></div>
+                <div>Estimated Render Primitives: <span style={{ color: 'var(--text-strong)' }}>{fmt.number(stats.supportStats.estimatedRenderablePrimitives)}</span></div>
               </div>
             </div>
 
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-[12px] font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>GPU Picking Stats</div>
               <div className="space-y-1 text-[12px]" style={{ color: 'var(--text-muted)' }}>
-                <div>Total Registered: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingRegisteredTotal.toLocaleString()}</span></div>
-                <div>Support Registered: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingRegisteredSupportRelated.toLocaleString()}</span></div>
-                <div>Visible Pick Objects: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingVisibleObjects.toLocaleString()}</span></div>
-                <div>Cached Pick Objects: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingCachedObjects.toLocaleString()}</span></div>
-                <div>Pick Avg: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingAvgMs.toFixed(3)} ms</span></div>
-                <div>Pick Last: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingLastMs.toFixed(3)} ms</span></div>
-                <div>Sync Cache Avg: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingSyncAvgMs.toFixed(3)} ms</span></div>
-                <div>Pick Rate: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingPicksPerSecond.toFixed(1)} /s</span></div>
+                <div>Total Registered: <span style={{ color: 'var(--text-strong)' }}>{fmt.number(stats.supportStats.pickingRegisteredTotal)}</span></div>
+                <div>Support Registered: <span style={{ color: 'var(--text-strong)' }}>{fmt.number(stats.supportStats.pickingRegisteredSupportRelated)}</span></div>
+                <div>Visible Pick Objects: <span style={{ color: 'var(--text-strong)' }}>{fmt.number(stats.supportStats.pickingVisibleObjects)}</span></div>
+                <div>Cached Pick Objects: <span style={{ color: 'var(--text-strong)' }}>{fmt.number(stats.supportStats.pickingCachedObjects)}</span></div>
+                <div>Pick Avg: <span style={{ color: 'var(--text-strong)' }}>{fmt.quantity(stats.supportStats.pickingAvgMs, 3, 'ms')}</span></div>
+                <div>Pick Last: <span style={{ color: 'var(--text-strong)' }}>{fmt.quantity(stats.supportStats.pickingLastMs, 3, 'ms')}</span></div>
+                <div>Sync Cache Avg: <span style={{ color: 'var(--text-strong)' }}>{fmt.quantity(stats.supportStats.pickingSyncAvgMs, 3, 'ms')}</span></div>
+                <div>Pick Rate: <span style={{ color: 'var(--text-strong)' }}>{fmt.quantity(stats.supportStats.pickingPicksPerSecond, 1, 'perSecond')}</span></div>
               </div>
             </div>
           </div>

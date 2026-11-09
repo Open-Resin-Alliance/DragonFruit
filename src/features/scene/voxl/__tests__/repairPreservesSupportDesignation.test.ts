@@ -42,7 +42,7 @@ test('repair preserves isSupportGeometry designation on model object', () => {
 test('assumeSupportGeometry option is passed in MeshRepairOptions payload', () => {
   const options: MeshRepairOptions = {
     assumeSupportGeometry: true,
-    weldEpsilon: 1e-5,
+    weldToleranceMm: 1e-5,
   };
 
   assert.equal(options.assumeSupportGeometry, true);

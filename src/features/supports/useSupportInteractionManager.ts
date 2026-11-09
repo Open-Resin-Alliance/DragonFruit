@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useSyncExternalStore, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useSyncExternalStore, useRef } from 'react';
 import * as THREE from 'three';
 import type { SupportMode } from '@/supports/types';
+import type { SupportPlacementActive, SupportPlacementPreviews } from '@/supports/rendering';
 import { useTrunkPlacementV2 } from '@/supports/SupportTypes/Trunk/useTrunkPlacement';
 import { useBranchPlacement } from '@/supports/SupportTypes/Branch/useBranchPlacement';
 import { useLeafPlacement } from '@/supports/SupportTypes/Leaf/useLeafPlacement';
@@ -12,38 +13,24 @@ import { useInteractionStatus } from '@/supports/interaction/useInteractionStatu
 import { useJointCreationHotkey } from '@/supports/SupportPrimitives/Joint/useJointCreationHotkey';
 import { useCurveHotkey } from '@/supports/Curves/useCurveHotkey';
 import { useJointCreationState } from '@/supports/SupportPrimitives/Joint/jointCreationState';
-import { computeAndApplyTrunkDiameterProfile } from '@/supports/SupportTypes/Trunk/TrunkReplacement';
-import {
-  getSelectedId,
-  getSelectedCategory,
-  getBranches,
-  getBraces,
-  getLeaves,
-  getSnapshot,
-  removeBranch,
-  removeBrace,
-  removeLeaf,
-  removeTwig,
-  removeStick,
-  removeAnchor,
-  removeTrunk,
-  removeKickstandCascade,
-  removeJointById,
-  updateKnot,
-  updateTrunk,
-  setSelectedId,
-  setHoveredState,
-  subscribe,
-} from '@/supports/state';
+import { cloneSupportState, getSelectedId, getSelectedCategory, findShaftOwnerOfJoint, findShaftOwnerOfSegment, getSupportEntities, getSupportTypeOf, getSupports, getSnapshot, setSelectedId, setHoveredState, subscribe } from '@/supports/state';
+import { removeJointWithPayload } from '@/supports/history/jointRemovalPayload';
+import { pushSupportEditHistory } from '@/supports/history/supportEditHistory';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
-import { SUPPORT_REMOVE_ANCHOR, SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK, SUPPORT_AUTO_BRACE_REPLACE, SUPPORT_REMOVE_KICKSTAND, type SupportBranchRemovePayload } from '@/supports/history/actionTypes';
+import { SUPPORT_MULTI_DELETE } from '@/supports/history/actionTypes';
+import { findKnotHost, getSupportTypeBySelectionCategory, getSupportTypeDescriptor, KNOT_HOST_PRECEDENCE, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
+import { removeSupportEntityWithPayload } from '@/supports/history/removalPayload';
+import { MODEL_SURFACE_GESTURE_TYPES } from '@/supports/supportTypeRegistry';
+import type { ModelSurfaceGestureTypeId } from '@/supports/supportTypeRegistry';
+import { knotFields } from '@/supports/interaction/shared/selection/selectedIdsByType';
 import { clearSupportSelection, getResolvedPrimarySelection, selectSupportIds } from '@/supports/interaction/shared/selection/selectionController';
-import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { resolveSupportPlacementHotkeyBindings } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
-import { resolveSupportPlacementRouting } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementRouting';
+import { resolveSupportPlacementRouting, routeModelPlacementHit, BRACE_PLACEMENT_OWNER, BRANCH_FAMILY_PLACEMENT_OWNER, DEFAULT_PLACEMENT_TYPE_ID, KICKSTAND_PLACEMENT_OWNER, LEAF_PLACEMENT_OWNER } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementRouting';
+import type { SupportModelPlacementHandlers, SupportModelPlacementOwner } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementHotkeyTypes';
 import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
+import { deleteJointLabel, deleteSupportsLabel } from '@/supports/history/supportHistoryLabels';
 
 interface SupportInteractionOptions {
   mode: SupportMode;
@@ -51,93 +38,33 @@ interface SupportInteractionOptions {
 
 
 
-function resolveSupportCategoryFromSnapshot(id: string) {
-  const snapshot = getSnapshot();
-  if (snapshot.trunks[id]) return 'trunk' as const;
-  if (snapshot.branches[id]) return 'branch' as const;
-  if (snapshot.leaves[id]) return 'leaf' as const;
-  if (snapshot.twigs[id]) return 'twig' as const;
-  if (snapshot.sticks[id]) return 'stick' as const;
-  if (snapshot.braces[id]) return 'brace' as const;
-  if (snapshot.anchors[id]) return 'anchor' as const;
-  if (getKickstandSnapshot().kickstands[id]) return 'brace' as const;
-  return null;
+/**
+ * @deprecated for removal -- prefer `getSupportTypeOf(id)` from state.
+ * Kept while callers and tests still name it.
+ */
+export function resolveSupportCategoryFromSnapshot(id: string) {
+  return getSupportTypeOf(id);
 }
 
 function collectAllSupportIds() {
-  const snapshot = getSnapshot();
-  const kickstandSnapshot = getKickstandSnapshot();
-
-  return [
-    ...Object.keys(snapshot.trunks),
-    ...Object.keys(snapshot.branches),
-    ...Object.keys(snapshot.leaves),
-    ...Object.keys(snapshot.twigs),
-    ...Object.keys(snapshot.sticks),
-    ...Object.keys(snapshot.braces),
-    ...Object.keys(snapshot.anchors),
-    ...Object.keys(kickstandSnapshot.kickstands),
-  ];
+  return Object.keys(getSupports());
 }
 
-function resolveSupportOwnerFromSegmentId(segmentId: string): { category: 'trunk' | 'branch' | 'twig' | 'stick' | 'brace'; id: string } | null {
-  if (!segmentId) return null;
-
-  const snapshot = getSnapshot();
-  const kickstandSnapshot = getKickstandSnapshot();
-
-  if (segmentId.startsWith('braceSegment:')) {
-    const braceId = segmentId.slice('braceSegment:'.length);
-    if (snapshot.braces[braceId]) return { category: 'brace', id: braceId };
-  }
-
-  for (const trunk of Object.values(snapshot.trunks)) {
-    if (trunk.segments.some((segment) => segment.id === segmentId)) {
-      return { category: 'trunk', id: trunk.id };
-    }
-  }
-
-  for (const branch of Object.values(snapshot.branches)) {
-    if (branch.segments.some((segment) => segment.id === segmentId)) {
-      return { category: 'branch', id: branch.id };
-    }
-  }
-
-  for (const twig of Object.values(snapshot.twigs)) {
-    if (twig.segments.some((segment) => segment.id === segmentId)) {
-      return { category: 'twig', id: twig.id };
-    }
-  }
-
-  for (const stick of Object.values(snapshot.sticks)) {
-    if (stick.segments.some((segment) => segment.id === segmentId)) {
-      return { category: 'stick', id: stick.id };
-    }
-  }
-
-  for (const kickstand of Object.values(kickstandSnapshot.kickstands)) {
-    if (kickstand.segments.some((segment) => segment.id === segmentId)) {
-      return { category: 'brace', id: kickstand.id };
-    }
-  }
-
-  return null;
+/**
+ * @deprecated for removal -- prefer `findShaftOwnerOfSegment(id)` from state,
+ * which resolves every type's declared segment prefix from the registry.
+ */
+export function resolveSupportOwnerFromSegmentId(segmentId: string) {
+  const owner = findShaftOwnerOfSegment(segmentId);
+  return owner ? { category: owner.typeId, id: owner.id } : null;
 }
 
-function resolveSupportOwnerFromJointId(jointId: string): { category: 'brace'; id: string } | null {
-  if (!jointId) return null;
-
-  const kickstandSnapshot = getKickstandSnapshot();
-  for (const kickstand of Object.values(kickstandSnapshot.kickstands)) {
-    const ownsJoint = kickstand.segments.some((segment) =>
-      segment.bottomJoint?.id === jointId || segment.topJoint?.id === jointId,
-    );
-    if (ownsJoint) {
-      return { category: 'brace', id: kickstand.id };
-    }
-  }
-
-  return null;
+/**
+ * @deprecated for removal -- prefer `findShaftOwnerOfJoint(id)` from state.
+ */
+export function resolveSupportOwnerFromJointId(jointId: string) {
+  const owner = findShaftOwnerOfJoint(jointId);
+  return owner ? { category: owner.typeId, id: owner.id } : null;
 }
 
 export function useSupportInteractionManager({ mode }: SupportInteractionOptions) {
@@ -148,6 +75,30 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   const bracePlacement = useBracePlacement();
   const kickstandPlacement = useKickstandPlacement();
   const { getHotkey } = useHotkeyConfig();
+
+  /**
+   * The model-face placement hooks, keyed by the owner the router names. One
+   * owner takes the hit and the rest are cleared, so the handlers index this
+   * rather than testing the owner against a type name.
+   *
+   * The keys are the owners the registry declares, so renaming a type moves them
+   * with it: what a type is called is decided in the registry, not here.
+   */
+  const modelPlacementByOwner = useMemo(() => {
+    const handlersByOwner = {} as Record<ModelSurfaceGestureTypeId, SupportModelPlacementHandlers>;
+    handlersByOwner[BRANCH_FAMILY_PLACEMENT_OWNER] = branchPlacement;
+    handlersByOwner[LEAF_PLACEMENT_OWNER] = leafPlacement;
+    return handlersByOwner;
+  }, [branchPlacement, leafPlacement]);
+
+  /** Route a model-face gesture: `owner` gets the hit, every other owner null. */
+  const dispatchModelHover = useCallback((owner: SupportModelPlacementOwner, hit: THREE.Intersection | null) => {
+    trunkPlacementV2.onSupportHover(null);
+    const routed = routeModelPlacementHit(MODEL_SURFACE_GESTURE_TYPES, owner, hit);
+    for (const id of MODEL_SURFACE_GESTURE_TYPES) {
+      modelPlacementByOwner[id].onModelHover(routed[id]);
+    }
+  }, [trunkPlacementV2, modelPlacementByOwner]);
 
   const altDownRef = useRef(false);
   const deletingRef = useRef(false);
@@ -191,66 +142,45 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   // Handler for MODEL hover (used for trunk placement preview, or branch tip preview)
   const onModelHover = useCallback((hit: THREE.Intersection | null) => {
     if (isSupportEditInteractionActive()) {
-      trunkPlacementV2.onSupportHover(null);
-      branchPlacement.onModelHover(null);
-      leafPlacement.onModelHover(null);
+      dispatchModelHover('none', null);
       return;
     }
 
     if (isContactDiskHudInteractionActive()) {
-      trunkPlacementV2.onSupportHover(null);
-      branchPlacement.onModelHover(null);
-      leafPlacement.onModelHover(null);
+      dispatchModelHover('none', null);
       return;
     }
 
     if (isPlacementHardDisabled) {
-      trunkPlacementV2.onSupportHover(null);
-      branchPlacement.onModelHover(null);
-      leafPlacement.onModelHover(null);
+      dispatchModelHover('none', null);
       return;
     }
 
     if (jointCreationState.isActive) {
-      trunkPlacementV2.onSupportHover(null);
-      branchPlacement.onModelHover(null);
-      leafPlacement.onModelHover(null);
+      dispatchModelHover('none', null);
       return;
     }
 
     const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
     if (fanningActive) {
-      trunkPlacementV2.onSupportHover(null);
-      branchPlacement.onModelHover(null);
-      leafPlacement.onModelHover(hit);
+      dispatchModelHover(LEAF_PLACEMENT_OWNER, hit);
       return;
     }
 
     const routing = resolvePlacementRouting();
 
-    if (routing.modelHoverOwner === 'leaf') {
-      trunkPlacementV2.onSupportHover(null);
-      branchPlacement.onModelHover(null);
-      leafPlacement.onModelHover(hit);
-      return;
-    }
-
-    if (routing.modelHoverOwner === 'branch') {
-      trunkPlacementV2.onSupportHover(null);
-      leafPlacement.onModelHover(null);
-      branchPlacement.onModelHover(hit);
+    if (routing.modelHoverOwner !== 'none') {
+      dispatchModelHover(routing.modelHoverOwner, hit);
       return;
     }
 
     if (routing.blocksDefaultModelPlacement) {
-      trunkPlacementV2.onSupportHover(null);
-      branchPlacement.onModelHover(null);
-      leafPlacement.onModelHover(null);
+      dispatchModelHover('none', null);
       return;
     }
 
     trunkPlacementV2.onSupportHover(hit);
-  }, [isPlacementHardDisabled, trunkPlacementV2, branchPlacement, leafPlacement, jointCreationState.isActive, resolvePlacementRouting]);
+  }, [isPlacementHardDisabled, trunkPlacementV2, dispatchModelHover, leafPlacement, jointCreationState.isActive, resolvePlacementRouting]);
 
   // Handler for MODEL click (trunk placement, or branch tip placement)
   const onModelClick = useCallback((hit: THREE.Intersection) => {
@@ -270,13 +200,8 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
     const routing = resolvePlacementRouting();
 
-    if (routing.modelClickOwner === 'leaf') {
-      leafPlacement.onModelClick(hit);
-      return;
-    }
-
-    if (routing.modelClickOwner === 'branch') {
-      branchPlacement.onModelClick(hit);
+    if (routing.modelClickOwner !== 'none') {
+      modelPlacementByOwner[routing.modelClickOwner].onModelClick(hit);
       return;
     }
 
@@ -285,104 +210,38 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     }
 
     trunkPlacementV2.onSupportClick(hit);
-  }, [trunkPlacementV2, branchPlacement, leafPlacement, jointCreationState.isActive, resolvePlacementRouting]);
-
-  // Handler for SUPPORT hover (branch base preview when hovering existing support shafts)
-  // NOTE: We do NOT check isPlacementDisabled here because branch placement
-  // REQUIRES hovering over supports. The isPlacementDisabled check would
-  // always be true when hovering a support, breaking branch placement.
-  const onSupportHover = useCallback((hit: THREE.Intersection | null) => {
-    if (mode !== 'support') return;
-
-    if (isSupportEditInteractionActive()) {
-      leafPlacement.onSupportHover(null);
-      branchPlacement.onSupportHover(null);
-      return;
-    }
-
-    const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
-    if (fanningActive) {
-      branchPlacement.onSupportHover(null);
-      leafPlacement.onSupportHover(hit);
-      return;
-    }
-
-    const routing = resolvePlacementRouting();
-
-    if (routing.supportHoverOwner === 'leaf') {
-      leafPlacement.onSupportHover(hit);
-      branchPlacement.onSupportHover(null);
-    } else if (routing.supportHoverOwner === 'branch') {
-      branchPlacement.onSupportHover(hit);
-      leafPlacement.onSupportHover(null);
-    } else {
-      leafPlacement.onSupportHover(null);
-      branchPlacement.onSupportHover(null);
-    }
-  }, [mode, branchPlacement, leafPlacement, resolvePlacementRouting]);
-
-  // Handler for SUPPORT click (branch base placement on existing support shaft)
-  const onSupportClick = useCallback((hit: THREE.Intersection) => {
-    if (mode !== 'support') return;
-
-    if (isSupportEditInteractionActive()) {
-      return;
-    }
-
-    const fanningActive = leafPlacement.sproutParentingLockHeld || leafPlacement.stage === 'awaitingSproutTip';
-    if (fanningActive) {
-      leafPlacement.onSupportClick(hit);
-      return;
-    }
-
-    const routing = resolvePlacementRouting();
-
-    if (routing.blocksDefaultSupportPlacement) {
-      return;
-    }
-
-    if (routing.supportClickOwner === 'leaf') {
-      leafPlacement.onSupportClick(hit);
-    } else if (routing.supportClickOwner === 'branch') {
-      branchPlacement.onSupportClick(hit);
-    }
-    // Note: clicking on supports in non-branch mode is handled by SupportRenderer (selection)
-  }, [mode, branchPlacement, leafPlacement, resolvePlacementRouting]);
+  }, [trunkPlacementV2, modelPlacementByOwner, leafPlacement, jointCreationState.isActive, resolvePlacementRouting]);
 
   useEffect(() => {
     if (mode !== 'support') return;
 
     const deleteSelectionByCategoryAndId = (category: string, id: string, recordHistory = true): boolean => {
       if (category === 'joint') {
-        const result = removeJointById(id);
-        if (!result) {
+        const resolved = removeJointWithPayload(id);
+        if (!resolved) {
           const kickstandOwner = resolveSupportOwnerFromJointId(id);
           if (!kickstandOwner) return false;
           return deleteSelectionByCategoryAndId(kickstandOwner.category, kickstandOwner.id, recordHistory);
         }
-        if (result.kind === 'trunk') {
-          if (recordHistory) {
+        // A type declaring `historyUpdate` records the edit its action owns;
+        // one without it records the full-state snapshot joint drags use.
+        const descriptor = getSupportTypeDescriptor(resolved.typeId);
+        if (recordHistory) {
+          if (resolved.edit && descriptor.historyUpdate) {
             pushSupportHistory({
-              type: SUPPORT_UPDATE_TRUNK,
-              description: 'Delete trunk joint',
-              payload: { before: result.before, after: result.after },
+              type: descriptor.historyUpdate,
+              description: deleteJointLabel(descriptor.id),
+              payload: resolved.edit as never,
             });
+          } else if (resolved.snapshot) {
+            pushSupportEditHistory(
+              deleteJointLabel(descriptor.id),
+              { support: resolved.snapshot.before },
+              { support: resolved.snapshot.after },
+            );
           }
-          setSelectedId(result.trunkId);
-        } else if (result.kind === 'branch') {
-          if (recordHistory) {
-            pushSupportHistory({
-              type: SUPPORT_UPDATE_BRANCH,
-              payload: { before: result.before, after: result.after },
-            });
-          }
-          setSelectedId(result.branchId);
-        } else if (result.kind === 'kickstand') {
-          // Joint removed from kickstand — just select the parent kickstand.
-          // No dedicated SUPPORT_UPDATE_KICKSTAND history type exists yet,
-          // so undo is handled via full state snapshot if needed.
-          setSelectedId(result.kickstandId);
         }
+        setSelectedId(resolved.id);
         return true;
       }
 
@@ -392,233 +251,37 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         return deleteSelectionByCategoryAndId(owner.category, owner.id, recordHistory);
       }
 
-      if (category === 'trunk') {
-        const snapshots = removeTrunk(id);
-        if (!snapshots) return false;
-        if (recordHistory) {
-          pushSupportHistory({
-            type: SUPPORT_REMOVE_TRUNK,
-            payload: {
-              trunk: snapshots.trunk,
-              root: snapshots.root ?? undefined,
-              branches: snapshots.branches,
-              braces: snapshots.braces,
-              kickstands: snapshots.kickstands,
-              leaves: snapshots.leaves,
-              knots: snapshots.knots,
-            },
-          });
-        }
-        setSelectedId(null);
-        return true;
-      }
-
-      if (category === 'leaf') {
-        const snapshots = removeLeaf(id);
-        if (!snapshots) return false;
-        if (recordHistory) {
-          pushSupportHistory({
-            type: SUPPORT_REMOVE_LEAF,
-            payload: { leaf: snapshots.leaf, knot: snapshots.knot ?? undefined },
-          });
-        }
-        setSelectedId(null);
-        return true;
-      }
-
+      // Every type whose removal is the cascade plus one history entry, under
+      // the action it declares. A type that shapes its payload -- or has to
+      // repair something the removal invalidated -- registered a reshaper in
+      // its own folder, so there is no list of names here: the registration is
+      // the answer to "does this type reshape".
       if (category === 'knot') {
-        const leaves = getLeaves();
-        const leaf = leaves.find(l => l.parentKnotId === id);
-        if (leaf) {
-          const snapshots = removeLeaf(leaf.id);
-          if (!snapshots) return false;
-          if (recordHistory) {
-            pushSupportHistory({
-              type: SUPPORT_REMOVE_LEAF,
-              payload: { leaf: snapshots.leaf, knot: snapshots.knot ?? undefined },
-            });
-          }
-          setSelectedId(null);
-          return true;
-        }
-
-        const branches = getBranches();
-        const branch = branches.find(b => b.parentKnotId === id);
-        if (branch) {
-          const beforeSnapshot = getSnapshot();
-          const snapshots = removeBranch(branch.id);
-          if (!snapshots) return false;
-          const afterSnapshot = getSnapshot();
-
-          let trunkUpdate: SupportBranchRemovePayload['trunkUpdate'];
-          let knotUpdates: SupportBranchRemovePayload['knotUpdates'];
-          const parentKnot = branch.parentKnotId ? beforeSnapshot.knots[branch.parentKnotId] : undefined;
-          const parentSegId = parentKnot?.parentShaftId;
-          const trunkId = parentSegId
-            ? Object.values(beforeSnapshot.trunks).find(t => t.segments.some(s => s.id === parentSegId))?.id
-            : undefined;
-
-          if (trunkId && afterSnapshot.trunks[trunkId]) {
-            const applied = computeAndApplyTrunkDiameterProfile(afterSnapshot, trunkId);
-            if (applied) {
-              for (const u of applied.knotUpdates) updateKnot(u.after);
-              updateTrunk(applied.trunk);
-              const beforeTrunk = beforeSnapshot.trunks[trunkId];
-              if (beforeTrunk) {
-                trunkUpdate = { before: structuredClone(beforeTrunk), after: structuredClone(applied.trunk) };
-                knotUpdates = applied.knotUpdates;
-              }
-            }
-          }
-
-          if (recordHistory) {
-            pushSupportHistory({
-              type: SUPPORT_REMOVE_BRANCH,
-              payload: {
-                ...snapshots,
-                trunkUpdate,
-                knotUpdates,
-              },
-            });
-          }
-          setSelectedId(null);
-          return true;
-        }
-
-        const braces = getBraces();
-        const brace = braces.find(br => br.startKnotId === id || br.endKnotId === id);
-        if (brace) {
-          const snapshots = removeBrace(brace.id);
-          if (!snapshots) return false;
-          if (recordHistory) {
-            pushSupportHistory({
-              type: SUPPORT_REMOVE_BRACE,
-              payload: { brace: snapshots.brace, startKnot: snapshots.startKnot ?? undefined, endKnot: snapshots.endKnot ?? undefined },
-            });
-          }
-          setSelectedId(null);
-          return true;
-        }
-
-        const kickstands = Object.values(getKickstandSnapshot().kickstands);
-        const kickstand = kickstands.find((ks) => ks.hostKnotId === id);
-        if (kickstand) {
-          const kickstandSnapshots = removeKickstandCascade(kickstand.id);
-          if (!kickstandSnapshots) return false;
-          if (recordHistory) {
-            pushSupportHistory({
-              type: SUPPORT_REMOVE_KICKSTAND,
-              payload: kickstandSnapshots,
-            });
-          }
-          setSelectedId(null);
-          return true;
-        }
-
-        return false;
+        // Deleting a knot deletes what it hosts. Which types can host, and the
+        // field each reads, come from the declared knot edges; the order is the
+        // precedence this has always used, since a knot can host more than one.
+        const host = findKnotHost(getSnapshot(), id, KNOT_HOST_PRECEDENCE);
+        if (!host) return false;
+        return deleteSelectionByCategoryAndId(
+          getSupportTypeDescriptor(host.typeId).selectionCategory,
+          host.id,
+          recordHistory,
+        );
       }
 
-      if (category === 'branch') {
-        const beforeSnapshot = getSnapshot();
-        const snapshots = removeBranch(id);
-        if (!snapshots) return false;
-        const afterSnapshot = getSnapshot();
-
-        let trunkUpdate: SupportBranchRemovePayload['trunkUpdate'];
-        let knotUpdates: SupportBranchRemovePayload['knotUpdates'];
-        const removedRootBranch = snapshots.branches.find(b => b.id === id) ?? snapshots.branches[0];
-        const parentKnot = removedRootBranch?.parentKnotId ? beforeSnapshot.knots[removedRootBranch.parentKnotId] : undefined;
-        const parentSegId = parentKnot?.parentShaftId;
-        const trunkId = parentSegId
-          ? Object.values(beforeSnapshot.trunks).find(t => t.segments.some(s => s.id === parentSegId))?.id
-          : undefined;
-
-        if (trunkId && afterSnapshot.trunks[trunkId]) {
-          const applied = computeAndApplyTrunkDiameterProfile(afterSnapshot, trunkId);
-          if (applied) {
-            for (const u of applied.knotUpdates) updateKnot(u.after);
-            updateTrunk(applied.trunk);
-            const beforeTrunk = beforeSnapshot.trunks[trunkId];
-            if (beforeTrunk) {
-              trunkUpdate = { before: structuredClone(beforeTrunk), after: structuredClone(applied.trunk) };
-              knotUpdates = applied.knotUpdates;
-            }
-          }
-        }
+      const removalDescriptor = getSupportTypeBySelectionCategory(category);
+      if (removalDescriptor) {
+        // The removal and its payload are resolved by a plain function so they
+        // can be tested; this hook cannot be. See
+        // supports/history/removalPayload.ts.
+        const removed = removeSupportEntityWithPayload(removalDescriptor.id, id);
+        if (!removed) return false;
 
         if (recordHistory) {
           pushSupportHistory({
-            type: SUPPORT_REMOVE_BRANCH,
-            payload: {
-              ...snapshots,
-              trunkUpdate,
-              knotUpdates,
-            },
-          });
-        }
-        setSelectedId(null);
-        return true;
-      }
-
-      if (category === 'twig') {
-        const snapshots = removeTwig(id);
-        if (!snapshots) return false;
-        if (recordHistory) {
-          pushSupportHistory({
-            type: SUPPORT_REMOVE_TWIG,
-            payload: snapshots,
-          });
-        }
-        setSelectedId(null);
-        return true;
-      }
-
-      if (category === 'stick') {
-        const snapshots = removeStick(id);
-        if (!snapshots) return false;
-        if (recordHistory) {
-          pushSupportHistory({
-            type: SUPPORT_REMOVE_STICK,
-            payload: snapshots,
-          });
-        }
-        setSelectedId(null);
-        return true;
-      }
-
-      if (category === 'anchor') {
-        const snapshots = removeAnchor(id);
-        if (!snapshots) return false;
-        if (recordHistory) {
-          pushSupportHistory({
-            type: SUPPORT_REMOVE_ANCHOR,
-            payload: { anchor: snapshots.anchor },
-          });
-        }
-        setSelectedId(null);
-        return true;
-      }
-
-      if (category === 'brace') {
-        const kickstandSnapshots = removeKickstandCascade(id);
-        if (kickstandSnapshots) {
-          if (recordHistory) {
-            pushSupportHistory({
-              type: SUPPORT_REMOVE_KICKSTAND,
-              payload: kickstandSnapshots,
-            });
-          }
-          setSelectedId(null);
-          return true;
-        }
-
-        const snapshots = removeBrace(id);
-        if (!snapshots) return false;
-        if (recordHistory) {
-          pushSupportHistory({
-            type: SUPPORT_REMOVE_BRACE,
-            payload: { brace: snapshots.brace, startKnot: snapshots.startKnot ?? undefined, endKnot: snapshots.endKnot ?? undefined },
-          });
+            type: removalDescriptor.historyRemove,
+            payload: removed.payload,
+          } as Parameters<typeof pushSupportHistory>[0]);
         }
         setSelectedId(null);
         return true;
@@ -636,22 +299,19 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       const category = getSelectedCategory();
       const id = getSelectedId();
       if (!id || !category) return false;
-      if (category === 'joint' || category === 'trunk' || category === 'leaf' || category === 'branch' || category === 'twig' || category === 'stick' || category === 'brace') return true;
+      // Every support type is deletable, and 'joint' too, so this asks the
+      // registry rather than listing categories.
+      if (category === 'joint' || getSupportTypeBySelectionCategory(category)) return true;
 
+      // A knot is deletable when something hangs off it. Which types can, and
+      // by which field, is the declared hostedBy-knots edge set.
       if (category === 'knot') {
-        const leaves = getLeaves();
-        if (leaves.some(l => l.parentKnotId === id)) return true;
-
-        const branches = getBranches();
-        if (branches.some(b => b.parentKnotId === id)) return true;
-
-        const braces = getBraces();
-        if (braces.some(br => br.startKnotId === id || br.endKnotId === id)) return true;
-
-        const kickstands = Object.values(getKickstandSnapshot().kickstands);
-        if (kickstands.some((ks) => ks.hostKnotId === id)) return true;
-
-        return false;
+        return SUPPORT_TYPES.some((descriptor) => {
+          const fields = knotFields(descriptor);
+          if (fields.length === 0) return false;
+          return getSupportEntities<Record<string, unknown>>(descriptor.id)
+            .some((entity) => fields.some((field) => entity[field] === id));
+        });
       }
 
       if (category === 'segment') {
@@ -667,8 +327,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       try {
       const multiSelectedIds = Array.from(new Set(getResolvedPrimarySelection().selectedIds));
       if (multiSelectedIds.length > 0) {
-        const beforeSupportSnapshot = structuredClone(getSnapshot());
-        const beforeKickstandSnapshot = structuredClone(getKickstandSnapshot());
+        const beforeSupportSnapshot = cloneSupportState(getSnapshot());
         let anyDeleted = false;
         for (const supportId of multiSelectedIds) {
           const category = resolveSupportCategoryFromSnapshot(supportId);
@@ -678,17 +337,14 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         }
 
         if (anyDeleted) {
-          const afterSupportSnapshot = structuredClone(getSnapshot());
-          const afterKickstandSnapshot = structuredClone(getKickstandSnapshot());
+          const afterSupportSnapshot = cloneSupportState(getSnapshot());
 
           pushSupportHistory({
-            type: SUPPORT_AUTO_BRACE_REPLACE,
-            description: `Delete ${multiSelectedIds.length} supports`,
+            type: SUPPORT_MULTI_DELETE,
+            description: deleteSupportsLabel(multiSelectedIds.length),
             payload: {
               before: beforeSupportSnapshot,
               after: afterSupportSnapshot,
-              kickstandBefore: beforeKickstandSnapshot,
-              kickstandAfter: afterKickstandSnapshot,
             },
           });
         }
@@ -717,25 +373,42 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         const category = getSelectedCategory();
         const id = getSelectedId();
         if (id) {
-          if (category === 'leaf' || category === 'branch') {
+          const hostedType = getSupportTypeBySelectionCategory(category);
+          // The knot a support hangs from is a declared `hostedBy` edge. Only
+          // types with exactly one have an unambiguous parent -- a brace hangs
+          // from two, so it keeps the knot-side traversal below instead.
+          const parentKnotEdges = hostedType?.edges.filter(
+            (edge) => edge.to === 'knots' && edge.ownership === 'hostedBy',
+          ) ?? [];
+
+          if (parentKnotEdges.length === 1) {
             const snapshot = getSnapshot();
-            const parentKnotId = category === 'leaf'
-              ? snapshot.leaves[id]?.parentKnotId
-              : snapshot.branches[id]?.parentKnotId;
+            const entity = (snapshot as unknown as Record<string, Record<string, Record<string, unknown>>>)
+              [hostedType!.location.key]?.[id];
+            const parentKnotId = entity?.[parentKnotEdges[0].field] as string | undefined;
             if (parentKnotId && snapshot.knots[parentKnotId]) {
               setSelectedId(parentKnotId);
             }
           } else if (category === 'knot') {
+            // Children of a knot are whatever types declare a `hostedBy` edge
+            // onto knots and name this knot. Derived, so a type that can hang
+            // off a knot is walkable here the moment it says so.
             const snapshot = getSnapshot();
-            const childLeaves = Object.values(snapshot.leaves).filter(l => l.parentKnotId === id);
-            const childBranches = Object.values(snapshot.branches).filter(b => b.parentKnotId === id);
-            const children = [
-              ...childLeaves.map(l => ({ id: l.id, category: 'leaf' })),
-              ...childBranches.map(b => ({ id: b.id, category: 'branch' })),
-            ];
-            if (children.length > 0) {
-              children.sort((a, b) => a.id.localeCompare(b.id));
-              selectSupportIds([children[0].id]);
+            const childIds: string[] = [];
+            for (const descriptor of SUPPORT_TYPES) {
+              const fields = descriptor.edges
+                .filter((edge) => edge.to === 'knots' && edge.ownership === 'hostedBy')
+                .map((edge) => edge.field);
+              if (fields.length === 0) continue;
+              const collection = snapshot[descriptor.location.key] as unknown as
+                Record<string, Record<string, unknown>> | undefined;
+              for (const [childId, entity] of Object.entries(collection ?? {})) {
+                if (fields.some((field) => entity[field] === id)) childIds.push(childId);
+              }
+            }
+            if (childIds.length > 0) {
+              childIds.sort((a, b) => a.localeCompare(b));
+              selectSupportIds([childIds[0]]);
             }
           }
         }
@@ -806,15 +479,34 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     // Model interaction (for trunk placement or branch tip)
     onModelHover,
     onModelClick,
-    // Support interaction (for branch base placement)
-    onSupportHover,
-    onSupportClick,
     previewError: trunkPlacementV2.previewError,
     previewWarning: trunkPlacementV2.previewWarning,
-    trunkPreview: trunkPlacementV2.previewData,
-    branchPreview: branchPlacement.previewData,
-    leafPreview: leafPlacement.previewData,
-    bracePreview: bracePlacement.preview,
-    kickstandPreview: kickstandPlacement.previewData,
+    /**
+     * Placement previews, keyed by type. Brace names its field `preview`
+     * where the others use `previewData`; that is the only difference.
+     *
+     * Keyed by the owners the registry declares rather than by literals, so a
+     * renamed type moves its key here too. The record is still indexed by type
+     * downstream, which is the point: `placementActive` and `placementPreviews`
+     * keep a key per declared type.
+     */
+    placementPreviews: {
+      [DEFAULT_PLACEMENT_TYPE_ID]: trunkPlacementV2.previewData,
+      [BRANCH_FAMILY_PLACEMENT_OWNER]: branchPlacement.previewData,
+      [LEAF_PLACEMENT_OWNER]: leafPlacement.previewData,
+      [BRACE_PLACEMENT_OWNER]: bracePlacement.preview,
+      [KICKSTAND_PLACEMENT_OWNER]: kickstandPlacement.previewData,
+    } satisfies SupportPlacementPreviews,
+    /**
+     * Which placement modes are live, keyed by type, next to the previews above
+     * so the scene takes one prop rather than one per type. Trunk is absent: it
+     * is the default tool rather than a mode anything toggles.
+     */
+    placementActive: {
+      [BRANCH_FAMILY_PLACEMENT_OWNER]: branchPlacement.isActive,
+      [LEAF_PLACEMENT_OWNER]: leafPlacement.isActive,
+      [BRACE_PLACEMENT_OWNER]: bracePlacement.isActive,
+      [KICKSTAND_PLACEMENT_OWNER]: kickstandPlacement.isActive,
+    } satisfies SupportPlacementActive,
   };
 }

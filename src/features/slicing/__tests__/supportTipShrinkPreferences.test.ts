@@ -1,0 +1,67 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+  addMaterialProfile,
+  addPrinterProfile,
+  getProfileStoreSnapshot,
+  updateMaterialProfile,
+  type MaterialAntiAliasingSettings,
+} from '@/features/profiles/profileStore';
+import { installFakeWindow } from '@/utils/__tests__/helpers/fakeWindow';
+
+test('material AA tip shrink and Auto compensation persist without AA override', () => {
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => { storage.set(key, value); },
+    removeItem: (key: string) => { storage.delete(key); },
+  };
+  const restoreWindow = installFakeWindow({
+    localStorage, sessionStorage: localStorage, dispatchEvent: () => true,
+  });
+
+  try {
+    const printerId = addPrinterProfile({ name: 'Shrink test printer' });
+    const legacySettings = { ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS } as Record<string, unknown>;
+    delete legacySettings.supportTipShrinkPercent;
+    delete legacySettings.tipOffsetMode;
+    const materialId = addMaterialProfile(printerId, {
+      name: 'Shrink test material',
+      antiAliasingSettings: legacySettings as MaterialAntiAliasingSettings,
+    });
+    const settings = () => getProfileStoreSnapshot().materialProfiles.find((profile) => profile.id === materialId)!.antiAliasingSettings;
+    const setPercent = (percent: number) => updateMaterialProfile(materialId, {
+      antiAliasingSettings: { ...settings(), supportTipShrinkPercent: percent },
+    });
+
+    assert.equal(settings().supportTipShrinkPercent, 10);
+    assert.equal(settings().tipOffsetMode, 'auto');
+    assert.equal(settings().enableCustomSettings, false);
+    assert.equal(settings().enableOverride, false);
+    for (const [input, expected] of [[0, 0], [25, 25], [-5, 0], [101, 90], [NaN, 10]]) {
+      setPercent(input);
+      assert.equal(settings().supportTipShrinkPercent, expected);
+      assert.equal(settings().enableOverride, false);
+      const persisted = JSON.parse(storage.get('dragonfruit-profiles-v1')!) as {
+        state: { materialProfiles: Array<{ id: string; antiAliasingSettings: MaterialAntiAliasingSettings }> };
+      };
+      assert.equal(persisted.state.materialProfiles.find((profile) => profile.id === materialId)?.antiAliasingSettings.supportTipShrinkPercent, expected);
+    }
+    updateMaterialProfile(materialId, {
+      antiAliasingSettings: { ...settings(), tipOffsetMode: 'disabled' },
+    });
+    assert.equal(settings().tipOffsetMode, 'disabled', 'explicit Disabled remains available after changing the default');
+    updateMaterialProfile(materialId, {
+      antiAliasingSettings: { ...settings(), aaOnSupports: true, tipOffsetMode: 'manual', tipOffsetMm: 0.2, tipOffsetDisplayInUi: true },
+    });
+    assert.equal(settings().enableCustomSettings, false);
+    assert.equal(settings().enableOverride, false);
+    assert.equal(settings().aaOnSupports, true);
+    assert.equal(settings().tipOffsetMode, 'manual');
+    assert.equal(settings().tipOffsetMm, 0.2);
+    assert.equal(settings().tipOffsetDisplayInUi, true);
+  } finally {
+    restoreWindow();
+  }
+});

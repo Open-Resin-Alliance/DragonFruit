@@ -1,14 +1,23 @@
 import React from 'react';
-import { hotkeyStore } from '@/hotkeys/hotkeyStore';
+import { useLingui } from '@lingui/react';
 import * as THREE from 'three';
-import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
+import {
+  hollowingDesktopOnlyMessage,
+  hollowingFailedMessage,
+  hollowingPreviewDesktopOnlyMessage,
+  hollowingPreviewFailedMessage,
+  hollowingRemoveUnavailableMessage,
+  shellModeNeedsFaceMessage,
+} from '@/features/hollowing/hollowingMessages';
+import { SCENE_MODELS_SNAPSHOT_APPLY, type useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
+import { subscribeHistoryOperations } from '@/history/historyStore';
 import type { useTransformManager } from '@/features/transform/useTransformManager';
 import type { HollowingPanelState } from '@/features/hollowing';
-import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
-import type { MeshShaderType } from '@/features/shaders/mesh';
+import type { ModelMeshModifiers, ModelMeshModifiersHistoryOptions, ModelHollowingModifier } from '@/features/mesh-modifiers/types';
 import type { HolePunchPanelState } from '@/features/hole-punching/HolePunchPanel';
 import type { HolePunchPlacementState } from '@/features/hole-punching/holePunchGeometry';
 import { snapshotGeometryPositions, geometryFromSnapshot } from '@/utils/geometrySnapshot';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { bytesToBase64, base64ToBytes } from '@/utils/base64';
 import {
   getUniformScaleFactorForThickness,
@@ -29,6 +38,9 @@ import { getRotationQuatTuple, resolveBlockedVoxelValidity } from '@/features/me
 import { toPersistedHolePunchPlacements } from '@/features/hole-punching/holePunchPersistence';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { serializeHollowingModifier } from '@/features/hollowing/hollowingSerialize';
+import { HOLLOWING_BLOCKERS_EDIT } from '@/features/hollowing/history/actionTypes';
+import { pushHollowingHistory, registerHollowingHistoryHandler } from '@/features/hollowing/history/history';
+import { accelerateGeometry } from '@/utils/bvh';
 import {
   buildGeometryVersionKey,
   createGeometryFromPreviewPositions,
@@ -41,6 +53,14 @@ import type {
   HollowingSourceEntry,
   CavityGeometryEntry,
 } from '@/features/hollowing/hollowingPreviewTypes';
+import {
+  CAVITY_HOLLOWING_LABEL,
+  CLEAR_HOLLOWING_LABEL,
+  HOLLOWING_SETTINGS_LABEL,
+  INFILL_HOLLOWING_LABEL,
+  RESET_HOLLOWING_LABEL,
+  SHELL_HOLLOWING_LABEL,
+} from '@/features/scene/sceneHistoryLabels';
 
 type SceneManager = ReturnType<typeof useSceneCollectionManager>;
 type TransformManager = ReturnType<typeof useTransformManager>;
@@ -73,10 +93,9 @@ export type HollowingManagerDeps = {
   beginFinalizing: (kind: 'hollowing' | 'holePunch') => void;
   clearFinalizing: () => void;
   nextPaint: () => Promise<void>;
-  persistActiveModelModifiers: (next: ModelMeshModifiers | undefined) => void;
+  persistActiveModelModifiers: (next: ModelMeshModifiers | undefined, options?: ModelMeshModifiersHistoryOptions) => void;
   setPendingModifierResetAction: React.Dispatch<React.SetStateAction<'hollowing' | 'hole_punch' | 'clear_hollowing' | null>>;
   setInteriorView: React.Dispatch<React.SetStateAction<boolean>>;
-  setSessionShaderOverride: React.Dispatch<React.SetStateAction<MeshShaderType | null>>;
   computeAutoHolePunchDepthMmForGeometry: (
     model: SceneManager['models'][number],
     targetGeometry: THREE.BufferGeometry,
@@ -106,6 +125,7 @@ export function useHollowingManager({
   transformMgr,
   deps,
 }: UseHollowingManagerOptions) {
+  const { _ } = useLingui();
   const [isPreviewingHollowing, setIsPreviewingHollowing] = React.useState(false);
   const [hollowPreview, setHollowPreview] = React.useState<HollowPreviewState | null>(null);
   const [hollowingState, setHollowingState] = React.useState<HollowingPanelState>({
@@ -126,8 +146,6 @@ export function useHollowingManager({
   const [isApplyingHollowing, setIsApplyingHollowing] = React.useState(false);
 
   const editingBlockedHollowVoxelIndicesRef = React.useRef<number[]>([]);
-  const hollowVoxelEditUndoStackRef = React.useRef<number[][]>([]);
-  const hollowVoxelEditRedoStackRef = React.useRef<number[][]>([]);
   const hollowingEditModeRef = React.useRef(false);
   const hollowPreviewDebounceTimerRef = React.useRef<number | ReturnType<typeof setTimeout> | null>(null);
   const hollowPreviewRequestSeqRef = React.useRef(0);
@@ -135,6 +153,25 @@ export function useHollowingManager({
   const hollowPreviewWarmupKeyRef = React.useRef<string | null>(null);
   const hollowingSourceByModelIdRef = React.useRef<Map<string, HollowingSourceEntry>>(new Map());
   const cavityGeometryByModelIdRef = React.useRef<Map<string, CavityGeometryEntry>>(new Map());
+  /**
+   * Bumped whenever the cavity map above changes. The map is a ref, so a read of
+   * it does not subscribe anything: without this, a value derived from it —
+   * "is interior view available?" — keeps the answer it had on the last render
+   * that happened for some other reason, and the feature stayed enabled after the
+   * hollow that justified it was reset.
+   */
+  const [cavityGeometryVersion, setCavityGeometryVersion] = React.useState(0);
+  const markCavityGeometryChanged = React.useCallback(() => {
+    setCavityGeometryVersion((version) => version + 1);
+  }, []);
+  const bakedHollowingBeforeDraftRef = React.useRef<Map<string, ModelHollowingModifier>>(new Map());
+
+  const rememberBakedHollowing = React.useCallback((model: NonNullable<SceneManager['activeModel']>) => {
+    const hollowing = model.meshModifiers?.hollowing;
+    if (hollowing?.enabled && hollowing.bakedIntoGeometry && !bakedHollowingBeforeDraftRef.current.has(model.id)) {
+      bakedHollowingBeforeDraftRef.current.set(model.id, hollowing);
+    }
+  }, []);
 
   const defaultHollowingState = React.useMemo<HollowingPanelState>(() => ({
     mode: 'cavity',
@@ -145,6 +182,41 @@ export function useHollowingManager({
     infillBeamRadiusMm: 0.35,
     openFace: 'z_max',
   }), []);
+  const clearPendingHollowPreviewDebounce = React.useCallback(() => {
+    if (hollowPreviewDebounceTimerRef.current !== null) {
+      clearTimeout(hollowPreviewDebounceTimerRef.current);
+      hollowPreviewDebounceTimerRef.current = null;
+    }
+  }, []);
+
+  const clearHollowPreview = React.useCallback(() => {
+    hollowPreviewRequestSeqRef.current += 1;
+    setIsPreviewingHollowing(false);
+    clearPendingHollowPreviewDebounce();
+    setHollowPreview((previous) => {
+      if (previous) {
+        disposeHollowPreviewGeometryIfUncached(previous.geometry, hollowPreviewResultCacheRef.current.values());
+        disposeHollowPreviewGeometryIfUncached(previous.infillGeometry ?? null, hollowPreviewResultCacheRef.current.values());
+      }
+      return null;
+    });
+  }, [clearPendingHollowPreviewDebounce]);
+
+  const releaseHollowingCachesForModel = React.useCallback((modelId: string) => {
+    if (scene.activeModelId === modelId || hollowPreview?.modelId === modelId) clearHollowPreview();
+    const source = hollowingSourceByModelIdRef.current.get(modelId);
+    source?.geometry.dispose();
+    hollowingSourceByModelIdRef.current.delete(modelId);
+    const cavity = cavityGeometryByModelIdRef.current.get(modelId);
+    cavity?.geometry.dispose();
+    if (cavityGeometryByModelIdRef.current.delete(modelId)) markCavityGeometryChanged();
+    for (const [key, entry] of hollowPreviewResultCacheRef.current) {
+      if (entry.modelId !== modelId) continue;
+      disposeHollowPreviewCacheEntry(entry);
+      hollowPreviewResultCacheRef.current.delete(key);
+    }
+    bakedHollowingBeforeDraftRef.current.delete(modelId);
+  }, [clearHollowPreview, hollowPreview?.modelId, scene.activeModelId, markCavityGeometryChanged]);
 
   const handleApplyHollowing = React.useCallback(() => {
     void (async () => {
@@ -156,7 +228,7 @@ export function useHollowingManager({
       if (!shouldApply) return;
 
       if (hollowingState.mode === 'shell_open_face' && !isShellOpenFaceSelected) {
-        deps.current.showOperationError('Pick the face to open before applying Shell mode.');
+        deps.current.showOperationError(shellModeNeedsFaceMessage(_));
         return;
       }
 
@@ -197,7 +269,7 @@ export function useHollowingManager({
         );
         const bboxSize = bbox.getSize(new THREE.Vector3());
         const maxExtent = Math.max(bboxSize.x, bboxSize.y, bboxSize.z);
-        const applyQuat = new THREE.Quaternion().setFromEuler(activeModel.transform.rotation);
+        const applyQuat = quaternionFromGlobalEuler(activeModel.transform.rotation);
         const options: HollowOptions = {
           mode: effectiveHollowMode,
           voxelResolution: computeVoxelResolution(worldMmToLocalMm(hollowingState.voxelSizeMm, shellScaleFactor), maxExtent),
@@ -223,7 +295,7 @@ export function useHollowingManager({
           ? await hollowApplyFromCapturedSource(options)
           : await hollowFromGeometry(sourceGeometry, options);
         if (!result) {
-          deps.current.showOperationError('Hollowing is available in DragonFruit Desktop only.');
+          deps.current.showOperationError(hollowingDesktopOnlyMessage(_));
           return;
         }
 
@@ -249,46 +321,19 @@ export function useHollowingManager({
         nextGeometry.computeBoundingBox();
         nextGeometry.computeBoundingSphere();
 
-        // Store cavity geometry for Interior View Mode
+        let cavityGeometry: THREE.BufferGeometry | undefined;
         if (result.cavityPositions) {
-          const existingCavity = cavityGeometryByModelIdRef.current.get(activeModel.id);
-          if (existingCavity) {
-            existingCavity.geometry.dispose();
-          }
-          const cavityGeometry = new THREE.BufferGeometry();
+          cavityGeometry = new THREE.BufferGeometry();
           cavityGeometry.setAttribute('position', new THREE.BufferAttribute(result.cavityPositions, 3));
           cavityGeometry.computeVertexNormals();
           cavityGeometry.computeBoundingBox();
           cavityGeometry.computeBoundingSphere();
-          cavityGeometryByModelIdRef.current.set(activeModel.id, { geometry: cavityGeometry });
-        } else {
-          const existingCavity = cavityGeometryByModelIdRef.current.get(activeModel.id);
-          if (existingCavity) {
-            existingCavity.geometry.dispose();
-            cavityGeometryByModelIdRef.current.delete(activeModel.id);
-          }
+          // Interior placement builds an SDFCache from whatever mesh the click
+          // hit, and the cavity mesh is one of those. Without a boundsTree the
+          // cache throws and every interior support press dies, so accelerate it
+          // here, where the geometry is born, rather than at each consumer.
+          accelerateGeometry(cavityGeometry);
         }
-
-        const modeLabel = hollowingState.mode === 'shell_open_face'
-          ? 'Shell Hollowing'
-          : hollowingState.mode === 'infill'
-            ? 'Infill Hollowing'
-            : 'Cavity Hollowing';
-        const replaced = scene.replaceModelGeometry(
-          activeModel.id,
-          nextGeometry,
-          `${modeLabel} (${result.report.outputTriangleCount.toLocaleString()} tris)`,
-        );
-        if (!replaced) {
-          nextGeometry.dispose();
-          deps.current.clearFinalizing();
-          return;
-        }
-
-        // Hollowing is now baked — clear the preview overlay and exit X-Ray
-        // forced shader so the user can see surface detail for hole placement.
-        clearHollowPreview();
-        deps.current.setSessionShaderOverride(null);
 
         const sourceSnapshot = snapshotGeometryPositions(sourceGeometry);
         let cavityPositionsBase64: string | undefined;
@@ -300,7 +345,7 @@ export function useHollowingManager({
           // On reload the cavity is rebuilt verbatim, so the on-disk cavity
           // must share the model's centered frame or it renders displaced by
           // ~half the model height. The in-session cavity geometry (built above
-          // from the raw result.cavityPositions) is intentionally left untouched.
+          // from raw positions) is intentionally left untouched.
           if (!nextGeometry.boundingBox) nextGeometry.computeBoundingBox();
           const modelCenter = new THREE.Vector3();
           nextGeometry.boundingBox?.getCenter(modelCenter);
@@ -313,12 +358,6 @@ export function useHollowingManager({
           cavityPositionsBase64 = bytesToBase64(cavityBytes);
           cavityPositionCount = result.cavityPositions.length / 3;
         }
-
-        deps.current.setHolePunchState((previous) => (
-          previous.depthMode === 'auto'
-            ? previous
-            : { ...previous, depthMode: 'auto' }
-        ));
 
         const nextHolePunchPlacements = deps.current.holePunchPlacementsRef.current.map((placement) => {
           if (placement.modelId !== activeModel.id || placement.depthMode !== 'auto') {
@@ -335,7 +374,6 @@ export function useHollowingManager({
             ),
           };
         });
-        deps.current.setHolePunchPlacements(nextHolePunchPlacements);
 
         const persistedHolePunches = toPersistedHolePunchPlacements(
           { geometry: { geometry: nextGeometry } as GeometryWithBounds },
@@ -347,7 +385,7 @@ export function useHollowingManager({
         // Only auto-reapply holes that were in draft state (not yet baked).
         const shouldAutoReapplyHolePunches = !holesWereAlreadyBaked && persistedHolePunches.length > 0;
 
-        deps.current.persistActiveModelModifiers({
+        const nextModifiers: ModelMeshModifiers = {
           ...(activeModel.meshModifiers ?? {}),
           hollowing: {
             enabled: true,
@@ -380,21 +418,62 @@ export function useHollowingManager({
           holePunchSourcePositionCount: holesWereAlreadyBaked
             ? (activeModel.meshModifiers?.holePunchSourcePositionCount ?? undefined)
             : undefined,
-        });
+        };
+
+        const previousBaked = bakedHollowingBeforeDraftRef.current.get(activeModel.id)
+          ?? (persistedHollowing?.bakedIntoGeometry ? persistedHollowing : undefined);
+        // Undo returns to the draft Apply started from, blockers included: it sits on the
+        // source geometry, so it slices the same. Not when that draft was edited over an
+        // earlier Apply, whose geometry is hollow already: then it is the earlier one.
+        const beforeModifiers: ModelMeshModifiers = { ...(activeModel.meshModifiers ?? {}) };
+        if (previousBaked) beforeModifiers.hollowing = previousBaked;
+
+        const modeLabel = hollowingState.mode === 'shell_open_face'
+          ? SHELL_HOLLOWING_LABEL
+          : hollowingState.mode === 'infill'
+            ? INFILL_HOLLOWING_LABEL
+            : CAVITY_HOLLOWING_LABEL;
+        const replaced = scene.replaceModelGeometry(
+          activeModel.id,
+          nextGeometry,
+          modeLabel,
+          { meshModifiersBefore: beforeModifiers, meshModifiersAfter: nextModifiers },
+        );
+        if (!replaced) {
+          nextGeometry.dispose();
+          cavityGeometry?.dispose();
+          deps.current.clearFinalizing();
+          return;
+        }
+        bakedHollowingBeforeDraftRef.current.delete(activeModel.id);
+
+        const existingCavity = cavityGeometryByModelIdRef.current.get(activeModel.id);
+        existingCavity?.geometry.dispose();
+        if (cavityGeometry) {
+          cavityGeometryByModelIdRef.current.set(activeModel.id, { geometry: cavityGeometry });
+        } else {
+          cavityGeometryByModelIdRef.current.delete(activeModel.id);
+        }
+        markCavityGeometryChanged();
+        deps.current.setHolePunchState((previous) => (
+          previous.depthMode === 'auto' ? previous : { ...previous, depthMode: 'auto' }
+        ));
+        deps.current.setHolePunchPlacements(nextHolePunchPlacements);
+        clearHollowPreview();
 
         if (shouldAutoReapplyHolePunches) {
           deps.current.setPendingHolePunchAutoApplyModelId(activeModel.id);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        deps.current.showOperationError(`Hollowing failed: ${message}`);
+        deps.current.showOperationError(hollowingFailedMessage(message, _));
         deps.current.clearFinalizing();
       } finally {
         setIsApplyingHollowing(false);
         setIsApplyingBlockersHollowing(false);
       }
     })();
-  }, [blockedHollowVoxelIndices, hollowingDraftEnabled, hollowingState, isShellOpenFaceSelected, deps.current.persistActiveModelModifiers, scene]);
+  }, [_, blockedHollowVoxelIndices, hollowingDraftEnabled, hollowingState, isShellOpenFaceSelected, scene, markCavityGeometryChanged]);
 
   const handleResetHollowing = React.useCallback(() => {
     const activeModel = scene.activeModel;
@@ -409,48 +488,12 @@ export function useHollowingManager({
         return entry;
       })();
 
-    if (sourceEntry) {
-      const restoredGeometry = sourceEntry.geometry.clone();
-      const restored = scene.replaceModelGeometry(activeModel.id, restoredGeometry, 'Reset Hollowing');
-      if (!restored) {
-        restoredGeometry.dispose();
-      }
+    if (!sourceEntry) {
+      deps.current.showOperationError(hollowingRemoveUnavailableMessage(_));
+      return;
     }
-
-    // Clear cavity geometry and auto-disable interior view on hollowing reset
-    const existingCavity = cavityGeometryByModelIdRef.current.get(activeModel.id);
-    if (existingCavity) {
-      existingCavity.geometry.dispose();
-      cavityGeometryByModelIdRef.current.delete(activeModel.id);
-    }
-    deps.current.setInteriorView(false);
-
-    setHollowingState(defaultHollowingState);
-    setIsShellOpenFaceSelected(true);
-    setHollowingDraftEnabled(false);
-    setHollowingEditMode(false);
-    setBlockedHollowVoxelIndices([]);
-    setEditingBlockedHollowVoxelIndices([]);
-    deps.current.persistActiveModelModifiers({
+    const nextModifiers: ModelMeshModifiers = {
       ...(activeModel.meshModifiers ?? {}),
-      hollowing: {
-        enabled: false,
-        bakedIntoGeometry: false,
-        // Clear the source snapshot — hollowing was reset so the snapshot is
-        // stale (it may contain holes that have since been removed).
-        sourcePositionsBase64: undefined,
-        sourcePositionCount: undefined,
-        blockedVoxelIndices: [],
-        blockedVoxelRotationQuat: undefined,
-        mode: defaultHollowingState.mode,
-        voxelSizeMm: defaultHollowingState.voxelSizeMm,
-        shellThicknessMm: defaultHollowingState.shellThicknessMm,
-        infillMode: defaultHollowingState.infillMode,
-        infillCellMm: defaultHollowingState.infillCellMm,
-        infillBeamRadiusMm: defaultHollowingState.infillBeamRadiusMm,
-        openFace: defaultHollowingState.openFace,
-        openFaceSelected: true,
-      },
       // Preserve hole punch baked state — the geometry restored from the
       // hollowing source still contains any pre-baked holes, so the system
       // must not lose track of them.
@@ -458,8 +501,27 @@ export function useHollowingManager({
       holePunchesBakedIntoGeometry: activeModel.meshModifiers?.holePunchesBakedIntoGeometry === true,
       holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
       holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
+    };
+    delete nextModifiers.hollowing;
+
+    const restoredGeometry = sourceEntry.geometry.clone();
+    const restored = scene.replaceModelGeometry(activeModel.id, restoredGeometry, RESET_HOLLOWING_LABEL, {
+      meshModifiersAfter: nextModifiers,
     });
-  }, [defaultHollowingState, deps.current.persistActiveModelModifiers, scene.activeModel]);
+    if (!restored) {
+      restoredGeometry.dispose();
+      return;
+    }
+    releaseHollowingCachesForModel(activeModel.id);
+    deps.current.setPendingBlockerResetState(null);
+    deps.current.setInteriorView(false);
+    setHollowingState(defaultHollowingState);
+    setIsShellOpenFaceSelected(true);
+    setHollowingDraftEnabled(false);
+    setHollowingEditMode(false);
+    setBlockedHollowVoxelIndices([]);
+    setEditingBlockedHollowVoxelIndices([]);
+  }, [_, defaultHollowingState, releaseHollowingCachesForModel, scene.activeModel]);
 
   const handleClearAppliedHollowing = React.useCallback(() => {
     const activeModel = scene.activeModel;
@@ -474,53 +536,35 @@ export function useHollowingManager({
         return entry;
       })();
 
-    if (sourceEntry) {
-      const restoredGeometry = sourceEntry.geometry.clone();
-      const restored = scene.replaceModelGeometry(activeModel.id, restoredGeometry, 'Clear Hollowing');
-      if (!restored) {
-        restoredGeometry.dispose();
-      }
+    if (!sourceEntry) {
+      deps.current.showOperationError(hollowingRemoveUnavailableMessage(_));
+      return;
     }
-
-    // Clear cavity geometry and disable interior view
-    const existingCavity = cavityGeometryByModelIdRef.current.get(activeModel.id);
-    if (existingCavity) {
-      existingCavity.geometry.dispose();
-      cavityGeometryByModelIdRef.current.delete(activeModel.id);
-    }
-    deps.current.setInteriorView(false);
-
-    setHollowingDraftEnabled(false);
-    setHollowingEditMode(false);
-    setBlockedHollowVoxelIndices([]);
-    setEditingBlockedHollowVoxelIndices([]);
-    deps.current.persistActiveModelModifiers({
+    const nextModifiers: ModelMeshModifiers = {
       ...(activeModel.meshModifiers ?? {}),
-      hollowing: {
-        enabled: false,
-        bakedIntoGeometry: false,
-        sourcePositionsBase64: undefined,
-        sourcePositionCount: undefined,
-        blockedVoxelIndices: [],
-        blockedVoxelRotationQuat: undefined,
-        // Keep current settings — don't reset to defaults.
-        mode: hollowingState.mode,
-        voxelSizeMm: hollowingState.voxelSizeMm,
-        shellThicknessMm: hollowingState.shellThicknessMm,
-        infillMode: hollowingState.infillMode,
-        infillCellMm: hollowingState.infillCellMm,
-        infillBeamRadiusMm: hollowingState.infillBeamRadiusMm,
-        openFace: hollowingState.openFace,
-        openFaceSelected: hollowingState.mode === 'shell_open_face'
-          ? isShellOpenFaceSelected
-          : true,
-      },
       holePunchAppliedPlacements: activeModel.meshModifiers?.holePunches ?? [],
       holePunchesBakedIntoGeometry: activeModel.meshModifiers?.holePunchesBakedIntoGeometry === true,
       holePunchSourcePositionsBase64: activeModel.meshModifiers?.holePunchSourcePositionsBase64,
       holePunchSourcePositionCount: activeModel.meshModifiers?.holePunchSourcePositionCount,
+    };
+    delete nextModifiers.hollowing;
+
+    const restoredGeometry = sourceEntry.geometry.clone();
+    const restored = scene.replaceModelGeometry(activeModel.id, restoredGeometry, CLEAR_HOLLOWING_LABEL, {
+      meshModifiersAfter: nextModifiers,
     });
-  }, [hollowingState, isShellOpenFaceSelected, deps.current.persistActiveModelModifiers, scene.activeModel]);
+    if (!restored) {
+      restoredGeometry.dispose();
+      return;
+    }
+    releaseHollowingCachesForModel(activeModel.id);
+    deps.current.setPendingBlockerResetState(null);
+    deps.current.setInteriorView(false);
+    setHollowingDraftEnabled(false);
+    setHollowingEditMode(false);
+    setBlockedHollowVoxelIndices([]);
+    setEditingBlockedHollowVoxelIndices([]);
+  }, [_, releaseHollowingCachesForModel, scene.activeModel]);
 
   const handleResetHollowingSettings = React.useCallback(() => {
     setHollowingState(defaultHollowingState);
@@ -542,6 +586,7 @@ export function useHollowingManager({
       )
       : true;
 
+    if (scene.activeModel) rememberBakedHollowing(scene.activeModel);
     // Warn before clearing blockers when adjusting resolution or thickness.
     if ((resolutionChanged || thicknessChanged) && blockedHollowVoxelIndices.length > 0) {
       deps.current.setPendingBlockerResetState(next);
@@ -585,8 +630,8 @@ export function useHollowingManager({
         openFace: next.openFace,
         openFaceSelected: nextShellOpenFaceSelected,
       },
-    });
-  }, [blockedHollowVoxelIndices, hollowingState.mode, hollowingState.openFace, hollowingState.voxelSizeMm, isShellOpenFaceSelected, deps.current.persistActiveModelModifiers, scene.activeModel]);
+    }, { historyDescription: HOLLOWING_SETTINGS_LABEL, merge: true });
+  }, [blockedHollowVoxelIndices, hollowingState.mode, hollowingState.openFace, hollowingState.voxelSizeMm, isShellOpenFaceSelected, deps.current.persistActiveModelModifiers, rememberBakedHollowing, scene.activeModel]);
 
   const isHollowingApplied = React.useMemo(() => {
     const modifier = scene.activeModel?.meshModifiers?.hollowing;
@@ -653,20 +698,22 @@ export function useHollowingManager({
     editingBlockedHollowVoxelIndicesRef.current = editingBlockedHollowVoxelIndices;
   }, [editingBlockedHollowVoxelIndices]);
 
+  // Set while the edit mode was reopened by undoing a step Done had committed: the steps
+  // walked through from there are committed ones, so they move the committed blockers too.
+  // A new stroke ends that; its steps wait for Done like any other.
+  const reopenedByHistoryRef = React.useRef(false);
+
   React.useEffect(() => {
     hollowingEditModeRef.current = hollowingEditMode;
+    if (!hollowingEditMode) reopenedByHistoryRef.current = false;
   }, [hollowingEditMode]);
 
-  React.useEffect(() => {
-    if (hollowingEditMode) return;
-    hollowVoxelEditUndoStackRef.current = [];
-    hollowVoxelEditRedoStackRef.current = [];
-  }, [hollowingEditMode]);
-
-  const applyEditingBlockedHollowVoxelIndices = React.useCallback((
-    nextIndicesInput: Iterable<number>,
-    options?: { recordHistory?: boolean },
-  ) => {
+  /**
+   * Replaces the blockers being edited. Each change is an undo step on the app's history, so
+   * Ctrl+Z steps back through blocker edits like through any other — inside the edit mode, and
+   * after Done, where the step applies to the committed blockers instead.
+   */
+  const applyEditingBlockedHollowVoxelIndices = React.useCallback((nextIndicesInput: Iterable<number>) => {
     const nextIndices = [...new Set(nextIndicesInput)]
       .filter((value) => Number.isFinite(value))
       .sort((a, b) => a - b);
@@ -675,72 +722,77 @@ export function useHollowingManager({
       return false;
     }
 
-    if (options?.recordHistory ?? true) {
-      hollowVoxelEditUndoStackRef.current.push([...previousIndices]);
-      if (hollowVoxelEditUndoStackRef.current.length > 100) {
-        hollowVoxelEditUndoStackRef.current.shift();
-      }
-      hollowVoxelEditRedoStackRef.current = [];
+    const modelId = scene.activeModelId;
+    if (modelId) {
+      pushHollowingHistory({
+        type: HOLLOWING_BLOCKERS_EDIT,
+        payload: { modelId, before: [...previousIndices], after: nextIndices },
+      });
     }
 
+    reopenedByHistoryRef.current = false;
     editingBlockedHollowVoxelIndicesRef.current = nextIndices;
     setEditingBlockedHollowVoxelIndices(nextIndices);
     return true;
-  }, []);
+  }, [scene.activeModelId]);
 
-  const undoHollowVoxelEdit = React.useCallback(() => {
-    const previousIndices = hollowVoxelEditUndoStackRef.current.pop();
-    if (!previousIndices) return false;
+  // Read by the history handler, which outlives any one render.
+  const sceneRef = React.useRef(scene);
+  sceneRef.current = scene;
 
-    hollowVoxelEditRedoStackRef.current.push([...editingBlockedHollowVoxelIndicesRef.current]);
-    editingBlockedHollowVoxelIndicesRef.current = previousIndices;
-    setEditingBlockedHollowVoxelIndices(previousIndices);
-    return true;
-  }, []);
+  React.useEffect(() => registerHollowingHistoryHandler(HOLLOWING_BLOCKERS_EDIT, (payload, direction) => {
+    if (!payload?.modelId) return false;
+    const target = direction === 'undo' ? payload.before : payload.after;
+    const expected = direction === 'undo' ? payload.after : payload.before;
+    const currentScene = sceneRef.current;
 
-  const redoHollowVoxelEdit = React.useCallback(() => {
-    const nextIndices = hollowVoxelEditRedoStackRef.current.pop();
-    if (!nextIndices) return false;
+    const model = currentScene.models.find((candidate) => candidate.id === payload.modelId);
+    const modifiers = currentScene.getModelMeshModifiers(payload.modelId);
+    const hollowing = modifiers?.hollowing;
+    const committedMatches = Boolean(model && hollowing) && areSortedNumberArraysEqual(
+      [...(hollowing?.blockedVoxelIndices ?? [])].sort((a, b) => a - b),
+      expected,
+    );
+    const commit = () => {
+      if (!model || !hollowing) return;
+      currentScene.setModelMeshModifiers(payload.modelId, {
+        ...modifiers,
+        hollowing: {
+          ...hollowing,
+          blockedVoxelIndices: [...target],
+          blockedVoxelRotationQuat: target.length > 0
+            ? (hollowing.blockedVoxelRotationQuat ?? getRotationQuatTuple(model.transform.rotation))
+            : undefined,
+        },
+      });
+    };
+    const edit = () => {
+      editingBlockedHollowVoxelIndicesRef.current = [...target];
+      setEditingBlockedHollowVoxelIndices([...target]);
+    };
+    const isActiveModel = currentScene.activeModelId === payload.modelId;
 
-    hollowVoxelEditUndoStackRef.current.push([...editingBlockedHollowVoxelIndicesRef.current]);
-    editingBlockedHollowVoxelIndicesRef.current = nextIndices;
-    setEditingBlockedHollowVoxelIndices(nextIndices);
-    return true;
-  }, []);
-
-  React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing' || !hollowingEditMode) {
-      return;
+    // Still editing this model: the step moves the blockers being edited.
+    if (hollowingEditModeRef.current && isActiveModel) {
+      if (!areSortedNumberArraysEqual(editingBlockedHollowVoxelIndicesRef.current, expected)) return false;
+      edit();
+      if (reopenedByHistoryRef.current && committedMatches) commit();
+      return true;
     }
 
-    let wasZPressed = false;
-    let wasYPressed = false;
-
-    const unsubscribe = hotkeyStore.subscribe((state) => {
-      const active = state.activeKeys;
-      const isCtrlOrMeta = active.has('ctrl') || active.has('meta') || active.has('control');
-      const isZPressed = active.has('z') && isCtrlOrMeta;
-      const isYPressed = active.has('y') && isCtrlOrMeta;
-
-      const isZJustPressed = isZPressed && !wasZPressed;
-      const isYJustPressed = isYPressed && !wasYPressed;
-
-      if (isZJustPressed) {
-        if (active.has('shift')) {
-          redoHollowVoxelEdit();
-        } else {
-          undoHollowVoxelEdit();
-        }
-      } else if (isYJustPressed) {
-        redoHollowVoxelEdit();
-      }
-
-      wasZPressed = isZPressed;
-      wasYPressed = isYPressed;
-    });
-
-    return unsubscribe;
-  }, [hollowingEditMode, redoHollowVoxelEdit, scene.mode, transformMgr.transformMode, undoHollowVoxelEdit]);
+    // Otherwise it moves the committed blockers, which the panel resyncs from, and takes the
+    // user back into the edit mode the step was made in. A step from an edit session that
+    // ended without Done no longer matches them, and is dropped.
+    if (!committedMatches) return false;
+    commit();
+    if (isActiveModel) {
+      edit();
+      reopenedByHistoryRef.current = true;
+      hollowingEditModeRef.current = true;
+      setHollowingEditMode(true);
+    }
+    return true;
+  }), []);
 
   const blockedPreviewVoxelInstanceIdSet = React.useMemo(() => {
     const preview = hollowPreview;
@@ -776,6 +828,7 @@ export function useHollowingManager({
   const commitBlockedHollowVoxelIndices = React.useCallback((nextIndices: number[]) => {
     const activeModel = scene.activeModel;
     if (!activeModel) return;
+    rememberBakedHollowing(activeModel);
 
     setBlockedHollowVoxelIndices(nextIndices);
     setHollowingDraftEnabled(true);
@@ -802,7 +855,7 @@ export function useHollowingManager({
           : true,
       },
     });
-  }, [hollowingState, isShellOpenFaceSelected, deps.current.persistActiveModelModifiers, scene.activeModel]);
+  }, [hollowingState, isShellOpenFaceSelected, deps.current.persistActiveModelModifiers, rememberBakedHollowing, scene.activeModel]);
 
   const toggleBlockedHollowVoxelIndex = React.useCallback((voxelIndex: number) => {
     const currentPreview = hollowPreview;
@@ -842,13 +895,6 @@ export function useHollowingManager({
 
   const requestClearAppliedHollowing = React.useCallback(() => {
     deps.current.setPendingModifierResetAction('clear_hollowing');
-  }, []);
-
-  const clearPendingHollowPreviewDebounce = React.useCallback(() => {
-    if (hollowPreviewDebounceTimerRef.current !== null) {
-      clearTimeout(hollowPreviewDebounceTimerRef.current);
-      hollowPreviewDebounceTimerRef.current = null;
-    }
   }, []);
 
   const resolveHollowPreviewSourceGeometry = React.useCallback((activeModel: (typeof scene.models)[number]) => {
@@ -941,7 +987,7 @@ export function useHollowingManager({
     );
     const bboxSize = bbox.getSize(new THREE.Vector3());
     const maxExtent = Math.max(bboxSize.x, bboxSize.y, bboxSize.z);
-    const previewQuat = new THREE.Quaternion().setFromEuler(activeModel.transform.rotation);
+    const previewQuat = quaternionFromGlobalEuler(activeModel.transform.rotation);
     const options: HollowOptions = {
       ...buildHollowingOptions(activeModel.transform.scale, maxExtent, {
         preview: true,
@@ -1156,7 +1202,7 @@ export function useHollowingManager({
       );
       if (!staged) {
         if (notifyUnavailable) {
-          deps.current.showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
+          deps.current.showOperationError(hollowingPreviewDesktopOnlyMessage(_));
         }
         return;
       }
@@ -1164,7 +1210,7 @@ export function useHollowingManager({
       const result = await hollowPreviewFromCapturedSource(options);
       if (!result) {
         if (notifyUnavailable) {
-          deps.current.showOperationError('Hollowing preview is available in DragonFruit Desktop only.');
+          deps.current.showOperationError(hollowingPreviewDesktopOnlyMessage(_));
         }
         return;
       }
@@ -1218,7 +1264,7 @@ export function useHollowingManager({
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (notifyUnavailable) {
-        deps.current.showOperationError(`Hollowing preview failed: ${message}`);
+        deps.current.showOperationError(hollowingPreviewFailedMessage(message, _));
       } else {
         console.warn('[Hollowing] Debounced preview failed:', message);
       }
@@ -1228,20 +1274,7 @@ export function useHollowingManager({
         setIsApplyingBlockersHollowing(false);
       }
     }
-  }, [cacheHollowPreviewResult, scene.models]);
-
-  const clearHollowPreview = React.useCallback(() => {
-    hollowPreviewRequestSeqRef.current += 1;
-    setIsPreviewingHollowing(false);
-    clearPendingHollowPreviewDebounce();
-    setHollowPreview((previous) => {
-      if (previous) {
-        disposeHollowPreviewGeometryIfUncached(previous.geometry, hollowPreviewResultCacheRef.current.values());
-        disposeHollowPreviewGeometryIfUncached(previous.infillGeometry ?? null, hollowPreviewResultCacheRef.current.values());
-      }
-      return null;
-    });
-  }, [clearPendingHollowPreviewDebounce]);
+  }, [_, cacheHollowPreviewResult, scene.models]);
 
   React.useEffect(() => {
     return () => {
@@ -1265,6 +1298,16 @@ export function useHollowingManager({
   }, [clearPendingHollowPreviewDebounce]);
 
   React.useEffect(() => {
+    const unsubscribe = subscribeHistoryOperations(({ action }) => {
+      if (action.type !== SCENE_MODELS_SNAPSHOT_APPLY) return;
+      const payload = action.payload;
+      if (!payload || typeof payload !== 'object' || !('modelId' in payload)) return;
+      if (typeof payload.modelId === 'string') releaseHollowingCachesForModel(payload.modelId);
+    });
+    return () => { unsubscribe(); };
+  }, [releaseHollowingCachesForModel]);
+
+  React.useEffect(() => {
     const liveIds = new Set(scene.models.map((model) => model.id));
     for (const [modelId, entry] of hollowingSourceByModelIdRef.current.entries()) {
       if (liveIds.has(modelId)) continue;
@@ -1272,11 +1315,14 @@ export function useHollowingManager({
       hollowingSourceByModelIdRef.current.delete(modelId);
     }
 
+    let removedCavityGeometry = false;
     for (const [modelId, entry] of cavityGeometryByModelIdRef.current.entries()) {
       if (liveIds.has(modelId)) continue;
       entry.geometry.dispose();
       cavityGeometryByModelIdRef.current.delete(modelId);
+      removedCavityGeometry = true;
     }
+    if (removedCavityGeometry) markCavityGeometryChanged();
 
     // If the active model's cavity geometry was just removed, exit interior view
     // so the user doesn't get stuck with no way to toggle it off.
@@ -1292,7 +1338,10 @@ export function useHollowingManager({
       disposeHollowPreviewCacheEntry(entry);
       hollowPreviewResultCacheRef.current.delete(cacheKey);
     }
-  }, [scene.models, deps.current.interiorView, deps.current.setInteriorView]);
+    for (const modelId of bakedHollowingBeforeDraftRef.current.keys()) {
+      if (!liveIds.has(modelId)) bakedHollowingBeforeDraftRef.current.delete(modelId);
+    }
+  }, [scene.models, deps.current.interiorView, deps.current.setInteriorView, markCavityGeometryChanged]);
 
   // Restore cavity geometry from persisted data for models with baked hollowing.
   React.useEffect(() => {
@@ -1321,9 +1370,13 @@ export function useHollowingManager({
       cavityGeometry.computeVertexNormals();
       cavityGeometry.computeBoundingBox();
       cavityGeometry.computeBoundingSphere();
+      // Same reason as the apply path: interior placement builds an SDFCache
+      // from the cavity mesh, so a restored cavity needs its boundsTree too.
+      accelerateGeometry(cavityGeometry);
       cavityGeometryByModelIdRef.current.set(model.id, { geometry: cavityGeometry });
+      markCavityGeometryChanged();
     }
-  }, [scene.models]);
+  }, [scene.models, scene.activeModelId, markCavityGeometryChanged]);
 
   // Rust echoes back which committed blockers it actually accepted (stale
   // indices that fell off the grid or landed on non-solid voxels are
@@ -1409,12 +1462,13 @@ export function useHollowingManager({
         disposeHollowPreviewCacheEntry(entry);
       }
       hollowPreviewResultCacheRef.current.clear();
+      bakedHollowingBeforeDraftRef.current.clear();
     };
   }, []);
 
   React.useEffect(() => {
     if (!hollowPreview) return;
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'hollowing') {
+    if ((scene.mode !== 'prepare' && scene.mode !== 'support') || transformMgr.transformMode !== 'hollowing') {
       clearHollowPreview();
       return;
     }
@@ -1425,7 +1479,7 @@ export function useHollowingManager({
   }, [clearHollowPreview, hollowPreview, scene.mode, scene.models, transformMgr.transformMode]);
 
   React.useEffect(() => {
-    if (scene.mode === 'prepare' && transformMgr.transformMode === 'hollowing') {
+    if ((scene.mode === 'prepare' || scene.mode === 'support') && transformMgr.transformMode === 'hollowing') {
       return;
     }
     setHollowingEditMode(false);
@@ -1457,7 +1511,7 @@ export function useHollowingManager({
       return inside;
     };
 
-    const modelQuaternion = new THREE.Quaternion().setFromEuler(activeModel.transform.rotation);
+    const modelQuaternion = quaternionFromGlobalEuler(activeModel.transform.rotation);
     const selected: string[] = [];
 
     // Removed/cavity voxels are resolved in Rust against the full grid, so the
@@ -1559,8 +1613,6 @@ export function useHollowingManager({
 
   const handleStartHollowVoxelEditing = React.useCallback(() => {
     editingBlockedHollowVoxelIndicesRef.current = blockedHollowVoxelIndices;
-    hollowVoxelEditUndoStackRef.current = [];
-    hollowVoxelEditRedoStackRef.current = [];
     setEditingBlockedHollowVoxelIndices(blockedHollowVoxelIndices);
     setHollowingEditMode(true);
   }, [blockedHollowVoxelIndices]);
@@ -1587,7 +1639,7 @@ export function useHollowingManager({
   }, [blockedHollowVoxelIndices, clearHollowPreview, commitBlockedHollowVoxelIndices, editingBlockedHollowVoxelIndices]);
 
   React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode === 'hollowing') {
+    if ((scene.mode !== 'prepare' && scene.mode !== 'support') || transformMgr.transformMode === 'hollowing') {
       return;
     }
 
@@ -1597,6 +1649,14 @@ export function useHollowingManager({
     }
 
     const persistedHollowing = activeModel.meshModifiers?.hollowing;
+    // Nothing reads this preview until the hollowing panel asks, and a model
+    // with no hollowing has nothing to show there but the defaults — which the
+    // panel computes itself on open. Warming it anyway paid a ~900 ms
+    // stage-capture-readback for every model the selection passed through,
+    // including the one the file opens on.
+    if (!persistedHollowing?.enabled && !persistedHollowing?.bakedIntoGeometry) {
+      return;
+    }
     const warmupState: HollowingPanelState = persistedHollowing?.enabled
       ? {
           mode: persistedHollowing.mode === 'shell_open_face' ? 'cavity' : persistedHollowing.mode,
@@ -1615,7 +1675,29 @@ export function useHollowingManager({
       return;
     }
 
-    void primeHollowPreviewCache(activeModel, warmupState);
+    // The warm-up exists so opening the hollowing panel is instant, and it is
+    // speculative: nothing reads this cache until the panel asks. Running it on
+    // the selection that a model drag produces put a ~300 ms task on that drag's
+    // commit frame (the trace: `stage_mesh_binary_set`, the preview capture, and
+    // every read-back). Wait for the interaction to finish — a fixed quiet
+    // period, then idle — and cancel if the selection moves again.
+    let idleHandle: number | null = null;
+    const timer = window.setTimeout(() => {
+      const scheduleIdle = typeof window.requestIdleCallback === 'function'
+        ? (cb: () => void) => window.requestIdleCallback(cb, { timeout: 1500 })
+        : (cb: () => void) => window.setTimeout(cb, 200);
+      idleHandle = scheduleIdle(() => {
+        void primeHollowPreviewCache(activeModel, warmupState);
+      });
+    }, 1200);
+
+    return () => {
+      window.clearTimeout(timer);
+      if (idleHandle != null) {
+        if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(idleHandle);
+        else window.clearTimeout(idleHandle);
+      }
+    };
   }, [
     buildHollowPreviewRequest,
     defaultHollowingState,
@@ -1647,8 +1729,6 @@ export function useHollowingManager({
     isApplyingHollowing,
     setIsApplyingHollowing,
     editingBlockedHollowVoxelIndicesRef,
-    hollowVoxelEditUndoStackRef,
-    hollowVoxelEditRedoStackRef,
     hollowingEditModeRef,
     hollowPreviewDebounceTimerRef,
     hollowPreviewRequestSeqRef,
@@ -1656,6 +1736,7 @@ export function useHollowingManager({
     hollowPreviewWarmupKeyRef,
     hollowingSourceByModelIdRef,
     cavityGeometryByModelIdRef,
+    cavityGeometryVersion,
     defaultHollowingState,
     isHollowingApplied,
     persistedHollowingSignature,
@@ -1672,8 +1753,6 @@ export function useHollowingManager({
     handleResetHollowingSettings,
     handleHollowingStateChange,
     applyEditingBlockedHollowVoxelIndices,
-    undoHollowVoxelEdit,
-    redoHollowVoxelEdit,
     commitBlockedHollowVoxelIndices,
     toggleBlockedHollowVoxelIndex,
     requestResetHollowing,

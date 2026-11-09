@@ -9,6 +9,14 @@ export interface ContactDiskProfile {
     diskThicknessMm: number;       // Minimum base thickness (flat surfaces)
     maxStandoffMm: number;         // Max extension length (steep surfaces)
     standoffAngleThreshold: number; // Angle (radians) where extension starts
+    /**
+     * Contact footprint diameter (the flat face against the model). The nib is
+     * also the round tip's socket — the ball is centered on the nib's top face —
+     * so the nib must be at least half this tall. Optional because the profile
+     * reaches `calculateDiskThickness` as a bare `ContactDiskProfile` in a few
+     * joints/twigs; when absent the nib keeps the pure angle-based thickness.
+     */
+    contactDiameterMm?: number;
 }
 
 /**

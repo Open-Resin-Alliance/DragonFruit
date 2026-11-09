@@ -4,9 +4,10 @@ import { Joint, Segment, Stick, Vec3, LimitationCode } from '../../types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
 import { getSocketPosition } from '../../SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import { getJointDiameter } from '../../constants';
-import { isShaftBlocked, isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
+import { isShaftBlocked } from '../../PlacementLogic/CollisionAvoidance';
+import { checkShaftCollision } from '../../PlacementLogic/CollisionUtils';
 import { clampConeAxisDeviationFromSurfaceNormal } from '../../PlacementLogic/ConeAxisPolicy';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -29,15 +30,57 @@ export interface StickBuildResult {
 
 const GEOMETRY_EPSILON = 0.000001;
 
+/** Clearance kept between a shortened cone and the surface it stops short of. */
+const CONE_GAP_CLEARANCE_MM = 0.1;
+/** A cone never shortens away to nothing; the disk stands it off the surface. */
+const MIN_CONE_LENGTH_MM = 0.1;
+
+const _gapProbeRaycaster = new THREE.Raycaster();
+
+/**
+ * How far this end's cone may run before it leaves the free gap.
+ *
+ * A stick's cone axis runs along the span, so on a short span the stock cone
+ * length (2.5mm per end) carries both sockets past each other and into the
+ * model. The shaft then starts inside material, `isShaftBlocked` reports every
+ * such stick as a collision, and the manual flow shows "would collide" for
+ * bridges that are plainly clear. Cast along the axis and keep the cone inside
+ * the room the gap actually has; a span with room keeps the full cone.
+ */
+function clampConeLengthToFreeGap(
+    start: THREE.Vector3,
+    axis: THREE.Vector3,
+    lengthMm: number,
+    mesh: THREE.Mesh | undefined,
+): number {
+    if (!mesh || lengthMm <= MIN_CONE_LENGTH_MM) return lengthMm;
+    const end = start.clone().addScaledVector(axis, lengthMm);
+    const { hit, distance } = checkShaftCollision(
+        { x: start.x, y: start.y, z: start.z },
+        { x: end.x, y: end.y, z: end.z },
+        0,
+        mesh,
+        _gapProbeRaycaster,
+    );
+    if (!hit || distance === undefined) return lengthMm;
+    return Math.max(MIN_CONE_LENGTH_MM, Math.min(lengthMm, distance - CONE_GAP_CLEARANCE_MM));
+}
+
 
 export function buildStick(input: StickBuildInput): StickBuildResult {
     const { modelId, aPos, aNormal, bPos, bNormal, mesh } = input;
 
     const settings = getSettings();
 
+    // Auto-support tier overrides (absent for manual placement). The tier
+    // band sizes the stick; the active Support Studio preset must not, or an
+    // auto run inherits whatever profile the user last selected by hand.
+    const tipContactDiameterMm = input.tipContactDiameterMm ?? settings.tip.contactDiameterMm;
+    const shaftDiameter = input.shaftDiameterMm ?? settings.shaft.diameterMm;
+
     const tipProfile: SupportTipProfile = {
         type: 'disk',
-        contactDiameterMm: settings.tip.contactDiameterMm,
+        contactDiameterMm: tipContactDiameterMm,
         bodyDiameterMm: settings.tip.bodyDiameterMm,
         lengthMm: settings.tip.lengthMm,
         penetrationMm: settings.tip.penetrationMm,
@@ -46,8 +89,6 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
         standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? Math.PI / 4,
     };
 
-    // Stick rule: use regular support shaft diameter logic
-    const shaftDiameter = settings.shaft.diameterMm;
     const jointDiameter = getJointDiameter(shaftDiameter);
 
     const surfaceNormalA = new THREE.Vector3(aNormal.x, aNormal.y, aNormal.z);
@@ -119,8 +160,17 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     );
     coneAxisB.set(finalClampedAxisB.x, finalClampedAxisB.y, finalClampedAxisB.z);
 
-    const socketA = getSocketPosition(toVec3(coneStartA), toVec3(coneAxisA), tipProfile);
-    const socketB = getSocketPosition(toVec3(coneStartB), toVec3(coneAxisB), tipProfile);
+    const coneLengthA = clampConeLengthToFreeGap(coneStartA, coneAxisA, tipProfile.lengthMm, mesh);
+    const coneLengthB = clampConeLengthToFreeGap(coneStartB, coneAxisB, tipProfile.lengthMm, mesh);
+    const profileA: SupportTipProfile = coneLengthA === tipProfile.lengthMm
+        ? tipProfile
+        : { ...tipProfile, lengthMm: coneLengthA };
+    const profileB: SupportTipProfile = coneLengthB === tipProfile.lengthMm
+        ? tipProfile
+        : { ...tipProfile, lengthMm: coneLengthB };
+
+    const socketA = getSocketPosition(toVec3(coneStartA), toVec3(coneAxisA), profileA);
+    const socketB = getSocketPosition(toVec3(coneStartB), toVec3(coneAxisB), profileB);
 
     const socketJointA: Joint = {
         id: uuidv4(),
@@ -147,7 +197,7 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
         normal: toVec3(coneAxisA),
         surfaceNormal: toVec3(surfaceNormalA),
         diskLengthOverride: diskThicknessA,
-        profile: tipProfile,
+        profile: profileA,
         socketJointId: socketJointA.id,
     };
 
@@ -157,7 +207,7 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
         normal: toVec3(coneAxisB),
         surfaceNormal: toVec3(surfaceNormalB),
         diskLengthOverride: diskThicknessB,
-        profile: tipProfile,
+        profile: profileB,
         socketJointId: socketJointB.id,
     };
 
@@ -178,23 +228,41 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     let error: LimitationCode | undefined = undefined;
     if (mesh) {
         const shaftRadius = shaftDiameter / 2;
-        const contactRadius = tipProfile.contactDiameterMm / 2;
-        const bodyRadius = tipProfile.bodyDiameterMm / 2;
-
-        // 1. Check shaft segment (SDF adaptive sphere tracing — zero BVH
-        //    overhead when precomputed SDF grid is loaded)
-        const segmentBlocked = isShaftBlocked(socketA, socketB, shaftRadius, mesh);
-
-        // 2. Check both contact cones as tapered frustums
-        const coneABlocked = isCollisionFrustumBlocked(
-            aPos, socketA, contactRadius, bodyRadius, mesh,
+        // A stick is anchored on the two surfaces it bridges, so the shaft's own
+        // ends always sit within a shaft radius of material -- by construction,
+        // not by fault. Testing those ends as clearance reported *every* stick
+        // as a collision, which the manual flow surfaced as "would collide" on
+        // bridges that were plainly clear. Test the free span instead, the part
+        // that can actually foul.
+        //
+        // The tip cones are left out of it, as every other type leaves its own:
+        // a tip is anchored where it was aimed, and its length is already
+        // bounded by the gap it crosses (`clampConeLengthToFreeGap`).
+        const span = Math.hypot(
+            socketB.x - socketA.x,
+            socketB.y - socketA.y,
+            socketB.z - socketA.z,
         );
-        const coneBBlocked = isCollisionFrustumBlocked(
-            bPos, socketB, contactRadius, bodyRadius, mesh,
-        );
-
-        if (segmentBlocked || coneABlocked || coneBBlocked) {
-            error = 'COLLISION_WITH_MODEL';
+        if (span > GEOMETRY_EPSILON) {
+            const inset = Math.min(shaftRadius + 0.15, span * 0.4);
+            const ux = (socketB.x - socketA.x) / span;
+            const uy = (socketB.y - socketA.y) / span;
+            const uz = (socketB.z - socketA.z) / span;
+            const blocked = isShaftBlocked(
+                {
+                    x: socketA.x + ux * inset,
+                    y: socketA.y + uy * inset,
+                    z: socketA.z + uz * inset,
+                },
+                {
+                    x: socketB.x - ux * inset,
+                    y: socketB.y - uy * inset,
+                    z: socketB.z - uz * inset,
+                },
+                shaftRadius,
+                mesh,
+            );
+            if (blocked) error = 'COLLISION_WITH_MODEL';
         }
     }
 

@@ -12,11 +12,22 @@ pub mod arrangement;
 /// users) without rewriting every import.
 pub use dragonfruit_mesh_core as core;
 pub mod decimation_config;
+pub mod evaluate;
+pub mod holes;
+pub mod tet_wrap;
+pub mod topology_passes;
 pub mod hollowing;
 pub mod io;
 pub mod repair;
+pub mod solid_remesh;
 pub mod report;
+pub mod shells;
+mod memo;
+pub(crate) mod smoothing;
+pub mod shrink_wrap;
 pub mod stl_budget;
+#[cfg(test)]
+mod test_fixtures;
 
 pub use crate::analysis::{analyze, minimal_analysis, MeshAnalysis};
 pub use crate::core::mesh::{IndexedMesh, Vec3};
@@ -26,11 +37,23 @@ pub use crate::hollowing::{
     HollowSession, OpenFace,
 };
 pub use crate::repair::{
-    classify_support_split, decimate_sections_to_budget, repair, ClassificationOutcome, RepairOptions,
-    RepairOutcome, SectionDecimationOutcome,
+    classify_support_split, decimate_sections_to_budget, repair, repair_auto,
+    repair_auto_with_progress, repair_separate_parts, repair_with_progress, ClassificationOutcome,
+    PartOutcome, PartsRepair, RepairOptions, RepairOutcome, SectionDecimationOutcome,
 };
 pub use crate::report::MeshHealthReport;
+pub use crate::shrink_wrap::{
+    shrink_wrap, shrink_wrap_with_progress, ShrinkWrapOptions, ShrinkWrapOutcome, ShrinkWrapReport,
+};
 pub use crate::stl_budget::{compute_triangle_budget, TriangleBudget};
+pub use crate::tet_wrap::{
+    tet_surface, tet_surface_with_progress, TetWrapOptions, TetWrapOutcome, TetWrapReport,
+};
+
+pub use crate::solid_remesh::{
+    solid_remesh, solid_remesh_with_progress, SolidRemeshOptions, SolidRemeshOutcome,
+    SolidRemeshReport,
+};
 
 use std::path::Path;
 

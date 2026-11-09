@@ -1,7 +1,11 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import { AlertTriangle } from 'lucide-react';
+import { Button } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 
 type PrintingResliceModalProps = {
@@ -15,44 +19,36 @@ export function PrintingResliceModal({
   onCancel,
   onResliceNow,
 }: PrintingResliceModalProps) {
+  const { _ } = useLingui();
   return (
     <StructuredDialogModal
       open={isOpen}
-      ariaLabel="Re-slice required"
-      title="Scene Modified"
-      subtitle="Please re-slice before printing"
+      ariaLabel={_(msg`Scene Modified`)}
+      title={_(msg`Scene Modified`)}
+      subtitle={_(msg`Please re-slice before printing`)}
       icon={<AlertTriangle className="h-4 w-4" />}
       iconTone="warning"
       zIndexClassName="z-[130]"
-      closeAriaLabel="Close modal"
+      closeAriaLabel={_(msg`Close modal`)}
       onClose={onCancel}
       onBackdropClick={onCancel}
       actions={(
         <>
-          <button
-            type="button"
-            className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-            onClick={onCancel}
-          >
-            Back
-          </button>
-          <button
-            type="button"
-            className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-              color: 'var(--accent)',
-            }}
+          <Button variant="secondary" onClick={onCancel}>
+            <Trans>Back</Trans>
+          </Button>
+          <Button
+            variant="tinted-accent"
+            className="inline-flex items-center justify-center gap-1.5"
             onClick={onResliceNow}
           >
-            Re-Slice Now
-          </button>
+            <Trans>Re-Slice Now</Trans>
+          </Button>
         </>
       )}
     >
       <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        Your model has been modified (geometry, position, rotation, scale, or supports changed). The current slice is no longer valid.
+        <Trans>Your model has been modified (geometry, position, rotation, scale, or supports changed). The current slice is no longer valid.</Trans>
       </p>
     </StructuredDialogModal>
   );

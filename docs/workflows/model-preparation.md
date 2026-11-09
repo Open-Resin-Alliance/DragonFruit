@@ -24,6 +24,8 @@ When multiple models are loaded:
 
 - Confirm the intended active model before transforms.
 - Re-check support ownership after model selection changes.
+- Transforms and **Repair** apply to every selected model; see
+  [Transform and Positioning](./transform-and-positioning.md#several-models-at-once).
 
 ## Related workflows
 

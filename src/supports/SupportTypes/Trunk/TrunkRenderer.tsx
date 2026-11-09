@@ -1,7 +1,11 @@
-import React, { useSyncExternalStore } from 'react';
+import { useContactDiskDragSession } from '../useContactDiskDragSession';
+import { updateSupportEntity } from '../../supportTypeRegistry';
+import { registerSupportDetailRenderer } from '../../detailRenderer/seam';
+import React from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { Trunk, Roots } from '../../types';
+import { Trunk, Roots, type Vec3 } from '../../types';
+import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
@@ -9,14 +13,12 @@ import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
-import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
+import { isPrimaryPointerPress, type ContactDiskDragHit } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
-import { getSnapshot, updateTrunk } from '../../state';
-import { subscribeToSettings, getSettingsSnapshot } from '../../Settings';
-import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
+import { getSnapshot } from '../../state';
 
 interface TrunkRendererProps {
     trunk: Trunk;
@@ -43,21 +45,11 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
-    const previewTrunk = usePartDragUpdate<Trunk>('trunk', baseTrunk.id);
+    // The entity names its own type; the store stamps it on every write.
+    const typeId = baseTrunk.typeId ?? 'trunk';
+    const previewTrunk = usePartDragUpdate<Trunk>(typeId, baseTrunk.id);
     const trunk = previewTrunk ?? baseTrunk;
-    const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
-    const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
-    const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
-    const [, setDragTick] = React.useState(0);
 
-    React.useEffect(() => {
-        return () => {
-            dragSessionRef.current?.stop();
-            dragSessionRef.current = null;
-            liveDragConeRef.current = null;
-            beforeHistoryRef.current = null;
-        };
-    }, []);
 
     // Use universal highlight hook
     const { pickRef, visuals, isPickingHovered } = useHighlight({
@@ -72,58 +64,51 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
         hoverColor,
     });
 
-    // Subscribe to settings for Base Flare reactivity
-    const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
-    const baseFlare = settings.baseFlare;
-    const rootsSettings = settings.roots;
-    const baseFlareEnabled = baseFlare.enabled;
-
     // Handle Click
     const handleClick = (e: any) => {
         if (!isPickingHovered && !isSelected) return;
         handleSupportClick(e, trunk.id, !!isInteractable);
     };
 
+    const tipDrag = useContactDiskDragSession<ContactCone>(typeId, {
+        onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
+            const latest = getSnapshot().trunks[trunk.id];
+            if (!latest?.contactCone) return null;
+            return recomputeContactConeForMovedDisk(
+                latest.contactCone, point, surfaceNormal, socketAnchorRef.current, mesh,
+            );
+        },
+        onCommit: (cone) => {
+            const latest = getSnapshot().trunks[trunk.id];
+            if (latest) updateSupportEntity('trunk', { ...latest, contactCone: cone });
+        },
+        // A trunk's tip drag mutates only its contact cone: the socket is
+        // anchored, so the shaft, joints and root stay put.
+        coneFromPreview: (cone) => cone,
+    });
+
+    const socketAnchorRef = React.useRef<Vec3 | undefined>(undefined);
+
     const handleContactDiskHudPointerDown = React.useCallback((e: any) => {
         if (!isSelected || !trunk.contactCone) return;
         if (!isPrimaryPointerPress(e)) return;
 
-        const socketAnchor = getFinalSocketPosition(trunk.contactCone);
-        beforeHistoryRef.current = captureSupportEditSnapshot();
-
-        dragSessionRef.current?.stop();
-        dragSessionRef.current = startContactDiskDragSession({
-            camera,
-            domElement: gl.domElement,
-            scene,
-            initialEvent: e,
+        socketAnchorRef.current = getFinalSocketPosition(trunk.contactCone);
+        tipDrag.start({
+            event: e, camera, domElement: gl.domElement, scene,
             modelId: trunk.modelId,
             placementSurface: trunk.contactCone?.placementSurface,
-            onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
-                const latest = getSnapshot().trunks[trunk.id];
-                if (!latest?.contactCone) return;
-                liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor, mesh);
-                setDragTick(t => t + 1);
-            },
-            onEnd: () => {
-                if (liveDragConeRef.current) {
-                    const latest = getSnapshot().trunks[trunk.id];
-                    if (latest) updateTrunk({ ...latest, contactCone: liveDragConeRef.current });
-                    if (beforeHistoryRef.current) {
-                        pushSupportEditHistory('Move trunk tip', beforeHistoryRef.current, captureSupportEditSnapshot());
-                    }
-                }
-                liveDragConeRef.current = null;
-                dragSessionRef.current = null;
-                beforeHistoryRef.current = null;
+            contact: {
+                field: 'contactCone',
+                cone: trunk.contactCone,
+                supportId: trunk.id,
             },
         });
-    }, [camera, gl.domElement, isSelected, scene, trunk.id, trunk.contactCone, trunk.modelId]);
+    }, [camera, gl.domElement, isSelected, scene, tipDrag, trunk.contactCone, trunk.id, trunk.modelId]);
 
     const handleContactDiskHudPointerUp = React.useCallback(() => {
-        dragSessionRef.current?.stop();
-        dragSessionRef.current = null;
-    }, []);
+        tipDrag.stop();
+    }, [tipDrag]);
     // --- Roots parameters for segment start calculation ---
     const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
     // Matches RootsRenderer logic
@@ -140,18 +125,20 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
     // For now, let's assume standard Z=0 behavior unless we see gaps.
     // Actually, we should probably align the logic.
     
-    const diskHeight = rootsSettings.diskHeightMm; // Use global setting
-    const coneHeight = baseFlareEnabled ? baseFlare.heightMm : (root.coneHeight || 1.5);
-    
-    // Effective Cone Height depends on Base Flare setting
-    const effectiveConeHeight = baseFlareEnabled ? coneHeight : 0;
+    // The shaft starts at the root top the RootsRenderer actually draws: the
+    // root's own disk + cone heights. This used to read the global roots/flare
+    // settings instead, so a selected trunk whose root was baked with different
+    // dimensions (an auto-support band, or a later slider change) started above
+    // the root and showed a gap that the unselected batch — which resolves
+    // `rootTop()` from the same root fields — never had.
+    const diskHeight = root.diskHeight;
+    const coneHeight = root.coneHeight;
 
     const shaftDiameter = trunk.segments[0]?.diameter ?? 1.5;
 
     // --- Render Segments ---
     // Segments start at the CENTER of the Roots sphere (same as joints)
-    // Sphere center is at diskHeight + effectiveConeHeight
-    let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, diskHeight + effectiveConeHeight));
+    let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, diskHeight + coneHeight));
 
     const shafts: React.ReactNode[] = [];
     const batchedStraightShafts: InstancedShaft[] = [];
@@ -227,6 +214,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
+                    parentSupportId={trunk.id}
                     isParentSelected={isSelected}
                     isInteractable={isInteractable}
                     isSelected={isSegSelected}
@@ -257,7 +245,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
     });
 
     // --- Render Contact Cone ---
-    const effectiveCone = liveDragConeRef.current ?? effectiveTrunk.contactCone;
+    const effectiveCone = tipDrag.preview ?? effectiveTrunk.contactCone;
     let coneRender = null;
     if (effectiveCone && !deferContactConesToSceneBatch) {
         const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;
@@ -291,7 +279,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
         >
             {/* Trunk Picking Group - Contains Roots, Shafts, Cones */}
             <group ref={pickRef as any}>
-                {!hidePlateContactPrimitives && !deferRootsToSceneBatch && (
+                <group visible={!hidePlateContactPrimitives && !deferRootsToSceneBatch}>
                     <RootsRenderer
                         root={root}
                         shaftDiameter={shaftDiameter}
@@ -301,7 +289,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
                         radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                         sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                     />
-                )}
+                </group>
                 <InstancedShaftGroup
                     shafts={batchedStraightShafts}
                     color={visuals.color}
@@ -319,3 +307,20 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk: baseTrun
 });
 
 TrunkRenderer.displayName = 'TrunkRenderer';
+
+registerSupportDetailRenderer('trunk', (ctx) => ({
+    component: TrunkRenderer as never,
+    hosts: (trunk: Trunk) => {
+        const root = ctx.roots[trunk.rootId];
+        return root ? { root } : null;
+    },
+    skip: ({ isSelected }) => !isSelected,
+    noClipping: () => true,
+    extraProps: ({ entity, isSelected }) => ({
+        deferStraightShaftsToSceneBatch: !isSelected,
+        deferInteractionToSceneBatch: !isSelected,
+        deferRootsToSceneBatch: !isSelected,
+        deferContactConesToSceneBatch: !isSelected && !!(entity as Trunk).contactCone,
+        hidePlateContactPrimitives: ctx.hidePlateContactPrimitivesEffective,
+    }),
+}));

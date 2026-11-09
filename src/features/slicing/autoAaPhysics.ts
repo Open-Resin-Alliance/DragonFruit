@@ -3,8 +3,9 @@
  *
  * Derives AA settings from the physical voxel shape (XY pixel pitch vs. Z layer
  * height), plus a conservative UV-bloom model. Auto mode intentionally chooses
- * the backend kernel too: sharp prints use supersampled Coverage, ordinary 2D
- * smoothing uses Blur, and visibly anisotropic voxels use perturbation 3DAA.
+ * the backend kernel too: a preset that is not inline blending uses Blur, and
+ * visibly anisotropic voxels use perturbation 3DAA. Coverage supersampling is
+ * still a mode a material profile can select by hand; auto does not pick it.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * Physical model
@@ -58,7 +59,10 @@
  *
  *   blur_px = max(1, round( (target_mm − bloom_mm) / pitch_mm ))
  *
- * Sharp intentionally targets 0 mm explicit blur and uses Coverage SSAA instead.
+ * Sharp keeps a small explicit blur rather than none: with zero blur and no 3DAA
+ * the raster goes out exactly as it was rendered, which is not antialiasing at
+ * all. Z blending stays off for it, since that works against the crispness the
+ * preset is for.
  *
  * This produces 1 px for most printers at Balanced (bloom covers much of the
  * target) and rises to 2–4 px only for very fine-pitch screens where even 1 px
@@ -131,7 +135,7 @@ const AA_STEPS_AUTO_MAX = 8;
  *   smooth   0.075 mm — aggressive softening; suited to organic/curved surfaces
  */
 const BLUR_PHYSICAL_TARGET_MM = {
-  sharp:    0.000,
+  sharp:    0.020,
   balanced: 0.040,
   smooth:   0.075,
 } as const;
@@ -206,14 +210,7 @@ export function estimateBloomRadiusMm(pitchMm: number): number {
   return Math.max(0, pitchMm) * BLOOM_PITCH_FRACTION;
 }
 
-function resolveBackendMode(preset: AaPreset, aspectRatio: number): 'Coverage' | 'Blur' | 'Vertical2' {
-  if (preset === 'sharp') {
-    // Coverage SSAA preserves small lettering and mechanical edges better than
-    // a blur pass. The slicer will supersample/downsample RLE without widening
-    // the physical footprint.
-    return 'Coverage';
-  }
-
+function resolveBackendMode(preset: AaPreset, aspectRatio: number): 'Blur' | 'Vertical2' {
   if (aspectRatio >= MIN_ASPECT_RATIO_FOR_3DAA[preset]) {
     return 'Vertical2';
   }
@@ -262,7 +259,7 @@ function computeZBlurRadiusLayers(aspectRatio: number, preset: AaPreset, use3DAA
  *   ──────────   ──────  ─────────  ─────  ─────────  ────────  ─────────
  *   12K (0.019)  0.019   balanced    8×    2px XY/2L  3DAA      4 lyr
  *   12K (0.019)  0.019   smooth      8×    4px XY/3L  3DAA      6 lyr
- *   12K (0.019)  0.019   sharp       4×    none       Coverage  —
+ *   12K (0.019)  0.019   sharp       4×    1px XY     Blur      —
  *    8K (0.028)  0.028   balanced    6×    1px XY/2L  3DAA      3 lyr
  *    4K (0.047)  0.047   balanced    4×    1px XY/1L  3DAA      3 lyr
  *   low (0.085)  0.085   balanced    3×    1px XY/1L  3DAA      2 lyr
@@ -340,9 +337,9 @@ export function computePhysicalAaConfig(
   const antiAliasingMode = resolveBackendMode(preset, aspectRatio);
   const use3DAA = antiAliasingMode === 'Vertical2';
   const aaMode: 'Blur' | '3DAA' = use3DAA ? '3DAA' : 'Blur';
-  const blurBrushRadiusPx = antiAliasingMode === 'Coverage'
-    ? 0
-    : clamp(Math.max(1, computedBlurPx), 1, 6);
+  // Always at least one pixel. Zero blur with no 3DAA renders the raster exactly
+  // as it is: no antialiasing at all, which is what Sharp silently became.
+  const blurBrushRadiusPx = clamp(Math.max(1, computedBlurPx), 1, 6);
 
 
   let zBlendLookBack = 2; // safe default; only meaningful when aaMode === '3DAA'

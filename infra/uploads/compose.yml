@@ -1,0 +1,34 @@
+# Private upload service for issue attachments (#597): FileBrowser Quantum
+# serving one folder per issue through upload-only share links.
+# Setup and the GitHub side: docs/dev/upload-service.md.
+
+services:
+  filebrowser:
+    # Slim = no ffmpeg; this service never makes previews. The stable line,
+    # pinned so an update is a deliberate edit here.
+    image: gtstef/filebrowser:2.0.2-stable-slim
+    restart: unless-stopped
+    environment:
+      FILEBROWSER_CONFIG: /config/config.yaml
+      FILEBROWSER_DATABASE_PATH: /home/filebrowser/data/database.sqlite
+      # Expanded into config.yaml; the values live in .env, never in git.
+      UPLOADS_EXTERNAL_URL: ${UPLOADS_EXTERNAL_URL:?set it in .env}
+      UPLOADS_ADMIN_PASSWORD: ${UPLOADS_ADMIN_PASSWORD:?set it in .env}
+      UPLOADS_TOTP_SECRET: ${UPLOADS_TOTP_SECRET:?set it in .env}
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      # The database stays on local disk: SQLite over a network share is asking
+      # for corruption.
+      - ./data:/home/filebrowser/data
+      # The files go wherever .env says, typically a NAS mount. Docker would
+      # otherwise create a missing path as an empty local folder, and with the
+      # NAS unmounted the uploads would quietly fill the machine's own disk.
+      - type: bind
+        source: ${UPLOADS_FILES_DIR:?set it in .env}
+        target: /srv/uploads
+        bind:
+          create_host_path: false
+    # Loopback only: whatever publishes the HTTPS hostname (tunnel or reverse
+    # proxy) runs on this machine and forwards here.
+    ports:
+      - 127.0.0.1:8081:80

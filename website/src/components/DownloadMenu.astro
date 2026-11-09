@@ -1,0 +1,73 @@
+---
+import { LINKS, docs } from '../data/site';
+---
+
+<div class="download">
+  <div class="btn-row download__actions">
+    <a class="btn btn--primary" data-download-primary href={`${LINKS.releases}/latest`}>Download</a>
+    <a class="btn btn--ghost" href={docs()}>Read the docs</a>
+  </div>
+
+  <p class="download__meta mono muted">
+    <a data-download-version href={`${LINKS.releases}/latest`}>Latest stable release, from GitHub</a>
+    <span aria-hidden="true">·</span>
+    <a href="/builds/">Preview Builds</a>
+  </p>
+</div>
+
+<script>
+  import { initReleaseFeed } from '../lib/release-feed';
+
+  initReleaseFeed();
+</script>
+
+<style>
+  .download {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    /* Room under the buttons: the release line is a footnote to them, not a
+       second line of the button. */
+    gap: 1.5rem;
+  }
+
+  .download__actions {
+    justify-content: center;
+  }
+
+  /* Equal width, so the pair reads as one control group rather than as a primary
+     with an afterthought beside it. */
+  .download__actions .btn {
+    justify-content: center;
+    min-inline-size: 11.5rem;
+  }
+
+  /* The glass pane is right on a card; over the hero's wash it reads as a hole in
+     the page, so the secondary takes the stronger border instead. */
+  .download__actions .btn--ghost {
+    --btn-border: var(--border-strong);
+  }
+
+  .download__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+  }
+
+  .download__meta [data-download-version] {
+    text-decoration: underline;
+    text-decoration-color: var(--border-strong);
+    text-underline-offset: 0.2em;
+  }
+
+  .download__meta a:hover,
+  .download__meta a:focus-visible {
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-color: currentColor;
+    text-underline-offset: 0.2em;
+  }
+</style>

@@ -1,8 +1,11 @@
 import React from 'react';
+import { Trans, useLingui } from '@lingui/react/macro';
 import * as THREE from 'three';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Card, CardHeader, IconButton } from '@/components/atoms';
+import { Button, Card, CardHeader } from '@/components/atoms';
+import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
+import type { SelectionRotationMode } from '@/features/scene/selectionTransform';
 
 interface SectionHeaderProps {
   title: string;
@@ -30,11 +33,15 @@ interface TransformControlsProps {
   onRotationChange: (x: number, y: number, z: number) => void;
   onResetRotation: () => void;
   onRotationComplete?: () => void;
+  /** Set only while several models are selected: whether they turn as one block or each in place. */
+  selectionRotationMode?: SelectionRotationMode;
+  onSelectionRotationModeChange?: (mode: SelectionRotationMode) => void;
   
   // Scale
   scale: THREE.Vector3;
   onScaleChange: (x: number, y: number, z: number) => void;
   onResetScale: () => void;
+  onScaleCommit: () => void;
   uniformScaling: boolean;
   onUniformScalingChange: (value: boolean) => void;
 
@@ -65,9 +72,12 @@ export function TransformControls({
   onRotationChange,
   onResetRotation,
   onRotationComplete,
+  selectionRotationMode,
+  onSelectionRotationModeChange,
   scale,
   onScaleChange,
   onResetScale,
+  onScaleCommit,
   uniformScaling,
   onUniformScalingChange,
   localSpace,
@@ -81,8 +91,9 @@ export function TransformControls({
   onDrop,
   onTransformCommit,
 }: TransformControlsProps) {
+  const { t } = useLingui();
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
-  const compactButtonClass = 'ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]';
+  const compactButtonClass = '!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]';
   const valueInputClass = 'ui-input h-8 w-full px-1.5 text-xs sm:text-sm text-left tabular-nums no-spinners';
 
   const sectionCardStyle: React.CSSProperties = {
@@ -136,11 +147,11 @@ export function TransformControls({
     <button
       type="button"
       onClick={() => onLocalSpaceChange(!localSpace)}
-      title="Move and rotate along the model's own axes instead of the build plate's"
+      title={t`Move and rotate along the model's own axes instead of the build plate's`}
       className={toggleButtonClass}
       style={toggleButtonStyle(localSpace)}
     >
-      Local
+      <Trans context="Gizmo space toggle">Local</Trans>
     </button>
   );
 
@@ -192,27 +203,9 @@ export function TransformControls({
       <CardHeader
         left={(
           <>
-            <IconButton
-              onClick={() => setExpanded(!expanded)}
-              title={expanded ? 'Collapse card' : 'Expand card'}
-              className="!p-0.5"
-            >
-              <svg
-                className="w-3 h-3 transform transition-transform"
-                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                {expanded ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                )}
-              </svg>
-            </IconButton>
+            <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded((prev) => !prev)} />
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Transform
+              <Trans>Transform</Trans>
             </h3>
           </>
         )}
@@ -225,7 +218,7 @@ export function TransformControls({
           <div className="rounded-md border p-2" style={moveCardStyle}>
             <div className="flex items-center">
               <div className="flex-1" />
-              <SectionHeader title="Move" />
+              <SectionHeader title={t({ message: 'Move', context: 'Transform panel section' })} />
               <div className="flex-1 flex justify-end">
                 {renderLocalSpaceToggle()}
               </div>
@@ -273,13 +266,15 @@ export function TransformControls({
                   </div>
                 </div>
 
-                <button
+                <Button
                   type="button"
                   onClick={onCenter}
+                  variant="secondary"
+                  size="auto"
                   className={compactButtonClass + ' w-full'}
                 >
-                  Center Selection
-                </button>
+                  <Trans>Center Selection</Trans>
+                </Button>
 
               </div>
           </div>
@@ -288,11 +283,12 @@ export function TransformControls({
           <div className="rounded-md border p-2" style={liftCardStyle}>
             <div className="flex items-center">
               <div className="flex-1" />
-              <SectionHeader title="Lift" />
+              <SectionHeader title={t({ message: 'Lift', context: 'Transform panel section' })} />
               <div className="flex-1 flex justify-end">
                 <button
                   type="button"
                   onClick={() => onAutoLiftChange(!autoLift)}
+                  title={t`On, the selected models are lifted to this distance and keep it through moves, rotations and scaling. Off, they return to the height they were lifted from; Drop puts them on the plate.`}
                   className="h-7 min-w-[64px] rounded-md border px-2 text-[10px] font-semibold uppercase tracking-wide transition-colors"
                   style={autoLift
                     ? {
@@ -306,7 +302,7 @@ export function TransformControls({
                         color: 'var(--text-muted)',
                       }}
                 >
-                  Auto
+                  <Trans context="Auto-lift toggle">Auto</Trans>
                 </button>
               </div>
             </div>
@@ -323,36 +319,40 @@ export function TransformControls({
               </div>
 
               <div className="grid grid-cols-2 gap-1">
-                <button
+                <Button
                   onClick={() => {
                     onLift();
                     onTransformCommit?.();
                   }}
                   disabled={!modelBBox}
-                  className="ui-button ui-button-secondary !h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{
                     borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 38%)',
                     color: 'color-mix(in srgb, var(--accent), var(--text-strong) 30%)',
                     background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
                   }}
                 >
-                  Lift
-                </button>
-                <button
+                  <Trans context="Lift button">Lift</Trans>
+                </Button>
+                <Button
                   onClick={() => {
                     onDrop();
                     onTransformCommit?.();
                   }}
                   disabled={!modelBBox}
-                  className="ui-button ui-button-secondary !h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
+                  variant="secondary"
+                  size="auto"
+                  className="!h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{
                     borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
                     color: 'color-mix(in srgb, var(--accent-secondary), var(--text-strong) 30%)',
                     background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
                   }}
                 >
-                  Drop
-                </button>
+                  <Trans context="Drop button">Drop</Trans>
+                </Button>
               </div>
             </div>
           </div>
@@ -360,8 +360,20 @@ export function TransformControls({
           {/* ROTATE SECTION */}
           <div className="rounded-md border p-2" style={rotateCardStyle}>
             <div className="flex items-center">
-              <div className="flex-1" />
-              <SectionHeader title="Rotate" />
+              <div className="flex-1 flex justify-start">
+                {selectionRotationMode && (
+                  <button
+                    type="button"
+                    onClick={() => onSelectionRotationModeChange?.(selectionRotationMode === 'group' ? 'individual' : 'group')}
+                    title={t`Rotate the selection as one block around its centre; turn off to rotate each model in place`}
+                    className={toggleButtonClass}
+                    style={toggleButtonStyle(selectionRotationMode === 'group')}
+                  >
+                    <Trans context="Group rotation toggle">Group</Trans>
+                  </button>
+                )}
+              </div>
+              <SectionHeader title={t({ message: 'Rotate', context: 'Transform panel section' })} />
               <div className="flex-1 flex justify-end">
                 {renderLocalSpaceToggle()}
               </div>
@@ -418,15 +430,17 @@ export function TransformControls({
                   </div>
                 </div>
 
-                <button
+                <Button
                   onClick={() => {
                     onResetRotation();
                     onTransformCommit?.();
                   }}
-                  className="ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
+                  variant="secondary"
+                  size="auto"
+                  className="w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
                 >
-                  Reset Rotation
-                </button>
+                  <Trans>Reset Rotation</Trans>
+                </Button>
               </div>
           </div>
 
@@ -434,7 +448,7 @@ export function TransformControls({
           <div className="rounded-md border p-2" style={scaleCardStyle}>
             <div className="flex items-center justify-between">
               <div className="flex-1" />
-              <SectionHeader title="Scale" />
+              <SectionHeader title={t({ message: 'Scale', context: 'Transform panel section' })} />
               <div className="flex-1 flex justify-end">
                 <button
                 type="button"
@@ -452,7 +466,7 @@ export function TransformControls({
                       color: 'var(--text-muted)',
                     }}
               >
-                Uniform
+                <Trans context="Uniform scaling toggle">Uniform</Trans>
               </button>
             </div>
             </div>
@@ -469,7 +483,7 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(newScale, scale.y, scale.z);
                         }}
-                        onBlur={() => onTransformCommit?.()}
+                        onBlur={onScaleCommit}
                         className={valueInputClass}
                         showStepper={false}
                       />
@@ -486,7 +500,7 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(scale.x, newScale, scale.z);
                         }}
-                        onBlur={() => onTransformCommit?.()}
+                        onBlur={onScaleCommit}
                         className={valueInputClass}
                         showStepper={false}
                       />
@@ -503,7 +517,7 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(scale.x, scale.y, newScale);
                         }}
-                        onBlur={() => onTransformCommit?.()}
+                        onBlur={onScaleCommit}
                         className={valueInputClass}
                         showStepper={false}
                       />
@@ -523,7 +537,7 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(newScale, scale.y, scale.z);
                         }}
-                        onBlur={() => onTransformCommit?.()}
+                        onBlur={onScaleCommit}
                         className={valueInputClass}
                         showStepper={false}
                       />
@@ -540,7 +554,7 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(scale.x, newScale, scale.z);
                         }}
-                        onBlur={() => onTransformCommit?.()}
+                        onBlur={onScaleCommit}
                         className={valueInputClass}
                         showStepper={false}
                       />
@@ -557,7 +571,7 @@ export function TransformControls({
                           if (uniformScaling) onScaleChange(newScale, newScale, newScale);
                           else onScaleChange(scale.x, scale.y, newScale);
                         }}
-                        onBlur={() => onTransformCommit?.()}
+                        onBlur={onScaleCommit}
                         className={valueInputClass}
                         showStepper={false}
                       />
@@ -566,15 +580,17 @@ export function TransformControls({
                   </div>
                 </div>
 
-                <button
+                <Button
                   onClick={() => {
                     onResetScale();
-                    onTransformCommit?.();
+                    onScaleCommit();
                   }}
-                  className="ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
+                  variant="secondary"
+                  size="auto"
+                  className="w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
                 >
-                  Reset Scale
-                </button>
+                  <Trans>Reset Scale</Trans>
+                </Button>
               </div>
           </div>
         </div>

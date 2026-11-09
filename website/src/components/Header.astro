@@ -1,0 +1,311 @@
+---
+import ThemeToggle from './ThemeToggle.astro';
+import DiscordIcon from './DiscordIcon.astro';
+import Wordmark from './Wordmark.astro';
+import { LINKS, NAV, SITE } from '../data/site';
+
+const path = Astro.url.pathname;
+const isActive = (href: string) => {
+  // `/docs/` is both a tab and the root of every documentation URL, so compare
+  // against the prefix without its trailing slash.
+  const base = href !== '/' && href.endsWith('/') ? href.slice(0, -1) : href;
+  return path === base || path === href || path.startsWith(`${base}/`);
+};
+const githubIcon = 'M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2a4.6 4.6 0 0 1 1.2 3.2c0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3Z';
+---
+
+<header class="site-header" data-site-header>
+  <div class="shell site-header__inner">
+    <a class="brand" href="/" aria-label={`${SITE.name} home`}>
+      <img class="brand__icon" src="/brand/simple_icon.svg" alt="" width="32" height="32" />
+      <Wordmark size="9rem" />
+    </a>
+
+    <button
+      class="nav-toggle"
+      type="button"
+      data-nav-toggle
+      aria-controls="site-nav"
+      aria-expanded="false"
+      aria-label="Toggle navigation"
+    >
+      <span class="nav-toggle__bar"></span>
+      <span class="nav-toggle__bar"></span>
+    </button>
+
+    <nav class="site-nav" id="site-nav" data-site-nav aria-label="Main">
+      <ul class="site-nav__list">
+        {
+          NAV.map((item) => (
+            <li>
+              <a
+                class="site-nav__link"
+                href={item.href}
+                aria-current={isActive(item.href) ? 'page' : undefined}
+                target={item.external ? '_blank' : undefined}
+                rel={item.external ? 'noopener noreferrer' : undefined}
+              >
+                {item.label}
+                {
+                  /* The mark is an element rather than a pseudo-element because a view
+                     transition cannot name one: this is what the cross-document
+                     transition morphs from the tab you were on to the tab you are on,
+                     so the bar travels between them instead of blinking. */
+                  isActive(item.href) && <span class="site-nav__mark" aria-hidden="true" />
+                }
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+
+      <div class="site-nav__actions">
+        <a class="icon-link" href={LINKS.github} rel="noopener noreferrer" target="_blank" aria-label="DragonFruit on GitHub">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="currentColor" d={githubIcon}></path></svg>
+        </a>
+        <a class="icon-link" href={LINKS.discord} rel="me noopener noreferrer" target="_blank" aria-label="DragonFruit on Discord">
+          <DiscordIcon size={17} />
+        </a>
+        <ThemeToggle />
+      </div>
+    </nav>
+  </div>
+</header>
+
+<script is:inline>
+  // Everything is delegated from document rather than bound to the elements: the
+  // listeners outlive what they act on, and each handler resolves the current
+  // element when it fires.
+  (() => {
+    const header = () => document.querySelector('[data-site-header]');
+
+    const setOpen = (open) => {
+      const element = header();
+      if (!element) return;
+      element.toggleAttribute('data-open', open);
+      element.querySelector('[data-nav-toggle]')?.setAttribute('aria-expanded', String(open));
+    };
+
+    document.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest('[data-nav-toggle]')) {
+        setOpen(!header()?.hasAttribute('data-open'));
+        return;
+      }
+      if (target.closest('[data-site-nav] a')) setOpen(false);
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') setOpen(false);
+    });
+
+    const scrolled = () => header()?.toggleAttribute('data-scrolled', window.scrollY > 8);
+    window.addEventListener('scroll', scrolled, { passive: true });
+    scrolled();
+  })();
+</script>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    /* Same pane as the cards, so the bar reads as the same material. */
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.2s var(--ease), background-color 0.2s var(--ease);
+  }
+
+  /* Pages and cards scroll underneath, so once that starts the pane thickens:
+     the thin version is only safe over the flat wash at the top of a page. */
+  .site-header[data-scrolled] {
+    background: color-mix(in oklab, var(--bg) 82%, transparent);
+    border-bottom-color: var(--glass-border);
+  }
+
+  .site-header__inner {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    min-block-size: var(--header-block-size);
+  }
+
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-right: auto;
+  }
+
+  .brand__icon {
+    block-size: 1.75rem;
+    inline-size: auto;
+  }
+
+  /* The wordmark's box is centred on the emblem's, but the glyphs' optical centre
+     sits above the box because of the descender in "g". Drop it those few pixels. */
+  .brand :global(.wordmark) {
+    transform: translateY(0.1875rem);
+  }
+
+  .site-nav {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+
+  .site-nav__list {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .site-nav__link {
+    position: relative;
+    display: block;
+    padding: 0.45rem 0.7rem;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--muted);
+    border-radius: var(--radius-sm);
+    transition: color 0.16s var(--ease), background-color 0.16s var(--ease);
+  }
+
+  .site-nav__link:hover {
+    color: var(--ink);
+    background: var(--bg-inset);
+  }
+
+  .site-nav__link[aria-current='page'] {
+    color: var(--ink);
+  }
+
+  .site-nav__mark {
+    /* The one named element in the header. A cross-document view transition matches
+       it by name on both sides, so the bar travels from the old tab to the new one
+       instead of disappearing and reappearing. */
+    view-transition-name: nav-mark;
+    position: absolute;
+    inset-inline: 0.7rem;
+    bottom: 0.1rem;
+    block-size: 2px;
+    border-radius: 2px;
+    background: var(--brand-gradient);
+  }
+
+  .site-nav__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding-left: 1.5rem;
+    border-left: 1px solid var(--border);
+  }
+
+  .icon-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 2.125rem;
+    block-size: 2.125rem;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    transition: color 0.16s var(--ease), border-color 0.16s var(--ease), background-color 0.16s var(--ease);
+  }
+
+  .icon-link:hover {
+    color: var(--ink);
+    border-color: var(--border-strong);
+    background: var(--bg-inset);
+  }
+
+  .nav-toggle {
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    inline-size: 2.125rem;
+    block-size: 2.125rem;
+    padding: 0 0.5rem;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .nav-toggle__bar {
+    display: block;
+    block-size: 1.5px;
+    background: var(--ink);
+    border-radius: 2px;
+    transition: transform 0.2s var(--ease);
+  }
+
+  @media (max-width: 860px) {
+    .nav-toggle {
+      display: flex;
+    }
+
+    .site-nav {
+      position: absolute;
+      inset-inline: 0;
+      top: 100%;
+      display: none;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+      padding: 0.75rem var(--gutter) 1.25rem;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+
+    .site-header[data-open] .site-nav {
+      display: flex;
+    }
+
+    .site-header[data-open] .nav-toggle__bar:first-child {
+      transform: translateY(3.25px) rotate(45deg);
+    }
+
+    .site-header[data-open] .nav-toggle__bar:last-child {
+      transform: translateY(-3.25px) rotate(-45deg);
+    }
+
+    .site-nav__list {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.125rem;
+    }
+
+    .site-nav__link {
+      padding: 0.6rem 0.7rem;
+      font-size: 1rem;
+    }
+
+    .site-nav__link[aria-current='page'] {
+      background: var(--bg-inset);
+    }
+
+    .site-nav__mark {
+      inset-block: 0.75rem;
+      inset-inline: auto 0.55rem;
+      inline-size: 2px;
+      block-size: auto;
+    }
+
+    .site-nav__actions {
+      padding: 0.75rem 0 0;
+      margin-top: 0.5rem;
+      border-top: 1px solid var(--border);
+      border-left: 0;
+      padding-left: 0;
+    }
+  }
+</style>

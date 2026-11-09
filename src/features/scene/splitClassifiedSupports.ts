@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { buildModelEdgeGeometry } from '@/hooks/useStlGeometry';
 import type { LoadedModel } from './useSceneCollectionManager';
 import { accelerateGeometry } from '@/utils/bvh';
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
@@ -18,6 +19,7 @@ function buildGeometryWithBounds(
   positions: Float32Array,
   triangleCount: number,
   interactive: boolean,
+  computeEdgeGeometry: boolean,
 ): GeometryWithBounds {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -35,21 +37,14 @@ function buildGeometryWithBounds(
   const flatteningPlanes = triangleCount * 3 < 15_000_000
     ? computeFlatteningPlanes(geometry)
     : [];
-  let edgeGeometry: THREE.EdgesGeometry | undefined;
-  if (triangleCount < 4_000_000) {
-    try {
-      edgeGeometry = new THREE.EdgesGeometry(geometry, 30);
-    } catch {
-      // Edge geometry is optional for very large meshes.
-    }
-  }
+  const edgeGeometry = computeEdgeGeometry ? buildModelEdgeGeometry(geometry) : undefined;
 
   return { geometry, bbox, center, size, flatteningPlanes, edgeGeometry };
 }
 
 export function splitClassifiedSupportGeometry(
   source: LoadedModel,
-  options: { interactive?: boolean } = {},
+  options: { interactive?: boolean; computeEdgeGeometry?: boolean } = {},
 ): ClassifiedSupportGeometrySplit | null {
   const modelTriangleCount = Math.floor(
     source.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? 0,
@@ -77,15 +72,18 @@ export function splitClassifiedSupportGeometry(
   const modelPositions = positions.slice(0, modelFloatEnd);
   const supportPositions = positions.slice(modelFloatEnd);
   const interactive = options.interactive === true;
+  const computeEdgeGeometry = options.computeEdgeGeometry === true;
   const modelGeometry = buildGeometryWithBounds(
     modelPositions,
     modelTriangleCount,
     interactive,
+    computeEdgeGeometry,
   );
   const supportGeometry = buildGeometryWithBounds(
     supportPositions,
     supportTriangleCount,
     interactive,
+    computeEdgeGeometry,
   );
 
   const originalCenter = source.geometry.center;

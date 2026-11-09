@@ -7,11 +7,6 @@ import {
   serializeVoxlDocumentV2,
   parseVoxlBinaryV2,
 } from '../codec-v2';
-import {
-  buildVoxlDocumentV1,
-  parseVoxlDocument,
-  serializeVoxlDocument,
-} from '../codec';
 import type { BuildVoxlDocumentInput, VoxlModelRuntimeLike } from '../types';
 import type { DragonfruitImportFormat } from '@/supports/types';
 
@@ -38,7 +33,7 @@ function createDummyGeometry(): THREE.BufferGeometry {
   return geom;
 }
 
-test('splitSupports assigns isSupportGeometry: false to model and isSupportGeometry: true to support geometry', () => {
+test('splitSupports assigns isSupportGeometry: false to model and isSupportGeometry: true to support geometry', async () => {
   const geom = createDummyGeometry();
   const source: LoadedModel = {
     id: 'orig-model-1',
@@ -63,6 +58,8 @@ test('splitSupports assigns isSupportGeometry: false to model and isSupportGeome
           likely_support_geometry: false,
           residual_issues: [],
           fully_repaired: true,
+          rebuilt: false,
+          cancelled: false,
           total_ms: 0,
           model_triangle_count: 1,
         },
@@ -119,61 +116,6 @@ test('splitSupports assigns isSupportGeometry: false to model and isSupportGeome
   assert.equal(supportModel.isSupportGeometry, true);
 });
 
-test('VOXL V1 round-trip persistence for split support model', () => {
-  const modelPart: VoxlModelRuntimeLike = {
-    id: 'model-part',
-    name: 'TestPart (Model)',
-    visible: true,
-    color: '#a3a3a3',
-    polygonCount: 1,
-    transform: {
-      position: { x: 0, y: 0, z: 0 },
-      rotation: { x: 0, y: 0, z: 0 },
-      scale: { x: 1, y: 1, z: 1 },
-    },
-    mesh: { mode: 'external-file', fileName: 'model-part.stl' },
-    isSupportGeometry: false,
-  };
-
-  const supportPart: VoxlModelRuntimeLike = {
-    id: 'support-part',
-    name: 'TestPart (Supports)',
-    visible: true,
-    color: '#a3a3a3',
-    polygonCount: 1,
-    transform: {
-      position: { x: 0, y: 0, z: 0 },
-      rotation: { x: 0, y: 0, z: 0 },
-      scale: { x: 1, y: 1, z: 1 },
-    },
-    mesh: { mode: 'external-file', fileName: 'support-part.stl' },
-    isSupportGeometry: true,
-    linkGroupId: 'link-group-split',
-  };
-
-  const input: BuildVoxlDocumentInput = {
-    models: [modelPart, supportPart],
-    activeModelId: 'model-part',
-    selectedModelIds: ['model-part', 'support-part'],
-    supports: EMPTY_SUPPORTS,
-  };
-
-  const doc = buildVoxlDocumentV1(input);
-  const serializedJson = serializeVoxlDocument(doc, false, { compression: 'none' });
-  const parsed = parseVoxlDocument(serializedJson);
-
-  assert.equal(parsed.models.length, 2);
-  const parsedModel = parsed.models.find((m) => m.id === 'model-part');
-  const parsedSupport = parsed.models.find((m) => m.id === 'support-part');
-
-  assert.ok(parsedModel);
-  assert.equal(parsedModel.isSupportGeometry, false);
-
-  assert.ok(parsedSupport);
-  assert.equal(parsedSupport.isSupportGeometry, true);
-  assert.equal(parsedSupport.linkGroupId, 'link-group-split');
-});
-
 test('VOXL V2 binary round-trip persistence for split support model', async () => {
   const modelPart: VoxlModelRuntimeLike = {
     id: 'model-part-v2',
@@ -221,7 +163,7 @@ test('VOXL V2 binary round-trip persistence for split support model', async () =
   ]);
 
   const binary = await serializeVoxlDocumentV2(input, meshBytes);
-  const parsedResult = parseVoxlBinaryV2(binary);
+  const parsedResult = await parseVoxlBinaryV2(binary);
 
   assert.equal(parsedResult.document.models.length, 2);
   const parsedModel = parsedResult.document.models.find((m) => m.id === 'model-part-v2');

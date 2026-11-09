@@ -1,4 +1,4 @@
-name: Deploy Docs (MkDocs)
+name: Deploy Site
 
 on:
   workflow_dispatch:
@@ -7,9 +7,10 @@ on:
       - main
     paths:
       - docs/**
-      - mkdocs.yml
+      - website/**
+      - scripts/materialize-doc-placeholder-assets.mjs
+      - scripts/prepare-docs-versions.mjs
       - .github/workflows/docs-pages.yml
-      - docs/requirements.txt
   workflow_run:
     workflows:
       - Release
@@ -28,7 +29,13 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # Release chains into this workflow through workflow_run; workflow_dispatch
+    # is only the manual button. A GITHUB_TOKEN with actions: write can fire a
+    # workflow_dispatch — it is exempt from the rule that token-driven events do
+    # not chain — so that path requires a human actor.
+    if: >-
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') &&
+      (github.event_name != 'workflow_dispatch' || github.triggering_actor != 'github-actions[bot]')
     permissions:
       actions: write
       contents: read
@@ -38,16 +45,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: docs/requirements.txt
+          submodules: recursive
 
-      - name: Install docs dependencies
-        run: pip install -r docs/requirements.txt
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install site dependencies
+        working-directory: website
+        run: npm ci
 
       - name: Materialize placeholder docs assets
         run: node scripts/materialize-doc-placeholder-assets.mjs
@@ -56,8 +66,25 @@ jobs:
         id: pages
         uses: actions/configure-pages@v6
 
-      - name: Build docs site
-        run: mkdocs build --strict --site-dir site
+      # `main` is the default documentation even when this build runs from `dev`.
+      # The script exports both refs into website/.docs-versions/; add more refs
+      # to DOCS_VERSIONS when they need a switcher entry.
+      - name: Prepare documentation versions
+        run: node scripts/prepare-docs-versions.mjs
+        env:
+          DOCS_VERSIONS: main,dev
+          DOCS_DEFAULT: main
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # One build owns the landing page at the root and the documentation under
+      # `/docs/`. See docs/dev/site-and-landing.md.
+      - name: Build site
+        working-directory: website
+        run: npm run build
+        env:
+          # Raises the GitHub API rate limit for the page that lists branch
+          # previews. Build-time only: it never reaches the browser bundle.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Inject updater JSONs into site
         uses: actions/github-script@v9
@@ -76,13 +103,13 @@ jobs:
             async function fetchUpdaterJson(isPrerelease) {
               const assetName = isPrerelease ? 'latest-dev.json' : 'latest.json';
 
-              // Nightly prereleases never carry an updater feed and are deleted
+              // Preview prereleases never carry an updater feed and are deleted
               // and recreated on every build, so they always sort to the top of
               // the prerelease list and would shadow the real dev release.
               const candidates = releases.filter(r =>
                 !r.draft &&
                 r.prerelease === isPrerelease &&
-                !r.tag_name.startsWith('nightly_'));
+                !r.tag_name.startsWith('preview_'));
 
               const release = candidates.find(r => r.assets.some(a => a.name === assetName));
               if (release) {
@@ -109,20 +136,78 @@ jobs:
                 `refusing to deploy a site without it.`);
             }
 
+            // What ends up on Pages is the feed every installation's updater
+            // reads. It comes from a release asset, and contents: write allows
+            // replacing assets on *any* release in the repo — so a compromised
+            // token can plant a latest.json and wait for this workflow to
+            // publish it. Validate before writing: if anything is off, fail the
+            // deploy instead of serving it.
+            function assertReleaseUrl(name, platform, raw) {
+              let url;
+              try {
+                url = new URL(raw);
+              } catch (e) {
+                throw new Error(`${name}: platform ${platform} has an unparseable url: ${raw}`);
+              }
+              // new URL normalises ".." segments, so the prefix check cannot be
+              // sidestepped with relative path segments.
+              const prefix = `/${context.repo.owner}/${context.repo.repo}/releases/`;
+              if (url.protocol !== 'https:' ||
+                  url.host !== 'github.com' ||
+                  !url.pathname.startsWith(prefix)) {
+                throw new Error(
+                  `${name}: platform ${platform} points outside this repo's releases: ${raw}`);
+              }
+            }
+
+            function validateUpdaterFeed(name, text) {
+              let feed;
+              try {
+                feed = JSON.parse(text);
+              } catch (e) {
+                throw new Error(`${name} is not valid JSON: ${e.message}`);
+              }
+
+              if (typeof feed.version !== 'string' || !feed.version) {
+                throw new Error(`${name} has no version string`);
+              }
+              if (!feed.platforms || typeof feed.platforms !== 'object') {
+                throw new Error(`${name} has no platforms object`);
+              }
+
+              const entries = Object.entries(feed.platforms);
+              if (entries.length === 0) {
+                throw new Error(`${name} lists no platforms`);
+              }
+
+              for (const [platform, entry] of entries) {
+                if (!entry || typeof entry.url !== 'string') {
+                  throw new Error(`${name}: platform ${platform} has no url`);
+                }
+                assertReleaseUrl(name, platform, entry.url);
+                if (typeof entry.signature !== 'string' || !entry.signature) {
+                  throw new Error(`${name}: platform ${platform} has no signature`);
+                }
+              }
+
+              core.info(`${name} validated — v${feed.version}, ${entries.length} platform(s)`);
+            }
+
             const results = await Promise.all([
               fetchUpdaterJson(false),
               fetchUpdaterJson(true),
             ]);
 
             for (const result of results) {
-              fs.writeFileSync(`site/${result.name}`, result.content);
-              core.info(`Wrote site/${result.name}`);
+              validateUpdaterFeed(result.name, result.content);
+              fs.writeFileSync(`website/dist/${result.name}`, result.content);
+              core.info(`Wrote website/dist/${result.name}`);
             }
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: site
+          path: website/dist
 
       - name: Deploy to GitHub Pages
         id: deployment

@@ -1,11 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod astar;
 mod mesh_minima;
 mod mesh_repair;
+mod mesh_refine;
 mod network;
+mod ao_vertex;
 mod overhang;
-mod sdf;
 mod spacemouse;
 mod updater_channel;
 
@@ -41,6 +41,10 @@ fn default_z_blur_sigma() -> f64 {
     0.5
 }
 
+fn default_tank_count() -> u32 {
+    1
+}
+
 fn default_anti_aliasing_mode() -> String {
     "Blur".to_string()
 }
@@ -58,7 +62,14 @@ fn default_dither_device_gamma() -> f64 {
 }
 
 mod experiments;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+mod mallinfo_shim;
 mod plugin_registry;
+mod plugin_sideload;
+mod plugin_sideload_encoder;
+#[cfg(test)]
+mod plugin_test_support;
+mod plugin_sideload_runtime;
 mod webview_watchdog;
 mod window_state;
 
@@ -678,6 +689,12 @@ struct SliceJobMetadata {
     zaa_duplicate_z: Option<bool>,
     #[serde(default)]
     model_triangle_count: u32,
+    /// Resin tanks the job prints; `1` for every single-material machine.
+    #[serde(default = "default_tank_count")]
+    tank_count: u32,
+    /// Tank per triangle, aligned with the mesh. Empty means all Tank 1.
+    #[serde(default)]
+    triangle_tank_index: Vec<u32>,
     container_compression_level: u8,
     build_width_mm: f32,
     build_depth_mm: f32,
@@ -1216,6 +1233,29 @@ async fn allocate_mesh_stage_path() -> Result<String, String> {
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Decodes the percent-encoded `x-mesh-stage-path` header back into a path.
+///
+/// The path cannot ride in the header verbatim: HTTP header values are
+/// visible-ASCII only, so `HeaderValue::to_str` rejects every byte outside
+/// 0x20-0x7E and a destination like `C:\Users\...\Tatsaechliche Dokumente\x.voxl`
+/// (any accent, umlaut or CJK character) failed on its very first chunk. Saving
+/// a project into such a folder was impossible, and the frontend's fallback
+/// chain turned the failure into a browser download rather than an error.
+///
+/// The sender is `encodeStagePathHeader` in `nativeSlicerBridge.ts`; every
+/// caller of this command goes through it, so the value here is always
+/// percent-encoded ASCII. An unencoded ASCII path decodes to itself, but a
+/// literal `%` would not survive the round trip - encode on the way in.
+fn decode_stage_path_header(raw: &[u8]) -> Result<String, String> {
+    let encoded = std::str::from_utf8(raw)
+        .map_err(|err| format!("Invalid x-mesh-stage-path header value: {err}"))?;
+
+    percent_encoding::percent_decode_str(encoded)
+        .decode_utf8()
+        .map(|decoded| decoded.into_owned())
+        .map_err(|err| format!("Invalid x-mesh-stage-path header encoding: {err}"))
+}
+
 #[tauri::command]
 async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64, String> {
     let bytes = match request.body() {
@@ -1230,10 +1270,8 @@ async fn append_mesh_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<u64
         .get("x-mesh-stage-path")
         .ok_or("append_mesh_stage_chunk missing x-mesh-stage-path header")?;
 
-    let path_text = path_header
-        .to_str()
-        .map_err(|e| format!("Invalid x-mesh-stage-path header value: {e}"))?
-        .trim();
+    let decoded_path = decode_stage_path_header(path_header.as_bytes())?;
+    let path_text = decoded_path.trim();
 
     if path_text.is_empty() {
         return Err("append_mesh_stage_chunk received empty x-mesh-stage-path header".into());
@@ -1629,6 +1667,8 @@ async fn slice_solid_native_to_temp_path(
             z_blur_sigma: meta.z_blur_sigma,
             aa_on_supports: meta.aa_on_supports,
             model_triangle_count: meta.model_triangle_count,
+            tank_count: meta.tank_count,
+            triangle_tank_index: meta.triangle_tank_index,
             minimum_aa_alpha_percent: meta.minimum_aa_alpha_percent,
             mirror_x: meta.mirror_x,
             mirror_y: meta.mirror_y,
@@ -3739,6 +3779,80 @@ async fn read_print_layer_png(
     Ok(Response::new(bytes))
 }
 
+/// Decode a run of layer preview PNGs in one round trip, in parallel.
+///
+/// Each layer costs a file open, an RLE decode and a PNG encode, and the printing workspace
+/// wants the layers either side of the one on screen at once. Doing them here means one IPC
+/// round trip and as many cores as the machine has, rather than one blocking task per layer,
+/// one after another.
+///
+/// The answer is packed as `[u32 little-endian length][bytes]` per layer, in the order asked
+/// for, and an empty entry is a layer that would not decode. It is one binary payload rather
+/// than a list of them, which is what the bridge can hand straight to the caller.
+#[tauri::command]
+async fn read_print_layer_pngs(
+    source_path: String,
+    layer_numbers: Vec<u32>,
+    format_hint: String,
+) -> Result<Response, String> {
+    let packed = tauri::async_runtime::spawn_blocking(move || {
+        if layer_numbers.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let source = std::path::PathBuf::from(source_path.trim());
+        if !source.exists() {
+            return Err("Source print file no longer exists on disk".to_string());
+        }
+        if layer_numbers.iter().any(|number| *number == 0) {
+            return Err("Layer number must be >= 1".to_string());
+        }
+
+        use rayon::prelude::*;
+        let decoded: Vec<Vec<u8>> = layer_numbers
+            .par_iter()
+            .map(|layer_number| {
+                dragonfruit_slicing_engine::engine::read_layer_preview_png_by_format_hint(
+                    &source,
+                    *layer_number,
+                    &format_hint,
+                )
+                .unwrap_or_default()
+            })
+            .collect();
+
+        let mut packed: Vec<u8> = Vec::with_capacity(decoded.iter().map(|bytes| bytes.len() + 4).sum());
+        for bytes in decoded {
+            packed.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            packed.extend_from_slice(&bytes);
+        }
+
+        Ok(packed)
+    })
+    .await
+    .map_err(|err| format!("Read layers task failed to join: {err}"))??;
+
+    Ok(Response::new(packed))
+}
+
+/// Which of these paths already exist on disk.
+///
+/// For a caller about to write files over them: a batch of plate outputs lands in a folder the
+/// user picked, and that folder may already hold files of the same names from an earlier run.
+#[tauri::command]
+async fn existing_paths(paths: Vec<String>) -> Result<Vec<bool>, String> {
+    let existing = tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .iter()
+            .map(|path| std::path::Path::new(path.trim()).exists())
+            .collect::<Vec<bool>>()
+    })
+    .await
+    .map_err(|err| format!("Path check task failed to join: {err}"))?;
+
+    Ok(existing)
+}
+
 #[tauri::command]
 async fn delete_print_temp_file(source_path: String) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -3903,18 +4017,21 @@ async fn launch_external_process(exe_path: String, file_arg: String) -> Result<(
     }
 
     // A macOS `.app` bundle is a directory: it has to be started through
-    // `open -a`, which hands the file to the already-running instance if there
-    // is one. A bare executable (a CLI on PATH, or the binary inside the
-    // bundle) still spawns directly.
+    // `open -a`. The file goes in as a command-line argument, not as a file to
+    // open: UVtools declares no document types, so it ignores the open-document
+    // event that `open -a <app> <file>` sends. `-n` starts a new instance,
+    // since one already running would never see the arguments. A bare
+    // executable (a CLI on PATH, or the binary inside the bundle) still spawns
+    // directly.
     #[cfg(target_os = "macos")]
     if std::path::Path::new(&exe_path)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
     {
         let mut command = std::process::Command::new("open");
-        command.arg("-a").arg(&exe_path);
+        command.arg("-n").arg("-a").arg(&exe_path);
         if !file_arg.is_empty() {
-            command.arg(&file_arg);
+            command.arg("--args").arg(&file_arg);
         }
         command
             .spawn()
@@ -3973,6 +4090,69 @@ async fn fetch_sponsor_avatar(url: String) -> Result<String, String> {
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Ok(format!("data:{content_type};base64,{b64}"))
 }
+/// Payload returned by `fetch_github_plugin_resource`.
+#[derive(serde::Serialize)]
+struct GithubPluginResource {
+    status: u16,
+    content_type: String,
+    body_base64: String,
+}
+
+/// Fetch a plugin manifest resource (manifest JSON, preset packs, preset images)
+/// via Rust, bypassing WebView CORS.
+///
+/// The desktop build serves only static assets from Tauri, so the Next.js
+/// `/api/plugins/github-manifest` route does not exist in production. The
+/// resolver in `src/features/plugins/githubPluginManifest.ts` runs in the
+/// WebView and calls this command for every GitHub request instead.
+///
+/// Only `https` GitHub hosts are allowed; anything else is refused here rather
+/// than fetched. Non-2xx responses are returned with their status so the
+/// resolver can report the HTTP error.
+#[tauri::command]
+async fn fetch_github_plugin_resource(url: String) -> Result<GithubPluginResource, String> {
+    let trimmed = url.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("URL is empty".to_string());
+    }
+    let parsed = url::Url::parse(&trimmed).map_err(|e| format!("Invalid url: {e}"))?;
+    if parsed.scheme() != "https" {
+        return Err("Only https URLs are allowed".to_string());
+    }
+    let host = parsed.host_str().ok_or("Missing host")?.to_ascii_lowercase();
+    const ALLOWED_HOSTS: &[&str] = &["github.com", "api.github.com", "raw.githubusercontent.com"];
+    if !ALLOWED_HOSTS.contains(&host.as_str()) {
+        return Err(format!("Host not allowed: {host}"));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Client build failed: {e}"))?;
+    let resp = client
+        .get(trimmed)
+        .header("Accept", "application/json, */*")
+        .header("User-Agent", "DragonFruit")
+        .send()
+        .await
+        .map_err(|e| format!("Fetch failed: {e}"))?;
+
+    let status = resp.status().as_u16();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = resp.bytes().await.map_err(|e| format!("Read failed: {e}"))?;
+
+    Ok(GithubPluginResource {
+        status,
+        content_type,
+        body_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+    })
+}
+
 /// Fetch external JSON/text via Rust (bypasses WebView CORS) for sponsors list.
 /// Only `https` URLs from `opencollective.com` are allowed.
 #[tauri::command]
@@ -4272,6 +4452,16 @@ fn main() {
             // surfacing real update failures to the user, so suppress the
             // Rust-side noise here.
             .level_for("tauri_plugin_updater", log::LevelFilter::Off)
+            // The Vulkan loader hands wgpu every implicit layer installed on the
+            // machine, and a third-party overlay whose manifest is missing or
+            // whose layer violates the loader's naming policy is reported as an
+            // ERROR on the instance we asked for — Epic's EOS layer, Samsung's
+            // Galaxy overlay, Overwolf's OBS hook. None of it is ours and none of
+            // it is actionable, and every record is mirrored into the webview
+            // console by the log plugin, where it reads as an application crash.
+            // wgpu failures we can act on come back as `Err` from our own calls
+            // (`dragonfruit-ao-gpu` logs its fallback itself).
+            .level_for("wgpu_hal", log::LevelFilter::Off)
             .max_file_size(5_000_000)
             .rotation_strategy(RotationStrategy::KeepOne)
             .build()
@@ -4282,6 +4472,16 @@ fn main() {
     let builder = builder.plugin(log_plugin);
     let builder = builder.setup(|app| {
         let app_handle = app.handle().clone();
+
+        // Point the sideloaded plugin runtime at the installed packages before
+        // anything can route a request to one.
+        match plugin_sideload::plugin_root(&app_handle) {
+            Ok(root) => {
+                plugin_sideload_encoder::register_installed_encoders(&root);
+                plugin_sideload_runtime::initialize(root);
+            }
+            Err(error) => log::warn!("[plugin-runtime] {error}"),
+        }
 
         log_startup_header();
 
@@ -4338,6 +4538,9 @@ fn main() {
                         }
                     }
                     window_state::track(&window);
+                    // Keep navlib's `active` / `focus` in step with the window, so
+                    // the driver stops routing the puck to a backgrounded app.
+                    spacemouse::track_window_focus(&window);
 
                     // On macOS, reveal immediately so a frontend startup hiccup
                     // can't leave the app invisible when created as hidden.
@@ -4400,7 +4603,11 @@ fn main() {
             mesh_minima::scan_mesh_minima_from_path,
             mesh_minima::scan_voxel_islands_from_path,
             mesh_minima::scan_islands_from_path,
+            mesh_minima::scan_islands_staged,
+            ao_vertex::bake_vertex_occlusion,
+            ao_vertex::ao_available,
             overhang::scan_overhangs,
+            overhang::scan_overhangs_staged,
             export_mesh_file,
             save_print_file,
             save_print_file_from_path,
@@ -4410,6 +4617,7 @@ fn main() {
             experiments::set_experiment_overrides,
             fetch_sponsor_avatar,
             fetch_external_text,
+            fetch_github_plugin_resource,
             get_slicer_engine_version,
             notify_launch_scene_handoff,
             focus_main_window_command,
@@ -4419,6 +4627,8 @@ fn main() {
             read_print_file_size,
             read_print_file_chunk,
             read_print_layer_png,
+            read_print_layer_pngs,
+            existing_paths,
             delete_print_temp_file,
             cleanup_stale_print_temp_files,
             cleanup_all_print_temp_files,
@@ -4449,13 +4659,29 @@ fn main() {
             spacemouse::spacemouse_native_stop,
             spacemouse::spacemouse_native_sync,
             network::plugin_network_request,
+            plugin_sideload::sideloaded_plugin_allowance,
+            plugin_sideload::sideloaded_plugin_set_allowance,
+            plugin_sideload::sideloaded_plugin_pick,
+            plugin_sideload::sideloaded_plugin_inspect,
+            plugin_sideload::sideloaded_plugin_install,
+            plugin_sideload::sideloaded_plugin_list,
+            plugin_sideload::sideloaded_plugin_asset,
+            plugin_sideload::sideloaded_plugin_remove,
+            plugin_sideload::sideloaded_plugin_import_file,
             network::ensure_rtsp_relay,
             mesh_repair::mesh_analyze_from_path,
+            mesh_refine::refine_mesh_soup,
             mesh_repair::mesh_analyze_staged,
             mesh_repair::mesh_repair_from_path,
+            mesh_repair::mesh_repair_parts_from_path,
+            mesh_repair::mesh_load_from_path,
             mesh_repair::mesh_repair_staged,
+            mesh_repair::mesh_repair_cancel,
             mesh_repair::mesh_classify_staged,
             mesh_repair::mesh_hollow_staged,
+            mesh_repair::mesh_shrinkwrap_staged,
+            mesh_repair::mesh_tet_surface_staged,
+            mesh_repair::mesh_solid_remesh_staged,
             mesh_repair::mesh_hollow_preview_capture_staged_source,
             mesh_repair::mesh_hollow_preview_from_captured_source,
             mesh_repair::mesh_hollow_apply_from_captured_source,
@@ -4484,11 +4710,9 @@ fn main() {
             mesh_repair::mesh_organic_cut_read_membrane,
             mesh_repair::mesh_organic_cut_read_tenon,
             mesh_repair::mesh_repair_read_positions,
-            mesh_repair::load_stl_file,
-            sdf::compute_sdf_from_staged,
-            sdf::compute_heightmap_from_staged,
-            sdf::invalidate_sdf_cache,
-            astar::run_astar_pathfinding,
+            mesh_repair::load_mesh_file,
+            mesh_repair::load_mesh_bytes,
+            mesh_repair::load_mesh_range,
             updater_channel::check_updates,
             updater_channel::perform_update,
             updater_channel::get_saved_update_channel,
@@ -4504,6 +4728,7 @@ fn main() {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
                 window_state::save(app_handle);
+                plugin_sideload_runtime::shutdown_all();
             }
         });
 }
@@ -4601,6 +4826,60 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The non-ASCII destination regression.** The staging path crosses the
+    /// IPC bridge in the `x-mesh-stage-path` header, and HTTP header values are
+    /// visible ASCII only. A project under `Tatsächliche Dokumente` therefore
+    /// failed on its first chunk with "failed to convert header to a str", and
+    /// the frontend's fallback chain downgraded the failure to a browser
+    /// download: the user picked a destination, got a success toast, and the
+    /// scene file was never written there. The path is percent-encoded on the
+    /// wire now, so the whole seam has to work under a non-ASCII directory.
+    #[test]
+    fn voxl_write_seam_works_under_a_non_ascii_path() {
+        let _guard = lock_writer_tests();
+        let dir = unique_test_dir("atomic-nonascii").join("Tatsächliche Dokumente");
+        std::fs::create_dir_all(&dir).expect("failed creating non-ASCII test dir");
+        let target = dir.join("Füße & Hände.voxl");
+
+        let payload: Vec<u8> = (0..256u32).flat_map(|i| i.to_le_bytes()).collect();
+        voxl_write_seam(&target, &payload, None).expect("write to a non-ASCII path failed");
+
+        assert_eq!(
+            std::fs::read(&target).expect("no file written to the non-ASCII path"),
+            payload,
+        );
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// The header carries a percent-encoded path; decoding it is what makes the
+    /// non-ASCII destination above reach the writer at all.
+    #[test]
+    fn stage_path_header_decodes_percent_encoding() {
+        assert_eq!(
+            super::decode_stage_path_header(
+                b"C%3A%5CUsers%5CSomeone%5CTats%C3%A4chliche%20Dokumente%5CF%C3%BC%C3%9Fe.voxl"
+            )
+            .expect("decoding a percent-encoded path failed"),
+            r"C:\Users\Someone\Tatsächliche Dokumente\Füße.voxl",
+        );
+    }
+
+    /// An ASCII path with nothing to decode must survive untouched, so the
+    /// encoding change cannot alter the paths that already worked.
+    #[test]
+    fn stage_path_header_passes_plain_ascii_through() {
+        assert_eq!(
+            super::decode_stage_path_header(b"C%3A%5Cprojects%5Cscene.voxl")
+                .expect("decoding failed"),
+            r"C:\projects\scene.voxl",
+        );
+        assert_eq!(
+            super::decode_stage_path_header(b"/tmp/scene.voxl").expect("decoding failed"),
+            "/tmp/scene.voxl",
+        );
     }
 
     /// The happy path of the commit: the target becomes the temp's bytes and no

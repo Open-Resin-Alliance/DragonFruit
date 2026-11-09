@@ -2,6 +2,8 @@
 
 import React, { useSyncExternalStore } from 'react';
 import { AlertTriangle, CheckCircle2, CloudDownload } from 'lucide-react';
+import { Trans } from '@lingui/react/macro';
+import { Button } from '@/components/atoms';
 import {
   getSystemNotificationsSnapshot,
   subscribeSystemNotifications,
@@ -14,9 +16,9 @@ function toneStyles(tone?: SystemNotification['tone']) {
   switch (tone) {
     case 'error':
       return {
-        border: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
-        bg: 'color-mix(in srgb, #ef4444, var(--surface-1) 85%)',
-        color: '#ef4444',
+        border: 'color-mix(in srgb, var(--danger), var(--border-subtle) 40%)',
+        bg: 'color-mix(in srgb, var(--danger), var(--surface-1) 85%)',
+        color: 'var(--danger)',
         icon: <AlertTriangle className="h-4 w-4" />,
       };
     case 'warning':
@@ -28,9 +30,9 @@ function toneStyles(tone?: SystemNotification['tone']) {
       };
     case 'success':
       return {
-        border: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 40%)',
-        bg: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 85%)',
-        color: 'var(--accent-secondary)',
+        border: 'color-mix(in srgb, var(--success), var(--border-subtle) 40%)',
+        bg: 'color-mix(in srgb, var(--success), var(--surface-1) 85%)',
+        color: 'var(--success)',
         icon: <CheckCircle2 className="h-4 w-4" />,
       };
     case 'accent':
@@ -58,43 +60,39 @@ function ActionButton({ action, onClose }: { action: SystemNotificationAction; o
   const variant = action.variant ?? 'secondary';
   if (variant === 'secondary') {
     return (
-      <button
+      <Button
         type="button"
         onClick={handleClick}
-        className="flex-1 ui-button ui-button-secondary !h-9 px-4 text-sm inline-flex items-center justify-center gap-1.5"
+        variant="secondary"
+        size="auto"
+        className="flex-1 !h-9 px-4 text-sm inline-flex items-center justify-center gap-1.5"
       >
         {action.icon}
         {action.label}
-      </button>
+      </Button>
     );
   }
+  // accent/danger tints are reproduced by the tinted Button variants;
+  // accent-secondary has no matching variant, so it keeps its inline tint.
   const styleMap: Record<string, React.CSSProperties> = {
-    accent: {
-      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-      color: 'var(--accent)',
-    },
     'accent-secondary': {
       borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
       background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 86%)',
       color: 'var(--accent-secondary)',
     },
-    danger: {
-      borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-      background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-      color: 'var(--danger)',
-    },
   };
   return (
-    <button
+    <Button
       type="button"
       onClick={handleClick}
-      className="flex-1 ui-button !h-9 px-4 text-sm inline-flex items-center justify-center gap-1.5"
-      style={styleMap[variant] ?? styleMap.accent}
+      variant={variant === 'danger' ? 'tinted-danger' : 'tinted-accent'}
+      size="auto"
+      className="flex-1 !h-9 px-4 text-sm inline-flex items-center justify-center gap-1.5"
+      style={styleMap[variant]}
     >
       {action.icon}
       {action.label}
-    </button>
+    </Button>
   );
 }
 
@@ -230,7 +228,7 @@ export function SystemNotificationStack() {
                     </span>
                   )}
                   <div className="min-w-0">
-                    <div className="text-base font-bold leading-tight" style={{ color: n.tone === 'accent-secondary' || n.tone === 'success' ? 'var(--accent-secondary)' : 'var(--text-strong)' }}>
+                    <div className="text-base font-bold leading-tight" style={{ color: n.tone === 'success' ? 'var(--success)' : n.tone === 'accent-secondary' ? 'var(--accent-secondary)' : 'var(--text-strong)' }}>
                       {n.title}
                     </div>
                     {n.subtitle && (
@@ -277,13 +275,15 @@ export function SystemNotificationStack() {
                     <ActionButton key={idx} action={a} onClose={() => handleDismiss(n)} />
                   ))}
                   {(!n.actions || n.actions.length === 0) && n.dismissible !== false && (
-                    <button
+                    <Button
                       type="button"
                       onClick={() => handleDismiss(n)}
-                      className="flex-1 ui-button ui-button-secondary !h-9 px-4 text-sm"
+                      variant="secondary"
+                      size="auto"
+                      className="flex-1 !h-9 px-4 text-sm"
                     >
-                      Dismiss
-                    </button>
+                      <Trans>Dismiss</Trans>
+                    </Button>
                   )}
                 </div>
               </div>

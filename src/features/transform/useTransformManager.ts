@@ -1,45 +1,36 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
-import { useModelTransform } from '@/hooks/useModelTransform';
-import { computeLowestZ, computeBoundsZ } from '@/utils/geometry';
+import { useModelTransform, type ModelTransform } from '@/hooks/useModelTransform';
+import { computeBoundsZ } from '@/utils/geometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { alignModelToLift, type LiftDropModel } from '@/features/scene/selectionLiftDrop';
+import { DEFAULT_LIFT_DISTANCE_MM } from './liftDefaults';
 
 interface TransformManagerProps {
   geom: GeometryWithBounds | null;
+  /** The model the live transform belongs to; its own bottom is what a transform holds. */
+  activeModel: LiftDropModel | null;
 }
 
-export function useTransformManager({ geom }: TransformManagerProps) {
+export function useTransformManager({ geom, activeModel }: TransformManagerProps) {
   const [isTransforming, setIsTransforming] = useState<boolean>(false);
   const pendingTransformRef = useRef<{ pos: THREE.Vector3; rot: THREE.Euler; scl: THREE.Vector3 } | null>(null);
+  /** A manual Z drag sets the height itself, so the live snap stands down for that gesture. */
+  const snapEnabledRef = useRef(true);
 
   // Transform hooks
   const transformHook = useModelTransform();
   const { transform } = transformHook;
 
-  // Auto-lift settings
-  const [autoLift, setAutoLift] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const saved = window.localStorage.getItem('autoLift');
-      return saved ? JSON.parse(saved) : false;
-    }
-    return false;
-  });
-
+  // Lift distance: the amount the Lift action seats a model at.
   const [liftDistance, setLiftDistance] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = window.localStorage.getItem('liftDistance');
-      return saved ? parseFloat(saved) : 5;
+      return saved ? parseFloat(saved) : DEFAULT_LIFT_DISTANCE_MM;
     }
-    return 5;
+    return DEFAULT_LIFT_DISTANCE_MM;
   });
-
-  // Persistence
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('autoLift', JSON.stringify(autoLift));
-    }
-  }, [autoLift]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -47,136 +38,23 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     }
   }, [liftDistance]);
 
-  const setAutoLiftEnabled = useCallback((enabled: boolean) => {
-    setAutoLift(enabled);
-    transformHook.setAutoSnapEnabled(true);
-  }, [transformHook]);
-
-  const disableAutoLiftForManualZMove = useCallback(() => {
-    setAutoLift(false);
-    transformHook.setAutoSnapEnabled(false);
-  }, [transformHook]);
-
-  const buildTransformMatrix = useCallback((candidate: {
-    position: THREE.Vector3;
-    rotation: THREE.Euler;
-    scale: THREE.Vector3;
-  }): THREE.Matrix4 | null => {
-    if (!geom) return null;
-
-    const bbox = geom.geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geom.geometry.getAttribute('position') as THREE.BufferAttribute);
-    const center = bbox.getCenter(new THREE.Vector3());
-
-    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-
-    const rotScaleMatrix = new THREE.Matrix4();
-    rotScaleMatrix.compose(
-      new THREE.Vector3(0, 0, 0),
-      quaternionFromGlobalEuler(candidate.rotation),
-      candidate.scale,
-    );
-
-    const posMatrix = new THREE.Matrix4();
-    posMatrix.makeTranslation(candidate.position.x, candidate.position.y, candidate.position.z);
-
-    return posMatrix.multiply(rotScaleMatrix).multiply(offsetMatrix);
-  }, [geom]);
-
-  const getLowestWorldZForTransform = useCallback((candidate: {
-    position: THREE.Vector3;
-    rotation: THREE.Euler;
-    scale: THREE.Vector3;
-  }): number | null => {
-    if (!geom) return null;
-
-    const finalMatrix = buildTransformMatrix(candidate);
-    if (!finalMatrix) return null;
-
-    return computeLowestZ(geom.geometry, finalMatrix);
-  }, [buildTransformMatrix, geom]);
-
-  const alignTransformToAutoLift = useCallback((candidate: {
-    position: THREE.Vector3;
-    rotation: THREE.Euler;
-    scale: THREE.Vector3;
-  }) => {
-    const lowestWorldZ = getLowestWorldZForTransform(candidate);
-    if (lowestWorldZ === null) {
-      return {
-        position: candidate.position.clone(),
-        rotation: candidate.rotation.clone(),
-        scale: candidate.scale.clone(),
-      };
-    }
-
-    const targetZ = autoLift ? liftDistance : 0.001;
-    const offset = targetZ - lowestWorldZ;
-    const nextPosition = candidate.position.clone();
-    nextPosition.z += offset;
-
-    return {
-      position: nextPosition,
-      rotation: candidate.rotation.clone(),
-      scale: candidate.scale.clone(),
-    };
-  }, [autoLift, getLowestWorldZForTransform, liftDistance]);
+  const setSnapEnabled = useCallback((enabled: boolean) => {
+    snapEnabledRef.current = enabled;
+  }, []);
 
   const resolveLiveTransform = useCallback((candidate: {
     position: THREE.Vector3;
     rotation: THREE.Euler;
     scale: THREE.Vector3;
   }) => (
-    transformHook.autoSnapEnabled
-      ? alignTransformToAutoLift(candidate)
+    snapEnabledRef.current && activeModel
+      ? alignModelToLift(activeModel, candidate, liftDistance)
       : {
           position: candidate.position.clone(),
           rotation: candidate.rotation.clone(),
           scale: candidate.scale.clone(),
         }
-  ), [alignTransformToAutoLift, transformHook.autoSnapEnabled]);
-
-  // Helper to find lowest world Z
-  const getLowestWorldZ = useCallback((): number | null => {
-    const currentT = pendingTransformRef.current
-      ? {
-          position: pendingTransformRef.current.pos,
-          rotation: pendingTransformRef.current.rot,
-          scale: pendingTransformRef.current.scl
-        }
-      : transform;
-
-    return getLowestWorldZForTransform(currentT);
-  }, [getLowestWorldZForTransform, transform]);
-
-  // Auto-snap on lift distance change
-  useEffect(() => {
-    const lowestWorldZ = getLowestWorldZ();
-    if (lowestWorldZ !== null && transformHook.autoSnapEnabled) {
-      if (autoLift) {
-        transformHook.snapToLift(lowestWorldZ, liftDistance);
-      } else {
-        transformHook.snapToPlatform(lowestWorldZ);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liftDistance, autoLift]);
-
-  // Initialize transform on load - REMOVED
-  // This effect was causing issues in multi-model workflow by resetting 
-  // transforms (position=0,0,Z) whenever geometry changed (e.g. switching models).
-  // Initial transform logic is now handled by useSceneCollectionManager (for new files)
-  // and synced by page.tsx (for existing models).
-  /*
-  useEffect(() => {
-    if (geom?.bbox) {
-      const bbox = geom.bbox;
-      const center = bbox.getCenter(new THREE.Vector3());
-      const heightOffset = center.z - bbox.min.z;
-      const finalZ = autoLift ? heightOffset + liftDistance : heightOffset;
-      setPosition(0, 0, finalZ);
-    }
-  }, [geom, setPosition, autoLift, liftDistance]);
-  */
+  ), [activeModel, liftDistance]);
 
   // Compute Z Range
   const zRange = useMemo(() => {
@@ -192,7 +70,7 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     const center = bbox.getCenter(new THREE.Vector3());
 
     const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-    
+
     const rotScaleMatrix = new THREE.Matrix4();
     rotScaleMatrix.compose(
       new THREE.Vector3(0, 0, 0),
@@ -204,7 +82,7 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     posMatrix.makeTranslation(transform.position.x, transform.position.y, transform.position.z);
 
     const finalMatrix = posMatrix.multiply(rotScaleMatrix).multiply(offsetMatrix);
-    
+
     const { max } = computeBoundsZ(geom.geometry, finalMatrix);
     return { min: 0, max };
   }, [
@@ -229,19 +107,33 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     transformHook.setScale(nextTransform.scale.x, nextTransform.scale.y, nextTransform.scale.z);
   }, [resolveLiveTransform, transformHook]);
 
-  const performAutoSnap = useCallback(() => {
-     if (transformHook.autoSnapEnabled) {
-        const lowestWorldZ = getLowestWorldZ();
-        if (lowestWorldZ !== null) {
-            if (autoLift) {
-                transformHook.snapToLift(lowestWorldZ, liftDistance);
-            } else {
-                transformHook.snapToPlatform(lowestWorldZ);
-            }
-        }
+  /**
+   * Reseats after a rotation. `reference` is the transform the gesture started from — the store
+   * may already hold the rotated one, so the model's own pre-rotation bottom has to come from the
+   * caller's history entry rather than from the model as it stands now.
+   */
+  const performAutoSnap = useCallback((reference?: ModelTransform): ModelTransform | null => {
+    let snapped: ModelTransform | null = null;
+    if (snapEnabledRef.current && activeModel) {
+      const current = pendingTransformRef.current
+        ? {
+            position: pendingTransformRef.current.pos,
+            rotation: pendingTransformRef.current.rot,
+            scale: pendingTransformRef.current.scl,
+          }
+        : transform;
+      snapped = alignModelToLift(
+        { ...activeModel, transform: reference ?? activeModel.transform },
+        current,
+        liftDistance,
+      );
+      transformHook.setPosition(snapped.position.x, snapped.position.y, snapped.position.z);
+      transformHook.setRotation(snapped.rotation.x, snapped.rotation.y, snapped.rotation.z);
+      transformHook.setScale(snapped.scale.x, snapped.scale.y, snapped.scale.z);
     }
     pendingTransformRef.current = null;
-  }, [transformHook, autoLift, liftDistance, getLowestWorldZ]);
+    return snapped;
+  }, [activeModel, liftDistance, transform, transformHook]);
 
   return {
     transformHook, // Expose full hook if needed
@@ -250,17 +142,13 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     setTransformMode: transformHook.setMode,
     isTransforming,
     setIsTransforming,
-    autoSnapEnabled: transformHook.autoSnapEnabled,
-    autoLift,
-    setAutoLift: setAutoLiftEnabled,
-    disableAutoLiftForManualZMove,
     liftDistance,
     setLiftDistance,
+    setSnapEnabled,
     zRange,
     onTransformChange,
     performAutoSnap,
     pendingTransformRef,
-    getLowestWorldZ,
     resolveLiveTransform
   };
 }

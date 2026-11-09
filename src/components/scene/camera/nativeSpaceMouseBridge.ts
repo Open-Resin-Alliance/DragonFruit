@@ -50,6 +50,11 @@ export type NativeCameraInput = {
    *  navlib uses these to scale pan and drive zoom while `perspective` is false. */
   orthoMin: [number, number, number];
   orthoMax: [number, number, number];
+  /** The `NativeNavOutput.seq` JS last applied. navlib owns the pose while this
+   *  differs from the shadow's; when they match, JS owns it. */
+  lastAppliedSeq: number;
+  /** As {@link NativeCameraInput.lastAppliedSeq}, for `extentsSeq`. */
+  lastAppliedExtentsSeq: number;
 };
 
 /** navlib's latest camera output. Matches the Rust `NavOutput`. */

@@ -6,15 +6,17 @@ import { logStartupHeader } from "@/utils/debug/startupHeader";
 import { startWebviewHeartbeat } from "@/utils/debug/webviewHeartbeat";
 
 /**
- * Attaches the native Tauri log plugin to the browser console so that all
- * console.log / warn / error calls made anywhere in the frontend are written
- * to the platform log file (e.g. %APPDATA%\org.openresinalliance.dragonfruit\logs\dragonfruit.log).
+ * Attaches the native Tauri log plugin so that Rust-side log entries are echoed
+ * to the webview's devtools console. The forwarding is one-way: frontend
+ * console.* calls never reach the platform log file (e.g.
+ * %APPDATA%\org.openresinalliance.dragonfruit\logs\dragonfruit.log). Anything
+ * that must land there has to go through plugin-log's info()/warn()/error().
  *
  * Also starts the main-thread stall detector and writes the webview half of the
  * startup header. Both are cheap enough to run unconditionally: the detector is
  * one timer at 4 Hz that logs only when something is already wrong.
  *
- * The console attachment is a no-op outside of a Tauri context (e.g. browser
+ * The log plugin is skipped outside of a Tauri context (e.g. browser
  * dev); the stall detector still runs there and reports to the console.
  */
 export function AppLogger() {

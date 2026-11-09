@@ -9,9 +9,11 @@ import {
   registerHistoryHandler,
   getUndoCount,
   getRedoCount,
+  subscribeHistoryChanges,
 } from '../historyStore';
+import type { HistoryChange } from '../types';
 
-const ACTION = { type: 'test:action', payload: { value: 1 } } as const;
+const ACTION = { type: 'test:action', payload: { value: 1 }, description: { id: 'test:action' } } as const;
 
 describe('historyStore', () => {
   const cleanups: Array<() => void> = [];
@@ -100,8 +102,8 @@ describe('historyStore', () => {
   it('does not let a declined entry block undo of entries beneath it', () => {
     register('good', () => true);
     register('bad', () => false);
-    pushHistory({ type: 'good', payload: {} });
-    pushHistory({ type: 'bad', payload: {} }); // now on top
+    pushHistory({ type: 'good', payload: {}, description: { id: 'good' } });
+    pushHistory({ type: 'bad', payload: {}, description: { id: 'bad' } }); // now on top
 
     undo(); // pops 'bad' → declined → discarded, not pushed back
     assert.equal(getUndoCount(), 1, 'the good entry is still reachable');
@@ -123,5 +125,27 @@ describe('historyStore', () => {
 
     assert.equal(getRedoCount(), 0);
     assert.equal(getUndoCount(), 0);
+  });
+
+  it('reports pushes and applied undos and redos as changes, and nothing that did not apply', () => {
+    let accepts = true;
+    register(ACTION.type, () => accepts);
+    const changes: HistoryChange[] = [];
+    const unsubscribe = subscribeHistoryChanges((change) => changes.push(change));
+    cleanups.push(() => { unsubscribe(); });
+
+    pushHistory(ACTION);
+    undo();
+    redo();
+    accepts = false;
+    undo(); // declined
+    undo(); // empty
+    clearHistory();
+
+    assert.deepEqual(changes, [
+      { kind: 'push', actionType: ACTION.type },
+      { kind: 'undo', actionType: ACTION.type },
+      { kind: 'redo', actionType: ACTION.type },
+    ]);
   });
 });

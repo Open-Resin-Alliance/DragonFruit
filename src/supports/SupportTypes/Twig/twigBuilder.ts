@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { ContactDisk, Joint, Segment, Twig, Vec3, LimitationCode } from '../../types';
 import type { ContactDiskProfile } from '../../SupportPrimitives/ContactCone/types';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 import { twigDiskJointStandoff } from './twigJointStandoff';
 import { twigJointDiameterForLocalDiameter } from './twigTaper';
-import { isShaftBlocked, isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
+import { checkShortBridgeCollision } from '../../PlacementLogic/CollisionUtils';
 import { clampConeAxisDeviationFromSurfaceNormal } from '../../PlacementLogic/ConeAxisPolicy';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -164,24 +164,21 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
 
     let error: LimitationCode | undefined = undefined;
     if (mesh) {
-        const shaftRadius = shaftDiameter / 2;
-
-        // 1. Check shaft segment (SDF adaptive sphere tracing)
-        const segmentBlocked = isShaftBlocked(
-            socketJointA.pos, socketJointB.pos, shaftRadius, mesh,
-        );
-
-        // 2. Check contact disks as tapered frustums (disk surface → joint)
-        const diskABlocked = isCollisionFrustumBlocked(
-            aPos, socketJointA.pos,
-            diskAContactDiameter / 2, jointDiameterA / 2, mesh,
-        );
-        const diskBBlocked = isCollisionFrustumBlocked(
-            bPos, socketJointB.pos,
-            diskBContactDiameter / 2, jointDiameterB / 2, mesh,
-        );
-
-        if (segmentBlocked || diskABlocked || diskBBlocked) {
+        // Twigs test with RAYS, not the signed SDF.
+        //
+        // A twig exists to span a gap between two model surfaces, and the SDF
+        // resolves the inside/outside sign from the nearest triangle: in a gap
+        // between two facing faces the nearest one changes across the gap, so
+        // the empty space reads as material (measured: the midpoint of a 1.5mm
+        // gap between a header and the body reports -0.75mm, "inside"). Every
+        // SDF-based gate therefore refused twigs by construction. Ray casts
+        // need no sign — they find surfaces the body actually crosses — and a
+        // twig's body is a cylinder whose shaft diameter already equals its
+        // disk contact diameter, so one cast at that radius covers shaft and
+        // disks alike. Sticks and trunks keep the SDF: they are long, and
+        // their clearance question is genuinely three-dimensional.
+        const twigRadius = Math.max(shaftDiameter, diskAContactDiameter) / 2;
+        if (checkShortBridgeCollision(socketJointA.pos, socketJointB.pos, twigRadius, mesh).hit) {
             error = 'COLLISION_WITH_MODEL';
         }
     }

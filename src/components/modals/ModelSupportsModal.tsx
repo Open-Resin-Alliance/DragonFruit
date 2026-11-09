@@ -1,11 +1,17 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
+import { IconButton } from '@/components/atoms';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { getSnapshot as getSupportSnapshot, subscribe as subscribeSupportState } from '@/supports/state';
-import { getKickstandSnapshot, subscribeToKickstandStore } from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import { getSupportsForModel, modelIdOfParentShaft } from '@/supports/PlacementLogic/SupportModelLinker';
+import { MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_STATE_TYPES, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
 
 type ModelSupportsModalProps = {
   isOpen: boolean;
@@ -13,37 +19,44 @@ type ModelSupportsModalProps = {
   model: LoadedModel | null;
 };
 
-type ModelSupportGroups = {
-  roots: string[];
-  trunks: string[];
-  branches: string[];
-  leaves: string[];
-  twigs: string[];
-  sticks: string[];
-  braces: string[];
-  knots: string[];
-  kickstands: string[];
-};
+/** One id list per collection, derived so a new support type appears here too. */
+type ModelSupportGroups = Record<SupportCollectionKey, string[]>;
 
-const EMPTY_GROUPS: ModelSupportGroups = {
-  roots: [],
-  trunks: [],
-  branches: [],
-  leaves: [],
-  twigs: [],
-  sticks: [],
-  braces: [],
-  knots: [],
-  kickstands: [],
-};
+const EMPTY_GROUPS: ModelSupportGroups = (() => {
+  const empty = {} as ModelSupportGroups;
+  for (const key of SUPPORT_COLLECTION_KEYS) empty[key] = [];
+  return empty;
+})();
 
 function sortIds(ids: string[]): string[] {
   return [...ids].sort((a, b) => a.localeCompare(b));
 }
 
+// Static ICU patterns in module-level formatters (see page.tsx): inline
+// interpolation loses its placeholder names to the React Compiler in production.
+function formatSupportEntityCount(
+  translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string,
+  count: number,
+): string {
+  return translate(msg({
+    message: '{count, plural, one {# support entity} other {# support entities}}',
+    comment: 'Total number of support entities on the model.',
+  }), { count });
+}
+
+function formatEmptyGroup(
+  translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string,
+  groupLabel: string,
+): string {
+  return translate(msg({
+    message: 'No {groupLabel} for this model.',
+    comment: '{groupLabel} is a support type name (Trunks, Branches, Knots, …), lowercased by the caller in English.',
+  }), { groupLabel });
+}
+
 export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModalProps) {
+  const { _ } = useLingui();
   const supportSnapshot = React.useSyncExternalStore(subscribeSupportState, getSupportSnapshot, getSupportSnapshot);
-  const kickstandSnapshot = React.useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
   const [collapsedGroups, setCollapsedGroups] = React.useState<Record<string, boolean>>({});
 
   useEscapeToClose(isOpen, onClose);
@@ -52,87 +65,48 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
     const modelId = model?.id;
     if (!modelId) return EMPTY_GROUPS;
 
-    const roots = sortIds(Object.values(supportSnapshot.roots).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const trunks = sortIds(Object.values(supportSnapshot.trunks).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const branches = sortIds(Object.values(supportSnapshot.branches).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const leaves = sortIds(Object.values(supportSnapshot.leaves).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const twigs = sortIds(Object.values(supportSnapshot.twigs).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const sticks = sortIds(Object.values(supportSnapshot.sticks).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const braces = sortIds(Object.values(supportSnapshot.braces).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const kickstands = sortIds(Object.values(kickstandSnapshot.kickstands).filter((item) => item.modelId === modelId).map((item) => item.id));
+    const byModel = getSupportsForModel(supportSnapshot, modelId);
+    const grouped = {} as ModelSupportGroups;
+    for (const key of MODEL_ID_COLLECTION_KEYS) grouped[key] = sortIds(byModel[key]);
 
-    const knots = sortIds(Object.values(supportSnapshot.knots).filter((item) => {
-      const parent = item.parentShaftId;
-      const trunk = supportSnapshot.trunks[parent];
-      if (trunk) return trunk.modelId === modelId;
-      const branch = supportSnapshot.branches[parent];
-      if (branch) return branch.modelId === modelId;
-      const twig = supportSnapshot.twigs[parent];
-      if (twig) return twig.modelId === modelId;
-      const stick = supportSnapshot.sticks[parent];
-      if (stick) return stick.modelId === modelId;
-      if (parent.startsWith('braceSegment:')) {
-        const braceId = parent.slice('braceSegment:'.length);
-        return supportSnapshot.braces[braceId]?.modelId === modelId;
-      }
-      return false;
-    }).map((item) => item.id));
+    // Which model a knot belongs to is which model its parent shaft belongs to.
+    // `parentShaftId` is a SEGMENT id, so the owner is resolved through the
+    // segment rather than by looking the id up in a collection of entities.
+    const knots = sortIds(Object.values(supportSnapshot.knots)
+      .filter((item) => modelIdOfParentShaft(supportSnapshot, item.parentShaftId) === modelId)
+      .map((item) => item.id));
 
-    return {
-      roots,
-      trunks,
-      branches,
-      leaves,
-      twigs,
-      sticks,
-      braces,
-      knots,
-      kickstands,
-    };
-  }, [kickstandSnapshot.kickstands, model?.id, supportSnapshot.braces, supportSnapshot.branches, supportSnapshot.knots, supportSnapshot.leaves, supportSnapshot.roots, supportSnapshot.sticks, supportSnapshot.trunks, supportSnapshot.twigs]);
+    grouped.knots = knots;
+    return grouped;
+  }, [model?.id, supportSnapshot]);
 
   React.useEffect(() => {
     if (!isOpen) return;
-    setCollapsedGroups({ roots: true, trunks: true, branches: true, leaves: true, twigs: true, sticks: true, braces: true, knots: true, kickstands: true });
+    setCollapsedGroups(Object.fromEntries(SUPPORT_COLLECTION_KEYS.map((key) => [key, true])));
   }, [isOpen, model?.id]);
 
   const summaryStats = React.useMemo(() => {
-    return {
-      roots: groups.roots.length,
-      trunks: groups.trunks.length,
-      branches: groups.branches.length,
-      leaves: groups.leaves.length,
-      twigs: groups.twigs.length,
-      sticks: groups.sticks.length,
-      braces: groups.braces.length,
-      knots: groups.knots.length,
-      kickstands: groups.kickstands.length,
-    };
+    const stats = {} as Record<SupportCollectionKey, number>;
+    for (const key of SUPPORT_COLLECTION_KEYS) stats[key] = groups[key].length;
+    return stats;
   }, [groups]);
 
+  // Knots are excluded: they are attachments on a support, not supports.
   const totalSupportEntities = React.useMemo(() => {
-    return summaryStats.roots
-      + summaryStats.trunks
-      + summaryStats.branches
-      + summaryStats.leaves
-      + summaryStats.twigs
-      + summaryStats.sticks
-      + summaryStats.braces
-      + summaryStats.kickstands;
+    return MODEL_ID_COLLECTION_KEYS.reduce((sum, key) => sum + summaryStats[key], 0);
   }, [summaryStats]);
 
   const groupRows = React.useMemo(() => {
+    // Roots first, then the support types in registry order, then knots.
     return [
-      { key: 'roots', label: 'Roots', ids: groups.roots },
-      { key: 'trunks', label: 'Trunks', ids: groups.trunks },
-      { key: 'branches', label: 'Branches', ids: groups.branches },
-      { key: 'leaves', label: 'Leaves', ids: groups.leaves },
-      { key: 'twigs', label: 'Twigs', ids: groups.twigs },
-      { key: 'sticks', label: 'Sticks', ids: groups.sticks },
-      { key: 'braces', label: 'Braces', ids: groups.braces },
-      { key: 'kickstands', label: 'Kickstands', ids: groups.kickstands },
-      { key: 'knots', label: 'Knots', ids: groups.knots },
-    ] as const;
+      { key: 'roots' as SupportCollectionKey, label: 'Roots', ids: groups.roots },
+      ...SUPPORT_STATE_TYPES.map((descriptor) => ({
+        key: descriptor.location.key as SupportCollectionKey,
+        label: descriptor.label,
+        ids: groups[descriptor.location.key as SupportCollectionKey],
+      })),
+      { key: 'knots' as SupportCollectionKey, label: 'Knots', ids: groups.knots },
+    ];
   }, [groups]);
 
   const toggleGroup = React.useCallback((groupKey: string) => {
@@ -160,30 +134,25 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
         }}
         role="dialog"
         aria-modal="true"
-        aria-label="Model supports"
+        aria-label={_(msg`Model Supports`)}
       >
         <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
           <div>
             <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Model Supports
+              <Trans>Model Supports</Trans>
             </h2>
             <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              {model ? model.name : 'No model selected'}
+              {model ? model.name : _(msg`No model selected`)}
             </p>
           </div>
-          <button
-            type="button"
-            className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--surface-1)',
-              color: 'var(--text-muted)',
-            }}
-            aria-label="Close supports modal"
+          <IconButton
+            variant="surface"
+            size="sm"
+            aria-label={_(msg`Close supports modal`)}
             onClick={onClose}
           >
             <X className="w-4 h-4" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="p-4 space-y-3 max-h-[68vh] overflow-y-auto custom-scrollbar">
@@ -195,27 +164,17 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
             }}
           >
             <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Total
+              <Trans>Total</Trans>
             </div>
             <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {totalSupportEntities === 1 ? '1 support entity' : `${totalSupportEntities.toLocaleString()} support entities`}
+              {formatSupportEntityCount(_, totalSupportEntities)}
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            {[
-              ['Roots', summaryStats.roots],
-              ['Trunks', summaryStats.trunks],
-              ['Branches', summaryStats.branches],
-              ['Leaves', summaryStats.leaves],
-              ['Twigs', summaryStats.twigs],
-              ['Sticks', summaryStats.sticks],
-              ['Braces', summaryStats.braces],
-              ['Kickstands', summaryStats.kickstands],
-              ['Knots', summaryStats.knots],
-            ].map(([label, count]) => (
+            {groupRows.map(({ key, label }) => (
               <div
-                key={label}
+                key={key}
                 className="rounded-md border px-3 py-2"
                 style={{
                   borderColor: 'var(--border-subtle)',
@@ -224,7 +183,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
               >
                 <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{label}</div>
                 <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
-                  {Number(count).toLocaleString()}
+                  {summaryStats[key].toLocaleString()}
                 </div>
               </div>
             ))}
@@ -232,7 +191,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
 
           <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="px-1 pb-1 text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Support IDs by type
+              <Trans>Support IDs by type</Trans>
             </div>
 
             <div className="space-y-1">
@@ -264,7 +223,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
                       <div className="border-t px-2 py-1.5" style={{ borderColor: 'var(--border-subtle)' }}>
                         {isEmpty ? (
                           <div className="text-[11px] italic" style={{ color: 'var(--text-muted)' }}>
-                            No {group.label.toLowerCase()} for this model.
+                            {formatEmptyGroup(_, group.label.toLowerCase())}
                           </div>
                         ) : (
                           <div className="flex flex-wrap gap-1">

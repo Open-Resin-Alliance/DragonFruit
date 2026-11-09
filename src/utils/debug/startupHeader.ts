@@ -48,6 +48,9 @@ export function logStartupHeader(info: LogFn): void {
         `[header] gpu=${describeGpu()} `
         + `viewport=${window.innerWidth}x${window.innerHeight} `
         + `screen=${width}x${height}@${window.devicePixelRatio}x `
-        + `cores=${navigator.hardwareConcurrency ?? 'unknown'}`,
+        + `cores=${navigator.hardwareConcurrency ?? 'unknown'} `
+        // Without isolation SharedArrayBuffer is unavailable and the support
+        // workers fall back to their non-shared path.
+        + `crossOriginIsolated=${window.crossOriginIsolated === true}`,
     );
 }

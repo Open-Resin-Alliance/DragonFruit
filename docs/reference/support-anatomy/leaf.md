@@ -25,6 +25,10 @@ A leaf is a minimal support tip with an integrated knot. It adds a small contact
 - A leaf must attach to a trunk or branch shaft.
 - It does not connect to a joint.
 - It is removed if the parent support is removed.
+- Auto placement builds one only for a knot-to-tip span under 6 mm. The body is
+  a seg-less tapered cone, so a longer one stands next to its trunk as a
+  spindly spike rather than supporting the contact — a longer link becomes a
+  branch with a real shaft, or the tip keeps a pillar of its own.
 
 ## Related
 

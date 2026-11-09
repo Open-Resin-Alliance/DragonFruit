@@ -2,28 +2,40 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import { AlertTriangle, Check, Download, Edit3, Pencil, Plus, Trash2, Upload, X, RotateCcw, TrendingUp } from 'lucide-react';
+import { Button, IconButton } from '@/components/atoms';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { pickSavePathWithNativeDialogOptions, writeBytesToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
+import {
+  DEFAULT_CLEAR_EXP_100_CURVE,
+  DEFAULT_CUSTOM_CURVE,
+  DEFAULT_OPAQUE_EXP_120_230_CURVE,
+  DEFAULT_SAVED_CURVES,
+  makeSpline,
+  sampleCurveToLut,
+  type CurvePoint,
+  type SavedCurve,
+} from '@/features/slicing/lutCurves';
+
+export {
+  DEFAULT_CLEAR_EXP_100_CURVE,
+  DEFAULT_CUSTOM_CURVE,
+  DEFAULT_OPAQUE_EXP_120_230_CURVE,
+  DEFAULT_SAVED_CURVES,
+  sampleCurveToLut,
+  type CurvePoint,
+  type SavedCurve,
+};
 
 const DRAGONFRUIT_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.0.0';
 
-// ── Public types ──────────────────────────────────────────────────────────────
-
-export interface CurvePoint {
-  /** 0 = outermost gradient pixel (receding from solid), 1 = innermost (adjacent to solid). */
-  x: number;
-  /** 0 = 0 % alpha output, 1 = 100 % alpha output. */
-  y: number;
-}
-
-export interface SavedCurve {
-  id: string;
-  name: string;
-  points: CurvePoint[];
-}
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 type NewCurvePreset = 'opaque' | 'clear' | 'custom';
 type AlphaUnitMode = 'percent' | 'u8';
@@ -46,16 +58,6 @@ type LutCurveProfileExchangeDocument = {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/** Default control points — linear ramp matching the opaque preset (55 % → 90 %). */
-export const DEFAULT_CUSTOM_CURVE: CurvePoint[] = [
-  { x: 0, y: 0.55 },
-  { x: 1, y: 0.90 },
-];
-
-export const DEFAULT_SAVED_CURVES: SavedCurve[] = [
-  { id: 'default', name: 'My Curve', points: DEFAULT_CUSTOM_CURVE },
-];
-
 const LUT_ALPHA_UNIT_MODE_STORAGE_KEY = 'dragonfruit.lut-editor.alpha-unit-mode';
 
 const NEW_CURVE_OPAQUE_POINTS: CurvePoint[] = [
@@ -66,49 +68,6 @@ const NEW_CURVE_OPAQUE_POINTS: CurvePoint[] = [
 const NEW_CURVE_CLEAR_POINTS: CurvePoint[] = [
   { x: 0, y: 0.55 },
   { x: 1, y: 0.65 },
-];
-
-/**
- * Compact 10-point control curve derived from the UVTools EXP_120-230 LUT.
- *
- * Sampling indices (0-based) from the 256-entry LUT:
- * [1, 29, 57, 85, 113, 142, 170, 198, 226, 254]
- * Values:
- * [120, 125, 130, 135, 142, 151, 162, 178, 199, 230]
- */
-export const DEFAULT_OPAQUE_EXP_120_230_CURVE: CurvePoint[] = [
-  { x: 0 / 253, y: 120 / 255 },
-  { x: 28 / 253, y: 125 / 255 },
-  { x: 56 / 253, y: 130 / 255 },
-  { x: 84 / 253, y: 135 / 255 },
-  { x: 112 / 253, y: 142 / 255 },
-  { x: 141 / 253, y: 151 / 255 },
-  { x: 169 / 253, y: 162 / 255 },
-  { x: 197 / 253, y: 178 / 255 },
-  { x: 225 / 253, y: 199 / 255 },
-  { x: 253 / 253, y: 230 / 255 },
-];
-
-/**
- * Compact 10-point control curve using the EXP-100 shape remapped for
- * clear resin windowing (roughly 100..166 PWM, i.e. ~39%..65%).
- *
- * Source EXP-100 samples at indices [1,29,57,85,113,142,170,198,226,254]:
- * [100,107,114,121,131,143,159,180,210,252]
- * Remapped to clear window:
- * [100,103,106,109,113,119,126,135,148,166]
- */
-export const DEFAULT_CLEAR_EXP_100_CURVE: CurvePoint[] = [
-  { x: 0 / 253, y: 100 / 255 },
-  { x: 28 / 253, y: 103 / 255 },
-  { x: 56 / 253, y: 106 / 255 },
-  { x: 84 / 253, y: 109 / 255 },
-  { x: 112 / 253, y: 113 / 255 },
-  { x: 141 / 253, y: 119 / 255 },
-  { x: 169 / 253, y: 126 / 255 },
-  { x: 197 / 253, y: 135 / 255 },
-  { x: 225 / 253, y: 148 / 255 },
-  { x: 253 / 253, y: 166 / 255 },
 ];
 
 // ── Math utilities ────────────────────────────────────────────────────────────
@@ -272,6 +231,31 @@ function resolveLutCurveExportTargetFromPath(path: string): 'dragonfruit-json' |
   return lowered.endsWith('.lut') ? 'uvtools-lut' : 'dragonfruit-json';
 }
 
+/** Thrown outside React, so the dialog that catches it is the one that words it. */
+export class UnsupportedLutProfileFormatError extends Error {
+  constructor() {
+    super('Unsupported LUT profile format. Use a DragonFruit .lutcurve.json file or a UVTools 256-value .lut/.json LUT array.');
+    this.name = 'UnsupportedLutProfileFormatError';
+  }
+}
+
+type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
+
+/** Module-scope helpers because they interpolate: React Compiler renames inline `msg` locals in production. */
+function formatExportFailedMessage(translate: Translate, reason: string): string {
+  return translate(msg`Failed to export LUT curve profile. ${reason}`);
+}
+
+function formatDeleteCurvePrompt(translate: Translate, name: string): string {
+  return translate(msg`Delete “${name}”?`);
+}
+
+function formatAlphaRangeLabel(translate: Translate, bound: 'min' | 'max', units: string): string {
+  return bound === 'min'
+    ? translate(msg`Min alpha ${units}`)
+    : translate(msg`Max alpha ${units}`);
+}
+
 export function importLutCurveProfileFromJson(jsonText: string, options?: { fileNameHint?: string }): {
   name: string;
   points: CurvePoint[];
@@ -288,70 +272,12 @@ export function importLutCurveProfileFromJson(jsonText: string, options?: { file
 
   const dragonfruitDoc = parsed as Partial<LutCurveProfileExchangeDocument>;
   if (dragonfruitDoc?.header?.kind !== 'dragonfruit-lut-curve-profile' || dragonfruitDoc?.header?.formatVersion !== 1) {
-    throw new Error('Unsupported LUT profile format. Use a DragonFruit .lutcurve.json file or a UVTools 256-value .lut/.json LUT array.');
+    throw new UnsupportedLutProfileFormatError();
   }
 
   const name = (dragonfruitDoc.curve?.name ?? '').trim() || deriveImportedCurveName(options?.fileNameHint);
   const points = normalizeImportedCurvePoints(dragonfruitDoc.curve?.points);
   return { name, points };
-}
-
-/**
- * Monotone cubic Hermite spline (Fritsch-Carlson algorithm).
- * Guarantees no overshoot / undershoot — safe for alpha LUT usage.
- */
-function makeSpline(pts: CurvePoint[]): (x: number) => number {
-  const n = pts.length;
-  if (n === 0) return () => 0;
-  if (n === 1) return () => pts[0].y;
-
-  const xs = pts.map((p) => p.x);
-  const ys = pts.map((p) => p.y);
-  const d: number[] = [];
-  const m: number[] = new Array(n);
-
-  for (let i = 0; i < n - 1; i++) d[i] = (ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]);
-
-  m[0] = d[0];
-  for (let i = 1; i < n - 1; i++) m[i] = (d[i - 1] + d[i]) / 2;
-  m[n - 1] = d[n - 2];
-
-  for (let i = 0; i < n - 1; i++) {
-    if (Math.abs(d[i]) < 1e-10) {
-      m[i] = 0;
-      m[i + 1] = 0;
-      continue;
-    }
-    const a = m[i] / d[i];
-    const b = m[i + 1] / d[i];
-    const h = Math.sqrt(a * a + b * b);
-    if (h > 3) {
-      m[i] = (3 * a / h) * d[i];
-      m[i + 1] = (3 * b / h) * d[i];
-    }
-  }
-
-  return (x: number) => {
-    if (x <= xs[0]) return ys[0];
-    if (x >= xs[n - 1]) return ys[n - 1];
-    let lo = 0;
-    let hi = n - 1;
-    while (hi - lo > 1) {
-      const mid = (lo + hi) >> 1;
-      if (xs[mid] <= x) lo = mid;
-      else hi = mid;
-    }
-    const hx = xs[hi] - xs[lo];
-    const t = (x - xs[lo]) / hx;
-    const t2 = t * t;
-    const t3 = t2 * t;
-    return (
-      (2 * t3 - 3 * t2 + 1) * ys[lo]
-      + (t3 - 2 * t2 + t) * hx * m[lo]
-      + (-2 * t3 + 3 * t2) * ys[hi]
-      + (t3 - t2) * hx * m[hi]
-    );
-  };
 }
 
 // ── Canvas layout ─────────────────────────────────────────────────────────────
@@ -400,6 +326,7 @@ interface CurveCanvasProps {
 
 function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint, alphaUnitMode }: CurveCanvasProps) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const { _ } = useLingui();
   const draggingIdx = useRef(-1);
   const dragStarted = useRef(false);
   const dragStartClient = useRef<[number, number] | null>(null);
@@ -558,7 +485,7 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint, alphaUnitMo
               opacity={isBound ? 0.68 : 0.36}
             />
             <text x={xLabelX} y={IY1 + 16} fontSize={9} fill="color-mix(in srgb, var(--text-muted), white 5%)" textAnchor={xLabelAnchor}>
-              {v === 0 ? 'Outer' : v === 1 ? 'Inner' : `${Math.round(v * 100)}%`}
+              {v === 0 ? _(msg({ message: 'Outer', comment: 'LUT curve axis end: the outer edge of the anti-aliasing gradient.' })) : v === 1 ? _(msg({ message: 'Inner', comment: 'LUT curve axis end: the inner edge of the anti-aliasing gradient.' })) : `${Math.round(v * 100)}%`}
             </text>
           </React.Fragment>
         );
@@ -569,11 +496,11 @@ function CurveCanvas({ points, onChange, selectedIdx, onSelectPoint, alphaUnitMo
         x={11} y={(IY0 + IY1) / 2}
         fontSize={9} fill="var(--text-muted)" textAnchor="middle"
         transform={`rotate(-90,11,${(IY0 + IY1) / 2})`}
-      >Alpha Output</text>
+      ><Trans>Alpha Output</Trans></text>
 
       {/* X-axis title */}
       <text x={(IX0 + IX1) / 2} y={VH - 3} fontSize={9} fill="var(--text-muted)" textAnchor="middle">
-        Gradient Position
+        <Trans>Gradient Position</Trans>
       </text>
 
       {/* Hover crosshair */}
@@ -665,6 +592,7 @@ interface LutCurveSelectorProps {
 export function LutCurveSelector({
   savedCurves, selectedCurveId, onSelectCurve, onOpenEditor, variant = 'panel',
 }: LutCurveSelectorProps) {
+  const { _ } = useLingui();
   const effectiveId = savedCurves.some((c) => c.id === selectedCurveId)
     ? selectedCurveId
     : (savedCurves[0]?.id ?? '');
@@ -698,31 +626,41 @@ export function LutCurveSelector({
                   borderColor: 'var(--border-subtle)',
                   color: 'var(--text-strong)',
                 }}
-            ariaLabel="Select LUT curve"
+            ariaLabel={_(msg`Select LUT curve`)}
           />
         </div>
 
-        <button
-          type="button"
-          title="Edit selected curve"
-          disabled={!canEdit}
-          onClick={() => {
-            if (canEdit) onOpenEditor(effectiveId);
-          }}
-          className={isSettingsVariant
-            ? 'ui-button ui-button-secondary inline-flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-md !p-0 disabled:opacity-35 disabled:cursor-not-allowed'
-            : 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors hover:bg-white/5 disabled:opacity-35 disabled:cursor-not-allowed'}
-          style={isSettingsVariant
-            ? undefined
-            : {
-                borderColor: 'var(--border-subtle)',
-                background: 'var(--surface-0)',
-                color: 'var(--text-strong)',
-              }}
-          aria-label="Edit selected curve"
-        >
-          <Pencil className="h-3.5 w-3.5" />
-        </button>
+        {isSettingsVariant ? (
+          <Button
+            variant="secondary"
+            size="auto"
+            type="button"
+            title={_(msg`Edit selected curve`)}
+            disabled={!canEdit}
+            onClick={() => {
+              if (canEdit) onOpenEditor(effectiveId);
+            }}
+            className="inline-flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-md !p-0 disabled:opacity-35 disabled:cursor-not-allowed"
+            aria-label={_(msg`Edit selected curve`)}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+        ) : (
+          <IconButton
+            variant="surface"
+            size="sm"
+            type="button"
+            title={_(msg`Edit selected curve`)}
+            disabled={!canEdit}
+            onClick={() => {
+              if (canEdit) onOpenEditor(effectiveId);
+            }}
+            className="disabled:opacity-35 disabled:cursor-not-allowed"
+            aria-label={_(msg`Edit selected curve`)}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </IconButton>
+        )}
       </div>
     </div>
   );
@@ -754,15 +692,16 @@ export function LutCurveEditorModal({
   onDelete,
   onClose,
 }: LutCurveEditorModalProps) {
+  const { _ } = useLingui();
   const [draftPoints, setDraftPoints] = useState<CurvePoint[]>(DEFAULT_CUSTOM_CURVE);
-  const [draftName, setDraftName] = useState('My Curve');
+  const [draftName, setDraftName] = useState(() => _(msg`My Curve`));
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [draftRenameName, setDraftRenameName] = useState('');
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [draftCreateName, setDraftCreateName] = useState('New Curve');
+  const [draftCreateName, setDraftCreateName] = useState(() => _(msg`New Curve`));
   const [draftCreatePreset, setDraftCreatePreset] = useState<NewCurvePreset>('opaque');
   const [draftCreateCustomMin, setDraftCreateCustomMin] = useState<number>(55);
   const [draftCreateCustomMax, setDraftCreateCustomMax] = useState<number>(90);
@@ -786,7 +725,7 @@ export function LutCurveEditorModal({
     }
   }, [alphaUnitMode]);
 
-  const normalizeDraftName = useCallback((name: string) => name.trim() || 'Untitled Curve', []);
+  const normalizeDraftName = useCallback((name: string) => name.trim() || _(msg`Untitled Curve`), [_]);
 
   const pointsEqual = useCallback((a: CurvePoint[], b: CurvePoint[]) => {
     if (a.length !== b.length) return false;
@@ -798,7 +737,7 @@ export function LutCurveEditorModal({
 
   useEffect(() => {
     if (!isOpen) return;
-    const initialName = editingCurve?.name ?? 'My Curve';
+    const initialName = editingCurve?.name ?? _(msg`My Curve`);
     const initialPoints = editingCurve ? [...editingCurve.points] : [...DEFAULT_CUSTOM_CURVE];
     setDraftPoints(initialPoints);
     setDraftName(initialName);
@@ -808,7 +747,7 @@ export function LutCurveEditorModal({
     setShowRenameDialog(false);
     setDraftRenameName('');
     setShowCreateDialog(false);
-    setDraftCreateName('New Curve');
+    setDraftCreateName(_(msg`New Curve`));
     setDraftCreatePreset('opaque');
     setDraftCreateCustomMin(55);
     setDraftCreateCustomMax(90);
@@ -816,7 +755,7 @@ export function LutCurveEditorModal({
       name: normalizeDraftName(initialName),
       points: initialPoints.map((p) => ({ ...p })),
     };
-  }, [editingCurve, isOpen, normalizeDraftName]);
+  }, [_, editingCurve, isOpen, normalizeDraftName]);
 
   const isDirty = useMemo(() => {
     const initialSnapshot = initialSnapshotRef.current;
@@ -1092,12 +1031,12 @@ export function LutCurveEditorModal({
   }, [onSelectCurve]);
 
   const handleOpenCreateDialog = useCallback(() => {
-    setDraftCreateName('New Curve');
+    setDraftCreateName(_(msg`New Curve`));
     setDraftCreatePreset('opaque');
     setDraftCreateCustomMin(55);
     setDraftCreateCustomMax(90);
     setShowCreateDialog(true);
-  }, []);
+  }, [_]);
 
   useEffect(() => {
     if (!showRenameDialog) return;
@@ -1180,11 +1119,11 @@ export function LutCurveEditorModal({
 
         window.URL.revokeObjectURL(blobUrl);
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown export error';
-        window.alert(`Failed to export LUT curve profile. ${message}`);
+        const message = error instanceof Error ? error.message : _(msg`Unknown export error`);
+        window.alert(formatExportFailedMessage(_, message));
       }
     })();
-  }, [draftName, draftPoints, normalizeDraftName]);
+  }, [_, draftName, draftPoints, normalizeDraftName]);
 
   const handleImportCurveFile = useCallback(async (file: File) => {
     const rawJson = await file.text();
@@ -1203,10 +1142,12 @@ export function LutCurveEditorModal({
     event.target.value = '';
     if (!file) return;
     void handleImportCurveFile(file).catch((error) => {
-      const message = error instanceof Error ? error.message : 'Failed to import LUT profile.';
+      const message = error instanceof UnsupportedLutProfileFormatError
+        ? _(msg`Unsupported LUT profile format. Use a DragonFruit .lutcurve.json file or a UVTools 256-value .lut/.json LUT array.`)
+        : (error instanceof Error ? error.message : _(msg`Failed to import LUT profile.`));
       if (typeof window !== 'undefined') window.alert(message);
     });
-  }, [handleImportCurveFile]);
+  }, [_, handleImportCurveFile]);
 
   const handleImportCurve = useCallback(() => {
     importInputRef.current?.click();
@@ -1243,7 +1184,7 @@ export function LutCurveEditorModal({
         }}
         role="dialog"
         aria-modal="true"
-        aria-label={editingCurve ? 'Edit LUT Curve' : 'New LUT Curve'}
+        aria-label={editingCurve ? _(msg`Edit LUT Curve`) : _(msg`New LUT Curve`)}
       >
         {/* Header */}
         <div
@@ -1263,12 +1204,12 @@ export function LutCurveEditorModal({
             </span>
             <div>
               <h2 className="text-sm font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                {editingCurve ? 'Edit LUT Curve' : 'New LUT Curve'}
+                {editingCurve ? _(msg`Edit LUT Curve`) : _(msg`New LUT Curve`)}
               </h2>
               <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                 {editingCurve
-                  ? 'Refine your cure-window alpha response'
-                  : 'Create a custom alpha response profile'}
+                  ? _(msg`Refine your cure-window alpha response`)
+                  : _(msg`Create a custom alpha response profile`)}
               </p>
             </div>
           </div>
@@ -1277,14 +1218,14 @@ export function LutCurveEditorModal({
               className="inline-flex rounded-md border p-0.5"
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
               role="group"
-              aria-label="Alpha value display mode"
+              aria-label={_(msg`Alpha value display mode`)}
             >
               <button
                 type="button"
                 onClick={() => setAlphaUnitMode('percent')}
                 className="rounded px-2 py-1 text-[10px] font-semibold transition-colors"
                 aria-pressed={alphaUnitMode === 'percent'}
-                title="Show alpha as 0-100%"
+                title={_(msg`Show alpha as 0-100%`)}
                 style={alphaUnitMode === 'percent'
                   ? {
                     color: 'var(--accent-secondary-action-color)',
@@ -1304,7 +1245,7 @@ export function LutCurveEditorModal({
                 onClick={() => setAlphaUnitMode('u8')}
                 className="rounded px-2 py-1 text-[10px] font-semibold transition-colors"
                 aria-pressed={alphaUnitMode === 'u8'}
-                title="Show alpha as 0-255"
+                title={_(msg`Show alpha as 0-255`)}
                 style={alphaUnitMode === 'u8'
                   ? {
                     color: 'var(--accent-secondary-action-color)',
@@ -1321,15 +1262,14 @@ export function LutCurveEditorModal({
               </button>
             </div>
 
-            <button
-              type="button"
+            <IconButton
+              variant="surface"
+              size="sm"
               onClick={requestClose}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors hover:bg-white/5"
-              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-              aria-label="Close"
+              aria-label={_(msg`Close`)}
             >
               <X className="h-4 w-4" />
-            </button>
+            </IconButton>
           </div>
         </div>
 
@@ -1346,7 +1286,7 @@ export function LutCurveEditorModal({
 
             <div className="flex flex-wrap items-center gap-2">
               <label className="text-[11px] font-medium shrink-0" style={{ color: 'var(--text-muted)' }}>
-                Profile
+                <Trans>Profile</Trans>
               </label>
               <div className="min-w-0 flex-1">
                 <SelectDropdown
@@ -1355,39 +1295,45 @@ export function LutCurveEditorModal({
                   onChange={handleSelectCurveFromModal}
                   className="space-y-0"
                   selectClassName="!h-8 !px-2.5 text-[12px] w-full"
-                  ariaLabel="Select curve profile to edit"
+                  ariaLabel={_(msg`Select curve profile to edit`)}
                   menuFooterAction={{
-                    label: 'New Curve',
+                    label: _(msg`New Curve`),
                     onClick: handleOpenCreateDialog,
                     icon: <Plus className="h-3.5 w-3.5" />,
                     tone: 'accent',
                   }}
                 />
               </div>
-              <button
+              <Button
                 type="button"
                 onClick={handleOpenRename}
-                className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px]"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-2.5 !py-0 text-[11px]"
               >
-                Rename
-              </button>
-              <button
+                <Trans>Rename</Trans>
+              </Button>
+              <Button
                 type="button"
                 onClick={handleExportCurve}
-                className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1"
-                title="Export selected curve"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1"
+                title={_(msg`Export selected curve`)}
               >
                 <Download className="h-3.5 w-3.5" />
-                Export
-              </button>
-              <button
+                <Trans>Export</Trans>
+              </Button>
+              <Button
                 type="button"
                 onClick={handleImportCurve}
-                className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1"
+                variant="secondary"
+                size="auto"
+                className="!h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1"
               >
                 <Upload className="h-3.5 w-3.5" />
-                Import
-              </button>
+                <Trans>Import</Trans>
+              </Button>
             </div>
 
           </div>
@@ -1395,10 +1341,10 @@ export function LutCurveEditorModal({
           <div className="rounded-md border p-3 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
-                Curve Canvas
+                <Trans>Curve Canvas</Trans>
               </span>
               <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                Right-click to add · Drag to move · Use inspector to remove
+                <Trans>Right-click to add · Drag to move · Use inspector to remove</Trans>
               </span>
             </div>
 
@@ -1419,7 +1365,7 @@ export function LutCurveEditorModal({
             {selectedPoint !== null ? (
               <div className="flex h-full w-full items-center gap-2">
                 <div className="inline-flex h-9 min-w-0 flex-1 items-center gap-1.5">
-                  <label className="text-[10px] shrink-0 font-medium" style={{ color: 'var(--text-muted)' }}>Position</label>
+                  <label className="text-[10px] shrink-0 font-medium" style={{ color: 'var(--text-muted)' }}><Trans context="LUT curve point">Position</Trans></label>
                   <ScrollableNumberField
                     value={Math.round(selectedPoint.x * 100)}
                     onChange={(nextValue) => handleInspectorChange('x', nextValue)}
@@ -1427,9 +1373,9 @@ export function LutCurveEditorModal({
                     max={100}
                     step={1}
                     unit="%"
-                    ariaLabel="Selected point position"
-                    decreaseTitle="Decrease point position"
-                    increaseTitle="Increase point position"
+                    ariaLabel={_(msg`Selected point position`)}
+                    decreaseTitle={_(msg`Decrease point position`)}
+                    increaseTitle={_(msg`Increase point position`)}
                     disabled={isEndpoint}
                     className="min-w-0 flex-1"
                     inputClassName="!h-8 !text-[12px]"
@@ -1439,7 +1385,7 @@ export function LutCurveEditorModal({
                 <span className="h-4 w-px" style={{ background: 'var(--border-subtle)' }} />
 
                 <div className="inline-flex h-9 min-w-0 flex-1 items-center gap-1.5">
-                  <label className="text-[10px] shrink-0 font-medium" style={{ color: 'var(--text-muted)' }}>Alpha</label>
+                  <label className="text-[10px] shrink-0 font-medium" style={{ color: 'var(--text-muted)' }}><Trans>Alpha</Trans></label>
                   <ScrollableNumberField
                     value={normalizedAlphaToDisplayValue(selectedPoint.y, alphaUnitMode)}
                     onChange={(nextValue) => handleInspectorChange('y', nextValue)}
@@ -1447,19 +1393,20 @@ export function LutCurveEditorModal({
                     max={alphaUnitMode === 'u8' ? 255 : 100}
                     step={1}
                     unit={alphaUnitMode === 'percent' ? '%' : undefined}
-                    ariaLabel="Selected point alpha"
-                    decreaseTitle="Decrease point alpha"
-                    increaseTitle="Increase point alpha"
+                    ariaLabel={_(msg`Selected point alpha`)}
+                    decreaseTitle={_(msg`Decrease point alpha`)}
+                    increaseTitle={_(msg`Increase point alpha`)}
                     className="min-w-0 flex-1"
                     inputClassName="!h-8 !text-[12px]"
                   />
                 </div>
 
-                <button
+                <Button
                   type="button"
                   onClick={handleRemoveSelected}
                   disabled={isEndpoint || draftPoints.length <= 2}
-                  className="ml-auto ui-button !h-8 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
+                  size="auto"
+                  className="ml-auto !h-8 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
                   style={{
                     borderColor: (isEndpoint || draftPoints.length <= 2)
                       ? 'var(--border-subtle)'
@@ -1473,12 +1420,12 @@ export function LutCurveEditorModal({
                   }}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                  Remove
-                </button>
+                  <Trans>Remove</Trans>
+                </Button>
               </div>
             ) : (
               <p className="h-full w-full inline-flex items-center justify-center text-[11px] text-center" style={{ color: 'var(--text-muted)' }}>
-                Click a point to inspect · Drag to move · Right-click canvas to add · Use inspector to remove
+                <Trans>Click a point to inspect · Drag to move · Right-click canvas to add · Use inspector to remove</Trans>
               </p>
             )}
           </div>
@@ -1486,94 +1433,88 @@ export function LutCurveEditorModal({
 
         {/* Footer */}
         <div
-          className="flex items-center justify-between gap-3 border-t px-4 py-3"
+          className="flex items-center justify-between gap-3 border-t px-3 py-3"
           style={{ borderColor: 'var(--border-subtle)' }}
         >
           {editingCurve && onDelete ? (
-            <button
+            <Button
               type="button"
               onClick={() => setShowDeleteConfirm(true)}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
-              title="Delete this curve preset"
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
+              title={_(msg`Delete this curve preset`)}
             >
               <Trash2 className="h-3.5 w-3.5" />
-              Delete Curve
-            </button>
+              <Trans>Delete Curve</Trans>
+            </Button>
           ) : <div />}
 
           <div className="flex items-center gap-2">
-            <button
+            <Button
               type="button"
               onClick={handleResetDraft}
               disabled={!isDirty}
-              className="ui-button ui-button-secondary inline-flex items-center gap-1.5 !h-9 px-3 text-[12px] disabled:opacity-45 disabled:cursor-not-allowed"
+              variant="secondary"
+              size="auto"
+              className="inline-flex items-center gap-1.5 !h-9 px-3 text-[12px] disabled:opacity-45 disabled:cursor-not-allowed"
             >
               <RotateCcw className="h-3.5 w-3.5" />
-              Reset
-            </button>
-            <button
+              <Trans>Reset</Trans>
+            </Button>
+            <Button
               type="button"
               onClick={handleSave}
               disabled={!isDirty}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
+              className="inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
               style={{
                 borderColor: 'var(--accent-secondary-action-border)',
                 background: 'var(--accent-secondary-action-bg-92)',
                 color: 'var(--accent-secondary-action-color)',
               }}
             >
-              Save
-            </button>
+              <Trans>Save</Trans>
+            </Button>
           </div>
         </div>
       </div>
 
       <StructuredDialogModal
         open={showCreateDialog}
-        ariaLabel="Create new LUT curve profile"
-        title="Create New Curve"
-        subtitle="Start from Opaque, Clear, or your own custom min/max alpha values."
+        ariaLabel={_(msg`Create new LUT curve profile`)}
+        title={_(msg`Create New Curve`)}
+        subtitle={_(msg`Start from Opaque, Clear, or your own custom min/max alpha values.`)}
         icon={<Plus className="h-4 w-4" />}
         iconTone="accent"
         zIndexClassName="z-[136]"
         maxWidthClassName="max-w-md"
-        closeAriaLabel="Close create curve profile dialog"
+        closeAriaLabel={_(msg`Close create curve profile dialog`)}
         onClose={handleCancelCreate}
         onBackdropClick={handleCancelCreate}
         actions={(
           <>
-            <button
+            <Button
               type="button"
               onClick={handleCancelCreate}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
             >
-              Cancel
-            </button>
-            <button
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
               type="button"
               onClick={handleConfirmCreate}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
+              variant="tinted-accent"
+              className="inline-flex items-center justify-center gap-1.5"
             >
               <Check className="h-3.5 w-3.5" />
-              Create
-            </button>
+              <Trans>Create</Trans>
+            </Button>
           </>
         )}
       >
         <div className="space-y-3">
           <div className="space-y-1.5">
             <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Curve name
+              <Trans>Curve name</Trans>
             </label>
             <input
               type="text"
@@ -1587,13 +1528,13 @@ export function LutCurveEditorModal({
               }}
               maxLength={48}
               className="ui-input h-9 w-full text-xs"
-              placeholder="New Curve"
+              placeholder={_(msg`New Curve`)}
             />
           </div>
 
           <div className="space-y-1.5">
             <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Preset
+              <Trans>Preset</Trans>
             </label>
             <div
               className="inline-flex w-full rounded-md border p-1"
@@ -1620,7 +1561,7 @@ export function LutCurveEditorModal({
                         background: 'transparent',
                       }}
                   >
-                    {preset === 'opaque' ? 'Opaque' : preset === 'clear' ? 'Clear' : 'Custom'}
+                    {preset === 'opaque' ? _(msg({ message: 'Opaque', context: 'Resin type' })) : preset === 'clear' ? _(msg({ message: 'Clear', context: 'Resin type' })) : _(msg`Custom`)}
                   </button>
                 );
               })}
@@ -1631,7 +1572,7 @@ export function LutCurveEditorModal({
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Min alpha {alphaUnitMode === 'u8' ? '(0-255)' : '(%)'}
+                  {formatAlphaRangeLabel(_, 'min', alphaUnitMode === 'u8' ? '(0-255)' : '(%)')}
                 </label>
                 <ScrollableNumberField
                   value={alphaUnitMode === 'u8'
@@ -1642,16 +1583,16 @@ export function LutCurveEditorModal({
                   max={alphaUnitMode === 'u8' ? 255 : 100}
                   step={1}
                   unit={alphaUnitMode === 'percent' ? '%' : undefined}
-                  ariaLabel="Custom minimum alpha"
-                  decreaseTitle="Decrease minimum alpha"
-                  increaseTitle="Increase minimum alpha"
+                  ariaLabel={_(msg`Custom minimum alpha`)}
+                  decreaseTitle={_(msg`Decrease minimum alpha`)}
+                  increaseTitle={_(msg`Increase minimum alpha`)}
                   className="w-full"
                   inputClassName="!h-9 !text-xs"
                 />
               </div>
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Max alpha {alphaUnitMode === 'u8' ? '(0-255)' : '(%)'}
+                  {formatAlphaRangeLabel(_, 'max', alphaUnitMode === 'u8' ? '(0-255)' : '(%)')}
                 </label>
                 <ScrollableNumberField
                   value={alphaUnitMode === 'u8'
@@ -1662,9 +1603,9 @@ export function LutCurveEditorModal({
                   max={alphaUnitMode === 'u8' ? 255 : 100}
                   step={1}
                   unit={alphaUnitMode === 'percent' ? '%' : undefined}
-                  ariaLabel="Custom maximum alpha"
-                  decreaseTitle="Decrease maximum alpha"
-                  increaseTitle="Increase maximum alpha"
+                  ariaLabel={_(msg`Custom maximum alpha`)}
+                  decreaseTitle={_(msg`Decrease maximum alpha`)}
+                  increaseTitle={_(msg`Increase maximum alpha`)}
                   className="w-full"
                   inputClassName="!h-9 !text-xs"
                 />
@@ -1673,8 +1614,8 @@ export function LutCurveEditorModal({
           ) : (
             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
               {draftCreatePreset === 'opaque'
-                ? 'Opaque starts at 55% and ramps to 90%.'
-                : 'Clear starts at 55% and ramps to 65%.'}
+                ? _(msg`Opaque starts at 55% and ramps to 90%.`)
+                : _(msg`Clear starts at 55% and ramps to 65%.`)}
             </p>
           )}
         </div>
@@ -1682,45 +1623,41 @@ export function LutCurveEditorModal({
 
       <StructuredDialogModal
         open={showRenameDialog}
-        ariaLabel="Rename LUT curve profile"
-        title="Rename Curve Profile"
-        subtitle="Update the display name for this LUT curve profile."
+        ariaLabel={_(msg`Rename LUT curve profile`)}
+        title={_(msg`Rename Curve Profile`)}
+        subtitle={_(msg`Update the display name for this LUT curve profile.`)}
         icon={<Edit3 className="h-4 w-4" />}
         iconTone="accent"
         zIndexClassName="z-[137]"
         maxWidthClassName="max-w-md"
-        closeAriaLabel="Close rename curve profile dialog"
+        closeAriaLabel={_(msg`Close rename curve profile dialog`)}
         onClose={handleCancelRename}
         onBackdropClick={handleCancelRename}
         actions={(
           <>
-            <button
+            <Button
               type="button"
               onClick={handleCancelRename}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
             >
-              Cancel
-            </button>
-            <button
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
               type="button"
               onClick={handleConfirmRename}
               disabled={draftRenameName.trim().length === 0}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
+              variant="tinted-accent"
+              className="inline-flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
             >
               <Check className="h-3.5 w-3.5" />
-              Save Name
-            </button>
+              <Trans>Save Name</Trans>
+            </Button>
           </>
         )}
       >
         <div className="space-y-2">
           <label className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-            Curve name
+            <Trans>Curve name</Trans>
           </label>
           <input
             ref={renameInputRef}
@@ -1735,113 +1672,87 @@ export function LutCurveEditorModal({
             }}
             maxLength={48}
             className="ui-input h-9 w-full text-xs"
-            placeholder="Curve name"
+            placeholder={_(msg`Curve name`)}
           />
         </div>
       </StructuredDialogModal>
 
       <StructuredDialogModal
         open={showDiscardConfirm}
-        ariaLabel="Discard unsaved LUT curve changes"
-        title="Do you wanna quit?"
-        subtitle="You have unsaved LUT curve edits."
+        ariaLabel={_(msg`Discard unsaved LUT curve changes`)}
+        title={_(msg`Do you wanna quit?`)}
+        subtitle={_(msg`You have unsaved LUT curve edits.`)}
         icon={<AlertTriangle className="h-4 w-4" />}
         iconTone="warning"
         zIndexClassName="z-[138]"
         maxWidthClassName="max-w-md"
-        closeAriaLabel="Close discard changes confirmation"
+        closeAriaLabel={_(msg`Close discard changes confirmation`)}
         onClose={handleCancelDiscardClose}
         onBackdropClick={handleCancelDiscardClose}
         actions={(
           <>
-            <button
+            <Button
               type="button"
               onClick={handleCancelDiscardClose}
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+              variant="secondary"
             >
-              Keep Editing
-            </button>
-            <button
+              <Trans>Keep Editing</Trans>
+            </Button>
+            <Button
               type="button"
               onClick={handleConfirmDiscardClose}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              Quit Without Saving
-            </button>
+              <Trans>Quit Without Saving</Trans>
+            </Button>
           </>
         )}
       >
         <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          If you quit now, your unsaved LUT curve changes will be lost.
+          <Trans>If you quit now, your unsaved LUT curve changes will be lost.</Trans>
         </p>
       </StructuredDialogModal>
 
       <StructuredDialogModal
         open={showDeleteConfirm}
-        ariaLabel="Confirm delete LUT curve"
-        title="Delete Curve Preset"
-        subtitle={editingCurve ? `Delete “${editingCurve.name}”?` : 'Delete this curve preset?'}
+        ariaLabel={_(msg`Confirm delete LUT curve`)}
+        title={_(msg`Delete Curve Preset`)}
+        subtitle={editingCurve ? formatDeleteCurvePrompt(_, editingCurve.name) : _(msg`Delete this curve preset?`)}
         icon={<AlertTriangle className="h-4 w-4" />}
         iconTone="warning"
         zIndexClassName="z-[139]"
         maxWidthClassName="max-w-md"
-        closeAriaLabel="Close delete confirmation"
+        closeAriaLabel={_(msg`Close delete confirmation`)}
         onClose={handleCancelDelete}
         onBackdropClick={handleCancelDelete}
         actions={(
           <>
-            <button
+            <Button
               type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
               onClick={handleCancelDelete}
+              variant="secondary"
             >
-              Cancel
-            </button>
-            <button
+              <Trans>Cancel</Trans>
+            </Button>
+            <Button
               type="button"
               onClick={handleConfirmDelete}
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              Delete
-            </button>
+              <Trans>Delete</Trans>
+            </Button>
           </>
         )}
       >
         <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          This action cannot be undone. The selected LUT curve preset will be permanently removed.
+          <Trans>This action cannot be undone. The selected LUT curve preset will be permanently removed.</Trans>
         </p>
       </StructuredDialogModal>
     </div>
   );
 }
 
-// ── LUT sampling ──────────────────────────────────────────────────────────────
-
-/**
- * Sample a curve defined by control points into a 256-element LUT (u8 values
- * 0–255). Index 0 (void pixels) is always 0; index 255 (solid pixels) is
- * always 255. Indices 1–254 are sampled from the monotone cubic spline.
- */
-export function sampleCurveToLut(points: CurvePoint[]): number[] {
-  const spline = makeSpline(points);
-  const lut = new Array<number>(256);
-  lut[0] = 0;
-  lut[255] = 255;
-  for (let i = 1; i <= 254; i++) {
-    const x = (i - 1) / 253;
-    lut[i] = Math.round(clamp01(spline(x)) * 255);
-  }
-  return lut;
-}

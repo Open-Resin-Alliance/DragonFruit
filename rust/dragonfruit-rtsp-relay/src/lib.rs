@@ -4,16 +4,16 @@
 //! transcodes to MPEG-TS/JSMpeg-compatible bytes, and fan-outs frames to subscribers.
 //!
 //! Key features:
-//! - Deterministic UDP port reclaim per RTSP URL
-//! - Persisted lease/session hints across app restarts
+//! - Persisted per-URL session hints across app restarts
 //! - UDP-first transport with fallback to TCP
-//! - Optional Session header reuse for reconnect attempts
+//! - Bounded exponential retry backoff, so a printer that is refusing connections is not
+//!   hit with a fresh RTSP connection every retry (see docs/internal/rtsp-session-recovery.md)
 
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,6 +34,25 @@ const DEFAULT_LEASE_TTL_MS: u64 = 60_000;
 const DEFAULT_PORT_BASE_MIN: u16 = 5000;
 const DEFAULT_PORT_BASE_MAX: u16 = 64998;
 const DEFAULT_LEASE_STORE_FILENAME: &str = "dragonfruit-rtsp-relay-leases.json";
+/// Retry delay range for the relay pump. A printer that is refusing connections must not be
+/// hit with a fresh RTSP connection every 750 ms: each rejected connection leaks a descriptor
+/// inside the printer's accept loop.
+const RETRY_BACKOFF_MIN_MS: u64 = 750;
+const RETRY_BACKOFF_MAX_MS: u64 = 30_000;
+/// How long one ffmpeg attempt may run without producing any media before it is killed. The RTSP
+/// demuxer has no default socket timeout, so without this a printer that accepts a connection and
+/// then stays silent leaves the pump blocked in its stdout read forever.
+const FIRST_OUTPUT_DEADLINE_MS: u64 = 12_000;
+/// Timeout for the best-effort SDCP stream-slot probe and the stale-session reclaim request.
+const SDCP_TIMEOUT_MS: u64 = 3_000;
+/// SDCP (printer HTTP/WebSocket) endpoint, where the printer reports free video-stream slots.
+const SDCP_PORT: u16 = 3030;
+const SDCP_WS_PATH: &str = "/websocket";
+/// SDCP command 0x01, request attribute: its reply carries the printer's live video stream
+/// counters. Command 0x182 looks like the natural oracle but is gated on more than those counters
+/// (measured: it refuses while zero of two slots are connected), so the counters are read here.
+/// See docs/dev/rtsp-relay.md.
+const SDCP_CMD_REQUEST_ATTRIBUTES: u16 = 1;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -271,24 +290,14 @@ impl StreamRelay {
     /// completed with no media output, and `Err(())` when ffmpeg could not be spawned.
     fn run_ffmpeg_transport(&self, transport: &str, ffmpeg_binary: &str) -> Result<bool, ()> {
         let reclaim_enabled = reclaim_is_enabled();
-        let lease = get_or_create_lease_record(&self.rtsp_url);
-        let session_reuse_enabled = reclaim_session_header_reuse_enabled();
-        let reclaim_session_id = normalize_session_id(lease.session_id.as_deref());
+        // Record the stream's lease entry (and its last observed session id) for the reclaim
+        // index. The deterministic RTP port pinning and the `Session:` header reuse that used
+        // to be injected here were removed: the printer's exhaustion is in TCP worker slots,
+        // not RTP client ports, so neither affects whether a reconnect can succeed.
+        get_or_create_lease_record(&self.rtsp_url);
 
         let mut command = Command::new(ffmpeg_binary);
         command.arg("-rtsp_transport").arg(transport);
-        if reclaim_enabled && transport == "udp" {
-            command
-                .arg("-min_port")
-                .arg(lease.base_port.to_string())
-                .arg("-max_port")
-                .arg((lease.base_port + 1).to_string());
-        }
-        if reclaim_enabled && session_reuse_enabled {
-            if let Some(session_id) = reclaim_session_id.as_deref() {
-                command.arg("-headers").arg(format!("Session: {session_id}\r\n"));
-            }
-        }
         command
             .arg("-i")
             .arg(&self.rtsp_url)
@@ -371,10 +380,22 @@ impl StreamRelay {
         };
 
         let mut idle_since = Instant::now();
+        let started_at = Instant::now();
         let mut buffer = vec![0_u8; 64 * 1024];
         let mut produced_any_output = false;
 
         loop {
+            if !produced_any_output
+                && started_at.elapsed() > Duration::from_millis(FIRST_OUTPUT_DEADLINE_MS)
+            {
+                update_lease_record(&self.rtsp_url, |record| {
+                    record.last_claim_status = Some("no-media-first-output-timeout".to_string());
+                    record.last_claim_at_ms = Some(now_epoch_ms());
+                });
+                let _ = child.kill();
+                break;
+            }
+
             if !self.has_subscribers() {
                 if idle_since.elapsed() > Duration::from_secs(5) {
                     let _ = child.kill();
@@ -410,9 +431,14 @@ impl StreamRelay {
     }
 
     /// Main relay loop that repeatedly tries configured transports while subscribers exist.
+    ///
+    /// Retries back off exponentially up to `RETRY_BACKOFF_MAX_MS`, and a round that delivers
+    /// media resets the delay. An unresponsive printer must not see a new RTSP connection every
+    /// 750 ms: every connection it rejects leaks a descriptor inside it.
     fn pump_ffmpeg(self: Arc<Self>) {
         let ffmpeg_binary = resolve_ffmpeg_binary();
         let transports = Self::preferred_transports();
+        let mut backoff_ms = RETRY_BACKOFF_MIN_MS;
 
         'relay_loop: loop {
             if !self.has_subscribers() {
@@ -425,6 +451,7 @@ impl StreamRelay {
                 match self.run_ffmpeg_transport(transport, &ffmpeg_binary) {
                     Ok(has_output) => {
                         if has_output {
+                            backoff_ms = RETRY_BACKOFF_MIN_MS;
                             continue 'relay_loop;
                         }
                         if reclaim_is_enabled() && *transport == "udp" {
@@ -446,7 +473,42 @@ impl StreamRelay {
                 break;
             }
 
-            thread::sleep(Duration::from_millis(750));
+            // A round that produced no media may mean the printer has no free stream slot, which
+            // no amount of retrying fixes. Ask its oracle, and reclaim a stale media slot when we
+            // recorded the session id that holds one.
+            if probe_stream_slot(&self.rtsp_url) == StreamSlotState::Exhausted {
+                let recorded_session = get_or_create_lease_record(&self.rtsp_url).session_id;
+                match recorded_session.as_deref() {
+                    Some(session_id) => {
+                        let reclaimed = reclaim_stale_session(&self.rtsp_url, session_id);
+                        let status = if reclaimed {
+                            "reclaimed-stale-session"
+                        } else {
+                            "reclaim-stale-session-failed"
+                        };
+                        update_lease_record(&self.rtsp_url, |record| {
+                            if reclaimed {
+                                record.session_id = None;
+                            }
+                            record.last_claim_status = Some(status.to_string());
+                            record.last_claim_at_ms = Some(now_epoch_ms());
+                        });
+                    }
+                    None => {
+                        update_lease_record(&self.rtsp_url, |record| {
+                            record.last_claim_status =
+                                Some("printer-stream-slots-exhausted".to_string());
+                            record.last_claim_at_ms = Some(now_epoch_ms());
+                        });
+                    }
+                }
+                // Retrying fast cannot help while another client holds the slots; keep one slow
+                // probe going so playback resumes by itself once that client lets go.
+                backoff_ms = RETRY_BACKOFF_MAX_MS;
+            }
+
+            thread::sleep(Duration::from_millis(backoff_ms));
+            backoff_ms = (backoff_ms * 2).min(RETRY_BACKOFF_MAX_MS);
         }
 
         self.running.store(false, Ordering::SeqCst);
@@ -456,11 +518,6 @@ impl StreamRelay {
 /// Whether reclaim behavior is enabled.
 fn reclaim_is_enabled() -> bool {
     parse_env_bool("DRAGONFRUIT_RTSP_RECLAIM", true)
-}
-
-/// Whether prior session IDs should be reused via `Session:` ffmpeg headers.
-fn reclaim_session_header_reuse_enabled() -> bool {
-    parse_env_bool("DRAGONFRUIT_RTSP_SESSION_HEADER_REUSE", true)
 }
 
 /// Lease TTL used to decide when a stored session hint should expire.
@@ -620,13 +677,6 @@ fn now_epoch_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
-}
-
-/// Normalizes optional session IDs by trimming and removing empties.
-fn normalize_session_id(session: Option<&str>) -> Option<String> {
-    session
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 /// Detects ffmpeg log lines indicating stale/missing RTSP session state.
@@ -825,6 +875,155 @@ fn is_safe_rtsp_url(candidate: &str) -> bool {
     lower.starts_with("rtsp://") || lower.starts_with("rtsps://")
 }
 
+/// What the printer's SDCP stream-slot probe reported.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum StreamSlotState {
+    /// The printer handed out a stream URL, so a video slot is free.
+    Available,
+    /// The printer answered without a stream URL: every stream slot is in use.
+    Exhausted,
+    /// No usable answer — not an SDCP printer, unreachable, or slow. Treated as "carry on".
+    Unknown,
+}
+
+/// Splits an RTSP URL into `(host, port, path)`.
+fn rtsp_url_parts(rtsp_url: &str) -> Option<(String, u16, String)> {
+    let parsed = url::Url::parse(rtsp_url).ok()?;
+    let host = parsed.host_str()?.to_string();
+    let port = parsed.port().unwrap_or(554);
+    let path = if parsed.path().is_empty() {
+        "/video".to_string()
+    } else {
+        parsed.path().to_string()
+    };
+    Some((host, port, path))
+}
+
+/// Resolves `host:port` to a socket address.
+fn resolve_socket_addr(host: &str, port: u16) -> Result<SocketAddr, ()> {
+    (host, port)
+        .to_socket_addrs()
+        .map_err(|_| ())?
+        .next()
+        .ok_or(())
+}
+
+/// Asks the printer how many of its live video-stream slots are in use.
+///
+/// Chitu-based boards expose SDCP on port 3030 and report `NumberOfVideoStreamConnected` and
+/// `MaximumVideoStreamAllowed` in the attribute reply to command 0x01. Command 0x182 looks like the
+/// natural oracle but is gated on more than those counters: measured against a printer with zero
+/// of two slots connected, it still refuses a stream, so it cannot tell exhaustion apart from
+/// whatever else makes the printer decline. Anything this probe cannot read, a different vendor's
+/// printer, a host that is down, a protocol surprise, is [`StreamSlotState::Unknown`], and the
+/// relay then behaves exactly as it did before the probe existed. Best effort by design: this crate
+/// is printer-agnostic.
+fn probe_stream_slot(rtsp_url: &str) -> StreamSlotState {
+    let Some((host, _port, _path)) = rtsp_url_parts(rtsp_url) else {
+        return StreamSlotState::Unknown;
+    };
+    let Ok(addr) = resolve_socket_addr(&host, SDCP_PORT) else {
+        return StreamSlotState::Unknown;
+    };
+    let timeout = Duration::from_millis(SDCP_TIMEOUT_MS);
+    let Ok(stream) = TcpStream::connect_timeout(&addr, timeout) else {
+        return StreamSlotState::Unknown;
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let request = format!("ws://{host}:{SDCP_PORT}{SDCP_WS_PATH}");
+    let Ok((mut socket, _response)) = tungstenite::client(request, stream) else {
+        return StreamSlotState::Unknown;
+    };
+
+    let envelope = serde_json::json!({
+        "Id": "dragonfruit-rtsp-relay",
+        "Data": {
+            "Cmd": SDCP_CMD_REQUEST_ATTRIBUTES,
+            "Data": {},
+            "RequestID": "relay-stream-slot-probe",
+            "From": 0
+        }
+    });
+    if socket
+        .send(Message::Text(envelope.to_string().into()))
+        .is_err()
+    {
+        return StreamSlotState::Unknown;
+    }
+
+    // Read to the deadline: the reply envelope and the attribute push arrive as separate frames
+    // and either may carry the counters, so judge only once both numbers have been seen.
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match socket.read() {
+            Ok(Message::Text(text)) => {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(text.as_str()) else {
+                    continue;
+                };
+                let Some(attributes) = value.get("Attributes") else {
+                    continue;
+                };
+                let connected = attributes
+                    .get("NumberOfVideoStreamConnected")
+                    .and_then(serde_json::Value::as_u64);
+                let allowed = attributes
+                    .get("MaximumVideoStreamAllowed")
+                    .and_then(serde_json::Value::as_u64);
+                if let (Some(connected), Some(allowed)) = (connected, allowed) {
+                    return if allowed == 0 || connected >= allowed {
+                        StreamSlotState::Exhausted
+                    } else {
+                        StreamSlotState::Available
+                    };
+                }
+            }
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+
+    StreamSlotState::Unknown
+}
+
+/// Sends a `TEARDOWN` naming a session we recorded earlier, to free the media slot it holds.
+///
+/// The printer matches the named session against a global table rather than against the
+/// connection the request arrived on, so this frees a slot left behind by a client that went away
+/// without tearing down. It consumes one connection slot itself, so it is only worth trying while
+/// the printer still has one free. Returns whether the printer accepted the request.
+fn reclaim_stale_session(rtsp_url: &str, session_id: &str) -> bool {
+    let Some((host, port, path)) = rtsp_url_parts(rtsp_url) else {
+        return false;
+    };
+    let Ok(addr) = resolve_socket_addr(&host, port) else {
+        return false;
+    };
+    let timeout = Duration::from_millis(SDCP_TIMEOUT_MS);
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, timeout) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let request = format!(
+        "TEARDOWN rtsp://{host}:{port}{path} RTSP/1.0\r\nCSeq: 1\r\n\
+         User-Agent: dragonfruit-rtsp-relay\r\nSession: {session_id}\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut response = [0_u8; 128];
+    match stream.read(&mut response) {
+        Ok(read) if read > 0 => {
+            String::from_utf8_lossy(&response[..read]).starts_with("RTSP/1.0 200")
+        }
+        _ => false,
+    }
+}
+
 /// Resolves ffmpeg executable path with env overrides and ffmpeg-sidecar support.
 fn resolve_ffmpeg_binary() -> String {
     if let Some(from_env) = std::env::var("DRAGONFRUIT_FFMPEG_PATH")
@@ -894,4 +1093,48 @@ fn ffmpeg_binary_is_runnable(binary: &str) -> bool {
         .stderr(Stdio::null());
     configure_background_process(&mut command);
     command.status().is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtsp_url_parts_resolves_host_port_and_path() {
+        assert_eq!(
+            rtsp_url_parts("rtsp://192.168.2.101:554/video"),
+            Some(("192.168.2.101".to_string(), 554, "/video".to_string()))
+        );
+        assert_eq!(
+            rtsp_url_parts("rtsp://printer.local/stream"),
+            Some(("printer.local".to_string(), 554, "/stream".to_string()))
+        );
+        assert_eq!(
+            rtsp_url_parts("rtsp://printer.local:8554"),
+            Some(("printer.local".to_string(), 8554, "/video".to_string()))
+        );
+        assert_eq!(rtsp_url_parts("rtsp://"), None);
+        assert_eq!(rtsp_url_parts("not-a-url"), None);
+    }
+
+    /// Opt-in check of the SDCP stream-slot oracle against a real printer. The reply shape is the
+    /// one part of this crate that cannot be verified without a device:
+    ///
+    /// ```text
+    /// DRAGONFRUIT_RTSP_ORACLE_TEST_URL=rtsp://<printer>:554/video \
+    ///     cargo test -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a reachable SDCP printer; set DRAGONFRUIT_RTSP_ORACLE_TEST_URL"]
+    fn sdcp_oracle_reports_a_slot_state() {
+        let url = std::env::var("DRAGONFRUIT_RTSP_ORACLE_TEST_URL")
+            .expect("set DRAGONFRUIT_RTSP_ORACLE_TEST_URL to an rtsp:// URL");
+        let state = probe_stream_slot(&url);
+        println!("probe_stream_slot({url}) = {state:?}");
+        assert_ne!(
+            state,
+            StreamSlotState::Unknown,
+            "the printer gave no usable answer to the stream-slot probe"
+        );
+    }
 }

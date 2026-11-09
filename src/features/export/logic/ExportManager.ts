@@ -1,22 +1,25 @@
 import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
-import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import type { LoadedModel, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
+import type { MeshHealthReport } from '@/utils/meshRepair';
+import { reportAddressesTriangleSoup } from '@/features/scene/voxl/classification';
 import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
-import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache, type VoxlChunkReportEntry } from '@/features/scene/voxl';
+import { getProfileStoreSnapshot } from '@/features/profiles/profileStore';
+import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache, type VoxlChunkReportEntry, type VoxlPrinterBundle } from '@/features/scene/voxl';
 import { type BakedChunk, meshChunkStore } from '@/features/scene/voxl/meshChunkStore';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
+import { VOXL_PLATE_ORDERING_EXTENSION, type PlateOrdering } from '@/features/scene/plates/plateCascade';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath, writeFileAtomicToNativePath, writeFileAtomicStreamedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { info as logInfo } from '@tauri-apps/plugin-log';
-import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
+import { SUPPORT_COLLECTION_KEYS } from '@/supports/supportTypeRegistry';
 import { getRaftSettings, getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
-import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
-import { generateChamferedBase } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBase';
-import { generatePerimeterWall } from '@/supports/Rafts/Crenelated/geometry/generatePerimeterWall';
-import { generateCrenelatedWallManual } from '@/supports/Rafts/Crenelated/geometry/generateCrenelatedWallManual';
-import { generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
+import { buildRaftFootprintMeshes } from '@/supports/Rafts/Crenelated/geometry/generateRaftFromFootprint';
+import { collectModelPlateFootprint } from '@/supports/Rafts/Crenelated/geometry/modelPlateFootprint';
+import { inflateModelPlateClearance, raftBandTopMm } from '@/supports/Rafts/Crenelated/geometry/computeRaftFootprint';
+import { filterLineRaftEdges, generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
 import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBeam';
 import { buildLineRaftEdgePairs } from '@/supports/Rafts/Crenelated/geometry/buildLineRaftEdgePairs';
 import { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
@@ -36,17 +39,27 @@ export interface ExportSceneContext {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  /** The scene's plates. With them, a save carries a plate list; without them, none. */
+  plates?: ScenePlate[];
+  /** Which plate was active, written as the file's cursor. */
+  activePlateId?: string;
+  /** The active plate's name, written as the older single-plate shorthand. */
+  plateName?: string;
+  /** The printer this scene is being written for, embedded whole, if one is selected. */
+  printer?: VoxlPrinterBundle;
+  /** The grid the beds are laid out on, so re-opening re-lays the same beds. */
+  plateOrdering?: PlateOrdering;
   exportThumbnailPng?: Uint8Array | null;
 }
 
 export interface ExportSceneSaveTarget {
   nativePath?: string | null;
   /**
-   * VOXL 2.2 modifier-snapshot chunking. Omitted/`true` writes the newest
-   * (chunked 2.2) layout — the manual-save default. Autosave passes `false` to
-   * preserve a pre-2.2 file's inline layout, and escalates to `true` itself if
+   * VOXL 3.1 modifier-snapshot chunking. Omitted/`true` writes the newest
+   * (chunked 3.1) layout — the manual-save default. Autosave passes `false` to
+   * preserve a pre-3.1 file's inline layout, and escalates to `true` itself if
    * that write throws (see `useSceneAutosave`). Never write `false` for a file
-   * that is already 2.2 — that would downgrade it.
+   * that is already 3.1 — that would downgrade it.
    */
   chunkModifierSnapshots?: boolean;
   /**
@@ -85,6 +98,30 @@ function snapshotToken(obj: unknown): string {
     snapshotTokens.set(obj, token);
   }
   return token;
+}
+
+/**
+ * Identity of the position buffer a geometry is drawn from.
+ *
+ * Weak, so a replaced array's token is forgotten with it; monotonic, so two arrays
+ * alive at once never share one. `computeModelGeometrySignature` needs it because a
+ * classify pass installs a whole new position attribute whose version starts at 0
+ * again: every other field of the signature is identical before and after, yet the
+ * triangle order — the thing a `classification` boundary indexes — is not.
+ */
+const soupTokens = new WeakMap<ArrayBufferView, number>();
+let soupTokenCounter = 0;
+function soupToken(
+  position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute | null | undefined,
+): number {
+  if (!position) return 0;
+  const array = 'data' in position ? position.data.array : position.array;
+  if (!array) return 0;
+  const known = soupTokens.get(array as ArrayBufferView);
+  if (known !== undefined) return known;
+  soupTokenCounter += 1;
+  soupTokens.set(array as ArrayBufferView, soupTokenCounter);
+  return soupTokenCounter;
 }
 
 export class ExportManager {
@@ -205,6 +242,15 @@ export class ExportManager {
    * is read out of. The cost of getting it wrong is asymmetric — a missed flag
    * writes stale geometry into the user's recovery file; a missed bake hook only
    * costs one lazy re-bake.
+   *
+   * `soupToken` is the position ARRAY's identity, and the version numbers cannot
+   * stand in for it. A classify pass installs a *new* position attribute with the
+   * same corner count and version 0 over the same `BufferGeometry`, so every other
+   * field here is unchanged while the triangle order is not — which is exactly the
+   * pair a VOXL stores as geometry plus a `classification` boundary. Without it the
+   * store could hand back bytes written before the classifier ran, the writer would
+   * stamp the post-classification boundary beside them, and the reload would split
+   * the soup at an index that no longer means anything.
    */
   static computeModelGeometrySignature(model: LoadedModel): string {
     const geometry = model.geometry.geometry;
@@ -215,7 +261,7 @@ export class ExportManager {
       ? 0
       : ('version' in position ? position.version : position.data.version);
     const indexVersion = index?.version ?? 0;
-    return `${geometry.uuid}:${positionVersion}:${indexVersion}:${vertexCount}`;
+    return `${geometry.uuid}:${positionVersion}:${indexVersion}:${vertexCount}:${soupToken(position)}`;
   }
 
   /**
@@ -232,9 +278,15 @@ export class ExportManager {
    * it, because the writer consumes the store rather than the geometry.
    */
   static async bakeModelGeometryChunk(model: LoadedModel): Promise<BakedChunk> {
+    const signature = this.computeModelGeometrySignature(model);
+    // Duplicates share the source geometry, so their local-space chunk is the
+    // same bytes. Reuse an owner that already baked this signature instead of
+    // encoding the mesh again for every copy.
+    const adopted = meshChunkStore.adoptForModel(model.id, signature);
+    if (adopted) return adopted;
     return meshChunkStore.bake({
       modelId: model.id,
-      signature: this.computeModelGeometrySignature(model),
+      signature,
       encode: () => this.exportModelAsEmbeddedBinaryStlBytes(model),
     });
   }
@@ -256,6 +308,9 @@ export class ExportManager {
 
     const cached = meshChunkStore.lookup(model.id, signature);
     if (cached) return { chunk: cached, stale: false };
+
+    const adopted = meshChunkStore.adoptForModel(model.id, signature);
+    if (adopted) return { chunk: adopted, stale: false };
 
     const inFlight = meshChunkStore.pending(model.id, signature);
     if (inFlight) {
@@ -287,63 +342,6 @@ export class ExportManager {
   /** Backstop for paths that drop models without going through `deleteModels`. */
   static retainModelChunks(modelIds: Iterable<string>): void {
     meshChunkStore.retainOnly(modelIds);
-  }
-
-  private static encodeRleU8(input: Uint8Array): Uint8Array {
-    if (input.length === 0) return new Uint8Array();
-
-    const output: number[] = [];
-    let runValue = input[0];
-    let runCount = 1;
-
-    for (let i = 1; i < input.length; i += 1) {
-      const value = input[i];
-      if (value === runValue && runCount < 255) {
-        runCount += 1;
-      } else {
-        output.push(runCount, runValue);
-        runValue = value;
-        runCount = 1;
-      }
-    }
-
-    output.push(runCount, runValue);
-    return new Uint8Array(output);
-  }
-
-  private static async sha256Hex(bytes: Uint8Array): Promise<string> {
-    if (!globalThis.crypto?.subtle) {
-      throw new Error('SHA-256 hashing is unavailable in this environment.');
-    }
-
-    const digestInput = new ArrayBuffer(bytes.byteLength);
-    new Uint8Array(digestInput).set(bytes);
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', digestInput);
-    const digestBytes = new Uint8Array(digest);
-    let hex = '';
-    for (let i = 0; i < digestBytes.length; i += 1) {
-      hex += digestBytes[i].toString(16).padStart(2, '0');
-    }
-    return hex;
-  }
-
-  private static async buildEmbeddedMeshPayload(model: LoadedModel): Promise<{
-    dataBase64: string;
-    dataEncoding: 'base64-raw' | 'base64-rle-u8';
-    uncompressedSizeBytes: number;
-    sha256: string;
-  }> {
-    const rawBytes = this.exportModelAsEmbeddedBinaryStlBytes(model);
-    const rleBytes = this.encodeRleU8(rawBytes);
-    const useRle = rleBytes.length > 0 && rleBytes.length < rawBytes.length;
-    const payloadBytes = useRle ? rleBytes : rawBytes;
-
-    return {
-      dataBase64: this.toBase64(payloadBytes),
-      dataEncoding: useRle ? 'base64-rle-u8' : 'base64-raw',
-      uncompressedSizeBytes: rawBytes.length,
-      sha256: await this.sha256Hex(rawBytes),
-    };
   }
 
   /**
@@ -677,72 +675,6 @@ export class ExportManager {
   }
 
   /**
-   * Streams a 3MF ZIP directly to the native file system using append_mesh_stage_chunk.
-   *
-   * Three sequential writes to the same path:
-   *   1. Preamble  — local headers for the two small metadata files + their data +
-   *                  the model local header (flag bit 3, CRC/sizes = 0).
-   *   2. XML chunks — streamed one 4 MB chunk at a time, never all in memory at once.
-   *   3. Postamble — data descriptor + central directory + end-of-central-directory.
-   *
-   * append_mesh_stage_chunk truncates the file on the first call to a given path and
-   * appends on all subsequent calls, so the three sequential writeChunkedToNativePath
-   * calls are always correct.
-   */
-  private static async streamZipToNativePath(
-    nativePath: string,
-    ctName: Uint8Array, ctData: Uint8Array,
-    relsName: Uint8Array, relsData: Uint8Array,
-    modelName: Uint8Array,
-    xmlChunks: Uint8Array[], xmlCrc32: number, xmlTotalBytes: number,
-  ): Promise<void> {
-    const ctCrc   = this.crc32(ctData);
-    const relsCrc = this.crc32(relsData);
-    const ctHeader    = this.buildLocalFileHeader(ctName,    ctCrc,   ctData.length,   false);
-    const relsHeader  = this.buildLocalFileHeader(relsName,  relsCrc, relsData.length, false);
-    const modelHeader = this.buildLocalFileHeader(modelName, 0, 0, true);
-
-    const ctOffset    = 0;
-    const relsOffset  = ctHeader.length + ctData.length;
-    const modelOffset = relsOffset + relsHeader.length + relsData.length;
-
-    // ── 1. Preamble (truncates the output file) ──
-    const preambleSize = ctHeader.length + ctData.length + relsHeader.length + relsData.length + modelHeader.length;
-    const preamble = new Uint8Array(preambleSize);
-    let p = 0;
-    preamble.set(ctHeader,    p); p += ctHeader.length;
-    preamble.set(ctData,      p); p += ctData.length;
-    preamble.set(relsHeader,  p); p += relsHeader.length;
-    preamble.set(relsData,    p); p += relsData.length;
-    preamble.set(modelHeader, p);
-    await writeChunkedToNativePath(nativePath, preamble);
-
-    // ── 2. XML chunks (appended sequentially) ──
-    for (const chunk of xmlChunks) {
-      await writeChunkedToNativePath(nativePath, chunk);
-    }
-
-    // ── 3. Postamble: data descriptor + central dir + EOCD ──
-    const cdOffset = modelOffset + modelHeader.length + xmlTotalBytes + 16;
-    const dataDesc = this.buildDataDescriptor(xmlCrc32, xmlTotalBytes);
-    const cdCt     = this.buildCentralDirEntry(ctName,    ctCrc,    ctData.length,   ctOffset,    false);
-    const cdRels   = this.buildCentralDirEntry(relsName,  relsCrc,  relsData.length, relsOffset,  false);
-    const cdModel  = this.buildCentralDirEntry(modelName, xmlCrc32, xmlTotalBytes,   modelOffset, true);
-    const cdSize   = cdCt.length + cdRels.length + cdModel.length;
-    const eocd     = this.buildEocd(3, cdSize, cdOffset);
-
-    const postambleSize = dataDesc.length + cdCt.length + cdRels.length + cdModel.length + eocd.length;
-    const postamble = new Uint8Array(postambleSize);
-    p = 0;
-    postamble.set(dataDesc, p); p += dataDesc.length;
-    postamble.set(cdCt,     p); p += cdCt.length;
-    postamble.set(cdRels,   p); p += cdRels.length;
-    postamble.set(cdModel,  p); p += cdModel.length;
-    postamble.set(eocd,     p);
-    await writeChunkedToNativePath(nativePath, postamble);
-  }
-
-  /**
    * Builds the 3MF model XML in fixed-size chunks (4 MB each) to avoid a single
    * large pre-allocation.
    *
@@ -751,10 +683,8 @@ export class ExportManager {
    * reliably throws `RangeError: Array buffer allocation failed` on constrained
    * heap environments.
    *
-   * Callers either stream the returned chunks directly to a native file
-   * (Tauri / streamZipToNativePath) or fold them into a Blob (browser /
-   * buildBlobZip).  Neither path ever requires a single contiguous buffer for
-   * the full model XML.
+   * The caller folds the returned chunks into a Blob (`buildBlobZip`), which
+   * never requires a single contiguous buffer for the full model XML.
    */
   private static async buildMinimal3mfXmlChunks(
     objects: THREE.Object3D[],
@@ -936,8 +866,6 @@ export class ExportManager {
   private static async export3mf(
     objects: THREE.Object3D[],
     filename: string,
-    prePickedNativePath: string | null,
-    useNativeWrite: boolean,
   ): Promise<string | null> {
     const enc = new TextEncoder();
     const ctName    = enc.encode('[Content_Types].xml');
@@ -953,16 +881,6 @@ export class ExportManager {
     for (const chunk of xmlChunks) xmlCrcState = this.updateCrc32(xmlCrcState, chunk);
     const xmlCrc32 = (xmlCrcState ^ 0xffffffff) >>> 0;
 
-    if (prePickedNativePath && useNativeWrite) {
-      await this.streamZipToNativePath(
-        prePickedNativePath,
-        ctName, ctData, relsName, relsData, modelName,
-        xmlChunks, xmlCrc32, xmlTotalBytes,
-      );
-      return prePickedNativePath;
-    }
-
-    // Browser fallback: Blob-based ZIP.
     const zipBlob = this.buildBlobZip(
       ctName, ctData, relsName, relsData, modelName,
       xmlChunks, xmlCrc32, xmlTotalBytes,
@@ -1038,8 +956,7 @@ export class ExportManager {
     if (options.includeSupports) {
       if (hasScopedModelFilter) {
         const supportSnapshot = getSnapshot();
-        const kickstandSnapshot = getKickstandSnapshot();
-        const scopedSupports = buildScopedSupportGeometryGroup(supportSnapshot, kickstandSnapshot, scopedModelIds);
+        const scopedSupports = buildScopedSupportGeometryGroup(supportSnapshot, scopedModelIds);
         if (scopedSupports.children.length > 0) {
           exportObjects.push(scopedSupports);
         }
@@ -1054,9 +971,7 @@ export class ExportManager {
       const globalRaftSettings = getRaftSettings();
       if (globalRaftSettings.bottomMode !== 'off') {
         const supportState = getSnapshot();
-        const kickstandState = getKickstandSnapshot();
         const allRoots = Object.values(supportState.roots);
-        const allKickstandRoots = Object.values(kickstandState.roots);
 
         // Group roots by modelId so each model gets a separate raft
         const rootsByModel = new Map<string, typeof allRoots>();
@@ -1074,19 +989,7 @@ export class ExportManager {
           arr.push(root);
         }
 
-        for (const root of allKickstandRoots) {
-          const rootModelId = root.modelId ?? null;
-          if (hasScopedModelFilter) {
-            if (!rootModelId || !scopedModelIds.has(rootModelId)) {
-              continue;
-            }
-          }
-
-          const mid = rootModelId ?? '__orphan__';
-          let arr = rootsByModel.get(mid);
-          if (!arr) { arr = []; rootsByModel.set(mid, arr); }
-          arr.push(root);
-        }
+        const clearanceTargets = (sceneContext?.models ?? []).filter((model) => model.visible);
 
         for (const [modelKey, roots] of rootsByModel) {
           if (roots.length === 0) continue;
@@ -1095,35 +998,26 @@ export class ExportManager {
           const modelId = modelKey === '__orphan__' ? null : modelKey;
           const raftSettings = modelId ? getRaftSettingsForModel(modelId) : globalRaftSettings;
 
-          const thickness = raftSettings.bottomMode === 'line' ? raftSettings.lineHeightMm : raftSettings.thickness;
-          const chamferInset = Math.max(0, thickness) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))));
-          const wallInset = raftSettings.wallEnabled ? Math.max(0, raftSettings.wallThickness) : 0;
-          const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
-
           const circles: SupportBaseCircle[] = roots.map(r => ({
             x: r.transform.pos.x,
             y: r.transform.pos.y,
             r: r.diameter / 2
           }));
 
-          const profile = computeFootprint(circles, { marginMm: dynamicMargin, samplesPerCircle: 24 });
-
-          if (!profile || profile.length < 3) continue;
+          // The raft keeps clear of any model standing on the plate, so the
+          // exported solid matches the viewport (and the slice).
+          const clearance = collectModelPlateFootprint(clearanceTargets, raftBandTopMm(raftSettings));
+          const parts = buildRaftFootprintMeshes({ circles, raft: raftSettings, clearance });
+          if (!parts.baseMesh && parts.footprint.length === 0) continue;
 
           const raftGroup = new THREE.Group();
           raftGroup.name = 'Raft';
 
-          if (raftSettings.bottomMode === 'solid') {
-            const baseMesh = generateChamferedBase(profile, {
-              thickness: raftSettings.thickness,
-              chamferAngle: raftSettings.chamferAngle
-            });
-            raftGroup.add(baseMesh);
-          }
+          if (parts.baseMesh) raftGroup.add(parts.baseMesh);
 
           if (raftSettings.bottomMode === 'line') {
             const nodes2d = roots.map((r) => new THREE.Vector2(r.transform.pos.x, r.transform.pos.y));
-            const hasBorderRing = !!profile && profile.length >= 3;
+            const hasBorderRing = parts.footprint.length > 0;
             const edgePairs = buildLineRaftEdgePairs(nodes2d, {
               hasBorderRing,
               keepFactor: 8,
@@ -1133,7 +1027,14 @@ export class ExportManager {
 
             const beamHeight = Math.max(0.01, raftSettings.lineHeightMm);
 
-            const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]);
+            // Beams a model on the plate is in the way of are never drawn: cutting them
+    // would leave severed ends to close up again, and two clusters either side of
+    // a model should stay two clusters.
+    const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = filterLineRaftEdges(
+      edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]),
+      inflateModelPlateClearance(clearance),
+      raftSettings.lineWidthMm,
+    );
             const unionMesh = generateUnionedLineRaftMesh(unionEdges, {
               widthMm: raftSettings.lineWidthMm,
               heightMm: beamHeight,
@@ -1145,9 +1046,9 @@ export class ExportManager {
             if (unionHasGeometry) {
               raftGroup.add(unionMesh);
             } else {
-              for (const [a, b] of edgePairs) {
-                const start = new THREE.Vector3(nodes2d[a].x, nodes2d[a].y, 0);
-                const end = new THREE.Vector3(nodes2d[b].x, nodes2d[b].y, 0);
+              for (const [a, b] of unionEdges) {
+                const start = new THREE.Vector3(a.x, a.y, 0);
+                const end = new THREE.Vector3(b.x, b.y, 0);
                 const beam = generateChamferedBeam(start, end, {
                   widthMm: raftSettings.lineWidthMm,
                   heightMm: beamHeight,
@@ -1156,30 +1057,9 @@ export class ExportManager {
                 raftGroup.add(beam);
               }
             }
-
           }
 
-          const shouldRenderWall = raftSettings.wallEnabled;
-          if (shouldRenderWall) {
-            const useCrenels = raftSettings.crenulationSpacing > 0 && raftSettings.crenulationGapWidth > 0;
-            const thickness = raftSettings.bottomMode === 'line' ? Math.max(0.01, raftSettings.lineHeightMm) : raftSettings.thickness;
-            const wallMesh = useCrenels
-              ? generateCrenelatedWallManual(profile, {
-                  wallHeight: raftSettings.wallHeight,
-                  wallThickness: raftSettings.wallThickness,
-                  crenulationGapWidth: raftSettings.crenulationGapWidth,
-                  crenulationSpacing: raftSettings.crenulationSpacing,
-                  thickness,
-                  chamferAngle: raftSettings.chamferAngle,
-                })
-              : generatePerimeterWall(profile, {
-                  wallHeight: raftSettings.wallHeight,
-                  wallThickness: raftSettings.wallThickness,
-                  thickness
-                });
-
-            if (wallMesh) raftGroup.add(wallMesh);
-          }
+          if (parts.wallMesh) raftGroup.add(parts.wallMesh);
 
           raftGroup.updateMatrixWorld(true);
           exportObjects.push(raftGroup);
@@ -1204,7 +1084,7 @@ export class ExportManager {
 
     // ── Browser / fallback: JS-based serializers ──
     if (options.format === '3mf') {
-      return this.export3mf(exportObjects, options.filename, null, false);
+      return this.export3mf(exportObjects, options.filename);
     }
 
     const stlBytes = this.buildBinaryStl(exportObjects);
@@ -1270,7 +1150,6 @@ export class ExportManager {
     await this.yieldToBrowserFrame();
 
     const supportSnapshot = getSnapshot();
-    const kickstandSnapshot = getKickstandSnapshot();
 
     const scopedModelIds = new Set((sceneContext?.models ?? []).map((model) => model.id));
     const hasScopedModelFilter = scopedModelIds.size > 0;
@@ -1278,26 +1157,19 @@ export class ExportManager {
     const supports = hasScopedModelFilter
       ? buildScopedSupportExportDocument(
           supportSnapshot,
-          kickstandSnapshot,
           scopedModelIds,
           'dragonfruit-voxl-export',
         )
       : buildSupportExportFromStores(
           supportSnapshot,
-          kickstandSnapshot,
           'dragonfruit-voxl-export',
         );
 
     if (!options.includeSupports) {
-      supports.roots = [];
-      supports.trunks = [];
-      supports.branches = [];
-      supports.leaves = [];
-      supports.twigs = [];
-      supports.sticks = [];
-      supports.braces = [];
-      supports.knots = [];
-      supports.kickstands = [];
+      // Every collection the format declares, walked rather than listed, so an
+      // export asked to leave supports out leaves out all of them.
+      const emptyDocument = supports as unknown as Record<string, unknown>;
+      for (const key of SUPPORT_COLLECTION_KEYS) emptyDocument[key] = [];
     }
 
     // Post-C the writer is fed from the chunk store, so `meshBytesMap` stays
@@ -1322,7 +1194,10 @@ export class ExportManager {
             visible: boolean;
             color: string;
             polygonCount: number;
-            fileSizeBytes: number;
+            /** The plate the model stands on; see `VoxlModelEntry.plateId`. */
+            plateId?: string;
+            /** Absent when the mesh's size was never recorded; never a stand-in 0. */
+            fileSizeBytes?: number;
             sourcePath?: string;
             nativePreview?: {
               originalTriangleCount: number;
@@ -1339,6 +1214,13 @@ export class ExportManager {
             meshModifiers?: ModelMeshModifiers;
             isSupportGeometry?: boolean;
             linkGroupId?: string;
+            materialProfileId?: string;
+            materialBaseColor?: string;
+            bodies?: Array<{ positions: Float32Array; index: Uint32Array | null }>;
+            bodyCenter?: { x: number; y: number; z: number };
+            bodyMaterialProfileIds?: Array<string | null>;
+            bodyColors?: Array<string | null>;
+            classification?: MeshHealthReport;
             mesh: {
               mode: 'embedded-file';
               fileName: string;
@@ -1363,6 +1245,25 @@ export class ExportManager {
               if (resolvedChunk.stale) staleModelIds.add(model.id);
             }
 
+            // Baked mesh classification (VOXL V3.3): the model/support split the
+            // session already knows, persisted so a reload does not re-run the
+            // classifier over the same triangles. Omitted for a stale chunk —
+            // those bytes are one bake behind the geometry the report describes,
+            // so its boundary would not address them — and omitted unless the
+            // report's boundary actually addresses the soup the chunk holds: a
+            // repair report describes the mesh the pass ended with, and stamping
+            // one whose `post` disagrees with the stored bytes made every reader
+            // discard it and reclassify, which reorders the soup on load.
+            const storedTriangles = model.geometry.geometry.getIndex()?.count
+              ?? model.geometry.geometry.getAttribute('position')?.count
+              ?? 0;
+            const report = model.geometry.meshDefects?.nativeRepairReport;
+            const classification = staleModelIds.has(model.id)
+              || !report
+              || !reportAddressesTriangleSoup(report, storedTriangles / 3)
+              ? undefined
+              : report;
+
             const origChunk = meshChunkStore.lastCommitted(model.id, 'original');
             if (origChunk) {
               precompressedOriginalMap.set(index, {
@@ -1379,7 +1280,12 @@ export class ExportManager {
               visible: model.visible,
               color: model.color,
               polygonCount: model.polygonCount,
-              fileSizeBytes: model.fileSizeBytes ?? 0,
+              // Only when known: writing 0 for an unknown size is what made a
+              // cached or re-opened scene report "0 B" — the field said the mesh
+              // occupies no space rather than that its size was never recorded.
+              ...(typeof model.fileSizeBytes === 'number' && model.fileSizeBytes > 0
+                ? { fileSizeBytes: model.fileSizeBytes }
+                : {}),
               // Preserves sourcePath / nativePreview if present on model
               ...(typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
                 ? { sourcePath: model.sourcePath }
@@ -1420,8 +1326,39 @@ export class ExportManager {
               // every saved VOXL silently loses hollowing/hole-punch
               // re-editability (voxl-format-spec.md V2.1 requirement).
               meshModifiers: resolveModelMeshModifiers(model),
+              ...(model.plateId ? { plateId: model.plateId } : {}),
               isSupportGeometry: model.isSupportGeometry,
               linkGroupId: model.linkGroupId,
+              ...(model.materialProfileId ? { materialProfileId: model.materialProfileId } : {}),
+              ...(model.materialBaseColor ? { materialBaseColor: model.materialBaseColor } : {}),
+              // V3.4: bodies travel whole so per-body material assignments survive
+              // a reload without the source 3MF.
+              ...(model.splitBodies && model.splitBodies.length > 0
+                ? {
+                  bodies: model.splitBodies.map((body) => {
+                    const position = body.geometry.getAttribute('position');
+                    const index = body.geometry.getIndex();
+                    return {
+                      positions: position
+                        ? Float32Array.from(position.array as ArrayLike<number>)
+                        : new Float32Array(0),
+                      index: index ? Uint32Array.from(index.array as ArrayLike<number>) : null,
+                    };
+                  }),
+                  bodyCenter: {
+                    x: model.geometry.center.x,
+                    y: model.geometry.center.y,
+                    z: model.geometry.center.z,
+                  },
+                  ...(model.bodyMaterialProfileIds
+                    ? { bodyMaterialProfileIds: model.bodyMaterialProfileIds.map((id) => id ?? null) }
+                    : {}),
+                  ...(model.bodyColors
+                    ? { bodyColors: model.bodyColors.map((color) => color ?? null) }
+                    : {}),
+                }
+                : {}),
+              classification,
               mesh: {
                 mode: 'embedded-file',
                 fileName: `${this.normalizeExportFilenameBase(model.name || 'model')}.stl`,
@@ -1450,15 +1387,45 @@ export class ExportManager {
         }
       : undefined;
 
+    // The material profiles the scene references, ids preserved. Without them a
+    // scene opened on another machine has model/body material ids that resolve to
+    // nothing (the printer bundle's own materials are re-id'd on import).
+    const referencedMaterialIds = new Set<string>();
+    for (const model of models) {
+      if (model.materialProfileId) referencedMaterialIds.add(model.materialProfileId);
+      for (const id of model.bodyMaterialProfileIds ?? []) {
+        if (id) referencedMaterialIds.add(id);
+      }
+    }
+    const sceneMaterials = referencedMaterialIds.size > 0
+      ? getProfileStoreSnapshot().materialProfiles.filter((material) => referencedMaterialIds.has(material.id))
+      : [];
+
     const documentInput = {
       models,
       activeModelId: sceneContext?.activeModelId ?? null,
       selectedModelIds: sceneContext?.selectedModelIds ?? [],
+      ...(sceneContext?.plates && sceneContext.plates.length > 0
+        ? {
+            plates: sceneContext.plates.map((plate) => ({
+              id: plate.id,
+              ...(plate.name ? { name: plate.name } : {}),
+            })),
+          }
+        : {}),
+      ...(sceneContext?.activePlateId ? { activePlateId: sceneContext.activePlateId } : {}),
       supports,
       meta: {
         generator: 'DragonFruit',
+        ...(sceneContext?.printer ? { printer: sceneContext.printer } : {}),
       },
-      extensions: voxlExtensions,
+      ...(sceneMaterials.length > 0 ? { materials: sceneMaterials } : {}),
+      extensions: {
+        ...voxlExtensions,
+        ...(sceneContext?.plateOrdering
+          ? { [VOXL_PLATE_ORDERING_EXTENSION]: sceneContext.plateOrdering }
+          : {}),
+      },
     };
     // The SUPP chunk's bytes are a pure function of the two store snapshots plus
     // the include/scope flags. Key on the snapshot identities so an unchanged
@@ -1467,16 +1434,15 @@ export class ExportManager {
     const supportsCacheKey = chunkCache
       ? [
           snapshotToken(supportSnapshot),
-          snapshotToken(kickstandSnapshot),
           options.includeSupports ? 'S1' : 'S0',
           hasScopedModelFilter ? [...scopedModelIds].sort().join(',') : '*',
         ].join('|')
       : undefined;
 
-    // `chunkModifierSnapshots` selects the VOXL 2.2 layout (chunked, the default
-    // and the manual-save path) or the pre-2.2 inline layout (autosave preserving
+    // `chunkModifierSnapshots` selects the VOXL 3.1 layout (chunked, the default
+    // and the manual-save path) or the pre-3.1 inline layout (autosave preserving
     // an old file's format). Autosave owns the escalate-on-failure decision so it
-    // can also latch the scene to 2.2 — see `useSceneAutosave`.
+    // can also latch the scene to 3.1 — see `useSceneAutosave`.
     const serializeOptions = {
       precompressed: precompressedMap,
       precompressedOriginal: precompressedOriginalMap,
@@ -1600,6 +1566,9 @@ export class ExportManager {
 
     // If a native path was already picked before heavy work started, write directly.
     let nativeDestinationPath = prePickedNativePath;
+    // Kept so a desktop run can report *why* it failed instead of silently
+    // reinterpreting the failure as a browser download (see the throw below).
+    let nativeWriteError: unknown = null;
 
     if (nativeDestinationPath && useNativeWrite) {
       try {
@@ -1607,6 +1576,7 @@ export class ExportManager {
         return nativeDestinationPath;
       } catch (error) {
         console.warn('[ExportManager] Chunked write failed, retrying with a fresh save destination.', error);
+        nativeWriteError = error;
         nativeDestinationPath = null;
       }
     }
@@ -1622,11 +1592,30 @@ export class ExportManager {
         if (message.toLowerCase().includes('save cancelled by user') || message.toLowerCase().includes('cancelled by user')) {
           return null;
         }
-        console.warn('[ExportManager] Native save dialog unavailable/failed, falling back to browser download.', error);
+        console.warn('[ExportManager] Native save dialog unavailable/failed.', error);
+        nativeWriteError = error;
       }
     }
 
-    // Browser <a download> fallback
+    // Desktop runtime: the native write is the only way to honour the
+    // destination the user picked. Falling through to the blob <a download>
+    // below does NOT write there — WebView2 drops the file in the browser
+    // download folder under a de-duplicated name — and returning a filename
+    // reads as success to every caller, so the user saw a "saved" toast for a
+    // file that never reached their project folder. Fail loudly instead; the
+    // save handler turns this into the "Could not save the scene" dialog.
+    if (useNativeWrite) {
+      throw nativeWriteError instanceof Error
+        ? nativeWriteError
+        : new Error(
+            nativeWriteError === null
+              ? `Could not write ${resolvedFilename} to the selected destination.`
+              : this.getErrorMessage(nativeWriteError),
+          );
+    }
+
+    // Browser <a download> fallback — web builds only, where there is no
+    // native write seam and a download is the real save.
     const blobData = typeof data === 'string' ? data : new Uint8Array(bytes);
     const blob = new Blob([blobData], { type: mimeType });
 

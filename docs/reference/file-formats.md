@@ -7,8 +7,8 @@ DragonFruit works with both scene and geometry formats.
 Native DragonFruit scene format.
 
 - Stores scene metadata, model transforms, supports, and optional extensions.
-- Supports legacy V1 JSON and current V2 binary chunk container.
-- V2 is the preferred writer target.
+- Uses the binary chunk container (compat floor `2`, or `3` when identical geometry is shared between models).
+- The obsolete V1 JSON profile is no longer read; opening such a file reports that it was saved by an unsupported version.
 
 ## STL
 

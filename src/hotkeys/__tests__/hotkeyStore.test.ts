@@ -96,6 +96,17 @@ test('Overlap resolution: Ctrl+Alt leaf activates and Alt branch suppresses', ()
     assert.equal(isActionActiveSync('SUPPORTS', 'BRANCH_PLACEMENT'), false, 'Ctrl+Alt press should suppress BRANCH_PLACEMENT');
 });
 
+test('Alt+Q keeps both branch placement and force placement active', () => {
+    hotkeyStore.getState().clearKeys();
+    hotkeyStore.getState().pressKey('Alt');
+    hotkeyStore.getState().pressKey('q', { altKey: true });
+
+    assert.equal(isActionActiveSync('SUPPORTS', 'BRANCH_PLACEMENT'), true, 'Alt must keep branch placement active');
+    assert.equal(isActionActiveSync('SUPPORTS', 'FORCE_PLACE_SUPPORT'), true, 'Q must force placement while Alt is held');
+
+    hotkeyStore.getState().clearKeys();
+});
+
 test('Hotkey Registry: ignores keys when typing in input or textarea', () => {
     hotkeyStore.getState().clearKeys();
     const cleanup = setupHotkeyListeners();
@@ -138,6 +149,80 @@ test('Hotkey Registry: clears all active keys on window blur', () => {
     // Expect store to be cleared
     assert.equal(isKeyPressedSync('w'), false, 'Keys should be cleared on blur');
     assert.equal(isKeyPressedSync('Shift'), false, 'Keys should be cleared on blur');
+
+    cleanup();
+});
+
+test('Ctrl+A stays Ctrl+A when Control is released before A', () => {
+    hotkeyStore.getState().clearKeys();
+    const cleanup = setupHotkeyListeners();
+    const divTarget = new (global as any).HTMLElement('DIV');
+    const keyEvent = (key: string, modifiers: Record<string, boolean> = {}) => ({
+        key,
+        target: divTarget,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        preventDefault() {},
+        ...modifiers,
+    });
+
+    dispatchWindowEvent('keydown', keyEvent('Control', { ctrlKey: true }));
+    dispatchWindowEvent('keydown', keyEvent('a', { ctrlKey: true }));
+
+    assert.equal(isActionActiveSync('CANVAS', 'SELECT_ALL'), true, 'Ctrl+A must select all');
+    assert.equal(isActionActiveSync('CANVAS', 'TOOL_ARRANGE'), false, 'A pressed with Ctrl must not match bare A');
+
+    // Releasing Control first is what used to open Arrange.
+    dispatchWindowEvent('keyup', keyEvent('Control'));
+    assert.equal(isActionActiveSync('CANVAS', 'TOOL_ARRANGE'), false, 'releasing Ctrl must not hand A to the bare binding');
+
+    dispatchWindowEvent('keyup', keyEvent('a'));
+
+    // A bare A press afterwards still opens Arrange.
+    dispatchWindowEvent('keydown', keyEvent('a'));
+    assert.equal(isActionActiveSync('CANVAS', 'TOOL_ARRANGE'), true, 'a plain A press must still open Arrange');
+    dispatchWindowEvent('keyup', keyEvent('a'));
+
+    // Alt placement is a modifier key used on its own, so it must stay unaffected.
+    dispatchWindowEvent('keydown', keyEvent('Alt', { altKey: true }));
+    assert.equal(isActionActiveSync('SUPPORTS', 'BRANCH_PLACEMENT'), true, 'a bare Alt press must still place branches');
+    dispatchWindowEvent('keyup', keyEvent('Alt'));
+
+    cleanup();
+});
+
+// Regression: Firefox on macOS sends no keyup for a key released before Cmd. The
+// V of a Cmd+V stayed pressed, so every later Cmd press (a Cmd+Z) pasted again.
+test('Releasing Cmd releases the keys pressed under it', () => {
+    hotkeyStore.getState().clearKeys();
+    const cleanup = setupHotkeyListeners();
+    const divTarget = new (global as any).HTMLElement('DIV');
+    const keyEvent = (key: string, modifiers: Record<string, boolean> = {}) => ({
+        key,
+        target: divTarget,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        preventDefault() {},
+        ...modifiers,
+    });
+
+    // J is held before Cmd, so its keyup will still come: Cmd must not drop it.
+    dispatchWindowEvent('keydown', keyEvent('j'));
+    dispatchWindowEvent('keydown', keyEvent('Meta', { metaKey: true }));
+    dispatchWindowEvent('keydown', keyEvent('v', { metaKey: true }));
+    // V is released first, and its keyup never arrives.
+    dispatchWindowEvent('keyup', keyEvent('Meta'));
+
+    assert.equal(isKeyPressedSync('v'), false, 'V must not outlive the Cmd it was pressed with');
+    assert.equal(isKeyPressedSync('j'), true, 'a key held before Cmd keeps its own keyup');
+
+    dispatchWindowEvent('keydown', keyEvent('Meta', { metaKey: true }));
+    dispatchWindowEvent('keydown', keyEvent('z', { metaKey: true }));
+    assert.equal(isKeyPressedSync('v'), false, 'a new Cmd press must not bring the old V back');
 
     cleanup();
 });
@@ -294,7 +379,7 @@ test('Pointer/mouse events interception in placement modes on canvas', () => {
     cleanup();
 });
 
-test('Newly migrated configurations: GLOBAL, DEBUG, MESH, NAVIGATION, PRESETS, HOLE_PUNCH', () => {
+test('Newly migrated configurations: GLOBAL, DEBUG, SUPPORTS, NAVIGATION, PRESETS, HOLE_PUNCH', () => {
     hotkeyStore.getState().clearKeys();
 
     // 1. GLOBAL.SAVE (Ctrl+S)
@@ -339,10 +424,10 @@ test('Newly migrated configurations: GLOBAL, DEBUG, MESH, NAVIGATION, PRESETS, H
     hotkeyStore.getState().releaseKey('o');
     hotkeyStore.getState().clearKeys();
 
-    // 3. MESH.INVERT_NORMALS (Alt+N)
+    // 3. SUPPORTS.BRANCH_PLACEMENT (Alt) holds through a key nothing binds with Alt
     hotkeyStore.getState().pressKey('Alt');
     hotkeyStore.getState().pressKey('n');
-    assert.equal(isActionActiveSync('MESH', 'INVERT_NORMALS'), true);
+    assert.equal(isActionActiveSync('SUPPORTS', 'BRANCH_PLACEMENT'), true);
     hotkeyStore.getState().clearKeys();
 
     // 4. NAVIGATION.LAYER_UP/DOWN (ArrowUp/Down)

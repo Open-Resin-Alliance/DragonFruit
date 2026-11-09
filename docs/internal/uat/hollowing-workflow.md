@@ -40,3 +40,30 @@ Given a hollowed model with blockers placed
 When I slice the model
 Then blocker regions produce solid layers (no hollow artefacts)
 And the transition between hollow and blocked regions is watertight
+
+## Scenario 6: Select a hole punch through the slice-view cutaway
+
+Given a hollowed model with an existing hole punch and exterior view active
+When I move the slice viewer until the plug is visible from inside the cavity
+And click the plug
+Then the existing punch is selected and its gizmo appears
+And no new punch is placed on the far cavity wall
+And selection also works with the lower clip bound and in interior view
+
+## Scenario 7: Place a hole punch in interior view
+
+Given a hollowed model in interior view with no hole punch selected
+When I click a cavity surface away from existing punches
+Then a new punch is placed at that surface
+And the build plate or other unrelated geometry behind the model does not block placement
+
+## Scenario 8: Drag a punch body without jumping to a far wall
+
+Given a 30×30×20 mm box with hollowing and a top-face hole punch applied
+When I grab the punch body and drag it across the top face
+Then it stays on the nearest visible surface without flickering to the cavity floor
+And its direction follows that surface's normal
+And releasing and applying the punch keeps the hole at the dragged position
+And the same interaction works in exterior and interior view
+And with a slice-view cutaway, hidden surfaces are skipped
+And the gizmo arrows still provide axis-constrained movement

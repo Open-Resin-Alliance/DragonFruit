@@ -1,9 +1,12 @@
 "use client";
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trash2, WandSparkles } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Button, Toast, ToastViewport } from '@/components/atoms';
-import { SelectDropdown } from '@/components/ui/SelectDropdown';
+import { CENTERED_SELECT_PADDING, SelectDropdown } from '@/components/ui/SelectDropdown';
 import {
     AUTO_BRACING_PATTERN_OPTIONS,
     type AutoBracingSettings,
@@ -14,6 +17,8 @@ interface AutoBracingSettingsCardProps {
     settings: AutoBracingSettings;
     onChange: (patch: Partial<AutoBracingSettings>) => void;
     onAutoBrace: () => void;
+    /** Removes every brace of the model the Studio is working on. */
+    onClearBraces: () => void;
     status?: {
         kind: 'success' | 'warning' | 'error';
         message: string;
@@ -36,8 +41,13 @@ export function AutoBracingSettingsCard({
     settings,
     onChange,
     onAutoBrace,
+    onClearBraces,
     status,
 }: AutoBracingSettingsCardProps) {
+    const { _ } = useLingui();
+    // Zigzag chains step by their own rise, not the fixed interval — when
+    // both patterns are zigzag the interval does nothing and is disabled.
+    const intervalDisabled = settings.initialPattern === 'zigZag' && settings.repeatingPattern === 'zigZag';
     const ToggleButton = ({
         checked,
         onChange,
@@ -88,10 +98,14 @@ export function AutoBracingSettingsCard({
                     onChange={(nextValue) => onPatternChange(nextValue as AutoBracingPattern)}
                     options={AUTO_BRACING_PATTERN_OPTIONS.map((pattern) => ({
                         value: pattern,
-                        label: pattern === 'singleDiagonal' ? 'Single Diagonal' : 'Cross Diagonal',
+                        label: pattern === 'singleDiagonal' ? _(msg`Single Diagonal`) : pattern === 'zigZag' ? _(msg`Zig Zag`) : _(msg`Crosses`),
                     }))}
                     className="min-w-0 space-y-0"
-                    selectClassName="h-[36px] px-3 py-2 text-base"
+                    selectClassName="h-[36px] py-2 text-base"
+                    // Same centring as the Auto Support panel's preset selector:
+                    // equal insets either side of the label, so it sits on the
+                    // control's centre instead of clear of the chevron.
+                    selectStyle={CENTERED_SELECT_PADDING}
                 />
             </label>
         );
@@ -102,7 +116,7 @@ export function AutoBracingSettingsCard({
             {/* Row 1: Brace Diameter | Max Brace Distance */}
             <div className="grid grid-cols-2 gap-1.5 items-start">
                 <label className="space-y-1 min-w-0">
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Brace Diameter</div>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{_(msg`Brace Diameter`)}</div>
                     <div className="relative">
                         <NumberInput
                             value={settings.braceDiameterMm}
@@ -115,7 +129,7 @@ export function AutoBracingSettingsCard({
                     </div>
                 </label>
                 <label className="space-y-1 min-w-0">
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Max Brace Distance</div>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{_(msg`Max Brace Distance`)}</div>
                     <div className="relative">
                         <NumberInput
                             value={settings.maxBraceLengthMm}
@@ -132,7 +146,7 @@ export function AutoBracingSettingsCard({
             {/* Row 2: Initial Distance | Repeat Interval */}
             <div className="grid grid-cols-2 gap-1.5 items-start">
                 <label className="space-y-1 min-w-0">
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Initial Distance</div>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{_(msg`Initial Distance`)}</div>
                     <div className="relative">
                         <NumberInput
                             value={settings.initialDistanceMm}
@@ -144,14 +158,15 @@ export function AutoBracingSettingsCard({
                         {unitHint('mm')}
                     </div>
                 </label>
-                <label className="space-y-1 min-w-0">
-                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Repeat Interval</div>
-                    <div className="relative">
+                <label className="space-y-1 min-w-0" style={intervalDisabled ? { opacity: 0.45 } : undefined}>
+                    <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{_(msg`Repeat Interval`)}</div>
+                    <div className="relative" title={intervalDisabled ? _(msg`Zigzag chains step by their own rise — interval has no effect`) : undefined}>
                         <NumberInput
                             value={settings.patternIntervalMm}
                             onChange={(value) => onChange({ patternIntervalMm: value })}
                             step={0.1}
                             showStepper={false}
+                            disabled={intervalDisabled}
                             className={compactInputClass}
                         />
                         {unitHint('mm')}
@@ -161,26 +176,31 @@ export function AutoBracingSettingsCard({
 
             {/* Row 3: Initial Pattern | Repeating Pattern */}
             <div className="grid grid-cols-2 gap-1.5 items-start">
-                {renderPatternSelect('Initial Pattern', settings.initialPattern, (initialPattern) => onChange({ initialPattern }))}
-                {renderPatternSelect('Repeating Pattern', settings.repeatingPattern, (repeatingPattern) => onChange({ repeatingPattern }))}
+                {renderPatternSelect(_(msg`Initial Pattern`), settings.initialPattern, (initialPattern) => onChange({ initialPattern }))}
+                {renderPatternSelect(_(msg`Repeating Pattern`), settings.repeatingPattern, (repeatingPattern) => onChange({ repeatingPattern }))}
             </div>
 
             {/* Row 4: Seed Spacing (full width) */}
             <label className="space-y-1 min-w-0">
-                <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>Cluster Spacing</div>
+                <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{_(msg`Cluster Spacing`)}</div>
                 <div className="grid grid-cols-3 gap-1.5">
-                    {([['Low', 2], ['Mid', 5], ['High', 10]] as const).map(([label, value]) => {
+                    {([
+                        [msg({ message: 'Low', context: 'Cluster spacing' }), 2],
+                        [msg({ message: 'Mid', context: 'Cluster spacing' }), 5],
+                        [msg({ message: 'High', context: 'Cluster spacing' }), 10],
+                    ] as const).map(([label, value]) => {
                         const isActive = settings.seedSpacingMm === value;
                         return (
-                            <button
-                                key={label}
-                                type="button"
-                                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                            <Button
+                                key={value}
+                                variant="secondary"
+                                size="auto"
+                                className="!h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                                 style={isActive ? activeModeStyle : { background: 'var(--surface-0)' }}
                                 onClick={() => onChange({ seedSpacingMm: value })}
                             >
-                                {label}
-                            </button>
+                                {_(label)}
+                            </Button>
                         );
                     })}
                 </div>
@@ -201,26 +221,34 @@ export function AutoBracingSettingsCard({
 
             <div className="h-2" />
 
-            <button
-                type="button"
-                onClick={onAutoBrace}
-                className="w-full !h-10 rounded-md border px-3 text-[12px] font-semibold inline-flex items-center justify-center gap-2 transition-colors"
-                style={{
-                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                    color: 'var(--accent)',
-                }}
-            >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14.5 3.5 12 6l2.5 2.5L17 6l-2.5-2.5z" />
-                    <path d="M9.5 14.5 7 17l2.5 2.5L12 17l-2.5-2.5z" />
-                    <path d="M15 13l-3 3 2 2 3-3-2-2z" />
-                    <path d="M6 8l-3 3 2 2 3-3-2-2z" />
-                    <path d="M8 6l2-2" />
-                    <path d="M16 16l2 2" />
-                </svg>
-                Apply Auto Brace
-            </button>
+            <div className="flex items-stretch gap-1.5">
+                <Button
+                    size="auto"
+                    onClick={onAutoBrace}
+                    className="flex flex-1 items-center justify-center gap-1 !h-8 text-[11px]"
+                    style={{
+                        borderColor: 'var(--accent)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
+                        color: 'var(--accent)',
+                    }}
+                >
+                    <WandSparkles className="h-3.5 w-3.5 shrink-0" />
+                    {_(msg`Apply`)}
+                </Button>
+                <Button
+                    size="auto"
+                    onClick={onClearBraces}
+                    className="flex flex-1 items-center justify-center gap-1 !h-8 text-[11px]"
+                    style={{
+                        borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 40%)',
+                        background: 'color-mix(in srgb, var(--danger), var(--surface-0) 88%)',
+                        color: 'var(--danger)',
+                    }}
+                >
+                    <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                    {_(msg`Clear All`)}
+                </Button>
+            </div>
         </div>
     );
 }

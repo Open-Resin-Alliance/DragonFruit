@@ -18,6 +18,7 @@ import {
 } from '@/features/experiments/experimentsRegistry';
 import complexPluginAllowlist from '@/config/complex-plugin-allowlist.json';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
+import { installFakeWindow } from '@/utils/__tests__/helpers/fakeWindow';
 
 test('experiments.json manifest declares version 1 with a non-empty experiments array', () => {
   assert.equal(EXPERIMENTS_MANIFEST.version, 1);
@@ -123,9 +124,11 @@ test('resolveExperimentEnabled implements the promotion contract', () => {
   assert.equal(resolveExperimentEnabled(promoted, { example: EXPERIMENTS_OPT_OUT_MARKER }), false);
 });
 
+let restoreMockWindow: (() => void) | null = null;
+
 function installMockWindow(initialRaw: string | null): void {
   let stored = initialRaw;
-  const mockWindow = {
+  restoreMockWindow = installFakeWindow({
     localStorage: {
       getItem: (key: string) => (key === EXPERIMENTS_ENABLED_STORAGE_KEY ? stored : null),
       setItem: (key: string, value: string) => {
@@ -135,12 +138,12 @@ function installMockWindow(initialRaw: string | null): void {
     addEventListener: () => {},
     removeEventListener: () => {},
     dispatchEvent: () => true,
-  };
-  (globalThis as unknown as Record<string, unknown>).window = mockWindow;
+  });
 }
 
 function removeMockWindow(): void {
-  delete (globalThis as unknown as Record<string, unknown>).window;
+  restoreMockWindow?.();
+  restoreMockWindow = null;
 }
 
 test('toggling a default-disabled experiment on stores true and syncs an override', () => {

@@ -3,29 +3,17 @@ import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
 import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
-import {
-    subscribe,
-    getSnapshot,
-    getKnotById,
-    getTrunks,
-    getBranches,
-    getTwigs,
-    getSticks,
-    getRootById,
-    updateKnot,
-    updateBranch,
-    getBranchById,
-    getTrunkById,
-    getTwigById,
-    getStickById,
-} from '../../state';
-import { Branch, Knot } from '../../types';
-import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints, projectOntoSegment } from './knotUtils';
+import { findShaftOwnerOfSegment, getSupportEntity, subscribe, getSnapshot, getKnotById, getRootById, updateKnot } from '../../state';
+import { Branch, Knot, Segment } from '../../types';
+import { getSupportTypeDescriptor, updateSupportEntity, type SupportEdge, type SupportTypeId } from '../../supportTypeRegistry';
+import { resolveSegmentEndpoints, type ShaftEntity } from './segmentEndpoints';
+import { captureFlexingShafts, collectSolvedShaft, getFlexingShaft } from './elasticShaftPreview';
+import { knotMoveDescription, projectOntoSegment } from './knotUtils';
 import { ElasticChainInitialState, solveElasticChain } from '../../PlacementLogic/ElasticChainSolver';
-import { getSettings } from '../../Settings';
-import { getSocketPosition } from '../ContactCone';
+import { getSettings } from '../../Settings/state';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { clearKnotDragPreview, emitKnotDragPreview, useActiveKnotDragPreview } from '../../interaction/knotDragPreview';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 type KnotGizmoWindowState = Window & {
     __knotGizmoDragging?: boolean;
@@ -52,13 +40,6 @@ export function KnotGizmo() {
     const shaftAxisRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 1));
     const shaftStartRef = useRef<THREE.Vector3>(new THREE.Vector3());
     const shaftEndRef = useRef<THREE.Vector3>(new THREE.Vector3());
-    const selectedKnotParentRef = useRef<{
-        selectedId: string;
-        parentShaftId: string;
-        kind: 'trunk' | 'branch' | 'twig' | 'stick';
-        supportId: string;
-        segmentIndex: number;
-    } | null>(null);
     const beforeHistoryRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const dragEndedResetTimeoutRef = useRef<number | null>(null);
     const gizmoTargetRef = useRef<THREE.Group>(null);
@@ -67,7 +48,7 @@ export function KnotGizmo() {
 
     // Elastic chain state - captured at drag start
     const elasticStateRef = useRef<Record<string, ElasticChainInitialState>>({});
-    const previewBranchSegmentsByIdRef = useRef<Record<string, Branch['segments']>>({});
+    const previewShaftSegmentsByIdRef = useRef<Record<string, Branch['segments']>>({});
     const previewKnotRef = useRef<Knot | null>(null);
     const activePreviewKnotIdRef = useRef<string | null>(null);
     const previewCoincidentKnotsRef = useRef<Knot[]>([]);
@@ -118,150 +99,40 @@ export function KnotGizmo() {
         const knot = selectedPreviewKnot ?? getKnotById(selectedId);
         if (!knot) return null;
 
-        const cached = selectedKnotParentRef.current;
-        if (cached && cached.selectedId === selectedId && cached.parentShaftId === knot.parentShaftId) {
-            if (cached.kind === 'trunk') {
-                const trunk = getTrunkById(cached.supportId);
-                const seg = trunk?.segments[cached.segmentIndex];
-                const root = trunk ? getRootById(trunk.rootId) : null;
-                if (trunk && seg && seg.id === knot.parentShaftId && root) {
-                    const endpoints = getTrunkSegmentEndpoints(trunk, seg, cached.segmentIndex, root);
-                    if (endpoints) {
-                        const start = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
-                        const end = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
-                        const axis = new THREE.Vector3().subVectors(end, start).normalize();
-                        return { knot, start, end, axis };
-                    }
-                }
-            } else if (cached.kind === 'branch') {
-                const branch = getBranchById(cached.supportId);
-                const seg = branch?.segments[cached.segmentIndex];
-                const parentKnot = branch ? getKnotById(branch.parentKnotId) : null;
-                if (branch && seg && seg.id === knot.parentShaftId && parentKnot) {
-                    const endpoints = getBranchSegmentEndpoints(branch, seg, cached.segmentIndex, parentKnot);
-                    if (endpoints) {
-                        const start = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
-                        const end = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
-                        const axis = new THREE.Vector3().subVectors(end, start).normalize();
-                        return { knot, start, end, axis };
-                    }
-                }
-            } else if (cached.kind === 'twig') {
-                const twig = getTwigById(cached.supportId);
-                const seg = twig?.segments[cached.segmentIndex];
-                if (twig && seg && seg.id === knot.parentShaftId && seg.bottomJoint && seg.topJoint) {
-                    const start = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
-                    const end = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-                    const axis = new THREE.Vector3().subVectors(end, start).normalize();
-                    return { knot, start, end, axis };
-                }
-            } else {
-                const stick = getStickById(cached.supportId);
-                const seg = stick?.segments[cached.segmentIndex];
-                if (stick && seg && seg.id === knot.parentShaftId && seg.bottomJoint && seg.topJoint) {
-                    const start = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
-                    const end = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-                    const axis = new THREE.Vector3().subVectors(end, start).normalize();
-                    return { knot, start, end, axis };
-                }
-            }
+        // One lookup for every shafted type, then the shared endpoint walker.
+        // The chain here covered four types and ended in a bare else for stick.
+        const owner = findShaftOwnerOfSegment(knot.parentShaftId);
+        if (!owner) return null;
 
-            selectedKnotParentRef.current = null;
-        }
+        const entity = getSupportEntity(owner.typeId, owner.id) as
+            | (Record<string, unknown> & { id: string; typeId?: SupportTypeId; segments?: Segment[]; rootId?: string })
+            | null;
+        if (!entity) return null;
 
-        // Find parent shaft in trunks
-        const trunks = getTrunks();
-        for (const trunk of trunks) {
-            const idx = trunk.segments.findIndex(s => s.id === knot.parentShaftId);
-            if (idx !== -1) {
-                const root = getRootById(trunk.rootId);
-                if (!root) continue;
-                const seg = trunk.segments[idx];
-                const endpoints = getTrunkSegmentEndpoints(trunk, seg, idx, root);
-                if (endpoints) {
-                    const start = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
-                    const end = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
-                    const axis = new THREE.Vector3().subVectors(end, start).normalize();
-                    selectedKnotParentRef.current = {
-                        selectedId,
-                        parentShaftId: knot.parentShaftId,
-                        kind: 'trunk',
-                        supportId: trunk.id,
-                        segmentIndex: idx,
-                    };
-                    return { knot, start, end, axis };
-                }
-            }
-        }
+        const segments = entity.segments ?? [];
+        const index = segments.findIndex((seg) => seg.id === knot.parentShaftId);
+        if (index === -1) return null;
 
-        // Find parent shaft in branches
-        const branches = getBranches();
-        for (const branch of branches) {
-            const idx = branch.segments.findIndex(s => s.id === knot.parentShaftId);
-            if (idx !== -1) {
-                const parentKnot = getKnotById(branch.parentKnotId);
-                if (!parentKnot) continue;
-                const seg = branch.segments[idx];
-                const endpoints = getBranchSegmentEndpoints(branch, seg, idx, parentKnot);
-                if (endpoints) {
-                    const start = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
-                    const end = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
-                    const axis = new THREE.Vector3().subVectors(end, start).normalize();
-                    selectedKnotParentRef.current = {
-                        selectedId,
-                        parentShaftId: knot.parentShaftId,
-                        kind: 'branch',
-                        supportId: branch.id,
-                        segmentIndex: idx,
-                    };
-                    return { knot, start, end, axis };
-                }
-            }
-        }
+        const knotField = getSupportTypeDescriptor(owner.typeId).edges.find(
+            (edge: SupportEdge) => edge.to === 'knots' && edge.ownership === 'hostedBy',
+        )?.field;
 
-        // Find parent shaft in twigs
-        const twigs = getTwigs();
-        for (const twig of twigs) {
-            const idx = twig.segments.findIndex(s => s.id === knot.parentShaftId);
-            if (idx === -1) continue;
-            const seg = twig.segments[idx];
-            if (!seg.bottomJoint || !seg.topJoint) continue;
-            const start = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
-            const end = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-            const axis = new THREE.Vector3().subVectors(end, start).normalize();
-            selectedKnotParentRef.current = {
-                selectedId,
-                parentShaftId: knot.parentShaftId,
-                kind: 'twig',
-                supportId: twig.id,
-                segmentIndex: idx,
-            };
-            return { knot, start, end, axis };
-        }
+        const endpoints = resolveSegmentEndpoints(
+            entity as ShaftEntity,
+            segments[index],
+            index,
+            {
+                root: entity.rootId ? getRootById(entity.rootId) : undefined,
+                hostKnot: knotField && typeof entity[knotField] === 'string'
+                    ? getKnotById(entity[knotField] as string)
+                    : undefined,
+            },
+        );
+        if (!endpoints) return null;
 
-        // Find parent shaft in sticks
-        const sticks = getSticks();
-        for (const stick of sticks) {
-            const idx = stick.segments.findIndex(s => s.id === knot.parentShaftId);
-            if (idx === -1) continue;
-            const seg = stick.segments[idx];
-            if (!seg.bottomJoint || !seg.topJoint) continue;
-            const start = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
-            const end = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-            const axis = new THREE.Vector3().subVectors(end, start).normalize();
-            selectedKnotParentRef.current = {
-                selectedId,
-                parentShaftId: knot.parentShaftId,
-                kind: 'stick',
-                supportId: stick.id,
-                segmentIndex: idx,
-            };
-            return { knot, start, end, axis };
-        }
-
-        selectedKnotParentRef.current = null;
-        return null;
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        const start = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
+        const end = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
+        return { knot, start, end, axis: new THREE.Vector3().subVectors(end, start).normalize() };
     }, [selectedId, selectedPreviewKnot, state]);
 
     const result = findKnotAndShaft();
@@ -294,7 +165,7 @@ export function KnotGizmo() {
     useFrame(() => {
         if (!isDraggingRef.current || !result) return;
 
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
         const projected = projectOntoSegment(
             raycaster.ray,
             shaftStartRef.current,
@@ -313,9 +184,9 @@ export function KnotGizmo() {
         let wasLocked = false;
 
         // Run elastic solver for each attached branch
-        const branchSegmentsById: Record<string, Branch['segments']> = {};
-        for (const branchId in elasticStateRef.current) {
-            const initialState = elasticStateRef.current[branchId];
+        const shaftSegmentsById: Record<string, Branch['segments']> = {};
+        for (const shaftId in elasticStateRef.current) {
+            const initialState = elasticStateRef.current[shaftId];
             const res = solveElasticChain(finalKnotPos, initialState, maxAngleDeg);
 
             // If solver clamped the knot, use the clamped position
@@ -324,45 +195,10 @@ export function KnotGizmo() {
                 wasLocked = true;
             }
 
-            // Update branch joints
-            const branch = getBranchById(branchId);
-            if (!branch) continue;
-
-            let branchChanged = false;
-            const newSegments = branch.segments.map(seg => {
-                let segChanged = false;
-                let newTopJoint = seg.topJoint;
-                let newBottomJoint = seg.bottomJoint;
-
-                if (seg.topJoint && res.jointPositions[seg.topJoint.id]) {
-                    const newPos = res.jointPositions[seg.topJoint.id];
-                    if (Math.abs(newPos.z - seg.topJoint.pos.z) > 0.0001) {
-                        newTopJoint = { ...seg.topJoint, pos: newPos };
-                        segChanged = true;
-                    }
-                }
-
-                if (seg.bottomJoint && res.jointPositions[seg.bottomJoint.id]) {
-                    const newPos = res.jointPositions[seg.bottomJoint.id];
-                    if (Math.abs(newPos.z - seg.bottomJoint.pos.z) > 0.0001) {
-                        newBottomJoint = { ...seg.bottomJoint, pos: newPos };
-                        segChanged = true;
-                    }
-                }
-
-                if (segChanged) {
-                    branchChanged = true;
-                    return { ...seg, topJoint: newTopJoint, bottomJoint: newBottomJoint };
-                }
-                return seg;
-            });
-
-            if (branchChanged) {
-                branchSegmentsById[branch.id] = newSegments;
-            } else if (Object.prototype.hasOwnProperty.call(previewBranchSegmentsByIdRef.current, branch.id)) {
-                // Branch returned to committed geometry; mark it for preview-prune below.
-                branchSegmentsById[branch.id] = branch.segments;
-            }
+            // A shaft back at its committed geometry keeps an entry only if it
+            // already had a preview override, so the prune below can see it.
+            collectSolvedShaft(shaftSegmentsById, shaftId, res, (id) =>
+                Object.prototype.hasOwnProperty.call(previewShaftSegmentsByIdRef.current, id));
         }
 
         // Recalculate t based on final position
@@ -381,19 +217,21 @@ export function KnotGizmo() {
             t,
         };
 
-        const updatedBranchIds = Object.keys(branchSegmentsById);
-        if (updatedBranchIds.length > 0) {
-            const nextPreviewBranchSegmentsById = { ...previewBranchSegmentsByIdRef.current };
-            for (const branchId of updatedBranchIds) {
-                const nextSegments = branchSegmentsById[branchId];
-                const committedBranch = getBranchById(branchId);
-                if (committedBranch && committedBranch.segments === nextSegments) {
-                    delete nextPreviewBranchSegmentsById[branchId];
+        const updatedShaftIds = Object.keys(shaftSegmentsById);
+        if (updatedShaftIds.length > 0) {
+            const nextPreviewBranchSegmentsById = { ...previewShaftSegmentsByIdRef.current };
+            for (const shaftId of updatedShaftIds) {
+                const nextSegments = shaftSegmentsById[shaftId];
+                // By id alone: this map is keyed by flexing shafts, and the
+                // store already knows what type each one is.
+                const committedShaft = getFlexingShaft(shaftId);
+                if (committedShaft && committedShaft.segments === nextSegments) {
+                    delete nextPreviewBranchSegmentsById[shaftId];
                 } else {
-                    nextPreviewBranchSegmentsById[branchId] = nextSegments;
+                    nextPreviewBranchSegmentsById[shaftId] = nextSegments;
                 }
             }
-            previewBranchSegmentsByIdRef.current = nextPreviewBranchSegmentsById;
+            previewShaftSegmentsByIdRef.current = nextPreviewBranchSegmentsById;
         }
 
         const w = getKnotGizmoWindowState() as any;
@@ -418,7 +256,7 @@ export function KnotGizmo() {
         emitKnotDragPreview({
             knotId: updated.id,
             knot: updated,
-            branchSegmentsById: previewBranchSegmentsByIdRef.current,
+            shaftSegmentsById: previewShaftSegmentsByIdRef.current,
             coincidentKnots: coincidentPreviewList,
         });
     });
@@ -440,7 +278,7 @@ export function KnotGizmo() {
         getKnotGizmoWindowState().__gizmoDragEndedThisFrame = false;
         document.body.style.cursor = 'grabbing';
         beforeHistoryRef.current = captureSupportEditSnapshot();
-        previewBranchSegmentsByIdRef.current = {};
+        previewShaftSegmentsByIdRef.current = {};
         previewKnotRef.current = null;
         activePreviewKnotIdRef.current = result.knot.id;
         clearKnotDragPreview();
@@ -448,7 +286,7 @@ export function KnotGizmo() {
         // Preserve click offset so the knot doesn't snap to the raw pointer projection on first drag frame.
         const currentKnotPos = new THREE.Vector3(result.knot.pos.x, result.knot.pos.y, result.knot.pos.z);
         const currentT = computeTOnSegment(currentKnotPos, result.start, result.end);
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
         const projectedAtStart = projectOntoSegment(raycaster.ray, result.start, result.end);
         dragProjectionOffsetTRef.current = currentT - projectedAtStart.t;
 
@@ -467,35 +305,10 @@ export function KnotGizmo() {
         );
         w.__draggedKnotGroup = isGroup ? coincident.map(k => k.id) : [result.knot.id];
 
-        // Capture elastic state for attached branches
-        const allBranches = getBranches();
-        const attached = allBranches.filter(b => w.__draggedKnotGroup.includes(b.parentKnotId));
-        const nextState: Record<string, ElasticChainInitialState> = {};
-
-        for (const branch of attached) {
-            const joints: { id: string; pos: { x: number, y: number, z: number } }[] = [];
-
-            for (let i = 0; i < branch.segments.length; i++) {
-                const seg = branch.segments[i];
-                let joint = seg.topJoint;
-                if (!joint && i < branch.segments.length - 1) {
-                    joint = branch.segments[i + 1].bottomJoint;
-                }
-                if (joint) {
-                    joints.push({ id: joint.id, pos: { ...joint.pos } });
-                }
-            }
-
-            nextState[branch.id] = {
-                branchId: branch.id,
-                knotPos: { ...result.knot.pos },
-                joints,
-                // Use SOCKET position (where shaft connects), not TIP position (where cone touches model)
-                contactCone: branch.contactCone ? {
-                    pos: getSocketPosition(branch.contactCone.pos, branch.contactCone.normal, branch.contactCone.profile),
-                } : undefined,
-            };
-        }
+        // Capture the initial state of every shaft that flexes off the dragged
+        // knots. Which types those are, the field naming their knot, and the
+        // field holding their contact all come from the registry.
+        const nextState = captureFlexingShafts(w.__draggedKnotGroup, result.knot.pos);
 
         elasticStateRef.current = nextState;
         return true;
@@ -515,13 +328,14 @@ export function KnotGizmo() {
         elasticStateRef.current = {};
         dragProjectionOffsetTRef.current = 0;
 
-        const previewBranchSegmentsById = previewBranchSegmentsByIdRef.current;
+        const previewShaftSegmentsById = previewShaftSegmentsByIdRef.current;
         const previewKnot = previewKnotRef.current;
 
-        for (const [branchId, previewSegments] of Object.entries(previewBranchSegmentsById)) {
-            const branch = getBranchById(branchId);
-            if (!branch) continue;
-            updateBranch({ ...branch, segments: previewSegments });
+        for (const [shaftId, previewSegments] of Object.entries(previewShaftSegmentsById)) {
+            // By id alone: the store holds the type this shaft is.
+            const shaft = getSupportEntity(shaftId);
+            if (!shaft) continue;
+            updateSupportEntity({ ...shaft, segments: previewSegments });
         }
 
         if (previewKnot) {
@@ -540,7 +354,7 @@ export function KnotGizmo() {
             clearKnotDragPreview();
         }
         activePreviewKnotIdRef.current = null;
-        previewBranchSegmentsByIdRef.current = {};
+        previewShaftSegmentsByIdRef.current = {};
         previewKnotRef.current = null;
         previewCoincidentKnotsRef.current = [];
 
@@ -558,14 +372,9 @@ export function KnotGizmo() {
         document.body.style.cursor = '';
 
         if (beforeHistoryRef.current) {
-            const description =
-                selectedKnotParentRef.current?.kind === 'branch'
-                    ? 'Move branch knot'
-                    : selectedKnotParentRef.current?.kind === 'twig'
-                        ? 'Move twig knot'
-                        : selectedKnotParentRef.current?.kind === 'stick'
-                            ? 'Move stick knot'
-                            : 'Move support knot';
+            const parentShaftId = selectedId ? getKnotById(selectedId)?.parentShaftId : undefined;
+            const movedFrom = parentShaftId ? findShaftOwnerOfSegment(parentShaftId) : null;
+            const description = knotMoveDescription(movedFrom?.typeId);
             pushSupportEditHistory(description, beforeHistoryRef.current, captureSupportEditSnapshot());
         }
         beforeHistoryRef.current = null;
@@ -580,7 +389,7 @@ export function KnotGizmo() {
             dragProjectionOffsetTRef.current = 0;
             clearKnotDragPreview();
             activePreviewKnotIdRef.current = null;
-            previewBranchSegmentsByIdRef.current = {};
+            previewShaftSegmentsByIdRef.current = {};
             previewKnotRef.current = null;
             previewCoincidentKnotsRef.current = [];
             const w = getKnotGizmoWindowState() as any;

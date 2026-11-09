@@ -3,32 +3,9 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { IconButton } from '@/components/atoms/IconButton';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
-
-type DialogIconTone = 'warning' | 'danger' | 'accent' | 'neutral';
-
-const ICON_TONE_STYLES: Record<DialogIconTone, React.CSSProperties> = {
-  warning: {
-    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 50%)',
-    background: 'color-mix(in srgb, #d97706, var(--surface-1) 85%)',
-    color: '#d97706',
-  },
-  danger: {
-    borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 55%)',
-    background: 'color-mix(in srgb, #ef4444, var(--surface-1) 88%)',
-    color: 'var(--danger)',
-  },
-  accent: {
-    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
-    color: 'var(--accent-secondary)',
-  },
-  neutral: {
-    borderColor: 'var(--border-subtle)',
-    background: 'var(--surface-1)',
-    color: 'var(--text-muted)',
-  },
-};
+import { ICON_TONE_STYLES, type IconTone } from '@/components/atoms/iconTone';
 
 type StructuredDialogModalProps = {
   open: boolean;
@@ -36,7 +13,7 @@ type StructuredDialogModalProps = {
   title: React.ReactNode;
   subtitle?: React.ReactNode;
   icon?: React.ReactNode;
-  iconTone?: DialogIconTone;
+  iconTone?: IconTone;
   zIndexClassName?: string;
   maxWidthClassName?: string;
   panelClassName?: string;
@@ -127,20 +104,15 @@ export function StructuredDialogModal({
           </div>
 
           {onClose ? (
-            <button
-              type="button"
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors"
-              style={{
-                borderColor: 'var(--border-subtle)',
-                background: 'var(--surface-1)',
-                color: 'var(--text-muted)',
-              }}
+            <IconButton
+              variant="surface"
+              size="md"
               aria-label={closeAriaLabel}
               disabled={closeDisabled}
               onClick={onClose}
             >
               <X className="w-4 h-4" />
-            </button>
+            </IconButton>
           ) : null}
         </div>
 

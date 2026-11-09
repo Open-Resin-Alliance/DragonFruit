@@ -1,4 +1,5 @@
 import experimentsJson from '@/config/experiments.json';
+import { hasWindow } from '@/utils/dom';
 
 /**
  * Compile-time Experiments registry.
@@ -141,7 +142,7 @@ let cachedEnabledRaw: string | null | undefined;
 let cachedEnabledRecord: Record<string, ExperimentOverrideValue> | null = null;
 
 function readEnabledRecord(): Record<string, ExperimentOverrideValue> | null {
-  if (typeof window === 'undefined') return null;
+  if (!hasWindow()) return null;
 
   let raw: string | null = null;
   try {
@@ -210,7 +211,7 @@ export function isExperimentEnabled(id: string): boolean {
 }
 
 export function setExperimentEnabled(id: string, enabled: boolean): void {
-  if (typeof window === 'undefined') return;
+  if (!hasWindow()) return;
   const definition = getExperimentDefinition(id);
   if (!definition) return;
 
@@ -239,7 +240,7 @@ export function setExperimentEnabled(id: string, enabled: boolean): void {
 }
 
 export function subscribeToExperiments(listener: () => void): () => void {
-  if (typeof window === 'undefined') return () => {};
+  if (!hasWindow()) return () => {};
 
   const onStorage = (event: StorageEvent) => {
     if (event.key && event.key !== EXPERIMENTS_ENABLED_STORAGE_KEY) return;

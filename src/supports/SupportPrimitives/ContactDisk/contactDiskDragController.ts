@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import type { Vec3 } from '../../types';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 export interface ContactDiskDragHit {
     point: Vec3;
@@ -109,7 +110,7 @@ export function startContactDiskDragSession(options: ContactDiskDragSessionOptio
 
         pointer.x = ((pointerPosition.clientX - rect.left) / rect.width) * 2 - 1;
         pointer.y = -((pointerPosition.clientY - rect.top) / rect.height) * 2 + 1;
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
 
         if (modelMeshes.length === 0) return;
 

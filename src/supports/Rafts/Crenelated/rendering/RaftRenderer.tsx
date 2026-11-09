@@ -2,27 +2,29 @@
 
 import React from 'react';
 import * as THREE from 'three';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
+import { supportAnswersPointer, SCENERY_DIM } from '@/features/scene/plates/plateInteractivity';
 import { useSyncExternalStore } from 'react';
 import { subscribe, getSnapshot } from '@/supports/state';
-import { getKickstandSnapshot, subscribeToKickstandStore } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
-import { computeFootprint } from '../geometry/computeFootprint';
-import { generateChamferedBase } from '../geometry/generateChamferedBase';
-import { generatePerimeterWall } from '../geometry/generatePerimeterWall';
-import { generateCrenelatedWallManual } from '../geometry/generateCrenelatedWallManual';
+import { buildRaftFootprintMeshes } from '../geometry/generateRaftFromFootprint';
+import { collectModelPlateFootprint, type PlateFootprintSource } from '../geometry/modelPlateFootprint';
+import { raftBandTopMm } from '../geometry/computeRaftFootprint';
 import { collectRaftBaseCirclesByModel, fromRaftModelKey } from '../raftFootprintCircles';
+import { noteActivity } from '@/utils/debug/heartbeatContext';
 
 /**
  * RaftRenderer
  * - Subscribes to supports and raft settings
- * - Builds a convex footprint around support base circles
+ * - Builds a convex footprint around support base circles, minus the plate
+ *   footprint of any model standing on the plate
  * - Generates chamfered base mesh and renders it at Z=0 when enabled
  */
 interface RaftRendererProps {
-  clipLower?: number | null;
-  clipUpper?: number | null;
   passive?: boolean;
   colorized?: boolean;
+  /** Models on another bed: their raft dims and answers no pointer, like the model itself. */
+  pointerSceneryModelIds?: ReadonlySet<string>;
   hoverized?: boolean;
   ghostOpacity?: number;
   ghostRenderOrder?: number;
@@ -34,13 +36,16 @@ interface RaftRendererProps {
   excludeModelIds?: string[];
   navigationLodActive?: boolean;
   onModelPointerSelect?: (modelId: string, e: any) => void;
+  /** Models whose plate footprint the raft has to clear. */
+  plateClearanceTargets?: readonly PlateFootprintSource[];
 }
 
+const EMPTY_PLATE_CLEARANCE_TARGETS: readonly PlateFootprintSource[] = Object.freeze([]);
+
 export default function RaftRenderer({
-  clipLower = null,
-  clipUpper = null,
   passive = false,
   colorized = true,
+  pointerSceneryModelIds,
   hoverized = false,
   ghostOpacity = 1,
   ghostRenderOrder = 0,
@@ -52,9 +57,9 @@ export default function RaftRenderer({
   excludeModelIds = [],
   navigationLodActive = false,
   onModelPointerSelect,
+  plateClearanceTargets = EMPTY_PLATE_CLEARANCE_TARGETS,
 }: RaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
-  const kickstandState = useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
   const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
@@ -121,24 +126,9 @@ export default function RaftRenderer({
     setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
   }, [immediatePrepareActiveModelId, passive, selectedModelIds]);
 
-  // Initialize clipping planes once (update in-place to avoid recreation)
-  const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
-
-  React.useEffect(() => {
-    const planes: THREE.Plane[] = [];
-
-    if (clipLower != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-    }
-
-    if (clipUpper != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-    }
-
-    clippingPlanesRef.current = planes;
-  }, [clipLower, clipUpper]);
-
-  const clippingPlanes = clippingPlanesRef.current;
+  // The scene's two shared planes: stable identity and length, so a scrub moves
+  // their constants without recompiling a material.
+  const clippingPlanes = getSceneClipPlanes();
 
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const excludedModelIdSet = React.useMemo(() => new Set(excludeModelIds.filter((id): id is string => Boolean(id))), [excludeModelIds]);
@@ -146,14 +136,18 @@ export default function RaftRenderer({
   const raftOpacity = Math.max(0.05, Math.min(1, ghostOpacity));
   const raftTransparent = raftOpacity < 0.999;
 
+  const clearance = React.useMemo(
+    () => (raft.bottomMode === 'off'
+      ? []
+      : collectModelPlateFootprint(plateClearanceTargets, raftBandTopMm(raft))),
+    [plateClearanceTargets, raft],
+  );
+
   const raftMeshes = React.useMemo(() => {
     if (raft.bottomMode !== 'solid') return null;
 
-    const rootsByModel = collectRaftBaseCirclesByModel({
-      roots: Object.values(supportState.roots),
-      anchors: Object.values(supportState.anchors),
-      kickstandRoots: Object.values(kickstandState.roots),
-    }, {
+    noteActivity('support-mode:raft-meshes');
+    const rootsByModel = collectRaftBaseCirclesByModel(supportState, {
       modelFilterId,
       excludeModelId,
       excludedModelIds: excludedModelIdSet,
@@ -166,53 +160,38 @@ export default function RaftRenderer({
       if (circles.length === 0) continue;
       const modelId = fromRaftModelKey(modelKey, 'unknown') ?? modelKey;
 
-      const chamferInset = Math.max(0, raft.thickness) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raft.chamferAngle))));
-      const wallInset = raft.wallEnabled ? Math.max(0, raft.wallThickness) : 0;
-      const dynamicMargin = 0.2 + Math.max(chamferInset, wallInset);
+      const parts = buildRaftFootprintMeshes({ circles, raft, clearance });
+      if (!parts.baseMesh) continue;
 
-      const profile = computeFootprint(circles, { marginMm: dynamicMargin, samplesPerCircle: 24 });
-      if (!profile || profile.length < 3) continue;
-
-      const baseMesh = generateChamferedBase(profile, { thickness: raft.thickness, chamferAngle: raft.chamferAngle });
+      const baseMesh = parts.baseMesh;
       baseMesh.userData.modelId = modelId;
       baseMesh.renderOrder = ghostRenderOrder;
       baseMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
       baseMesh.castShadow = false;
       baseMesh.receiveShadow = true;
 
-      let wallMesh: THREE.Mesh | null = null;
-      if (raft.wallEnabled) {
-        const useCrenels = raft.crenulationSpacing > 0 && raft.crenulationGapWidth > 0;
-        wallMesh = useCrenels
-          ? generateCrenelatedWallManual(profile, {
-            wallHeight: raft.wallHeight,
-            wallThickness: raft.wallThickness,
-            crenulationGapWidth: raft.crenulationGapWidth,
-            crenulationSpacing: raft.crenulationSpacing,
-            thickness: raft.thickness,
-            chamferAngle: raft.chamferAngle,
-          })
-          : generatePerimeterWall(profile, { wallHeight: raft.wallHeight, wallThickness: raft.wallThickness, thickness: raft.thickness });
-
-        if (wallMesh.geometry && (wallMesh.geometry as any).attributes?.position?.count > 0) {
-          wallMesh.userData.modelId = modelId;
-          wallMesh.userData.isWall = true;
-          wallMesh.renderOrder = ghostRenderOrder;
-          wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
-          wallMesh.castShadow = false;
-          wallMesh.receiveShadow = true;
-        }
+      let wallMesh: THREE.Mesh | null = parts.wallMesh;
+      if (wallMesh && (wallMesh.geometry as THREE.BufferGeometry).attributes?.position?.count > 0) {
+        wallMesh.userData.modelId = modelId;
+        wallMesh.userData.isWall = true;
+        wallMesh.renderOrder = ghostRenderOrder;
+        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+        wallMesh.castShadow = false;
+        wallMesh.receiveShadow = true;
+      } else {
+        wallMesh = null;
       }
 
       meshes.push({ baseMesh, wallMesh });
     }
 
     return meshes;
-  }, [excludeModelId, excludedModelIdSet, modelFilterId, supportState, kickstandState.roots, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
+  }, [clearance, excludeModelId, excludedModelIdSet, modelFilterId, supportState, raft, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
 
   const handleClick = React.useCallback((e: any) => {
     if (passive) return;
     const modelId = e?.object?.userData?.modelId;
+    if (!supportAnswersPointer(modelId, pointerSceneryModelIds)) return;
     if (!modelId || !onModelPointerSelect) return;
 
     e.stopPropagation();
@@ -222,7 +201,7 @@ export default function RaftRenderer({
     }
 
     onModelPointerSelect(modelId, e);
-  }, [onModelPointerSelect, passive]);
+  }, [onModelPointerSelect, passive, pointerSceneryModelIds]);
 
   const handlePointerMove = React.useCallback((e: any) => {
     if (passive) return;
@@ -292,6 +271,9 @@ export default function RaftRenderer({
         );
       const tintHex = isWall ? '#22c55e' : '#3b82f6';
       const nextColor = blendColor('#a3a3a3', tintHex, tintStrength);
+      if (!supportAnswersPointer(modelId ?? undefined, pointerSceneryModelIds)) {
+        nextColor.multiplyScalar(SCENERY_DIM);
+      }
       if (!material.color.equals(nextColor)) {
         material.color.copy(nextColor);
       }
@@ -318,7 +300,7 @@ export default function RaftRenderer({
         mesh.renderOrder = ghostRenderOrder;
       }
     }
-  }, [colorized, effectiveHoverModelId, effectiveVisualActiveModelId, hasSelectedModels, hoverized, raft.thickness, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet, clippingPlanes]);
+  }, [colorized, effectiveHoverModelId, effectiveVisualActiveModelId, hasSelectedModels, hoverized, raft.thickness, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet, clippingPlanes, pointerSceneryModelIds]);
 
   if (raft.bottomMode === 'off') return null;
   return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;

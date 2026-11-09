@@ -145,6 +145,12 @@ export interface SupportSettings {
     devTools: DevToolsSettings;
     /** Debug: only render contact disk/cone + line vector for shaft (like J×2 pathfinding debug). */
     debugSimpleSupportRender: boolean;
+    /**
+     * View: only the contact discs stay solid meshes, every other member is a
+     * line vector. A navigation aid for a dense forest, and not part of a
+     * preset, so switching presets cannot flip the view.
+     */
+    navigationDiscsOnly: boolean;
 }
 
 // --- Default Factory ---
@@ -229,6 +235,7 @@ export function createDefaultSettings(): SupportSettings {
             maxBranchesPerTrunk: 3,
         },
         debugSimpleSupportRender: false,
+        navigationDiscsOnly: false,
     };
 }
 
@@ -242,7 +249,7 @@ export interface SupportPreset {
     icon?: string;
     isBuiltIn: boolean;
     /** Pinned slot (1-4) for quick-access hotkeys, or undefined if unpinned. */
-    pinnedSlot?: number;
+    pinnedSlot?: number | null;
     settings: SupportSettings;
     createdAt?: number;
     updatedAt?: number;
@@ -252,4 +259,23 @@ export interface PresetCollection {
     byId: Record<string, SupportPreset>;
     allIds: string[];
     activePresetId: string | null;
+}
+
+/** `base` with every unset group filled in from the defaults. */
+export function mergeSettingsWithDefaults(base?: SupportSettings): SupportSettings {
+    const defaults = createDefaultSettings();
+    if (!base) return defaults;
+
+    return {
+        ...defaults,
+        ...base,
+        tip: { ...defaults.tip, ...base.tip },
+        shaft: { ...defaults.shaft, ...base.shaft },
+        roots: { ...defaults.roots, ...base.roots },
+        baseFlare: { ...defaults.baseFlare, ...base.baseFlare },
+        joint: { ...defaults.joint, ...base.joint },
+        grid: { ...defaults.grid, ...base.grid },
+        meshToMesh: { ...defaults.meshToMesh, ...base.meshToMesh },
+        autoBracing: { ...defaults.autoBracing, ...base.autoBracing },
+    };
 }

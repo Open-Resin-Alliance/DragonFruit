@@ -1,0 +1,39 @@
+---
+import DocsNav from './DocsNav.astro';
+import type { DocsNavNode } from '../../lib/docs';
+import { navContainsSlug } from '../../lib/docs';
+
+interface Props {
+  nodes: DocsNavNode[];
+  currentSlug: string;
+}
+
+const { nodes, currentSlug } = Astro.props;
+---
+
+<ul class="docs-nav__list">
+  {
+    nodes.map((node) =>
+      node.slug ? (
+        <li>
+          <a
+            class="docs-nav__link"
+            href={node.url}
+            aria-current={node.slug === currentSlug ? 'page' : undefined}
+          >
+            {node.label}
+          </a>
+        </li>
+      ) : (
+        <li>
+          <details class="docs-nav__details" open={navContainsSlug(node, currentSlug)}>
+            <summary class="docs-nav__summary">{node.label}</summary>
+            {node.children && node.children.length > 0 && (
+              <DocsNav nodes={node.children} currentSlug={currentSlug} />
+            )}
+          </details>
+        </li>
+      ),
+    )
+  }
+</ul>

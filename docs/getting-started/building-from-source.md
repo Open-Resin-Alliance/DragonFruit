@@ -13,8 +13,8 @@ Install the following before building:
 - **Rust toolchain** via `rustup`
 - **Platform-specific Tauri system dependencies**
 
-!!! tip
-      If desktop build steps fail early, the most common cause is missing Tauri system dependencies on your OS.
+> [!TIP]
+> If desktop build steps fail early, the most common cause is missing Tauri system dependencies on your OS.
 
 ## 1) Clone the repository
 

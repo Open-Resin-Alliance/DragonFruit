@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GIZMO_SIZES } from '../constants';
 import type { GizmoAxis } from '../types';
+import type { LocaleFormat } from '@/utils/localeNumber';
 
 /**
  * Protractor dial for the rotation rings — the pure model.
@@ -123,12 +124,15 @@ export function shortestAngleDelta(fromRad: number, toRad: number): number {
  * a quaternion. Same wrap here so the readout and the panel cannot disagree about
  * what a rotation is.
  */
-export function formatSweepDegrees(sweepRad: number): string {
-  if (!Number.isFinite(sweepRad)) return '0.00';
-  const degrees = (wrapAngle(sweepRad) * 180) / Math.PI;
-  const signed = degrees > 0 ? `+${degrees.toFixed(2)}` : degrees.toFixed(2);
-  // toFixed rounds -0.001 to "-0.00", and a signed zero reads as a bug.
-  return signed === '-0.00' ? '0.00' : signed;
+export function formatSweepDegrees(sweepRad: number, fmt: LocaleFormat): string {
+  const degrees = Number.isFinite(sweepRad) ? (wrapAngle(sweepRad) * 180) / Math.PI : 0;
+  // exceptZero: a value that rounds to zero (-0.001 included) prints unsigned,
+  // since a signed zero reads as a bug.
+  return fmt.number(degrees, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+    signDisplay: 'exceptZero',
+  });
 }
 
 /** Position of a dial angle in the ring's local XY plane. */

@@ -1,6 +1,6 @@
 # LYS to STL Extraction Specification
 
-This page documents the reverse-engineered mesh extraction contract used when importing `.lys` scene data and converting geometry to STL-like triangle meshes.
+This page documents the mesh extraction contract used when importing `.lys` scene data and converting geometry to STL-like triangle meshes.
 
 ## Overview
 
@@ -41,8 +41,8 @@ The header consists of 5 unsigned 32-bit integers (`uint32`).
 | **Coord Count**   | 12-15       | `uint32` | Number of scalar coordinates (`n_coords`).     |
 | **Padding**       | 16-19       | `uint32` | Zero padding / reserved.                       |
 
-!!! warning
-      Data starts at byte 20. Reading from byte 16 shifts the index buffer and scrambles mesh topology.
+> [!WARNING]
+> Data starts at byte 20. Reading from byte 16 shifts the index buffer and scrambles mesh topology.
 
 ### Index buffer
 

@@ -11,7 +11,7 @@ function emptySnapshot(): SupportState {
         roots: {},
         branches: {},
         leaves: {},
-        anchors: {},
+        stumps: {},
         knots: {},
         braces: {},
         twigs: {},
@@ -116,10 +116,10 @@ test('buildForestReport groups fan-out trees and lists bare trunks with sizing',
         ledgerEntry('v0', 'bare-1', 5.0, 0.1),
     ]);
 
-    assert.equal(report.trunkCount, 2);
+    assert.equal(report.hostCount, 2);
     assert.equal(report.leafCount, 2);
     assert.equal(report.trees.length, 1);
-    assert.equal(report.bareTrunks.length, 1);
+    assert.equal(report.bareHosts.length, 1);
 
     const tree = report.trees[0];
     assert.equal(tree.hostId, 'v19');
@@ -130,22 +130,22 @@ test('buildForestReport groups fan-out trees and lists bare trunks with sizing',
     assert.equal(tree.members[0].kind, 'leaf');
     // Knot at z=9.4, tip at z=15.9, dx=1.1 → span ≈ 6.51mm, angle ≈ 10°.
     assert.ok(Math.abs(tree.members[0].spanMm - Math.hypot(1.1, 6.5)) < 0.01);
+    // The member's own diameter: the leaf's cone body (its widest end).
+    assert.equal(tree.members[0].diameterMm, 0.5);
     assert.ok(tree.sizingNote.includes('base Ø1.00'));
 
-    const bare = report.bareTrunks[0];
+    const bare = report.bareHosts[0];
     assert.equal(bare.id, 'v0');
     assert.equal(bare.shaftDiameterMm, 0.89);
     assert.ok(bare.sizingNote.includes('area 0.10mm²'));
 });
 
-test('forestSizingNote reports the height factor and area reasoning', () => {
+test('forestSizingNote reports the sized multiplier and area reasoning', () => {
     const note = forestSizingNote(ledgerEntry('v19', 'e', 40, 0.5), 1.3);
-    // Z=40 → h = 1 + (40-20)/200 = 1.10.
-    assert.ok(note.includes('h1.10'));
+    assert.ok(note.includes('sized ×1.30'), note);
     assert.ok(note.includes('Ø1.30mm'));
     const short = forestSizingNote(ledgerEntry('v0', 'e', 5, 0.1), 0.89);
-    // Z=5 → h = 1.00 (below the 20mm band start).
-    assert.ok(short.includes('h1.00'));
+    assert.ok(short.includes('sized ×0.89'), short);
 });
 
 test('forestReportToText renders the copyable plain-text report', () => {
@@ -186,9 +186,10 @@ test('forestReportToText renders the copyable plain-text report', () => {
 
     const text = forestReportToText(report);
     assert.ok(text.startsWith('FOREST REPORT'));
-    assert.ok(text.includes('1 trunks · 1 leaves'));
+    assert.ok(text.includes('1 trunks · 1 leaves'), 'the host count names the declared host type');
     assert.ok(text.includes('v19 @ Z=15.9mm'));
     assert.ok(text.includes('leaf-a(L 6.6mm/'));
+    assert.ok(text.includes('Ø0.50)'), 'the member line carries the member\'s own diameter');
     assert.ok(text.includes('SCAN'), 'scan section rendered');
     assert.ok(text.includes('184 islands (voxel 150 · minima 30 · intersection 0 · overhang 4)'));
     assert.ok(text.includes('coverage 100% of 1280mm² (5 uncovered) · 10 rejected'));

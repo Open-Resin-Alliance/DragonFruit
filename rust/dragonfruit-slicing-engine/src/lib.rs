@@ -18,8 +18,10 @@ pub mod geometry;
 pub mod index;
 pub mod metrics;
 pub mod pipeline;
+mod pulp_simd;
 pub mod raster;
 pub mod rle;
+pub mod tanks;
 pub mod types;
 pub mod zaa;
 

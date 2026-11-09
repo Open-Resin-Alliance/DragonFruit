@@ -1,0 +1,403 @@
+{
+  "709": {
+    "title": "`scene slice` assembles the slice job by hand and writes files the app would not",
+    "split": "train",
+    "areas": [
+      "slicing",
+      "ctb",
+      "lumen"
+    ],
+    "note": "Ender: slicing, ctb, lumen; not printer/material profile. No printer family: Saturn and Athena presets are only the test cases; the defect is in the CLI."
+  },
+  "691": {
+    "title": "Dragging on the value in the \"Arrange Distance\" box",
+    "split": "train",
+    "areas": [
+      "ui",
+      "scene tools"
+    ],
+    "note": "A drag-and-drop glitch (ui) in the arrange panel (scene tools)."
+  },
+  "686": {
+    "title": "Delete key doesn't remove selected models (0.1.15)",
+    "split": "train",
+    "areas": [
+      "scene tools",
+      "ui"
+    ],
+    "note": "Deleting models is scene tools; the shortcut not firing is ui."
+  },
+  "685": {
+    "title": "\"Open scene\" adds to the current scene instead of replacing it (0.1.15)",
+    "split": "train",
+    "areas": [
+      "voxl"
+    ],
+    "note": "Ender: .voxl is native, so opening one is not a file import."
+  },
+  "683": {
+    "title": "Crash upon Loading Mesh in V0.1.15 DragonFruit",
+    "split": "train",
+    "areas": [
+      "file import"
+    ]
+  },
+  "673": {
+    "title": "Cut Tool Causes Phantom Auto-Supports",
+    "split": "train",
+    "areas": [
+      "cuts",
+      "autosupports"
+    ]
+  },
+  "672": {
+    "title": "[BUG] Anycubic Photon slicing failing to properly initiate",
+    "split": "train",
+    "areas": [
+      "slicing",
+      "anycubic"
+    ]
+  },
+  "665": {
+    "title": "[BUG] Slicer artifacting issues",
+    "split": "train",
+    "areas": [
+      "slicing",
+      "mesh repair"
+    ],
+    "note": "No elegoo: the Saturn 4 Ultra is only where it was printed."
+  },
+  "661": {
+    "title": "[BUG] Cone angle offset seems to do nothing, and can 'break' a scene if 'scrolled' past 0 degrees",
+    "split": "train",
+    "areas": [
+      "support studio"
+    ]
+  },
+  "658": {
+    "title": "[BUG] Support live preview overriden during active movements using NavLib",
+    "split": "train",
+    "areas": [
+      "support studio",
+      "ui"
+    ]
+  },
+  "656": {
+    "title": "‎[BUG] slicing engine receives information from models outside of the build plate",
+    "split": "train",
+    "areas": [
+      "slicing"
+    ]
+  },
+  "654": {
+    "title": "[BUG] Putting DragonFruit in the background causes it to misdetect a hung web process.",
+    "split": "train",
+    "areas": [
+      "platform"
+    ]
+  },
+  "653": {
+    "title": "[BUG] Autosupports only allow the active model.",
+    "split": "train",
+    "areas": [
+      "autosupports"
+    ]
+  },
+  "651": {
+    "title": "PNG compression strategy never reaches the encoders NanoDLP uses",
+    "split": "train",
+    "areas": [
+      "slicing",
+      "other",
+      "athena"
+    ],
+    "note": "Ender: slicing plus other (no NanoDLP/Athena area)."
+  },
+  "648": {
+    "title": "3MF native ZIP path truncates instead of appending (dead code)",
+    "split": "train",
+    "areas": [
+      "file export"
+    ]
+  },
+  "643": {
+    "title": "The camera relay downloads an unverified ffmpeg at runtime instead of shipping one",
+    "split": "train",
+    "areas": [
+      "platform",
+      "printer connection"
+    ],
+    "note": "Packaging problem in the camera relay: platform, and printer connection for whoever filters by the camera."
+  },
+  "641": {
+    "title": "[BUG] P1Max screen needs mirroring",
+    "split": "train",
+    "areas": [
+      "printer/material profile",
+      "anycubic"
+    ]
+  },
+  "639": {
+    "title": "Kickstands are not editable after placing",
+    "split": "train",
+    "areas": [
+      "support studio"
+    ]
+  },
+  "632": {
+    "title": "[BUG] Supports block access to various functions even when not visible.",
+    "split": "train",
+    "areas": [
+      "support studio",
+      "hollowing"
+    ]
+  },
+  "628": {
+    "title": "[BUG] Anycubic Photon Mono 4/U missing X-mirroring",
+    "split": "train",
+    "areas": [
+      "printer/material profile",
+      "anycubic"
+    ]
+  },
+  "627": {
+    "title": "[BUG] Anycubic Photon Mono 4 TSMC retract speeds swapped",
+    "split": "holdout",
+    "areas": [
+      "printer/material profile",
+      "anycubic"
+    ]
+  },
+  "620": {
+    "title": "[BUG] SpaceMouse Enterprise doesn't work on macOS 26.2",
+    "split": "holdout",
+    "areas": [
+      "ui",
+      "platform"
+    ]
+  },
+  "615": {
+    "title": "CEF backend: startup panic \"No provider set\" from the updater's TLS client",
+    "split": "holdout",
+    "areas": [
+      "platform"
+    ]
+  },
+  "614": {
+    "title": "Linux: tauri dev builds the wry backend, not the CEF one we ship",
+    "split": "holdout",
+    "areas": [
+      "platform"
+    ]
+  },
+  "612": {
+    "title": "Support tip positions of branched supports can't be changed",
+    "split": "holdout",
+    "areas": [
+      "support studio"
+    ]
+  },
+  "609": {
+    "title": "Flatpak builds report no version and always branch master",
+    "split": "holdout",
+    "areas": [
+      "platform"
+    ]
+  },
+  "606": {
+    "title": "Blank build plate window Dev Build 0.1.14",
+    "split": "holdout",
+    "areas": [
+      "platform",
+      "ui"
+    ]
+  },
+  "604": {
+    "title": "[BUG] UVTools integration only works on Windows",
+    "split": "holdout",
+    "areas": [
+      "platform",
+      "other"
+    ],
+    "note": "UVTools integration has no area of its own, hence other."
+  },
+  "596": {
+    "title": "[Bug] Export as STL does not acknowledge parameters properly",
+    "split": "holdout",
+    "areas": [
+      "file export"
+    ]
+  },
+  "594": {
+    "title": "Linux: updater should defer to Flatpak instead of failing the check",
+    "split": "holdout",
+    "areas": [
+      "platform"
+    ]
+  },
+  "593": {
+    "title": "[Bug] Sub-Threshold Voxel Area Disqualifies Physical Mesh Minima in Auto-Supports",
+    "split": "train",
+    "areas": [
+      "autosupports",
+      "islands"
+    ]
+  },
+  "592": {
+    "title": "[Bug] Silent Mesh Minima Suppression via Overhang Merging (Ghost Intersections)",
+    "split": "train",
+    "areas": [
+      "islands"
+    ]
+  },
+  "591": {
+    "title": "[Bug] Overhang Contact Z-Mismatch (Mid-Air Floating Contacts & Pucks)",
+    "split": "holdout",
+    "areas": [
+      "islands",
+      "autosupports"
+    ]
+  },
+  "589": {
+    "title": "LYS import: mini support reconstructed as full-length trunk that crosses through mesh",
+    "split": "train",
+    "areas": [
+      "lys"
+    ],
+    "note": "Ender: opening a .lys is importing a file, and lys sits within file import, so lys alone. .voxl is native, so not an import."
+  },
+  "585": {
+    "title": "Support connection balls not hidden while using the layer slider",
+    "split": "holdout",
+    "areas": [
+      "support studio"
+    ],
+    "note": "Support rendering while scrubbing layers; could be ui too."
+  },
+  "582": {
+    "title": "[BUG] Strange \"conical effect\" on mini supports",
+    "split": "holdout",
+    "areas": [
+      "support studio"
+    ]
+  },
+  "581": {
+    "title": "[BUG] Saving Cone Angle setting does not save",
+    "split": "train",
+    "areas": [
+      "support studio"
+    ]
+  },
+  "580": {
+    "title": "[BUG] .chitubox Import Failing With Error",
+    "split": "train",
+    "areas": [
+      "file import"
+    ],
+    "note": ".chitubox is a Chitubox scene, not a .ctb print file."
+  },
+  "578": {
+    "title": "[BUG] Context-menu copy only applies to the last selected object",
+    "split": "train",
+    "areas": [
+      "scene tools",
+      "ui"
+    ],
+    "note": "The action belongs to scene tools; only part of the multi-model selection getting it is ui."
+  },
+  "577": {
+    "title": "[BUG] Context-menu cut only applies to the last selected object",
+    "split": "train",
+    "areas": [
+      "scene tools",
+      "ui"
+    ],
+    "note": "The action belongs to scene tools; only part of the multi-model selection getting it is ui."
+  },
+  "576": {
+    "title": "[BUG] Context-menu delete only applies to the last selected object",
+    "split": "holdout",
+    "areas": [
+      "scene tools",
+      "ui"
+    ],
+    "note": "The action belongs to scene tools; only part of the multi-model selection getting it is ui."
+  },
+  "575": {
+    "title": "[BUG] Mirror/flip only applies to the last selected object",
+    "split": "train",
+    "areas": [
+      "scene tools",
+      "ui"
+    ],
+    "note": "The action belongs to scene tools; only part of the multi-model selection getting it is ui."
+  },
+  "574": {
+    "title": "[BUG] Panel move to position/center only applies to the last selected object",
+    "split": "train",
+    "areas": [
+      "scene tools",
+      "ui"
+    ],
+    "note": "The action belongs to scene tools; only part of the multi-model selection getting it is ui."
+  },
+  "573": {
+    "title": "[BUG] Panel reset rotation/scale only applies to the last selected object",
+    "split": "holdout",
+    "areas": [
+      "scene tools",
+      "ui"
+    ],
+    "note": "The action belongs to scene tools; only part of the multi-model selection getting it is ui."
+  },
+  "572": {
+    "title": "[BUG] Panel scale only applies to the last selected object",
+    "split": "train",
+    "areas": [
+      "scene tools",
+      "ui"
+    ],
+    "note": "The action belongs to scene tools; only part of the multi-model selection getting it is ui."
+  },
+  "571": {
+    "title": "[BUG] Panel rotate only applies to the last selected object",
+    "split": "train",
+    "areas": [
+      "scene tools",
+      "ui"
+    ],
+    "note": "The action belongs to scene tools; only part of the multi-model selection getting it is ui."
+  },
+  "569": {
+    "title": "[BUG] Actions on a multi-object selection only apply to a single object",
+    "split": "train",
+    "areas": [
+      "scene tools",
+      "ui"
+    ],
+    "note": "The action belongs to scene tools; only part of the multi-model selection getting it is ui."
+  },
+  "554": {
+    "title": "[BUG] Right-clicking objects occasionally brings up a navigation selection instead of the normal functions",
+    "split": "train",
+    "areas": [
+      "ui"
+    ],
+    "note": "A context-menu glitch, not an action on models: ui only."
+  },
+  "553": {
+    "title": "[BUG] When inputting resin information data input cell jumps unexpectedly",
+    "split": "train",
+    "areas": [
+      "printer/material profile"
+    ],
+    "note": "Input glitch in the material editor: the feature owns it, per the ui description."
+  },
+  "549": {
+    "title": "[BUG] Duplicate Terminal Z causes issues",
+    "split": "holdout",
+    "areas": [
+      "aa-3daa"
+    ]
+  }
+}

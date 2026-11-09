@@ -99,12 +99,15 @@ and prerelease identifier, so the tag doesn't need to encode it separately.
 # Thanks to scripts/sync-app-version.mjs, this bumps the version in:
 #  package-lock.json, package.json, src-tauri/Cargo.lock,
 #  src-tauri/Cargo.toml and src-tauri/tauri.conf.json
-npm version 0.1.10 --no-git-tag-version
+VER=0.1.10
+git checkout dev
+git switch -c release/v$VER
+npm version $VER --no-git-tag-version
 # Generate the bitmap for the NSIS installer.
 ./scripts/gen_nsis_images.py
 
-git commit -a -m "chore: release 0.1.10"
-git push origin dev
+git commit -a -m "chore: release $VER"
+git push
 ```
 
 That's it — `release.yml` tags `v0.1.10`, builds, publishes a GitHub
@@ -140,12 +143,19 @@ keep absorbing new (0.3.x) work the moment this happens, while `main`
 stabilizes what's already there.
 
 ```
+VER=0.2.0
 git checkout main
-git merge --ff-only v0.1.11        # or whatever the last dev tag was
-# bump version → 0.2.0-rc.1
-npm version 0.2.0-rc.1 --no-git-tag-version
-git commit -a -m "chore: release 0.2.0-rc.1"
-git push origin main
+git switch -c release/v$VER
+# The next step can take a while.
+git merge release/v0.1.18        # or whatever the last dev tag/branch was
+# bump version → $VER
+npm version $VER --no-git-tag-version
+# Generate the bitmap for the NSIS installer.
+./scripts/gen_nsis_images.py
+
+git commit -a -m "chore: release $VER"
+# Push to main and open a PR.
+git push origin
 ```
 
 Fix anything that comes up with normal commits on `main` (cherry-picked from
@@ -157,7 +167,7 @@ When satisfied:
 # bump version → 0.2.0 (drop the -rc suffix)
 npm version 0.2.0 --no-git-tag-version
 git commit -a -m "chore: release 0.2.0"
-git push origin main
+git push origin
 ```
 
 `release.yml` will look for a prior GitHub release tagged `v0.2.0-rc.*` and
@@ -217,20 +227,236 @@ closes it as part of that release, or closes it by hand. RC builds on `dev`
 or `main` don't trigger this job — only a final version bump does, so labels
 land once per train stop rather than once per commit.
 
-## Branch preview builds (`build-nightly.yml`)
+## Branch preview builds (`build-preview.yml`)
 
-We are dropping the `nightly` codeword in favor of `preview` or
-`branch-preview`, as the former has a very specific meaning in software.
+Separate from all of the above: `build-preview.yml` builds an arbitrary branch
+on demand (`workflow_dispatch`, or a `/preview` comment on a pull request) and
+publishes a rolling `preview_{branch}` prerelease, so a reviewer can download
+and try an exact commit.
 
-Until we drop the term, the reality is this: Separate from all of the above:
-`build-nightly.yml` builds an arbitrary branch on demand (`workflow_dispatch`
-or a `/nightly` PR comment) and publishes a rolling `nightly_{branch}`
-prerelease so a reviewer can download and try an exact commit. It is **not**
-a scheduled build of `dev`, doesn't participate in the versioning/channel
-model above, and isn't wired to the auto-updater at all. The name is
-inherited from an older convention and is somewhat misleading given it isn't
-on any schedule — treat it as a branch/PR preview mechanism, not a "nightly
-channel."
+It is **not** a scheduled build of `dev`, doesn't participate in the
+versioning/channel model above, and isn't wired to the auto-updater at all.
+These builds used to be called *nightly*, which was misleading on both counts:
+nothing about them is nightly, and nothing is on a schedule. Treat them as a
+branch or pull-request preview mechanism.
+
+### External (fork) pull requests
+
+A preview build compiles the branch with the release signing secrets in scope,
+so external pull requests are never built automatically: the `preview-build`
+label does not dispatch for them, and `/preview` replies with a pointer to the
+command below.
+
+After reading the diff, a maintainer runs `/create-preview-external`. That
+resolves the pull request's head SHA, points `preview/pr-<number>` at it, and
+builds that branch. It imports **one commit** — later pushes need the command
+again, so every external build is one a maintainer chose to run. Preview
+branches whose pull request has closed are swept away the next time any
+preview is activated.
+
+## Windows code signing (Azure Artifact Signing)
+
+Every Windows binary a release produces is Authenticode-signed with
+[Azure Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/overview)
+(formerly Trusted Signing). Without it SmartScreen warns on every download and
+Windows 11 Smart App Control refuses to run the app at all.
+
+### What gets signed, and when
+
+Tauri signs through `bundle.windows.signCommand`, so the signature is applied
+by the bundler itself, not bolted on afterwards. That ordering matters:
+
+- the application executable is signed **before** it is packed into the
+  installers, so the installed `dragonfruit-desktop.exe` carries a signature
+  too — signing only the outer installer would leave it unsigned;
+- the NSIS and MSI installers are signed when the bundler finishes them;
+- the updater artifacts (`createUpdaterArtifacts`) are generated **after**
+  bundling, so the `.exe.sig` covers the signed bytes. Signing a published
+  installer by hand would invalidate that signature.
+
+The command lives in `src-tauri/tauri.windows-signing.conf.json`, a config
+overlay that only `release.yml` passes (`--config …`), so local
+`npm run tauri:bundle:windows` builds stay unsigned and need no Azure
+credentials. Preview builds (`build-preview.yml`) are unsigned for the same
+reason: they are not release artifacts.
+
+`scripts/sign-windows.cmd` is the command Tauri runs, once per file, with the
+path as its only argument. It exists because the bundler spawns the command by
+name and `pwsh` is not on the PATH that process sees, even though a PowerShell
+step resolves it; `cmd.exe` is always in System32, which Windows searches before
+PATH, so the batch file finds PowerShell 7 and hands the work to
+`scripts/sign-windows.ps1`.
+
+The overlay names it as `..\scripts\sign-windows.cmd`, not `scripts\…`. The
+bundler calls `set_current_dir` into `src-tauri` before it builds the sign
+command, and only absolutizes an argument that exists from there, so a path
+relative to the repository root is passed through unchanged and resolves
+against the wrong directory. Anything that invokes the overlay outside the
+bundler has to run from `src-tauri` too, which is what the smoke check does. That script calls `Invoke-ArtifactSigning` from the
+`ArtifactSigning` PowerShell module pinned to `0.1.20` — the same module the
+`azure/artifact-signing-action` action installs. The action itself is not used
+because it signs a folder after the build, which is both too late for the
+executable inside the installer and destructive to the updater signature.
+
+### Authentication
+
+OIDC only; there is no client secret anywhere in the pipeline:
+
+1. `release.yml` grants the build job `id-token: write`.
+2. `azure/login@v3` exchanges that token for an Azure CLI login using the
+   federated credential on the app registration.
+3. `Invoke-ArtifactSigning` resolves credentials through
+   `DefaultAzureCredential`; the script excludes every credential type that
+   cannot work on a GitHub runner, leaving `AzureCliCredential` as the only
+   path so a misconfiguration fails immediately instead of after nine probes.
+
+The federated credential's subject must match the refs releases are cut from
+(`ref:refs/heads/main` and `ref:refs/heads/dev`), and the app registration
+needs the **Artifact Signing Certificate Profile Signer** role on the signing
+account.
+
+### Required repository secrets
+
+| Secret | Value |
+|---|---|
+| `AZURE_CLIENT_ID` | Application (client) ID of the app registration |
+| `AZURE_TENANT_ID` | Entra ID directory (tenant) ID |
+| `AZURE_SUBSCRIPTION_ID` | Subscription holding the signing account |
+| `AZURE_SIGNING_ENDPOINT` | Signing account endpoint, e.g. `https://eus.codesigning.azure.net/` |
+| `AZURE_SIGNING_ACCOUNT` | Artifact Signing account name |
+| `AZURE_SIGNING_CERTIFICATE_PROFILE` | Certificate profile name inside that account |
+
+The endpoint, account and profile are passed as environment variables rather
+than written into the overlay config because they name Azure resources that
+differ per deployment; the overlay stays the same for every fork.
+
+### Pre-flight check
+
+`verify-windows-signing.yml` builds the Windows release exactly as the release
+pipeline does — same profile, same target, same `nsis,msi` bundles, same
+signing overlay — then asserts every binary is signed and timestamped and
+uploads the installers as the `dragonfruit-windows-x64-signed` artifact. It
+tags nothing and publishes no release.
+
+It is `workflow_dispatch` only, because it costs a full release compile
+(roughly 40 minutes warm). Run it after touching anything in the signing path,
+and before the first release that depends on it: a bad federated credential, a
+missing role assignment, a wrong certificate profile or a stale module pin all
+surface there instead of halfway through a release build.
+
+The build steps mirror the `windows-latest` leg of `release.yml` rather than
+sharing it — a reusable workflow would have to be carved out of the release
+matrix, and the release path is not something to restructure for a
+once-in-a-while check. The cost is that the two can drift, so a change to one
+belongs in the other.
+
+A `workflow_dispatch` workflow only appears in the Actions UI once it is on the
+default branch, so the first run is after the merge.
+
+To check the signing command alone on a workstation, without a build, sign in
+with an account that holds the certificate-profile role and run what the overlay
+names:
+
+```powershell
+Install-Module ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
+az login
+$env:AZURE_SIGNING_ENDPOINT = 'https://eus.codesigning.azure.net/'
+$env:AZURE_SIGNING_ACCOUNT = '<account>'
+$env:AZURE_SIGNING_CERTIFICATE_PROFILE = '<profile>'
+./scripts/sign-windows.ps1 .\some-binary.exe
+Get-AuthenticodeSignature .\some-binary.exe | Format-List Status
+```
+
+`az login` is what `DefaultAzureCredential` picks up on both paths, so the
+local run exercises the same credential the release does.
+
+### Verification
+
+`release.yml` runs `Get-AuthenticodeSignature` over every produced installer
+and over the executable extracted from each one, and fails the release if any of
+them is unsigned, if the signature does not match the file's contents, or if it
+carries no timestamp.
+
+The executable left in `target/release` is not checked, because the bundler
+restores the unsigned original there after building each package type: it copies
+the binary, patches and signs the copy for each bundle, then puts the original
+back. The signed copy is the one inside the installers, which is why the check
+unpacks them.
+
+It deliberately does not require `Status` to be `Valid`. A clean runner's root
+store does not carry the Microsoft root that Artifact Signing certificates chain
+to, so a perfectly good signature reports `UnknownError` there: "a certificate
+chain processed, but terminated in a root certificate which is not trusted by
+the trust provider". That root reaches end users through Windows Update. The
+runner is the odd one out, not the installer, and gating on `Valid` would fail
+every release.
+
+A release that ships unsigned installers is worse than one that fails: nothing
+else in the pipeline would say why SmartScreen started warning.
+
+To check a downloaded installer by hand, where the root is present:
+
+```powershell
+Get-AuthenticodeSignature .\DragonFruit_0.3.1_x64-setup.exe | Format-List Status, SignerCertificate
+```
+
+## Windows Microsoft C++ prerequisite
+
+Windows installers contain neither Microsoft CRT DLLs nor its redistributable.
+NSIS obtains the runtime directly from [Microsoft's latest-x64 endpoint](https://aka.ms/vc14/vc_redist.x64.exe)
+under Microsoft's terms. DragonFruit's AGPL license is unchanged; see the
+[FSF runtime guidance](https://www.gnu.org/licenses/gpl-faq.html#WindowsRuntimeAndGPL)
+and [Microsoft redistribution rules](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files).
+Build-tool licensing remains the release owner's responsibility.
+
+`scripts/prepare-windows-runtime.ps1` pins the minimum to `14.51.36247.0` and checks
+it against the selected Visual Studio installation's newest x64 CRT using direct
+`vswhere` discovery. It never updates the pin automatically. It generates the
+NSIS/WiX includes and downloads only checksum-pinned
+InetC, the free HTTPS plugin described in `scripts/windows-runtime-download-plugin.json`.
+Its zlib notice, `scripts/inetc-license.txt`, ships as `licenses/InetC.txt`.
+Preparation writes the generated notice as `windows-resources/nsis-plugins/InetC.txt`:
+the pinned Tauri WiX bundler preserves the source basename even when a resource
+mapping specifies a different destination filename. Keeping the source and
+destination basenames equal makes both MSI and NSIS ship the expected notice.
+The NSIS prerequisite hook reads that same generated file and embeds it as
+`$PLUGINSDIR\InetC.txt`; changing the notice basename must update both consumers.
+The native-resource build step and Windows pre-bundle hook run preparation.
+
+`src-tauri/nsis/runtime-prerequisite.nsh` checks the registered native x64 runtime
+and numeric system DLL version. If inadequate, an early consent page precedes
+any reinstall/uninstall pages. InetC downloads the latest official installer;
+`scripts/verify-windows-runtime.ps1` requires a valid Microsoft corporate signature
+and a VC14 version at least as new as the build requires, then setup runs
+**`/q /norestart`** and rechecks the runtime. Failure or cancellation stops setup;
+exit `3010` requests a manual restart and rerun, never an automatic reboot/launch.
+Silent `/S` and passive `/P` installations must have the prerequisite provisioned
+first. `src-tauri/wix/runtime-prerequisite.wxs` blocks an inadequate runtime with
+a Microsoft download link; it never nests an installer and allows uninstall.
+Tauri links that fragment through its supported `componentGroupRefs` option; the
+empty group anchors the searches and blocking action without installing a dummy component.
+The MSI search specifies the official CRT's resource language `1033`, not the
+Windows UI locale. MSI also compares language when the installed version equals
+the minimum; leaving it unspecified would reject the tagged Microsoft DLL.
+
+There is no Microsoft installer checksum pin or update bot: Microsoft may update
+its signed download independently. The shipped InetC plugin remains pinned.
+On Windows PowerShell 5.1 or 7:
+
+```powershell
+$minimum = ./scripts/prepare-windows-runtime.ps1
+./scripts/verify-windows-runtime.ps1 -InstallerPath C:\Temp\VC_redist.x64.exe -MinimumVersion $minimum
+```
+
+Preparation accepts `-OutputDirectory` and a higher `-MinimumVersion`; it cannot
+lower the pinned floor. A toolset requiring a newer runtime fails the build rather
+than changing the pin. Output defaults resolve relative to the script after
+parameter binding, including Windows PowerShell `-File` invocations from another
+directory. One Windows validation job checks the current Microsoft
+download. `scripts/verify-windows-bundles.ps1` rejects bundled Microsoft runtime
+payloads and checks the NSIS helpers and plugin notice before publication.
+Windows install/upgrade smoke must still cover missing/old/current runtimes,
+consent/UAC cancellation, failed downloads/signatures, and reboot-required results.
 
 ## Updater implementation notes
 

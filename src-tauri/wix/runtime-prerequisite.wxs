@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <?include $(sys.SOURCEFILEDIR)..\windows-resources\runtime-version.wxi ?>
+  <?if $(sys.BUILDARCH) != "x64" ?>
+    <?error The DragonFruit Visual C++ prerequisite supports x64 packages only. ?>
+  <?endif ?>
+  <Fragment>
+    <!-- Tauri references this group to link the entire prerequisite fragment.
+         It installs no components; the searches and error action below are the guard. -->
+    <ComponentGroup Id="DfRuntimePrerequisite" />
+    <!-- MSI's Signature table compares all four numeric file-version components.
+         Search System32 in this x64 package, never an app-local or x86 copy. -->
+    <!-- Microsoft's CRT DLL is tagged 1033 regardless of the Windows UI language.
+         MSI checks language at equal MinVersion; a null filter rejects that DLL. -->
+    <Property Id="DF_VC_RUNTIME_SUFFICIENT" Secure="yes">
+      <DirectorySearch Id="DfVcSystem64Search" Path="[System64Folder]" Depth="0">
+        <FileSearch Id="DfVcMsvcpSearch" Name="msvcp140.dll" MinVersion="$(var.DF_VC_VERSION)" Languages="1033" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="DF_VC_RUNTIME_INSTALLED" Secure="yes">
+      <RegistrySearch Id="DfVcInstalledSearch" Root="HKLM"
+                      Key="SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64"
+                      Name="Installed" Type="raw" Win64="yes" />
+    </Property>
+    <!-- A real Type 19 error; the standalone MSI never starts another installer. -->
+    <CustomAction Id="DfRequireVcRuntime"
+                  Error="DragonFruit requires Microsoft Visual C++ v14 Redistributable (x64) $(var.DF_VC_VERSION) or newer. Install it directly from Microsoft at https://aka.ms/vc14/vc_redist.x64.exe, restart Windows if requested, then run this installer again." />
+    <InstallUISequence>
+      <Custom Action="DfRequireVcRuntime" After="AppSearch">NOT (REMOVE~="ALL") AND (NOT DF_VC_RUNTIME_SUFFICIENT OR DF_VC_RUNTIME_INSTALLED &lt;&gt; "#1")</Custom>
+    </InstallUISequence>
+    <InstallExecuteSequence>
+      <Custom Action="DfRequireVcRuntime" After="AppSearch">NOT (REMOVE~="ALL") AND (NOT DF_VC_RUNTIME_SUFFICIENT OR DF_VC_RUNTIME_INSTALLED &lt;&gt; "#1")</Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

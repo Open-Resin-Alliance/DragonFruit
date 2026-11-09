@@ -412,6 +412,7 @@ export function RendererCrashDiagnostics() {
       const phase = typeof detail.phase === 'string' ? detail.phase : 'unknown';
       const done = Number.isFinite(detail.done) ? Number(detail.done) : 0;
       const total = Number.isFinite(detail.total) ? Number(detail.total) : 0;
+      // i18n-ignore: crash-report breadcrumb
       addBreadcrumb('info', `Slicing progress ${phase}`, `${done}/${total}`);
     };
 

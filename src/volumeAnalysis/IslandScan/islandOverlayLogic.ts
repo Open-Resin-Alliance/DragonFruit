@@ -9,6 +9,10 @@ export type IslandMarker = {
   pixelCount: number;
   geometry?: THREE.BufferGeometry; // 3D shape from island contours
   radius?: number; // Optional radius for geometry-independent rendering
+  /** Numeric marker id the overlay matches against the selection. Defaults to `id`. */
+  islandId?: number;
+  /** Render type: 0 voxel, 1 minima, 2 intersection, 3 consolidated voxel. */
+  type?: number;
 };
 
 /**

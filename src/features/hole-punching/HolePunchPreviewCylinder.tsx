@@ -206,6 +206,7 @@ export function HolePunchPreviewCylinder({
     <>
       {(onClick || onHoverStart || onHoverEnd || onPointerDown || onPointerMove || onPointerUp || onPointerCancel) && (
         <mesh
+          userData={{ isHolePunch: true }}
           position={interactionPosition}
           quaternion={quaternion}
           renderOrder={PUNCH_PREVIEW_RENDER_ORDER_INTERACTION}

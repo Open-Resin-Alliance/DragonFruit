@@ -143,4 +143,5 @@ describe('buildBatchedBezierTubes', () => {
         assert.ok(triangleCount(result.geometry) > 0);
         assertClosedSurface(result.geometry);
     });
+
 });

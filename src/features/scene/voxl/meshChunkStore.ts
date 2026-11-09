@@ -17,7 +17,8 @@
  * **1. Dirty tracking is by geometry SIGNATURE, not by a boolean flag.**
  * `ExportManager.computeModelGeometrySignature` is promoted from a private cache
  * key to the dirty primitive. It is derived from the geometry object itself
- * (`uuid : position.version : index.version : vertexCount`), so it cannot drift
+ * (`uuid : position.version : index.version : vertexCount : position-array identity`),
+ * so it cannot drift
  * the way a flag missed by a future mutation path would. The consequence worth
  * stating: because the signature is the authority and the bake hooks are merely
  * *when*, a missed hook costs a lazy re-bake on the next tick — **never a stale
@@ -277,6 +278,37 @@ export class MeshChunkStore {
     } finally {
       this.inFlight.delete(flightKey);
     }
+  }
+
+  /**
+   * Gives `targetModelId` the chunk another owner already baked for the same
+   * geometry signature, without encoding it again.
+   *
+   * Duplication shares the source model's `BufferGeometry` (same uuid, same
+   * attribute versions, same signature) and the chunk is encoded in local space
+   * around the geometry's centre, so the bytes are identical. Without this, the
+   * post-duplicate chunk sweep encoded the same multi-hundred-megabyte STL once
+   * per copy — on the main thread, inside an idle callback that ran for 650 ms on
+   * an eight-model duplicate.
+   */
+  adoptForModel(targetModelId: string, signature: string, slot: ChunkSlot = 'preview'): BakedChunk | null {
+    const targetKey = ownerKey(targetModelId, slot);
+    const current = this.contentByOwner.get(targetKey);
+    if (current?.signature === signature) return this.lastCommitted(targetModelId, slot);
+
+    for (const [key, owner] of this.contentByOwner) {
+      if (key === targetKey || owner.signature !== signature) continue;
+      const blob = this.chunkStore.get(owner.sha256);
+      if (!blob) continue;
+      this.adopt(targetKey, signature, owner.sha256);
+      return {
+        sha256: owner.sha256,
+        data: blob.data,
+        compression: blob.compression,
+        uncompressedSize: blob.uncompressedSize,
+      };
+    }
+    return null;
   }
 
   /**

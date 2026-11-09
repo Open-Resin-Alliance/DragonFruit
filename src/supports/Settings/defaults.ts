@@ -43,3 +43,31 @@ export const DEFAULT_GRID_ATTACH_SEARCH_STEP_MM = 2.0;
 export const DEFAULT_GRID_MIN_ROUTED_TRUNK_ANGLE_DEG = 60;
 
 export const DEFAULT_MESH_TO_MESH_STICK_VS_TWIG_CUTOFF_MM = 5.0;
+
+// --- Profile field limits ---
+/**
+ * Sane ranges for the General tab's profile fields, in one place: the settings
+ * store clamps every write through them (UI, preset, import, plugin) so a
+ * negative or absurd value can never reach the geometry, and the inputs take
+ * their `min`/`max` from the same table.
+ *
+ * Lower bounds are the smallest value that still means something: 0 for a height
+ * that may legitimately be "no feature", a hair above 0 for a diameter, because a
+ * zero-radius disk/cone has no usable normal. Upper bounds are generous — they
+ * catch a typo (a stray digit), not model a printer.
+ */
+export const SUPPORT_PROFILE_LIMITS = {
+    tip: {
+        contactDiameterMm: { min: 0.05, max: 5 },
+        lengthMm: { min: 0.1, max: 50 },
+        adaptiveConeAngleOffsetDeg: { min: 0, max: 90 },
+    },
+    shaft: {
+        diameterMm: { min: 0.05, max: 20 },
+    },
+    roots: {
+        diameterMm: { min: 0.05, max: 50 },
+        diskHeightMm: { min: 0, max: 20 },
+        coneHeightMm: { min: 0, max: 50 },
+    },
+} as const;

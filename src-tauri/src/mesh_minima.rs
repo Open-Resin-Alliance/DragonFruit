@@ -394,6 +394,14 @@ pub struct VoxelIsland {
     pub base_z: f64,
     pub area_mm2: f32,
     pub layer_span: [u32; 2],
+    /// Base-layer contact pixels, flat `[x, y, …]` in world millimetres.
+    ///
+    /// The overlay draws one disc per contact voxel, so an island without
+    /// these collapses to a single disc at its centroid — the per-voxel
+    /// footprint detail the client-side detector used to provide. Derived from
+    /// the same per-layer labels the island itself came from.
+    #[serde(default)]
+    pub contact_voxels: Vec<f32>,
 }
 
 #[tauri::command]
@@ -614,6 +622,7 @@ pub async fn scan_voxel_islands_from_path(
                         .copied()
                         .unwrap_or(island.total_area_mm2) as f32,
                     layer_span: [island.first_layer, island.last_layer],
+                    contact_voxels: Vec::new(),
                 });
             } else {
                 // Fallback to global centroid if seed_voxel is somehow missing
@@ -635,6 +644,7 @@ pub async fn scan_voxel_islands_from_path(
                             .copied()
                             .unwrap_or(island.total_area_mm2) as f32,
                         layer_span: [island.first_layer, island.last_layer],
+                        contact_voxels: Vec::new(),
                     });
                 }
             }
@@ -658,11 +668,274 @@ pub struct CombinedIslandScanResult {
     pub voxel_islands: Vec<VoxelIsland>,
     pub minima_islands: Vec<LocalMinimum>,
     pub overhang_islands: Vec<overhang::OverhangRegion>,
+    /// Topple report for this pose. Computed here so the frontend does not
+    /// need a second overhang pass just for stability.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stability: Option<overhang::StabilityReport>,
 }
 
 /// Single Tauri command that loads the mesh once and runs both the voxel island
 /// scan (batch pipeline with Z-bucketed rayon-parallel rasterization) and the mesh
 /// minima scan **concurrently**. Surface-snapping projections are also parallelized.
+/// Run voxel islands, mesh minima and overhang classification against an
+/// already-loaded, world-space mesh.
+///
+/// Every caller supplies the same world-space soup the frontend renders, so a
+/// `triangleId` in the overhang output indexes the rendered geometry. The three
+/// scans run concurrently on one welded mesh, which is what keeps the combined
+/// command cheaper than three separate passes.
+fn scan_islands_from_mesh(
+    app: crate::DragonFruitAppHandle,
+    mesh: IndexedMesh,
+    overhang_mesh_input: Option<IndexedMesh>,
+    layer_height_mm: f64,
+    px_mm: f64,
+    support_buffer_mm: f64,
+    connectivity: u8,
+    k: Option<usize>,
+    overhang_self_support_angle_deg: Option<f32>,
+    overhang_px_mm: Option<f32>,
+    has_raft: Option<bool>,
+) -> Result<CombinedIslandScanResult, String> {
+    let tri_count = mesh.triangle_count();
+    let vert_count = mesh.vertex_count();
+    log::info!(
+        "[islands-combined] Mesh loaded: {} triangles, {} vertices",
+        tri_count, vert_count,
+    );
+    let _ = app.emit("island-scan-progress", serde_json::json!({ "done": 5, "total": 100 }));
+
+    let bbox = mesh.bbox();
+    let soup = mesh.to_triangle_soup();
+    let triangles = dragonfruit_slicing_engine::geometry::parse_triangles(&soup);
+
+    let ox = bbox.min.x as f64;
+    let oz = -bbox.max.y as f64;
+    let gw = ((bbox.max.x as f64 - bbox.min.x as f64) / px_mm).ceil().max(1.0) as i32;
+    let gh = ((bbox.max.y as f64 - bbox.min.y as f64) / px_mm).ceil().max(1.0) as i32;
+    let model_height = bbox.max.z as f64 - bbox.min.z as f64;
+    let num_layers = (model_height / layer_height_mm).ceil().max(0.0) as usize;
+
+    let connectivity_enum = if connectivity == 8 { Connectivity::Eight } else { Connectivity::Four };
+
+    let job = IslandScanJob {
+        px_mm,
+        support_buffer_mm,
+        connectivity: connectivity_enum,
+        min_island_area_mm2: 0.0001,
+        layer_height_mm,
+        grid: GridRef { origin_x: ox, origin_z: oz, width: gw, height: gh, px_mm },
+        num_layers: num_layers as u32,
+        min_overlap_px: 1,
+        overlap_neighborhood_px: 1,
+        candidate_only: true,
+    };
+
+    // ── 2. Run voxel rasterization + scan, minima scan, AND overhang
+    //       classification CONCURRENTLY (all share the loaded mesh) ──
+    let angle_deg = overhang_self_support_angle_deg.unwrap_or(45.0);
+    let oh_px_mm = overhang_px_mm.unwrap_or(0.25);
+    // The caller passes the geometry the frontend renders for overhang: the
+    // staged soup when it supplied one, otherwise the scan mesh itself.
+    let overhang_mesh: &IndexedMesh = overhang_mesh_input.as_ref().unwrap_or(&mesh);
+    let app_a = app.clone();
+    let app_b = app.clone();
+    let app_c = app.clone();
+    let (voxel_islands, minima_islands, overhang_islands, stability) = std::thread::scope(|s| {
+        // Thread A: voxel rasterization + scan, then the surface snap. The snap
+        // only needs the voxel result, so it runs here and overlaps the minima
+        // and overhang threads instead of starting after they join.
+        let voxel_handle = s.spawn(|| {
+            log::info!(
+                "[islands-combined] Rasterizing {} layers (batch, {}×{} grid)…",
+                num_layers, gw, gh,
+            );
+            let rasterize_start = std::time::Instant::now();
+            let (masks, _, _, _, _, _) = rasterize_for_island_scan(
+                &triangles,
+                bbox.min.x as f64, bbox.max.x as f64,
+                bbox.min.y as f64, bbox.max.y as f64,
+                bbox.min.z as f64, bbox.max.z as f64,
+                px_mm, layer_height_mm,
+            );
+            let rasterize_sec = rasterize_start.elapsed().as_secs_f64();
+            log::info!("[islands-combined] Rasterized {} layers in {:.1}s", num_layers, rasterize_sec);
+            let _ = app_a.emit("island-scan-progress", serde_json::json!({ "done": 30, "total": 100 }));
+
+            log::info!("[islands-combined] Running island scan (batch pipeline)…");
+            let scan_start = std::time::Instant::now();
+            let scan_result = run_island_scan(&job, &masks, None);
+            let scan_sec = scan_start.elapsed().as_secs_f64();
+            log::info!(
+                "[islands-combined] Island scan done in {:.1}s — {} islands (rasterize {:.1}s + scan {:.1}s = {:.1}s)",
+                scan_sec + rasterize_sec, scan_result.islands.len(), rasterize_sec, scan_sec, rasterize_sec + scan_sec,
+            );
+            let _ = app_a.emit("island-scan-progress", serde_json::json!({ "done": 65, "total": 100 }));
+
+            // Base-layer footprints: one pass over the layers that are some
+            // island's first layer, appending its pixels in the same world
+            // frame as the contact.
+            let mut footprints: Vec<Vec<f32>> = vec![Vec::new(); scan_result.islands.len()];
+            {
+                let mut by_layer: Vec<Vec<(i32, usize)>> = vec![Vec::new(); num_layers];
+                for (idx, island) in scan_result.islands.iter().enumerate() {
+                    if let Some(slot) = by_layer.get_mut(island.first_layer as usize) {
+                        slot.push((island.id.0 as i32, idx));
+                    }
+                }
+                for (layer, entries) in by_layer.iter().enumerate() {
+                    if entries.is_empty() {
+                        continue;
+                    }
+                    let labels = &scan_result.island_labels_per_layer[layer];
+                    for (row, runs) in labels.rows.iter().enumerate() {
+                        for run in runs {
+                            if run.id <= 0 {
+                                continue;
+                            }
+                            let Some(&(_, idx)) = entries.iter().find(|(id, _)| *id == run.id) else {
+                                continue;
+                            };
+                            let y = -(oz + row as f64 * px_mm) as f32;
+                            let out = &mut footprints[idx];
+                            for col in run.start..run.start + run.length {
+                                out.push((ox + col as f64 * px_mm + px_mm * 0.5) as f32);
+                                out.push(y);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Z-bucket index for surface-snapping projections ──────────
+            let z_min = bbox.min.z;
+            let z_max = bbox.max.z;
+            let z_range = (z_max - z_min) as f32;
+            let num_buckets = 128;
+            let mut z_buckets = vec![Vec::new(); num_buckets];
+            for fi in 0..tri_count {
+                let [v0, v1, v2] = mesh.tri_positions(fi as u32);
+                let t_min_z = v0.z.min(v1.z).min(v2.z);
+                let t_max_z = v0.z.max(v1.z).max(v2.z);
+                if z_range > 1e-5 {
+                    let b_start = (((t_min_z - z_min) / z_range) * (num_buckets as f32 - 1.0)).floor().max(0.0) as usize;
+                    let b_end = (((t_max_z - z_min) / z_range) * (num_buckets as f32 - 1.0)).ceil().min(num_buckets as f32 - 1.0) as usize;
+                    for b in b_start..=b_end {
+                        z_buckets[b].push(fi as u32);
+                    }
+                } else {
+                    z_buckets[0].push(fi as u32);
+                }
+            }
+
+            let epsilon = (layer_height_mm * 1.5) as f32;
+            let snap_start = std::time::Instant::now();
+            let voxel_islands: Vec<VoxelIsland> = scan_result
+                .islands
+                .par_iter()
+                .enumerate()
+                .zip(footprints.par_iter())
+                .map(|((idx, island), footprint)| {
+                    let (contact_x, contact_y, contact_z) = if let Some(seed) = island.seed_voxel {
+                        (
+                            (ox + seed.x * px_mm + px_mm * 0.5) as f32,
+                            (-(oz + seed.y * px_mm)) as f32,
+                            (bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm) as f32,
+                        )
+                    } else if let Some(c) = island.centroid {
+                        (
+                            (ox + c.x * px_mm + px_mm * 0.5) as f32,
+                            (-(oz + c.y * px_mm)) as f32,
+                            (bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm) as f32,
+                        )
+                    } else {
+                        (0.0_f32, 0.0_f32, 0.0_f32)
+                    };
+
+                    let contact = snap_to_surface(
+                        contact_x, contact_y, contact_z,
+                        epsilon, &z_buckets, z_min, z_range, num_buckets, &mesh,
+                    );
+
+                    VoxelIsland {
+                        id: format!("v{}", idx),
+                        source: "voxel".to_string(),
+                        contact,
+                        base_z: contact_z as f64,
+                        // Contact footprint = base-layer area, not accumulated area.
+                        area_mm2: island
+                            .per_layer_area_mm2
+                            .get(&island.first_layer)
+                            .copied()
+                            .unwrap_or(island.total_area_mm2) as f32,
+                        layer_span: [island.first_layer, island.last_layer],
+                        contact_voxels: footprint.clone(),
+                    }
+                })
+                .collect();
+            log::info!(
+                "[islands-combined] Surface snapping done in {:.1}s for {} islands",
+                snap_start.elapsed().as_secs_f64(),
+                voxel_islands.len(),
+            );
+            voxel_islands
+        });
+
+        // Thread B: mesh minima scan (uses rayon internally)
+        let minima_handle = s.spawn(|| {
+            log::info!("[islands-combined] Running mesh minima scan (k={})…", k.unwrap_or(2));
+            let minima_start = std::time::Instant::now();
+            let minima = scan_minima_internal(&mesh, k);
+            let minima_sec = minima_start.elapsed().as_secs_f64();
+            log::info!("[islands-combined] Minima scan done in {:.1}s — {} minima", minima_sec, minima.len());
+            let _ = app_b.emit("island-scan-progress", serde_json::json!({ "done": 80, "total": 100 }));
+            minima
+        });
+
+        // Thread C: overhang (mesh-normal) classification. Thread D runs the
+        // topple report beside it — both are independent passes over the same
+        // immutable mesh, and stability used to run after classify finished.
+        let overhang_handle = s.spawn(|| {
+            log::info!("[islands-combined] Running overhang classification (angle={}°)…", angle_deg);
+            let oh_start = std::time::Instant::now();
+            let regions = overhang::classify_overhangs(overhang_mesh, angle_deg, oh_px_mm);
+            log::info!(
+                "[islands-combined] Overhang classification done in {:.1}s — {} regions",
+                oh_start.elapsed().as_secs_f64(),
+                regions.len(),
+            );
+            let _ = app_c.emit("island-scan-progress", serde_json::json!({ "done": 90, "total": 100 }));
+            regions
+        });
+        let stability_handle = s.spawn(|| {
+            overhang::compute_stability_report(overhang_mesh, angle_deg, has_raft.unwrap_or(false))
+        });
+
+        (
+            voxel_handle.join().unwrap(),
+            minima_handle.join().unwrap(),
+            overhang_handle.join().unwrap(),
+            stability_handle.join().unwrap(),
+        )
+    });
+
+    log::info!(
+        "[islands-combined] Complete: {} voxel islands, {} minima islands, {} overhang regions",
+        voxel_islands.len(),
+        minima_islands.len(),
+        overhang_islands.len(),
+    );
+
+    let _ = app.emit("island-scan-progress", serde_json::json!({ "done": 100, "total": 100 }));
+
+    Ok(CombinedIslandScanResult {
+        voxel_islands,
+        minima_islands,
+        overhang_islands,
+        stability,
+    })
+}
+
 #[tauri::command]
 pub async fn scan_islands_from_path(
     app: crate::DragonFruitAppHandle,
@@ -676,206 +949,101 @@ pub async fn scan_islands_from_path(
     k: Option<usize>,
     overhang_self_support_angle_deg: Option<f32>,
     overhang_px_mm: Option<f32>,
+    overhang_from_staged: Option<bool>,
+    has_raft: Option<bool>,
 ) -> Result<CombinedIslandScanResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        // ── 1. Load and transform mesh ONCE ──────────────────────────────
-        log::info!("[islands-combined] Loading mesh from {}", file_path);
-        let mesh = load_and_transform_mesh(&file_path, matrix, center)?;
-        let tri_count = mesh.triangle_count();
-        let vert_count = mesh.vertex_count();
-        log::info!(
-            "[islands-combined] Mesh loaded: {} triangles, {} vertices",
-            tri_count, vert_count,
-        );
-        let _ = app.emit("island-scan-progress", serde_json::json!({ "done": 5, "total": 100 }));
-
-        let bbox = mesh.bbox();
-        let soup = mesh.to_triangle_soup();
-        let triangles = dragonfruit_slicing_engine::geometry::parse_triangles(&soup);
-
-        let ox = bbox.min.x as f64;
-        let oz = -bbox.max.y as f64;
-        let gw = ((bbox.max.x as f64 - bbox.min.x as f64) / px_mm).ceil().max(1.0) as i32;
-        let gh = ((bbox.max.y as f64 - bbox.min.y as f64) / px_mm).ceil().max(1.0) as i32;
-        let model_height = bbox.max.z as f64 - bbox.min.z as f64;
-        let num_layers = (model_height / layer_height_mm).ceil().max(0.0) as usize;
-
-        let connectivity_enum = if connectivity == 8 { Connectivity::Eight } else { Connectivity::Four };
-
-        let job = IslandScanJob {
-            px_mm,
-            support_buffer_mm,
-            connectivity: connectivity_enum,
-            min_island_area_mm2: 0.0001,
-            layer_height_mm,
-            grid: GridRef { origin_x: ox, origin_z: oz, width: gw, height: gh, px_mm },
-            num_layers: num_layers as u32,
-            min_overlap_px: 1,
-            overlap_neighborhood_px: 1,
-            candidate_only: true,
-        };
-
-        // ── 2. Run voxel rasterization + scan, minima scan, AND overhang
-        //       classification CONCURRENTLY (all share the loaded mesh) ──
-        let angle_deg = overhang_self_support_angle_deg.unwrap_or(45.0);
-        let oh_px_mm = overhang_px_mm.unwrap_or(0.25);
-        let app_a = app.clone();
-        let app_b = app.clone();
-        let app_c = app.clone();
-        let (scan_result, minima_islands, overhang_islands) = std::thread::scope(|s| {
-            // Thread A: voxel rasterization + island scan
-            let voxel_handle = s.spawn(|| {
-                log::info!(
-                    "[islands-combined] Rasterizing {} layers (batch, {}×{} grid)…",
-                    num_layers, gw, gh,
+    // The frontend stages the soup it renders so overhang ids index the
+    // overlay geometry. A missing buffer falls back to the file mesh.
+    let staged_overhang_soup: Option<Vec<f32>> = if overhang_from_staged.unwrap_or(false) {
+        let bytes = crate::staged_mesh()
+            .lock()
+            .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
+            .take();
+        match bytes {
+            Some(bytes) => Some(crate::bytes_to_f32_vec(&bytes)?),
+            None => {
+                log::warn!(
+                    "[islands-combined] overhang_from_staged was set but no mesh was staged; using the file mesh"
                 );
-                let rasterize_start = std::time::Instant::now();
-                let (masks, _, _, _, _, _) = rasterize_for_island_scan(
-                    &triangles,
-                    bbox.min.x as f64, bbox.max.x as f64,
-                    bbox.min.y as f64, bbox.max.y as f64,
-                    bbox.min.z as f64, bbox.max.z as f64,
-                    px_mm, layer_height_mm,
-                );
-                let rasterize_sec = rasterize_start.elapsed().as_secs_f64();
-                log::info!("[islands-combined] Rasterized {} layers in {:.1}s", num_layers, rasterize_sec);
-                let _ = app_a.emit("island-scan-progress", serde_json::json!({ "done": 30, "total": 100 }));
-
-                log::info!("[islands-combined] Running island scan (batch pipeline)…");
-                let scan_start = std::time::Instant::now();
-                let result = run_island_scan(&job, &masks, None);
-                let scan_sec = scan_start.elapsed().as_secs_f64();
-                log::info!(
-                    "[islands-combined] Island scan done in {:.1}s — {} islands (rasterize {:.1}s + scan {:.1}s = {:.1}s)",
-                    scan_sec + rasterize_sec, result.islands.len(), rasterize_sec, scan_sec, rasterize_sec + scan_sec,
-                );
-                let _ = app_a.emit("island-scan-progress", serde_json::json!({ "done": 65, "total": 100 }));
-                result
-            });
-
-            // Thread B: mesh minima scan (uses rayon internally)
-            let minima_handle = s.spawn(|| {
-                log::info!("[islands-combined] Running mesh minima scan (k={})…", k.unwrap_or(2));
-                let minima_start = std::time::Instant::now();
-                let minima = scan_minima_internal(&mesh, k);
-                let minima_sec = minima_start.elapsed().as_secs_f64();
-                log::info!("[islands-combined] Minima scan done in {:.1}s — {} minima", minima_sec, minima.len());
-                let _ = app_b.emit("island-scan-progress", serde_json::json!({ "done": 80, "total": 100 }));
-                minima
-            });
-
-            // Thread C: overhang (mesh-normal) classification — the same mesh
-            // the voxel/minima paths use, so the TS side never round-trips
-            // geometry for it.
-            let overhang_handle = s.spawn(|| {
-                log::info!("[islands-combined] Running overhang classification (angle={}°)…", angle_deg);
-                let oh_start = std::time::Instant::now();
-                let regions = overhang::classify_overhangs(&mesh, angle_deg, oh_px_mm);
-                log::info!(
-                    "[islands-combined] Overhang classification done in {:.1}s — {} regions",
-                    oh_start.elapsed().as_secs_f64(),
-                    regions.len(),
-                );
-                let _ = app_c.emit("island-scan-progress", serde_json::json!({ "done": 90, "total": 100 }));
-                regions
-            });
-
-            (
-                voxel_handle.join().unwrap(),
-                minima_handle.join().unwrap(),
-                overhang_handle.join().unwrap(),
-            )
-        });
-
-        // ── 3. Build Z-bucket index for surface-snapping projections ──────
-        let z_min = bbox.min.z;
-        let z_max = bbox.max.z;
-        let z_range = (z_max - z_min) as f32;
-        let num_buckets = 128;
-        let mut z_buckets = vec![Vec::new(); num_buckets];
-        for fi in 0..tri_count {
-            let [v0, v1, v2] = mesh.tri_positions(fi as u32);
-            let t_min_z = v0.z.min(v1.z).min(v2.z);
-            let t_max_z = v0.z.max(v1.z).max(v2.z);
-            if z_range > 1e-5 {
-                let b_start = (((t_min_z - z_min) / z_range) * (num_buckets as f32 - 1.0)).floor().max(0.0) as usize;
-                let b_end = (((t_max_z - z_min) / z_range) * (num_buckets as f32 - 1.0)).ceil().min(num_buckets as f32 - 1.0) as usize;
-                for b in b_start..=b_end {
-                    z_buckets[b].push(fi as u32);
-                }
-            } else {
-                z_buckets[0].push(fi as u32);
+                None
             }
         }
+    } else {
+        None
+    };
 
-        // ── 4. Surface-snap contacts in parallel via rayon ────────────────
-        let epsilon = (layer_height_mm * 1.5) as f32;
-        let snap_start = std::time::Instant::now();
-        let voxel_islands: Vec<VoxelIsland> = scan_result
-            .islands
-            .par_iter()
-            .enumerate()
-            .map(|(idx, island)| {
-                let (contact_x, contact_y, contact_z) = if let Some(seed) = island.seed_voxel {
-                    (
-                        (ox + seed.x * px_mm + px_mm * 0.5) as f32,
-                        (-(oz + seed.y * px_mm)) as f32,
-                        (bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm) as f32,
-                    )
-                } else if let Some(c) = island.centroid {
-                    (
-                        (ox + c.x * px_mm + px_mm * 0.5) as f32,
-                        (-(oz + c.y * px_mm)) as f32,
-                        (bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm) as f32,
-                    )
-                } else {
-                    (0.0_f32, 0.0_f32, 0.0_f32)
-                };
-
-                let contact = snap_to_surface(
-                    contact_x, contact_y, contact_z,
-                    epsilon, &z_buckets, z_min, z_range, num_buckets, &mesh,
-                );
-
-                VoxelIsland {
-                    id: format!("v{}", idx),
-                    source: "voxel".to_string(),
-                    contact,
-                    base_z: contact_z as f64,
-                    // Contact footprint = base-layer area, not accumulated area.
-                    area_mm2: island
-                        .per_layer_area_mm2
-                        .get(&island.first_layer)
-                        .copied()
-                        .unwrap_or(island.total_area_mm2) as f32,
-                    layer_span: [island.first_layer, island.last_layer],
-                }
-            })
-            .collect();
-        log::info!(
-            "[islands-combined] Surface snapping done in {:.1}s for {} islands",
-            snap_start.elapsed().as_secs_f64(),
-            voxel_islands.len(),
-        );
-
-        log::info!(
-            "[islands-combined] Complete: {} voxel islands, {} minima islands, {} overhang regions",
-            voxel_islands.len(),
-            minima_islands.len(),
-            overhang_islands.len(),
-        );
-
-        let _ = app.emit("island-scan-progress", serde_json::json!({ "done": 100, "total": 100 }));
-
-        Ok(CombinedIslandScanResult {
-            voxel_islands,
-            minima_islands,
-            overhang_islands,
-        })
+    tauri::async_runtime::spawn_blocking(move || {
+        let mesh = load_and_transform_mesh(&file_path, matrix, center)?;
+        let staged_overhang_mesh = staged_overhang_soup
+            .as_deref()
+            .map(|soup| IndexedMesh::from_triangle_soup(soup, 1e-5));
+        scan_islands_from_mesh(
+            app,
+            mesh,
+            staged_overhang_mesh,
+            layer_height_mm,
+            px_mm,
+            support_buffer_mm,
+            connectivity,
+            k,
+            overhang_self_support_angle_deg,
+            overhang_px_mm,
+            has_raft,
+        )
     })
     .await
     .map_err(|e| format!("Combined island scan panicked: {e}"))?
 }
+
+/// Combined island scan against the staged world-space triangle soup.
+///
+/// This is the pathless-model entrypoint (a VOXL has no source file): the
+/// frontend stages exactly the positions it renders, so every returned
+/// `triangleId` indexes the rendered geometry. It consumes the staged buffer.
+#[tauri::command]
+pub async fn scan_islands_staged(
+    app: crate::DragonFruitAppHandle,
+    layer_height_mm: f64,
+    px_mm: f64,
+    support_buffer_mm: f64,
+    connectivity: u8,
+    k: Option<usize>,
+    overhang_self_support_angle_deg: Option<f32>,
+    overhang_px_mm: Option<f32>,
+    has_raft: Option<bool>,
+) -> Result<CombinedIslandScanResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = crate::staged_mesh()
+            .lock()
+            .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
+            .take()
+            .ok_or("No staged mesh binary — call stage_mesh_binary_set first")?;
+        let soup = crate::bytes_to_f32_vec(&bytes)?;
+        if soup.is_empty() || soup.len() % 9 != 0 {
+            return Err(format!(
+                "Staged island scan needs a triangle soup (9 floats per triangle); got {} floats",
+                soup.len()
+            ));
+        }
+        let mesh = IndexedMesh::from_triangle_soup(&soup, 1e-5);
+        scan_islands_from_mesh(
+            app,
+            mesh,
+            None,
+            layer_height_mm,
+            px_mm,
+            support_buffer_mm,
+            connectivity,
+            k,
+            overhang_self_support_angle_deg,
+            overhang_px_mm,
+            has_raft,
+        )
+    })
+    .await
+    .map_err(|e| format!("Staged island scan panicked: {e}"))?
+}
+
 
 /// Surface-snap a raw contact coordinate to the nearest mesh surface triangle
 /// via bidirectional raycasting within a Z-bucket index. Thread-safe: reads

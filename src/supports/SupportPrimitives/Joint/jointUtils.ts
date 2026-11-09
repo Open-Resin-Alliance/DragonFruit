@@ -1,4 +1,4 @@
-import { Trunk, Branch, Twig, Stick, Segment, Joint, Vec3, Roots, Knot, BezierSegment } from '../../types';
+import { Trunk, Segment, Joint, Vec3, Roots, Knot, BezierSegment } from '../../types';
 import * as THREE from 'three';
 import { v4 as uuidv4 } from 'uuid';
 import { getSocketPosition, getFinalSocketPosition } from '../ContactCone';
@@ -8,6 +8,8 @@ import { getBezierPointAtT, toVector3, subdivideCubicBezier, toVec3 } from '../.
 import { getKnotById } from '../../state';
 import { solveJointConstraint } from '../../PlacementLogic/JointConstraintSolver';
 import { remapKnotAcrossSplit, type KnotSplitRemap } from '../Knot/knotUtils';
+import { getSupportTypeDescriptor, resolveSupportTypeIdOf } from '../../supportTypeRegistry';
+import type { ShaftEntity } from '../Knot/segmentEndpoints';
 
 function remapKnotsForSplit(
     knots: Record<string, Knot> | undefined,
@@ -26,9 +28,8 @@ function remapKnotsForSplit(
 
 /**
  * Generic segment splitter that preserves bezier geometry via De Casteljau
- * subdivision and falls back to a linear split. Host-specific start/end
- * resolution is supplied by the light wrappers below so the core logic lives
- * in one place (Jo review: single place to change split geometry).
+ * subdivision and falls back to a linear split. Start and end resolution are
+ * supplied by splitSupportShaft, which reads them from the registry.
  */
 function splitSegmentArray(
     segments: Segment[],
@@ -106,133 +107,76 @@ function splitSegmentArray(
 }
 
 
+/** The host a type's lower endpoint needs, when it needs one. */
+export interface SplitHosts {
+    root?: Roots;
+    hostKnot?: Knot;
+}
+
 /**
- * Splits a trunk shaft segment by inserting a new joint.
+ * Splits a shaft segment on any type, inserting a joint at `splitPoint`.
+ * Start and end come from the declared endpoints; `shaftFallback` covers
+ * what to do when neither resolves.
+ *
+ * The type comes off the entity. One that carries no type is not a support, so
+ * nothing is split and a warning says which segment was asked for.
  */
-export function splitShaft(
-    trunk: Trunk,
+export function splitSupportShaft<T extends ShaftEntity>(
+    entity: T,
     segmentId: string,
     splitPoint: Vec3,
     splitT?: number,
-    root?: Roots,
-    knots?: Record<string, Knot>
-): { trunk: Trunk; knotRemaps: KnotSplitRemap[] } {
+    hosts: SplitHosts = {},
+    knots?: Record<string, Knot>,
+): { entity: T; knotRemaps: KnotSplitRemap[] } {
+    const typeId = resolveSupportTypeIdOf(entity);
+    if (!typeId) {
+        console.warn('[JointUtils] Segment has no support type:', segmentId, entity.id);
+        return { entity, knotRemaps: [] };
+    }
+    const descriptor = getSupportTypeDescriptor(typeId);
+    const { stubLengthMm, startFallsBackToSplitPoint } = descriptor.shaftFallback;
+    const unresolved = startFallsBackToSplitPoint ? splitPoint : null;
+
     const res = splitSegmentArray(
-        trunk.segments,
+        entity.segments,
         segmentId,
         splitPoint,
         splitT,
         (segIndex, seg) => {
-            if (seg.bottomJoint) return seg.bottomJoint.pos;
-            if (segIndex === 0 && root) {
-                const rPos = root.transform.pos;
-                const startZ = rPos.z + root.diskHeight + root.coneHeight;
-                return { x: rPos.x, y: rPos.y, z: startZ };
+            // A knot-hosted shaft starts at its host; the others read the joint
+            // first, matching resolveSegmentEndpoints.
+            if (descriptor.lower.kind !== 'knot' && seg.bottomJoint) return seg.bottomJoint.pos;
+            if (segIndex === 0) {
+                if (descriptor.lower.kind === 'plateRoot' && hosts.root) {
+                    const rPos = hosts.root.transform.pos;
+                    return { x: rPos.x, y: rPos.y, z: rPos.z + hosts.root.diskHeight + hosts.root.coneHeight };
+                }
+                if (descriptor.lower.kind === 'knot') return hosts.hostKnot?.pos ?? unresolved;
+                return seg.bottomJoint?.pos ?? unresolved;
             }
-            if (segIndex > 0) return trunk.segments[segIndex - 1].topJoint?.pos ?? null;
-            return null;
+            return entity.segments[segIndex - 1].topJoint?.pos ?? unresolved;
         },
         (startPos, seg) => {
             if (seg.topJoint) return seg.topJoint.pos;
-            if (trunk.contactCone) return getFinalSocketPosition(trunk.contactCone);
-            return { x: startPos.x, y: startPos.y, z: startPos.z + 10 };
-        }
-    );
-    if (!res) {
-        console.warn('[JointUtils] Segment not found:', segmentId);
-        return { trunk, knotRemaps: [] };
-    }
-    const knotRemaps = remapKnotsForSplit(knots, segmentId, res.topSegmentId, splitT);
-    return { trunk: { ...trunk, segments: res.newSegments }, knotRemaps };
-}
-
-/**
- * Splits a branch shaft segment by inserting a new joint.
- * Identical to splitShaft but for branches (which start at a knot instead of roots).
- */
-export function splitBranchShaft(
-    branch: Branch,
-    segmentId: string,
-    splitPoint: Vec3,
-    splitT?: number,
-    parentKnot?: Knot,
-    knots?: Record<string, Knot>
-): { branch: Branch; knotRemaps: KnotSplitRemap[] } {
-    const res = splitSegmentArray(
-        branch.segments,
-        segmentId,
-        splitPoint,
-        splitT,
-        (segIndex) => {
-            if (segIndex === 0) return parentKnot?.pos ?? null;
-            return branch.segments[segIndex - 1].topJoint?.pos ?? null;
+            const upper = descriptor.upper;
+            if (upper.field && (upper.kind === 'cone' || upper.kind === 'disk')) {
+                const contact = (entity as unknown as Record<string, unknown>)[upper.field];
+                if (contact) return getFinalSocketPosition(contact as Parameters<typeof getFinalSocketPosition>[0]);
+            }
+            return { x: startPos.x, y: startPos.y, z: startPos.z + stubLengthMm };
         },
-        (startPos, seg) => {
-            if (seg.topJoint) return seg.topJoint.pos;
-            if (branch.contactCone) return getFinalSocketPosition(branch.contactCone);
-            return { x: startPos.x, y: startPos.y, z: startPos.z + 5 };
-        }
     );
-    if (!res) {
-        console.warn('[JointUtils] Segment not found in branch:', segmentId);
-        return { branch, knotRemaps: [] };
-    }
-    const knotRemaps = remapKnotsForSplit(knots, segmentId, res.topSegmentId, splitT);
-    return { branch: { ...branch, segments: res.newSegments }, knotRemaps };
-}
 
-export function splitTwigShaft(
-    twig: Twig,
-    segmentId: string,
-    splitPoint: Vec3,
-    splitT?: number,
-    knots?: Record<string, Knot>
-): { twig: Twig; knotRemaps: KnotSplitRemap[] } {
-    const res = splitSegmentArray(
-        twig.segments,
-        segmentId,
-        splitPoint,
-        splitT,
-        (segIndex, seg) => {
-            if (segIndex === 0) return seg.bottomJoint?.pos ?? splitPoint;
-            return twig.segments[segIndex - 1].topJoint?.pos ?? splitPoint;
-        },
-        (startPos, seg) => seg.topJoint?.pos ?? { x: startPos.x, y: startPos.y, z: startPos.z + 5 }
-    );
     if (!res) {
-        console.warn('[JointUtils] Segment not found in twig:', segmentId);
-        return { twig, knotRemaps: [] };
+        console.warn('[JointUtils] Segment not found:', segmentId, 'on', typeId);
+        return { entity, knotRemaps: [] };
     }
-    const knotRemaps = remapKnotsForSplit(knots, segmentId, res.topSegmentId, splitT);
-    return { twig: { ...twig, segments: res.newSegments }, knotRemaps };
+    return {
+        entity: { ...entity, segments: res.newSegments },
+        knotRemaps: remapKnotsForSplit(knots, segmentId, res.topSegmentId, splitT),
+    };
 }
-
-export function splitStickShaft(
-    stick: Stick,
-    segmentId: string,
-    splitPoint: Vec3,
-    splitT?: number,
-    knots?: Record<string, Knot>
-): { stick: Stick; knotRemaps: KnotSplitRemap[] } {
-    const res = splitSegmentArray(
-        stick.segments,
-        segmentId,
-        splitPoint,
-        splitT,
-        (segIndex, seg) => {
-            if (segIndex === 0) return seg.bottomJoint?.pos ?? splitPoint;
-            return stick.segments[segIndex - 1].topJoint?.pos ?? splitPoint;
-        },
-        (startPos, seg) => seg.topJoint?.pos ?? { x: startPos.x, y: startPos.y, z: startPos.z + 5 }
-    );
-    if (!res) {
-        console.warn('[JointUtils] Segment not found in stick:', segmentId);
-        return { stick, knotRemaps: [] };
-    }
-    const knotRemaps = remapKnotsForSplit(knots, segmentId, res.topSegmentId, splitT);
-    return { stick: { ...stick, segments: res.newSegments }, knotRemaps };
-}
-
 
 export function findClosestSegment(trunk: Trunk, root: Roots, point: Vec3): { segment: Segment, t: number, pointOnLine: Vec3 } | null {
     // Reconstruct skeleton start
@@ -327,7 +271,7 @@ export function findClosestSegment(trunk: Trunk, root: Roots, point: Vec3): { se
 import { checkShaftCollision } from '../../PlacementLogic/CollisionUtils';
 import { calculateSafeOffset } from '../../PlacementLogic/CollisionAvoidance';
 import { updateCurvesAtJoint } from '../../Curves/curveUtils';
-import { getSettings } from '../../Settings';
+import { getSettings } from '../../Settings/state';
 
 import { clampShaftAngle } from '../../PlacementLogic/ShaftAngleConstraint';
 

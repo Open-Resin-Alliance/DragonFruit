@@ -154,6 +154,7 @@ export function RtspRelayCanvasPlayer({
 
     const normalizedUrl = url.trim();
     if (!/^wss?:\/\//i.test(normalizedUrl)) {
+      // i18n-ignore: technical error reported by the relay player
       emitError(`Unsupported rtsp-relay websocket URL: ${normalizedUrl || '(empty)'}`);
       return;
     }

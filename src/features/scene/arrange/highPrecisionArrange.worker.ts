@@ -83,6 +83,7 @@ self.onmessage = (event: MessageEvent<HighPrecisionArrangeWorkerRequest>) => {
       widthMm: msg.input.widthMm,
       depthMm: msg.input.depthMm,
       originMode: msg.input.originMode,
+      plateOffsetMm: msg.input.plateOffsetMm,
       arrangeSpacingMm: msg.input.arrangeSpacingMm,
       arrangeAllowRotateOnZ: msg.input.arrangeAllowRotateOnZ,
       arrangeAnchorMode: msg.input.arrangeAnchorMode,

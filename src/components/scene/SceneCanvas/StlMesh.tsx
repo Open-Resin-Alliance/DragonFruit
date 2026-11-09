@@ -2,9 +2,11 @@
 
 import React, { useEffect } from 'react';
 import * as THREE from 'three';
+import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
+import { MODEL_EDGE_OVERLAY_ENABLED } from '@/hooks/useStlGeometry';
 import { useFrame, useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
-import { MeshShaderMaterial, type MeshShaderType } from '@/features/shaders/mesh';
+import { MeshShaderMaterial, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
 import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
 import { OpaqueWireOverlayMaterial } from '@/features/shaders/mesh/opaqueWireMesh';
 import {
@@ -18,11 +20,20 @@ import {
   ensureMeshSmoothingEngineReady,
 } from '@/features/mesh-smoothing/meshSmoothingEngine';
 import { clampMeshSmoothingBrushSizeMm, getMeshSmoothingSettings } from '@/features/mesh-smoothing/settings';
+import {
+  paintSupportBlockers,
+  beginSupportBlockerStroke,
+  setSupportBlockerHover,
+} from '@/supports/autoSupport/supportBlockers';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 import { MARQUEE_CANDIDATE_TINT_FACTOR } from '@/utils/marqueeCandidateTint';
+import { getSupportPlacementGuideZ } from './supportPlacementGuideStore';
+import { useOptimisticSelectedModelId } from './optimisticModelSelection';
+import { BAKED_OCCLUSION_ATTRIBUTE, bakedOcclusionStrength, bakedOcclusionVersion, getBakedOcclusionServerVersion, subscribeToBakedOcclusionVersions } from '@/features/scene/bakedOcclusion';
+import { prewarmSupportPlacementAsync } from '@/supports/PlacementLogicV3/supportPlacementPrewarm';
 
 // Scratch raycaster reused for clip-zone fallback raycasts.
 const _clipFallbackRaycaster = new THREE.Raycaster();
@@ -35,6 +46,208 @@ const _interiorCavityRaycastMesh = new THREE.Mesh();
 // result by quantised ray origin + direction eliminates redundant raycasts
 // when the pointer hasn't moved meaningfully.
 const _clipCacheQuant = 0.15; // mm position quantisation
+const EMPTY_BODY_INDICES: number[] = [];
+
+/** Stencil passes for the selection silhouette: the mask, then the rim above the scene. */
+const MATERIAL_OUTLINE_MASK_ORDER = 100000;
+const MATERIAL_OUTLINE_ORDER = 100001;
+const MATERIAL_HOVER_OUTLINE_MASK_ORDER = 99998;
+const MATERIAL_HOVER_OUTLINE_ORDER = 99999;
+
+/**
+ * One body of a multi-body 3MF. When a body is selected it has to sit above its
+ * X-rayed neighbours even where a neighbour's surface is nearer the camera (a box
+ * around a sphere), so the selected body is drawn last, in the transparent pass,
+ * without depth testing. Everything else behaves like any opaque surface.
+ */
+function BodySurface({
+  geometry,
+  position,
+  color,
+  shaderType,
+  selected,
+  hiddenBySelectedBody,
+  hovered,
+  useVertexColors,
+  hoverTintColor,
+  selectedTintColor,
+  hoverTintStrength,
+  selectedTintStrength,
+  matcapVariant,
+  flatUseVertexColors,
+  materialRoughness,
+  clippingPlanes,
+  xrayOpacity,
+  heatmapMinAngle,
+  heatmapMaxAngle,
+  heatmapColors,
+  bakedAoStrength,
+}: {
+  geometry: THREE.BufferGeometry;
+  position: THREE.Vector3;
+  color?: string;
+  shaderType: MeshShaderType;
+  selected: boolean;
+  /** X-rayed while another body of the same model is selected: masked against it. */
+  hiddenBySelectedBody: boolean;
+  hovered: boolean;
+  useVertexColors: boolean;
+  hoverTintColor?: string;
+  selectedTintColor?: string;
+  hoverTintStrength?: number;
+  selectedTintStrength?: number;
+  matcapVariant?: MatcapVariant;
+  flatUseVertexColors?: boolean;
+  materialRoughness?: number;
+  clippingPlanes: THREE.Plane[];
+  xrayOpacity?: number;
+  heatmapMinAngle?: number;
+  heatmapMaxAngle?: number;
+  heatmapColors?: string[];
+  bakedAoStrength?: number;
+}) {
+  const meshRef = React.useRef<THREE.Mesh>(null);
+  // An X-rayed neighbour is stencil-masked against the selected body's silhouette,
+  // which is drawn by its rim pass. That keeps the selected body's own surface an
+  // ordinary opaque draw — lifting it through the transparent pass made a hollow
+  // box self-overdraw and look like glass.
+  const savedByMaterial = React.useRef(new Map<string, {
+    stencilWrite: boolean;
+    stencilRef: number;
+    stencilFunc: THREE.StencilFunc;
+    stencilFail: THREE.StencilOp;
+    stencilZFail: THREE.StencilOp;
+    stencilZPass: THREE.StencilOp;
+  }>());
+
+  React.useEffect(() => {
+    const material = meshRef.current?.material as THREE.Material | undefined;
+    if (!material) return;
+    const saved = savedByMaterial.current;
+    const key = material.uuid;
+
+    if (hiddenBySelectedBody) {
+      if (!saved.has(key)) {
+        saved.set(key, {
+          stencilWrite: material.stencilWrite,
+          stencilRef: material.stencilRef,
+          stencilFunc: material.stencilFunc,
+          stencilFail: material.stencilFail,
+          stencilZFail: material.stencilZFail,
+          stencilZPass: material.stencilZPass,
+        });
+      }
+      material.stencilWrite = true;
+      material.stencilRef = 1;
+      material.stencilFunc = THREE.NotEqualStencilFunc;
+      material.stencilFail = THREE.KeepStencilOp;
+      material.stencilZFail = THREE.KeepStencilOp;
+      material.stencilZPass = THREE.KeepStencilOp;
+    } else {
+      const prior = saved.get(key);
+      if (!prior) return;
+      Object.assign(material, prior);
+      saved.delete(key);
+    }
+    material.needsUpdate = true;
+  }, [hiddenBySelectedBody, shaderType]);
+
+  return (
+    <mesh
+      ref={meshRef}
+      geometry={geometry}
+      position={position}
+      renderOrder={selected ? 0 : 10010}
+      raycast={() => {}}
+    >
+      <MeshShaderMaterial
+        shaderType={shaderType}
+        isSelected={selected}
+        isHovered={hovered}
+        useVertexColors={useVertexColors}
+        hoverTintColor={hoverTintColor}
+        selectedTintColor={selectedTintColor}
+        hoverTintStrength={hoverTintStrength}
+        selectedTintStrength={selectedTintStrength}
+        meshColor={color}
+        matcapVariant={matcapVariant}
+        flatUseVertexColors={flatUseVertexColors}
+        materialRoughness={materialRoughness}
+        clippingPlanes={clippingPlanes}
+        xrayOpacity={xrayOpacity}
+        heatmapMinAngle={heatmapMinAngle}
+        heatmapMaxAngle={heatmapMaxAngle}
+        heatmapColors={heatmapColors}
+        bakedAoStrength={bakedAoStrength}
+      />
+    </mesh>
+  );
+}
+
+type MaterialOutlineRimProps = {
+  geometry: THREE.BufferGeometry;
+  position: THREE.Vector3;
+  scale: number;
+  color: string;
+  opacity: number;
+  maskOrder: number;
+  rimOrder: number;
+  planes?: THREE.Plane[];
+};
+
+/**
+ * A stencil-masked silhouette: backfaces of the model, expanded, drawn only where
+ * the model's own stencil is clear, with no depth test.
+ *
+ * Without the mask a depth-test-free rim paints the whole model; without clearing
+ * the depth test it is hidden under the plate and grid, which draw after it.
+ */
+function MaterialOutlineRim({
+  geometry,
+  position,
+  scale,
+  color,
+  opacity,
+  maskOrder,
+  rimOrder,
+  planes,
+}: MaterialOutlineRimProps) {
+  return (
+    <>
+      <mesh geometry={geometry} position={position} renderOrder={maskOrder} raycast={() => {}}>
+        <meshBasicMaterial
+          colorWrite={false}
+          depthWrite={false}
+          depthTest={false}
+          stencilWrite
+          stencilRef={1}
+          stencilFunc={THREE.AlwaysStencilFunc}
+          stencilZPass={THREE.ReplaceStencilOp}
+          clippingPlanes={planes}
+        />
+      </mesh>
+      <mesh geometry={geometry} position={position} scale={scale} renderOrder={rimOrder} raycast={() => {}}>
+        <meshBasicMaterial
+          color={color}
+          side={THREE.BackSide}
+          transparent
+          opacity={opacity}
+          depthWrite={false}
+          depthTest={false}
+          // Mask wrote 1 across the model; draw the rim only where it is not 1.
+          stencilWrite
+          stencilRef={1}
+          stencilFunc={THREE.NotEqualStencilFunc}
+          stencilFail={THREE.KeepStencilOp}
+          stencilZFail={THREE.KeepStencilOp}
+          stencilZPass={THREE.KeepStencilOp}
+          toneMapped={false}
+          clippingPlanes={planes}
+        />
+      </mesh>
+    </>
+  );
+}
 let _clipCacheKey = '';
 let _clipCacheResult: THREE.Intersection | null = null;
 
@@ -109,8 +322,14 @@ function findInteriorCavityHit(
 ): THREE.Intersection | null {
   const rc = _interiorCavityRaycaster;
   rc.ray.copy(ray);
+  // The ray comes from the camera, so its origin sits wherever the current zoom
+  // puts it — hundreds of scene units away, and the number grows without bound as
+  // the user zooms out. An absolute bound here silently misses the cavity (the
+  // first hit is simply out of range) and both the hole-punch and the support
+  // press then bail, which is what "interior placement stopped working" looks
+  // like. `firstHitOnly` already makes this cheap, so there is no bound to keep.
   rc.near = 0;
-  rc.far = 500;
+  rc.far = Infinity;
   (rc as any).firstHitOnly = true;
 
   const mesh = _interiorCavityRaycastMesh;
@@ -161,6 +380,20 @@ function hasVisibleNonModelIntersection(
   return false;
 }
 
+function hasVisibleHolePunchIntersection(
+  intersections: THREE.Intersection[],
+  clipLower: number | null | undefined,
+  clipUpper: number | null | undefined,
+): boolean {
+  for (const hit of intersections) {
+    if (hit.object.userData.isHolePunch !== true) continue;
+    if (clipUpper != null && hit.point.z > clipUpper) continue;
+    if (clipLower != null && hit.point.z < clipLower) continue;
+    return true;
+  }
+  return false;
+}
+
 function StlMeshComponent({
   geometry,
   clipLower,
@@ -169,10 +402,10 @@ function StlMeshComponent({
   meshRef,
   actualMeshRef,
   materialRoughness,
+  bakedAoIntensity = 1,
   shaderType,
   matcapVariant,
   flatUseVertexColors,
-  toonSteps,
   xrayOpacity,
   heatmapMinAngle,
   heatmapMaxAngle,
@@ -194,10 +427,11 @@ function StlMeshComponent({
   suppressNextClickRef,
   modelId,
   isSelected,
+  materialOutlineEnabled = false,
+  bodyGeometries,
+  bodyColors,
+  selectedBodyIndices = EMPTY_BODY_INDICES,
   isMarqueeCandidate,
-  isBranchPlacementActive,
-  isLeafPlacementActive,
-  isBracePlacementActive,
   onModelHoverPointChange,
   onModelHoverModelChange,
   revealGhostOpacity,
@@ -210,7 +444,7 @@ function StlMeshComponent({
   outOfBoundsMin,
   outOfBoundsMax,
   outOfBoundsStripeColor,
-  supportPlacementGuidePlaneZ,
+  supportPlacementGuideEnabled,
   supportPlacementGuideColor,
   supportPlacementGuideLineWidthMm,
   supportPlacementGuideOpacity,
@@ -236,17 +470,18 @@ function StlMeshComponent({
   /** Ref to the actual mesh (for outline effect) */
   actualMeshRef?: React.Ref<THREE.Mesh | null>;
   materialRoughness?: number;
+  /** Multiplier on the baked occlusion's strength; 0 means the bake is off. */
+  bakedAoIntensity?: number;
   shaderType: MeshShaderType;
   matcapVariant?: import('@/features/shaders/mesh').MatcapVariant;
   flatUseVertexColors?: boolean;
-  toonSteps?: number;
   xrayOpacity?: number;
   heatmapMinAngle?: number;
   heatmapMaxAngle?: number;
   heatmapColors?: string[];
   /** When true, overlays black edge lines on model geometry for better shape definition. */
   higherContrastModelEdges?: boolean;
-  /** Pre-computed hard-edge geometry for Higher Contrast Model Edges overlay. */
+  /** Hard-edge geometry for the overlay, built when the setting is on. */
   edgeGeometry?: THREE.EdgesGeometry | null;
   /** When true, suppresses the edge overlay (e.g. during voxel blocker editing). */
   blockerEditMode?: boolean;
@@ -272,15 +507,26 @@ function StlMeshComponent({
   suppressNextClickRef?: React.RefObject<boolean>;
   /** Model ID for picking registration */
   modelId: string;
+  /**
+   * A multi-body 3MF's bodies, in this model's local space. When their resolved
+   * colours differ (or one is selected) each body is drawn on its own so it can
+   * carry its own material colour without splitting the model.
+   */
+  bodyGeometries?: THREE.BufferGeometry[];
+  /** Resolved colour per body, aligned with `bodyGeometries`. */
+  bodyColors?: Array<string | undefined>;
+  /** Indices of this model's bodies that are selected. */
+  selectedBodyIndices?: number[];
+  /**
+   * Draw a silhouette around the selected model. Multi-material printing colours
+   * each mesh by its resin, so the selection tint alone can disappear into a
+   * similar hue; the outline is the second, colour-independent cue.
+   */
+  materialOutlineEnabled?: boolean;
   /** Whether model is selected (tints material) */
   isSelected?: boolean;
   /** Whether model is currently inside marquee drag window */
   isMarqueeCandidate?: boolean;
-  /** Whether branch placement mode is active (Alt held) */
-  isBranchPlacementActive?: boolean;
-  /** Whether leaf placement mode is active (Alt+Shift held) */
-  isLeafPlacementActive?: boolean;
-  isBracePlacementActive?: boolean;
   onModelHoverPointChange?: (point: THREE.Vector3 | null) => void;
   onModelHoverModelChange?: (modelId: string | null) => void;
   revealGhostOpacity?: number;
@@ -294,7 +540,8 @@ function StlMeshComponent({
   outOfBoundsMin?: THREE.Vector3 | null;
   outOfBoundsMax?: THREE.Vector3 | null;
   outOfBoundsStripeColor?: string;
-  supportPlacementGuidePlaneZ?: number | null;
+  /** Mounts the placement guide overlay; hover and drag enter/leave only, never per move. */
+  supportPlacementGuideEnabled?: boolean;
   supportPlacementGuideColor?: string;
   supportPlacementGuideLineWidthMm?: number;
   supportPlacementGuideOpacity?: number;
@@ -315,6 +562,59 @@ function StlMeshComponent({
   children?: React.ReactNode;
 }) {
   // Access GPU picking state to detect gizmo hover
+  // A viewport click announces its model before the page selection render
+  // lands; only the clicked mesh changes tint for that frame.
+  const optimisticSelectedModelId = useOptimisticSelectedModelId();
+  // A pending single-selection click is authoritative for the tint, so the
+  // previous model clears in the same frame instead of waiting for the commit.
+  const isEffectivelySelected = optimisticSelectedModelId !== null
+    ? optimisticSelectedModelId === modelId
+    : !!isSelected;
+  // In multi-material mode the mesh colour *is* the assigned resin, so selection is
+  // carried by the rim alone; tinting would hide the colour the user just chose.
+  // Hover keeps its tint, which is transient and not the selection cue.
+  const selectionTintActive = isEffectivelySelected && !materialOutlineEnabled;
+
+  // Inverted-hull silhouette: backfaces of the model, pushed out along a uniform
+  // scale. Sharing the geometry costs no extra vertex memory, and the shell is
+  // mounted only while this model is selected in multi-material mode. Thin and
+  // white on purpose - a rim, not a halo, and independent of the resin colour.
+  const materialHoverOutlineScale = React.useMemo(() => {
+    if (!materialOutlineEnabled) return 1;
+    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+    const radius = geometry.boundingSphere?.radius ?? 0;
+    if (!(radius > 0)) return 1;
+    return 1 + Math.min(0.008, 0.18 / radius);
+  }, [geometry, materialOutlineEnabled]);
+
+  const materialOutlineScale = React.useMemo(() => {
+    if (!materialOutlineEnabled || !isEffectivelySelected) return 1;
+    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+    const radius = geometry.boundingSphere?.radius ?? 0;
+    if (!(radius > 0)) return 1;
+    // A hairline: about 0.3 mm on a typical part, capped so small parts do not
+    // get a fat rim.
+    return 1 + Math.min(0.012, 0.3 / radius);
+  }, [geometry, isEffectivelySelected, materialOutlineEnabled]);
+
+  // Per-body drawing: only when the bodies actually differ in colour, or one is
+  // selected. A single-colour model keeps the one-mesh path.
+  // While one body is being worked on, its neighbours turn to X-ray: the selected
+  // body is the only solid one, and what it hides is visible through it.
+  const hasBodySelection = selectedBodyIndices.length > 0;
+  const bodyRenderInfos = React.useMemo(() => {
+    // Interior view draws its own cavity shell, and only the merged surface.
+    if (interiorView || !bodyGeometries || bodyGeometries.length < 2) return null;
+    const resolved = bodyGeometries.map((_, index) => bodyColors?.[index] ?? meshColor);
+    const distinct = new Set(resolved).size;
+    if (distinct < 2 && selectedBodyIndices.length === 0) return null;
+    return bodyGeometries.map((geometry, index) => ({
+      geometry,
+      color: resolved[index],
+      selected: selectedBodyIndices.includes(index),
+    }));
+  }, [bodyColors, bodyGeometries, interiorView, meshColor, selectedBodyIndices]);
+
   // Note: This works because StlMesh is rendered inside PickingProvider
   const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
   const [isPointerHovered, setIsPointerHovered] = React.useState(false);
@@ -348,24 +648,9 @@ function StlMeshComponent({
     } as THREE.Mesh['raycast'],
   );
 
-  // Build clipping planes directly from current props so clipping never lags
-  // by one frame when layer slider updates.
-  const planes = React.useMemo(() => {
-    const next: THREE.Plane[] = [];
-
-    if (clipLower != null) {
-      // Clip below clipLower in world space
-      // Normal points up (0,0,1), hide points where world Z < clipLower
-      next.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-    }
-    if (clipUpper != null) {
-      // Clip above clipUpper in world space
-      // Normal points down (0,0,-1), hide points where world Z > clipUpper
-      next.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-    }
-
-    return next;
-  }, [clipLower, clipUpper]);
+  // The scene's two shared planes, updated in place by the clip store. The
+  // identity and length never change, so a scrub never recompiles a material.
+  const planes = getSceneClipPlanes();
 
   React.useEffect(() => {
     if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
@@ -393,13 +678,33 @@ function StlMeshComponent({
     );
   }, [geometry]);
 
+  // Baked per-vertex occlusion (see docs/dev/backlog.md). The bake attaches the
+  // attribute in the background, so a model can gain it while mounted, and the
+  // geometry object keeps its identity — the store's per-geometry counter is what
+  // re-runs this memo. It is subscribed to rather than read from the `models`
+  // array, which every landing bake used to replace and invalidate the clearance
+  // map and the raft with.
+  const bakedAoVersion = React.useSyncExternalStore(
+    subscribeToBakedOcclusionVersions,
+    () => bakedOcclusionVersion(geometry),
+    getBakedOcclusionServerVersion,
+  );
+  const bakedAoStrength = React.useMemo(() => {
+    const occlusion = geometry.getAttribute(BAKED_OCCLUSION_ATTRIBUTE);
+    return occlusion && occlusion.count === geometry.getAttribute('position').count
+      ? bakedOcclusionStrength(bakedAoIntensity)
+      : 0;
+  }, [geometry, bakedAoVersion, bakedAoIntensity]);
+
   const hasVertexColorAttribute = React.useMemo(() => {
     const colorAttr = geometry.getAttribute('color');
     return !!colorAttr && colorAttr.count > 0;
   }, [geometry]);
 
-  // Edges geometry for Higher Contrast Model Edges overlay.
-  // Pre-computed during geometry import — no render-time cost.
+  // Edges geometry for Higher Contrast Model Edges overlay. Built by the
+  // geometry's own producer when the setting is on (see buildModelEdgeGeometry)
+  // and cached on GeometryWithBounds, so every remount reuses one build — no
+  // render-time or per-mount cost here.
   const edgeLinesGeometry = edgeGeometry ?? null;
 
   // Derive edge color from the selection accent color so edges read as a dark,
@@ -445,6 +750,46 @@ function StlMeshComponent({
       }
     };
   }, [modelId, register, unregister]);
+
+  /**
+   * Warm the distance field and column maps for the model that can receive
+   * placement, so the first Support hover never pays the router's cold-start
+   * build.
+   *
+   * The build runs in the column-map worker, but preparing it copies the
+   * model's position array, which is large enough to matter on a plate. So it
+   * runs in either editing mode, once the model has settled: opening Support
+   * later then finds the map already built, instead of the first hover paying
+   * for it. Prepare warms the active clearance only; Support warms the pinned
+   * presets' maps as well.
+   */
+  React.useEffect(() => {
+    if ((mode !== 'prepare' && mode !== 'support') || !isActiveModel) return;
+    const mesh = internalMeshRef.current;
+    if (!mesh) return;
+
+    let cancelled = false;
+    const warm = () => {
+      if (cancelled) return;
+      void prewarmSupportPlacementAsync(
+        mesh,
+        () => cancelled,
+        { allClearances: mode === 'support' },
+      ).catch(() => {
+        // The warmup is opportunistic; an unaccelerated mesh must not break
+        // the scene. The hover path reports the same problem if it matters.
+      });
+    };
+    // Debounced: a transform drag replaces the timer on every frame, so the
+    // worker is asked once the model settles rather than once per pointer move.
+    // Long enough that a gesture's release is settled, never on its frame.
+    const handle = window.setTimeout(warm, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [mode, isActiveModel, geometry, transform]);
 
   const defaultPosition = React.useMemo(() => new THREE.Vector3(0, 0, 0), []);
   const defaultQuaternion = React.useMemo(() => new THREE.Quaternion(), []);
@@ -577,6 +922,8 @@ function StlMeshComponent({
     ? isExternallyHoveredModel
     : (isExternallyHoveredModel || isHoveredModelFromPicking);
   const isMarqueeHovered = !shouldSuppressModelInteraction && !!isMarqueeCandidate;
+  // Multi-material meshes show their resin; hover is a faint rim, not a tint.
+  const hoverTintActive = (isHoveredModel || isMarqueeHovered) && !materialOutlineEnabled;
   const isSupportDimmed = typeof supportNonSelectedOpacity === 'number';
   isSupportDimmedRef.current = isSupportDimmed; // keep ref current every render
   const dimmedBaseOpacity = isSupportDimmed
@@ -705,7 +1052,7 @@ if (uDitherAmount > 0.0) {
     const selectionStrength = Math.min(1, Math.max(0.88, selectedTintStrength ?? 0.75));
     const hoverStrength = Math.min(1, Math.max(0.65, hoverTintStrength ?? 0.5));
 
-    if (isSelected) {
+    if (isEffectivelySelected) {
       return base.clone().lerp(supportTint, selectionStrength).getStyle();
     }
 
@@ -718,7 +1065,7 @@ if (uDitherAmount > 0.0) {
     }
 
     return base.getStyle();
-  }, [hoverTintStrength, isHoveredModel, isMarqueeHovered, isSelected, selectedTintStrength]);
+  }, [hoverTintStrength, isHoveredModel, isMarqueeHovered, isEffectivelySelected, selectedTintStrength]);
 
   const supportSectionOpacity = React.useMemo(() => {
     if (typeof revealGhostOpacity === 'number') {
@@ -785,9 +1132,11 @@ if (uDitherAmount > 0.0) {
     return material;
   }, [outOfBoundsMax, outOfBoundsMin, outOfBoundsStripeColor, showOutOfBoundsOverlay]);
 
-  const supportPlacementGuideEnabled = supportPlacementGuidePlaneZ != null && Number.isFinite(supportPlacementGuidePlaneZ);
-
   const supportPlacementGuideMaterial = React.useMemo(() => {
+    // Only the active model in placement mode draws the guide; every other mounted
+    // model used to build a ShaderMaterial it never rendered and then write its
+    // uniform on every frame.
+    if (!supportPlacementGuideEnabled) return null;
     const material = new THREE.ShaderMaterial({
       transparent: true,
       depthTest: true,
@@ -824,50 +1173,64 @@ if (uDitherAmount > 0.0) {
         uniform float uOpacity;
 
         void main() {
-          float distanceToPlane = abs(vWorldPos.z - uPlaneZ);
-          float baseHalfWidth = max(0.0005, uLineWidthMm * 0.5);
+          // How steeply the surface crosses the guide plane: 1 on a vertical
+          // wall, 0 on a face lying in the plane.
           vec3 worldNormal = normalize(vWorldNormal);
-          vec3 viewDir = normalize(cameraPosition - vWorldPos);
-          float ndotv = abs(dot(worldNormal, viewDir));
-          float grazing = 1.0 - ndotv;
-          float grazingComp = mix(1.0, 0.58, smoothstep(0.45, 0.96, grazing));
+          float slope = sqrt(max(0.0, 1.0 - worldNormal.z * worldNormal.z));
 
-          float compensatedHalfWidth = baseHalfWidth * grazingComp;
-          float aa = max(fwidth(vWorldPos.z) * 1.15, 0.0012);
+          // Distance from the plane's contour measured *along the surface*, so
+          // uLineWidthMm paints the same stripe width at any tilt. Measured in
+          // world Z alone the stripe smears to width / sin(tilt) -- a wide band
+          // on shallow faces, the whole face on one parallel to the plane.
+          float surfaceDist = abs(vWorldPos.z - uPlaneZ) / max(slope, 0.02);
+
+          float baseHalfWidth = max(0.0005, uLineWidthMm * 0.5);
+          float aa = max(fwidth(surfaceDist) * 1.15, 0.0012);
           float feather = min(
-            max(aa * 1.15, compensatedHalfWidth * 0.16),
-            max(aa * 1.1, compensatedHalfWidth * 0.55)
+            max(aa * 1.15, baseHalfWidth * 0.16),
+            max(aa * 1.1, baseHalfWidth * 0.55)
           );
 
-          float lineMask = 1.0 - smoothstep(compensatedHalfWidth - feather, compensatedHalfWidth + feather, distanceToPlane);
+          float lineMask = 1.0 - smoothstep(baseHalfWidth - feather, baseHalfWidth + feather, surfaceDist);
           if (lineMask <= 0.001) discard;
 
-          float alpha = uOpacity * lineMask;
+          // A face lying in the plane has no contour to trace, only a coincident
+          // region: keep it a faint wash rather than a stripe as wide as the face.
+          // Above ~3 degrees of tilt the stripe is real and gets full strength.
+          float slopeFade = mix(0.18, 1.0, smoothstep(0.01, 0.06, slope));
+
+          float alpha = uOpacity * lineMask * slopeFade;
           gl_FragColor = vec4(uLineColor, alpha);
         }
       `,
     });
 
     return material;
-  }, [planes]);
+  }, [planes, supportPlacementGuideEnabled]);
 
   React.useEffect(() => {
     if (!supportPlacementGuideMaterial) return;
 
-    supportPlacementGuideMaterial.uniforms.uPlaneZ.value = supportPlacementGuideEnabled
-      ? Number(supportPlacementGuidePlaneZ)
-      : 0;
     supportPlacementGuideMaterial.uniforms.uLineWidthMm.value = Math.max(0.02, supportPlacementGuideLineWidthMm ?? 0.24);
     supportPlacementGuideMaterial.uniforms.uOpacity.value = THREE.MathUtils.clamp(supportPlacementGuideOpacity ?? 0.62, 0, 1);
     (supportPlacementGuideMaterial.uniforms.uLineColor.value as THREE.Color).set(supportPlacementGuideColor ?? '#baf72e');
   }, [
     supportPlacementGuideColor,
-    supportPlacementGuideEnabled,
     supportPlacementGuideLineWidthMm,
     supportPlacementGuideMaterial,
     supportPlacementGuideOpacity,
-    supportPlacementGuidePlaneZ,
   ]);
+
+  // Plane Z is read from the store every frame instead of arriving as a prop:
+  // the cursor and a tip drag move it continuously, and any update deferred to
+  // a render pass quantizes it, which steps the line by z / tan(surface tilt)
+  // on screen.
+  useFrame(() => {
+    if (!supportPlacementGuideMaterial) return;
+    const planeZ = getSupportPlacementGuideZ();
+    supportPlacementGuideMaterial.uniforms.uPlaneZ.value =
+      typeof planeZ === 'number' && Number.isFinite(planeZ) ? planeZ : 0;
+  });
 
   // Red/clear striped overlay flagging a non-manifold model (failed the
   // manifold_csg status check). Uses the SAME world-space stripe seed and
@@ -938,6 +1301,7 @@ if (uDitherAmount > 0.0) {
 
   return (
     <group
+      userData={{ dfPerfGroup: 'models' }}
       ref={(node) => {
         groupRef.current = node;
         if (typeof meshRef === 'function') meshRef(node);
@@ -1003,7 +1367,7 @@ if (uDitherAmount > 0.0) {
             return;
           }
 
-          if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchClick) {
+          if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchClick) {
             const shouldOnlySelect = suppressNextHolePunchClickRef.current || !isActiveModel;
             suppressNextHolePunchClickRef.current = false;
             if (shouldOnlySelect) {
@@ -1019,16 +1383,15 @@ if (uDitherAmount > 0.0) {
               return;
             }
 
-            // In interior view, if a non-model object (placed hole punch) is behind
-            // the X-Ray front face, let the click propagate to it for selection.
-            if ((interiorView && cavityGeometry) && hasVisibleNonModelIntersection(e.intersections, e.object, null, null)) {
-              return;
-            }
-
             let clickHit: THREE.Intersection = e as unknown as THREE.Intersection;
             const isClippedHit =
               (clipUpper != null && e.point.z > clipUpper) ||
               (clipLower != null && e.point.z < clipLower);
+            // A placed punch behind a clipped or X-Ray front face owns the click.
+            // Other scene geometry must not prevent placement on the cavity wall.
+            if ((isClippedHit || (interiorView && cavityGeometry)) && hasVisibleHolePunchIntersection(e.intersections, clipLower, clipUpper)) {
+              return;
+            }
             if (isClippedHit || (interiorView && cavityGeometry)) {
               const fallback = interiorView && cavityGeometry
                 ? findInteriorCavityHit(e.ray, e.object, cavityGeometry, modelId)
@@ -1070,8 +1433,8 @@ if (uDitherAmount > 0.0) {
             return;
           }
 
-          // Support placement in support mode
-          if (mode === 'support' && onSupportClick) {
+          // Support placement in support mode — muted while painting blockers.
+          if (mode === 'support' && onSupportClick && transformMode !== 'supportBlockers') {
             if (blockSupportPlacement) return;
 
             // When cross-section is active and a visible support is behind
@@ -1106,7 +1469,7 @@ if (uDitherAmount > 0.0) {
         }}
         onPointerMove={(e) => {
           if (isSupportShiftGesture(e)) {
-            if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchHover) {
+            if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchHover) {
               onHolePunchHover(null);
             }
             if (!hasExternalHoverSource) schedulePointerHover(false);
@@ -1125,7 +1488,7 @@ if (uDitherAmount > 0.0) {
           // the model in the ray should not suppress model hover.
           const firstIsGizmo = e.intersections[0]?.object.userData?.isGizmoHandle === true;
           if (shouldSuppressModelInteraction || isGizmoHoverCategory || firstIsGizmo) {
-            if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchHover) {
+            if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchHover) {
               onHolePunchHover(null);
             }
             if (!hasExternalHoverSource) schedulePointerHover(false);
@@ -1137,7 +1500,7 @@ if (uDitherAmount > 0.0) {
 
           const isTopMostIntersection = e.intersections[0]?.object === e.object;
           if (!isTopMostIntersection) {
-            if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchHover) {
+            if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchHover) {
               onHolePunchHover(null);
             }
             if (!hasExternalHoverSource) schedulePointerHover(false);
@@ -1166,7 +1529,7 @@ if (uDitherAmount > 0.0) {
           if (propagateForNonModel && !primaryInClippedZone) {
             // Non-model is visible but model hit is in visible zone — suppress
             // model hover and don't consume the event.
-            if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchHover) {
+            if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchHover) {
               onHolePunchHover(null);
             }
             if (!hasExternalHoverSource) schedulePointerHover(false);
@@ -1209,7 +1572,7 @@ if (uDitherAmount > 0.0) {
             emitImmediateModelHover(modelId);
           }
 
-          if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchHover) {
+          if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchHover) {
             let hoverHit: THREE.Intersection | null = e as unknown as THREE.Intersection;
             if (primaryInClippedZone) {
               const fallback = findClipAwareHit(e.ray, e.object, clipLower, clipUpper, e.distance);
@@ -1242,8 +1605,30 @@ if (uDitherAmount > 0.0) {
               }
             }
           }
+          if ((mode === 'prepare' || mode === 'support') && transformMode === 'supportBlockers' && isActiveModel) {
+            if (isGizmoHoverCategory || isSupportLikeHoverCategory) {
+              setSupportBlockerHover(null, null);
+            } else {
+              const normal = e.face?.normal
+                ? e.face.normal
+                  .clone()
+                  .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(e.object.matrixWorld))
+                  .normalize()
+                : null;
+              setSupportBlockerHover(e.point.clone(), normal);
 
-          if (mode === 'support' && onSupportHover) {
+              // Paint blockers only while the left mouse button is held.
+              if ((e.buttons & 1) === 1 && !disableRaycast) {
+                const localPoint = smoothingScratchLocalPointRef.current;
+                localPoint.copy(e.point);
+                e.object.worldToLocal(localPoint);
+
+                paintSupportBlockers(modelId, geometry, localPoint);
+              }
+            }
+          }
+
+          if (mode === 'support' && onSupportHover && transformMode !== 'supportBlockers') {
             // Mute hover when placement is blocked
             if (blockSupportPlacement) return;
 
@@ -1291,12 +1676,15 @@ if (uDitherAmount > 0.0) {
           onModelHoverModelChange?.(null);
           emitImmediateModelHover(null);
 
-          if (mode === 'prepare' && transformMode === 'hollowing' && onHolePunchHover) {
+          if ((mode === 'prepare' || mode === 'support') && transformMode === 'hollowing' && onHolePunchHover) {
             onHolePunchHover(null);
           }
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
             setMeshSmoothingHover(null, null);
+          }
+          if ((mode === 'prepare' || mode === 'support') && transformMode === 'supportBlockers' && isActiveModel) {
+            setSupportBlockerHover(null, null);
           }
 
           if (mode === 'support' && onSupportHover) {
@@ -1306,6 +1694,13 @@ if (uDitherAmount > 0.0) {
         onPointerDown={(e) => {
           if (isSupportShiftGesture(e)) {
             return;
+          }
+
+          // The hole-punch click must know whether this press already selected
+          // the model: in Support the hollowing tool owns the canvas, so only
+          // its suppress flag is set here, not Prepare's selection dance.
+          if (!shouldSuppressModelInteraction && mode === 'support' && transformMode === 'hollowing' && onHolePunchClick && e.button === 0) {
+            suppressNextHolePunchClickRef.current = !isActiveModel;
           }
 
           if (!shouldSuppressModelInteraction && mode === 'prepare' && e.button === 0) {
@@ -1337,7 +1732,11 @@ if (uDitherAmount > 0.0) {
               return;
             }
 
-            if (!(interiorView && cavityGeometry)) e.stopPropagation();
+            const isClippedHollowingHit = transformMode === 'hollowing' && (
+              (clipUpper != null && e.point.z > clipUpper) ||
+              (clipLower != null && e.point.z < clipLower)
+            );
+            if (!isClippedHollowingHit && !(interiorView && cavityGeometry)) e.stopPropagation();
             window.__modelClickGuardUntil = performance.now() + 48;
             window.__modelClickedThisFrame = true;
             window.setTimeout(() => {
@@ -1382,9 +1781,22 @@ if (uDitherAmount > 0.0) {
             onSmoothingGeometryActivate?.(geometry);
             beginMeshSmoothingEngineStroke(geometry);
           }
+          if ((mode === 'prepare' || mode === 'support') && transformMode === 'supportBlockers' && isActiveModel && e.button === 0) {
+            beginSupportBlockerStroke(modelId);
+
+            const localPoint = smoothingScratchLocalPointRef.current;
+            localPoint.copy(e.point);
+            e.object.worldToLocal(localPoint);
+
+            paintSupportBlockers(modelId, geometry, localPoint);
+          }
         }}
       >
-        {interiorView && cavityGeometry ? (
+        {bodyRenderInfos ? (
+          // The bodies below draw the surface; this mesh stays for picking and the
+          // overlay passes, which all use the merged geometry.
+          <meshBasicMaterial colorWrite={false} depthWrite={false} />
+        ) : interiorView && cavityGeometry ? (
           <meshStandardMaterial
             color={meshColor ?? '#c8c8ce'}
             transparent
@@ -1412,8 +1824,8 @@ if (uDitherAmount > 0.0) {
         ) : (
           <MeshShaderMaterial
             shaderType={baseShaderType}
-            isSelected={!!isSelected}
-            isHovered={isHoveredModel || isMarqueeHovered}
+            isSelected={selectionTintActive}
+            isHovered={hoverTintActive}
             useVertexColors={hasVertexColorAttribute}
             hoverTintColor={hoverTintColor}
             selectedTintColor={selectedTintColor}
@@ -1422,16 +1834,83 @@ if (uDitherAmount > 0.0) {
             meshColor={meshColor}
             matcapVariant={matcapVariant}
             flatUseVertexColors={flatUseVertexColors}
-            toonSteps={toonSteps}
             materialRoughness={materialRoughness}
             clippingPlanes={planes}
             xrayOpacity={xrayOpacity}
             heatmapMinAngle={heatmapMinAngle}
             heatmapMaxAngle={heatmapMaxAngle}
             heatmapColors={heatmapColors}
+            bakedAoStrength={bakedAoStrength}
           />
         )}
       </mesh>
+
+      {bodyRenderInfos?.map((info) => (
+        <React.Fragment key={info.geometry.uuid}>
+          <BodySurface
+            geometry={info.geometry}
+            position={meshLocalOffset}
+            color={info.color}
+            shaderType={hasBodySelection && !info.selected ? 'xray' : baseShaderType}
+            selected={info.selected && !materialOutlineEnabled}
+            hiddenBySelectedBody={hasBodySelection && !info.selected}
+            hovered={info.selected && hoverTintActive}
+            useVertexColors={Boolean(info.geometry.getAttribute('color'))}
+            hoverTintColor={hoverTintColor}
+            selectedTintColor={selectedTintColor}
+            hoverTintStrength={hoverTintStrength}
+            selectedTintStrength={selectedTintStrength}
+            matcapVariant={matcapVariant}
+            flatUseVertexColors={flatUseVertexColors}
+            materialRoughness={materialRoughness}
+            clippingPlanes={planes}
+            xrayOpacity={xrayOpacity ?? 0.3}
+            heatmapMinAngle={heatmapMinAngle}
+            heatmapMaxAngle={heatmapMaxAngle}
+            heatmapColors={heatmapColors}
+            bakedAoStrength={bakedAoStrength}
+          />
+          {info.selected && (
+            <MaterialOutlineRim
+              geometry={info.geometry}
+              position={meshLocalOffset}
+              scale={materialOutlineScale}
+              color="#ffffff"
+              opacity={1}
+              maskOrder={MATERIAL_OUTLINE_MASK_ORDER}
+              rimOrder={MATERIAL_OUTLINE_ORDER}
+              planes={planes}
+            />
+          )}
+        </React.Fragment>
+      ))}
+
+      {/* Selection is the rim in multi-material mode, because the mesh colour is the
+          assigned resin. Hover gets a fainter grey rim instead of a tint. */}
+      {materialOutlineEnabled && isEffectivelySelected && selectedBodyIndices.length === 0 && (
+        <MaterialOutlineRim
+          geometry={geometry}
+          position={meshLocalOffset}
+          scale={materialOutlineScale}
+          color="#ffffff"
+          opacity={1}
+          maskOrder={MATERIAL_OUTLINE_MASK_ORDER}
+          rimOrder={MATERIAL_OUTLINE_ORDER}
+          planes={planes}
+        />
+      )}
+      {materialOutlineEnabled && !isEffectivelySelected && (isHoveredModel || isMarqueeHovered) && (
+        <MaterialOutlineRim
+          geometry={geometry}
+          position={meshLocalOffset}
+          scale={materialHoverOutlineScale}
+          color="#9aa0aa"
+          opacity={0.55}
+          maskOrder={MATERIAL_HOVER_OUTLINE_MASK_ORDER}
+          rimOrder={MATERIAL_HOVER_OUTLINE_ORDER}
+          planes={planes}
+        />
+      )}
 
       {/* ── Interior View Mode: cavity shell visual-only ── */}
       {interiorView && cavityGeometry && (
@@ -1440,8 +1919,8 @@ if (uDitherAmount > 0.0) {
           <mesh geometry={cavityGeometry} position={meshLocalOffset} renderOrder={1} raycast={() => null}>
             <MeshShaderMaterial
               shaderType={baseShaderType}
-              isSelected={!!isSelected}
-              isHovered={isHoveredModel || isMarqueeHovered}
+              isSelected={selectionTintActive}
+              isHovered={hoverTintActive}
               useVertexColors={false}
               hoverTintColor={hoverTintColor}
               selectedTintColor={selectedTintColor}
@@ -1450,7 +1929,6 @@ if (uDitherAmount > 0.0) {
               meshColor={meshColor}
               matcapVariant={matcapVariant}
               flatUseVertexColors={flatUseVertexColors}
-              toonSteps={toonSteps}
               materialRoughness={materialRoughness}
               clippingPlanes={planes}
               xrayOpacity={xrayOpacity}
@@ -1468,7 +1946,7 @@ if (uDitherAmount > 0.0) {
         </mesh>
       )}
 
-      {!interiorView && higherContrastModelEdges && !showOpaqueWireOverlay && baseShaderType !== 'wireframe' && !blockerEditMode && edgeLinesGeometry && (
+      {!interiorView && MODEL_EDGE_OVERLAY_ENABLED && higherContrastModelEdges && !showOpaqueWireOverlay && baseShaderType !== 'wireframe' && !blockerEditMode && edgeLinesGeometry && (
         <lineSegments geometry={edgeLinesGeometry} position={meshLocalOffset} renderOrder={2} raycast={() => null}>
           <lineBasicMaterial color={edgeLinesColor} transparent opacity={0.55} depthTest polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1} clippingPlanes={planes} />
         </lineSegments>

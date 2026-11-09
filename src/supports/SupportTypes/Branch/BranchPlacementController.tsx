@@ -17,43 +17,39 @@ import { useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'r
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
+import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
-import { subscribe, getSnapshot, addBranch, addKnot, addTwig, addStick } from '../../state';
-import { pushSupportHistory } from '@/supports/history/supportHistory';
+import { asOneSupportEdit, subscribe, getSnapshot, addKnot, addSupportEntityWithHistory } from '../../state';
+import { buildContactBridge, cascadeExtras, parsePrefixedSegmentId, selectTypeForPlacement } from '../../supportTypeRegistry';
+import type { SupportTypeId } from '../../supportTypeRegistry';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
-import { SUPPORT_ADD_BRANCH, SUPPORT_ADD_TWIG, SUPPORT_ADD_STICK } from '../../history/actionTypes';
 import { SnapTarget } from '../../interaction/SnappingManager';
-import { Vec3, Knot } from '../../types';
+import { Vec3, Knot, type LimitationCode, type Segment } from '../../types';
 import { getSettings } from '../../Settings/state';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { buildBranchData } from './branchBuilder';
 import { branchPlacementStore, useBranchPlacementState } from './branchPlacementState';
 import { calculateSmoothedNormal, findClosestMeshToPoint } from '../../PlacementLogic/PlacementUtils';
-import { buildTwig } from '../Twig/twigBuilder';
-import { buildStick } from '../Stick/stickBuilder';
-import type { SupportData } from '../../rendering/SupportBuilder';
+import { supportDataForEntity, type SupportData } from '../../rendering/SupportBuilder';
 import { v4 as uuidv4 } from 'uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
 import { isSupportTargetHoverCategory } from '../../interaction/shared/hover/supportHoverResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
-import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
+import { buildPrimarySnapTargetIndex, ALL_SNAP_TYPES, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewNormalKey, previewVecKey, quantizePreviewValue } from '../shared/previewSignature';
+import { markPlacementSurface } from '../../PlacementLogic/placementSurface';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
     point?: Vec3 | null;
 }
 
-type PlacementSurface = 'interior' | 'exterior';
 
-function markContactPlacementSurface<T extends { placementSurface?: PlacementSurface } | undefined>(contact: T, surface?: PlacementSurface): T {
-    if (!contact || !surface) return contact;
-    return { ...contact, placementSurface: surface } as T;
-}
 
 // Scratch raycaster reused for clip-zone fallback raycasts (same pattern as StlMesh).
 const _branchClipFallbackRaycaster = new THREE.Raycaster();
@@ -132,12 +128,13 @@ export function BranchPlacementController() {
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const immediateModelHoverId = useImmediateModelHoverId();
     const { getHotkey } = useHotkeyConfig();
+    const forcePlaceActive = useActionActive('SUPPORTS', 'FORCE_PLACE_SUPPORT');
     const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
     const rawHoveringSupportTarget = isSupportTargetHoverCategory(supportState.hoveredCategory);
     const isHoveringSupportTarget = rawHoveringSupportTarget && immediateModelHoverId === null;
 
     const meshHoverRef = useRef<{ pos: Vec3; normal: Vec3; modelId: string } | null>(null);
-    const meshKindRef = useRef<'twig' | 'stick' | null>(null);
+    const meshKindRef = useRef<SupportTypeId | null>(null);
     const hoveredShaftRef = useRef<ShaftHoverDetail | null>(null);
     const pointerFreshSinceIdleActivationRef = useRef(false);
     const supportEditSuppressedRef = useRef(false);
@@ -212,14 +209,10 @@ export function BranchPlacementController() {
         if (stage !== 'awaitingBase') return [];
 
         return buildSupportPathSnapTargets(supportState, {
-            includeTrunks: true,
-            includeBranches: true,
-            includeBraces: true,
-            includeTwigs: true,
-            includeSticks: true,
+            snapTypes: ALL_SNAP_TYPES,
             placementSurface,
         });
-    }, [stage, placementSurface, supportState.trunks, supportState.branches, supportState.braces, supportState.twigs, supportState.sticks]);
+    }, [stage, placementSurface, supportState]);
 
     const targetById = useMemo(() => {
         return buildPrimarySnapTargetIndex(allTargets);
@@ -363,7 +356,7 @@ export function BranchPlacementController() {
         }
 
         // Update raycaster for mouse position
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
 
         // Fast path: when shaft-hover already provides a concrete segment+point,
         // skip the heavier global snapping pass for this frame.
@@ -394,8 +387,9 @@ export function BranchPlacementController() {
             }
 
             // If snapped to a brace, compute local tapered host diameter.
-            if (resolvedSnap.targetId.startsWith('braceSegment:')) {
-                const braceId = resolvedSnap.targetId.slice('braceSegment:'.length);
+            const snapSpan = parsePrefixedSegmentId(resolvedSnap.targetId);
+            if (snapSpan) {
+                const braceId = snapSpan.entityId;
                 const brace = supportState.braces[braceId];
                 const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
                 const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
@@ -483,8 +477,9 @@ export function BranchPlacementController() {
                     t = projected.t;
                     hostDiameterMm = hoveredTarget.pathSegment.radius * 2;
 
-                    if (segmentId.startsWith('braceSegment:')) {
-                        const braceId = segmentId.slice('braceSegment:'.length);
+                    const hoverSpan = parsePrefixedSegmentId(segmentId);
+                    if (hoverSpan) {
+                        const braceId = hoverSpan.entityId;
                         const brace = supportState.braces[braceId];
                         const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
                         const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
@@ -609,12 +604,16 @@ export function BranchPlacementController() {
                         const dy = tipPosition.y - bPos.y;
                         const dz = tipPosition.z - bPos.z;
                         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                        const cutoff = settings.meshToMesh?.stickVsTwigCutoffMm ?? 5;
-                        const kind: 'twig' | 'stick' = dist > cutoff ? 'stick' : 'twig';
+                        // Which bridge type a span calls for is the registry's
+                        // answer. An unknown span asks the same question at the
+                        // boundary -- zero -- which names no type here.
+                        const kind = selectTypeForPlacement('contactSpan', dist)
+                            ?? selectTypeForPlacement('contactSpan', 0);
+                        if (!kind) return;
                         meshKindRef.current = kind;
 
                         const meshLinkSignature = [
-                            kind === 'twig' ? 'branch:twig' : 'branch:stick',
+                            `branch:${kind}`,
                             modelId,
                             bModelId,
                             previewVecKey(tipPosition),
@@ -626,25 +625,22 @@ export function BranchPlacementController() {
                         if (lastPreviewSignatureRef.current !== meshLinkSignature) {
                             lastPreviewSignatureRef.current = meshLinkSignature;
 
-                             if (kind === 'twig') {
-                                 const { twig, error } = buildTwig({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal, mesh: resolveTipMesh() });
-                                 const startPos = twig.segments[0]?.bottomJoint?.pos ?? tipPosition;
+                             // The registry chose the type and knows how to
+                             // build it; the preview only relabels the result.
+                             // Manual: the cant caps are the auto pass's, not
+                             // the user's, who is aiming these two contacts.
+                             const built = buildContactBridge(kind, {
+                                 modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal,
+                                 mesh: resolveTipMesh(),
+                                 manual: true,
+                             });
+                             if (built) {
+                                 const entity = built.entity as { id: string; segments: Segment[] };
                                  branchPlacementStore.setPreviewData({
+                                     ...supportDataForEntity(kind, entity),
                                      id: 'preview-meshlink',
-                                     startPos,
-                                     segments: twig.segments,
-                                     contactDisks: [twig.contactDiskA, twig.contactDiskB],
-                                     error,
-                                 });
-                             } else {
-                                 const { stick, error } = buildStick({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal, mesh: resolveTipMesh() });
-                                 const startPos = stick.segments[0]?.bottomJoint?.pos ?? tipPosition;
-                                 branchPlacementStore.setPreviewData({
-                                     id: 'preview-meshlink',
-                                     startPos,
-                                     segments: stick.segments,
-                                     contactCones: [stick.contactConeA, stick.contactConeB],
-                                     error,
+                                     startPos: entity.segments[0]?.bottomJoint?.pos ?? tipPosition,
+                                     error: forcePlaceActive ? undefined : built.error as LimitationCode | undefined,
                                  });
                              }
                         }
@@ -726,51 +722,20 @@ export function BranchPlacementController() {
                 if (!meshHover || !kind) return;
                 if (meshHover.modelId !== modelId) return;
 
-                if (kind === 'twig') {
-                    const { twig, error } = buildTwig({
-                        modelId,
-                        aPos: tipPosition,
-                        aNormal: tipNormal,
-                        bPos: meshHover.pos,
-                        bNormal: meshHover.normal,
-                        mesh: resolveTipMesh(),
-                    });
-                    if (error) return;
-                    const markedTwig = placementSurface
-                        ? {
-                            ...twig,
-                            contactDiskA: markContactPlacementSurface(twig.contactDiskA, placementSurface),
-                            contactDiskB: markContactPlacementSurface(twig.contactDiskB, placementSurface),
-                        }
-                        : twig;
-                    addTwig(markedTwig);
-                    pushSupportHistory({
-                        type: SUPPORT_ADD_TWIG,
-                        payload: { twig: markedTwig },
-                    });
-                } else {
-                    const { stick, error } = buildStick({
-                        modelId,
-                        aPos: tipPosition,
-                        aNormal: tipNormal,
-                        bPos: meshHover.pos,
-                        bNormal: meshHover.normal,
-                        mesh: resolveTipMesh(),
-                    });
-                    if (error) return;
-                    const markedStick = placementSurface
-                        ? {
-                            ...stick,
-                            contactConeA: markContactPlacementSurface(stick.contactConeA, placementSurface),
-                            contactConeB: markContactPlacementSurface(stick.contactConeB, placementSurface),
-                        }
-                        : stick;
-                    addStick(markedStick);
-                    pushSupportHistory({
-                        type: SUPPORT_ADD_STICK,
-                        payload: { stick: markedStick },
-                    });
-                }
+                const built = buildContactBridge(kind, {
+                    modelId,
+                    aPos: tipPosition,
+                    aNormal: tipNormal,
+                    bPos: meshHover.pos,
+                    bNormal: meshHover.normal,
+                    mesh: resolveTipMesh(),
+                    manual: true,
+                });
+                if (!built || (built.error && !forcePlaceActive)) return;
+                addSupportEntityWithHistory(
+                    kind,
+                    markPlacementSurface(kind, built.entity, placementSurface),
+                );
 
                 branchPlacementStore.finalize();
                 meshHoverRef.current = null;
@@ -805,22 +770,14 @@ export function BranchPlacementController() {
             });
 
             console.log('[BranchPlacement] Creating branch via snap click', branch);
-            const markedBranch = placementSurface
-                ? {
-                    ...branch,
-                    contactCone: markContactPlacementSurface(branch.contactCone, placementSurface),
-                }
-                : branch;
+            const markedBranch = markPlacementSurface('branch', branch, placementSurface);
 
-            addKnot(parentKnot);
-            addBranch(markedBranch);
-
-            pushSupportHistory({
-                type: SUPPORT_ADD_BRANCH,
-                payload: {
-                    branch: markedBranch,
-                    knot: parentKnot,
-                },
+            // One write, and one payload the registry shapes: a hand-written
+            // `knot` missed the `knots` field a branch's cascade declares, so a
+            // redone branch came back without the knot it hangs from.
+            asOneSupportEdit(() => {
+                addKnot(parentKnot);
+                addSupportEntityWithHistory('branch', markedBranch, cascadeExtras('branch', 'knots', [parentKnot]));
             });
 
             // finalize() resets to idle + sets justFinalized to block stale useFrame
@@ -832,7 +789,7 @@ export function BranchPlacementController() {
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, tipNormal, modelId, placementSurface, resetSnapping, resolveTipMesh, gl]);
+    }, [isActive, stage, tipPosition, tipNormal, modelId, placementSurface, resetSnapping, resolveTipMesh, gl, forcePlaceActive]);
 
     // Reset snapping when deactivated
     useEffect(() => {

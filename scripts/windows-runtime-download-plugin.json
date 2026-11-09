@@ -1,0 +1,8 @@
+{
+  "version": "1.0.5.7",
+  "url": "https://github.com/DigitalMediaServer/NSIS-INetC-plugin/releases/download/v1.0.5.7/InetC.zip",
+  "sha256": "B01077E56EBB19C005B45D40F837958CA6A92F51A5A937DC1BB497C7C7F2AA93",
+  "pluginSha256": "83005624A3C515E8E4454A416693BA0FBF384FF5EA0E1471F520DFAE790D4AB7",
+  "licenseUrl": "https://raw.githubusercontent.com/DigitalMediaServer/NSIS-INetC-plugin/v1.0.5.7/LICENSE.md",
+  "licenseSha256": "C5EE66863FCEA719D3B4BADEB81FCF0021796B693B4B8B3821D9CE53E447CDF3"
+}

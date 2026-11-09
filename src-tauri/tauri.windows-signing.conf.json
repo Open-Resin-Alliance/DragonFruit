@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "windows": {
+      "signCommand": {
+        "cmd": "cmd.exe",
+        "args": [
+          "/d",
+          "/c",
+          "..\\scripts\\sign-windows.cmd",
+          "%1"
+        ]
+      }
+    }
+  }
+}

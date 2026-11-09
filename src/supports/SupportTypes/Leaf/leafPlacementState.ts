@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from 'react';
+import { createPlacementStore, usePlacementStoreState } from '../../interaction/shared/placement/placementStore';
+import { hostSnapTargetEq, hoverPositionEq, type HostSnapTarget } from '../../interaction/shared/placement/placementComparators';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import type { Vec3 } from '../../types';
 
@@ -13,13 +14,7 @@ interface LeafPlacementState {
     modelId: string;
     placementSurface?: PlacementSurface;
     previewData: SupportData | null;
-    snapTarget: {
-        targetId: string;
-        snappedPos: Vec3;
-        t?: number;
-        hostDiameterMm?: number;
-        hostSegmentId?: string;
-    } | null;
+    snapTarget: HostSnapTarget | null;
     justFinalized: boolean;
     hoverPosition: Vec3 | null;
     sproutParentingLockHeld: boolean;
@@ -43,189 +38,140 @@ const initialState: LeafPlacementState = {
     junctionHubIsNew: null,
 };
 
-let state = { ...initialState };
-const listeners = new Set<() => void>();
-
-function notify() {
-    listeners.forEach(l => l());
-}
-
-function snapTargetEq(a: LeafPlacementState['snapTarget'], b: LeafPlacementState['snapTarget']) {
-    if (a === b) return true;
-    if (!a || !b) return false;
-    return (
-        a.targetId === b.targetId &&
-        a.t === b.t &&
-        a.hostDiameterMm === b.hostDiameterMm &&
-        a.hostSegmentId === b.hostSegmentId &&
-        a.snappedPos.x === b.snappedPos.x &&
-        a.snappedPos.y === b.snappedPos.y &&
-        a.snappedPos.z === b.snappedPos.z
-    );
-}
+const store = createPlacementStore(initialState);
 
 export const leafPlacementStore = {
-    subscribe(listener: () => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-    },
-
-    getSnapshot(): LeafPlacementState {
-        return state;
-    },
+    subscribe: store.subscribe,
+    getSnapshot: store.getSnapshot,
 
     setHotkeyActive(active: boolean) {
+        const state = store.read();
+
         if (active) {
             if (state.hotkeyActive) return;
-            state = { ...initialState, hotkeyActive: true };
-            notify();
+            store.write({ ...initialState, hotkeyActive: true });
             return;
         }
 
-        if (!state.hotkeyActive && state.stage === 'idle' && state.previewData === null && state.snapTarget === null && state.hoverPosition === null) {
+        // Releasing the hotkey on an already-clean store is a no-op; otherwise
+        // the whole placement state goes with it.
+        if (!state.hotkeyActive
+            && state.stage === 'idle'
+            && state.previewData === null
+            && state.snapTarget === null
+            && state.hoverPosition === null) {
             return;
         }
 
-        state = {
-            ...initialState,
-            hotkeyActive: false,
-        };
-        notify();
+        store.write({ ...initialState, hotkeyActive: false });
     },
 
     setSproutParentingLockHeld(held: boolean) {
-        if (state.sproutParentingLockHeld !== held) {
-            state = { ...state, sproutParentingLockHeld: held };
-            notify();
-        }
+        const state = store.read();
+        if (state.sproutParentingLockHeld === held) return;
+
+        store.write({ ...state, sproutParentingLockHeld: held });
     },
 
     setJunctionHub(junctionHubId: string | null, junctionHubIsNew: boolean | null) {
-        if (state.junctionHubId !== junctionHubId || state.junctionHubIsNew !== junctionHubIsNew) {
-            state = { ...state, junctionHubId, junctionHubIsNew };
-            notify();
-        }
+        const state = store.read();
+        if (state.junctionHubId === junctionHubId && state.junctionHubIsNew === junctionHubIsNew) return;
+
+        store.write({ ...state, junctionHubId, junctionHubIsNew });
     },
 
     setStage(stage: Stage) {
-        if (state.stage !== stage) {
-            state = { ...state, stage };
-            notify();
-        }
+        const state = store.read();
+        if (state.stage === stage) return;
+
+        store.write({ ...state, stage });
     },
 
     clearJunctionHubIsNew() {
-        if (state.junctionHubIsNew !== null) {
-            state = { ...state, junctionHubIsNew: null };
-            notify();
-        }
+        const state = store.read();
+        if (state.junctionHubIsNew === null) return;
+
+        store.write({ ...state, junctionHubIsNew: null });
     },
 
+    /** Partial update where a null argument means "leave this field alone". */
     updateFanningTip(tipPosition: Vec3 | null, surfaceNormal: Vec3 | null, modelId?: string) {
-        const nextState = { ...state };
-        if (tipPosition !== null) {
-            nextState.tipPosition = tipPosition;
-        }
-        if (surfaceNormal !== null) {
-            nextState.surfaceNormal = surfaceNormal;
-        }
-        if (modelId !== undefined && modelId !== null) {
-            nextState.modelId = modelId;
-        }
-        state = nextState;
-        notify();
+        const state = store.read();
+        const next = { ...state };
+        if (tipPosition !== null) next.tipPosition = tipPosition;
+        if (surfaceNormal !== null) next.surfaceNormal = surfaceNormal;
+        if (modelId !== undefined && modelId !== null) next.modelId = modelId;
+
+        store.write(next);
     },
 
     setTip(tipPosition: Vec3, surfaceNormal: Vec3, modelId: string, placementSurface?: PlacementSurface) {
-        state = {
-            ...state,
+        store.write({
+            ...store.read(),
             tipPosition,
             surfaceNormal,
             modelId,
             placementSurface,
             stage: 'awaitingBase',
-            justFinalized: false,
-        };
-        notify();
+            justFinalized: false, // Clear the flag when starting new placement
+        });
     },
 
     setPreviewData(previewData: SupportData | null) {
-        if (state.justFinalized && previewData !== null) {
-            return;
-        }
+        const state = store.read();
+        // If just finalized, ignore any attempts to set preview data
+        // This prevents the useFrame loop from re-setting the preview
+        if (state.justFinalized && previewData !== null) return;
+        if (state.previewData === previewData) return;
 
-        if (state.previewData !== previewData) {
-            state = { ...state, previewData };
-            notify();
-        }
+        store.write({ ...state, previewData });
     },
 
-    setSnapTarget(snapTarget: LeafPlacementState['snapTarget']) {
-        if (snapTargetEq(state.snapTarget, snapTarget)) return;
-        state = { ...state, snapTarget };
-        notify();
+    setSnapTarget(snapTarget: HostSnapTarget | null) {
+        const state = store.read();
+        if (hostSnapTargetEq(state.snapTarget, snapTarget)) return;
+
+        store.write({ ...state, snapTarget });
     },
 
     setHoverPosition(hoverPosition: Vec3 | null) {
-        if (state.hoverPosition?.x !== hoverPosition?.x ||
-            state.hoverPosition?.y !== hoverPosition?.y ||
-            state.hoverPosition?.z !== hoverPosition?.z) {
-            state = { ...state, hoverPosition };
-            notify();
-        }
+        // Only update if position actually changed (avoid unnecessary re-renders)
+        const state = store.read();
+        if (hoverPositionEq(state.hoverPosition, hoverPosition)) return;
+
+        store.write({ ...state, hoverPosition });
     },
 
     getSnapTarget() {
-        return state.snapTarget;
+        return store.read().snapTarget;
     },
 
     finalize() {
-        state = {
-            ...state,
-            previewData: null,
-            snapTarget: null,
-            justFinalized: true,
-        };
-        notify();
+        const state = store.read();
+        store.write({ ...state, previewData: null, snapTarget: null, justFinalized: true });
     },
 
     reset() {
-        const nextState = { ...initialState, hotkeyActive: state.hotkeyActive };
-        if (
-            state.stage === nextState.stage
-            && state.tipPosition === nextState.tipPosition
-            && state.surfaceNormal === nextState.surfaceNormal
-            && state.modelId === nextState.modelId
-            && state.placementSurface === nextState.placementSurface
-            && state.previewData === nextState.previewData
-            && state.hoverPosition === nextState.hoverPosition
-            && state.snapTarget === nextState.snapTarget
-            && state.justFinalized === nextState.justFinalized
-            && state.sproutParentingLockHeld === nextState.sproutParentingLockHeld
-            && state.junctionHubId === nextState.junctionHubId
-            && state.junctionHubIsNew === nextState.junctionHubIsNew
-        ) {
-            return;
-        }
-
-        state = nextState;
-        notify();
+        store.resetPreserving('hotkeyActive');
     },
 
     isActive(): boolean {
-        return state.hotkeyActive || state.stage === 'awaitingBase' || state.stage === 'awaitingSproutTip' || state.sproutParentingLockHeld;
+        const state = store.read();
+        return state.hotkeyActive
+            || state.stage === 'awaitingBase'
+            || state.stage === 'awaitingSproutTip'
+            || state.sproutParentingLockHeld;
     },
 };
 
 export function useLeafPlacementState() {
-    const snapshot = useSyncExternalStore(
-        leafPlacementStore.subscribe,
-        leafPlacementStore.getSnapshot,
-        leafPlacementStore.getSnapshot
-    );
+    const snapshot = usePlacementStoreState(leafPlacementStore);
 
     return {
         ...snapshot,
-        isActive: snapshot.hotkeyActive || snapshot.stage === 'awaitingBase' || snapshot.stage === 'awaitingSproutTip' || snapshot.sproutParentingLockHeld,
+        isActive: snapshot.hotkeyActive
+            || snapshot.stage === 'awaitingBase'
+            || snapshot.stage === 'awaitingSproutTip'
+            || snapshot.sproutParentingLockHeld,
     };
 }

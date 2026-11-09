@@ -80,7 +80,7 @@ describe('the streaming VOXL serializer', () => {
       assert.deepEqual([...bytes], [...buffered]);
 
       // And it is a real file, not just an equal byte string.
-      const { meshBytes: out } = parseVoxlBinaryV2(bytes);
+      const { meshBytes: out } = await parseVoxlBinaryV2(bytes);
       assert.deepEqual([...out.get('m1')!], [...MESH_A]);
     });
   });

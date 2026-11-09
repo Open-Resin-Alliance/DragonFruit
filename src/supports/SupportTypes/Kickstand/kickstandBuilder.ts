@@ -1,7 +1,9 @@
-import type { Joint, Segment } from '../../types';
+import type { Joint, LimitationCode, Segment, Vec3 } from '../../types';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { getJointDiameter } from '../../constants';
+import { isShaftBlocked } from '../../PlacementLogic/CollisionAvoidance';
 import * as THREE from 'three';
+import { toVector3 } from '../../Curves/BezierUtils';
 import { assertKickstandHostKind, clampKickstandHostT } from './kickstandRules';
 import {
     getKickstandKnotDiameterMm,
@@ -11,9 +13,9 @@ import {
 import type { KickstandBuildInput, KickstandBuildResult } from './types';
 import { v4 as uuidv4 } from 'uuid';
 
-function createJoint(pos: { x: number; y: number; z: number }, diameter: number): Joint {
+function createJoint(id: string, pos: { x: number; y: number; z: number }, diameter: number): Joint {
     return {
-        id: uuidv4(),
+        id,
         pos,
         diameter,
     };
@@ -55,6 +57,69 @@ function createRootAndJointHeights(input: KickstandBuildInput, rootTopZ: number)
     return { firstJointZ, secondJointZ, thirdJointZ, layout };
 }
 
+/** At least this far from horizontal, matching the shaft constraint's 80deg default. */
+const DEFAULT_MAX_SHAFT_ANGLE_DEG = 80;
+
+/** A descending run means the chain overshot its host and doubled back. */
+function columnShapeError(
+    segments: Segment[],
+    hostPos: Vec3,
+    maxShaftAngleDeg: number | undefined,
+): LimitationCode | undefined {
+    const limitDeg = maxShaftAngleDeg ?? DEFAULT_MAX_SHAFT_ANGLE_DEG;
+    const points = columnPoints(segments, hostPos);
+
+    for (let i = 0; i < points.length - 1; i += 1) {
+        const run = new THREE.Vector3().subVectors(points[i + 1], points[i]);
+        const span = run.length();
+        if (span < 1e-6) continue;
+        const angleFromUpDeg = THREE.MathUtils.radToDeg(
+            Math.acos(THREE.MathUtils.clamp(run.z / span, -1, 1)),
+        );
+        if (angleFromUpDeg > limitDeg) return 'ANGLE_TOO_STEEP';
+    }
+    return undefined;
+}
+
+/** The column's joints bottom to top, ending at the host it reaches. */
+function columnPoints(segments: Segment[], hostPos?: Vec3): THREE.Vector3[] {
+    const points: THREE.Vector3[] = [];
+    for (const segment of segments) {
+        if (segment.bottomJoint?.pos && points.length === 0) points.push(toVector3(segment.bottomJoint.pos));
+        if (segment.topJoint?.pos) points.push(toVector3(segment.topJoint.pos));
+    }
+    if (hostPos) points.push(toVector3(hostPos));
+    return points;
+}
+
+/** Does the column run through the model? The top run insets off its host. */
+function columnCollision(
+    segments: Segment[],
+    bodyDiameterMm: number,
+    mesh: THREE.Mesh | undefined,
+): LimitationCode | undefined {
+    if (!mesh) return undefined;
+
+    const radius = Math.max(0.001, bodyDiameterMm / 2);
+    const points = columnPoints(segments);
+
+    for (let i = 0; i < points.length - 1; i += 1) {
+        const start = points[i];
+        const end = points[i + 1];
+        const probeEnd = i === points.length - 2 ? insetTowards(end, start, radius) : end;
+        if (isShaftBlocked(start, probeEnd, radius, mesh)) return 'COLLISION_WITH_MODEL';
+    }
+    return undefined;
+}
+
+/** `from` pulled back toward `towards`, or unchanged when the run is shorter. */
+function insetTowards(from: THREE.Vector3, towards: THREE.Vector3, distanceMm: number): THREE.Vector3 {
+    const run = new THREE.Vector3().subVectors(towards, from);
+    const length = run.length();
+    if (length <= distanceMm) return from;
+    return from.clone().addScaledVector(run.divideScalar(length), distanceMm);
+}
+
 export function buildKickstandData(input: KickstandBuildInput): KickstandBuildResult {
     assertKickstandHostKind(input.host.supportKind);
 
@@ -62,9 +127,12 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
     const bodyDiameterMm = Math.max(0.001, input.host.diameterMm);
     const jointDiameterMm = getJointDiameter(bodyDiameterMm);
 
-    const rootId = uuidv4();
-    const hostKnotId = uuidv4();
-    const kickstandId = uuidv4();
+    // A seeded build is reproducible: auto-bracing compares supports by id in
+    // some tie-breaks, so a fresh uuid per run made the brace pass drift.
+    const nextId = (suffix: string): string => (input.idSeed ? `${input.idSeed}-${suffix}` : uuidv4());
+    const rootId = nextId('root');
+    const hostKnotId = nextId('host-knot');
+    const kickstandId = nextId('kickstand');
 
     const root = {
         id: rootId,
@@ -82,6 +150,7 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
     const { firstJointZ, secondJointZ, thirdJointZ } = createRootAndJointHeights(input, rootTopZ);
 
     const joint1 = createJoint(
+        nextId('j1'),
         {
             x: input.rootPos.x,
             y: input.rootPos.y,
@@ -91,6 +160,7 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
     );
 
     const joint2 = createJoint(
+        nextId('j2'),
         {
             x: input.rootPos.x,
             y: input.rootPos.y,
@@ -101,6 +171,7 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
 
     const topBlend = 0.65;
     const joint3 = createJoint(
+        nextId('j3'),
         {
             x: input.rootPos.x + (input.host.pos.x - input.rootPos.x) * topBlend,
             y: input.rootPos.y + (input.host.pos.y - input.rootPos.y) * topBlend,
@@ -110,26 +181,26 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
     );
 
     const segment1: Segment = {
-        id: uuidv4(),
+        id: nextId('s1'),
         diameter: bodyDiameterMm,
         topJoint: joint1,
     };
 
     const segment2: Segment = {
-        id: uuidv4(),
+        id: nextId('s2'),
         diameter: bodyDiameterMm,
         bottomJoint: joint1,
         topJoint: joint2,
     };
 
     const terminalSegment: Segment = {
-        id: uuidv4(),
+        id: nextId('s4'),
         diameter: bodyDiameterMm,
         bottomJoint: joint3,
     };
 
     const upperSegment: Segment = {
-        id: uuidv4(),
+        id: nextId('s3'),
         diameter: bodyDiameterMm,
         bottomJoint: joint2,
         topJoint: joint3,
@@ -145,14 +216,33 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
         diameter: getKickstandKnotDiameterMm(input.host.diameterMm),
     };
 
+    // An authored column is already straight, so it keeps that shape: one column
+    // segment and one terminal. The derived joints exist to give a placed
+    // kickstand something to drag, and would bend it.
+    const columnTop = input.authoredColumn
+        ? createJoint(nextId('column-top'), input.authoredColumn.topPos, jointDiameterMm)
+        : null;
+    const segments = columnTop
+        ? [
+            { id: nextId('s1'), diameter: bodyDiameterMm, topJoint: columnTop },
+            { id: nextId('s2'), diameter: bodyDiameterMm, bottomJoint: columnTop },
+        ]
+        : [segment1, segment2, upperSegment, terminalSegment];
+
     const kickstand = {
         id: kickstandId,
+        // Stamped here, not only by the store: auto-bracing builds a kickstand
+        // into a local snapshot before committing it, and the type resolver
+        // falls back to store membership for an unstamped entity. Without this
+        // the fresh kickstand has no resolvable segments, so the brace pass
+        // gives it no samples and never braces it to its host.
+        typeId: 'kickstand' as const,
         modelId: input.modelId,
         rootId,
         hostKnotId,
         hostSegmentId: input.host.segmentId,
         hostMinT: input.host.minT ?? 0,
-        segments: [segment1, segment2, upperSegment, terminalSegment],
+        segments,
         profile: {
             bodyDiameterMm,
             terminalStartDiameterMm: bodyDiameterMm,
@@ -164,6 +254,8 @@ export function buildKickstandData(input: KickstandBuildInput): KickstandBuildRe
         root,
         hostKnot,
         kickstand,
+        error: columnShapeError(segments, hostKnot.pos, input.maxShaftAngleDeg)
+            ?? columnCollision(segments, bodyDiameterMm, input.collisionMesh),
     };
 }
 
@@ -187,5 +279,6 @@ export function toKickstandPreviewData(build: KickstandBuildResult): SupportData
         roots: build.root,
         segments: previewSegments,
         knot: build.hostKnot,
+        error: build.error,
     };
 }

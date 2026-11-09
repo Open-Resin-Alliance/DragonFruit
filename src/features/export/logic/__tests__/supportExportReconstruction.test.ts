@@ -4,11 +4,13 @@ import * as THREE from 'three';
 import type { KickstandState } from '@/supports/SupportTypes/Kickstand/types';
 import type { SupportState } from '@/supports/types';
 import { JOINT_DIAMETER_OFFSET_MM } from '@/supports/constants';
-import { SupportGeometryGenerator } from '../SupportGeometryGenerator';
+import { SupportGeometryGenerator } from '@/supports/exportGeometry/SupportGeometryGenerator';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '../supportExportReconstruction';
+import { createEmptySupportCollections, exportGroupName, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 
 function makeSupportState(): SupportState {
   return {
+    ...createEmptySupportCollections(),
     roots: {
       'root-a': {
         id: 'root-a',
@@ -109,7 +111,6 @@ function makeSupportState(): SupportState {
         },
       },
     },
-    sticks: {},
     braces: {
       'brace-a': {
         id: 'brace-a',
@@ -126,7 +127,7 @@ function makeSupportState(): SupportState {
         profile: { diameter: 0.6 },
       },
     },
-    anchors: {
+    stumps: {
       'anchor-a': {
         id: 'anchor-a',
         modelId: 'model-a',
@@ -155,6 +156,16 @@ function makeSupportState(): SupportState {
     hoveredId: null,
     hoveredCategory: 'none',
     interactionWarning: null,
+  };
+}
+
+/** The export takes one state; fold a kickstand fixture into it. */
+function withKickstands(base: SupportState, kick: KickstandState): SupportState {
+  return {
+    ...base,
+    kickstands: { ...base.kickstands, ...kick.kickstands },
+    roots: { ...base.roots, ...kick.roots },
+    knots: { ...base.knots, ...kick.knots },
   };
 }
 
@@ -209,20 +220,21 @@ function makeKickstandState(): KickstandState {
 }
 
 test('scoped support export document keeps only requested model supports', () => {
-  const supportState = makeSupportState();
-  const kickstandState = makeKickstandState();
+  const supportState = withKickstands(makeSupportState(), makeKickstandState());
 
-  const scoped = buildScopedSupportExportDocument(supportState, kickstandState, ['model-a'], 'test-export');
+  const scoped = buildScopedSupportExportDocument(supportState, ['model-a'], 'test-export');
 
-  assert.equal(scoped.roots.length, 1);
+  // Two: the trunk's, and the one its kickstand owns. Kickstand roots are not a
+  // separate collection, so a model-a scope takes both.
+  assert.equal(scoped.roots.length, 2);
   assert.equal(scoped.trunks.length, 1);
   assert.equal(scoped.branches.length, 1);
   assert.equal(scoped.leaves.length, 1);
   assert.equal(scoped.braces.length, 1);
-  assert.equal(scoped.anchors?.length ?? 0, 1);
+  assert.equal(scoped.stumps?.length ?? 0, 1);
   assert.equal(scoped.kickstands?.length ?? 0, 1);
 
-  for (const collection of [scoped.roots, scoped.trunks, scoped.branches, scoped.leaves, scoped.braces, scoped.anchors ?? []]) {
+  for (const collection of [scoped.roots, scoped.trunks, scoped.branches, scoped.leaves, scoped.braces, scoped.stumps ?? []]) {
     for (const item of collection) {
       assert.equal(item.modelId, 'model-a');
     }
@@ -233,10 +245,9 @@ test('scoped support export document keeps only requested model supports', () =>
 });
 
 test('scoped support geometry group only contains requested model metadata', () => {
-  const supportState = makeSupportState();
-  const kickstandState = makeKickstandState();
+  const supportState = withKickstands(makeSupportState(), makeKickstandState());
 
-  const group = buildScopedSupportGeometryGroup(supportState, kickstandState, ['model-a']);
+  const group = buildScopedSupportGeometryGroup(supportState, ['model-a']);
 
   assert.ok(group.children.length > 0);
 
@@ -312,9 +323,8 @@ test('twig disk tips export with finite geometry (no NaN radius)', () => {
 });
 
 test('scoped twig export contains disk tip geometry for the requested model', () => {
-  const supportState = makeSupportState();
-  const kickstandState = makeKickstandState();
-  const group = buildScopedSupportGeometryGroup(supportState, kickstandState, ['model-a']);
+  const supportState = withKickstands(makeSupportState(), makeKickstandState());
+  const group = buildScopedSupportGeometryGroup(supportState, ['model-a']);
 
   const twigGroup = group.children.find((child) => child.name === 'Twig_twig-a');
   assert.ok(twigGroup, 'expected a Twig_ group in the scoped export');
@@ -386,9 +396,8 @@ test('curved (bezier) segments export as piecewise cylinders that follow the cur
 });
 
 test('kickstand export does not add a host-knot sphere affordance', () => {
-  const supportState = makeSupportState();
-  const kickstandState = makeKickstandState();
-  const group = buildScopedSupportGeometryGroup(supportState, kickstandState, ['model-a']);
+  const supportState = withKickstands(makeSupportState(), makeKickstandState());
+  const group = buildScopedSupportGeometryGroup(supportState, ['model-a']);
 
   const kickstandGroup = group.children.find((child) => child.name === 'Kickstand_kickstand-a');
   assert.ok(kickstandGroup);
@@ -406,4 +415,35 @@ test('kickstand export does not add a host-knot sphere affordance', () => {
   });
 
   assert.equal(hostSphereMeshes.length, 0);
+});
+
+/**
+ * Every type the payload carries reaches the exported group. The metadata test
+ * above only asserts nothing WRONG is present, so dropping a type's block
+ * entirely left it passing -- the geometry path had no other coverage.
+ */
+test('every populated support type reaches the exported geometry', () => {
+  const supportState = withKickstands(makeSupportState(), makeKickstandState());
+
+  const group = buildScopedSupportGeometryGroup(supportState, ['model-a']);
+  const names = group.children.map((child) => child.name);
+
+  const expected = SUPPORT_TYPES
+    .filter((descriptor) => {
+      const collection = (supportState as unknown as Record<string, Record<string, { modelId?: string }>>)[descriptor.location.key];
+      return Object.values(collection ?? {}).some((entity) => entity.modelId === 'model-a');
+    })
+    .map((descriptor) => descriptor.id);
+
+  assert.ok(expected.length > 0, 'fixture populates no model-a supports');
+
+  // Named through the registry, not a second copy of the rule here: a test that
+  // recomputed the prefix would agree with a broken derivation.
+  for (const typeId of expected) {
+    const prefix = exportGroupName(typeId, '');
+    assert.ok(
+      names.some((name) => name.startsWith(prefix)),
+      `no ${typeId} group in the export; exported: ${names.join(', ')}`,
+    );
+  }
 });

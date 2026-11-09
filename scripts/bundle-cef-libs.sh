@@ -47,12 +47,24 @@ if [ -z "$BINARY_DIR" ]; then
     BINARY_DIR="${CANDIDATE_DIRS[0]}"
 fi
 
-CEF_OUT=$(find "$BINARY_DIR/build" -path '*/cef-dll-sys-*/out/cef_linux_x86_64' -type d 2>/dev/null | head -1)
+# A restored CI cache can hold several cef-dll-sys build dirs, one per CEF
+# version the cache has seen. `find` order is arbitrary, so take the one whose
+# libcef.so was written last: that is the CEF this build linked against.
+# Shipping an older libcef aborts at startup with "unsupported CEF API version".
+newest_cef_out() {
+    local lib
+    lib=$(find "$1" -path '*/cef-dll-sys-*/out/cef_linux_x86_64/libcef.so' -type f -print0 2>/dev/null \
+        | xargs -0 -r ls -t 2>/dev/null | head -1)
+    [ -n "$lib" ] && dirname "$lib"
+    return 0
+}
+
+CEF_OUT=$(newest_cef_out "$BINARY_DIR/build")
 
 if [ -z "$CEF_OUT" ]; then
     # Fallback: scan other candidate release/build trees.
     for dir in "${CANDIDATE_DIRS[@]}"; do
-        CEF_OUT=$(find "$dir/build" -path '*/cef-dll-sys-*/out/cef_linux_x86_64' -type d 2>/dev/null | head -1)
+        CEF_OUT=$(newest_cef_out "$dir/build")
         if [ -n "$CEF_OUT" ]; then
             break
         fi

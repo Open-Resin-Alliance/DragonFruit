@@ -65,22 +65,42 @@ lipo -create \
     -output "$MACOS_DIR/VoxlThumbnailExtension"
 rm -f "$MACOS_DIR/VoxlThumbnailExtension.arm64" "$MACOS_DIR/VoxlThumbnailExtension.x86_64"
 
-echo "Copying Info.plist..."
-cp "$SCRIPT_DIR/Sources/VoxlThumbnailExtension/Info.plist" "$CONTENTS/Info.plist"
-
-# Replace $(PRODUCT_MODULE_NAME) placeholder in Info.plist
-sed -i '' 's/$(PRODUCT_MODULE_NAME)/VoxlThumbnailExtension/g' "$CONTENTS/Info.plist"
+echo "Copying the generated Info.plist (declared UTIs) and file-type table..."
+# Both are written by `scripts/generate-plugin-registry.mjs` from the plugins'
+# declarations, into this crate rather than the repository root: the plist lands
+# in `generated/`, the table beside the source in `src/`.
+CRATE_DIR="$SCRIPT_DIR/.."
+cp "$CRATE_DIR/generated/VoxlThumbnailExtension-Info.plist" "$CONTENTS/Info.plist"
+mkdir -p "$CONTENTS/Resources"
+cp "$CRATE_DIR/src/generated_output_file_types.json" "$CONTENTS/Resources/outputFileTypes.json"
 
 echo "Stripping extended attributes..."
 find "$APPEX" -exec xattr -c {} \; 2>/dev/null || true
 
-echo "Signing (ad-hoc with sandbox entitlement)..."
 ENTITLEMENTS="$SCRIPT_DIR/Sources/VoxlThumbnailExtension/VoxlThumbnailExtension.entitlements"
-# Use Apple Development identity if available so the extension gets a Team ID
-# (required for the QL system to load it). Falls back to ad-hoc for CI.
-SIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep 'Apple Development:' | head -1 | awk '{print $2}' || true)
+# This is the extension's only signature. Tauri copies it into the .app through
+# `bundle.macOS.files` (src-tauri/tauri.macos.conf.json) and then signs and
+# notarizes the .app around it, but never signs nested code it was handed, so
+# the .appex has to arrive here already signed the way the shipped bundle needs.
+#
+# Identity, in order: Developer ID Application (CI, the only kind Apple will
+# notarize), Apple Development (a dev machine: gives the extension the Team ID
+# the QuickLook host needs before it loads it), ad-hoc (no certificate at all).
+find_identity() {
+    security find-identity -v -p codesigning 2>/dev/null | grep "$1" | head -1 | awk '{print $2}' || true
+}
+SIGN_IDENTITY=$(find_identity 'Developer ID Application:')
+SIGN_FLAGS=()
+if [ -n "$SIGN_IDENTITY" ]; then
+    # Notarization rejects nested code without the hardened runtime and a
+    # secure timestamp. --timestamp needs Apple's server, so only ask for it here.
+    SIGN_FLAGS=(--options runtime --timestamp)
+else
+    SIGN_IDENTITY=$(find_identity 'Apple Development:')
+fi
 [ -z "$SIGN_IDENTITY" ] && SIGN_IDENTITY="-"
-codesign --force --sign "$SIGN_IDENTITY" --entitlements "$ENTITLEMENTS" "$APPEX"
+echo "Signing with identity $SIGN_IDENTITY (sandbox entitlement)..."
+codesign --force --sign "$SIGN_IDENTITY" ${SIGN_FLAGS[@]+"${SIGN_FLAGS[@]}"} --entitlements "$ENTITLEMENTS" "$APPEX"
 
 echo ""
 echo "Built: $APPEX"

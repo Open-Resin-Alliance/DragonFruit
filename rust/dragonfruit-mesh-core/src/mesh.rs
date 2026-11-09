@@ -151,11 +151,28 @@ impl IndexedMesh {
     /// soup as used by the existing staging buffers). Auto-welds by quantizing
     /// to `merge_epsilon` relative to the bbox diagonal.
     pub fn from_triangle_soup(positions: &[f32], merge_epsilon: f32) -> Self {
+        Self::from_triangle_soup_with_corner_map(positions, merge_epsilon).0
+    }
+
+    /// As [`Self::from_triangle_soup`], and also the vertex each corner of the
+    /// input welded into, in the soup's own corner order.
+    ///
+    /// A caller that has per-*corner* results to attach to vertices — the
+    /// occlusion bake does — otherwise has to rediscover this mapping by replaying
+    /// the traversal and the quantisation, which is a second hash pass over every
+    /// corner of the soup and, worse, two independent chances to disagree about
+    /// which corners are the same vertex. That disagreement is what put occlusion
+    /// from one mesh onto another and rendered it as misaligned triangles.
+    pub fn from_triangle_soup_with_corner_map(
+        positions: &[f32],
+        merge_epsilon: f32,
+    ) -> (Self, Vec<u32>) {
         let tri_count = positions.len() / 9;
         let mut out = IndexedMesh {
             positions: Vec::with_capacity(tri_count * 3 / 2),
             triangles: Vec::with_capacity(tri_count),
         };
+        let mut corner_map: Vec<u32> = Vec::with_capacity(tri_count * 3);
 
         // First pass: bbox to derive quantization scale.
         let mut bbox = Aabb::empty();
@@ -199,8 +216,11 @@ impl IndexedMesh {
             let i1 = intern(v1, &mut out);
             let i2 = intern(v2, &mut out);
             out.triangles.push([i0, i1, i2]);
+            corner_map.push(i0);
+            corner_map.push(i1);
+            corner_map.push(i2);
         }
-        out
+        (out, corner_map)
     }
 
     /// Unindex into a flat soup (9 floats per triangle). Used for exporting.
@@ -248,6 +268,58 @@ impl IndexedMesh {
         } else {
             Vec3::ZERO
         }
+    }
+
+    /// Map every vertex to the first vertex sharing its exact position. STL
+    /// stores no vertex identity, so any re-read of the same bytes welds these
+    /// together; this makes in-memory checks agree with that re-read.
+    pub fn position_weld_ids(&self) -> Vec<u32> {
+        // -0.0 and 0.0 are one position to a value comparison, so normalise the
+        // key rather than hashing the raw bits.
+        let key = |p: Vec3| {
+            let n = |v: f32| if v == 0.0 { 0.0f32 } else { v };
+            [
+                n(p.x).to_bits(),
+                n(p.y).to_bits(),
+                n(p.z).to_bits(),
+            ]
+        };
+        let mut map: ahash::AHashMap<[u32; 3], u32> =
+            ahash::AHashMap::with_capacity(self.positions.len());
+        let mut ids = Vec::with_capacity(self.positions.len());
+        for p in &self.positions {
+            let next = map.len() as u32;
+            ids.push(*map.entry(key(*p)).or_insert(next));
+        }
+        ids
+    }
+
+    /// Merge vertices at identical positions, keeping the first of each group,
+    /// and return how many were removed.
+    pub fn weld_by_position(&mut self) -> usize {
+        let ids = self.position_weld_ids();
+        let mut group = vec![u32::MAX; self.positions.len()];
+        let mut renumbered = vec![0u32; self.positions.len()];
+        let mut kept: Vec<Vec3> = Vec::with_capacity(self.positions.len());
+        for (v, &id) in ids.iter().enumerate() {
+            let slot = &mut group[id as usize];
+            if *slot == u32::MAX {
+                *slot = kept.len() as u32;
+                kept.push(self.positions[v]);
+            }
+            renumbered[v] = *slot;
+        }
+        if kept.len() == self.positions.len() {
+            return 0;
+        }
+        for tri in self.triangles.iter_mut() {
+            for v in tri.iter_mut() {
+                *v = renumbered[*v as usize];
+            }
+        }
+        let removed = self.positions.len() - kept.len();
+        self.positions = kept;
+        removed
     }
 
     /// Signed volume via divergence theorem. Positive = outward-oriented

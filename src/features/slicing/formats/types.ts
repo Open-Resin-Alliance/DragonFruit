@@ -30,6 +30,8 @@ export type SlicingFormatDefinition = {
    *  (e.g. .aff/.azf) while each printer variant has its own native extension. */
   fileExtensionFromVersion?: boolean;
   settingsModes?: SlicingSettingsModeOption[];
+  /** The format can carry more than one material, so Material Mode applies to it. */
+  supportsMultiTank?: boolean;
   rustModulePath: string;
   wasmExportName: string;
   notes?: string;

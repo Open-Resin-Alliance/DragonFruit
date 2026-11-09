@@ -1,4 +1,5 @@
 import { AlertTriangle, Trash2 } from 'lucide-react';
+import { BlockingOverlay, Button } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
@@ -6,9 +7,19 @@ import { type HollowingPanelState } from '@/features/hollowing';
 
 type PendingModifierResetAction = 'hollowing' | 'hole_punch' | 'clear_hollowing';
 
+/** What the user chose in the unapplied-modifier prompt. The page performs the
+ *  action — the modal only reports it. */
+export type UnappliedModifierAction = 'apply' | 'skip' | 'goto';
+
+export type UnappliedModifierPrompt = {
+  title: string;
+  subtitle: string;
+  paragraphs: string[];
+  /** Hidden when nothing has unapplied hole punches (nothing to bake). */
+  showApplyAll: boolean;
+};
+
 export type ModifierModalsProps = {
-  handleApplyAllHolePunches: () => void;
-  handleGoToHollowTool: () => void;
   handleCancelDestructiveTransform: () => void;
   handleConfirmBlockerReset: () => void;
   handleConfirmDestructiveTransform: () => void;
@@ -17,20 +28,18 @@ export type ModifierModalsProps = {
   modifierApplyOverlayElapsedLabel: string;
   modifierApplyProcessingLabel: string;
   pendingBlockerResetState: HollowingPanelState | null;
-  pendingDestructiveTransform: { modelId: string; modelName: string; supportCount: number; operationLabel: string; } | null;
+  pendingDestructiveTransform: { modelIds: string[]; modelName: string; supportCount: number; operationLabel: string; } | null;
   pendingModifierResetAction: PendingModifierResetAction | null;
   setPendingBlockerResetState: React.Dispatch<React.SetStateAction<HollowingPanelState | null>>;
   setPendingModifierResetAction: React.Dispatch<React.SetStateAction<PendingModifierResetAction | null>>;
-  setShowUnappliedHolePunchModal: React.Dispatch<React.SetStateAction<boolean>>;
   showModifierApplyBlockingOverlay: boolean;
   showUnappliedHolePunchModal: boolean;
-  unappliedHolePunchResolveRef: React.RefObject<((action: "apply" | "skip") => void) | null>;
+  unappliedModifierPrompt: UnappliedModifierPrompt;
+  unappliedHolePunchResolveRef: React.RefObject<((action: UnappliedModifierAction) => void) | null>;
 };
 
 /** Editor modal organism: StructuredDialog_unappliedHolePunch, StructuredDialog_modifierReset, StructuredDialog_blockerReset, DestructiveTransformModal, modifierApplyBlockingOverlay. */
 export function ModifierModals({
-  handleApplyAllHolePunches,
-  handleGoToHollowTool,
   handleCancelDestructiveTransform,
   handleConfirmBlockerReset,
   handleConfirmDestructiveTransform,
@@ -43,94 +52,74 @@ export function ModifierModals({
   pendingModifierResetAction,
   setPendingBlockerResetState,
   setPendingModifierResetAction,
-  setShowUnappliedHolePunchModal,
   showModifierApplyBlockingOverlay,
   showUnappliedHolePunchModal,
+  unappliedModifierPrompt,
   unappliedHolePunchResolveRef,
 }: ModifierModalsProps) {
   // A blocking progress overlay: swallow Escape rather than let it through.
   useEscapeToClose(showModifierApplyBlockingOverlay, undefined);
 
+  // Two of the three reset actions undo hollowing; only `hole_punch` is about
+  // holes alone, so the confirmation reads off that rather than one action.
+  const isHollowingReset = pendingModifierResetAction === 'hollowing'
+    || pendingModifierResetAction === 'clear_hollowing';
+
   return (
     <>
       <StructuredDialogModal
         open={showUnappliedHolePunchModal}
-        ariaLabel="Unapplied hole punches"
-        title="Unapplied Holes"
-        subtitle="Some models have unapplied hole punches"
+        ariaLabel="Unapplied model changes"
+        title={unappliedModifierPrompt.title}
+        subtitle={unappliedModifierPrompt.subtitle}
         icon={<AlertTriangle className="h-4 w-4" />}
         iconTone="warning"
         closeAriaLabel="Close"
-        onClose={() => {
-          setShowUnappliedHolePunchModal(false);
-          unappliedHolePunchResolveRef.current?.('skip');
-          unappliedHolePunchResolveRef.current = null;
-        }}
+        onClose={() => unappliedHolePunchResolveRef.current?.('skip')}
         actions={(
           <>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
-              onClick={() => {
-                setShowUnappliedHolePunchModal(false);
-                unappliedHolePunchResolveRef.current?.('skip');
-                unappliedHolePunchResolveRef.current = null;
-              }}
+            <Button
+              variant="secondary"
+              onClick={() => unappliedHolePunchResolveRef.current?.('skip')}
             >
               Continue Without
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
-              onClick={() => {
-                unappliedHolePunchResolveRef.current = null;
-                handleGoToHollowTool();
-              }}
+            </Button>
+            <Button
+              variant="tinted-accent"
+              className="inline-flex items-center justify-center gap-1.5"
+              onClick={() => unappliedHolePunchResolveRef.current?.('goto')}
             >
               Go to Hollow Tool
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-                color: 'var(--accent)',
-              }}
-              onClick={() => {
-                unappliedHolePunchResolveRef.current = null;
-                // Defer so the modal closes before apply starts.
-                setTimeout(() => { handleApplyAllHolePunches(); }, 0);
-              }}
-            >
-              Apply to All
-            </button>
+            </Button>
+            {unappliedModifierPrompt.showApplyAll && (
+              <Button
+                variant="tinted-accent"
+                className="inline-flex items-center justify-center gap-1.5"
+                onClick={() => unappliedHolePunchResolveRef.current?.('apply')}
+              >
+                Apply to All
+              </Button>
+            )}
           </>
         )}
       >
         <div className="space-y-2">
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            One or more models have hole punches that haven&apos;t been applied.
-            Hole punches must be baked into the geometry before slicing or they
-            will not appear in the output.
-          </p>
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            <strong>Apply to All</strong> bakes the holes into every visible model
-            when applicable. Or open the <strong>Hollow</strong> tool to review and
-            apply holes individually.
-          </p>
+          {unappliedModifierPrompt.paragraphs.map((paragraph, index) => (
+            <p
+              key={index}
+              className="text-xs leading-relaxed"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              {paragraph}
+            </p>
+          ))}
         </div>
       </StructuredDialogModal>
 
       <StructuredDialogModal
         open={pendingModifierResetAction !== null}
         ariaLabel="Confirm modifier reset"
-        title={pendingModifierResetAction === 'hollowing' ? 'Remove Hollowing?' : 'Remove All Holes?'}
+        title={isHollowingReset ? 'Remove Hollowing?' : 'Remove All Holes?'}
         subtitle="This action can't be undone"
         icon={<AlertTriangle className="h-4 w-4" />}
         iconTone="warning"
@@ -138,83 +127,73 @@ export function ModifierModals({
         onClose={() => setPendingModifierResetAction(null)}
         actions={(
           <>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            <Button
+              variant="secondary"
               onClick={() => setPendingModifierResetAction(null)}
             >
               Cancel
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
+            </Button>
+            <Button
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
               onClick={handleConfirmModifierReset}
             >
               <Trash2 className="w-3.5 h-3.5" />
-              {pendingModifierResetAction === 'hollowing' ? 'Remove Hollowing' : 'Remove All Holes'}
-            </button>
+              {isHollowingReset ? 'Remove Hollowing' : 'Remove All Holes'}
+            </Button>
           </>
         )}
       >
         <div className="space-y-2">
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            {pendingModifierResetAction === 'hollowing'
+            {isHollowingReset
               ? 'Are you sure you want to remove hollowing from this model?'
               : 'Are you sure you want to remove all hole punches from this model?'}
           </p>
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            {pendingModifierResetAction === 'hollowing'
-              ? 'Your model will return to its solid version.'
-              : 'All holes on this model will be removed.'}
+            {pendingModifierResetAction === 'clear_hollowing'
+              ? 'The cavity and all holes will be removed.'
+              : pendingModifierResetAction === 'hollowing'
+                ? 'Your model will return to its solid version.'
+                : 'All holes on this model will be removed.'}
           </p>
         </div>
       </StructuredDialogModal>
 
       <StructuredDialogModal
         open={pendingBlockerResetState !== null}
-        ariaLabel="Confirm blocker reset"
-        title="Reset Blockers?"
-        subtitle="Blockers will be lost"
+        ariaLabel="Confirm solid area reset"
+        title="Reset Solid Areas?"
+        subtitle="Solid areas will be lost"
         icon={<AlertTriangle className="h-4 w-4" />}
         iconTone="warning"
-        closeAriaLabel="Close blocker reset confirmation"
+        closeAriaLabel="Close solid area reset confirmation"
         onClose={() => setPendingBlockerResetState(null)}
         actions={(
           <>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            <Button
+              variant="secondary"
               onClick={() => setPendingBlockerResetState(null)}
             >
               Cancel
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-              style={{
-                borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                background: 'color-mix(in srgb, #ef4444, var(--surface-1) 86%)',
-                color: 'var(--danger)',
-              }}
+            </Button>
+            <Button
+              variant="tinted-danger"
+              className="inline-flex items-center justify-center gap-1.5"
               onClick={handleConfirmBlockerReset}
             >
               <Trash2 className="w-3.5 h-3.5" />
-              Reset Blockers
-            </button>
+              Reset Solid Areas
+            </Button>
           </>
         )}
       >
         <div className="space-y-2">
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            Changing the voxel resolution or shell thickness will clear all applied blockers.
+            Changing the voxel resolution or shell thickness will clear all solid areas.
           </p>
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            You will need to re-select blocked regions after the change.
+            You will need to mark them again after the change.
           </p>
         </div>
       </StructuredDialogModal>
@@ -229,44 +208,15 @@ export function ModifierModals({
       />
 
       {showModifierApplyBlockingOverlay && (
-        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
-          <div
-            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
-            style={{
-              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
-              borderColor: 'var(--border-subtle)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-live="polite"
-          >
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {modifierApplyOverlayContent.title}
-            </div>
-            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              {modifierApplyOverlayContent.detailLines.map((line) => (
-                <p key={line}>{line}</p>
-              ))}
-            </div>
-
-            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
-              Elapsed: {modifierApplyOverlayElapsedLabel}
-            </div>
-            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              {modifierApplyProcessingLabel}
-            </div>
-
-            <div
-              className="ui-loading-track mt-3 h-2.5 w-full rounded-full"
-              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-            >
-              <div
-                className="ui-loading-indicator"
-                style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
-              />
-            </div>
-          </div>
-        </div>
+        <BlockingOverlay
+          zIndexClassName="z-[121]"
+          title={modifierApplyOverlayContent.title}
+          details={modifierApplyOverlayContent.detailLines}
+          elapsed={`Elapsed: ${modifierApplyOverlayElapsedLabel}`}
+          footnote={modifierApplyProcessingLabel}
+          progress={null}
+          progressLabel={modifierApplyOverlayContent.title}
+        />
       )}
     </>
   );

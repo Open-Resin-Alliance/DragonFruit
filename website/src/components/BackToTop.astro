@@ -1,0 +1,99 @@
+---
+/**
+ * A way back to the top of a long page.
+ *
+ * It is a scripted scroll and nothing else, so it is only honest to show it when a
+ * script is there to make it work: hidden by default, revealed once the reader is a
+ * screen down, and hidden again at the top where it has nothing to offer.
+ */
+---
+
+<button class="back-to-top" type="button" data-back-to-top aria-label="Back to top">
+  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+    <path
+      d="M12 19.5V6M5.5 12.5 12 6l6.5 6.5"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"></path>
+  </svg>
+</button>
+
+<script>
+  // The listeners are registered once and reach for the button when they fire: the
+  // Router replaces the document, so anything held here would be a button that no
+  // longer exists.
+  const GLOBALS = window as unknown as { __oraBackToTop?: boolean };
+
+  function sync() {
+    const button = document.querySelector('[data-back-to-top]');
+    if (!button) return;
+    button.toggleAttribute('data-visible', window.scrollY > window.innerHeight);
+  }
+
+  if (!GLOBALS.__oraBackToTop) {
+    GLOBALS.__oraBackToTop = true;
+
+    window.addEventListener('scroll', sync, { passive: true });
+    window.addEventListener('resize', sync);
+
+    document.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest('[data-back-to-top]')) return;
+      // No `behavior` on purpose: the scroll is smooth because the stylesheet says
+      // so, and instant for anyone who has asked for reduced motion.
+      window.scrollTo(0, 0);
+    });
+  }
+
+  sync();
+</script>
+
+<style>
+  .back-to-top {
+    position: fixed;
+    /* Clear of the home indicator on a phone, and of the corner the footer's own
+       links end in - the footer keeps the room for it. */
+    inset-block-end: max(1.25rem, env(safe-area-inset-bottom, 0px));
+    /* In the content box, not in the corner of the window: past the width of a
+       `.shell` the page is centred with margins, and a control pinned to the edge
+       of the screen is the one thing on the page that is not on the grid. The
+       percentage resolves against the viewport, so this is the shell's own margin
+       plus its gutter - the same right edge as the text above it. */
+    inset-inline-end: calc((100% - min(var(--shell), 100%)) / 2 + var(--gutter));
+    /* Under the sticky header, over everything else. */
+    z-index: 40;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 2.75rem;
+    block-size: 2.75rem;
+    padding: 0;
+    color: var(--ink);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border);
+    border-radius: 999px;
+    box-shadow: var(--glass-shadow);
+    cursor: pointer;
+    /* Out of the tab order and out of the way until there is somewhere to go. */
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(0.5rem);
+    transition: opacity 0.2s var(--ease), transform 0.2s var(--ease), visibility 0.2s, color 0.2s var(--ease),
+      border-color 0.2s var(--ease);
+  }
+
+  .back-to-top[data-visible] {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+  }
+
+  .back-to-top:hover {
+    color: var(--accent);
+    border-color: var(--border-strong);
+  }
+</style>

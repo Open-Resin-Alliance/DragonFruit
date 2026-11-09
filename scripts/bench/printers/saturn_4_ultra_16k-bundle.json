@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "exportedAt": "2026-07-27T17:57:28.745Z",
+  "printer": {
+    "id": "printer-mreixqxi-c13h4g5",
+    "name": "Saturn 4 Ultra 16K",
+    "manufacturer": "ELEGOO",
+    "imageDataUrl": "/api/profile-assets/plugins/elegoo/printers/assets/saturn/saturn-4-ultra-16k.png",
+    "antiAliasing": true,
+    "networkSupport": "sdcp",
+    "hasCamera": false,
+    "networkFilter": "Saturn 4",
+    "pixelSize": {
+      "x": 14,
+      "y": 19
+    },
+    "bitDepth": {
+      "bits": 3,
+      "description": "3-bit color depth, suboptimal for grayscale"
+    },
+    "buildDimensionMode": "auto",
+    "officialPresetId": "elegoo-saturn-4-ultra-16k-ctb",
+    "officialPresetVersion": 4,
+    "isOfficial": true,
+    "isCustom": false,
+    "buildVolumeMm": {
+      "width": 211.68,
+      "depth": 118.37,
+      "height": 220
+    },
+    "display": {
+      "resolutionX": 15120,
+      "resolutionY": 6230,
+      "outputFormat": ".ctb",
+      "formatVersion": "v5enc",
+      "settingsMode": "tilting",
+      "webcamRotationDeg": 0,
+      "mirrorX": true,
+      "mirrorY": false
+    },
+    "network": {
+      "discoveryEnabled": true,
+      "ipAddress": ""
+    },
+    "networkFleet": [],
+    "networkConnection": {
+      "mode": "sdcp",
+      "connected": false,
+      "hostName": "",
+      "ipAddress": "",
+      "port": 80,
+      "lastCheckedAt": "",
+      "statusText": "",
+      "selectedMaterialId": "",
+      "selectedMaterialName": ""
+    }
+  },
+  "materials": [
+    {
+      "id": "material-mreixqxi-elc9w4k",
+      "printerProfileId": "printer-mreixqxi-c13h4g5",
+      "officialTemplateVersion": 1,
+      "name": "Standard 405nm",
+      "brand": "Default",
+      "currencyCode": "USD",
+      "bottlePrice": 24.99,
+      "bottleCapacityMl": 1000,
+      "resinFamily": "standard",
+      "scaleCompensationPct": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "layerHeightMm": 0.05,
+      "normalExposureSec": 2.5,
+      "bottomExposureSec": 28,
+      "bottomLayerCount": 5,
+      "liftDistanceMm": 6,
+      "liftSpeedMmMin": 60,
+      "retractSpeedMmMin": 150,
+      "minimumAaAlphaPercent": 35,
+      "antiAliasingSettings": {
+        "enableCustomSettings": false,
+        "enableOverride": false,
+        "mode": "Blur",
+        "level": "4x",
+        "useCustomLevel": false,
+        "blurBrushRadiusPx": 1,
+        "useCustomBlurBrushRadius": false,
+        "blurBrushKernel": "gaussian",
+        "blurBrushSigmaX": 0.5,
+        "blurBrushSigmaY": 0.5,
+        "zBlurRadiusLayers": 0,
+        "useCustomZBlurRadius": false,
+        "zBlurKernel": "box",
+        "zBlurSigma": 0.5,
+        "zBlendLookBack": 2,
+        "useCustomZBlendLookBack": false,
+        "zBlendFadePx": 20,
+        "zBlendFadeMode": "auto",
+        "zBlendAutoMode": true,
+        "useCustomZBlendFadePx": false,
+        "zaaPattern": "halton",
+        "zaaDuplicateZ": true,
+        "blurGraySourceMode": "lut",
+        "zBlendResinType": "opaque",
+        "selectedLutCurveId": "default",
+        "aaOnSupports": false,
+        "ditherEnabled": false,
+        "ditherBitDepth": 3,
+        "ditherDeviceGamma": 3
+      }
+    }
+  ]
+}

@@ -55,6 +55,13 @@ function withResolvedImagePaths<T extends object>(
   });
 }
 
+// The one core preset, and the only place a format ships without a plugin declaring
+// it as its own printer's. It prints `.lumen` deliberately: the Generic Machine is the
+// Open Resin Alliance reference machine and LUMEN is the alliance's format, so this is
+// a statement about that machine rather than a default for everyone - every other
+// preset names the format its printer actually reads, and a profile whose format no
+// installed plugin claims is reported to the user instead of being substituted
+// (see features/slicing/formats/registry.ts).
 const printerPresets = [
   ...withResolvedImagePaths('printers/generic', genericPrinters),
 ];

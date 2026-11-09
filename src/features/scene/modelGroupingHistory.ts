@@ -1,3 +1,6 @@
+import type { MessageDescriptor } from '@lingui/core';
+import { groupModelLabel, groupModelsLabel, ungroupLabel, ungroupModelsLabel } from './sceneHistoryLabels';
+
 export type GroupableModel = {
   id: string;
   name: string;
@@ -11,7 +14,7 @@ type GroupingTransition<T extends GroupableModel> = {
   selectedModelIds: string[];
   changed: boolean;
   groupId?: string;
-  description?: string;
+  description?: MessageDescriptor;
 };
 
 export function applyModelGrouping<T extends GroupableModel>({
@@ -71,7 +74,7 @@ export function applyModelGrouping<T extends GroupableModel>({
     selectedModelIds: Array.from(new Set([...selectedModelIds, ...ids])),
     changed: true,
     groupId: resolvedGroupId,
-    description: selected.length === 1 ? `Group Model ${selected[0].name}` : `Group ${selected.length} Models`,
+    description: selected.length === 1 ? groupModelLabel(selected[0].name) : groupModelsLabel(selected.length),
   };
 }
 
@@ -107,7 +110,7 @@ export function applyModelUngrouping<T extends GroupableModel>({
     activeModelId,
     selectedModelIds,
     changed: true,
-    description: affected.length === 1 ? `Ungroup Model ${affected[0].name}` : `Ungroup ${affected.length} Models`,
+    description: affected.length === 1 ? ungroupLabel(affected[0].name) : ungroupModelsLabel(affected.length),
   };
 }
 
@@ -139,6 +142,6 @@ export function applyModelGroupUngrouping<T extends GroupableModel>({
     activeModelId,
     selectedModelIds,
     changed: true,
-    description: groupName ? `Ungroup ${groupName}` : `Ungroup ${affected.length} Models`,
+    description: groupName ? ungroupLabel(groupName) : ungroupModelsLabel(affected.length),
   };
 }

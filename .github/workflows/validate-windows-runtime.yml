@@ -1,0 +1,38 @@
+name: Validate Windows prerequisite
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - .github/workflows/validate-windows-runtime.yml
+      - scripts/*windows-runtime*
+      - scripts/verify-windows-bundles.ps1
+      - scripts/build-thumbnail-providers.mjs
+      - scripts/inetc-license.txt
+      - src-tauri/tauri.windows.conf.json
+      - src-tauri/nsis/**
+      - src-tauri/wix/**
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-prerequisite-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify official installer with the install-time PowerShell version
+        shell: powershell
+        run: |
+          $minimum = ./scripts/prepare-windows-runtime.ps1
+          $installer = Join-Path $env:RUNNER_TEMP 'VC_redist.x64.exe'
+          try {
+            Invoke-WebRequest -UseBasicParsing https://aka.ms/vc14/vc_redist.x64.exe -OutFile $installer
+            ./scripts/verify-windows-runtime.ps1 -InstallerPath $installer -MinimumVersion $minimum
+          } finally {
+            if (Test-Path $installer) { Remove-Item $installer }
+          }

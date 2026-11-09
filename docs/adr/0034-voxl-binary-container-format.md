@@ -71,7 +71,9 @@ decimation and repair pipelines.
 ## Consequences
 
 - V1 read support is a permanent requirement — early adopter projects must
-  remain loadable.
+  remain loadable. **Superseded by ADR-0043**: no release ever wrote V1, so V1
+  read support was removed and a V1 file is now refused with an explanatory
+  prompt.
 - Unknown chunk types are silently ignored, enabling forward-compatible
   extensions without version bumps.
 - Unknown compression codes must fail parsing (not ignore), as data integrity

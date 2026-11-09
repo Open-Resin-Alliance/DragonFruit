@@ -3,7 +3,7 @@
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import type { Island } from '@/volumeAnalysis/IslandScan/types';
-import type { ScanResults } from '@/volumeAnalysis/islandVolume/steps/voxelization/ScanOrchestrator';
+import type { ScanResults } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
 
 type IslandIdLabelsProps = {
   islands: Island[];

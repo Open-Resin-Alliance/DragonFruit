@@ -2,6 +2,10 @@
 # /app/bin/dragonfruit — Flatpak launcher wrapper for DragonFruit.
 #
 # CEF inside Flatpak notes:
+#   --no-first-run          Chromium switch that skips the first-run tasks and
+#                           wizards entirely, which is the standard way embedders
+#                           avoid this flow and prevent getting an error 28
+#                           CHROME_RESULT_CODE_EULA_REFUSED on Chromium 151+.
 #   --no-sandbox            CEF SUID-sandbox needs setuid root on chrome-sandbox;
 #                           Flatpak cannot grant it. bwrap already sandboxes, so
 #                           stacking is infeasible and unnecessary.
@@ -23,6 +27,7 @@ export LD_LIBRARY_PATH="$DF_LIB/cef:${LD_LIBRARY_PATH:-}"
 export CHROME_DEVEL_SANDBOX="$DF_LIB/cef/chrome-sandbox"
 
 exec "$DF_LIB/dragonfruit-desktop" \
+    --no-first-run \
     --no-sandbox \
     --disable-dev-shm-usage \
     --ozone-platform-hint=auto \

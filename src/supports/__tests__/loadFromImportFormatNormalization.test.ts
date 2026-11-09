@@ -2,7 +2,33 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { getSnapshot, loadFromImportFormat, resetStore } from '../state';
-import type { DragonfruitImportFormat } from '../types';
+import {
+    getSupportTypeDescriptor,
+    SUPPORT_COLLECTION_KEYS,
+    type SupportCollectionKey,
+    type SupportTypeId,
+} from '../supportTypeRegistry';
+import type { DragonfruitImportFormat, SupportCollectionByType } from '../types';
+
+/** Collection keys come from the registry; `roots` and `knots` are primitives. */
+function emptyWireCollections(): Pick<DragonfruitImportFormat, SupportCollectionKey> {
+    const collections = {} as Record<string, unknown[]>;
+    for (const key of SUPPORT_COLLECTION_KEYS) collections[key] = [];
+    return collections as unknown as Pick<DragonfruitImportFormat, SupportCollectionKey>;
+}
+
+/** What the wire format carries under a type's collection key. */
+type WireEntities<K extends SupportTypeId> =
+    DragonfruitImportFormat[SupportCollectionByType[K] & keyof DragonfruitImportFormat];
+
+/** Fill one collection, keyed by the type that declares it. */
+function setCollection<K extends SupportTypeId>(
+    payload: DragonfruitImportFormat,
+    typeId: K,
+    entities: WireEntities<K>,
+): void {
+    (payload as unknown as Record<string, unknown>)[getSupportTypeDescriptor(typeId).location.key] = entities;
+}
 
 function almostEqual(a: number, b: number, epsilon = 1e-6): boolean {
     return Math.abs(a - b) <= epsilon;
@@ -12,66 +38,12 @@ test('loadFromImportFormat normalizes imported host-knot positions for brace/lea
     resetStore();
 
     const data: DragonfruitImportFormat = {
+        ...emptyWireCollections(),
         version: 1,
         meta: {
             source: 'unit-test',
             objectCenter: { x: 0, y: 0, z: 0 },
         },
-        roots: [],
-        trunks: [],
-        branches: [
-            {
-                id: 'branch-1',
-                modelId: 'model-1',
-                parentKnotId: 'k-parent',
-                segments: [
-                    {
-                        id: 'seg-1',
-                        type: 'straight',
-                        diameter: 1.0,
-                        topJoint: {
-                            id: 'joint-top',
-                            pos: { x: 0, y: 0, z: 10 },
-                            diameter: 1,
-                        },
-                    },
-                ],
-            },
-        ],
-        leaves: [
-            {
-                id: 'leaf-1',
-                modelId: 'model-1',
-                parentKnotId: 'k-leaf',
-                contactCone: {
-                    id: 'cone-1',
-                    pos: { x: 2, y: 0, z: 12 },
-                    normal: { x: 0, y: 0, z: -1 },
-                    surfaceNormal: { x: 0, y: 0, z: -1 },
-                    profile: {
-                        type: 'disk',
-                        contactDiameterMm: 0.4,
-                        bodyDiameterMm: 1.2,
-                        lengthMm: 3,
-                        penetrationMm: 0.05,
-                        diskThicknessMm: 0.1,
-                        maxStandoffMm: 0.25,
-                        standoffAngleThreshold: Math.PI / 4,
-                    },
-                },
-            },
-        ],
-        twigs: [],
-        sticks: [],
-        braces: [
-            {
-                id: 'brace-1',
-                modelId: 'model-1',
-                startKnotId: 'k-leaf',
-                endKnotId: 'k-brace',
-                profile: { diameter: 0.8 },
-            },
-        ],
         knots: [
             {
                 id: 'k-parent',
@@ -95,6 +67,60 @@ test('loadFromImportFormat normalizes imported host-knot positions for brace/lea
             },
         ],
     };
+
+    setCollection(data, 'branch', [
+        {
+            id: 'branch-1',
+            modelId: 'model-1',
+            parentKnotId: 'k-parent',
+            segments: [
+                {
+                    id: 'seg-1',
+                    type: 'straight',
+                    diameter: 1.0,
+                    topJoint: {
+                        id: 'joint-top',
+                        pos: { x: 0, y: 0, z: 10 },
+                        diameter: 1,
+                    },
+                },
+            ],
+        },
+    ]);
+
+    setCollection(data, 'leaf', [
+        {
+            id: 'leaf-1',
+            modelId: 'model-1',
+            parentKnotId: 'k-leaf',
+            contactCone: {
+                id: 'cone-1',
+                pos: { x: 2, y: 0, z: 12 },
+                normal: { x: 0, y: 0, z: -1 },
+                surfaceNormal: { x: 0, y: 0, z: -1 },
+                profile: {
+                    type: 'disk',
+                    contactDiameterMm: 0.4,
+                    bodyDiameterMm: 1.2,
+                    lengthMm: 3,
+                    penetrationMm: 0.05,
+                    diskThicknessMm: 0.1,
+                    maxStandoffMm: 0.25,
+                    standoffAngleThreshold: Math.PI / 4,
+                },
+            },
+        },
+    ]);
+
+    setCollection(data, 'brace', [
+        {
+            id: 'brace-1',
+            modelId: 'model-1',
+            startKnotId: 'k-leaf',
+            endKnotId: 'k-brace',
+            profile: { diameter: 0.8 },
+        },
+    ]);
 
     loadFromImportFormat(data);
     const snapshot = getSnapshot();
@@ -130,6 +156,7 @@ test('loadFromImportFormat preserves authored brace host positions on large endp
     resetStore();
 
     const data: DragonfruitImportFormat = {
+        ...emptyWireCollections(),
         version: 1,
         meta: {
             source: 'unit-test',
@@ -159,55 +186,6 @@ test('loadFromImportFormat preserves authored brace host positions on large endp
                 coneHeight: 1,
             },
         ],
-        trunks: [
-            {
-                id: 'trunk-left',
-                modelId: 'model-1',
-                rootId: 'root-left',
-                segments: [
-                    {
-                        id: 'seg-left',
-                        type: 'straight',
-                        diameter: 1,
-                        topJoint: {
-                            id: 'joint-left-top',
-                            pos: { x: 0, y: 0, z: 10 },
-                            diameter: 1,
-                        },
-                    },
-                ],
-            },
-            {
-                id: 'trunk-right',
-                modelId: 'model-1',
-                rootId: 'root-right',
-                segments: [
-                    {
-                        id: 'seg-right',
-                        type: 'straight',
-                        diameter: 1,
-                        topJoint: {
-                            id: 'joint-right-top',
-                            pos: { x: 10, y: 0, z: 10 },
-                            diameter: 1,
-                        },
-                    },
-                ],
-            },
-        ],
-        branches: [],
-        leaves: [],
-        twigs: [],
-        sticks: [],
-        braces: [
-            {
-                id: 'brace-1',
-                modelId: 'model-1',
-                startKnotId: 'k-left',
-                endKnotId: 'k-right',
-                profile: { diameter: 0.8 },
-            },
-        ],
         knots: [
             {
                 id: 'k-left',
@@ -225,6 +203,53 @@ test('loadFromImportFormat preserves authored brace host positions on large endp
             },
         ],
     };
+
+    setCollection(data, 'trunk', [
+        {
+            id: 'trunk-left',
+            modelId: 'model-1',
+            rootId: 'root-left',
+            segments: [
+                {
+                    id: 'seg-left',
+                    type: 'straight',
+                    diameter: 1,
+                    topJoint: {
+                        id: 'joint-left-top',
+                        pos: { x: 0, y: 0, z: 10 },
+                        diameter: 1,
+                    },
+                },
+            ],
+        },
+        {
+            id: 'trunk-right',
+            modelId: 'model-1',
+            rootId: 'root-right',
+            segments: [
+                {
+                    id: 'seg-right',
+                    type: 'straight',
+                    diameter: 1,
+                    topJoint: {
+                        id: 'joint-right-top',
+                        pos: { x: 10, y: 0, z: 10 },
+                        diameter: 1,
+                    },
+                },
+            ],
+        },
+    ]);
+
+    setCollection(data, 'brace', [
+        {
+            id: 'brace-1',
+            modelId: 'model-1',
+            startKnotId: 'k-left',
+            endKnotId: 'k-right',
+            profile: { diameter: 0.8 },
+        },
+    ]);
 
     loadFromImportFormat(data);
     const snapshot = getSnapshot();
@@ -245,6 +270,7 @@ test('loadFromImportFormat preserves imported uniform brace knot diameters', () 
     resetStore();
 
     const data: DragonfruitImportFormat = {
+        ...emptyWireCollections(),
         version: 1,
         meta: {
             source: 'unit-test',
@@ -268,47 +294,6 @@ test('loadFromImportFormat preserves imported uniform brace knot diameters', () 
                 coneHeight: 1,
             },
         ],
-        trunks: [
-            {
-                id: 'trunk-left',
-                modelId: 'model-1',
-                rootId: 'root-left',
-                segments: [
-                    {
-                        id: 'seg-left',
-                        type: 'straight',
-                        diameter: 0.8,
-                        topJoint: { id: 'joint-left-top', pos: { x: 0, y: 0, z: 10 }, diameter: 0.9 },
-                    },
-                ],
-            },
-            {
-                id: 'trunk-right',
-                modelId: 'model-1',
-                rootId: 'root-right',
-                segments: [
-                    {
-                        id: 'seg-right',
-                        type: 'straight',
-                        diameter: 1.6,
-                        topJoint: { id: 'joint-right-top', pos: { x: 12, y: 0, z: 10 }, diameter: 1.7 },
-                    },
-                ],
-            },
-        ],
-        branches: [],
-        leaves: [],
-        twigs: [],
-        sticks: [],
-        braces: [
-            {
-                id: 'brace-1',
-                modelId: 'model-1',
-                startKnotId: 'k-left',
-                endKnotId: 'k-right',
-                profile: { diameter: 1.0 },
-            },
-        ],
         knots: [
             {
                 id: 'k-left',
@@ -328,6 +313,45 @@ test('loadFromImportFormat preserves imported uniform brace knot diameters', () 
             },
         ],
     };
+
+    setCollection(data, 'trunk', [
+        {
+            id: 'trunk-left',
+            modelId: 'model-1',
+            rootId: 'root-left',
+            segments: [
+                {
+                    id: 'seg-left',
+                    type: 'straight',
+                    diameter: 0.8,
+                    topJoint: { id: 'joint-left-top', pos: { x: 0, y: 0, z: 10 }, diameter: 0.9 },
+                },
+            ],
+        },
+        {
+            id: 'trunk-right',
+            modelId: 'model-1',
+            rootId: 'root-right',
+            segments: [
+                {
+                    id: 'seg-right',
+                    type: 'straight',
+                    diameter: 1.6,
+                    topJoint: { id: 'joint-right-top', pos: { x: 12, y: 0, z: 10 }, diameter: 1.7 },
+                },
+            ],
+        },
+    ]);
+
+    setCollection(data, 'brace', [
+        {
+            id: 'brace-1',
+            modelId: 'model-1',
+            startKnotId: 'k-left',
+            endKnotId: 'k-right',
+            profile: { diameter: 1.0 },
+        },
+    ]);
 
     loadFromImportFormat(data);
     const snapshot = getSnapshot();
@@ -350,6 +374,7 @@ test('loadFromImportFormat preserves terminal leaf tip endpoint intent, projects
     resetStore();
 
     const data: DragonfruitImportFormat = {
+        ...emptyWireCollections(),
         version: 1,
         meta: {
             source: 'unit-test',
@@ -368,108 +393,6 @@ test('loadFromImportFormat preserves terminal leaf tip endpoint intent, projects
                 coneHeight: 1,
             },
         ],
-        trunks: [
-            {
-                id: 'trunk-1',
-                modelId: 'model-1',
-                rootId: 'root-1',
-                segments: [
-                    {
-                        id: 'trunk-seg-1',
-                        type: 'straight',
-                        diameter: 1,
-                        topJoint: {
-                            id: 'trunk-top',
-                            pos: { x: 0, y: 0, z: 10 },
-                            diameter: 1,
-                        },
-                    },
-                ],
-            },
-        ],
-        branches: [
-            {
-                id: 'branch-1',
-                modelId: 'model-1',
-                parentKnotId: 'k-parent-host',
-                segments: [
-                    {
-                        id: 'branch-seg-1',
-                        type: 'straight',
-                        diameter: 0.8,
-                        topJoint: {
-                            id: 'branch-top',
-                            pos: { x: 4, y: 0, z: 20 },
-                            diameter: 1,
-                        },
-                    },
-                ],
-            },
-            {
-                id: 'branch-2-child',
-                modelId: 'model-1',
-                parentKnotId: 'k-child-on-branch',
-                segments: [
-                    {
-                        id: 'branch-seg-2',
-                        type: 'straight',
-                        diameter: 0.6,
-                        topJoint: {
-                            id: 'branch2-top',
-                            pos: { x: 8, y: 0, z: 24 },
-                            diameter: 0.8,
-                        },
-                    },
-                ],
-            },
-        ],
-        leaves: [
-            {
-                id: 'leaf-terminal',
-                modelId: 'model-1',
-                parentKnotId: 'k-terminal-endpoint',
-                contactCone: {
-                    id: 'leaf-cone-terminal',
-                    pos: { x: 4, y: 0, z: 21 },
-                    normal: { x: 0, y: 0, z: -1 },
-                    surfaceNormal: { x: 0, y: 0, z: -1 },
-                    profile: {
-                        type: 'disk',
-                        contactDiameterMm: 0.4,
-                        bodyDiameterMm: 1.2,
-                        lengthMm: 3,
-                        penetrationMm: 0.05,
-                        diskThicknessMm: 0.1,
-                        maxStandoffMm: 0.25,
-                        standoffAngleThreshold: Math.PI / 4,
-                    },
-                },
-            },
-            {
-                id: 'leaf-base-clamped',
-                modelId: 'model-1',
-                parentKnotId: 'k-terminal-base-clamped',
-                contactCone: {
-                    id: 'leaf-cone-base-clamped',
-                    pos: { x: 2, y: 0, z: 13 },
-                    normal: { x: 0, y: 0, z: -1 },
-                    surfaceNormal: { x: 0, y: 0, z: -1 },
-                    profile: {
-                        type: 'disk',
-                        contactDiameterMm: 0.4,
-                        bodyDiameterMm: 1.2,
-                        lengthMm: 3,
-                        penetrationMm: 0.05,
-                        diskThicknessMm: 0.1,
-                        maxStandoffMm: 0.25,
-                        standoffAngleThreshold: Math.PI / 4,
-                    },
-                },
-            },
-        ],
-        twigs: [],
-        sticks: [],
-        braces: [],
         knots: [
             {
                 id: 'k-parent-host',
@@ -502,6 +425,108 @@ test('loadFromImportFormat preserves terminal leaf tip endpoint intent, projects
         ],
     };
 
+    setCollection(data, 'trunk', [
+        {
+            id: 'trunk-1',
+            modelId: 'model-1',
+            rootId: 'root-1',
+            segments: [
+                {
+                    id: 'trunk-seg-1',
+                    type: 'straight',
+                    diameter: 1,
+                    topJoint: {
+                        id: 'trunk-top',
+                        pos: { x: 0, y: 0, z: 10 },
+                        diameter: 1,
+                    },
+                },
+            ],
+        },
+    ]);
+
+    setCollection(data, 'branch', [
+        {
+            id: 'branch-1',
+            modelId: 'model-1',
+            parentKnotId: 'k-parent-host',
+            segments: [
+                {
+                    id: 'branch-seg-1',
+                    type: 'straight',
+                    diameter: 0.8,
+                    topJoint: {
+                        id: 'branch-top',
+                        pos: { x: 4, y: 0, z: 20 },
+                        diameter: 1,
+                    },
+                },
+            ],
+        },
+        {
+            id: 'branch-2-child',
+            modelId: 'model-1',
+            parentKnotId: 'k-child-on-branch',
+            segments: [
+                {
+                    id: 'branch-seg-2',
+                    type: 'straight',
+                    diameter: 0.6,
+                    topJoint: {
+                        id: 'branch2-top',
+                        pos: { x: 8, y: 0, z: 24 },
+                        diameter: 0.8,
+                    },
+                },
+            ],
+        },
+    ]);
+
+    setCollection(data, 'leaf', [
+        {
+            id: 'leaf-terminal',
+            modelId: 'model-1',
+            parentKnotId: 'k-terminal-endpoint',
+            contactCone: {
+                id: 'leaf-cone-terminal',
+                pos: { x: 4, y: 0, z: 21 },
+                normal: { x: 0, y: 0, z: -1 },
+                surfaceNormal: { x: 0, y: 0, z: -1 },
+                profile: {
+                    type: 'disk',
+                    contactDiameterMm: 0.4,
+                    bodyDiameterMm: 1.2,
+                    lengthMm: 3,
+                    penetrationMm: 0.05,
+                    diskThicknessMm: 0.1,
+                    maxStandoffMm: 0.25,
+                    standoffAngleThreshold: Math.PI / 4,
+                },
+            },
+        },
+        {
+            id: 'leaf-base-clamped',
+            modelId: 'model-1',
+            parentKnotId: 'k-terminal-base-clamped',
+            contactCone: {
+                id: 'leaf-cone-base-clamped',
+                pos: { x: 2, y: 0, z: 13 },
+                normal: { x: 0, y: 0, z: -1 },
+                surfaceNormal: { x: 0, y: 0, z: -1 },
+                profile: {
+                    type: 'disk',
+                    contactDiameterMm: 0.4,
+                    bodyDiameterMm: 1.2,
+                    lengthMm: 3,
+                    penetrationMm: 0.05,
+                    diskThicknessMm: 0.1,
+                    maxStandoffMm: 0.25,
+                    standoffAngleThreshold: Math.PI / 4,
+                },
+            },
+        },
+    ]);
+
     loadFromImportFormat(data);
     const snapshot = getSnapshot();
 
@@ -532,6 +557,7 @@ test('loadFromImportFormat preserves terminal branch and leaf tip endpoints, whi
     resetStore();
 
     const data: DragonfruitImportFormat = {
+        ...emptyWireCollections(),
         version: 1,
         meta: {
             source: 'unit-test',
@@ -550,70 +576,6 @@ test('loadFromImportFormat preserves terminal branch and leaf tip endpoints, whi
                 coneHeight: 1,
             },
         ],
-        trunks: [
-            {
-                id: 'trunk-1',
-                modelId: 'model-1',
-                rootId: 'root-1',
-                segments: [
-                    {
-                        id: 'trunk-seg-1',
-                        type: 'straight',
-                        diameter: 1,
-                        topJoint: {
-                            id: 'trunk-top',
-                            pos: { x: 0, y: 0, z: 10 },
-                            diameter: 1,
-                        },
-                    },
-                ],
-            },
-        ],
-        branches: [
-            {
-                id: 'branch-terminal',
-                modelId: 'model-1',
-                parentKnotId: 'k-branch-terminal-parent',
-                segments: [
-                    {
-                        id: 'branch-terminal-seg',
-                        type: 'straight',
-                        diameter: 0.8,
-                        topJoint: {
-                            id: 'branch-terminal-top',
-                            pos: { x: 4, y: 0, z: 18 },
-                            diameter: 1,
-                        },
-                    },
-                ],
-            },
-        ],
-        leaves: [
-            {
-                id: 'leaf-terminal',
-                modelId: 'model-1',
-                parentKnotId: 'k-leaf-terminal-parent',
-                contactCone: {
-                    id: 'leaf-cone-terminal',
-                    pos: { x: 2, y: 0, z: 13 },
-                    normal: { x: 0, y: 0, z: -1 },
-                    surfaceNormal: { x: 0, y: 0, z: -1 },
-                    profile: {
-                        type: 'disk',
-                        contactDiameterMm: 0.4,
-                        bodyDiameterMm: 1.2,
-                        lengthMm: 3,
-                        penetrationMm: 0.05,
-                        diskThicknessMm: 0.1,
-                        maxStandoffMm: 0.25,
-                        standoffAngleThreshold: Math.PI / 4,
-                    },
-                },
-            },
-        ],
-        twigs: [],
-        sticks: [],
-        braces: [],
         knots: [
             {
                 id: 'k-branch-terminal-parent',
@@ -631,6 +593,70 @@ test('loadFromImportFormat preserves terminal branch and leaf tip endpoints, whi
             },
         ],
     };
+
+    setCollection(data, 'trunk', [
+        {
+            id: 'trunk-1',
+            modelId: 'model-1',
+            rootId: 'root-1',
+            segments: [
+                {
+                    id: 'trunk-seg-1',
+                    type: 'straight',
+                    diameter: 1,
+                    topJoint: {
+                        id: 'trunk-top',
+                        pos: { x: 0, y: 0, z: 10 },
+                        diameter: 1,
+                    },
+                },
+            ],
+        },
+    ]);
+
+    setCollection(data, 'branch', [
+        {
+            id: 'branch-terminal',
+            modelId: 'model-1',
+            parentKnotId: 'k-branch-terminal-parent',
+            segments: [
+                {
+                    id: 'branch-terminal-seg',
+                    type: 'straight',
+                    diameter: 0.8,
+                    topJoint: {
+                        id: 'branch-terminal-top',
+                        pos: { x: 4, y: 0, z: 18 },
+                        diameter: 1,
+                    },
+                },
+            ],
+        },
+    ]);
+
+    setCollection(data, 'leaf', [
+        {
+            id: 'leaf-terminal',
+            modelId: 'model-1',
+            parentKnotId: 'k-leaf-terminal-parent',
+            contactCone: {
+                id: 'leaf-cone-terminal',
+                pos: { x: 2, y: 0, z: 13 },
+                normal: { x: 0, y: 0, z: -1 },
+                surfaceNormal: { x: 0, y: 0, z: -1 },
+                profile: {
+                    type: 'disk',
+                    contactDiameterMm: 0.4,
+                    bodyDiameterMm: 1.2,
+                    lengthMm: 3,
+                    penetrationMm: 0.05,
+                    diskThicknessMm: 0.1,
+                    maxStandoffMm: 0.25,
+                    standoffAngleThreshold: Math.PI / 4,
+                },
+            },
+        },
+    ]);
 
     loadFromImportFormat(data);
     const snapshot = getSnapshot();

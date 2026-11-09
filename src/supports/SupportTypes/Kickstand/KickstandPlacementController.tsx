@@ -3,18 +3,16 @@ import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'r
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { pushSupportHistory } from '@/supports/history/supportHistory';
-import { SUPPORT_ADD_KICKSTAND } from '@/supports/history/actionTypes';
-import { addKnot, addRoot, subscribe, getSnapshot } from '../../state';
+import { useActionActive } from '@/hotkeys/hotkeyStore';
+import { findClosestMeshToPoint } from '../../PlacementLogic/PlacementUtils';
+import { addSupportEntityWithHistory, addKnot, addRoot, asOneSupportEdit, subscribe, getSnapshot } from '../../state';
 import type { SnapTarget } from '../../interaction/SnappingManager';
-import { getGridSettings } from '../../Settings';
+import { getGridSettings, getSettings } from '../../Settings/state';
 import { snapToGridIndex } from '../../PlacementLogic/Grid/gridMath';
-import { addKickstand, getKickstandSnapshot } from './kickstandStore';
 import { clampKickstandHostT } from './kickstandRules';
 import { buildKickstandData, toKickstandPreviewData } from './kickstandBuilder';
 import { getKickstandPlacementOffsetMm } from './kickstandSettings';
 import { kickstandPlacementStore, useKickstandPlacementState, type KickstandPlacementTarget } from './kickstandPlacementState';
-import { leafPlacementStore } from '../Leaf/leafPlacementState';
 import type { Vec3 } from '../../types';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState, resolveSupportPlacementHotkeyBindings, resolveSupportPlacementHotkeyIntent } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
@@ -22,6 +20,8 @@ import { usePlacementSnappingSession } from '../../interaction/shared/placement/
 import { buildKickstandSnapTargetMetaIndex, type KickstandSnapTargetMeta } from '../../interaction/shared/placement/snapping/kickstandSnapTargets';
 import { getSnapPathPointAtT, projectPointToSnapPath } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
+import { hasWindow } from '@/utils/dom';
 
 type DesiredBand = 'left' | 'right' | 'front';
 
@@ -31,6 +31,32 @@ interface ShaftClickDetail {
     intersection?: unknown;
 }
 
+
+/**
+ * Kickstand placement tracing, off unless `df-debug-kickstand` is set to '1'.
+ *
+ * Most of these sit in `useFrame`, so leaving them on costs a console write
+ * and an object allocation per log per frame for as long as the key is held.
+ */
+function isKickstandDebugEnabled(): boolean {
+    if (!hasWindow()) return false;
+    try {
+        return window.localStorage.getItem('df-debug-kickstand') === '1';
+    } catch {
+        return false;
+    }
+}
+
+function logKickstandDebug(...args: unknown[]): void {
+    if (!isKickstandDebugEnabled()) return;
+    console.log(...args);
+}
+
+/** For the `useFrame` sites: builds the payload only when tracing is on. */
+function logKickstandFrameDebug(message: string, detail: () => unknown): void {
+    if (!isKickstandDebugEnabled()) return;
+    console.log(message, detail());
+}
 
 function perpendicularDirection(
     path: NonNullable<SnapTarget['pathSegment']>,
@@ -92,7 +118,7 @@ function getPreferredPointFromPointerRay(
     pointer: THREE.Vector2,
     raycaster: THREE.Raycaster,
 ): Vec3 {
-    raycaster.setFromCamera(pointer, camera);
+    setPickRayFromCamera(raycaster, pointer, camera);
     const ray = raycaster.ray;
     const axisPointVec = toVector3(axisPoint);
     const toAxis = axisPointVec.clone().sub(ray.origin);
@@ -258,19 +284,19 @@ function isGridRootOccupied(rootPos: Vec3, modelId: string, hostRootId?: string 
         const rootGx = snapToGridIndex(root.transform.pos.x, grid.spacingMm);
         const rootGy = snapToGridIndex(root.transform.pos.y, grid.spacingMm);
         if (rootGx === gx && rootGy === gy) {
-            console.log('[DEBUG isGridRootOccupied] Occupied by supportRoot:', { rootId: root.id, rootGx, rootGy, gx, gy });
+            logKickstandDebug('[DEBUG isGridRootOccupied] Occupied by supportRoot:', { rootId: root.id, rootGx, rootGy, gx, gy });
             return true;
         }
     }
 
-    const kickstandSnapshot = getKickstandSnapshot();
+    const kickstandSnapshot = getSnapshot();
     for (const root of Object.values(kickstandSnapshot.roots)) {
         if (root.modelId !== modelId) continue;
         if (hostRootId && root.id === hostRootId) continue;
         const rootGx = snapToGridIndex(root.transform.pos.x, grid.spacingMm);
         const rootGy = snapToGridIndex(root.transform.pos.y, grid.spacingMm);
         if (rootGx === gx && rootGy === gy) {
-            console.log('[DEBUG isGridRootOccupied] Occupied by kickstandRoot:', { rootId: root.id, rootGx, rootGy, gx, gy });
+            logKickstandDebug('[DEBUG isGridRootOccupied] Occupied by kickstandRoot:', { rootId: root.id, rootGx, rootGy, gx, gy });
             return true;
         }
     }
@@ -287,10 +313,10 @@ function findNearestUnoccupiedGridRoot(
     const grid = getGridSettings();
     if (!grid.enabled || grid.spacingMm <= 0) return startRootPos;
 
-    console.log('[DEBUG findNearestUnoccupiedGridRoot] Solving for nearest unoccupied grid root:', { startRootPos, modelId, hostRootId });
+    logKickstandDebug('[DEBUG findNearestUnoccupiedGridRoot] Solving for nearest unoccupied grid root:', { startRootPos, modelId, hostRootId });
 
     if (!isGridRootOccupied(startRootPos, modelId, hostRootId)) {
-        console.log('[DEBUG findNearestUnoccupiedGridRoot] Start position is unoccupied:', startRootPos);
+        logKickstandDebug('[DEBUG findNearestUnoccupiedGridRoot] Start position is unoccupied:', startRootPos);
         return startRootPos;
     }
 
@@ -326,21 +352,24 @@ function findNearestUnoccupiedGridRoot(
                 z: 0,
             };
             if (!isGridRootOccupied(worldPos, modelId, hostRootId)) {
-                console.log('[DEBUG findNearestUnoccupiedGridRoot] Found unoccupied candidate:', { worldPos, gx: c.gx, gy: c.gy, r });
+                logKickstandDebug('[DEBUG findNearestUnoccupiedGridRoot] Found unoccupied candidate:', { worldPos, gx: c.gx, gy: c.gy, r });
                 return worldPos;
             }
         }
     }
 
-    console.log('[DEBUG findNearestUnoccupiedGridRoot] No unoccupied grid root found within radius. Falling back to start:', startRootPos);
+    logKickstandDebug('[DEBUG findNearestUnoccupiedGridRoot] No unoccupied grid root found within radius. Falling back to start:', startRootPos);
     return startRootPos;
 }
 
 export function KickstandPlacementController() {
     const { hotkeyActive } = useKickstandPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
-    const { camera, gl, pointer, raycaster } = useThree();
+    const { camera, gl, pointer, raycaster, scene } = useThree();
     const { getHotkey } = useHotkeyConfig();
+    const forcePlaceActive = useActionActive('SUPPORTS', 'FORCE_PLACE_SUPPORT');
+    const forcePlaceRef = useRef(false);
+    forcePlaceRef.current = forcePlaceActive;
     const hoverPointBySegmentRef = useRef<Map<string, Vec3>>(new Map());
     const hoveredSegmentIdRef = useRef<string | null>(null);
     const desiredBandRef = useRef<DesiredBand>('front');
@@ -351,6 +380,18 @@ export function KickstandPlacementController() {
     const targetMetaById = useMemo(() => {
         return buildKickstandSnapTargetMetaIndex(supportState);
     }, [supportState]);
+
+    /** The model the column has to clear, picked from the scene by its id. */
+    const resolveCollisionMesh = useCallback((modelId: string, near: Vec3): THREE.Mesh | undefined => {
+        if (!scene) return undefined;
+        const meshes: THREE.Object3D[] = [];
+        scene.traverse((obj) => {
+            if (obj.userData?.modelId !== modelId) return;
+            const mesh = obj as THREE.Mesh;
+            if (mesh.isMesh && mesh.geometry) meshes.push(mesh);
+        });
+        return findClosestMeshToPoint(near, meshes);
+    }, [scene]);
 
     const snapTargets = useMemo(() => {
         return Array.from(targetMetaById.values()).map((meta) => meta.target);
@@ -382,6 +423,8 @@ export function KickstandPlacementController() {
                 diameterMm: meta.diameterMm,
                 minT: meta.minT,
             },
+            collisionMesh: resolveCollisionMesh(meta.modelId, snappedPos),
+            maxShaftAngleDeg: getSettings().shaft.maxAngleDeg,
         });
 
         return {
@@ -397,7 +440,7 @@ export function KickstandPlacementController() {
             },
             build,
         };
-    }, []);
+    }, [resolveCollisionMesh]);
 
     useEffect(() => {
         const el = gl.domElement;
@@ -462,7 +505,7 @@ export function KickstandPlacementController() {
     useFrame(() => {
         if (isSupportEditInteractionActive()) {
             if (!supportEditSuppressedRef.current) {
-                console.log('[DEBUG Kickstand placement useFrame] Support edit interaction active, clearing preview');
+                logKickstandDebug('[DEBUG Kickstand placement useFrame] Support edit interaction active, clearing preview');
                 supportEditSuppressedRef.current = true;
                 kickstandPlacementStore.clearPreview();
                 desiredBandRef.current = 'front';
@@ -490,24 +533,24 @@ export function KickstandPlacementController() {
         let snapT = resolvedSnap.t ?? null;
         let snapPos = resolvedSnap.snappedPos ?? null;
 
-        console.log('[DEBUG Kickstand placement useFrame] Snapping update:', {
+        logKickstandFrameDebug('[DEBUG Kickstand placement useFrame] Snapping update:', () => ({
             resolvedSnapState: resolvedSnap.state,
             resolvedSnapTargetId: resolvedSnap.targetId,
             metaFromGpu: !!meta,
             snapT,
-            snapPos
-        });
+            snapPos,
+        }));
 
         if (!meta || snapT === null || !snapPos) {
             // GPU pick did not lock — try the most recently hovered segment from Three.js raycasting.
             const hoveredSegId = hoveredSegmentIdRef.current;
             const hoveredPoint = hoveredSegId ? hoverPointBySegmentRef.current.get(hoveredSegId) : null;
             const hoveredMeta = hoveredSegId ? targetMetaById.get(hoveredSegId) ?? null : null;
-            console.log('[DEBUG Kickstand placement useFrame] Falling back to hovered segment:', {
+            logKickstandFrameDebug('[DEBUG Kickstand placement useFrame] Falling back to hovered segment:', () => ({
                 hoveredSegId,
                 hoveredPoint,
-                hoveredMeta: !!hoveredMeta
-            });
+                hoveredMeta: !!hoveredMeta,
+            }));
             if (hoveredMeta && hoveredMeta.target.pathSegment && hoveredPoint) {
                 const projected = projectPointToSnapPath(hoveredPoint, hoveredMeta.target.pathSegment);
                 meta = hoveredMeta;
@@ -517,7 +560,7 @@ export function KickstandPlacementController() {
         }
 
         if (!meta || snapT === null || !snapPos) {
-            console.log('[DEBUG Kickstand placement useFrame] No meta or snap, clearing preview');
+            logKickstandDebug('[DEBUG Kickstand placement useFrame] No meta or snap, clearing preview');
             kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
@@ -526,7 +569,7 @@ export function KickstandPlacementController() {
 
         const path = meta.target.pathSegment;
         if (!path) {
-            console.log('[DEBUG Kickstand placement useFrame] No pathSegment in targetMeta, clearing preview');
+            logKickstandDebug('[DEBUG Kickstand placement useFrame] No pathSegment in targetMeta, clearing preview');
             kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
@@ -558,16 +601,19 @@ export function KickstandPlacementController() {
 
         const { target, build } = buildPlacementFromSnap(meta, clampedT, snappedPos, rootPos);
         const previewData = toKickstandPreviewData(build);
-        previewData.error = nodeOccupied ? 'TOO_CLOSE_TO_EXISTING' : undefined;
+        // An occupied node outranks a collision: the solver can resolve it.
+        previewData.error = forcePlaceRef.current
+            ? undefined
+            : (nodeOccupied ? 'TOO_CLOSE_TO_EXISTING' : build.error);
 
-        console.log('[DEBUG Kickstand placement useFrame] Setting preview:', {
+        logKickstandFrameDebug('[DEBUG Kickstand placement useFrame] Setting preview:', () => ({
             segmentId: meta.segmentId,
             clampedT,
             snappedPos,
             rootPos,
             nodeOccupied,
-            previewError: previewData.error
-        });
+            previewError: previewData.error,
+        }));
 
         kickstandPlacementStore.setPreview(target, build, previewData);
     });
@@ -592,7 +638,7 @@ export function KickstandPlacementController() {
             const snapshot = kickstandPlacementStore.getSnapshot();
             const { snapTarget, previewBuild, previewData, hotkeyActive } = snapshot;
 
-            console.log('[DEBUG Kickstand placement handleClick] Click triggered:', {
+            logKickstandDebug('[DEBUG Kickstand placement handleClick] Click triggered:', {
                 hotkeyActive,
                 hasSnapTarget: !!snapTarget,
                 hasPreviewBuild: !!previewBuild,
@@ -602,7 +648,7 @@ export function KickstandPlacementController() {
             if (!hotkeyActive) return;
 
             if (!snapTarget) {
-                console.log('[DEBUG Kickstand placement handleClick] Rejected: no snapTarget in store snapshot');
+                logKickstandDebug('[DEBUG Kickstand placement handleClick] Rejected: no snapTarget in store snapshot');
                 return;
             }
 
@@ -615,7 +661,7 @@ export function KickstandPlacementController() {
             const hostRootId = meta?.hostRootId;
             const occupied = isGridRootOccupied(snapTarget.rootPos, snapTarget.modelId, hostRootId);
 
-            console.log('[DEBUG Kickstand placement handleClick] Checking occupancy:', {
+            logKickstandDebug('[DEBUG Kickstand placement handleClick] Checking occupancy:', {
                 rootPos: snapTarget.rootPos,
                 modelId: snapTarget.modelId,
                 hostRootId,
@@ -625,41 +671,50 @@ export function KickstandPlacementController() {
 
             if (previewData?.error === 'TOO_CLOSE_TO_EXISTING' || occupied) {
                 if (meta) {
-                    console.log('[DEBUG Kickstand placement handleClick] Target is occupied, attempting solver for nearest unoccupied root');
+                    logKickstandDebug('[DEBUG Kickstand placement handleClick] Target is occupied, attempting solver for nearest unoccupied root');
                     const resolvedRootPos = findNearestUnoccupiedGridRoot(snapTarget.rootPos, snapTarget.modelId, hostRootId);
                     const stillOccupied = isGridRootOccupied(resolvedRootPos, snapTarget.modelId, hostRootId);
-                    console.log('[DEBUG Kickstand placement handleClick] Solver result:', {
+                    logKickstandDebug('[DEBUG Kickstand placement handleClick] Solver result:', {
                         resolvedRootPos,
                         stillOccupied
                     });
                     if (stillOccupied) {
-                        console.log('[DEBUG Kickstand placement handleClick] Solver failed: resolved root is still occupied');
+                        logKickstandDebug('[DEBUG Kickstand placement handleClick] Solver failed: resolved root is still occupied');
                         finalBuild = null;
                     } else {
                         const { build } = buildPlacementFromSnap(meta, snapTarget.t, snapTarget.pos, resolvedRootPos);
                         finalBuild = build;
-                        console.log('[DEBUG Kickstand placement handleClick] Solver succeeded, rebuilt with root:', resolvedRootPos);
+                        logKickstandDebug('[DEBUG Kickstand placement handleClick] Solver succeeded, rebuilt with root:', resolvedRootPos);
                     }
                 } else {
-                    console.log('[DEBUG Kickstand placement handleClick] Occupied and no meta found to resolve');
+                    logKickstandDebug('[DEBUG Kickstand placement handleClick] Occupied and no meta found to resolve');
                     finalBuild = null;
                 }
             }
 
             if (!finalBuild) {
-                console.log('[DEBUG Kickstand placement handleClick] Rejected: finalBuild is null or invalid');
+                logKickstandDebug('[DEBUG Kickstand placement handleClick] Rejected: finalBuild is null or invalid');
                 return;
             }
 
-            console.log('[DEBUG Kickstand placement handleClick] Placement succeeded! Adding kickstand:', finalBuild);
+            if (finalBuild.error && !forcePlaceRef.current) return;
 
-            addKickstand(finalBuild);
-            addRoot(finalBuild.root);
-            addKnot(finalBuild.hostKnot);
+            logKickstandDebug('[DEBUG Kickstand placement handleClick] Placement succeeded! Adding kickstand:', finalBuild);
 
-            pushSupportHistory({
-                type: SUPPORT_ADD_KICKSTAND,
-                payload: { build: finalBuild },
+            // Three ordinary entities: the kickstand, the root it mounts to and
+            // the knot it hangs from. No bundled adder.
+            //
+            // One write: a root alone is a root no kickstand claims, and the
+            // renderer culls those.
+            // The root rides on the kickstand's own `owns` edge, so the adder
+            // records it. The host knot is `hostedBy` -- the cascade takes it,
+            // but only this caller knows which knot that was.
+            asOneSupportEdit(() => {
+                addRoot(finalBuild.root);
+                addKnot(finalBuild.hostKnot);
+                addSupportEntityWithHistory('kickstand', finalBuild.kickstand, {
+                    knots: finalBuild.hostKnot,
+                });
             });
 
             clearSupportSelection();

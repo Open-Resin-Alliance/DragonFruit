@@ -1,5 +1,5 @@
 import { type ScanLayerResult, type GridRef, VOXEL_OFFSET_X, VOXEL_OFFSET_Y, VOXEL_OFFSET_Z } from './ScanOrchestrator';
-import { type RleMask, rleEncode } from './rle';
+import { type RleMask, candidateVoxelPairs, rleEncode } from './rle';
 import { rasterizeLoopsScanline as rasterizeLoopsToMask, rasterizeLoopsToExistingGridScanline as rasterizeLoopsToExistingGrid } from './scanline';
 import { type Connectivity, type RasterScanOptions, type Mask } from './types';
 import { scanLayer } from './island';
@@ -100,49 +100,13 @@ self.onmessage = (e: MessageEvent<InitMessage | StartMessage | LayerMessage>) =>
             console.log(`Layer ${msg.z.toFixed(2)}: Slice ${(t1 - t0).toFixed(2)}ms, Raster ${(t2 - t1).toFixed(2)}ms, RLE Encode ${(t3 - t2).toFixed(2)}ms, Island ${(t4 - t3).toFixed(2)}ms`);
         }
 
-        // Send RLE results back
-        // We need to flatten RLE arrays for transfer if they are jagged arrays of Int32Array
-        // But postMessage can handle arrays of TypedArrays.
-        // However, to be efficient, we might want to keep them as is.
-        // ScanOrchestrator expects: islandMaskRle, solidMaskRle, islandCount, labels, components
-
-        // Wait, ScanOrchestrator expects 'islandMaskRle' as Int32Array (single array).
-        // But our new RleMask is { rows: Int32Array[] }.
-        // We should probably flatten it for transfer or update Orchestrator to handle rows.
-        // Flattening is safer for now to match previous "RLE" concept (though previous was 1D RLE).
-        // Actually, previous RLE was just a placeholder I implemented in scanline.ts.
-        // Let's check what ScanOrchestrator expects.
-        // It expects 'islandMaskRle: Int32Array'.
-        // My new RleMask is 2D (rows).
-        // I should probably flatten it to a single Int32Array with row delimiters or just keep it as rows?
-        // Keeping as rows is better for processing but harder to transfer as a single buffer.
-        // Let's flatten it: [rowCount, row1_len, ...row1_data, row2_len, ...row2_data]
-        // Or just send the array of arrays?
-        // Let's send the object structure, but we can't transfer ownership of nested arrays easily.
-        // Actually, let's just send the object. Structure clone algorithm handles it.
-
-        (self as any).postMessage({
+        // Only the candidate voxels go back. The RLE, the solid mask, the
+        // components and the grid all describe this layer to a caller that only
+        // wants these, and cloning them per layer on the receiving thread was
+        // most of a scan's wall clock. See `candidateVoxelPairs`.
+        self.postMessage({
             type: 'done',
-            result: {
-                islandMaskRle: res.solidMask, // Wait, islandMask is effectively solidMask for visualization? No.
-                // In previous code: islandMask was "labels > 0".
-                // In new code: res.labels is RleLabels.
-                // We should send res.labels and res.solidMask.
-
-                // ScanOrchestrator expects:
-                // islandMaskRle: Int32Array
-                // solidMaskRle: Int32Array
-                // labels: Int32Array
-
-                // I need to update ScanOrchestrator to accept the new RleMask structure.
-                // For now, I will send the new structure and update Orchestrator next.
-
-                islandLabelsRle: res.labels,
-                solidMaskRle: res.solidMask,
-                islandCount: res.components.length,
-                components: res.components,
-                grid: { originX: currentMask.originX, originZ: currentMask.originZ, width: currentMask.width, height: currentMask.height, px_mm: currentMask.px_mm },
-            }
+            result: { candidatePairs: candidateVoxelPairs(res.labels) },
         });
         return;
     }

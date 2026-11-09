@@ -1,37 +1,40 @@
-import type { Branch, Brace, Knot, Leaf } from '../types';
+import { recomputeLeafPreviewContactCone } from '../SupportTypes/Leaf/leafPreviewCone';
+import type { Branch, Brace, Knot, Leaf, Twig } from '../types';
+import { hostKnotFieldsFor, isJointDragPreviewType, resolveSupportTypeIdOf, type SupportTypeId } from '../supportTypeRegistry';
 import { computeJointDragPreviewKnots, type JointDragPreviewSnapshot } from './jointDragPreviewMath';
 
-export function buildBranchesByParentKnotId(branches: Branch[]) {
-  const map = new Map<string, Branch[]>();
-  for (const branch of branches) {
-    const list = map.get(branch.parentKnotId);
-    if (list) list.push(branch);
-    else map.set(branch.parentKnotId, [branch]);
-  }
-  return map;
-}
+/**
+ * Entities indexed by each host knot they name, from the type's declared
+ * `hostedBy` knot fields. An entity naming two knots is indexed under both.
+ */
+export function buildEntitiesByHostKnot<T extends { id: string; typeId?: SupportTypeId }, R>(
+  entities: readonly T[],
+  project: (entity: T) => R,
+): Map<string, R[]> {
+  const map = new Map<string, R[]>();
+  const fieldsByType = new Map<SupportTypeId, readonly string[]>();
 
-export function buildLeafIdsByParentKnotId(leaves: Leaf[]) {
-  const map = new Map<string, string[]>();
-  for (const leaf of leaves) {
-    const list = map.get(leaf.parentKnotId);
-    if (list) list.push(leaf.id);
-    else map.set(leaf.parentKnotId, [leaf.id]);
-  }
-  return map;
-}
+  for (const entity of entities) {
+    const typeId = resolveSupportTypeIdOf(entity);
+    if (!typeId) continue;
 
-export function buildBraceIdsByKnotId(braces: Brace[]) {
-  const map = new Map<string, string[]>();
-  for (const brace of braces) {
-    const startList = map.get(brace.startKnotId);
-    if (startList) startList.push(brace.id);
-    else map.set(brace.startKnotId, [brace.id]);
+    let fields = fieldsByType.get(typeId);
+    if (!fields) {
+      fields = hostKnotFieldsFor(typeId);
+      fieldsByType.set(typeId, fields);
+    }
+    if (fields.length === 0) continue;
 
-    const endList = map.get(brace.endKnotId);
-    if (endList) endList.push(brace.id);
-    else map.set(brace.endKnotId, [brace.id]);
+    const record = entity as unknown as Record<string, unknown>;
+    for (const field of fields) {
+      const knotId = record[field];
+      if (typeof knotId !== 'string' || knotId.length === 0) continue;
+      const list = map.get(knotId);
+      if (list) list.push(project(entity));
+      else map.set(knotId, [project(entity)]);
+    }
   }
+
   return map;
 }
 
@@ -109,6 +112,12 @@ export function computeCascadedPreviewKnotOverrides({
     const branch = branchesById[branchId];
     if (!branch) continue;
 
+    const branchKind = resolveSupportTypeIdOf(branch);
+    if (!branchKind || !isJointDragPreviewType(branchKind)) {
+      processedBranchIds.add(branchId);
+      continue;
+    }
+
     const parentKnot = merged[branch.parentKnotId];
     if (!parentKnot) {
       processedBranchIds.add(branchId);
@@ -128,7 +137,7 @@ export function computeCascadedPreviewKnotOverrides({
     }
 
     const nextBranchPreviewKnots = computeJointDragPreviewKnots(
-      { kind: 'branch', supportId: branch.id, support: branch },
+      { kind: branchKind, supportId: branch.id, support: branch },
       { parentKnot },
       branchPreviewCandidateKnots,
     );
@@ -157,7 +166,8 @@ interface CollectPreviewLeavesByIdOptions {
   previewKnotOverrides: Record<string, Knot>;
   leafIdsByParentKnotId: Map<string, string[]>;
   leavesById: Record<string, Leaf>;
-  recomputeLeafPreviewContactCone: (leaf: Leaf, previewKnot: Knot) => Leaf;
+  /** Which twins host the knots, for the cones that track a tapered host. */
+  twigBySegmentId: Map<string, Twig>;
 }
 
 export function collectPreviewLeavesById({
@@ -165,7 +175,7 @@ export function collectPreviewLeavesById({
   previewKnotOverrides,
   leafIdsByParentKnotId,
   leavesById,
-  recomputeLeafPreviewContactCone,
+  twigBySegmentId,
 }: CollectPreviewLeavesByIdOptions) {
   const map = new Map<string, Leaf>();
   for (const knotId of previewKnotOverrideIds) {
@@ -178,7 +188,7 @@ export function collectPreviewLeavesById({
     for (const leafId of leafIds) {
       const leaf = leavesById[leafId];
       if (!leaf) continue;
-      map.set(leaf.id, recomputeLeafPreviewContactCone(leaf, previewKnot));
+      map.set(leaf.id, recomputeLeafPreviewContactCone(leaf, previewKnot, twigBySegmentId));
     }
   }
   return map;

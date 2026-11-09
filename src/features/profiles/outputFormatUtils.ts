@@ -1,4 +1,3 @@
-export const DEFAULT_OUTPUT_FORMAT = '.lumen';
 const FORMAT_VERSION_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 export type WebcamRotationDeg = 0 | 90 | 180 | 270;
 
@@ -12,19 +11,25 @@ const OUTPUT_FORMAT_RE = /^\.[a-z0-9][a-z0-9_-]*$/i;
 const WEBCAM_ROTATION_DEG_RE = /^(0|90|180|270)$/;
 
 /**
- * Normalize output format values to a stable, extensible extension string.
+ * Normalize an output format to a stable, extensible extension string.
  *
  * This intentionally does not hardcode a finite format allowlist so plugin-
  * owned output formats can flow through core profile/preset persistence.
+ *
+ * There is deliberately no default format, and `null` is a real answer: a format
+ * is owned by the plugin that encodes it, so a missing or malformed value is a
+ * question for the caller - skip the entry, keep what the profile already had, or
+ * ask the user for one. Substituting some other format would write bytes that
+ * disagree with the file's name.
  */
-export function normalizeOutputFormat(value: unknown, fallback = DEFAULT_OUTPUT_FORMAT): string {
-  if (typeof value !== 'string') return fallback;
+export function normalizeOutputFormat(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
 
   const raw = value.trim().toLowerCase();
-  if (!raw) return fallback;
+  if (!raw) return null;
 
   const aliased = LEGACY_FORMAT_ALIASES[raw] ?? raw;
-  if (!OUTPUT_FORMAT_RE.test(aliased)) return fallback;
+  if (!OUTPUT_FORMAT_RE.test(aliased)) return null;
 
   return aliased;
 }

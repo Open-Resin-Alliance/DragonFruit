@@ -206,6 +206,7 @@ body {
   );
 }
 
+
 /* Backdrop blur layer behind the topbar (z-30) so the Transform Toolbar
    (z-40) and modals (z-50+) float crisp above the frosted glass. */
 .ui-topbar-blur {
@@ -396,6 +397,43 @@ body {
 
 .ui-button-accent:hover {
   background: color-mix(in srgb, var(--secondary-button-surface), black 9%);
+}
+
+/* Tinted action: the tone mixed into the surface rather than filled solid.
+   These three lines replace the inline style triples that ~60 call sites used to
+   hand-write (border 45%, surface 86%, text = tone). */
+.ui-button-tint {
+  background: color-mix(in srgb, var(--button-tint), var(--surface-1) 86%);
+  border-color: color-mix(in srgb, var(--button-tint), var(--border-subtle) 45%);
+  color: var(--button-tint);
+}
+
+.ui-button-tint:hover {
+  background: color-mix(in srgb, var(--button-tint), var(--surface-1) 76%);
+}
+
+.ui-button-tint-accent { --button-tint: var(--accent); }
+.ui-button-tint-danger { --button-tint: var(--danger); }
+.ui-button-tint-warning { --button-tint: #f59e0b; }
+.ui-button-tint-success { --button-tint: var(--success); }
+
+/* Segmented option pill. `--segmented-tone` is set by the control, so one class
+   covers the accent and accent-secondary families that were hand-written ~50
+   times with a four-line inline active style block. */
+.ui-segmented-option {
+  background: var(--surface-1);
+  border-color: var(--border-subtle);
+  color: var(--text-muted);
+}
+
+.ui-segmented-option:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.ui-segmented-option[data-active="true"] {
+  border-color: color-mix(in srgb, var(--segmented-tone, var(--accent)), white 10%);
+  background: color-mix(in srgb, var(--segmented-tone, var(--accent)), var(--surface-0) 76%);
+  color: color-mix(in srgb, var(--segmented-tone, var(--accent)), var(--text-strong) 25%);
 }
 
 .ui-shell {
@@ -878,6 +916,14 @@ input[type="number"].no-spinners {
   animation: spinOnceCCW 500ms ease-in-out;
 }
 
+/* While a preset is dragged off the Support Studio panel, the pointer is a
+   trash can: releasing there asks to delete it. Set on the body with
+   `!important` because the cell under the pointer sets its own cursor. */
+body.preset-drag-delete,
+body.preset-drag-delete * {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 24 24' fill='none' stroke='%23ef4444' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18'/%3E%3Cpath d='M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2'/%3E%3Cpath d='M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6'/%3E%3Cpath d='M10 11v6'/%3E%3Cpath d='M14 11v6'/%3E%3C/svg%3E") 8 4, not-allowed !important;
+}
+
 /* Themed custom scrollbar */
 .custom-scrollbar {
   scrollbar-width: thin;
@@ -938,5 +984,4 @@ input[type="number"]:not(.no-spinners):hover::-webkit-outer-spin-button,
 .ui-number-input:hover::-webkit-outer-spin-button {
   background: color-mix(in srgb, var(--surface-2), var(--accent) 16%);
 }
-
 

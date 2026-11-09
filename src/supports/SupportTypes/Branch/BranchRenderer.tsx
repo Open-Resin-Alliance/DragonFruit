@@ -1,22 +1,23 @@
+import { useContactDiskDragSession } from '../useContactDiskDragSession';
+import { updateSupportEntity } from '../../supportTypeRegistry';
+import { renderShaftSegment } from '../renderShaftSegment';
+import { useShaftSegments } from '../useShaftSegments';
 import React from 'react';
 import { useThree } from '@react-three/fiber';
-import * as THREE from 'three';
 import { Branch, Knot } from '../../types';
+import { registerSupportDetailRenderer, simpleViewHidesDetail } from '../../detailRenderer/seam';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
-import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
-import { BezierRenderer } from '../../Renderers/BezierRenderer';
-import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
-import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
+import { ContactConeRenderer } from '../../SupportPrimitives/ContactCone';
+import { isPrimaryPointerPress, type ContactDiskDragHit } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
 import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
-import { getSnapshot, updateBranch } from '../../state';
-import { getSettings } from '../../Settings';
+import { getSnapshot } from '../../state';
+import { getSettings } from '../../Settings/state';
 import { decodeSupportSettingsHex } from '../../Settings/supportSettingsCodec';
-import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { buildBranchData, remapBranchGeometryIds } from './branchBuilder';
 
 interface BranchRendererProps {
@@ -36,6 +37,8 @@ interface BranchRendererProps {
   hoverColor?: string;
   selectedColor?: string;
   onContactDiskHudHoverChange?: (hovered: boolean) => void;
+  /** A frozen dependent of a drag: draw translucent, but still pickable. */
+  ghosted?: boolean;
 }
 
 export const BranchRenderer = React.memo(function BranchRenderer({
@@ -55,26 +58,17 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   hoverColor,
   selectedColor = '#80fffd',
   onContactDiskHudHoverChange,
+  ghosted = false,
 }: BranchRendererProps) {
   const { camera, scene, gl } = useThree();
   const highDetailPrimitiveSegments = 24;
   const lowDetailPrimitiveSegments = 8;
   const useLowDetailPrimitives = !isSelected && !propHovered;
-  const previewBranch = usePartDragUpdate<Branch>('branch', baseBranch.id);
+  // The entity names its own type; the store stamps it on every write.
+  const typeId = baseBranch.typeId ?? 'branch';
+  const previewBranch = usePartDragUpdate<Branch>(typeId, baseBranch.id);
   const branch = previewBranch ?? baseBranch;
-  const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
-  const liveDragBranchRef = React.useRef<Branch | null>(null);
-  const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
-  const [, setDragTick] = React.useState(0);
 
-  React.useEffect(() => {
-    return () => {
-      dragSessionRef.current?.stop();
-      dragSessionRef.current = null;
-      liveDragBranchRef.current = null;
-      beforeHistoryRef.current = null;
-    };
-  }, []);
 
   // Use universal highlight hook (matches TrunkRenderer pattern)
   const { pickRef, visuals, isPickingHovered } = useHighlight({
@@ -95,161 +89,83 @@ export const BranchRenderer = React.memo(function BranchRenderer({
     handleSupportClick(e, branch.id, !!isInteractable);
   };
 
+  const tipDrag = useContactDiskDragSession<Branch>(typeId, {
+    onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
+      const latest = getSnapshot().branches[branch.id];
+      if (!latest?.contactCone) return null;
+      // Size the rebuild from the branch's own settings and its existing
+      // geometry: moving a tip must not resize the support.
+      const ownSettings = (latest.settingsCodeHex
+        ? decodeSupportSettingsHex(latest.settingsCodeHex, getSettings())
+        : null) ?? getSettings();
+      const rebuilt = remapBranchGeometryIds(buildBranchData({
+        tipPos: point,
+        tipNormal: surfaceNormal,
+        modelId: branch.modelId,
+        parentKnot,
+        mesh,
+        settings: ownSettings,
+        shaftDiameterMm: latest.segments[0]?.diameter,
+        tipProfile: { ...latest.contactCone.profile, lengthMm: ownSettings.tip.lengthMm },
+      }).branch, latest);
+
+      return {
+        ...rebuilt,
+        contactCone: rebuilt.contactCone
+          ? { ...rebuilt.contactCone, placementSurface: latest.contactCone.placementSurface }
+          : rebuilt.contactCone,
+        id: latest.id,
+        parentKnotId: latest.parentKnotId,
+        settingsCodeHex: latest.settingsCodeHex,
+        modelId: latest.modelId,
+      };
+    },
+    onCommit: (next) => updateSupportEntity('branch', next),
+  });
+
   const handleContactDiskHudPointerDown = React.useCallback((e: any) => {
     if (!isSelected || !branch.contactCone) return;
     if (!isPrimaryPointerPress(e)) return;
-
-    beforeHistoryRef.current = captureSupportEditSnapshot();
-
-    dragSessionRef.current?.stop();
-    dragSessionRef.current = startContactDiskDragSession({
-      camera,
-      domElement: gl.domElement,
-      scene,
-      initialEvent: e,
+    tipDrag.start({
+      event: e, camera, domElement: gl.domElement, scene,
       modelId: branch.modelId,
       placementSurface: branch.contactCone?.placementSurface,
-      onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
-        const latest = getSnapshot().branches[branch.id];
-        if (!latest?.contactCone) return;
-        // Size the rebuild from the branch's own settings and its existing
-        // geometry, not from whatever the global preset says now: moving a tip
-        // must not resize the support. The stored cone length is the solved one,
-        // so the nominal comes from the branch's own band instead.
-        const ownSettings = (latest.settingsCodeHex
-          ? decodeSupportSettingsHex(latest.settingsCodeHex, getSettings())
-          : null) ?? getSettings();
-        const rebuilt = remapBranchGeometryIds(buildBranchData({
-          tipPos: point,
-          tipNormal: surfaceNormal,
-          modelId: branch.modelId,
-          parentKnot,
-          mesh,
-          settings: ownSettings,
-          shaftDiameterMm: latest.segments[0]?.diameter,
-          tipProfile: { ...latest.contactCone.profile, lengthMm: ownSettings.tip.lengthMm },
-        }).branch, latest);
-        liveDragBranchRef.current = {
-          ...rebuilt,
-          contactCone: rebuilt.contactCone
-            ? {
-                ...rebuilt.contactCone,
-                placementSurface: latest.contactCone.placementSurface,
-              }
-            : rebuilt.contactCone,
-          id: latest.id,
-          parentKnotId: latest.parentKnotId,
-          settingsCodeHex: latest.settingsCodeHex,
-          modelId: latest.modelId,
-        };
-        setDragTick(t => t + 1);
-      },
-      onEnd: () => {
-        if (liveDragBranchRef.current) {
-          updateBranch(liveDragBranchRef.current);
-          if (beforeHistoryRef.current) {
-            pushSupportEditHistory('Move branch tip', beforeHistoryRef.current, captureSupportEditSnapshot());
-          }
-        }
-        liveDragBranchRef.current = null;
-        dragSessionRef.current = null;
-        beforeHistoryRef.current = null;
-      },
     });
-  }, [branch.id, branch.contactCone, branch.modelId, camera, gl.domElement, isSelected, parentKnot, scene]);
+  }, [branch.contactCone, branch.modelId, camera, gl.domElement, isSelected, scene, tipDrag]);
 
   const handleContactDiskHudPointerUp = React.useCallback(() => {
-    dragSessionRef.current?.stop();
-    dragSessionRef.current = null;
-  }, []);
-  
-  // Start point is the Knot position
-  const startPos = parentKnot.pos 
-    ? new THREE.Vector3(parentKnot.pos.x, parentKnot.pos.y, parentKnot.pos.z)
-    : new THREE.Vector3(0, 0, 0);
-
-  let currentStart = startPos.clone();
+    tipDrag.stop();
+  }, [tipDrag]);
 
   const shafts: React.ReactNode[] = [];
   const batchedStraightShafts: InstancedShaft[] = [];
   const joints: React.ReactNode[] = [];
 
-  const effectiveBranch = liveDragBranchRef.current ?? previewBranch ?? branch;
+  const effectiveBranch = tipDrag.preview ?? previewBranch ?? branch;
+  const shaftSegments = useShaftSegments(effectiveBranch, { hostKnot: parentKnot });
 
-  effectiveBranch.segments.forEach((seg, index) => {
-    let endPoint: THREE.Vector3;
-
-    if (seg.topJoint) {
-      endPoint = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-    } else if (effectiveBranch.contactCone) {
-      // Shaft ends at the cone's socket position
-      const socketPos = getFinalSocketPosition(effectiveBranch.contactCone);
-      endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-    } else {
-      endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 5));
-    }
-
-    const startPosVec = { x: currentStart.x, y: currentStart.y, z: currentStart.z };
-    const endPosVec = { x: endPoint.x, y: endPoint.y, z: endPoint.z };
-
-    currentStart = endPoint;
+  shaftSegments.forEach((shaft) => {
+    const seg = shaft.segment;
 
     const isSegSelected = selectedId === seg.id;
 
     // Add Shaft (straight or bezier)
-    const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && seg.type !== 'bezier';
-
-    if (canBatchShaft) {
-      batchedStraightShafts.push({
-        id: seg.id,
-        start: startPosVec,
-        end: endPosVec,
-        diameter: seg.diameter,
-      });
-    } else if (seg.type === 'bezier') {
-      const bezierColor = isSelected ? '#ff00ff' : visuals.color;
-      shafts.push(
-        <BezierRenderer
-          key={`shaft-${seg.id}`}
-          id={seg.id}
-          start={startPosVec}
-          end={endPosVec}
-          control1={seg.controlPoint1}
-          control2={seg.controlPoint2}
-          diameter={seg.diameter}
-          resolution={seg.resolution}
-          color={bezierColor}
-          emissive={visuals.emissive}
-          emissiveIntensity={visuals.emissiveIntensity}
-          selectedColor={visuals.selectedColor}
-          isParentSelected={isSelected}
-          isInteractable={isInteractable}
-          isSelected={isSegSelected}
-          onClick={() => selectPrimitiveById(seg.id)}
-        />
-      );
-    } else if (!deferStraightShaftsToSceneBatch || isSelected) {
-      shafts.push(
-        <ShaftRenderer
-          key={`shaft-${seg.id}`}
-          id={seg.id}
-          start={startPosVec}
-          end={endPosVec}
-          diameter={seg.diameter}
-          color={visuals.color}
-          emissive={visuals.emissive}
-          emissiveIntensity={visuals.emissiveIntensity}
-          selectedColor={visuals.selectedColor}
-          isParentSelected={isSelected}
-          isInteractable={isInteractable}
-          isSelected={isSegSelected}
-          onClick={() => selectPrimitiveById(seg.id)}
-        />
-      );
-    }
+    const node = renderShaftSegment({
+      shaft,
+      visuals,
+      isSelected: !!isSelected,
+      isSegmentSelected: isSegSelected,
+      supportId: branch.id,
+      ghosted,
+      isInteractable,
+      deferStraightShaftsToSceneBatch: deferStraightShaftsToSceneBatch && !ghosted,
+      onSelect: selectPrimitiveById,
+      batch: batchedStraightShafts,
+    });
+    if (node) shafts.push(node);
 
     // Add Joint (if present)
-    if (isSelected && seg.topJoint) {
+    if ((isSelected || ghosted) && seg.topJoint) {
       joints.push(
         <JointRenderer
           key={`joint-${seg.topJoint.id}`}
@@ -264,6 +180,8 @@ export const BranchRenderer = React.memo(function BranchRenderer({
           selectedColor={visuals.selectedColor}
           isInteractable={isInteractable}
           isParentSelected={isSelected}
+          transparent={ghosted}
+          opacity={ghosted ? 0.3 : 1}
         />
       );
     }
@@ -272,7 +190,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   // --- Render Contact Cone (if present) ---
   const effectiveCone = effectiveBranch.contactCone;
   let coneRender = null;
-  if (effectiveCone && !deferContactConesToSceneBatch) {
+  if (effectiveCone && (!deferContactConesToSceneBatch || ghosted)) {
     const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;
     coneRender = (
       <ContactConeRenderer
@@ -291,6 +209,8 @@ export const BranchRenderer = React.memo(function BranchRenderer({
         isInteractable={isInteractable}
         isParentSelected={isSelected}
         isContactDiskSelected={isConeSelected}
+        transparent={ghosted}
+        opacity={ghosted ? 0.3 : 1}
         onDiskHudHoverChange={onContactDiskHudHoverChange}
         onDiskHudPointerDown={handleContactDiskHudPointerDown}
         onDiskHudPointerUp={handleContactDiskHudPointerUp}
@@ -324,6 +244,8 @@ export const BranchRenderer = React.memo(function BranchRenderer({
           selectedColor={visuals.selectedColor}
           isInteractable={isInteractable}
           isParentSelected={isSelected}
+          transparent={ghosted}
+          opacity={ghosted ? 0.3 : 1}
         />
       )}
 
@@ -334,3 +256,19 @@ export const BranchRenderer = React.memo(function BranchRenderer({
 });
 
 BranchRenderer.displayName = 'BranchRenderer';
+
+registerSupportDetailRenderer('branch', (ctx) => ({
+    component: BranchRenderer as never,
+    hosts: (branch: Branch) => {
+        const parentKnot = ctx.renderKnotsById[branch.parentKnotId];
+        return parentKnot ? { parentKnot } : null;
+    },
+    skip: ({ isSelected, isGhosted = false }) => !isSelected && !isGhosted,
+    noClipping: () => true,
+    extraProps: ({ entity, isSelected }) => ({
+        showKnots: simpleViewHidesDetail(ctx, isSelected) ? false : (!ctx.hideUnselectedKnots || isSelected),
+        deferStraightShaftsToSceneBatch: !isSelected,
+        deferInteractionToSceneBatch: !isSelected,
+        deferContactConesToSceneBatch: !isSelected && !!(entity as Branch).contactCone,
+    }),
+}));

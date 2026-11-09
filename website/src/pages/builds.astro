@@ -1,0 +1,426 @@
+---
+import Base from '../layouts/Base.astro';
+import { LINKS } from '../data/site';
+import {
+  DEV_FEED_URL,
+  RELEASES_API_URL,
+  devFeedTargets,
+  fetchJson,
+  formatDate,
+  recentPreviews,
+  releaseUrlFor,
+  sourcesUrlFor,
+  toPreviewBuild,
+  type PlatformKey,
+  type PreviewBuild,
+  type Release,
+  type UpdaterFeed,
+} from '../lib/releases';
+
+/**
+ * Both kinds of build the site does not download from its front page, each read
+ * from the source that actually knows:
+ *
+ * - the **developer build** from `latest-dev.json`, the updater's own dev feed,
+ *   because that is what an install on the dev channel updates to - asking GitHub
+ *   for the newest prerelease answers a different question and gets it wrong;
+ * - the **branch previews** from the releases API, because nothing else lists
+ *   them.
+ *
+ * Both are baked at build time and refreshed in the browser, because neither
+ * snapshot can be trusted to still be true when the page is read: previews are
+ * deleted and recreated on every push, and the deploy builds this page *before*
+ * it copies the new dev feed into the artifact, so the baked developer build is
+ * the previous deploy's. The built markup is the no-JavaScript and failed-fetch
+ * fallback for both.
+ *
+ * Each section degrades on its own: an unreachable source says so and points at
+ * GitHub rather than rendering an empty list as if there were no builds.
+ */
+
+interface DeveloperBuild {
+  version: string;
+  date: string;
+  releaseUrl: string;
+  targets: { platform: PlatformKey | null; label: string; url: string; file: string }[];
+}
+
+/**
+ * The per-platform asset URLs a row carries, so `build-downloads.ts` can point
+ * its one Download button at the visitor's platform. Without JavaScript the
+ * button keeps the release page, where every platform is listed.
+ */
+function downloadAttributes(assets: { platform: string | null; url: string }[]): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  for (const asset of assets) {
+    if (asset.platform) attributes[`data-download-${asset.platform}`] = asset.url;
+  }
+  return attributes;
+}
+
+let developer: DeveloperBuild | null = null;
+let reachedDevFeed = true;
+let previews: PreviewBuild[] = [];
+let reachedReleases = true;
+
+try {
+  const feed = await fetchJson<UpdaterFeed>(DEV_FEED_URL);
+  if (feed.version) {
+    developer = {
+      version: `v${feed.version}`,
+      date: formatDate(feed.pub_date),
+      releaseUrl: releaseUrlFor(feed.version),
+      targets: devFeedTargets(feed),
+    };
+  }
+} catch {
+  reachedDevFeed = false;
+}
+
+try {
+  previews = recentPreviews(await fetchJson<Release[]>(RELEASES_API_URL, process.env.GITHUB_TOKEN)).map(toPreviewBuild);
+} catch {
+  reachedReleases = false;
+}
+---
+
+<Base
+  title="Preview Builds"
+  description="The developer build and the branch previews of DragonFruit: what to install when the stable release is not what you want."
+  cardSummary="The developer build from the updater's dev feed, and every branch that built an installer in the last two weeks."
+>
+  <section class="shell page">
+    <nav class="crumbs mono" aria-label="Breadcrumb">
+      <a href="/">Home</a>
+      <span aria-hidden="true">/</span>
+      <span aria-current="page">Preview Builds</span>
+    </nav>
+
+    <header class="head">
+      <p class="eyebrow">Beyond the release</p>
+      <h1>Preview Builds</h1>
+      <p class="lede">
+        Two things live here: the developer build, which is what the dev channel of the updater follows, and the branch
+        previews, which are cuts of work in progress that nothing updates.
+      </p>
+    </header>
+
+    <div class="blocks">
+      <section class="block" aria-labelledby="developer-title">
+        <div class="block__head">
+          <h2 class="block__title" id="developer-title">Developer build</h2>
+          <p class="block__note">
+            Read from the updater's own <code>latest-dev.json</code>, so this is exactly what an install on the dev
+            channel updates to. Installing one of these puts you on that channel, and the updater keeps you there until
+            you install a stable release again.
+          </p>
+        </div>
+
+        <div class="block__body">
+          <p class="notice" data-developer-notice hidden={reachedDevFeed}>
+            The updater's dev feed did not answer while this page was built, so the developer build is missing from it.
+            The feed itself is{' '}
+            <a href="/latest-dev.json">/latest-dev.json</a>, and every build is on the{' '}
+            <a href={LINKS.releases} rel="noopener noreferrer" target="_blank">
+              releases page
+            </a>
+            .
+          </p>
+
+          <p class="muted" data-developer-empty hidden={!reachedDevFeed || developer !== null}>
+            The dev feed carries no version right now.
+          </p>
+
+          <article class="build" data-developer hidden={!developer}>
+            <a
+              class="build__tag mono"
+              data-developer-tag
+              href={developer?.releaseUrl}
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              {developer?.version}
+            </a>
+            <div class="build__right">
+              <span class="build__date" data-developer-date>{developer?.date}</span>
+              <div class="build__assets">
+                <a
+                  class="build__asset"
+                  data-download
+                  href={developer?.releaseUrl}
+                  {...downloadAttributes(developer?.targets ?? [])}
+                >
+                  Download
+                </a>
+                <a
+                  class="build__more"
+                  data-sources
+                  href={developer ? sourcesUrlFor(developer.version) : undefined}
+                  rel="noopener noreferrer"
+                  target="_blank"
+                >
+                  Show sources
+                </a>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="block" aria-labelledby="previews-title">
+        <div class="block__head">
+          <h2 class="block__title" id="previews-title">Branch previews</h2>
+          <p class="block__note">
+            Builds of work in progress, published so you can test a change and give feedback before it lands. The last
+            fortnight is listed. They are not wired into the updater: they will not replace an installed release, and an
+            install of one should be replaced by a release when you are done with it.
+          </p>
+        </div>
+
+        <p class="notice" data-preview-notice hidden={reachedReleases}>
+          The releases API did not answer while this page was built, so this list may be empty even though branches
+          have built. The browser tries again on load, and every build is on the{' '}
+          <a href={LINKS.releases} rel="noopener noreferrer" target="_blank">
+            releases page
+          </a>
+          .
+        </p>
+
+        <div class="block__body" data-preview-body aria-live="polite">
+          {previews.length > 0 ? (
+            <ul class="builds">
+              {previews.map((build) => (
+                <li class="build">
+                  <a class="build__tag mono" href={build.url} rel="noopener noreferrer" target="_blank">
+                    {build.tag}
+                  </a>
+                  <div class="build__right">
+                    <span class="build__date">{build.date}</span>
+                    <div class="build__assets">
+                      <a class="build__asset" data-download href={build.url} {...downloadAttributes(build.assets)}>
+                        Download
+                      </a>
+                      <a
+                        class="build__more"
+                        href={sourcesUrlFor(build.tag)}
+                        rel="noopener noreferrer"
+                        target="_blank"
+                      >
+                        Show sources
+                      </a>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p class="muted">No previews available at this time.</p>
+          )}
+        </div>
+      </section>
+    </div>
+
+  </section>
+</Base>
+
+<script>
+  import { applyDownload } from '../lib/build-downloads';
+  import { initDeveloperFeed } from '../lib/developer-feed';
+  import { initPreviewFeed } from '../lib/preview-feed';
+
+  applyDownload(document);
+  initDeveloperFeed();
+  initPreviewFeed();
+</script>
+
+<style>
+  .page {
+    padding-block: clamp(2rem, 4vw, 3.5rem) clamp(2.5rem, 5vw, 4rem);
+  }
+
+  .crumbs {
+    display: flex;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-bottom: 1.5rem;
+  }
+
+  .crumbs a:hover {
+    color: var(--ink);
+  }
+
+  .head {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    max-inline-size: 52rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .head h1 {
+    font-size: clamp(2rem, 1.4rem + 2.5vw, 3rem);
+  }
+
+  .notice {
+    display: block;
+    padding: 1.1rem 1.25rem;
+    margin-bottom: 1.5rem;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius);
+  }
+
+  .notice a {
+    color: var(--accent);
+  }
+
+  /* The two lists sit side by side once there is room: their rows are the same
+     shape, and stacking them made the page twice as long as it needed to be. */
+  .blocks {
+    display: grid;
+    gap: 2.5rem 3rem;
+    align-items: start;
+  }
+
+  @media (min-width: 60rem) {
+    .blocks {
+      /* Previews get the wider column: their tags are the longest text. */
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+      grid-template-rows: auto auto;
+      row-gap: 0;
+    }
+
+    /* The two notes are different lengths, so the cards would start at different
+       heights. Subgrid puts both headings in one row and both bodies in the next,
+       which lines the cards up however the notes wrap. */
+    .block {
+      display: grid;
+      grid-row: span 2;
+      grid-template-rows: subgrid;
+      align-content: start;
+    }
+  }
+
+  .block__head {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-inline-size: 52rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .block__body {
+    min-width: 0;
+  }
+
+  .block__title {
+    font-size: 1.25rem;
+  }
+
+  .block__note {
+    color: var(--muted);
+    font-size: 0.9375rem;
+    line-height: 1.6;
+  }
+</style>
+
+<!--
+  The build rows are painted twice: at build time, and again in the browser by
+  `preview-feed.ts` when it refreshes the branch previews from the releases API.
+  Nodes created there are not in this file, so they carry none of the page's
+  `data-astro-cid-*` scope attribute and a scoped rule would style the built
+  snapshot while leaving the live one unstyled. These rules are therefore global
+  to the page - Astro inlines a page's CSS in that page alone - so both paths
+  match. Keep every `.build*` rule here.
+-->
+<style is:global>
+  .builds {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .build {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem 1.5rem;
+    justify-content: space-between;
+    padding: 1rem 1.15rem;
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius);
+  }
+
+  /* The date sits with the downloads, not with the tag: reading a row is "which
+     build, when, and what can I get for my platform". */
+  .build__right {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+  }
+
+  .build__tag {
+    font-size: 0.875rem;
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-color: var(--border-strong);
+    text-underline-offset: 3px;
+  }
+
+  .build__tag:hover {
+    color: var(--accent);
+  }
+
+  .build__date {
+    font-size: 0.8125rem;
+    color: var(--muted);
+  }
+
+  .build__assets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .build__asset {
+    padding: 0.25rem 0.65rem;
+    font-size: 0.8125rem;
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    transition: border-color 0.15s var(--ease), background-color 0.15s var(--ease);
+  }
+
+  .build__more {
+    padding: 0.25rem 0.65rem;
+    font-size: 0.8125rem;
+    color: var(--muted);
+    border: 1px solid transparent;
+    border-radius: 999px;
+  }
+
+  .build__more:hover {
+    color: var(--ink);
+    border-color: var(--border);
+  }
+
+  .build__asset:hover {
+    border-color: var(--border-strong);
+    background: var(--bg-inset);
+  }
+
+  /* `display` above beats the UA's [hidden] rule, and the browser unhides these
+     after it has refreshed them from the feed. */
+  .build[hidden],
+  .notice[hidden] {
+    display: none;
+  }
+</style>

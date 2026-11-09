@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Initialize printer profile submodules
         run: git submodule update --init plugins/sdcp-v1 plugins/elegoo
@@ -29,7 +31,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
@@ -37,6 +39,19 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      # Compiled app modules for the DOM tests. Entries are keyed by content
+      # inside the directory and pruned after two weeks unused, so one rolling
+      # cache is enough; a cold run costs ~20 s more.
+      - name: Restore the DOM test compile cache
+        uses: actions/cache@v6
+        with:
+          path: node_modules/.cache/dragonfruit-dom-tests
+          key: dom-test-compile-${{ github.sha }}
+          restore-keys: dom-test-compile-
+
+      - name: Run DOM tests
+        run: npm run test:dom
 
   docs:
     name: Docs accuracy
@@ -50,7 +65,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
@@ -59,8 +74,8 @@ jobs:
       - name: Check docs against the codebase
         run: npm run check:docs
 
-  lint:
-    name: Lint (clean directories)
+  site:
+    name: Landing page
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -69,7 +84,46 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      # The page that lists branch previews reads the GitHub API at build time and
+      # falls back to a note when it cannot, so a build here needs no token.
+      - name: Check types and templates
+        working-directory: website
+        run: npm run check
+
+      # The build renders main and dev snapshots. The script materializes the
+      # placeholder screenshots each snapshot links, so a clean checkout builds.
+      - name: Prepare documentation versions
+        run: node scripts/prepare-docs-versions.mjs
+        env:
+          DOCS_VERSIONS: main,dev
+          DOCS_DEFAULT: main
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build the site
+        working-directory: website
+        run: npm run build
+
+  lint:
+    name: Lint (clean directories)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
@@ -77,3 +131,166 @@ jobs:
 
       - name: Lint the directories under lint control
         run: npm run check:lint
+
+      - name: Check support id prefixes are derived
+        run: npm run check:support-prefixes
+
+      - name: Check no new UI literals bypass Lingui
+        run: npm run check:i18n-literals
+
+  support-metrics:
+    name: Auto-support metrics
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Placement metrics, against the baseline in scripts/bench. A deliberate
+      # change updates that file in the same pull request; an unintended one
+      # fails here with the metric that moved.
+      - name: Compare auto-support metrics with the baseline
+        run: npm run bench:auto-supports -- --check
+
+      # Grid mode has its own baseline: the two modes measure different runs
+      # (node-snapped placement, and the fallback for tips the lattice refuses).
+      - name: Compare grid-mode auto-support metrics with the grid baseline
+        run: npm run bench:auto-supports -- --grid --baseline scripts/bench/auto-support-baseline-grid.json --check
+
+  scene-slice:
+    name: CLI scene slice
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # The slicing engine compiles the plugins' encoders in.
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install the pinned Rust toolchain
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal
+          rustup default "$channel"
+
+      # Saved from dev only, so pull requests restore it without each adding
+      # an entry of their own.
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./rust/dragonfruit-cli -> target
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The engine compiles the plugins' encoders through a generated module.
+      - name: Generate the plugin registry
+        run: npm run generate:plugin-registry
+
+      - name: Build the Rust CLI
+        run: cargo build --release --locked --manifest-path rust/dragonfruit-cli/Cargo.toml
+
+      # The TS CLI end to end, started the way its usage line says: a cube
+      # through create, add-model, place-on-platform and slice, and a cube on
+      # each of two plates sliced one plate at a time.
+      - name: Slice a scene with the TS CLI
+        run: npm run check:scene-slice
+
+  plugin-crates:
+    name: Plugin SDK and package crates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install the pinned Rust toolchain
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+
+      # The wire protocol (SDK) and the .dfplugin format (package) are the two
+      # contracts a partner builds against; their tests do not need the shell.
+      - name: Test
+        run: |
+          cargo test --locked --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml
+          cargo test --locked --manifest-path rust/dragonfruit-plugin-package/Cargo.toml
+
+  cargo-locks:
+    name: Cargo lockfiles
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # The engine depends on plugins/lumen by path, so resolution
+          # fails without the submodules for reasons unrelated to the locks.
+          submodules: recursive
+
+      - name: Install the pinned Rust toolchain
+        # Same cargo as rust-toolchain.toml, minus the macOS targets it
+        # lists: resolving a lockfile needs neither.
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+
+      - name: Check every Cargo.lock matches its manifest
+        # Locally: `npm run check:cargo-locks`, or `npm run check:cargo-locks:fix` to fix.
+        run: scripts/check-cargo-locks.sh
+
+  crate-versions:
+    name: Crate versions
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          # Needed to tell which plugins the engine compiles in.
+          submodules: recursive
+
+      - name: Warn when a crate changes without a version bump
+        # A warning, not an error: refactors, tests and changes that leave
+        # the output alone don't need a bump.
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          pkg_version() {
+            awk '/^\[/ { in_pkg = ($0 == "[package]") }
+                 in_pkg && /^version *=/ { gsub(/[" ]/, ""); sub(/^version=/, ""); print; exit }'
+          }
+          # Plugin encoders are #[path]-included into the engine, so a change
+          # to one (or a bump of its submodule) is a change to the engine.
+          engine_plugins=()
+          for f in plugins/*/slicing/rust/encoder_impl.rs; do
+            [ -e "$f" ] && engine_plugins+=("${f%/slicing/rust/encoder_impl.rs}")
+          done
+          for toml in $(git ls-files 'rust/*/Cargo.toml'); do
+            dir="${toml%/Cargo.toml}"
+            old=$(git show "$BASE:$toml" 2>/dev/null | pkg_version || true)
+            [ -n "$old" ] || continue  # crate is new in this PR
+            [ "$old" = "$(pkg_version < "$toml")" ] || continue
+            paths=("$dir/src")
+            [ "$dir" = rust/dragonfruit-slicing-engine ] && paths+=("${engine_plugins[@]}")
+            git diff --quiet "$BASE"...HEAD -- "${paths[@]}" && continue
+            echo "::warning file=$toml,title=Crate version unchanged::$dir changed but is still $old. Bump it if its behaviour changed; the Cargo lockfiles check will then list the locks to refresh."
+          done

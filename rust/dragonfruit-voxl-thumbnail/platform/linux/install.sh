@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install the VOXL thumbnail handler on Linux (GNOME / KDE / XFCE).
+# Install the thumbnail handler on Linux (GNOME / KDE / XFCE) for every file type
+# the app declares.
 #
 # Run from the repo root after building:
 #   cargo build --release -p dragonfruit-voxl-thumbnail
@@ -23,11 +24,16 @@ THUMBNAILER_DIR="/usr/share/thumbnailers"
 echo "Installing binary → $INSTALL_BIN"
 install -Dm755 "$BIN_SRC" "$INSTALL_BIN"
 
-echo "Installing MIME type → $MIME_DIR/dragonfruit-voxl.xml"
-install -Dm644 "$SCRIPT_DIR/dragonfruit-voxl.xml" "$MIME_DIR/dragonfruit-voxl.xml"
+# The MIME declaration and the thumbnailer entry cover every file type the app
+# writes, and are generated from those declarations (`npm run generate:plugin-registry`)
+# rather than maintained per format.
+GENERATED_DIR="$SCRIPT_DIR/../../generated"
 
-echo "Installing thumbnailer → $THUMBNAILER_DIR/dragonfruit-voxl.thumbnailer"
-install -Dm644 "$SCRIPT_DIR/dragonfruit-voxl.thumbnailer" "$THUMBNAILER_DIR/dragonfruit-voxl.thumbnailer"
+echo "Installing MIME types → $MIME_DIR/dragonfruit.xml"
+install -Dm644 "$GENERATED_DIR/dragonfruit-mime.xml" "$MIME_DIR/dragonfruit.xml"
+
+echo "Installing thumbnailer → $THUMBNAILER_DIR/dragonfruit.thumbnailer"
+install -Dm644 "$GENERATED_DIR/dragonfruit.thumbnailer" "$THUMBNAILER_DIR/dragonfruit.thumbnailer"
 
 echo "Updating MIME database..."
 update-mime-database /usr/share/mime 2>/dev/null || true
@@ -35,4 +41,4 @@ update-mime-database /usr/share/mime 2>/dev/null || true
 echo "Clearing thumbnail cache..."
 rm -rf "$HOME/.cache/thumbnails" 2>/dev/null || true
 
-echo "Done. VOXL thumbnails will appear after the next directory listing."
+echo "Done. Thumbnails for every declared file type will appear after the next directory listing."

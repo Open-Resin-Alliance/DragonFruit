@@ -2,35 +2,80 @@ import { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
-import { getBranches, getKnotById, getLeaves, getRootById, getSnapshot, getTrunks, getTwigs, getSticks, getBraces, setInteractionWarning, updateKnot, updateLeaf, updateBranch, getBranchById, subscribe } from '../../state';
-import { Branch, Brace, Knot, Roots, Trunk, Twig, Stick, Vec3 } from '../../types';
-import { getKickstandSnapshot } from '../../SupportTypes/Kickstand/kickstandStore';
+import { findShaftOwnerOfSegment, getSnapshot, getSupportEntity, getSupportEntities, getKnotById, getRootById, setInteractionWarning, updateKnot, subscribe } from '../../state';
+import { Stump, Brace, Knot, Leaf, Roots, Segment, Trunk, Twig, Vec3 } from '../../types';
+import { resolveSegmentEndpoints, type EndpointHosts, type ShaftEntity } from './segmentEndpoints';
+import {
+    captureFlexingShafts, collectSolvedShaft, contactOf, flexingShaftsOn, getFlexingShaft,
+    type ShaftSegmentsById,
+} from './elasticShaftPreview';
+import { SUPPORT_COLLECTION_KEYS, getSupportTypeDescriptor, parseKnotHostId, parsePrefixedSegmentId, updateSupportEntity, type SupportEdge } from '../../supportTypeRegistry';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
-import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints, projectOntoSegment, shouldStayOnCurrentSegment } from './knotUtils';
-import { getSettings } from '../../Settings';
+import { projectOntoSegment, shouldStayOnCurrentSegment } from './knotUtils';
+import { getSettings } from '../../Settings/state';
 import { solveKnotConstraint } from '../../PlacementLogic/JointConstraintSolver';
 import { ElasticChainInitialState, ElasticChainResult, solveElasticChain } from '../../PlacementLogic/ElasticChainSolver';
-import { getFinalSocketPosition, getSocketPosition } from '../ContactCone';
+import { getFinalSocketPosition } from '../ContactCone';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { getBezierPointAtT } from '../../Curves/BezierUtils';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { clearKnotDragPreview, emitKnotDragPreview } from '../../interaction/knotDragPreview';
-import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '../../SupportTypes/Twig/twigTaper';
+import { resolveTwigDiameterAtSegmentT } from '../../SupportTypes/Twig/twigTaper';
+import { coneKnotHostType, isConeKnotHost, resolveKnotDiameter, SUPPORT_TYPES, type SupportTypeId } from '../../supportTypeRegistry';
+import { shouldCommitJointDrag } from '../Joint/jointDragController';
+import { knotMoveDescription, type KnotHostType } from './knotUtils';
+import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
+
+/** The type whose knots ride a contact cone rather than a span. */
+const CONE_HOSTED_TYPE_ID = coneKnotHostType();
+
+
+/**
+ * Whether the host carries real segments a knot slides along. A pseudo-shaft
+ * host declares `knotHostPrefix` -- a leaf's cone, a brace's span -- and
+ * resolves its endpoints from the entity instead.
+ */
+function hostsRealSegments(host: ActiveHost): boolean {
+    if (host.ridesCone) return false;
+    return !getSupportTypeDescriptor(host.containerType).knotHostPrefix;
+}
+
+/** Whether the host is a span between two knots rather than a segmented shaft. */
+function hostsCurveSpan(host: ActiveHost): boolean {
+    if (host.ridesCone) return false;
+    const descriptor = getSupportTypeDescriptor(host.containerType);
+    return !descriptor.hasSegments && descriptor.segmentSelectionPrefix !== undefined;
+}
+
+/** Whether a knot drag on this host defers elastic solving to release. */
+function defersElasticPreview(host: ActiveHost): boolean {
+    if (host.ridesCone) return false;
+    return !!getSupportTypeDescriptor(host.containerType).knotDragDefersElasticPreview;
+}
+
+/** Whether a knot drag on this host updates the attached leaf cones' taper. */
+function updatesConeDiameterOnKnotDrag(host: ActiveHost): boolean {
+    if (host.ridesCone) return false;
+    return !!getSupportTypeDescriptor(host.containerType).knotDragUpdatesLeafConeDiameter;
+}
+
+/** Whether a knot on this host takes its diameter from the shaft it rides. */
+function takesShaftDiameter(host: ActiveHost): boolean {
+    return !host.ridesCone;
+}
+
+/** What a knot is riding: one entity, its type, and the hosts its ends need. */
 interface ActiveHost {
     segmentId: string;
-    containerType: 'trunk' | 'branch' | 'twig' | 'stick' | 'leafCone' | 'brace' | 'kickstand';
-    trunk?: Trunk;
-    branch?: Branch;
-    twig?: Twig;
-    stick?: Stick;
-    root?: Roots;
-    parentKnot?: Knot;
+    containerType: KnotHostType;
+    /** Whether the knot rides a contact cone rather than a shaft or span. */
+    ridesCone?: boolean;
+    /** The support the knot rides. Absent only for a leaf cone. */
+    entity?: { id: string; typeId?: SupportTypeId; segments?: Segment[] };
+    /** The root and host knot the entity's declared endpoints resolve from. */
+    hosts: EndpointHosts;
     leafId?: string;
-    brace?: Brace;
-    kickstand?: Kickstand;
-    kickstandRoot?: Roots;
-    kickstandHostKnot?: Knot;
     start: THREE.Vector3;
     end: THREE.Vector3;
     // Topology Map: BranchID -> 'UP' (Knot Z < Joint Z) or 'DOWN' (Knot Z > Joint Z)
@@ -42,16 +87,9 @@ export type SupportGeometryToken = Record<string, unknown>;
 /** Identity of every collection the host lookup and the elastic capture read. */
 export function captureSupportGeometryToken(): SupportGeometryToken {
     const snapshot = getSnapshot();
-    return {
-        trunks: snapshot.trunks,
-        branches: snapshot.branches,
-        leaves: snapshot.leaves,
-        twigs: snapshot.twigs,
-        sticks: snapshot.sticks,
-        braces: snapshot.braces,
-        knots: snapshot.knots,
-        kickstands: getKickstandSnapshot().kickstands,
-    };
+    const token: SupportGeometryToken = {};
+    for (const key of SUPPORT_COLLECTION_KEYS) token[key] = snapshot[key];
+    return token;
 }
 
 export function isSameSupportGeometry(a: SupportGeometryToken | null, b: SupportGeometryToken): boolean {
@@ -69,13 +107,15 @@ export function useKnotInteraction(enabled: boolean = true) {
     const { camera, raycaster, pointer } = useThree();
 
     const activeKnotId = useRef<string | null>(null);
+    /** Where the knot sat when the drag began, to tell a drag from a click. */
+    const dragStartKnotPos = useRef<Vec3 | null>(null);
     const activeHost = useRef<ActiveHost | null>(null);
     const forceEndDragRef = useRef(false);
     const initialEditSnapshotRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
 
     const leafClampWarningTimeout = useRef<number | null>(null);
 
-    // Store initial state of all attached branches for elastic drag
+    // Initial state of every shaft flexing off the dragged knot.
     const elasticState = useRef<Record<string, ElasticChainInitialState>>({});
     const prewarmedKnotIdRef = useRef<string | null>(null);
     const prewarmedHostRef = useRef<ActiveHost | null>(null);
@@ -89,10 +129,10 @@ export function useKnotInteraction(enabled: boolean = true) {
     // hover would throw the prewarm away.
     const prewarmedGeometryRef = useRef<SupportGeometryToken | null>(null);
     const lastAppliedKnotPosRef = useRef<THREE.Vector3 | null>(null);
-    const previewBranchSegmentsByIdRef = useRef<Record<string, Branch['segments']>>({});
+    const previewShaftSegmentsByIdRef = useRef<ShaftSegmentsById>({});
     const previewKnotRef = useRef<Knot | null>(null);
     const lastEmittedKnotPreviewPosRef = useRef<{ x: number; y: number; z: number } | null>(null);
-    const lastEmittedBranchPreviewRef = useRef<Record<string, Branch['segments']> | null>(null);
+    const lastEmittedShaftPreviewRef = useRef<ShaftSegmentsById | null>(null);
     const knotDragUpdatePendingRef = useRef(false);
     const knotDragListenersAttachedRef = useRef(false);
 
@@ -147,27 +187,23 @@ export function useKnotInteraction(enabled: boolean = true) {
         };
     }, []);
 
-    // Segment→host lookup cache: rebuilt whenever support state changes
-    type SegmentHostEntry = { containerType: 'trunk'; entityId: string } | { containerType: 'branch'; entityId: string } | { containerType: 'kickstand'; entityId: string } | { containerType: 'twig'; entityId: string } | { containerType: 'stick'; entityId: string };
+    // Segment->host lookup cache: rebuilt whenever support state changes.
+    // Walks every type declaring segments, so a ninth joins by being registered.
+    type SegmentHostEntry = { containerType: SupportTypeId; entityId: string };
     const segmentHostMapRef = useRef<Map<string, SegmentHostEntry>>(new Map());
 
     useEffect(() => {
         const buildMap = () => {
             const map = new Map<string, SegmentHostEntry>();
-            for (const trunk of getTrunks()) {
-                for (const seg of trunk.segments) map.set(seg.id, { containerType: 'trunk', entityId: trunk.id });
-            }
-            for (const branch of getBranches()) {
-                for (const seg of branch.segments) map.set(seg.id, { containerType: 'branch', entityId: branch.id });
-            }
-            for (const kickstand of Object.values(getKickstandSnapshot().kickstands)) {
-                for (const seg of kickstand.segments) map.set(seg.id, { containerType: 'kickstand', entityId: kickstand.id });
-            }
-            for (const twig of getTwigs()) {
-                for (const seg of twig.segments) map.set(seg.id, { containerType: 'twig', entityId: twig.id });
-            }
-            for (const stick of getSticks()) {
-                for (const seg of stick.segments) map.set(seg.id, { containerType: 'stick', entityId: stick.id });
+            const snapshot = getSnapshot() as unknown as Record<string, Record<string, { id: string; segments?: { id: string }[] }>>;
+
+            for (const descriptor of SUPPORT_TYPES) {
+                if (!descriptor.hasSegments) continue;
+                for (const entity of Object.values(snapshot[descriptor.location.key] ?? {})) {
+                    for (const seg of entity.segments ?? []) {
+                        map.set(seg.id, { containerType: descriptor.id, entityId: entity.id });
+                    }
+                }
             }
             segmentHostMapRef.current = map;
         };
@@ -212,7 +248,7 @@ export function useKnotInteraction(enabled: boolean = true) {
         host: ActiveHost,
         maxAngleDeg: number,
     ): { t: number; clamped: boolean } => {
-        const leaves = getLeaves().filter(l => l.parentKnotId === activeKnotId.current);
+        const leaves = getSupportEntities<Leaf>(CONE_HOSTED_TYPE_ID).filter(l => l.parentKnotId === activeKnotId.current);
         if (leaves.length === 0) return { t: tDesired, clamped: false };
 
         let low = 0;
@@ -348,106 +384,101 @@ export function useKnotInteraction(enabled: boolean = true) {
         return { t: tClamped, clamped: Math.abs(tClamped - tDesired) > 1e-6 };
     };
 
+    /**
+     * An ActiveHost for any shafted type, with the hosts its lower and upper
+     * endpoints declare. Was six near-identical branches.
+     */
+    const buildShaftHost = (typeId: SupportTypeId, entityId: string, segmentId: string): ActiveHost | null => {
+        const descriptor = getSupportTypeDescriptor(typeId);
+        if (!descriptor.hasSegments) return null;
+
+        const entity = getSupportEntity(typeId, entityId) as
+            | (Record<string, unknown> & { rootId?: string; parentKnotId?: string; hostKnotId?: string })
+            | null;
+        if (!entity) return null;
+
+        // A plate-rooted type needs its root; a knot-hosted one its host knot.
+        const root = descriptor.lower.kind === 'plateRoot' && entity.rootId
+            ? getRootById(entity.rootId) ?? undefined
+            : undefined;
+        if (descriptor.lower.kind === 'plateRoot' && !root) return null;
+
+        const knotField = descriptor.edges.find((e: SupportEdge) => e.to === 'knots' && e.ownership === 'hostedBy')?.field;
+        const hostKnot = knotField && typeof entity[knotField] === 'string'
+            ? getKnotById(entity[knotField] as string) ?? undefined
+            : undefined;
+        if (descriptor.upper.kind === 'knot' && !hostKnot) return null;
+
+        return {
+            segmentId,
+            containerType: typeId,
+            entity: entity as ActiveHost['entity'],
+            hosts: { root, hostKnot },
+            start: new THREE.Vector3(),
+            end: new THREE.Vector3(),
+            initialTopology: {},
+        };
+    };
+
     const findHost = (knot: Knot): ActiveHost | null => {
         let host: ActiveHost | null = null;
 
-        // Leaf cone host (brace endpoints)
-        if (knot.parentShaftId.startsWith('leafCone:')) {
-            const leafId = knot.parentShaftId.slice('leafCone:'.length);
-            const leaf = getLeaves().find(l => l.id === leafId);
+        // A cone host names a cone primitive, not its owner's entity, so it
+        // resolves before the generic pseudo-shaft path below.
+        const coneHost = parseKnotHostId(knot.parentShaftId);
+        if (coneHost && isConeKnotHost(coneHost.typeId)) {
+            const leafId = coneHost.entityId;
+            const leaf = getSupportEntities<Leaf>(coneHost.typeId).find(l => l.id === leafId);
             if (leaf?.contactCone) {
                 host = {
                     segmentId: knot.parentShaftId,
-                    containerType: 'leafCone',
+                    containerType: coneHost.typeId,
+                    ridesCone: true,
+                    hosts: {},
                     leafId,
                     start: new THREE.Vector3(),
                     end: new THREE.Vector3(),
                     initialTopology: {},
                 };
-                return host;
             }
+            return host;
         }
 
-        if (knot.parentShaftId.startsWith('braceSegment:')) {
-            const braceId = knot.parentShaftId.slice('braceSegment:'.length);
-            const brace = getBraces().find(b => b.id === braceId);
-            if (brace) {
+        // A type whose knots ride a pseudo-shaft declares its prefix in the registry.
+        const pseudoHost = parseKnotHostId(knot.parentShaftId);
+        if (pseudoHost) {
+            const entity = getSupportEntity(pseudoHost.typeId, pseudoHost.entityId) as ActiveHost['entity'] | null;
+            if (entity) {
                 host = {
                     segmentId: knot.parentShaftId,
-                    containerType: 'brace',
-                    brace,
+                    containerType: pseudoHost.typeId,
+                    entity,
+                    hosts: {},
                     start: new THREE.Vector3(),
                     end: new THREE.Vector3(),
                     initialTopology: {},
                 };
-                return host;
             }
+            return host;
         }
         const cacheEntry = segmentHostMapRef.current.get(knot.parentShaftId);
         if (cacheEntry) {
-            if (cacheEntry.containerType === 'trunk') {
-                const trunk = getTrunks().find(t => t.id === cacheEntry.entityId);
-                if (trunk) {
-                    const root = getRootById(trunk.rootId) || undefined;
-                    host = { segmentId: knot.parentShaftId, containerType: 'trunk', trunk, root, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
-                }
-            } else if (cacheEntry.containerType === 'branch') {
-                const branch = getBranches().find(b => b.id === cacheEntry.entityId);
-                if (branch) {
-                    const parentKnot = getKnotById(branch.parentKnotId) || undefined;
-                    host = { segmentId: knot.parentShaftId, containerType: 'branch', branch, parentKnot, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
-                }
-            } else if (cacheEntry.containerType === 'kickstand') {
-                const kickstandState = getKickstandSnapshot();
-                const kickstand = kickstandState.kickstands[cacheEntry.entityId];
-                if (kickstand) {
-                    const kickstandRoot = kickstandState.roots[kickstand.rootId];
-                    const kickstandHostKnot = kickstandState.knots[kickstand.hostKnotId];
-                    if (kickstandRoot && kickstandHostKnot) {
-                        host = { segmentId: knot.parentShaftId, containerType: 'kickstand', kickstand, kickstandRoot, kickstandHostKnot, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
-                    }
-                }
-            } else if (cacheEntry.containerType === 'twig') {
-                const twig = getTwigs().find(t => t.id === cacheEntry.entityId);
-                if (twig) {
-                    host = { segmentId: knot.parentShaftId, containerType: 'twig', twig, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
-                }
-            } else if (cacheEntry.containerType === 'stick') {
-                const stick = getSticks().find(s => s.id === cacheEntry.entityId);
-                if (stick) {
-                    host = { segmentId: knot.parentShaftId, containerType: 'stick', stick, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
-                }
-            }
+            host = buildShaftHost(cacheEntry.containerType as SupportTypeId, cacheEntry.entityId, knot.parentShaftId);
         }
 
         if (!host) {
-            // Fallback: stale cache — should not happen in normal use
-            const sticks = getSticks();
-            for (const stick of sticks) {
-                const idx = stick.segments.findIndex((s) => s.id === knot.parentShaftId);
-                if (idx !== -1) {
-                    host = {
-                        segmentId: knot.parentShaftId,
-                        containerType: 'stick',
-                        stick,
-                        start: new THREE.Vector3(),
-                        end: new THREE.Vector3(),
-                        initialTopology: {}
-                    };
-                    break;
-                }
-            }
+            // Stale cache: search every shafted type rather than only sticks.
+            const owner = findShaftOwnerOfSegment(knot.parentShaftId);
+            if (owner) host = buildShaftHost(owner.typeId, owner.id, knot.parentShaftId);
         }
 
         if (host) {
-            // Determine Initial Topology
-            const allBranches = getBranches();
-            const attached = allBranches.filter(b => b.parentKnotId === knot.id);
-            for (const b of attached) {
+            // Initial topology of every shaft that flexes off this knot.
+            for (const b of flexingShaftsOn(knot.id)) {
                 if (b.segments.length > 0) {
                     let jointZ = 0;
                     if (b.segments[0].topJoint) jointZ = b.segments[0].topJoint.pos.z;
-                    else if (b.contactCone) jointZ = b.contactCone.pos.z; // Approximate
+                    else jointZ = contactOf(b)?.pos.z ?? 0; // Approximate
 
                     // If Knot is BELOW Joint => UP branch
                     // If Knot is ABOVE Joint => DOWN branch
@@ -463,35 +494,34 @@ export function useKnotInteraction(enabled: boolean = true) {
         return host;
     };
 
+    /** The shafted entity and hosts backing this host record, if it has one. */
+    const shaftOf = (host: ActiveHost): { entity: ShaftEntity; hosts: EndpointHosts } | null => {
+        if (!hostsRealSegments(host) || !host.entity?.segments) return null;
+        return { entity: host.entity as ShaftEntity, hosts: host.hosts };
+    };
+
     const resolveEndpoints = (host: ActiveHost) => {
-        if (host.containerType === 'trunk' && host.trunk && host.root) {
-            const idx = host.trunk.segments.findIndex((s) => s.id === host.segmentId);
-            const seg = host.trunk.segments[idx];
-            const endpoints = getTrunkSegmentEndpoints(host.trunk, seg, idx, host.root);
+        // Every shafted host resolves the same way; only the two without a
+        // shaft need their own maths.
+        const shaft = shaftOf(host);
+        if (shaft) {
+            const index = shaft.entity.segments.findIndex((s) => s.id === host.segmentId);
+            if (index === -1) return;
+            const endpoints = resolveSegmentEndpoints(
+                shaft.entity,
+                shaft.entity.segments[index],
+                index,
+                shaft.hosts,
+            );
             if (endpoints) {
                 host.start.set(endpoints.start.x, endpoints.start.y, endpoints.start.z);
                 host.end.set(endpoints.end.x, endpoints.end.y, endpoints.end.z);
             }
-        } else if (host.containerType === 'branch' && host.branch && host.parentKnot) {
-            const idx = host.branch.segments.findIndex((s) => s.id === host.segmentId);
-            const seg = host.branch.segments[idx];
-            const endpoints = getBranchSegmentEndpoints(host.branch, seg, idx, host.parentKnot);
-            if (endpoints) {
-                host.start.set(endpoints.start.x, endpoints.start.y, endpoints.start.z);
-                host.end.set(endpoints.end.x, endpoints.end.y, endpoints.end.z);
-            }
-        } else if (host.containerType === 'twig' && host.twig) {
-            const seg = host.twig.segments.find((s) => s.id === host.segmentId);
-            if (!seg?.bottomJoint || !seg?.topJoint) return;
-            host.start.set(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
-            host.end.set(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-        } else if (host.containerType === 'stick' && host.stick) {
-            const seg = host.stick.segments.find((s) => s.id === host.segmentId);
-            if (!seg?.bottomJoint || !seg?.topJoint) return;
-            host.start.set(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
-            host.end.set(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-        } else if (host.containerType === 'leafCone' && host.leafId) {
-            const leaf = getLeaves().find(l => l.id === host.leafId);
+            return;
+        }
+
+        if (host.ridesCone && host.leafId) {
+            const leaf = getSupportEntities<Leaf>(host.containerType).find((l) => l.id === host.leafId);
             const cone = leaf?.contactCone;
             if (!cone) return;
 
@@ -500,51 +530,28 @@ export function useKnotInteraction(enabled: boolean = true) {
             const len = cone.profile?.lengthMm ?? 0;
 
             const endVec = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-            const startVec = endVec.clone().add(axis.multiplyScalar(-len));
-
-            host.start.copy(startVec);
+            host.start.copy(endVec.clone().add(axis.multiplyScalar(-len)));
             host.end.copy(endVec);
-        } else if (host.containerType === 'brace' && host.brace) {
-            const startKnot = getKnotById(host.brace.startKnotId);
-            const endKnot = getKnotById(host.brace.endKnotId);
+        } else if (hostsCurveSpan(host) && host.entity) {
+            const brace = host.entity as unknown as Brace;
+            const startKnot = getKnotById(brace.startKnotId);
+            const endKnot = getKnotById(brace.endKnotId);
             if (!startKnot || !endKnot) return;
             host.start.set(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z);
             host.end.set(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z);
-        } else if (host.containerType === 'kickstand' && host.kickstand && host.kickstandRoot && host.kickstandHostKnot) {
-            const segIdx = host.kickstand.segments.findIndex((s) => s.id === host.segmentId);
-            if (segIdx === -1) return;
-
-            const rootTopZ = host.kickstandRoot.transform.pos.z + host.kickstandRoot.diskHeight + host.kickstandRoot.coneHeight;
-
-            let startPos: Vec3;
-            if (segIdx === 0) {
-                startPos = {
-                    x: host.kickstandRoot.transform.pos.x,
-                    y: host.kickstandRoot.transform.pos.y,
-                    z: rootTopZ,
-                };
-            } else {
-                const prevSeg = host.kickstand.segments[segIdx - 1];
-                if (!prevSeg.topJoint) return;
-                startPos = prevSeg.topJoint.pos;
-            }
-
-            const seg = host.kickstand.segments[segIdx];
-            const endPos = seg.topJoint?.pos ?? host.kickstandHostKnot.pos;
-
-            host.start.set(startPos.x, startPos.y, startPos.z);
-            host.end.set(endPos.x, endPos.y, endPos.z);
         }
     };
 
     const getHostCandidates = (host: ActiveHost): Array<{ segmentId: string; start: THREE.Vector3; end: THREE.Vector3; diameter: number; bezier?: { control1: Vec3; control2: Vec3 } }> => {
         const out: Array<{ segmentId: string; start: THREE.Vector3; end: THREE.Vector3; diameter: number; bezier?: { control1: Vec3; control2: Vec3 } }> = [];
 
-        if (host.containerType === 'trunk' && host.trunk && host.root) {
-            for (let idx = 0; idx < host.trunk.segments.length; idx++) {
-                const seg = host.trunk.segments[idx];
-                const endpoints = getTrunkSegmentEndpoints(host.trunk, seg, idx, host.root);
-                if (!endpoints) continue;
+        // Every shafted host offers its segments; a brace offers the one span
+        // between its end knots.
+        const shaft = shaftOf(host);
+        if (shaft) {
+            shaft.entity.segments.forEach((seg, idx) => {
+                const endpoints = resolveSegmentEndpoints(shaft.entity, seg, idx, shaft.hosts);
+                if (!endpoints) return;
                 out.push({
                     segmentId: seg.id,
                     start: new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z),
@@ -552,81 +559,20 @@ export function useKnotInteraction(enabled: boolean = true) {
                     diameter: seg.diameter,
                     bezier: seg.type === 'bezier' ? { control1: seg.controlPoint1, control2: seg.controlPoint2 } : undefined,
                 });
-            }
-        } else if (host.containerType === 'branch' && host.branch && host.parentKnot) {
-            for (let idx = 0; idx < host.branch.segments.length; idx++) {
-                const seg = host.branch.segments[idx];
-                const endpoints = getBranchSegmentEndpoints(host.branch, seg, idx, host.parentKnot);
-                if (!endpoints) continue;
-                out.push({
-                    segmentId: seg.id,
-                    start: new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z),
-                    end: new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z),
-                    diameter: seg.diameter,
-                    bezier: seg.type === 'bezier' ? { control1: seg.controlPoint1, control2: seg.controlPoint2 } : undefined,
-                });
-            }
-        } else if (host.containerType === 'twig' && host.twig) {
-            for (let idx = 0; idx < host.twig.segments.length; idx++) {
-                const seg = host.twig.segments[idx];
-                if (!seg.bottomJoint || !seg.topJoint) continue;
-                out.push({
-                    segmentId: seg.id,
-                    start: new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z),
-                    end: new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z),
-                    diameter: seg.diameter,
-                    bezier: seg.type === 'bezier' ? { control1: seg.controlPoint1, control2: seg.controlPoint2 } : undefined,
-                });
-            }
-        } else if (host.containerType === 'stick' && host.stick) {
-            for (let idx = 0; idx < host.stick.segments.length; idx++) {
-                const seg = host.stick.segments[idx];
-                if (!seg.bottomJoint || !seg.topJoint) continue;
-                out.push({
-                    segmentId: seg.id,
-                    start: new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z),
-                    end: new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z),
-                    diameter: seg.diameter,
-                    bezier: seg.type === 'bezier' ? { control1: seg.controlPoint1, control2: seg.controlPoint2 } : undefined,
-                });
-            }
-        } else if (host.containerType === 'brace' && host.brace) {
-            const startKnot = getKnotById(host.brace.startKnotId);
-            const endKnot = getKnotById(host.brace.endKnotId);
+            });
+            return out;
+        }
+
+        if (hostsCurveSpan(host) && host.entity) {
+            const brace = host.entity as unknown as Brace;
+            const startKnot = getKnotById(brace.startKnotId);
+            const endKnot = getKnotById(brace.endKnotId);
             if (startKnot && endKnot) {
                 out.push({
                     segmentId: host.segmentId,
                     start: new THREE.Vector3(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z),
                     end: new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z),
-                    diameter: host.brace.profile.diameter,
-                });
-            }
-        } else if (host.containerType === 'kickstand' && host.kickstand && host.kickstandRoot && host.kickstandHostKnot) {
-            const rootTopZ = host.kickstandRoot.transform.pos.z + host.kickstandRoot.diskHeight + host.kickstandRoot.coneHeight;
-
-            for (let idx = 0; idx < host.kickstand.segments.length; idx++) {
-                const seg = host.kickstand.segments[idx];
-
-                let startPos: Vec3;
-                if (idx === 0) {
-                    startPos = {
-                        x: host.kickstandRoot.transform.pos.x,
-                        y: host.kickstandRoot.transform.pos.y,
-                        z: rootTopZ,
-                    };
-                } else {
-                    const prevSeg = host.kickstand.segments[idx - 1];
-                    if (!prevSeg.topJoint) continue;
-                    startPos = prevSeg.topJoint.pos;
-                }
-
-                const endPos = seg.topJoint?.pos ?? host.kickstandHostKnot.pos;
-                out.push({
-                    segmentId: seg.id,
-                    start: new THREE.Vector3(startPos.x, startPos.y, startPos.z),
-                    end: new THREE.Vector3(endPos.x, endPos.y, endPos.z),
-                    diameter: seg.diameter,
-                    bezier: seg.type === 'bezier' ? { control1: seg.controlPoint1, control2: seg.controlPoint2 } : undefined,
+                    diameter: brace.profile.diameter,
                 });
             }
         }
@@ -665,50 +611,9 @@ export function useKnotInteraction(enabled: boolean = true) {
         return { t: bt, point: { x: bp.x, y: bp.y, z: bp.z }, distSq: best };
     };
 
-    // Capture the initial state of attached branches
-    const captureElasticState = (knotId: string): Record<string, ElasticChainInitialState> => {
-        const allBranches = getBranches();
-        const attached = allBranches.filter(b => b.parentKnotId === knotId);
-        const state: Record<string, ElasticChainInitialState> = {};
-
-        for (const b of attached) {
-            const joints: { id: string; pos: { x: number, y: number, z: number } }[] = [];
-
-            // Traverse segments to collect joints
-
-            for (let i = 0; i < b.segments.length; i++) {
-                const seg = b.segments[i];
-                // Try to find the joint at the top of this segment
-                let joint = seg.topJoint;
-
-                // If not found, check the bottom of the NEXT segment (redundancy)
-                if (!joint && i < b.segments.length - 1) {
-                    joint = b.segments[i + 1].bottomJoint;
-                }
-
-                if (joint) {
-                    joints.push({
-                        id: joint.id,
-                        pos: { ...joint.pos }
-                    });
-                }
-            }
-
-            const knotPos = getKnotById(knotId)?.pos || { x: 0, y: 0, z: 0 };
-
-            state[b.id] = {
-                branchId: b.id,
-                knotPos: { ...knotPos },
-                joints,
-                // Use SOCKET position (where shaft connects), not TIP position (where cone touches model)
-                contactCone: b.contactCone ? {
-                    pos: getSocketPosition(b.contactCone.pos, b.contactCone.normal, b.contactCone.profile)
-                } : undefined
-            };
-        }
-
-        return state;
-    };
+    // Capture the initial state of every shaft that flexes off this knot.
+    const captureElasticState = (knotId: string): Record<string, ElasticChainInitialState> =>
+        captureFlexingShafts(knotId, getKnotById(knotId)?.pos ?? { x: 0, y: 0, z: 0 });
 
     useEffect(() => {
         if (!enabled) return;
@@ -756,6 +661,7 @@ export function useKnotInteraction(enabled: boolean = true) {
             }
             resolveEndpoints(host);
             activeKnotId.current = knot.id;
+            dragStartKnotPos.current = { x: knot.pos.x, y: knot.pos.y, z: knot.pos.z };
             activeHost.current = host;
             initialEditSnapshotRef.current = captureSupportEditSnapshot();
             setKnotDragInteractionLock(true);
@@ -765,10 +671,10 @@ export function useKnotInteraction(enabled: boolean = true) {
                 knotDragListenersAttachedRef.current = true;
             }
             lastAppliedKnotPosRef.current = null;
-            previewBranchSegmentsByIdRef.current = {};
+            previewShaftSegmentsByIdRef.current = {};
             previewKnotRef.current = null;
             lastEmittedKnotPreviewPosRef.current = null;
-            lastEmittedBranchPreviewRef.current = null;
+            lastEmittedShaftPreviewRef.current = null;
             clearKnotDragPreview();
 
             // Capture/restore state
@@ -787,12 +693,12 @@ export function useKnotInteraction(enabled: boolean = true) {
         if (shouldEndDrag) {
             const activeKnotIdAtEnd = activeKnotId.current;
             const activeHostAtEnd = activeHost.current;
-            const previewBranchSegmentsByIdAtEnd = { ...previewBranchSegmentsByIdRef.current };
+            const previewShaftSegmentsByIdAtEnd = { ...previewShaftSegmentsByIdRef.current };
             const previewKnotAtEnd = previewKnotRef.current;
 
             if (
                 FAST_KNOT_DRAG_ELASTIC_PREVIEW
-                && activeHostAtEnd?.containerType === 'trunk'
+                && activeHostAtEnd && defersElasticPreview(activeHostAtEnd)
                 && previewKnotAtEnd
                 && Object.keys(elasticState.current).length > 0
             ) {
@@ -803,10 +709,10 @@ export function useKnotInteraction(enabled: boolean = true) {
                 let requiresClamping = false;
                 const firstPassElasticResults: Record<string, ElasticChainResult> = {};
 
-                for (const branchId in elasticState.current) {
-                    const state = elasticState.current[branchId];
+                for (const shaftId in elasticState.current) {
+                    const state = elasticState.current[shaftId];
                     const res = solveElasticChain(releaseKnotPos, state, maxAngleDeg);
-                    firstPassElasticResults[branchId] = res;
+                    firstPassElasticResults[shaftId] = res;
 
                     if (res.isLocked) {
                         requiresClamping = true;
@@ -830,55 +736,19 @@ export function useKnotInteraction(enabled: boolean = true) {
 
                 const elasticResults: Record<string, ElasticChainResult> = {};
                 if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY) {
-                    for (const branchId in elasticState.current) {
-                        const state = elasticState.current[branchId];
-                        elasticResults[branchId] = solveElasticChain(releaseKnotPos, state, maxAngleDeg);
+                    for (const shaftId in elasticState.current) {
+                        const state = elasticState.current[shaftId];
+                        elasticResults[shaftId] = solveElasticChain(releaseKnotPos, state, maxAngleDeg);
                     }
                 } else {
                     Object.assign(elasticResults, firstPassElasticResults);
                 }
 
-                for (const branchId in elasticState.current) {
-                    const res = elasticResults[branchId];
+                for (const shaftId in elasticState.current) {
+                    const res = elasticResults[shaftId];
                     if (!res) continue;
-
-                    const branch = getBranchById(branchId);
-                    if (!branch) continue;
-
-                    let branchChanged = false;
-                    const newSegments = branch.segments.map(seg => {
-                        let segChanged = false;
-                        let newTopJoint = seg.topJoint;
-                        let newBottomJoint = seg.bottomJoint;
-
-                        if (seg.topJoint && res.jointPositions[seg.topJoint.id]) {
-                            const newPos = res.jointPositions[seg.topJoint.id];
-                            if (Math.abs(newPos.z - seg.topJoint.pos.z) > 0.0001) {
-                                newTopJoint = { ...seg.topJoint, pos: newPos };
-                                segChanged = true;
-                            }
-                        }
-
-                        if (seg.bottomJoint && res.jointPositions[seg.bottomJoint.id]) {
-                            const newPos = res.jointPositions[seg.bottomJoint.id];
-                            if (Math.abs(newPos.z - seg.bottomJoint.pos.z) > 0.0001) {
-                                newBottomJoint = { ...seg.bottomJoint, pos: newPos };
-                                segChanged = true;
-                            }
-                        }
-
-                        if (segChanged) {
-                            branchChanged = true;
-                            return { ...seg, topJoint: newTopJoint, bottomJoint: newBottomJoint };
-                        }
-                        return seg;
-                    });
-
-                    if (branchChanged) {
-                        previewBranchSegmentsByIdAtEnd[branch.id] = newSegments;
-                    } else {
-                        delete previewBranchSegmentsByIdAtEnd[branch.id];
-                    }
+                    // On release, a shaft back at its committed geometry drops its override.
+                    collectSolvedShaft(previewShaftSegmentsByIdAtEnd, shaftId, res);
                 }
 
                 previewKnotRef.current = {
@@ -888,18 +758,18 @@ export function useKnotInteraction(enabled: boolean = true) {
             }
 
             // Reconcile drag-time fast-path edits with an exact pass once on release.
-            for (const [branchId, previewSegments] of Object.entries(previewBranchSegmentsByIdAtEnd)) {
-                const branch = getBranchById(branchId);
-                if (branch) {
-                    updateBranch({ ...branch, segments: previewSegments });
-                }
+            for (const [shaftId, previewSegments] of Object.entries(previewShaftSegmentsByIdAtEnd)) {
+                const shaft = getFlexingShaft(shaftId);
+                if (shaft) updateSupportEntity({ ...shaft, segments: previewSegments });
             }
 
-            if (previewKnotAtEnd && previewKnotAtEnd.id === activeKnotIdAtEnd) {
+            // Only write when the knot actually moved. `updateKnot` resettles
+            // dependent geometry, which re-derives a hosted leaf's cone from the
+            // knot -- so committing a click swings a cone nobody dragged.
+            if (previewKnotAtEnd
+                && previewKnotAtEnd.id === activeKnotIdAtEnd
+                && shouldCommitJointDrag(dragStartKnotPos.current, previewKnotAtEnd.pos)) {
                 updateKnot(previewKnotAtEnd);
-            } else if (activeKnotIdAtEnd) {
-                const knotAtEnd = getKnotById(activeKnotIdAtEnd);
-                if (knotAtEnd) updateKnot(knotAtEnd);
             }
 
             // If the released knot lives on a twig, persist the leaf cone's
@@ -907,22 +777,22 @@ export function useKnotInteraction(enabled: boolean = true) {
             // it visibly had during the drag preview.
             if (
                 activeKnotIdAtEnd
-                && activeHostAtEnd?.containerType === 'twig'
-                && activeHostAtEnd.twig
+                && activeHostAtEnd && updatesConeDiameterOnKnotDrag(activeHostAtEnd)
+                && (activeHostAtEnd.entity as unknown as Twig)
                 && previewKnotAtEnd
                 && previewKnotAtEnd.t !== undefined
             ) {
                 const localTwigDia = resolveTwigDiameterAtSegmentT(
-                    activeHostAtEnd.twig,
+                    (activeHostAtEnd.entity as unknown as Twig),
                     activeHostAtEnd.segmentId,
                     previewKnotAtEnd.t,
                 );
                 if (localTwigDia !== null) {
-                    const attachedLeaves = getLeaves().filter(l => l.parentKnotId === activeKnotIdAtEnd);
+                    const attachedLeaves = getSupportEntities<Leaf>(CONE_HOSTED_TYPE_ID).filter(l => l.parentKnotId === activeKnotIdAtEnd);
                     for (const leaf of attachedLeaves) {
                         if (!leaf.contactCone) continue;
                         if (leaf.contactCone.profile.bodyDiameterMm === localTwigDia) continue;
-                        updateLeaf({
+                        updateSupportEntity({
                             ...leaf,
                             contactCone: {
                                 ...leaf.contactCone,
@@ -937,18 +807,12 @@ export function useKnotInteraction(enabled: boolean = true) {
             }
 
             if (activeHostAtEnd && initialEditSnapshotRef.current) {
-                const description =
-                    activeHostAtEnd.containerType === 'leafCone'
-                        ? 'Move tip knot'
-                        : activeHostAtEnd.containerType === 'brace'
-                            ? 'Move brace knot'
-                            : activeHostAtEnd.containerType === 'kickstand'
-                                ? 'Move kickstand host knot'
-                                : 'Move support knot';
+                const description = knotMoveDescription(activeHostAtEnd.containerType, activeHostAtEnd.ridesCone);
                 pushSupportEditHistory(description, initialEditSnapshotRef.current, captureSupportEditSnapshot());
             }
 
             activeKnotId.current = null;
+            dragStartKnotPos.current = null;
             activeHost.current = null;
             elasticState.current = {};
             forceEndDragRef.current = false;
@@ -970,10 +834,10 @@ export function useKnotInteraction(enabled: boolean = true) {
             prewarmedHostRef.current = null;
             prewarmedElasticStateRef.current = null;
             lastAppliedKnotPosRef.current = null;
-            previewBranchSegmentsByIdRef.current = {};
+            previewShaftSegmentsByIdRef.current = {};
             previewKnotRef.current = null;
             lastEmittedKnotPreviewPosRef.current = null;
-            lastEmittedBranchPreviewRef.current = null;
+            lastEmittedShaftPreviewRef.current = null;
             clearKnotDragPreview();
         }
     }, [isDragging, hit, enabled, setKnotDragInteractionLock, markKnotDragUpdatePending]);
@@ -991,11 +855,11 @@ export function useKnotInteraction(enabled: boolean = true) {
         resolveEndpoints(host);
 
         // Leaf-cone knots (brace endpoints) slide along the cone axis.
-        if (host.containerType === 'leafCone' && host.leafId) {
-            raycaster.setFromCamera(pointer, camera);
+        if (host.ridesCone && host.leafId) {
+            setPickRayFromCamera(raycaster, pointer, camera);
             const projected = projectOntoSegment(raycaster.ray, host.start, host.end);
 
-            const leaf = getLeaves().find(l => l.id === host.leafId);
+            const leaf = getSupportEntities<Leaf>(host.containerType).find(l => l.id === host.leafId);
             const cone = leaf?.contactCone;
             if (!cone) return;
 
@@ -1025,19 +889,19 @@ export function useKnotInteraction(enabled: boolean = true) {
                 && Math.abs(prevKnot.x - nextKnotPos.x) < MIN_DRAG_DELTA_SQ
                 && Math.abs(prevKnot.y - nextKnotPos.y) < MIN_DRAG_DELTA_SQ
                 && Math.abs(prevKnot.z - nextKnotPos.z) < MIN_DRAG_DELTA_SQ;
-            if (!sameKnotPos || lastEmittedBranchPreviewRef.current !== previewBranchSegmentsByIdRef.current) {
+            if (!sameKnotPos || lastEmittedShaftPreviewRef.current !== previewShaftSegmentsByIdRef.current) {
                 lastEmittedKnotPreviewPosRef.current = { ...nextKnotPos };
-                lastEmittedBranchPreviewRef.current = previewBranchSegmentsByIdRef.current;
+                lastEmittedShaftPreviewRef.current = previewShaftSegmentsByIdRef.current;
                 emitKnotDragPreview({
                     knotId: finalKnot.id,
                     knot: finalKnot,
-                    branchSegmentsById: previewBranchSegmentsByIdRef.current,
+                    shaftSegmentsById: previewShaftSegmentsByIdRef.current,
                 });
             }
             return;
         }
 
-        raycaster.setFromCamera(pointer, camera);
+        setPickRayFromCamera(raycaster, pointer, camera);
 
         const quickProjected = projectOntoSegment(raycaster.ray, host.start, host.end);
         const quickProjectedVec = snapVec3(new THREE.Vector3(quickProjected.point.x, quickProjected.point.y, quickProjected.point.z));
@@ -1059,9 +923,12 @@ export function useKnotInteraction(enabled: boolean = true) {
         let bestT = projectedOnHost.t;
         let bestDistSq = Number.POSITIVE_INFINITY;
 
-        if (host.containerType === 'brace' && host.brace?.curve?.type === 'bezier') {
-            const startKnot = getKnotById(host.brace.startKnotId);
-            const endKnot = getKnotById(host.brace.endKnotId);
+        const braceHost = hostsCurveSpan(host)
+            ? host.entity as unknown as Brace | undefined
+            : undefined;
+        if (braceHost?.curve?.type === 'bezier') {
+            const startKnot = getKnotById(braceHost.startKnotId);
+            const endKnot = getKnotById(braceHost.endKnotId);
             if (startKnot && endKnot) {
                 const STEPS = 40;
                 let best = Infinity;
@@ -1071,8 +938,8 @@ export function useKnotInteraction(enabled: boolean = true) {
                     const t = i / STEPS;
                     const p = getBezierPointAtT(
                         startKnot.pos,
-                        host.brace.curve.controlPoint1,
-                        host.brace.curve.controlPoint2,
+                        braceHost.curve.controlPoint1,
+                        braceHost.curve.controlPoint2,
                         endKnot.pos,
                         t
                     );
@@ -1164,9 +1031,9 @@ export function useKnotInteraction(enabled: boolean = true) {
             }
         }
 
-        if (bestSegmentId.startsWith('braceSegment:')) {
-            const braceId = bestSegmentId.slice('braceSegment:'.length);
-            const brace = getBraces().find(b => b.id === braceId);
+        const braceSpan = parsePrefixedSegmentId(bestSegmentId);
+        if (braceSpan) {
+            const brace = getSupportEntity(braceSpan.typeId, braceSpan.entityId) as Brace | null;
             if (brace) {
                 const startKnot = getKnotById(brace.startKnotId);
                 const endKnot = getKnotById(brace.endKnotId);
@@ -1190,13 +1057,13 @@ export function useKnotInteraction(enabled: boolean = true) {
         const settings = getSettings();
         const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
 
-        // Collect IDs of branches managed by Elastic Chain
-        const elasticBranchIds = Object.keys(elasticState.current);
+        // Collect IDs of shafts managed by Elastic Chain
+        const elasticShaftIds = Object.keys(elasticState.current);
 
         // 1. Initial Constraint (Shaft + Basic Angle)
-        // We IGNORE elastic branches here because ElasticChainSolver will handle them properly.
+        // We IGNORE elastic shafts here because ElasticChainSolver will handle them properly.
         // Static constraint solver would clamp the Knot based on the OLD joint position, preventing movement.
-        let constrainedPos = solveKnotConstraint(knot, snapVec3(new THREE.Vector3(result.point.x, result.point.y, result.point.z)), maxAngleDeg, host.initialTopology, elasticBranchIds);
+        let constrainedPos = solveKnotConstraint(knot, snapVec3(new THREE.Vector3(result.point.x, result.point.y, result.point.z)), maxAngleDeg, host.initialTopology, elasticShaftIds);
 
         // 1b. Leaf Constraint (if this knot owns a Leaf)
         // Prevent dragging past the same 10° from horizontal rule that placement enforces.
@@ -1215,31 +1082,29 @@ export function useKnotInteraction(enabled: boolean = true) {
             }
         }
 
-        const branchSegmentsById: Record<string, Branch['segments']> = {};
+        const shaftSegmentsById: ShaftSegmentsById = {};
 
         // 2. Elastic Chain Logic
         // Fast trunk-knot preview path: skip heavy per-frame elastic solving and
         // defer exact solving to release for smoother branch/leaf visual response.
-        const shouldSkipElasticPreview = FAST_KNOT_DRAG_ELASTIC_PREVIEW && host.containerType === 'trunk';
+        const shouldSkipElasticPreview = FAST_KNOT_DRAG_ELASTIC_PREVIEW && defersElasticPreview(host);
         let finalKnotPos = constrainedPos;
 
         if (shouldSkipElasticPreview) {
-            for (const branchId of Object.keys(previewBranchSegmentsByIdRef.current)) {
-                const branch = getBranchById(branchId);
-                if (branch) {
-                    // Explicitly mark previously preview-overridden branches for prune.
-                    branchSegmentsById[branch.id] = branch.segments;
-                }
+            for (const shaftId of Object.keys(previewShaftSegmentsByIdRef.current)) {
+                const shaft = getFlexingShaft(shaftId);
+                // Explicitly mark previously preview-overridden shafts for prune.
+                if (shaft) shaftSegmentsById[shaft.id] = shaft.segments;
             }
         } else {
             let minAllowedZ = Number.POSITIVE_INFINITY;
             let requiresClamping = false;
             const firstPassElasticResults: Record<string, ElasticChainResult> = {};
 
-            for (const branchId in elasticState.current) {
-                const state = elasticState.current[branchId];
+            for (const shaftId in elasticState.current) {
+                const state = elasticState.current[shaftId];
                 const res = solveElasticChain(constrainedPos, state, maxAngleDeg);
-                firstPassElasticResults[branchId] = res;
+                firstPassElasticResults[shaftId] = res;
 
                 if (res.isLocked) {
                     requiresClamping = true;
@@ -1263,57 +1128,21 @@ export function useKnotInteraction(enabled: boolean = true) {
 
             const elasticResults: Record<string, ElasticChainResult> = {};
             if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY) {
-                for (const branchId in elasticState.current) {
-                    const state = elasticState.current[branchId];
-                    elasticResults[branchId] = solveElasticChain(finalKnotPos, state, maxAngleDeg);
+                for (const shaftId in elasticState.current) {
+                    const state = elasticState.current[shaftId];
+                    elasticResults[shaftId] = solveElasticChain(finalKnotPos, state, maxAngleDeg);
                 }
             } else {
                 Object.assign(elasticResults, firstPassElasticResults);
             }
 
-            for (const branchId in elasticState.current) {
-                const res = elasticResults[branchId];
+            for (const shaftId in elasticState.current) {
+                const res = elasticResults[shaftId];
                 if (!res) continue;
-
-                const branch = getBranchById(branchId);
-                if (!branch) continue;
-
-                let branchChanged = false;
-                const newSegments = branch.segments.map(seg => {
-                    let segChanged = false;
-                    let newTopJoint = seg.topJoint;
-                    let newBottomJoint = seg.bottomJoint;
-
-                    if (seg.topJoint && res.jointPositions[seg.topJoint.id]) {
-                        const newPos = res.jointPositions[seg.topJoint.id];
-                        if (Math.abs(newPos.z - seg.topJoint.pos.z) > 0.0001) {
-                            newTopJoint = { ...seg.topJoint, pos: newPos };
-                            segChanged = true;
-                        }
-                    }
-
-                    if (seg.bottomJoint && res.jointPositions[seg.bottomJoint.id]) {
-                        const newPos = res.jointPositions[seg.bottomJoint.id];
-                        if (Math.abs(newPos.z - seg.bottomJoint.pos.z) > 0.0001) {
-                            newBottomJoint = { ...seg.bottomJoint, pos: newPos };
-                            segChanged = true;
-                        }
-                    }
-
-                    if (segChanged) {
-                        branchChanged = true;
-                        return { ...seg, topJoint: newTopJoint, bottomJoint: newBottomJoint };
-                    }
-                    return seg;
-                });
-
-                if (branchChanged) {
-                    branchSegmentsById[branch.id] = newSegments;
-                } else if (Object.prototype.hasOwnProperty.call(previewBranchSegmentsByIdRef.current, branch.id)) {
-                    // Branch returned to committed geometry; keep an explicit sync entry so
-                    // we can prune stale preview overrides below.
-                    branchSegmentsById[branch.id] = branch.segments;
-                }
+                // A shaft back at its committed geometry keeps an entry only if it
+                // already had a preview override, so the prune below sees it.
+                collectSolvedShaft(shaftSegmentsById, shaftId, res, (id) =>
+                    Object.prototype.hasOwnProperty.call(previewShaftSegmentsByIdRef.current, id));
             }
         }
 
@@ -1334,9 +1163,12 @@ export function useKnotInteraction(enabled: boolean = true) {
         let finalOnLine = snapVec3(host.start.clone().add(lineVec.clone().multiplyScalar(t)));
 
         // For curved braces: keep knot exactly on the curve and derive t from closest sample.
-        if (host.containerType === 'brace' && host.brace?.curve?.type === 'bezier') {
-            const startKnot = getKnotById(host.brace.startKnotId);
-            const endKnot = getKnotById(host.brace.endKnotId);
+        const curvedBrace = hostsCurveSpan(host)
+            ? host.entity as unknown as Brace | undefined
+            : undefined;
+        if (curvedBrace?.curve?.type === 'bezier') {
+            const startKnot = getKnotById(curvedBrace.startKnotId);
+            const endKnot = getKnotById(curvedBrace.endKnotId);
             if (startKnot && endKnot) {
                 const STEPS = 60;
                 let best = Infinity;
@@ -1348,8 +1180,8 @@ export function useKnotInteraction(enabled: boolean = true) {
                     const tt = i / STEPS;
                     const p = getBezierPointAtT(
                         startKnot.pos,
-                        host.brace.curve.controlPoint1,
-                        host.brace.curve.controlPoint2,
+                        curvedBrace.curve.controlPoint1,
+                        curvedBrace.curve.controlPoint2,
                         endKnot.pos,
                         tt
                     );
@@ -1367,100 +1199,32 @@ export function useKnotInteraction(enabled: boolean = true) {
 
                 const startDia = Math.max(
                     0.001,
-                    (startKnot.diameter ?? (host.brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
+                    (startKnot.diameter ?? (curvedBrace!.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
                 );
                 const endDia = Math.max(
                     0.001,
-                    (endKnot.diameter ?? (host.brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
+                    (endKnot.diameter ?? (curvedBrace!.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
                 );
                 bestDiameter = THREE.MathUtils.lerp(startDia, endDia, t);
             }
         }
 
-        if (host.containerType === 'trunk') {
-            if (host.trunk && host.root) {
-                const seg = host.trunk.segments.find(s => s.id === host.segmentId);
-                if (seg?.type === 'bezier') {
-                    const proj = projectOntoBezierCurve(
-                        raycaster.ray,
-                        host.start,
-                        host.end,
-                        seg.controlPoint1,
-                        seg.controlPoint2,
-                        BEZIER_PROJECTION_STEPS,
-                    );
-                    t = proj.t;
-                    finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
-                    bestDiameter = seg.diameter;
-                }
-            }
-        } else if (host.containerType === 'branch') {
-            if (host.branch && host.parentKnot) {
-                const seg = host.branch.segments.find(s => s.id === host.segmentId);
-                if (seg?.type === 'bezier') {
-                    const proj = projectOntoBezierCurve(
-                        raycaster.ray,
-                        host.start,
-                        host.end,
-                        seg.controlPoint1,
-                        seg.controlPoint2,
-                        BEZIER_PROJECTION_STEPS,
-                    );
-                    t = proj.t;
-                    finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
-                    bestDiameter = seg.diameter;
-                }
-            }
-        } else if (host.containerType === 'twig') {
-            if (host.twig) {
-                const seg = host.twig.segments.find(s => s.id === host.segmentId);
-                if (seg?.type === 'bezier') {
-                    const proj = projectOntoBezierCurve(
-                        raycaster.ray,
-                        host.start,
-                        host.end,
-                        seg.controlPoint1,
-                        seg.controlPoint2,
-                        BEZIER_PROJECTION_STEPS,
-                    );
-                    t = proj.t;
-                    finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
-                    bestDiameter = seg.diameter;
-                }
-            }
-        } else if (host.containerType === 'stick') {
-            if (host.stick) {
-                const seg = host.stick.segments.find(s => s.id === host.segmentId);
-                if (seg?.type === 'bezier') {
-                    const proj = projectOntoBezierCurve(
-                        raycaster.ray,
-                        host.start,
-                        host.end,
-                        seg.controlPoint1,
-                        seg.controlPoint2,
-                        BEZIER_PROJECTION_STEPS,
-                    );
-                    t = proj.t;
-                    finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
-                    bestDiameter = seg.diameter;
-                }
-            }
-        } else if (host.containerType === 'kickstand') {
-            if (host.kickstand) {
-                const seg = host.kickstand.segments.find(s => s.id === host.segmentId);
-                if (seg?.type === 'bezier') {
-                    const proj = projectOntoBezierCurve(
-                        raycaster.ray,
-                        host.start,
-                        host.end,
-                        seg.controlPoint1,
-                        seg.controlPoint2,
-                        BEZIER_PROJECTION_STEPS,
-                    );
-                    t = proj.t;
-                    finalOnLine = new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z);
-                    bestDiameter = seg.diameter;
-                }
+        // Every shafted host projects onto its own bezier segment identically.
+        const shaft = shaftOf(host);
+        if (shaft) {
+            const seg = shaft.entity.segments.find((s: Segment) => s.id === host.segmentId);
+            if (seg?.type === 'bezier') {
+                const proj = projectOntoBezierCurve(
+                    raycaster.ray,
+                    host.start,
+                    host.end,
+                    seg.controlPoint1,
+                    seg.controlPoint2,
+                    BEZIER_PROJECTION_STEPS,
+                );
+                t = proj.t;
+                finalOnLine = snapVec3(new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z));
+                bestDiameter = seg.diameter;
             }
         }
 
@@ -1472,8 +1236,9 @@ export function useKnotInteraction(enabled: boolean = true) {
             t: t
         };
 
-        // Update diameter when crossing into a segment with a different diameter
-        if (host.containerType === 'trunk' || host.containerType === 'branch' || host.containerType === 'twig' || host.containerType === 'stick' || host.containerType === 'brace' || host.containerType === 'kickstand') {
+        // Update diameter when crossing into a segment with a different diameter.
+        // Every shaft host does this; a leaf cone is the one that does not.
+        if (takesShaftDiameter(host)) {
             // +0.125 (not the legacy +0.1): the KnotRenderer subtracts the
             // full joint offset, so shaft + 0.125 renders at shaft + 0.025 —
             // the same diameter as a trunk's joint spheres. A moved auto
@@ -1481,14 +1246,13 @@ export function useKnotInteraction(enabled: boolean = true) {
             finalKnot.diameter = bestDiameter + 0.125;
         }
 
-        // Twig override: a knot on a twig live-tracks the twig's continuous
-        // disk-A→disk-B taper at its exact slide T and is sized 10% larger
-        // than that local diameter (same rule as the disk-end joints).
-        if (host.containerType === 'twig' && host.twig) {
-            const localTwigDia = resolveTwigDiameterAtSegmentT(host.twig, host.segmentId, t);
-            if (localTwigDia !== null) {
-                finalKnot.diameter = twigJointDiameterForLocalDiameter(localTwigDia);
-            }
+        // A knot on a shaft with its own sizing rule live-tracks it at the exact
+        // slide T. Types without a rule keep the segment diameter above.
+        if (hostsRealSegments(host) && host.entity) {
+            const ruled = resolveKnotDiameter(
+                host.containerType as SupportTypeId, host.entity, host.segmentId, t,
+            );
+            if (ruled !== null) finalKnot.diameter = ruled;
         }
 
         if (!lastAppliedKnotPosRef.current) {
@@ -1497,21 +1261,21 @@ export function useKnotInteraction(enabled: boolean = true) {
             lastAppliedKnotPosRef.current.copy(finalOnLine);
         }
 
-        const updatedBranchIds = Object.keys(branchSegmentsById);
-        if (updatedBranchIds.length > 0) {
-            const nextPreviewBranchSegmentsById = { ...previewBranchSegmentsByIdRef.current };
+        const updatedShaftIds = Object.keys(shaftSegmentsById);
+        if (updatedShaftIds.length > 0) {
+            const nextPreviewShaftSegmentsById = { ...previewShaftSegmentsByIdRef.current };
 
-            for (const branchId of updatedBranchIds) {
-                const nextSegments = branchSegmentsById[branchId];
-                const committedBranch = getBranchById(branchId);
-                if (committedBranch && committedBranch.segments === nextSegments) {
-                    delete nextPreviewBranchSegmentsById[branchId];
+            for (const shaftId of updatedShaftIds) {
+                const nextSegments = shaftSegmentsById[shaftId];
+                const committed = getFlexingShaft(shaftId);
+                if (committed && committed.segments === nextSegments) {
+                    delete nextPreviewShaftSegmentsById[shaftId];
                 } else {
-                    nextPreviewBranchSegmentsById[branchId] = nextSegments;
+                    nextPreviewShaftSegmentsById[shaftId] = nextSegments;
                 }
             }
 
-            previewBranchSegmentsByIdRef.current = nextPreviewBranchSegmentsById;
+            previewShaftSegmentsByIdRef.current = nextPreviewShaftSegmentsById;
         }
         previewKnotRef.current = finalKnot;
 
@@ -1521,13 +1285,13 @@ export function useKnotInteraction(enabled: boolean = true) {
             && Math.abs(prevKnot.x - nextKnotPos.x) < MIN_DRAG_DELTA_SQ
             && Math.abs(prevKnot.y - nextKnotPos.y) < MIN_DRAG_DELTA_SQ
             && Math.abs(prevKnot.z - nextKnotPos.z) < MIN_DRAG_DELTA_SQ;
-        if (!sameKnotPos || lastEmittedBranchPreviewRef.current !== previewBranchSegmentsByIdRef.current) {
+        if (!sameKnotPos || lastEmittedShaftPreviewRef.current !== previewShaftSegmentsByIdRef.current) {
             lastEmittedKnotPreviewPosRef.current = { ...nextKnotPos };
-            lastEmittedBranchPreviewRef.current = previewBranchSegmentsByIdRef.current;
+            lastEmittedShaftPreviewRef.current = previewShaftSegmentsByIdRef.current;
             emitKnotDragPreview({
                 knotId: finalKnot.id,
                 knot: finalKnot,
-                branchSegmentsById: previewBranchSegmentsByIdRef.current,
+                shaftSegmentsById: previewShaftSegmentsByIdRef.current,
             });
         }
     });

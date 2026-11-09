@@ -138,7 +138,7 @@ describe('pre-compressed chunk payloads', () => {
     assert.equal(countVoxlChunks(bin, 'MESH'), 2, 'the two identical meshes must share one chunk');
     assert.equal(readVoxlVersion(bin), 3);
 
-    const { meshBytes: out } = parseVoxlBinaryV2(bin);
+    const { meshBytes: out } = await parseVoxlBinaryV2(bin);
     assert.deepEqual([...out.get('m0')!], [...MESH_A]);
     assert.deepEqual([...out.get('m1')!], [...MESH_A]);
     assert.deepEqual([...out.get('m2')!], [...MESH_B]);
@@ -149,7 +149,7 @@ describe('pre-compressed chunk payloads', () => {
     const { meshBytes, sha256Map, precompressed } = await bakeAll(store, [['m0', MESH_A]]);
 
     const bin = await serializeVoxlDocumentV2(testInput(['m0']), meshBytes, sha256Map, { precompressed });
-    const { document, meshBytes: out } = parseVoxlBinaryV2(bin);
+    const { document, meshBytes: out } = await parseVoxlBinaryV2(bin);
 
     assert.deepEqual([...out.get('m0')!], [...MESH_A]);
     assert.equal(document.models[0].mesh.sha256, sha256Map.get(0));

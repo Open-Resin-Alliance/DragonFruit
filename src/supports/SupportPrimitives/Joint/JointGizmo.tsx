@@ -1,39 +1,65 @@
 import React, { useSyncExternalStore, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
-import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, getTrunkById, getBranchById, getTwigById, getStickById } from '../../state';
+import { subscribe, getSnapshot, findShaftOwnerOfJoint, getSupportEntity, resolveDeclaredHosts } from '../../state';
+import { getSupportTypeDescriptor, updateSupportEntity, type SupportTypeId } from '../../supportTypeRegistry';
 import * as THREE from 'three';
 import { pushSupportHistory } from '@/supports/history/supportHistory';
-import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { useCurveInteractionState } from '../../Curves/curveInteractionState';
 import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
-import { Trunk, Branch, Twig, Stick, Joint } from '../../types';
-import { getKickstandSnapshot, useKickstandStoreState, updateKickstand } from '../../SupportTypes/Kickstand/kickstandStore';
+import { Trunk, Twig, Joint, Segment } from '../../types';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { useJointDragPosition } from '../../interaction/jointDragPosition';
 import { clearSupportDragPreview, emitSupportDragPreview, setJointInteractionLock } from './jointDragRuntime';
-import { commitJointDragSupport, computeJointDragSupportPreview, publishJointDragSupportPreview } from './jointDragController';
+import { commitJointDragSupport, computeJointDragSupportPreview, publishJointDragSupportPreview, type JointDragSupport } from './jointDragController';
+import { resolveShaftAnchor } from '../Knot/segmentEndpoints';
+import { resolveDraggedContacts } from './resolveDraggedContacts';
+import { moveJointLabel } from '@/supports/history/supportHistoryLabels';
+import { useFrame } from '@react-three/fiber';
+import { SUPPORT_INSTANCED_DRAG } from '../../instanced/flags';
+import { findJointDragBinding } from '../../instanced/dragSlots';
+import {
+    beginJointDrag,
+    clearJointDragSession,
+    clearJointDragSessionAfterFrame,
+    endJointDrag,
+    getJointDragSession,
+    getLastJointDragPreview,
+    writeJointDragFrame,
+    type JointDragSceneContext,
+    type JointDragSlotEntity,
+} from '../../instanced/instanceDragWriter';
+import { suppressPrimitivesForJointDrag } from '../../instanced/dragSuppression';
 
-export function JointGizmo() {
+export function JointGizmo({
+    sceneRef,
+}: {
+    /** The scene values a joint drag needs; see `JointDragSceneContext`. */
+    sceneRef?: React.MutableRefObject<JointDragSceneContext | null>;
+} = {}) {
     const MOVE_DELTA_EPS_SQ = 1e-12;
     const state = useSyncExternalStore(subscribe, getSnapshot);
-    const kickstandState = useKickstandStoreState();
     const selectedId = state.selectedId;
-    const initialTrunkRef = useRef<Trunk | null>(null);
-    const initialBranchRef = useRef<Branch | null>(null);
+    /** The entity before a drag, for a type that owns its own history entry. */
+    const initialOwnHistoryRef = useRef<Trunk | null>(null);
     const initialEditSnapshotRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const dragPosRef = useRef<THREE.Vector3 | null>(null);
-    const selectedJointParentRef = useRef<{ selectedId: string; kind: 'trunk' | 'branch' | 'twig' | 'stick' | 'kickstand'; supportId: string } | null>(null);
     const { isActive: isCurveMode } = useCurveInteractionState();
-    const liveTrunkPreviewRef = useRef<Trunk | null>(null);
-    const liveBranchPreviewRef = useRef<Branch | null>(null);
-    const liveTwigPreviewRef = useRef<Twig | null>(null);
-    const liveStickPreviewRef = useRef<Stick | null>(null);
-    const liveKickstandPreviewRef = useRef<Kickstand | null>(null);
+    // One preview for whichever support is being dragged.
+    const livePreviewRef = useRef<{ typeId: SupportTypeId; support: unknown } | null>(null);
+    const livePreviewOf = <T,>(typeId: SupportTypeId): T | null => {
+        const live = livePreviewRef.current;
+        return live?.typeId === typeId ? live.support as T : null;
+    };
+    const setLivePreview = (typeId: SupportTypeId, support: unknown) => {
+        livePreviewRef.current = { typeId, support };
+    };
     const pendingDeltaRef = useRef<THREE.Vector3>(new THREE.Vector3());
     const moveRafRef = useRef<number | null>(null);
     const gizmoTargetRef = useRef<THREE.Group>(null);
     const jointDragPosition = useJointDragPosition(selectedId ?? '');
+    /** Whether this gizmo gesture draws through the instanced drag batch. */
+    const instancedDragRef = useRef(false);
 
     const cloneObj = <T,>(obj: T | null | undefined): T | null => obj ? JSON.parse(JSON.stringify(obj)) : null;
 
@@ -43,6 +69,13 @@ export function JointGizmo() {
             if (moveRafRef.current !== null) {
                 window.cancelAnimationFrame(moveRafRef.current);
                 moveRafRef.current = null;
+            }
+            // A gizmo unmounting mid-gesture is a dead gesture: no instance and
+            // no hidden primitive may survive it.
+            if (instancedDragRef.current) {
+                instancedDragRef.current = false;
+                endJointDrag();
+                clearJointDragSession();
             }
             setJointInteractionLock(false, 0);
         };
@@ -75,258 +108,34 @@ export function JointGizmo() {
         return null;
     }, []);
 
-     const recomputeConeForSocket = useCallback((cone: any, socketPos: { x: number; y: number; z: number }) => {
-         const effectiveSurfaceNormal = cone.surfaceNormal || cone.normal;
-         let axis = new THREE.Vector3(cone.normal.x, cone.normal.y, cone.normal.z);
-         if (axis.lengthSq() < 0.000001) axis.set(0, 0, 1);
-         axis.normalize();
-
-         let offset = 0;
-         if (cone.profile?.type === 'disk') {
-             if (cone.diskLengthOverride !== undefined) {
-                 offset = cone.diskLengthOverride;
-             } else {
-                 offset = calculateDiskThickness(effectiveSurfaceNormal, { x: axis.x, y: axis.y, z: axis.z }, cone.profile);
-             }
-         }
-
-         const contactPos = new THREE.Vector3(cone.pos.x, cone.pos.y, cone.pos.z);
-         const sn = new THREE.Vector3(effectiveSurfaceNormal.x, effectiveSurfaceNormal.y, effectiveSurfaceNormal.z);
-         const socket = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-
-         let startPos = contactPos.clone().add(sn.clone().multiplyScalar(offset));
-         for (let i = 0; i < 3; i++) {
-             const v = socket.clone().sub(startPos);
-             const len = v.length();
-             if (len > 0.0001) {
-                 axis = v.clone().normalize();
-             }
-             if (cone.profile?.type === 'disk' && cone.diskLengthOverride === undefined) {
-                 offset = calculateDiskThickness(effectiveSurfaceNormal, { x: axis.x, y: axis.y, z: axis.z }, cone.profile);
-                 startPos = contactPos.clone().add(sn.clone().multiplyScalar(offset));
-             }
-         }
-
-         const finalStart = contactPos.clone().add(sn.clone().multiplyScalar(offset));
-         const lengthMm = Math.max(0.1, socket.distanceTo(finalStart));
-
-         return {
-             ...cone,
-             normal: { x: axis.x, y: axis.y, z: axis.z },
-             profile: {
-                 ...cone.profile,
-                 lengthMm,
-             },
-         };
-     }, []);
-
-    const getTwigDiskTipCenter = useCallback((disk: any) => {
-        const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
-        return {
-            x: disk.pos.x + disk.surfaceNormal.x * thickness,
-            y: disk.pos.y + disk.surfaceNormal.y * thickness,
-            z: disk.pos.z + disk.surfaceNormal.z * thickness,
-        };
-    }, []);
-
-    const recomputeTwigDiskForSocket = useCallback((
-        disk: any,
-        desiredSocketPos: { x: number; y: number; z: number },
-        axisHint?: THREE.Vector3,
-    ) => {
-        const contactPos = new THREE.Vector3(disk.pos.x, disk.pos.y, disk.pos.z);
-
-        const desiredSocket = new THREE.Vector3(desiredSocketPos.x, desiredSocketPos.y, desiredSocketPos.z);
-        const contactToDesiredSocket = desiredSocket.clone().sub(contactPos);
-
-        // Keep contact point anchored, but allow contact angle to tilt toward the moved joint.
-        let surfaceNormal = contactToDesiredSocket.clone();
-        if (surfaceNormal.lengthSq() < 0.000001) {
-            surfaceNormal = new THREE.Vector3(disk.surfaceNormal.x, disk.surfaceNormal.y, disk.surfaceNormal.z);
-        }
-        if (surfaceNormal.lengthSq() < 0.000001) {
-            surfaceNormal.set(0, 0, 1);
-        }
-        surfaceNormal.normalize();
-
-        const axis = axisHint?.clone() ?? contactToDesiredSocket.clone();
-        if (axis.lengthSq() < 0.000001) {
-            axis.set(disk.coneAxis.x, disk.coneAxis.y, disk.coneAxis.z);
-        }
-        if (axis.lengthSq() < 0.000001) {
-            axis.copy(surfaceNormal);
-        }
-        axis.normalize();
-
-        const desiredDistance = contactToDesiredSocket.length();
-        const fallbackThickness = disk.diskLengthOverride ?? calculateDiskThickness(
-            { x: surfaceNormal.x, y: surfaceNormal.y, z: surfaceNormal.z },
-            { x: axis.x, y: axis.y, z: axis.z },
-            disk.profile,
-        );
-        const thickness = Number.isFinite(desiredDistance) && desiredDistance > 0.000001
-            ? Math.max(0.001, desiredDistance)
-            : Math.max(0.001, fallbackThickness);
-
-        const snappedSocket = contactPos.clone().add(surfaceNormal.clone().multiplyScalar(thickness));
-
-        return {
-            disk: {
-                ...disk,
-                // Keep contact point anchored on the model surface.
-                pos: {
-                    x: contactPos.x,
-                    y: contactPos.y,
-                    z: contactPos.z,
-                },
-                surfaceNormal: {
-                    x: surfaceNormal.x,
-                    y: surfaceNormal.y,
-                    z: surfaceNormal.z,
-                },
-                coneAxis: {
-                    x: axis.x,
-                    y: axis.y,
-                    z: axis.z,
-                },
-                diskLengthOverride: thickness,
-            },
-            socket: {
-                x: snappedSocket.x,
-                y: snappedSocket.y,
-                z: snappedSocket.z,
-            },
-        };
-    }, []);
-
-    // Helper to find joint and parent
-    const findJointAndParent = useCallback((): { joint: Joint, trunk?: Trunk, branch?: Branch, twig?: Twig, stick?: Stick, kickstand?: Kickstand } | null => {
+    /** The dragged joint and the support that owns it, over every shafted type. */
+    const findJointAndParent = useCallback((): {
+        joint: Joint;
+        typeId: SupportTypeId;
+        id: string;
+        entity: JointDragSupport;
+    } | null => {
         if (!selectedId) return null;
 
-        const findJointInSegments = (segments: Array<{ topJoint?: Joint; bottomJoint?: Joint }>) => {
-            for (const seg of segments) {
-                if (seg.topJoint?.id === selectedId) return seg.topJoint;
-                if (seg.bottomJoint?.id === selectedId) return seg.bottomJoint;
-            }
-            return null;
-        };
+        const owner = findShaftOwnerOfJoint(selectedId);
+        if (!owner) return null;
 
-        const cached = selectedJointParentRef.current;
-        if (cached && cached.selectedId === selectedId) {
-            if (cached.kind === 'trunk') {
-                const trunk = getTrunkById(cached.supportId);
-                if (trunk) {
-                    const joint = findJointInSegments(trunk.segments as any[]);
-                    if (joint) return { joint, trunk };
-                }
-            } else if (cached.kind === 'branch') {
-                const branch = getBranchById(cached.supportId);
-                if (branch) {
-                    const joint = findJointInSegments(branch.segments as any[]);
-                    if (joint) return { joint, branch };
-                }
-            } else if (cached.kind === 'twig') {
-                const twig = getTwigById(cached.supportId);
-                if (twig) {
-                    const joint = findJointInSegments(twig.segments as any[]);
-                    if (joint) return { joint, twig };
-                }
-            } else if (cached.kind === 'stick') {
-                const stick = getStickById(cached.supportId);
-                if (stick) {
-                    const joint = findJointInSegments(stick.segments as any[]);
-                    if (joint) return { joint, stick };
-                }
-            } else {
-                const kickstand = kickstandState.kickstands[cached.supportId];
-                if (kickstand) {
-                    const joint = findJointInSegments(kickstand.segments as any[]);
-                    if (joint) return { joint, kickstand };
-                }
-            }
+        const entity = getSupportEntity(owner.typeId, owner.id) as { segments?: Segment[] } | null;
+        if (!entity) return null;
 
-            selectedJointParentRef.current = null;
+        let joint: Joint | null = null;
+        for (const seg of entity.segments ?? []) {
+            if (seg.topJoint?.id === selectedId) { joint = seg.topJoint; break; }
+            if (seg.bottomJoint?.id === selectedId) { joint = seg.bottomJoint; break; }
         }
-        
-        // Search trunks first
-        const trunks = Object.values(state.trunks);
-        for (const trunk of trunks) {
-            for (const seg of trunk.segments) {
-                if (seg.topJoint?.id === selectedId) {
-                    selectedJointParentRef.current = { selectedId, kind: 'trunk', supportId: trunk.id };
-                    return { joint: seg.topJoint, trunk };
-                }
-                if (seg.bottomJoint?.id === selectedId) {
-                    selectedJointParentRef.current = { selectedId, kind: 'trunk', supportId: trunk.id };
-                    return { joint: seg.bottomJoint, trunk };
-                }
-            }
-        }
-        
-        // Search branches
-        const branches = Object.values(state.branches);
-        for (const branch of branches) {
-            for (const seg of branch.segments) {
-                if (seg.topJoint?.id === selectedId) {
-                    selectedJointParentRef.current = { selectedId, kind: 'branch', supportId: branch.id };
-                    return { joint: seg.topJoint, branch };
-                }
-                if (seg.bottomJoint?.id === selectedId) {
-                    selectedJointParentRef.current = { selectedId, kind: 'branch', supportId: branch.id };
-                    return { joint: seg.bottomJoint, branch };
-                }
-            }
-        }
+        if (!joint) return null;
 
-        // Search twigs
-        const twigs = Object.values(state.twigs);
-        for (const twig of twigs) {
-            for (const seg of twig.segments) {
-                if (seg.topJoint?.id === selectedId) {
-                    selectedJointParentRef.current = { selectedId, kind: 'twig', supportId: twig.id };
-                    return { joint: seg.topJoint, twig };
-                }
-                if (seg.bottomJoint?.id === selectedId) {
-                    selectedJointParentRef.current = { selectedId, kind: 'twig', supportId: twig.id };
-                    return { joint: seg.bottomJoint, twig };
-                }
-            }
-        }
-
-        // Search sticks
-        const sticks = Object.values(state.sticks);
-        for (const stick of sticks) {
-            for (const seg of stick.segments) {
-                if (seg.topJoint?.id === selectedId) {
-                    selectedJointParentRef.current = { selectedId, kind: 'stick', supportId: stick.id };
-                    return { joint: seg.topJoint, stick };
-                }
-                if (seg.bottomJoint?.id === selectedId) {
-                    selectedJointParentRef.current = { selectedId, kind: 'stick', supportId: stick.id };
-                    return { joint: seg.bottomJoint, stick };
-                }
-            }
-        }
-
-        // Search kickstands
-        const kickstands = Object.values(kickstandState.kickstands);
-        for (const kickstand of kickstands) {
-            for (const seg of kickstand.segments) {
-                if (seg.topJoint?.id === selectedId) {
-                    selectedJointParentRef.current = { selectedId, kind: 'kickstand', supportId: kickstand.id };
-                    return { joint: seg.topJoint, kickstand };
-                }
-                if (seg.bottomJoint?.id === selectedId) {
-                    selectedJointParentRef.current = { selectedId, kind: 'kickstand', supportId: kickstand.id };
-                    return { joint: seg.bottomJoint, kickstand };
-                }
-            }
-        }
-
-        selectedJointParentRef.current = null;
-        
-        return null;
-    }, [selectedId, state.trunks, state.branches, state.twigs, state.sticks, kickstandState.kickstands]);
+        return { joint, typeId: owner.typeId, id: owner.id, entity: entity as JointDragSupport };
+        // `findShaftOwnerOfJoint` and `getSupportEntity` read the store directly, so
+        // `state` invalidates this even though the body never names it. ESLint cannot
+        // see through those calls.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedId, state]);
 
     useEffect(() => {
         if (!jointDragPosition) return;
@@ -337,24 +146,60 @@ export function JointGizmo() {
 
     const result = findJointAndParent();
     const joint = result?.joint ?? null;
-    const trunk = result?.trunk;
-    const branch = result?.branch;
-    const twig = result?.twig;
-    const stick = result?.stick;
-    const kickstand = result?.kickstand;
+    const owner = result ? { typeId: result.typeId, id: result.id } : null;
+    const descriptor = result ? getSupportTypeDescriptor(result.typeId) : null;
 
     const handleMoveStart = () => {
         if (!joint) return;
         setJointInteractionLock(true);
         dragPosRef.current = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
+        instancedDragRef.current = false;
 
-        if (branch || twig || stick || kickstand) {
-            initialEditSnapshotRef.current = captureSupportEditSnapshot();
+        // A bezier (curve mode) or a type whose contacts are disks returns null
+        // here and keeps the legacy preview: `isInstanceableJointDrag` decides.
+        if (SUPPORT_INSTANCED_DRAG && owner && descriptor && result) {
+            const segments = (result.entity as { segments?: Segment[] }).segments ?? [];
+            const binding = findJointDragBinding(segments, joint.id);
+            const scene = sceneRef?.current ?? null;
+            if (binding) {
+                const entityRecord = result.entity as unknown as Record<string, unknown>;
+                const declaredHosts = resolveDeclaredHosts(owner.typeId, entityRecord);
+                const modelId = typeof entityRecord.modelId === 'string' ? entityRecord.modelId : undefined;
+                const slotMap = beginJointDrag({
+                    entity: result.entity as unknown as JointDragSlotEntity,
+                    binding,
+                    hosts: {
+                        root: descriptor.ownsRoot ? declaredHosts.root : undefined,
+                        hostKnot: descriptor.lower.kind === 'knot' ? declaredHosts.hostKnot : undefined,
+                    },
+                    hostKnots: scene?.hostKnots ?? [],
+                    sharedJointSlotById: scene?.sharedJointSlotById ?? null,
+                    dropOffsetZ: scene?.dropOffsetZFor?.(modelId) ?? 0,
+                });
+                if (slotMap) {
+                    suppressPrimitivesForJointDrag(slotMap);
+                    instancedDragRef.current = true;
+                }
+            }
         }
 
-        if (branch || twig || stick || kickstand) {
+        // Trunk records its own typed history entry instead.
+        if (descriptor && !descriptor.ownsEditHistoryEntry) {
             initialEditSnapshotRef.current = captureSupportEditSnapshot();
         }
+    };
+
+    /**
+     * One instanced frame, or a clean drop back to the detail path when a reset
+     * or a cancel released the session between moves.
+     */
+    const writeInstancedFrame = (entity: unknown) => {
+        const session = getJointDragSession();
+        if (!session || session.ended) {
+            instancedDragRef.current = false;
+            return;
+        }
+        writeJointDragFrame(entity as JointDragSlotEntity);
     };
 
     const applyMoveDelta = useCallback((delta: THREE.Vector3) => {
@@ -375,153 +220,55 @@ export function JointGizmo() {
 
         let gizmoPos = newPos;
 
-        if (trunk) {
-            if (!initialTrunkRef.current) {
-                initialTrunkRef.current = cloneObj(trunk);
+        if (owner && descriptor && !descriptor.jointDragMovesContacts) {
+            // A type that owns its history entry keeps its own before-snapshot.
+            if (descriptor.ownsEditHistoryEntry && !initialOwnHistoryRef.current) {
+                initialOwnHistoryRef.current = cloneObj(result!.entity as Trunk);
             }
-            const newTrunk = computeJointDragSupportPreview({
-                kind: 'trunk',
-                support: trunk,
+
+            // The pair the declared lower endpoint resolves from, so the field
+            // each host lives in is not restated here.
+            const declaredHosts = resolveDeclaredHosts(owner.typeId, result!.entity as unknown as Record<string, unknown>);
+            const root = descriptor.ownsRoot ? declaredHosts.root : undefined;
+
+            const next = computeJointDragSupportPreview({
+                kind: owner.typeId,
+                support: result!.entity as never,
                 jointId: joint.id,
                 newPos,
-                isCurveMode,
-                root: state.roots[trunk.rootId],
-            });
-            if (liveTrunkPreviewRef.current !== newTrunk) {
-                liveTrunkPreviewRef.current = newTrunk;
-                publishJointDragSupportPreview('trunk', newTrunk);
-            }
-            const clamped = getJointPosInSegments(newTrunk.segments as any[], joint.id);
-            if (clamped) gizmoPos = clamped;
-        } else if (branch) {
-            if (!initialBranchRef.current) {
-                initialBranchRef.current = cloneObj(branch);
-            }
-            const newBranch = computeJointDragSupportPreview({
-                kind: 'branch',
-                support: branch,
-                jointId: joint.id,
-                newPos,
-                isCurveMode: false,
-            }) as Branch;
-            if (liveBranchPreviewRef.current !== newBranch) {
-                liveBranchPreviewRef.current = newBranch;
-                publishJointDragSupportPreview('branch', newBranch);
-            }
-            const clamped = getJointPosInSegments(newBranch.segments as any[], joint.id);
-            if (clamped) gizmoPos = clamped;
-        } else if (twig) {
-            const nextSegments = updateSegmentsJointPos(twig.segments as any[], joint.id, newPos) as any;
-            const firstSegment = nextSegments[0];
-            const lastSegment = nextSegments[nextSegments.length - 1];
-            const movingBottomEndpoint = firstSegment?.bottomJoint?.id === joint.id;
-            const movingTopEndpoint = lastSegment?.topJoint?.id === joint.id;
-
-            let nextDiskA = twig.contactDiskA;
-            let nextDiskB = twig.contactDiskB;
-            let adjustedSegments = nextSegments;
-
-            if (movingBottomEndpoint && firstSegment?.bottomJoint) {
-                const otherSocket = lastSegment?.topJoint?.pos ?? getTwigDiskTipCenter(twig.contactDiskB);
-                const desiredSocketA = firstSegment.bottomJoint.pos;
-                const axisHint = new THREE.Vector3(
-                    otherSocket.x - desiredSocketA.x,
-                    otherSocket.y - desiredSocketA.y,
-                    otherSocket.z - desiredSocketA.z,
-                );
-
-                const recomputedA = recomputeTwigDiskForSocket(twig.contactDiskA as any, desiredSocketA, axisHint);
-                nextDiskA = recomputedA.disk;
-
-                adjustedSegments = adjustedSegments.map((segment: any, index: number) => {
-                    if (index !== 0 || !segment.bottomJoint) return segment;
-                    return {
-                        ...segment,
-                        bottomJoint: {
-                            ...segment.bottomJoint,
-                            pos: recomputedA.socket,
-                        },
-                    };
-                });
-
-                gizmoPos = recomputedA.socket;
-            }
-
-            if (movingTopEndpoint && lastSegment?.topJoint) {
-                const firstAfterAdjust = adjustedSegments[0];
-                const otherSocket = firstAfterAdjust?.bottomJoint?.pos ?? getTwigDiskTipCenter(nextDiskA as any);
-                const desiredSocketB = lastSegment.topJoint.pos;
-                const axisHint = new THREE.Vector3(
-                    otherSocket.x - desiredSocketB.x,
-                    otherSocket.y - desiredSocketB.y,
-                    otherSocket.z - desiredSocketB.z,
-                );
-
-                const recomputedB = recomputeTwigDiskForSocket(twig.contactDiskB as any, desiredSocketB, axisHint);
-                nextDiskB = recomputedB.disk;
-
-                adjustedSegments = adjustedSegments.map((segment: any, index: number) => {
-                    if (index !== adjustedSegments.length - 1 || !segment.topJoint) return segment;
-                    return {
-                        ...segment,
-                        topJoint: {
-                            ...segment.topJoint,
-                            pos: recomputedB.socket,
-                        },
-                    };
-                });
-
-                gizmoPos = recomputedB.socket;
-            }
-
-            const newTwig: Twig = {
-                ...twig,
-                segments: adjustedSegments,
-                contactDiskA: nextDiskA,
-                contactDiskB: nextDiskB,
-            };
-            liveTwigPreviewRef.current = newTwig;
-            emitSupportDragPreview('twig', newTwig.id, newTwig);
-        } else if (stick) {
-            const nextSegments = updateSegmentsJointPos(stick.segments as any[], joint.id, newPos) as any;
-            const nextConeA = stick.contactConeA?.socketJointId === joint.id
-                ? recomputeConeForSocket(stick.contactConeA as any, newPos)
-                : stick.contactConeA;
-            const nextConeB = stick.contactConeB?.socketJointId === joint.id
-                ? recomputeConeForSocket(stick.contactConeB as any, newPos)
-                : stick.contactConeB;
-
-            const newStick: Stick = {
-                ...stick,
-                segments: nextSegments,
-                contactConeA: nextConeA,
-                contactConeB: nextConeB,
-            };
-            liveStickPreviewRef.current = newStick;
-            emitSupportDragPreview('stick', newStick.id, newStick);
-        } else if (kickstand) {
-            const root = state.roots[kickstand.rootId];
-            const contextStart = root
-                ? {
-                    x: root.transform.pos.x,
-                    y: root.transform.pos.y,
-                    z: root.transform.pos.z + root.diskHeight + root.coneHeight,
-                }
-                : undefined;
-
-            const newKickstand = computeJointDragSupportPreview({
-                kind: 'kickstand',
-                support: kickstand,
-                jointId: joint.id,
-                newPos,
-                isCurveMode,
+                // Only a type with a curve-capable shaft reads the curve mode.
+                isCurveMode: descriptor.jointDragCanCurveShaft && isCurveMode,
                 root,
-                contextStart,
+                contextStart: resolveShaftAnchor(owner.typeId, { root, hostKnot: declaredHosts.hostKnot }) ?? undefined,
             });
-            if (liveKickstandPreviewRef.current !== newKickstand) {
-                liveKickstandPreviewRef.current = newKickstand;
-                publishJointDragSupportPreview('kickstand', newKickstand);
+
+            if (instancedDragRef.current) {
+                // The batch draws it; no preview event, no React commit. The
+                // gizmo's own position stays imperative below.
+                writeInstancedFrame(next);
+            } else if (livePreviewOf<typeof next>(owner.typeId) !== next) {
+                setLivePreview(owner.typeId, next);
+                publishJointDragSupportPreview(owner.typeId, next);
             }
+
+            const clamped = getJointPosInSegments((next as { segments: Segment[] }).segments as any[], joint.id);
+            if (clamped) gizmoPos = clamped;
+        } else if (owner && descriptor?.jointDragMovesContacts) {
+            // The contacts follow whichever end moved, and a disk snaps the
+            // joint back onto its tip -- which is what moves the gizmo.
+            const entity = result!.entity as unknown as { id: string; segments: Segment[] };
+            const moved = updateSegmentsJointPos(entity.segments as any[], joint.id, newPos) as Segment[];
+            const next = resolveDraggedContacts(owner.typeId, entity, joint.id, moved);
+
+            if (instancedDragRef.current) {
+                writeInstancedFrame(next);
+            } else {
+                setLivePreview(owner.typeId, next);
+                emitSupportDragPreview(owner.typeId, next.id, next);
+            }
+
+            const snapped = getJointPosInSegments(next.segments as any[], joint.id);
+            if (snapped) gizmoPos = snapped;
         }
 
         if (gizmoTargetRef.current) {
@@ -529,21 +276,17 @@ export function JointGizmo() {
             gizmoTargetRef.current.position.set(effectivePos.x, effectivePos.y, effectivePos.z);
         }
     }, [
-        branch,
+        owner?.typeId,
+        owner?.id,
+        descriptor,
+        result,
         isCurveMode,
         joint?.id,
         joint?.pos.x,
         joint?.pos.y,
         joint?.pos.z,
-        kickstand,
         state.roots,
-        stick,
-        trunk,
-        twig,
         updateSegmentsJointPos,
-        getTwigDiskTipCenter,
-        recomputeTwigDiskForSocket,
-        recomputeConeForSocket,
     ]);
 
     const flushPendingMove = useCallback(() => {
@@ -576,62 +319,66 @@ export function JointGizmo() {
         dragPosRef.current = null;
         pendingDeltaRef.current.set(0, 0, 0);
 
-        if (initialTrunkRef.current && trunk) {
-            const committedTrunk = liveTrunkPreviewRef.current ?? getTrunkById(trunk.id);
-            if (committedTrunk) {
-                const appliedTrunk = commitJointDragSupport('trunk', committedTrunk);
-                const appliedTrunkSnapshot = cloneObj(appliedTrunk);
-                if (appliedTrunkSnapshot) {
+        /**
+         * What this release commits. The fast path never published a preview, so
+         * the last frame the batch drew IS the entity to commit — reading the
+         * live preview ref would commit the pre-drag entity.
+         */
+        const instancedPreview = instancedDragRef.current
+            ? getLastJointDragPreview<JointDragSupport>()
+            : null;
+        if (instancedDragRef.current) {
+            // The final frame is the one `flushPendingMove` just wrote; end the
+            // gesture, then write the store in this same handler.
+            endJointDrag();
+            instancedDragRef.current = false;
+        }
+
+        // A type that owns its history entry records a TYPED before/after entry.
+        // The action's payload type is per-action, so this one stays typed rather
+        // than dispatched; the action comes off the descriptor that declares it.
+        if (initialOwnHistoryRef.current && owner
+            && descriptor!.ownsEditHistoryEntry && descriptor!.historyUpdate) {
+            const committed = instancedPreview
+                ?? livePreviewOf<JointDragSupport>(owner.typeId)
+                ?? getSupportEntity(owner.typeId, owner.id) as JointDragSupport | null;
+            if (committed) {
+                const applied = cloneObj(commitJointDragSupport(owner.typeId, committed as never));
+                if (applied) {
                     pushSupportHistory({
-                        type: SUPPORT_UPDATE_TRUNK,
-                        description: 'Move trunk joint',
-                        payload: {
-                            before: initialTrunkRef.current,
-                            after: appliedTrunkSnapshot,
-                        },
+                        type: descriptor!.historyUpdate,
+                        description: moveJointLabel(descriptor!.id),
+                        // The payload cast keeps the per-action payload map the
+                        // single source of truth, as the delete path does: the
+                        // action is the type's own, chosen at runtime.
+                        payload: { before: initialOwnHistoryRef.current, after: applied } as never,
                     });
                 }
             }
-            initialTrunkRef.current = null;
+            initialOwnHistoryRef.current = null;
         }
 
-        if (initialEditSnapshotRef.current) {
-            if (branch) {
-                const committedBranch = liveBranchPreviewRef.current ?? getBranchById(branch.id);
-                if (committedBranch) {
-                    commitJointDragSupport('branch', committedBranch as Branch);
-                }
-                pushSupportEditHistory('Move branch joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
-            } else if (twig) {
-                const committedTwig = liveTwigPreviewRef.current ?? getTwigById(twig.id);
-                if (committedTwig) {
-                    updateTwig(committedTwig);
-                }
-                clearSupportDragPreview('twig', twig.id);
-                pushSupportEditHistory('Move twig joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
-            } else if (stick) {
-                const committedStick = liveStickPreviewRef.current ?? getStickById(stick.id);
-                if (committedStick) {
-                    updateStick(committedStick);
-                }
-                clearSupportDragPreview('stick', stick.id);
-                pushSupportEditHistory('Move stick joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
-            } else if (kickstand) {
-                const committedKickstand = liveKickstandPreviewRef.current ?? getKickstandSnapshot().kickstands[kickstand.id];
-                if (committedKickstand) {
-                    commitJointDragSupport('kickstand', committedKickstand);
-                }
-                pushSupportEditHistory('Move kickstand joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
-            }
+        // Trunk pushed its own typed entry above; the rest share one. The
+        // commit writes the entity back and clears its preview, which is what
+        // the twig and stick arms did with two calls of their own.
+        if (initialEditSnapshotRef.current && owner) {
+            const committed = instancedPreview
+                ?? livePreviewOf<JointDragSupport>(owner.typeId)
+                ?? getSupportEntity(owner.typeId, owner.id) as JointDragSupport | null;
+            if (committed) commitJointDragSupport(owner.typeId, committed as never);
+
+            pushSupportEditHistory(
+                moveJointLabel(owner.typeId),
+                initialEditSnapshotRef.current,
+                captureSupportEditSnapshot(),
+            );
             initialEditSnapshotRef.current = null;
         }
 
-        initialBranchRef.current = null;
-        liveTrunkPreviewRef.current = null;
-        liveBranchPreviewRef.current = null;
-        liveTwigPreviewRef.current = null;
-        liveStickPreviewRef.current = null;
-        liveKickstandPreviewRef.current = null;
+        livePreviewRef.current = null;
+        // The suppression clear and the store write above are one commit; the
+        // session itself goes one frame later, after that commit has painted.
+        if (instancedPreview) clearJointDragSessionAfterFrame();
     };
 
     // Sync gizmo group position to joint.pos, but only when not dragging.
@@ -644,6 +391,24 @@ export function JointGizmo() {
         if (dragPosRef.current !== null) return; // skip during active drag
         gizmoTargetRef.current.position.set(joint.pos.x, joint.pos.y, joint.pos.z);
     }, [joint?.pos.x, joint?.pos.y, joint?.pos.z]);
+
+    /**
+     * A joint-ball drag no longer publishes a position event in the fast path, so
+     * the gizmo follows the batch's own last frame instead: one imperative write
+     * per frame, no React state. The gizmo's own gesture is excluded — it sets
+     * the position directly in `applyMoveDelta`.
+     */
+    useFrame(() => {
+        if (!SUPPORT_INSTANCED_DRAG) return;
+        if (dragPosRef.current !== null) return;
+        if (!gizmoTargetRef.current) return;
+        const session = getJointDragSession();
+        if (!session || session.ended) return;
+        const preview = getLastJointDragPreview<{ segments: Segment[] }>();
+        if (!preview) return;
+        const pos = getJointPosInSegments(preview.segments, session.slotMap.jointId);
+        if (pos) gizmoTargetRef.current.position.set(pos.x, pos.y, pos.z);
+    });
 
     if (!joint) return null;
 

@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
-    "target": "ES2017",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "target": "ES2024",
+    "lib": ["dom", "dom.iterable", "ES2024"],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -32,6 +32,7 @@
   ],
   "exclude": [
     "node_modules",
+    "website",
     "2. Backup",
     "rust/target",
     "rust/**/target",

@@ -33,7 +33,7 @@ describe('VOXL originalRef Sidecar Resolution & Serialization', () => {
         { embedOriginalMesh: false },
       );
 
-      const parsed = parseVoxlDocumentV2(bin);
+      const parsed = await parseVoxlDocumentV2(bin);
       assert.equal(parsed.document.models.length, 1);
       const parsedModel = parsed.document.models[0];
       assert.ok(parsedModel.originalRef, 'parsed model must carry originalRef');

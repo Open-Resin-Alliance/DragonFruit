@@ -1,0 +1,315 @@
+---
+import Base from '../layouts/Base.astro';
+import DownloadMenu from '../components/DownloadMenu.astro';
+import ScreenshotGrid from '../components/ScreenshotGrid.astro';
+import DiscordIcon from '../components/DiscordIcon.astro';
+import Wordmark from '../components/Wordmark.astro';
+import { LINKS, SITE, docs } from '../data/site';
+import { loadMachines } from '../lib/machines';
+
+/** Every claim below is one the documentation states; the links are its pages. */
+const capabilities = [
+  {
+    title: 'Privacy',
+    href: docs('dev/data-storage/'),
+    body: 'No account, no analytics, nothing sent to us. The app talks to GitHub for updates and plugins, and uploads only to the printer you choose.',
+  },
+  {
+    title: 'Open source, free forever',
+    href: LINKS.license,
+    body: 'AGPL-3.0-or-later, with no subscription, no tiers and no feature behind a licence key. Copyleft keeps forks open too.',
+  },
+  {
+    title: 'Built to be extended',
+    href: docs('dev/plugins-framework/'),
+    body: 'Printers, formats and print-side steps are plugins, not a fixed list, and the contract is documented.',
+  },
+  {
+    title: 'High-performance slicing',
+    href: docs('dev/slicing-engine/'),
+    body: 'A Rust pipeline with its own encoders: Puck the Adventurer, the model in the grid below, sliced and written in 1.01 seconds.',
+  },
+  {
+    title: 'Mesh repair',
+    href: docs('dev/mesh-repair-passes/'),
+    body: 'Repair runs every pass, not just the first hole: stitch, close holes, drop double faces, cull noise shells, plus shrink-wrap and cavity fill.',
+  },
+  {
+    title: '3D Anti-Aliasing',
+    href: docs('dev/slicing-engine/architecture/'),
+    body: 'Between layers as well as inside them, so a taller layer height prints faster without the stair-stepping.',
+  },
+];
+
+/* The hero quotes the count the machines page renders, so the two cannot drift. */
+const { machines } = loadMachines();
+
+const reference = [
+  { title: 'Installation', body: 'Installers for Windows, macOS and Linux, plus Flatpak and build-from-source.', href: docs('getting-started/installation/') },
+  { title: 'Quick start', body: 'Import a model, orient it, hollow it, add supports and slice your first plate.', href: docs('getting-started/quick-start/') },
+  { title: 'Hotkeys', body: 'Every shortcut in the workspace, from transform nudges to support modifiers.', href: docs('reference/hotkeys/') },
+  { title: 'Command line', body: 'Slice and inspect from a terminal, with the same engine the app drives.', href: docs('reference/cli/') },
+];
+---
+
+<Base>
+  <section class="hero">
+
+    <div class="shell hero__inner">
+      <h1 class="hero__title">
+        <span class="visually-hidden">{SITE.name}</span>
+        <Wordmark decorative />
+      </h1>
+
+      <p class="lede hero__lede">{SITE.motto}</p>
+
+      <div class="hero__cta"><DownloadMenu /></div>
+
+      <p class="hero__machines">
+        <span class="hero__machines-question muted">Will it work with my printer?</span>
+        <a class="hero__machines-link" href="/machines/">
+          {machines.length} machines supported<span aria-hidden="true"> →</span>
+        </a>
+      </p>
+
+      <p class="hero__note mono muted">
+        Beta software, under active development. Validate outputs and don't leave a first print unattended.
+      </p>
+    </div>
+
+  </section>
+
+  <section class="shell section" id="features">
+    <div class="section-head">
+      <div class="section-head__text">
+        <p class="eyebrow">Open by design</p>
+        <h2>Printing without being locked in</h2>
+        <p class="lede">
+          DragonFruit is an open-source slicer for resin printing, and nothing in it is held back. No subscription, no tiers,
+          no feature waiting behind a licence key. Inspect the mesh, hollow it, find the islands, author the
+          supports, slice, and keep the files it makes.
+        </p>
+      </div>
+    </div>
+
+    <div class="grid grid--3">
+      {
+        capabilities.map((item) => (
+          <a class="card feature" href={item.href}>
+            <h3 class="feature__title">{item.title}</h3>
+            <p class="feature__body">{item.body}</p>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <ScreenshotGrid />
+
+  <section class="shell section" id="docs">
+    <div class="section-head">
+      <div class="section-head__text">
+        <p class="eyebrow">Start here</p>
+        <h2>Straight into the manual</h2>
+        <p class="lede">The documentation covers every workflow page by page, from the first install to the CLI.</p>
+      </div>
+    </div>
+
+    <div class="grid grid--4">
+      {
+        reference.map((item) => (
+          <a class="card reference" href={item.href}>
+            <h3 class="reference__title">{item.title}</h3>
+            <p class="reference__body">{item.body}</p>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="shell section">
+    <div class="cta card">
+      <div class="cta__text">
+        <h2>Come break it with us</h2>
+        <p>
+          DragonFruit is developed in the open by the Open Resin Alliance. The app is AGPL-3.0-or-later and each plugin
+          ships under its own licence. Bug reports, printer profiles, translations and plugins are all welcome.
+        </p>
+      </div>
+
+      <div class="btn-row cta__actions">
+        <a class="btn btn--discord" href={LINKS.discord} rel="noopener noreferrer" target="_blank">
+          <DiscordIcon size={16} />
+          Join the Discord
+        </a>
+        <a class="btn btn--ghost" href={LINKS.collective} rel="noopener noreferrer" target="_blank">Support the project</a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .hero {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-block-size: min(76vh, 40rem);
+    padding-block: clamp(3.75rem, 7.5vw, 6rem) clamp(2rem, 4vw, 3rem);
+    /* The backdrop is scaled past the viewport on purpose; clipping it here is
+       what keeps it from widening the document. */
+    overflow: clip;
+  }
+
+  /* Centred on the page: the wordmark is the only thing that has to line up, and
+     it lines up with the centre. */
+  .hero__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 1.35rem;
+  }
+
+  .hero__title {
+    /* The wordmark is an inline SVG now; it brings its own sizing. */
+    line-height: 0;
+  }
+
+  .hero__lede {
+    font-size: clamp(1.0625rem, 0.95rem + 0.5vw, 1.25rem);
+    max-inline-size: 46rem;
+  }
+
+  /* A step up from the copy's own rhythm: the buttons are the ask, and the gap
+     before them is what says so. */
+  .hero__cta {
+    margin-top: 1.25rem;
+  }
+
+  /* The machine count sits under the download, where a visitor deciding whether
+     the app knows their printer is already looking. */
+  .hero__machines {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    /* Closer to the release line than to the warning below: the two are one
+       footnote about the download, and the warning is a different thought. */
+    margin-top: 0.55rem;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+  }
+
+  .hero__machines-link {
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-color: var(--border-strong);
+    text-underline-offset: 3px;
+  }
+
+  .hero__machines-link:hover {
+    color: var(--accent);
+    text-decoration-color: currentColor;
+  }
+
+  /* A step further from the release line than the hero's own rhythm: the warning
+     is not part of the download, it is the small print under it. */
+  .hero__note {
+    margin-top: 0.9rem;
+    font-size: 0.75rem;
+    max-inline-size: 40rem;
+  }
+
+  /* The hero is a field of the brand rather than a picture of the app: two soft
+     lights in the two brand colours, fading out before the section ends so the
+     content below starts on the page's own ground. */
+  .hero::before {
+    content: '';
+    position: absolute;
+    inset: -10% -5% -25%;
+    z-index: -1;
+    background: radial-gradient(55% 60% at 12% 12%, color-mix(in oklab, var(--brand-pink) 21%, transparent), transparent 70%),
+      radial-gradient(50% 55% at 88% 24%, color-mix(in oklab, var(--brand-lime-deep) 16%, transparent), transparent 72%);
+    filter: blur(30px);
+    mask-image: linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.5) 45%, transparent 82%);
+    pointer-events: none;
+  }
+
+  .section {
+    padding-block: clamp(2.5rem, 5vw, 4.5rem);
+  }
+
+  /* The section under the hero starts closer to it: the hero's own bottom edge is
+     already a break, and the two paddings together were a full screen of nothing
+     at common window heights. */
+  .hero + .section {
+    padding-block-start: clamp(1.75rem, 3.5vw, 2.75rem);
+  }
+
+  .feature {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 1.35rem 1.3rem 1.5rem;
+  }
+
+  .feature__title {
+    font-size: 1.0625rem;
+  }
+
+  .feature__body {
+    color: var(--muted);
+    font-size: 0.9375rem;
+    line-height: 1.65;
+  }
+
+  .reference {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 1.2rem 1.15rem 1.35rem;
+  }
+
+  .reference__title {
+    font-size: 1rem;
+  }
+
+  .reference__body {
+    color: var(--muted);
+    font-size: 0.875rem;
+    line-height: 1.6;
+  }
+
+  .cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem 2.5rem;
+    align-items: center;
+    justify-content: space-between;
+    padding: clamp(1.5rem, 3vw, 2.25rem);
+  }
+
+  /* 42rem rather than the prose measure: with the three actions beside it, 46rem
+     pushes the row onto its own line below 1500px, which is not the shape this
+     panel is meant to have. */
+  .cta__text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-inline-size: 42rem;
+  }
+
+  .cta__text p {
+    color: var(--muted);
+  }
+
+  .cta__text h2 {
+    font-size: clamp(1.5rem, 1.15rem + 1.5vw, 2rem);
+  }
+
+  /* Allowed to shrink, so the row wraps its own buttons when the card is narrow
+     instead of pushing the page sideways. */
+  .cta__actions {
+    flex: 0 1 auto;
+    min-inline-size: 0;
+  }
+</style>

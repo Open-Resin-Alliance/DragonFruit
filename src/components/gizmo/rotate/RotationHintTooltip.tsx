@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Trans } from '@lingui/react/macro';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
 
 /** Cursor-following tooltip shown on rotation ring hover, describing the dial. */
@@ -24,9 +25,9 @@ export function RotationHintTooltip() {
           whiteSpace: 'nowrap',
         }}
       >
-        <div>Drag to rotate</div>
+        <div><Trans>Drag to rotate</Trans></div>
         <div className="mt-0.5 opacity-70">
-          Dial marks pull at 5° / 10° / 45°
+          <Trans>Dial marks pull at 5° / 10° / 45°</Trans>
         </div>
       </div>
     </MouseTooltip>

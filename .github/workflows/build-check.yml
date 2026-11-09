@@ -46,15 +46,28 @@ jobs:
       - name: Checkout
         # No `ref:` on purpose — see note 1 above.
         uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
         run: npm ci
+
+      # Next asks for this on every run ("No build cache found"): its compiler and
+      # fetch caches live in `.next/cache`, and restoring that across runs is worth
+      # a minute or two of each frontend build.
+      - name: Cache Next.js build
+        uses: actions/cache@v6
+        with:
+          path: .next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('src/**/*.ts', 'src/**/*.tsx', 'next.config.ts', 'tsconfig.json') }}
+          restore-keys: |
+            next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
 
       # `npm run build` triggers prebuild, which generates the plugin registry
       # and the builtin simple plugins; the TypeScript pass fails without them.

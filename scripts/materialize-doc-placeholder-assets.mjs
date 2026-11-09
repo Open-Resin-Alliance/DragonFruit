@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-const docsDir = path.resolve('docs');
+const docsDir = path.resolve(process.argv[2] ?? 'docs');
 const placeholderRoot = path.join(docsDir, 'assets', 'placeholders');
 const markdownLinkPattern = /(?:\.\.\/)+assets\/placeholders\/([^\s)>"']+)/g;
 

@@ -11,7 +11,7 @@ test('resets settings scroll when the user selects a different support tab', () 
         },
     };
 
-    assert.equal(resetSupportSettingsScrollForTabChange(viewport, 'trunk', 'raft'), true);
+    assert.equal(resetSupportSettingsScrollForTabChange(viewport, 'supportInfo', 'raft'), true);
     assert.deepEqual(calls, [{ top: 0 }]);
 });
 
@@ -28,5 +28,5 @@ test('preserves settings scroll when the user selects the already-active tab', (
 });
 
 test('safely ignores a tab change before the settings viewport is mounted', () => {
-    assert.equal(resetSupportSettingsScrollForTabChange(null, 'stick', 'trunk'), false);
+    assert.equal(resetSupportSettingsScrollForTabChange(null, 'bracing', 'supportInfo'), false);
 });

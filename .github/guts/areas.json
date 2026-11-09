@@ -1,0 +1,81 @@
+{
+  "cuts": {
+    "description": "Cutting a model into pieces: planar or contour (seam) cuts, the caps that close each piece, tenon/mortise registration joints, joint clearance."
+  },
+  "autosupports": {
+    "description": "Automatic support generation: where supports get placed, how they are sized, trunks/branches/leaves/twigs, raft clearance, missing or excessive supports after an auto-support run."
+  },
+  "hollowing": {
+    "description": "Hollowing models into a shell: wall thickness, the hollowing modifier and its re-editing, artifacts or failures in hollowed meshes."
+  },
+  "slicing": {
+    "description": "Turning the scene into layers and encoding them into print files: slice jobs failing or stalling, wrong or missing geometry in sliced layers, the layer encoders, slicing speed or memory use. Antialiasing problems belong to aa-3daa instead."
+  },
+  "mesh repair": {
+    "description": "Detecting and repairing broken meshes: holes, non-manifold edges, flipped normals, self-intersections, decimation; broken meshes that go unnoticed or unwarned, repair results that are wrong, repair that fails."
+  },
+  "ui": {
+    "description": "Interface problems not owned by a specific feature: menus and context menus themselves, keyboard shortcut handling, drag and drop, mouse/trackpad/SpaceMouse input, the 3D viewport and camera, panels and layout, translations. Also two cross-cutting behaviours that are always ui, in addition to the area of the action involved: multi-model selection (an action that should apply to every selected model but only reaches some of them), and undo/redo (actions missing from the undo history, or undo restoring the wrong state). Otherwise, when the tool or panel of a specific feature misbehaves, that feature's area applies instead."
+  },
+  "scene tools": {
+    "description": "Tools that act on the models in the scene: selecting them (one, several, all), moving, rotating, scaling, mirroring, lifting or dropping, duplicating, copying, cutting, pasting and deleting them, arranging them on the build plate, measuring them; whether from the gizmo, the Modify panel, the context menu or a shortcut. Includes actions that only reach part of a multi-selection. Cutting a model into pieces belongs to cuts instead."
+  },
+  "lys": {
+    "description": "Lychee Slicer scene files (.lys): geometry, transforms and supports coming from a .lys file. Every .lys problem is also a file import problem.",
+    "within": "file import"
+  },
+  "ctb": {
+    "description": "CTB print files (.ctb, Chitubox's print format): writing or reading them, their layer data and metadata, printers rejecting or misreading a CTB file. Importing .chitubox scene files belongs to file import instead."
+  },
+  "lumen": {
+    "description": "LUMEN print files (.lumen), the Open Resin Alliance print format consumed by Odyssey firmware: writing them, their metadata, printers rejecting or misreading them."
+  },
+  "voxl": {
+    "description": "VOXL project files (.voxl), DragonFruit's native scene format (not an import): saving, opening or replacing scenes, autosave, projects that fail to load or come back wrong."
+  },
+  "islands": {
+    "description": "Island detection: finding regions that start mid-air layer by layer, mesh minima and overhang regions, the Islands panel, its markers and navigation, scan results that are wrong, scans that are slow or fail."
+  },
+  "support studio": {
+    "description": "Support Studio: placing and editing supports by hand, support settings and presets (cone angle, tip, shaft and base sizes, support types such as mini supports, branches, kickstands), the support editing tools."
+  },
+  "aa-3daa": {
+    "description": "Antialiasing of layer images, including 3DAA (blending across layers in Z): grey levels, dithering, bit depth, jagged or blurry edges in the output."
+  },
+  "printer/material profile": {
+    "description": "Wrong or missing values in the printer and material profiles themselves: resolution, build volume, screen mirroring or orientation, exposure and lift settings, printers missing from the list."
+  },
+  "file export": {
+    "description": "Exporting meshes (STL, 3MF, OBJ) and saving files to disk: export options, where and how files are written, file names. Wrong contents inside a print file belong to slicing or to that print format's area."
+  },
+  "file import": {
+    "description": "Opening or importing any file that is not a native DragonFruit project: model files (STL, OBJ, 3MF and similar), Lychee .lys scenes, Chitubox .chitubox scenes, drag and drop; imports that fail, hang or produce the wrong geometry or supports. Opening .voxl projects is not an import: that belongs to voxl."
+  },
+  "printer connection": {
+    "description": "Talking to a printer over the network: finding it, sending a print job to it (upload, start, pause, cancel), showing its status and progress, its camera feed. Defects seen on the physical print are not this area: they belong to the area that produced them, such as slicing, aa-3daa or autosupports."
+  },
+  "platform": {
+    "description": "The app as a program on the user's system: installing, starting up, updating, the app hanging or dying regardless of what the user was doing, packaging (Flatpak, installers, bundled binaries), behaviour specific to Windows, macOS or Linux."
+  },
+  "infra": {
+    "description": "The project's own infrastructure rather than the app: GitHub Actions workflows, CI builds and checks, release and packaging scripts, the plugin registry pipeline, repository tooling and automation (including this issue labeller), the documentation site build."
+  },
+  "anycubic": {
+    "description": "Anycubic printers (Photon Mono, Photon M3/M5/M7, Photon P1 and P1 Max, Photon D2 and others): their printer profiles, their print formats (.pwmb, .pwma, .pm3, .px6s and similar), behaviour that differs on them. Only when the problem is specific to these printers; a report that merely says which printer it was printed on does not count."
+  },
+  "elegoo": {
+    "description": "ELEGOO printers (Saturn, Mars, Jupiter): their printer profiles, their print formats (.goo, and .ctb as ELEGOO uses it), and SDCP, the network protocol used to send jobs to them and control them. Only when the problem is specific to these printers; a report that merely says which printer it was printed on does not count."
+  },
+  "uniformation": {
+    "description": "UniFormation printers (GKtwo, GK3, GK3 Pro, GK3 Ultra): their printer profiles and the files DragonFruit writes for them. Only when the problem is specific to these printers; a report that merely says which printer it was printed on does not count."
+  },
+  "athena": {
+    "description": "Concepts3D Athena printers (Athena 8K/12K, Athena II 12K/16K) and NanoDLP: their printer profiles, the .nanodlp print files and their layer encoding, and the NanoDLP network connection. Only when the problem is specific to these printers; a report that merely says which printer it was printed on does not count."
+  },
+  "sirayatech": {
+    "description": "Siraya Tech resins: the bundled Siraya Tech material profiles and their print settings. Only when the problem is in those profiles; a report that merely says which resin was used does not count."
+  },
+  "other": {
+    "description": "A substantial part of the report is about something none of the listed areas covers."
+  }
+}

@@ -14,13 +14,14 @@ test('balanced auto uses 3DAA for fine-pitch thick-layer printers', () => {
   assert.equal(cfg.zBlendLookBack, 4);
 });
 
-test('sharp auto preserves fine detail with coverage supersampling instead of blur', () => {
+test('sharp auto keeps a light blur instead of none, and stays off 3DAA', () => {
   const cfg = computePhysicalAaConfig('sharp', 0.019, 0.05);
 
   assert.equal(cfg.aaMode, 'Blur');
-  assert.equal(cfg.antiAliasingMode, 'Coverage');
+  assert.equal(cfg.antiAliasingMode, 'Blur');
   assert.equal(cfg.aaSteps, 4);
-  assert.equal(cfg.blurBrushRadiusPx, 0);
+  // Zero here was the regression: Sharp went out as a raw, unsoftened raster.
+  assert.equal(cfg.blurBrushRadiusPx, 1);
   assert.equal(cfg.zBlurRadiusLayers, 0);
 });
 

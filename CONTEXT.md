@@ -58,6 +58,18 @@ _Avoid_: lookahead depth, worker count (it bounds in-flight layers, not thread c
 The pattern used throughout 3DAA raster/post-processing: only `look_back` + `post_buffer_depth` layers are ever resident at once, instead of materializing every layer of a job simultaneously. A queue or buffer that looks like a sliding window in the code isn't necessarily one in practice — see [ADR-0036](docs/adr/0036-stream-ctb-layer-payloads-to-disk.md) for a case where backpressure didn't actually propagate end-to-end.
 _Avoid_: streaming (too generic — most of the pipeline "streams" data through; a sliding window is specifically what bounds peak memory)
 
+**job assembly**:
+Turning a printer profile, a material and the prepared scene into the native slice job: raster grid, packing, build plate, layer height, dithering, anti-aliasing and the metadata the encoders read. One pure module, `src/features/slicing/sliceJobAssembly.ts`; the app's export and the `scene slice` CLI are its two callers. See [Slice Job Assembly](docs/dev/slice-job-assembly.md).
+_Avoid_: job building, job config (both get used for the orchestrator's own work, which also covers mesh transport and thumbnails)
+
+**auto AA preset**:
+The slicing panel's automatic anti-aliasing choice: `sharp`, `balanced`, `smooth` or `raw` (off), turned into concrete settings from the printer's pixel pitch and the layer height by `computePhysicalAaConfig`. `balanced` is the default.
+_Avoid_: AA level (the level is one output of a preset, the sample count), AA mode
+
+**AA override**:
+The material's own anti-aliasing settings taking over from the auto AA preset, which happens when they carry `enableOverride`. A **session override** is the same settings kept for one material on one machine, applied on top of the stored ones; `scene slice --aa-settings` takes the same shape.
+_Avoid_: expert mode (a panel view, not a setting the job sees), custom AA
+
 **seam**:
 The curve the user draws across a model's skin to say where a contour cut should run. Traced as a geodesic through their waypoints, so it lies ON the surface rather than near it — which everything downstream depends on. A cut can carry several, and a piece held by two of them only comes free when both are cutting at once.
 _Avoid_: loop (the loop is the user's waypoints; the seam is the curve traced through them), cut line, path

@@ -8,8 +8,8 @@
  *      links fat; DF_BUILD_TARGET_TRIPLE so build-thumbnail-providers.mjs emits a
  *      universal sidecar),
  *   2. routes through scripts/tauri-build.mjs --universal — NOT `npx tauri build`
- *      directly — so the macOS post-build runs (QuickLook .appex embed + codesign
- *      of the .app and .appex + DMG rebuild),
+ *      directly — so the macOS post-build runs (checks Tauri embedded and
+ *      signed the QuickLook .appex),
  *   3. on success, runs scripts/verify-universal-bundle.mjs to assert the bundle
  *      is actually fat + signed; on build failure it propagates the status and
  *      skips verification.

@@ -72,6 +72,11 @@ Ship **one** `universal-apple-darwin` `.dmg`. Concretely:
 - **Shared embed module:** the post-build embed + re-sign + DMG-rebuild was
   extracted from `tauri-build.mjs` into `scripts/macos-embed-appex.mjs`, so the
   local wrapper *and* CI run the identical sequence (single source of truth).
+  *Update (2026-10-02, #703):* Tauri now embeds the `.appex` itself through
+  `bundle.macOS.files`, before it signs and notarizes the `.app`, and
+  `macos-embed-appex.mjs` only verifies the result and notarizes the DMG. The
+  post-build embed signed and notarized the `.app` twice and left the updater's
+  `.app.tar.gz` without the extension.
 - **Canonical entry point:** `npm run tauri:bundle:macos:universal` →
   `scripts/tauri-bundle-macos-universal.mjs` → `tauri-build.mjs --universal` (build
   + embed) → `scripts/verify-universal-bundle.mjs` (assert fat + signed + valid
@@ -164,9 +169,13 @@ uniform across platforms.
 to a release tag instead of `branch = "feat/cef"`, so the build cannot silently
 drift when the branch moves.
 
-**Current pin: `tauri-cef-v3.0.0-alpha.22`** (`f5bf953f`, 2026-08-19), adopted
-2026-08-24. All nine entries carry the same tag, so every crate resolves to one
-commit.
+**Current pin: `tauri-cef-v3.0.0-alpha.26`** (`71320305`), adopted 2026-09-30
+(previously alpha.22, `f5bf953f`, 2026-08-19). All nine entries carry the same
+tag, so every crate resolves to one commit. alpha.26 is the newest tag that still
+has the old `tauri/wry` + `tauri/cef` features: alpha.27 (#15985) decouples the
+runtime from the `tauri` crate (apps depend on `tauri-runtime-wry` /
+`tauri-runtime-cef` and call `Builder::runtime(...)`), which needs an app-level
+port before we can adopt it. It also brings wry 0.56 / tao 0.36 from alpha.23+.
 
 **History.** The original pin used two explicit revs — `tauri-plugin` on
 `a94e1b8…`, the other eight crates on `562bc59…` (2026-04-16) — because that was

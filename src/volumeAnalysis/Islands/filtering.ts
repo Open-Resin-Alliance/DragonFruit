@@ -62,7 +62,17 @@ export function annotateFilterFlags(
   }
 
   for (const island of islands) {
-    island.grounded = island.contact.z <= plateCeil;
+    // Grounded means the surface this island asks support for already rests on
+    // the plate. For a mesh patch the contact cannot answer that: an overhang
+    // region's contact is its lowest footprint pixel, so a domed underside that
+    // touches the plate at one point and climbs 20 mm was written off as "on the
+    // plate" and the whole patch never reached placement — a part resting on the
+    // plate got almost no supports while the same part lifted 5 mm got a full
+    // forest. A patch that declares a top (`maxZ`) is only grounded when that top
+    // is at the plate too; islands without one (voxel sections, minima) keep the
+    // contact rule, where the contact *is* the base.
+    const topZ = Number.isFinite(island.maxZ) ? (island.maxZ as number) : island.contact.z;
+    island.grounded = island.contact.z <= plateCeil && topZ <= plateCeil + zTolerance;
 
     const candidates = grid.query(island.contact.x, island.contact.y, maxRadius);
     let isSupported = false;

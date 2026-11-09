@@ -7,14 +7,11 @@ import {
   serializeVoxlDocumentV2,
   parseVoxlBinaryV2,
 } from '../codec-v2';
-import {
-  buildVoxlDocumentV1,
-  parseVoxlDocument,
-  serializeVoxlDocument,
-  parseVoxlAuto,
-} from '../codec';
-import type { BuildVoxlDocumentInput, VoxlModelRuntimeLike } from '../types';
+import { parseVoxlAuto } from '../codec';
+import type { BuildVoxlDocumentInput, VoxlModelEntry, VoxlModelRuntimeLike } from '../types';
 import type { DragonfruitImportFormat } from '@/supports/types';
+import { installFakeWindow } from '@/utils/__tests__/helpers/fakeWindow';
+import { readVoxlChunkText } from './voxlTestSupport';
 
 const EMPTY_SUPPORTS: DragonfruitImportFormat = {
   version: 1,
@@ -49,32 +46,6 @@ function createTestModel(
   };
 }
 
-test('VOXL V1 serialization and parsing preserves isSupportGeometry and linkGroupId', () => {
-  const model1 = createTestModel('m1', true, 'group-123');
-  const model2 = createTestModel('m2', false, undefined);
-
-  const input: BuildVoxlDocumentInput = {
-    models: [model1, model2],
-    activeModelId: 'm1',
-    selectedModelIds: ['m1'],
-    supports: EMPTY_SUPPORTS,
-  };
-
-  const doc = buildVoxlDocumentV1(input);
-  assert.equal(doc.models[0].isSupportGeometry, true);
-  assert.equal(doc.models[0].linkGroupId, 'group-123');
-  assert.equal(doc.models[1].isSupportGeometry, false);
-  assert.equal(doc.models[1].linkGroupId, undefined);
-
-  const serializedJson = serializeVoxlDocument(doc, false, { compression: 'none' });
-  const parsed = parseVoxlDocument(serializedJson);
-
-  assert.equal(parsed.models[0].isSupportGeometry, true);
-  assert.equal(parsed.models[0].linkGroupId, 'group-123');
-  assert.equal(parsed.models[1].isSupportGeometry, false);
-  assert.equal(parsed.models[1].linkGroupId, undefined);
-});
-
 test('VOXL V2 binary round-trip persistence preserves isSupportGeometry and linkGroupId', async () => {
   const model1 = createTestModel('supp_mesh_1', true, 'link-grp-abc');
   const model2 = createTestModel('main_mesh_1', false, 'link-grp-abc');
@@ -94,7 +65,7 @@ test('VOXL V2 binary round-trip persistence preserves isSupportGeometry and link
   ]);
 
   const binary = await serializeVoxlDocumentV2(input, meshBytes);
-  const parsedResult = parseVoxlBinaryV2(binary);
+  const parsedResult = await parseVoxlBinaryV2(binary);
 
   assert.equal(parsedResult.document.models.length, 2);
   const parsedM1 = parsedResult.document.models.find((m) => m.id === 'supp_mesh_1');
@@ -108,12 +79,12 @@ test('VOXL V2 binary round-trip persistence preserves isSupportGeometry and link
   assert.equal(parsedM2.isSupportGeometry, false);
   assert.equal(parsedM2.linkGroupId, 'link-grp-abc');
 
-  const autoResult = parseVoxlAuto(binary);
+  const autoResult = await parseVoxlAuto(binary);
   assert.equal(autoResult.document.models[0].isSupportGeometry, true);
   assert.equal(autoResult.document.models[0].linkGroupId, 'link-grp-abc');
 });
 
-test('toggleSupportDesignation action state toggling logic', () => {
+test('toggleSupportDesignation action state toggling logic', async () => {
   type SimpleModel = {
     id: string;
     isSupportGeometry?: boolean;
@@ -158,13 +129,13 @@ test('classifyFromGeometry with assumeSupportGeometry: true preserves likely_sup
 
   let capturedOptionsJson: string | undefined;
 
-  (globalThis as any).window = {
+  const restoreWindow = installFakeWindow({
     __TAURI_INTERNALS__: {
-      invoke: async (cmd: string, args?: any) => {
+      invoke: async (cmd: string, args?: { optionsJson?: string }) => {
         if (cmd === 'stage_mesh_binary_set') return;
         if (cmd === 'mesh_classify_staged') {
           capturedOptionsJson = args?.optionsJson;
-          const parsed = JSON.parse(args.optionsJson);
+          const parsed = JSON.parse(args?.optionsJson ?? '{}');
           return JSON.stringify({
             version: 1,
             pre: { triangle_count: 1 },
@@ -182,7 +153,7 @@ test('classifyFromGeometry with assumeSupportGeometry: true preserves likely_sup
         throw new Error(`Unexpected command: ${cmd}`);
       },
     },
-  };
+  });
 
   try {
     const result = await classifyFromGeometry(geom, { assumeSupportGeometry: true });
@@ -192,6 +163,6 @@ test('classifyFromGeometry with assumeSupportGeometry: true preserves likely_sup
     assert.equal(parsed.assume_support_geometry, true);
     assert.equal(result.report.likely_support_geometry, true);
   } finally {
-    delete (globalThis as any).window;
+    restoreWindow();
   }
 });

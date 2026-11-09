@@ -161,5 +161,5 @@ Required checks:
 
 ## 9) Related docs
 
-- Plugin framework: `plugins/README.md`
-- Complex plugin contribution framework: `plugins/CONTRIBUTING_COMPLEX_PLUGINS.md`
+- Plugin framework: `docs/dev/plugins-framework.md`
+- Complex plugin contribution framework: `docs/dev/plugins-complex-contributing.md`

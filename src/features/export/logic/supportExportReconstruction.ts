@@ -1,53 +1,16 @@
 import * as THREE from 'three';
-import { bezierToLineSegments } from '@/supports/Curves/BezierUtils';
 import { getModelIdForSupportEntityId } from '@/supports/state';
-import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone';
-import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
-import { getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
-import type { Kickstand, KickstandBuildResult, KickstandState } from '@/supports/SupportTypes/Kickstand/types';
-import type {
-  Anchor,
-  Brace,
-  Branch,
-  DragonfruitImportFormat,
-  Knot,
-  Leaf,
-  Roots,
-  Segment,
-  Stick,
-  SupportState,
-  Twig,
-  Vec3,
-} from '@/supports/types';
-import { SupportGeometryGenerator } from './SupportGeometryGenerator';
-import { getActiveMaterialProfile, getActivePrinterProfile } from '@/features/profiles/profileStore';
-import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
+import type { KickstandBuildResult } from '@/supports/SupportTypes/Kickstand/types';
+import { buildSupportExportGroup, type SupportExportContext } from '@/supports/exportGeometry/seam';
+import { importPayloadCollections } from '@/supports/supportCollections';
+import { exportGroupName, getSupportTypeDescriptor, parseKnotHostId, parsePrefixedSegmentId, SUPPORT_TYPES, type SupportTypeDescriptor, type SupportTypeId } from '@/supports/supportTypeRegistry';
+import type { DragonfruitImportFormat, Segment, SupportState } from '@/supports/types';
+import type { SupportCollectionKey } from '@/supports/supportTypeRegistry';
 
-function getGlobalPenetrationMm(): number {
-  const material = getActiveMaterialProfile();
-  const printer = getActivePrinterProfile();
-  if (material && printer) {
-    const pxX = printer.pixelSize?.x ? printer.pixelSize.x / 1000 : (printer.buildVolumeMm?.width ?? 143) / (printer.display?.resolutionX ?? 2560);
-    const pxY = printer.pixelSize?.y ? printer.pixelSize.y / 1000 : (printer.buildVolumeMm?.depth ?? 89) / (printer.display?.resolutionY ?? 1620);
-    return calculateTipOffset(material.antiAliasingSettings, material.layerHeightMm, pxX, pxY);
-  }
-  return 0;
-}
-
-export interface ScopedSupportPayload {
-  roots: Roots[];
-  trunks: SupportState['trunks'][string][];
-  branches: Branch[];
-  leaves: Leaf[];
-  twigs: Twig[];
-  sticks: Stick[];
-  braces: Brace[];
-  anchors: Anchor[];
-  knots: Knot[];
-  kickstandRoots: Roots[];
-  kickstandKnots: Knot[];
-  kickstands: Kickstand[];
-}
+/** One model's supports, one member per declared collection. */
+export type ScopedSupportPayload = {
+  [K in SupportCollectionKey]: SupportState[K][string][];
+};
 
 function hasAllowedModelId(allowedModelIds: ReadonlySet<string>, modelId: string | null | undefined): boolean {
   return typeof modelId === 'string' && allowedModelIds.has(modelId);
@@ -70,18 +33,12 @@ function firstAllowedModelId(
 type ModelIdResolver = (id: string | null | undefined) => string | null;
 
 /**
- * Builds an O(1) `entityId → modelId` resolver behaviourally identical to
- * {@link getModelIdForSupportEntityId}, but backed by reverse indices computed
- * once (O(N)) instead of scanning the entire support graph per call. The scoped
- * export used to invoke the linear-scan resolver once per knot/branch/leaf,
- * which is O(N²) and froze the main thread for tens of seconds on large scenes.
- *
- * The index order mirrors the scan order in the canonical resolver so ambiguous
- * ids resolve to the same owner (first registration wins).
+ * An O(1) `entityId -> modelId` resolver, backed by reverse indices built once
+ * rather than scanning the graph per call. Index order mirrors
+ * {@link getModelIdForSupportEntityId} so ambiguous ids resolve the same way.
  */
 function createScopedModelIdResolver(
   supportState: SupportState,
-  kickstandState: KickstandState,
 ): ModelIdResolver {
   // Ids reachable in the canonical resolver only via linear scans: segment and
   // joint ids, brace start/end knots, and kickstand host knots + segments.
@@ -97,17 +54,22 @@ function createScopedModelIdResolver(
     }
   };
 
-  for (const trunk of Object.values(supportState.trunks)) registerSegments(trunk.segments, trunk.modelId ?? null);
-  for (const branch of Object.values(supportState.branches)) registerSegments(branch.segments, branch.modelId ?? null);
-  for (const twig of Object.values(supportState.twigs)) registerSegments(twig.segments, twig.modelId ?? null);
-  for (const stick of Object.values(supportState.sticks)) registerSegments(stick.segments, stick.modelId ?? null);
-  for (const brace of Object.values(supportState.braces)) {
-    registerScan(brace.startKnotId, brace.modelId ?? null);
-    registerScan(brace.endKnotId, brace.modelId ?? null);
-  }
-  for (const kickstand of Object.values(kickstandState.kickstands)) {
-    registerScan(kickstand.hostKnotId, kickstand.modelId ?? null);
-    registerSegments(kickstand.segments, kickstand.modelId ?? null);
+  // Every type's shafts and the knots it hangs from, by declaration.
+  for (const descriptor of SUPPORT_TYPES) {
+    const collection = supportState[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+
+    for (const entity of Object.values(collection ?? {})) {
+      const modelId = (entity.modelId as string | undefined) ?? null;
+
+      if (descriptor.hasSegments) {
+        registerSegments(entity.segments as Segment[], modelId);
+      }
+      for (const edge of descriptor.edges) {
+        if (edge.to !== 'knots' || edge.ownership !== 'hostedBy') continue;
+        const knotId = entity[edge.field];
+        if (typeof knotId === 'string') registerScan(knotId, modelId);
+      }
+    }
   }
 
   // Knot fallbacks: a knot inherits from a branch/leaf that names it as parent.
@@ -123,19 +85,16 @@ function createScopedModelIdResolver(
   const resolve: ModelIdResolver = (id) => {
     if (!id) return null;
 
-    if (id.startsWith('braceSegment:')) {
-      return supportState.braces[id.slice('braceSegment:'.length)]?.modelId ?? null;
+    const span = parsePrefixedSegmentId(id);
+    if (span) {
+      return supportState.braces[span.entityId]?.modelId ?? null;
     }
 
     if (supportState.roots[id]) return supportState.roots[id].modelId ?? null;
-    if (supportState.trunks[id]) return supportState.trunks[id].modelId ?? null;
-    if (supportState.branches[id]) return supportState.branches[id].modelId ?? null;
-    if (supportState.leaves[id]) return supportState.leaves[id].modelId ?? null;
-    if (supportState.twigs[id]) return supportState.twigs[id].modelId ?? null;
-    if (supportState.sticks[id]) return supportState.sticks[id].modelId ?? null;
-    if (supportState.braces[id]) return supportState.braces[id].modelId ?? null;
-    if (supportState.anchors[id]) return supportState.anchors[id].modelId ?? null;
-    if (kickstandState.kickstands[id]) return kickstandState.kickstands[id].modelId ?? null;
+    for (const descriptor of SUPPORT_TYPES) {
+      const entity = (supportState[descriptor.location.key] as unknown as Record<string, { modelId?: string }>)[id];
+      if (entity) return entity.modelId ?? null;
+    }
 
     if (scanModelId.has(id)) return scanModelId.get(id) ?? null;
 
@@ -155,301 +114,8 @@ function createScopedModelIdResolver(
   return resolve;
 }
 
-function resolveBranchModelId(branch: Branch, allowedModelIds: ReadonlySet<string>, resolveModelId: ModelIdResolver): string | null {
-  return firstAllowedModelId(
-    allowedModelIds,
-    branch.modelId,
-    resolveModelId(branch.parentKnotId),
-  );
-}
-
-function resolveLeafModelId(leaf: Leaf, allowedModelIds: ReadonlySet<string>, resolveModelId: ModelIdResolver): string | null {
-  return firstAllowedModelId(
-    allowedModelIds,
-    leaf.modelId,
-    resolveModelId(leaf.parentKnotId),
-  );
-}
-
-function resolveBraceModelId(brace: Brace, allowedModelIds: ReadonlySet<string>, resolveModelId: ModelIdResolver): string | null {
-  return firstAllowedModelId(
-    allowedModelIds,
-    brace.modelId,
-    resolveModelId(brace.startKnotId),
-    resolveModelId(brace.endKnotId),
-  );
-}
-
-function resolveKickstandModelId(kickstand: Kickstand, allowedModelIds: ReadonlySet<string>, resolveModelId: ModelIdResolver): string | null {
-  return firstAllowedModelId(
-    allowedModelIds,
-    kickstand.modelId,
-    resolveModelId(kickstand.rootId),
-    resolveModelId(kickstand.hostKnotId),
-    resolveModelId(kickstand.hostSegmentId),
-  );
-}
-
-function buildTwigDiskTipCenter(disk: Twig['contactDiskA']): Vec3 {
-  const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
-  return {
-    x: disk.pos.x + (disk.surfaceNormal.x * thickness),
-    y: disk.pos.y + (disk.surfaceNormal.y * thickness),
-    z: disk.pos.z + (disk.surfaceNormal.z * thickness),
-  };
-}
-
-function addModelMetadata(object: THREE.Object3D, modelId: string | null | undefined) {
-  object.userData = {
-    ...object.userData,
-    modelId: modelId ?? null,
-  };
-}
-
-function appendConeGeometry(group: THREE.Group, cone: Leaf['contactCone']) {
-  const pen = getGlobalPenetrationMm();
-  const coneGroup = SupportGeometryGenerator.generateConeMesh(cone, pen);
-  group.add(coneGroup);
-
-  const diskGroup = SupportGeometryGenerator.generateContactDiskMesh(cone, pen);
-  if (diskGroup.children.length > 0) {
-    group.add(diskGroup);
-  }
-}
-
-function appendStraightOrBezierShafts(
-  group: THREE.Group,
-  segment: Segment,
-  start: Vec3,
-  end: Vec3,
-) {
-  const meshes = SupportGeometryGenerator.generateSegmentShaftMeshes(
-    segment,
-    new THREE.Vector3(start.x, start.y, start.z),
-    new THREE.Vector3(end.x, end.y, end.z),
-  );
-  for (const mesh of meshes) {
-    group.add(mesh);
-  }
-}
-
-function buildAnchorGroup(anchor: Anchor, modelId: string | null | undefined): THREE.Group {
-  const group = new THREE.Group();
-  group.name = `Anchor_${anchor.id}`;
-  addModelMetadata(group, modelId);
-
-  const rootHeight = Math.max(0.001, anchor.rootHeight);
-  const rootMesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(
-      Math.max(0.001, anchor.rootTopDiameter / 2),
-      Math.max(0.001, anchor.rootBaseDiameter / 2),
-      rootHeight,
-      20,
-    ),
-  );
-  rootMesh.position.set(anchor.rootPos.x, anchor.rootPos.y, anchor.rootPos.z + (rootHeight / 2));
-  rootMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1));
-  group.add(rootMesh);
-
-  group.add(SupportGeometryGenerator.generateJointMesh(anchor.joint));
-
-  let currentStart: Vec3 = anchor.joint.pos;
-  anchor.segments.forEach((segment) => {
-    const end = segment.topJoint
-      ? segment.topJoint.pos
-      : anchor.contactCone
-        ? getFinalSocketPosition(anchor.contactCone)
-        : currentStart;
-
-    appendStraightOrBezierShafts(group, segment, currentStart, end);
-
-    if (segment.topJoint) {
-      group.add(SupportGeometryGenerator.generateJointMesh(segment.topJoint));
-    }
-
-    currentStart = end;
-  });
-
-  appendConeGeometry(group, anchor.contactCone);
-  return group;
-}
-
-function buildBraceGroup(
-  brace: Brace,
-  startKnot: Knot,
-  endKnot: Knot,
-  modelId: string | null | undefined,
-): THREE.Group {
-  const group = new THREE.Group();
-  group.name = `Brace_${brace.id}`;
-  addModelMetadata(group, modelId);
-
-  const diameter = Math.max(
-    0.001,
-    brace.profile?.diameter
-      ?? Math.max(
-        0.001,
-        ((startKnot.diameter ?? 1.2) + (endKnot.diameter ?? 1.2)) * 0.5,
-      ),
-  );
-
-  if (brace.curve?.type === 'bezier') {
-    const points = bezierToLineSegments(
-      startKnot.pos,
-      brace.curve.controlPoint1,
-      brace.curve.controlPoint2,
-      endKnot.pos,
-      brace.curve.resolution,
-    );
-    for (let i = 0; i < points.length - 1; i += 1) {
-      const shaft = SupportGeometryGenerator.generateShaftMesh(
-        new THREE.Vector3(points[i].x, points[i].y, points[i].z),
-        new THREE.Vector3(points[i + 1].x, points[i + 1].y, points[i + 1].z),
-        diameter,
-      );
-      if (shaft) group.add(shaft);
-    }
-    return group;
-  }
-
-  const shaft = SupportGeometryGenerator.generateShaftMesh(
-    new THREE.Vector3(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z),
-    new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z),
-    diameter,
-  );
-  if (shaft) group.add(shaft);
-
-  return group;
-}
-
-function buildLeafGroup(leaf: Leaf, modelId: string | null | undefined): THREE.Group {
-  const group = new THREE.Group();
-  group.name = `Leaf_${leaf.id}`;
-  addModelMetadata(group, modelId);
-  appendConeGeometry(group, leaf.contactCone);
-  return group;
-}
-
-function buildStickGroup(stick: Stick, modelId: string | null | undefined): THREE.Group {
-  const startPos = getFinalSocketPosition(stick.contactConeA);
-  const group = SupportGeometryGenerator.generateSupportGroup(
-    {
-      id: stick.id,
-      startPos,
-      segments: stick.segments,
-      contactCone: stick.contactConeB,
-    },
-  );
-  group.name = `Stick_${stick.id}`;
-  addModelMetadata(group, modelId);
-  appendConeGeometry(group, stick.contactConeA);
-  return group;
-}
-
-function buildTwigGroup(twig: Twig, modelId: string | null | undefined): THREE.Group {
-  const startPos = buildTwigDiskTipCenter(twig.contactDiskA);
-  const endPos = buildTwigDiskTipCenter(twig.contactDiskB);
-  const group = new THREE.Group();
-  group.name = `Twig_${twig.id}`;
-  addModelMetadata(group, modelId);
-
-  const seenJointIds = new Set<string>();
-  let currentStart = startPos;
-
-  twig.segments.forEach((segment, index) => {
-    if (segment.bottomJoint && !seenJointIds.has(segment.bottomJoint.id)) {
-      seenJointIds.add(segment.bottomJoint.id);
-      group.add(SupportGeometryGenerator.generateJointMesh(segment.bottomJoint));
-    }
-
-    const isLast = index === twig.segments.length - 1;
-    const end = segment.topJoint
-      ? segment.topJoint.pos
-      : isLast
-        ? endPos
-        : currentStart;
-
-    appendStraightOrBezierShafts(group, segment, segment.bottomJoint?.pos ?? currentStart, end);
-
-    if (segment.topJoint && !seenJointIds.has(segment.topJoint.id)) {
-      seenJointIds.add(segment.topJoint.id);
-      group.add(SupportGeometryGenerator.generateJointMesh(segment.topJoint));
-    }
-
-    currentStart = end;
-  });
-
-  const pen = getGlobalPenetrationMm();
-  const diskA = SupportGeometryGenerator.generateContactDiskMesh({
-    pos: twig.contactDiskA.pos,
-    normal: twig.contactDiskA.coneAxis,
-    surfaceNormal: twig.contactDiskA.surfaceNormal,
-    diskLengthOverride: twig.contactDiskA.diskLengthOverride,
-    profile: twig.contactDiskA.profile,
-    contactDiameterMm: twig.contactDiskA.contactDiameterMm,
-  }, pen);
-  const diskB = SupportGeometryGenerator.generateContactDiskMesh({
-    pos: twig.contactDiskB.pos,
-    normal: twig.contactDiskB.coneAxis,
-    surfaceNormal: twig.contactDiskB.surfaceNormal,
-    diskLengthOverride: twig.contactDiskB.diskLengthOverride,
-    profile: twig.contactDiskB.profile,
-    contactDiameterMm: twig.contactDiskB.contactDiameterMm,
-  }, pen);
-  if (diskA.children.length > 0) group.add(diskA);
-  if (diskB.children.length > 0) group.add(diskB);
-  return group;
-}
-
-function buildKickstandGroup(
-  kickstand: Kickstand,
-  root: Roots,
-  hostKnot: Knot,
-  modelId: string | null | undefined,
-): THREE.Group {
-  const group = new THREE.Group();
-  group.name = `Kickstand_${kickstand.id}`;
-  addModelMetadata(group, modelId);
-
-  const raftSettings = modelId ? getRaftSettingsForModel(modelId) : undefined;
-  const rootGroup = SupportGeometryGenerator.generateRootsMesh(
-    root,
-    kickstand.segments[0]?.diameter ?? kickstand.profile.bodyDiameterMm,
-    raftSettings,
-  );
-  group.add(rootGroup);
-
-  const effectiveDiskHeight = Math.max(0.001, root.diskHeight);
-  const verticalOffset = 0;
-  let currentStart: Vec3 = {
-    x: root.transform.pos.x,
-    y: root.transform.pos.y,
-    z: root.transform.pos.z + verticalOffset + effectiveDiskHeight + Math.max(0, root.coneHeight),
-  };
-
-  kickstand.segments.forEach((segment, index) => {
-    const isLast = index === kickstand.segments.length - 1;
-    const end = segment.topJoint
-      ? segment.topJoint.pos
-      : isLast
-        ? hostKnot.pos
-        : currentStart;
-
-    appendStraightOrBezierShafts(group, segment, currentStart, end);
-
-    if (segment.topJoint) {
-      group.add(SupportGeometryGenerator.generateJointMesh(segment.topJoint));
-    }
-
-    currentStart = end;
-  });
-
-  return group;
-}
-
 export function extractScopedSupportPayload(
   supportState: SupportState,
-  kickstandState: KickstandState,
   modelIds: Iterable<string>,
 ): ScopedSupportPayload {
   const allowedModelIds = new Set(Array.from(modelIds).filter((modelId) => modelId.trim().length > 0));
@@ -458,96 +124,123 @@ export function extractScopedSupportPayload(
   // canonical getModelIdForSupportEntityId which linear-scans the whole graph
   // per call. Called once per branch/leaf/brace/kickstand/knot below, so the
   // linear-scan form made this O(N²) — the multi-second autosave freeze.
-  const resolveModelId = createScopedModelIdResolver(supportState, kickstandState);
+  const resolveModelId = createScopedModelIdResolver(supportState);
+
+  /**
+   * Whether an entity belongs to a requested model.
+   *
+   * Its own `modelId` first, then the ids it links through -- a branch borrows
+   * its parent knot's model, a kickstand its root's, its host knot's or its
+   * host segment's. Those fall-backs are the type's declared `edges`, in
+   * declared order. `roots` is excluded: following it would pull in a trunk
+   * whose root carries a model the trunk does not.
+   */
+  const belongsToScope = (descriptor: SupportTypeDescriptor, entity: Record<string, unknown>): boolean => {
+    const linked = descriptor.edges
+      .filter((edge) => edge.to !== 'roots')
+      .map((edge) => {
+        const linkedId = entity[edge.field];
+        return typeof linkedId === 'string' ? resolveModelId(linkedId) : null;
+      });
+
+    return firstAllowedModelId(
+      allowedModelIds,
+      entity.modelId as string | undefined,
+      ...linked,
+    ) !== null;
+  };
+
+  const scoped = <T>(typeId: SupportTypeId): T[] => {
+    const descriptor = getSupportTypeDescriptor(typeId);
+    const collection = (supportState as unknown as Record<string, unknown>)[descriptor.location.key] as Record<string, Record<string, unknown>> | undefined;
+    return Object.values(collection ?? {}).filter((entity) => belongsToScope(descriptor, entity)) as T[];
+  };
 
   const roots = Object.values(supportState.roots)
     .filter((item) => hasAllowedModelId(allowedModelIds, item.modelId));
-  const trunks = Object.values(supportState.trunks)
-    .filter((item) => hasAllowedModelId(allowedModelIds, item.modelId));
-  const branches = Object.values(supportState.branches)
-    .filter((item) => resolveBranchModelId(item, allowedModelIds, resolveModelId) !== null);
-  const leaves = Object.values(supportState.leaves)
-    .filter((item) => resolveLeafModelId(item, allowedModelIds, resolveModelId) !== null);
-  const twigs = Object.values(supportState.twigs)
-    .filter((item) => hasAllowedModelId(allowedModelIds, item.modelId));
-  const sticks = Object.values(supportState.sticks)
-    .filter((item) => hasAllowedModelId(allowedModelIds, item.modelId));
-  const braces = Object.values(supportState.braces)
-    .filter((item) => resolveBraceModelId(item, allowedModelIds, resolveModelId) !== null);
-  const anchors = Object.values(supportState.anchors)
-    .filter((item) => hasAllowedModelId(allowedModelIds, item.modelId));
-  const kickstands = Object.values(kickstandState.kickstands)
-    .filter((item) => resolveKickstandModelId(item, allowedModelIds, resolveModelId) !== null);
+  /** The scoped lists, by type id. */
+  const scopedEntities: Record<SupportTypeId, unknown[]> = {} as Record<SupportTypeId, unknown[]>;
+  for (const descriptor of SUPPORT_TYPES) scopedEntities[descriptor.id] = scoped(descriptor.id);
 
-  const kickstandRootIds = new Set(kickstands.map((item) => item.rootId));
-  const kickstandKnotIds = new Set(kickstands.map((item) => item.hostKnotId));
-  const kickstandRoots = Object.values(kickstandState.roots)
-    .filter((item) => kickstandRootIds.has(item.id));
-  const kickstandKnots = Object.values(kickstandState.knots)
-    .filter((item) => kickstandKnotIds.has(item.id));
+  /** Every scoped entity, with the descriptor that says what it is. */
+  const scopedByType: Array<{ descriptor: SupportTypeDescriptor; entities: Record<string, unknown>[] }> =
+    SUPPORT_TYPES.map((descriptor) => ({
+      descriptor,
+      entities: scopedEntities[descriptor.id] as unknown as Record<string, unknown>[],
+    }));
 
+  // Shafts carried by the scope: real segments, or a prefixed id for a type
+  // that has none.
   const includedSegmentIds = new Set<string>();
-  trunks.forEach((item) => item.segments.forEach((segment) => includedSegmentIds.add(segment.id)));
-  branches.forEach((item) => item.segments.forEach((segment) => includedSegmentIds.add(segment.id)));
-  twigs.forEach((item) => item.segments.forEach((segment) => includedSegmentIds.add(segment.id)));
-  sticks.forEach((item) => item.segments.forEach((segment) => includedSegmentIds.add(segment.id)));
-  braces.forEach((item) => includedSegmentIds.add(`braceSegment:${item.id}`));
-  kickstands.forEach((item) => item.segments.forEach((segment) => includedSegmentIds.add(segment.id)));
+  for (const { descriptor, entities } of scopedByType) {
+    for (const entity of entities) {
+      if (descriptor.segmentSelectionPrefix) {
+        includedSegmentIds.add(`${descriptor.segmentSelectionPrefix}${entity.id as string}`);
+        continue;
+      }
+      for (const segment of (entity.segments as Segment[] | undefined) ?? []) {
+        includedSegmentIds.add(segment.id);
+      }
+    }
+  }
 
+  // Knots the scope hangs from, by declared `hostedBy knots` edges.
   const referencedKnotIds = new Set<string>();
-  branches.forEach((item) => referencedKnotIds.add(item.parentKnotId));
-  leaves.forEach((item) => referencedKnotIds.add(item.parentKnotId));
-  braces.forEach((item) => {
-    referencedKnotIds.add(item.startKnotId);
-    referencedKnotIds.add(item.endKnotId);
-  });
+  for (const { descriptor, entities } of scopedByType) {
+    const knotFields = descriptor.edges
+      .filter((edge) => edge.to === 'knots' && edge.ownership === 'hostedBy')
+      .map((edge) => edge.field);
+    if (knotFields.length === 0) continue;
 
-  const leafIds = new Set(leaves.map((item) => item.id));
-  const braceIds = new Set(braces.map((item) => item.id));
+    for (const entity of entities) {
+      for (const field of knotFields) {
+        const knotId = entity[field];
+        if (typeof knotId === 'string') referencedKnotIds.add(knotId);
+      }
+    }
+  }
 
   const knots = Object.values(supportState.knots)
     .filter((item) => {
       if (referencedKnotIds.has(item.id)) return true;
       if (includedSegmentIds.has(item.parentShaftId)) return true;
-      if (item.parentShaftId.startsWith('leafCone:')) {
-        return leafIds.has(item.parentShaftId.slice('leafCone:'.length));
-      }
-      if (item.parentShaftId.startsWith('braceSegment:')) {
-        return braceIds.has(item.parentShaftId.slice('braceSegment:'.length));
+      // A knot riding a pseudo-shaft (a leaf's cone, a brace's span) carries
+      // the type's declared prefix. Splitting it through the registry means no
+      // literal here to fall out of step when a prefix changes.
+      const host: { typeId: SupportTypeId; entityId: string } | null = parseKnotHostId(item.parentShaftId);
+      if (host) {
+        const owners = scopedEntities[host.typeId] as { id: string }[];
+        return owners.some((owner) => owner.id === host.entityId);
       }
       return hasAllowedModelId(allowedModelIds, resolveModelId(item.id));
     });
 
-  return {
-    roots,
-    trunks,
-    branches,
-    leaves,
-    twigs,
-    sticks,
-    braces,
-    anchors,
-    knots,
-    kickstandRoots,
-    kickstandKnots,
-    kickstands,
-  };
+  // Field names are the collection keys; field order follows the registry,
+  // which the payload golden records.
+  const payload = { roots } as ScopedSupportPayload;
+  const byField = payload as unknown as Record<string, unknown>;
+  for (const descriptor of SUPPORT_TYPES) {
+    byField[descriptor.location.key] = scopedEntities[descriptor.id];
+  }
+  byField.knots = knots;
+  return payload;
 }
 
 export function buildScopedSupportExportDocument(
   supportState: SupportState,
-  kickstandState: KickstandState,
   modelIds: Iterable<string>,
   source = 'dragonfruit-voxl',
 ): DragonfruitImportFormat {
-  const payload = extractScopedSupportPayload(supportState, kickstandState, modelIds);
-  const kickstandRootsById = new Map(payload.kickstandRoots.map((item) => [item.id, item]));
-  const kickstandKnotsById = new Map(payload.kickstandKnots.map((item) => [item.id, item]));
+  const payload = extractScopedSupportPayload(supportState, modelIds);
+  // A kickstand serialises as a bundle (`serialisedAsBundle`), so the document
+  // nests its root and host knot rather than referencing them by id.
+  const rootsById = new Map(payload.roots.map((item) => [item.id, item]));
+  const knotsById = new Map(payload.knots.map((item) => [item.id, item]));
 
   const kickstandBuilds: KickstandBuildResult[] = payload.kickstands
     .map((kickstand) => {
-      const root = kickstandRootsById.get(kickstand.rootId);
-      const hostKnot = kickstandKnotsById.get(kickstand.hostKnotId);
+      const root = rootsById.get(kickstand.rootId);
+      const hostKnot = knotsById.get(kickstand.hostKnotId);
       if (!root || !hostKnot) return null;
       return { root, hostKnot, kickstand };
     })
@@ -560,103 +253,37 @@ export function buildScopedSupportExportDocument(
       objectCenter: { x: 0, y: 0, z: 0 },
       updatedAt: Date.now(),
     },
-    roots: payload.roots,
-    trunks: payload.trunks,
-    branches: payload.branches,
-    leaves: payload.leaves,
-    twigs: payload.twigs,
-    sticks: payload.sticks,
-    braces: payload.braces,
-    anchors: payload.anchors,
-    knots: payload.knots,
+    // `kickstands` is rebuilt above from each one's root and host knot, so it
+    // is written after the walk.
+    ...importPayloadCollections(payload),
     kickstands: kickstandBuilds,
   };
 }
 
 export function buildScopedSupportGeometryGroup(
   supportState: SupportState,
-  kickstandState: KickstandState,
   modelIds: Iterable<string>,
 ): THREE.Group {
-  const payload = extractScopedSupportPayload(supportState, kickstandState, modelIds);
+  const payload = extractScopedSupportPayload(supportState, modelIds);
   const group = new THREE.Group();
   group.name = 'ScopedSupportExport';
 
-  const rootsById = supportState.roots;
-  const knotsById = supportState.knots;
-  const kickstandRootsById = kickstandState.roots;
-  const kickstandKnotsById = kickstandState.knots;
+  const context: SupportExportContext = {
+    supportState,
+    modelIdOf: getModelIdForSupportEntityId,
+  };
 
-  payload.trunks.forEach((trunk) => {
-    const root = rootsById[trunk.rootId];
-    if (!root) return;
-    const modelId = trunk.modelId ?? root.modelId ?? null;
-    const trunkGroup = SupportGeometryGenerator.generateSupportGroup(
-      {
-        id: trunk.id,
-        roots: root,
-        segments: trunk.segments,
-        contactCone: trunk.contactCone,
-      },
-      modelId ? getRaftSettingsForModel(modelId) : undefined,
-    );
-    trunkGroup.name = `Trunk_${trunk.id}`;
-    addModelMetadata(trunkGroup, modelId);
-    group.add(trunkGroup);
-  });
-
-  payload.branches.forEach((branch) => {
-    const parentKnot = knotsById[branch.parentKnotId];
-    if (!parentKnot) return;
-    const modelId = branch.modelId ?? getModelIdForSupportEntityId(branch.parentKnotId);
-    const branchGroup = SupportGeometryGenerator.generateSupportGroup({
-      id: branch.id,
-      startPos: parentKnot.pos,
-      segments: branch.segments,
-      contactCone: branch.contactCone,
-    });
-    branchGroup.name = `Branch_${branch.id}`;
-    addModelMetadata(branchGroup, modelId);
-    group.add(branchGroup);
-  });
-
-  payload.leaves.forEach((leaf) => {
-    const modelId = leaf.modelId ?? getModelIdForSupportEntityId(leaf.parentKnotId);
-    group.add(buildLeafGroup(leaf, modelId));
-  });
-
-  payload.twigs.forEach((twig) => {
-    group.add(buildTwigGroup(twig, twig.modelId));
-  });
-
-  payload.sticks.forEach((stick) => {
-    group.add(buildStickGroup(stick, stick.modelId));
-  });
-
-  payload.braces.forEach((brace) => {
-    const startKnot = knotsById[brace.startKnotId];
-    const endKnot = knotsById[brace.endKnotId];
-    if (!startKnot || !endKnot) return;
-    const modelId = brace.modelId
-      ?? getModelIdForSupportEntityId(brace.startKnotId)
-      ?? getModelIdForSupportEntityId(brace.endKnotId);
-    group.add(buildBraceGroup(brace, startKnot, endKnot, modelId));
-  });
-
-  payload.kickstands.forEach((kickstand) => {
-    const root = kickstandRootsById[kickstand.rootId];
-    const hostKnot = kickstandKnotsById[kickstand.hostKnotId];
-    if (!root || !hostKnot) return;
-    const modelId = kickstand.modelId
-      ?? root.modelId
-      ?? getModelIdForSupportEntityId(kickstand.hostKnotId)
-      ?? getModelIdForSupportEntityId(kickstand.hostSegmentId);
-    group.add(buildKickstandGroup(kickstand, root, hostKnot, modelId));
-  });
-
-  payload.anchors.forEach((anchor) => {
-    group.add(buildAnchorGroup(anchor, anchor.modelId));
-  });
+  // Each type registers how it exports in its own folder; a type that
+  // registered none throws rather than exporting nothing.
+  for (const descriptor of SUPPORT_TYPES) {
+    const rows = (payload as unknown as Record<string, readonly { id: string }[]>)[descriptor.location.key] ?? [];
+    for (const entity of rows) {
+      const built = buildSupportExportGroup(descriptor.id, entity, context);
+      if (!built) continue;
+      built.name = exportGroupName(descriptor.id, entity.id);
+      group.add(built);
+    }
+  }
 
   group.updateMatrixWorld(true);
   return group;

@@ -5,7 +5,8 @@ import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { useIsLinux } from '@/hooks/usePlatform';
-import { formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
+import { formatFileSize, formatPolygonCountCompact } from '@/utils/meshStatsFormatting';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import {
   getActiveMaterialProfile,
@@ -31,6 +32,14 @@ interface ModelStatsCardProps {
   heightMm: number;
   estimatedPrintTimeLabelOverride?: string | null;
   estimatedResinLabelOverride?: string | null;
+  /**
+   * The plate's layer count, as text. Distinct from `numLayers` because a plate
+   * with nothing on it has zero layers, and zero must not fall back to the
+   * scene's own count the way an unknown one does.
+   */
+  estimatedLayerCountLabelOverride?: string | null;
+  /** The same estimate for every plate. Absent when there is only one plate. */
+  estimatedResinTotalLabel?: string | null;
 }
 
 export function ModelStatsCard({
@@ -42,8 +51,11 @@ export function ModelStatsCard({
   heightMm,
   estimatedPrintTimeLabelOverride,
   estimatedResinLabelOverride,
+  estimatedLayerCountLabelOverride,
+  estimatedResinTotalLabel,
 }: ModelStatsCardProps) {
   const { _ } = useLingui();
+  const fmt = useLocaleFormat();
   const [isFlipped, setIsFlipped] = React.useState(false);
   // The app forces WebKitGTK's SHM software renderer on Linux
   // (WEBKIT_DISABLE_DMABUF_RENDERER=1 in main.rs, issue #83), and that path
@@ -82,7 +94,7 @@ export function ModelStatsCard({
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const networkUiAdapter = React.useMemo(
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
-    [activePrinterProfile?.networkSupport],
+    [profileState, activePrinterProfile?.networkSupport],
   );
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   const selectedNetworkDeviceId = React.useMemo(() => {
@@ -119,6 +131,11 @@ export function ModelStatsCard({
   }, [activePrinterProfile]);
 
   const effectiveMaterialName = React.useMemo(() => {
+    // A multi-tank printer has no single active material: the tanks carry their own.
+    if (activePrinterProfile?.materialMode === 'multiTank') {
+      return _(msg({ message: 'Multi-Tank', comment: 'Material value for a printer whose resin is split across tanks.' }));
+    }
+
     if (showRemoteOfflineMaterialPlaceholder) {
       return _(msg({ message: 'N/A', comment: 'Value placeholder shown when the material is unknown because the printer is offline. Keep it as short as "N/A".' }));
     }
@@ -183,18 +200,6 @@ export function ModelStatsCard({
   }, [activeMaterialProfile, activePrinterProfile]);
 
   // Compute per-model layer counts
-
-  const formatBytes = (bytes: number) => {
-    const abs = Math.max(0, bytes);
-    const KB = 1024;
-    const MB = KB * 1024;
-    const GB = MB * 1024;
-
-    if (abs >= GB) return `${(abs / GB).toFixed(2)} GB`;
-    if (abs >= MB) return `${(abs / MB).toFixed(2)} MB`;
-    if (abs >= KB) return `${(abs / KB).toFixed(1)} KB`;
-    return `${abs.toFixed(0)} B`;
-  };
 
   // Compact duration for the narrow "Est. print time" row. The trailing letters
   // are unit abbreviations — h(ours), min(utes), s(econds) — so "5 s" is five
@@ -433,8 +438,8 @@ export function ModelStatsCard({
     const price = Math.max(0, activeMaterialProfile.bottlePrice || 0);
     const currency = (activeMaterialProfile.currencyCode || 'USD').toUpperCase();
     const cost = (estimatedResinMl / bottleMl) * price;
-    return `${currency} ${cost.toFixed(2)}`;
-  }, [activeMaterialProfile, estimatedResinMl]);
+    return `${currency} ${fmt.fixed(cost, 2)}`;
+  }, [activeMaterialProfile, estimatedResinMl, fmt]);
 
   const frontHeader = connectedHostName || activePrinterProfile?.name || _(msg`No printer connected`);
   const frontHeaderColor = isNetworkPrinterOffline
@@ -527,20 +532,20 @@ export function ModelStatsCard({
 
               <span><Trans>Layer profile:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
-                {effectiveLayerHeightMm != null ? `${Math.round(effectiveLayerHeightMm * 1000)} μm` : '-'}
+                {effectiveLayerHeightMm != null ? fmt.quantity(effectiveLayerHeightMm * 1000, 0, 'um') : '-'}
               </span>
 
               <span><Trans>Exposure:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
                 {effectiveNormalExposureSec != null
-                  ? `${effectiveNormalExposureSec.toFixed(1)}s • ${(effectiveBottomExposureSec ?? effectiveNormalExposureSec).toFixed(1)}s`
+                  ? `${fmt.quantity(effectiveNormalExposureSec, 1, 's')} • ${fmt.quantity(effectiveBottomExposureSec ?? effectiveNormalExposureSec, 1, 's')}`
                   : '-'}
               </span>
 
 
               <span><Trans>Layers:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
-                {resolvedLayerCount != null ? resolvedLayerCount : '-'}
+                {estimatedLayerCountLabelOverride ?? (resolvedLayerCount != null ? resolvedLayerCount : '-')}
               </span>
 
               <span><Trans comment='Row label on the printer card. "Est." is short for "estimated"; keep the abbreviation terse — the label column is narrow.'>Est. print time:</Trans></span>
@@ -551,9 +556,18 @@ export function ModelStatsCard({
               <span><Trans comment='Row label on the printer card: estimated resin volume. Keep it terse — the label column is narrow.'>Est. resin:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
                 {estimatedResinLabelOverride ?? (estimatedResinMl != null
-                  ? `${estimatedResinMl.toFixed(2)} ml${estimatedResinCost ? ` (${estimatedResinCost})` : ''}`
+                  ? `${fmt.quantity(estimatedResinMl, 2, 'ml')}${estimatedResinCost ? ` (${estimatedResinCost})` : ''}`
                   : '-')}
               </span>
+
+              {estimatedResinTotalLabel != null && (
+                <>
+                  <span><Trans comment='Row label on the printer card: estimated resin for every plate in the scene, beside the row for the plate being worked on. Keep it terse — the label column is narrow.'>Est. resin (all):</Trans></span>
+                  <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
+                    {estimatedResinTotalLabel}
+                  </span>
+                </>
+              )}
             </div>
 
             <div className="pt-0.5 text-[10px] mt-auto" style={{ color: 'var(--text-muted)' }}>
@@ -576,39 +590,29 @@ export function ModelStatsCard({
 
             <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
               <span><Trans>STL size:</Trans></span>
-              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatFileSize(model.fileSizeBytes, fmt) : '-'}</span>
 
               <span><Trans>Triangles:</Trans></span>
-              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? formatPolygonCountCompact(model.polygonCount) : '-'}</span>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? formatPolygonCountCompact(model.polygonCount, fmt) : '-'}</span>
 
               <span><Trans comment='Row label on the model details card: number of separate connected surfaces ("shells"/bodies) in the mesh.'>Shells:</Trans></span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.geometry.meshDefects?.nativeRepairReport?.post.component_count ?? '-'}</span>
 
               <span><Trans>Height:</Trans></span>
-              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? fmt.quantity(heightMm, 2, 'mm') : '-'}</span>
             </div>
 
             {model?.geometry.meshDefects?.hasDefects && (
               <div
                 className="flex items-start gap-1.5 rounded px-2 py-1 text-[10px]"
                 style={{
-                  background: model.geometry.meshDefects.repairedByManifold
-                    ? 'color-mix(in srgb, #22c55e, var(--surface-1) 84%)'
-                    : 'color-mix(in srgb, #f59e0b, var(--surface-1) 82%)',
-                  color: model.geometry.meshDefects.repairedByManifold
-                    ? 'color-mix(in srgb, #22c55e, var(--text-strong) 20%)'
-                    : 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
-                  border: model.geometry.meshDefects.repairedByManifold
-                    ? '1px solid color-mix(in srgb, #22c55e, transparent 55%)'
-                    : '1px solid color-mix(in srgb, #f59e0b, transparent 55%)',
+                  background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 82%)',
+                  color: 'color-mix(in srgb, #f59e0b, var(--text-strong) 20%)',
+                  border: '1px solid color-mix(in srgb, #f59e0b, transparent 55%)',
                 }}
               >
-                <span>{model.geometry.meshDefects.repairedByManifold ? '✓' : '⚠'}</span>
-                <span>
-                  {model.geometry.meshDefects.repairedByManifold
-                    ? <Trans>Auto-repaired — {model.geometry.meshDefects.repairedFloats} errors</Trans>
-                    : <Trans>Defective — {model.geometry.meshDefects.repairedFloats} errors</Trans>}
-                </span>
+                <span>⚠</span>
+                <span><Trans>Defective — {model.geometry.meshDefects.repairedFloats} errors</Trans></span>
               </div>
             )}
 

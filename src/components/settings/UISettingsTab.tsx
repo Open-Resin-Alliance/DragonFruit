@@ -1,8 +1,10 @@
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
 import { Palette } from 'lucide-react';
 import { OrganicCutColorsSection } from '@/features/organicCut';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
-import { Select } from '@/components/atoms';
+import { Button, ColorSwatchInput, SegmentedControl, Select } from '@/components/atoms';
 import type { ThemeCustomColors, ThemePreference, ThemePreset, ThemeProfile } from '@/components/settings/themeCustomizations';
 
 type ThemeColorField = {
@@ -88,6 +90,13 @@ const THEME_COLOR_SECTIONS: ThemeColorSection[] = [
 	},
 ];
 
+// Mesh selection/hover tint, on their own sub-tab: they are theme entries (so
+// presets can set them individually) rather than part of the core UI token set.
+const MESH_HIGHLIGHT_COLOR_FIELDS: ThemeColorField[] = [
+	{ key: 'meshSelectionColor', label: 'Selection color', description: 'Tint applied to selected models.', placeholder: '#ec2a77' },
+	{ key: 'meshHoverColor', label: 'Hover color', description: 'Tint applied to hovered models.', placeholder: '#ec2a77' },
+];
+
 interface UISettingsTabProps {
 	themeProfiles: ThemeProfile[];
 	themePreset: ThemePreset;
@@ -127,9 +136,10 @@ export function UISettingsTab({
 	onImportTheme,
 	onResetThemeColors,
 }: UISettingsTabProps) {
+	const { _ } = useLingui();
 	const importInputRef = React.useRef<HTMLInputElement | null>(null);
 	const [pendingPickerColors, setPendingPickerColors] = React.useState<Partial<Record<keyof ThemeCustomColors, string>>>({});
-	const [themeTab, setThemeTab] = React.useState<'general' | 'cut'>('general');
+	const [themeTab, setThemeTab] = React.useState<'general' | 'mesh' | 'cut'>('general');
 
 	const builtInProfiles = themeProfiles.filter((profile) => profile.isBuiltIn);
 	const customProfiles = themeProfiles.filter((profile) => !profile.isBuiltIn);
@@ -225,13 +235,11 @@ export function UISettingsTab({
 					</label>
 				</div>
 				<div className="flex min-w-0 items-center gap-1.5">
-					<input
-						type="color"
+					<ColorSwatchInput
 						value={getDisplayThemeColor(row.key)}
-						onChange={(event) => handleThemeColorPickerDraftChange(row.key, event.target.value)}
+						onChange={(next) => handleThemeColorPickerDraftChange(row.key, next)}
 						onBlur={() => commitThemeColorPickerChange(row.key)}
-						className="h-7 w-8 shrink-0 cursor-pointer appearance-none overflow-hidden rounded border p-0 [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-moz-color-swatch]:border-0"
-						style={{ borderColor: 'var(--border-subtle)' }}
+						className="h-7 w-8"
 					/>
 					<input
 						type="text"
@@ -323,81 +331,97 @@ export function UISettingsTab({
 					{isBuiltInThemePreset ? (
 							<>
 								<div className="flex flex-wrap items-center gap-1.5">
-									<button
+									<Button
 										type="button"
 										onClick={handleImportTheme}
-										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs"
+										variant="secondary"
+										size="auto"
+										className="!h-8 !px-2.5 !py-0 text-xs"
 									>
 										Import
-									</button>
+									</Button>
 								</div>
 								<div className="ml-auto flex flex-wrap items-center gap-1.5">
-									<button
+									<Button
 										type="button"
 										onClick={onResetThemeColors}
-										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs"
+										variant="secondary"
+										size="auto"
+										className="!h-8 !px-2.5 !py-0 text-xs"
 										style={isThemeResetDirty ? undefined : mutedActionStyle92}
 										disabled={!isThemeResetDirty}
 										title={isThemeResetDirty ? 'Reset current theme edits to selected preset values' : 'No theme changes to reset'}
 									>
 										Reset
-									</button>
+									</Button>
 								</div>
 							</>
 						) : (
 							<>
 								<div className="flex flex-wrap items-center gap-1.5">
-									<button
+									<Button
 										type="button"
 										onClick={onRequestSaveCustomTheme}
-										className="ui-button !h-8 !px-2.5 !py-0 text-xs"
+										variant="secondary"
+										size="auto"
+										className="!h-8 !px-2.5 !py-0 text-xs"
 										style={isCustomThemeDirty ? accentSecondaryActionStyle92 : mutedActionStyle92}
 										disabled={!isCustomThemeDirty}
 										title={isCustomThemeDirty ? 'Save current custom theme changes' : 'No unsaved custom theme changes'}
 									>
 										Save
-									</button>
-									<button
+									</Button>
+									<Button
 										type="button"
 										onClick={onRequestRenameCustomTheme}
-										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs"
+										variant="secondary"
+										size="auto"
+										className="!h-8 !px-2.5 !py-0 text-xs"
 									>
 										Rename
-									</button>
-									<button
+									</Button>
+									<Button
 										type="button"
 										onClick={onExportTheme}
-										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs"
+										variant="secondary"
+										size="auto"
+										className="!h-8 !px-2.5 !py-0 text-xs"
 									>
 										Export
-									</button>
-									<button
+									</Button>
+									<Button
 										type="button"
 										onClick={handleImportTheme}
-										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs"
+										variant="secondary"
+										size="auto"
+										className="!h-8 !px-2.5 !py-0 text-xs"
 									>
 										Import
-									</button>
+									</Button>
 								</div>
 								<div className="ml-auto flex flex-wrap items-center gap-1.5">
-									<button
+									<Button
 										type="button"
 										onClick={onResetThemeColors}
-										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs"
+										variant="secondary"
+										size="auto"
+										className="!h-8 !px-2.5 !py-0 text-xs"
 										style={isThemeResetDirty ? undefined : mutedActionStyle92}
 										disabled={!isThemeResetDirty}
 										title={isThemeResetDirty ? 'Reset current theme edits to selected preset values' : 'No theme changes to reset'}
 									>
 										Reset
-									</button>
-									<button
+									</Button>
+									<Button
 										type="button"
 										onClick={onRequestDeleteCustomTheme}
-										className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs"
+										variant="secondary"
+										size="auto"
+										className="!h-8 !px-2.5 !py-0 text-xs"
 										style={dangerActionStyle92}
 									>
 										Delete
-									</button>
+									</Button>
 								</div>
 							</>
 						)}
@@ -405,26 +429,23 @@ export function UISettingsTab({
 	</section>
 
 			<div className="flex items-center gap-1.5 border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
-				<button
-					type="button"
-					onClick={() => setThemeTab('general')}
-					className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-xs rounded-md"
-					style={themeTab === 'general'
-						? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
-						: { color: 'var(--text-muted)' }}
-				>
-					General UI
-				</button>
-				<button
-					type="button"
-					onClick={() => setThemeTab('cut')}
-					className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-xs rounded-md"
-					style={themeTab === 'cut'
-						? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
-						: { color: 'var(--text-muted)' }}
-				>
-					Cutting Tool
-				</button>
+				{([
+					{ id: 'general', title: 'General UI' },
+					{ id: 'mesh', title: 'Mesh Highlights' },
+					{ id: 'cut', title: 'Cutting Tool' },
+				] as const).map((tab) => (
+					<button
+						key={tab.id}
+						type="button"
+						onClick={() => setThemeTab(tab.id)}
+						className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-xs rounded-md"
+						style={themeTab === tab.id
+							? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
+							: { color: 'var(--text-muted)' }}
+					>
+						{tab.title}
+					</button>
+				))}
 			</div>
 
 			<div style={{ display: themeTab === 'general' ? undefined : 'none' }}>
@@ -452,6 +473,28 @@ export function UISettingsTab({
 					</section>
 				))}
 			</div>
+			</div>
+
+			<div style={{ display: themeTab === 'mesh' ? undefined : 'none' }}>
+				<section
+					className="rounded-xl border p-2.5"
+					style={{
+						borderColor: 'var(--border-subtle)',
+						background: 'var(--surface-1)',
+					}}
+				>
+					<div className="mb-2">
+						<h4 className="text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }}>
+							Mesh Highlights
+						</h4>
+						<p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+							Selection and hover tint for models in the 3D view. Also editable from the Mesh tab, which mirrors these two theme colors.
+						</p>
+					</div>
+					<div className="grid gap-1.5 md:grid-cols-2">
+						{MESH_HIGHLIGHT_COLOR_FIELDS.map(renderColorField)}
+					</div>
+				</section>
 			</div>
 
 			<div style={{ display: themeTab === 'cut' ? undefined : 'none' }}>

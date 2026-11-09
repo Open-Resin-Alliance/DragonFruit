@@ -1,26 +1,43 @@
-import { SupportState, DragonfruitImportFormat, Trunk, Roots, Segment, BezierSegment, StraightSegment, Branch, Knot, Vec3, Leaf, Brace, Twig, Stick, Anchor } from './types';
+import { SupportState, SupportEntityAny, DragonfruitImportFormat, Trunk, Roots, Segment, BezierSegment, StraightSegment, Branch, BraceCurve, Joint, Knot, Vec3, Leaf, Brace, Stump } from './types';
+import { ANCHOR_HEIGHT_THRESHOLD_MM } from './autoSupport/constants';
 import { calculateBezierControlPoints, getBezierPointAtT, toVector3, toVec3 } from './Curves/BezierUtils';
-import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints, calculateKnotPositionOnSegmentFromT } from './SupportPrimitives/Knot/knotUtils';
-import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
+import { calculateKnotPositionOnSegmentFromT } from './SupportPrimitives/Knot/knotUtils';
+import type { SupportSelectionCategory } from './supportTypeRegistry';
+import {
+    parseInlineRootId,
+    typesDeclaringOwnHistoryEntryWithoutUpdate,
+    typesMissingContactOverride,
+    removalShapeFor, type SupportRemovalResult } from './supportTypeRegistry';
+import { collectCascade, groupByCollection, ownedPrimitives, type EntityRef } from './supportCascade';
+import { pushSupportHistory } from './history/supportHistory';
+import { supportSettleFor } from './settle/seam';
+import { collectOwnedRootIds, hasSupportUpdater, hostKnotFieldsFor, typeIdForCollection, updateSupportEntity, JOINT_REMOVAL_TYPES, MODEL_ID_COLLECTION_KEYS, bundledSupportTypeId, parseKnotHostId, parsePrefixedSegmentId, isKnotHostId, isConeKnotHost, isSpanKnotHost, knotHostId, CONE_KNOT_HOST_TYPES, SPAN_KNOT_HOST_TYPES, SUPPORT_COLLECTION_KEYS, contactEndpointsFor, EDITABLE_SUPPORT_TYPES, hasSettingsInference, inferSupportSettings, isEditableSupportType, registerCollectionRestore, collectionsMissingRestore, registerSettingsInference, transformExtrasFor, type SupportTypeDescriptor, createEmptySupportCollections, getSupportTypeDescriptor, registerKnotDiameterRule, registerSupportUpdater, registerSupportTypeResolver, resolveKnotDiameter, resolveSupportTypeIdOf, type SupportEntityFor, SUPPORT_STATE_COLLECTIONS, SUPPORT_TYPES, type SupportTypeId, type JointRemovalTypeId } from './supportTypeRegistry';
+import { typesMissingExportGroupBuilder } from './exportGeometry/seam';
+import { migrateLegacySupportPayload } from './importMigrations';
+import type { SupportCollectionKey } from './supportTypeRegistry';
+import type { ContactCone, SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
+import { resolveSegmentEndpoints, type ShaftEntity } from './SupportPrimitives/Knot/segmentEndpoints';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { emitSupportInteractionReset } from './interaction/supportInteractionReset';
 import { getJointDiameter, JOINT_DIAMETER_OFFSET_MM } from './constants';
-import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, removeKickstand, resetKickstandStore, setKickstandSnapshot, transformAllKickstands, transformKickstandsForModel, updateKickstand } from './SupportTypes/Kickstand/kickstandStore';
-import type { Kickstand, KickstandBuildResult, KickstandRemoveResult } from './SupportTypes/Kickstand/types';
+import { mapImportPayloadEntities, mapSupportEntities } from './supportCollections';
+import type { Kickstand, KickstandBuildResult } from './SupportTypes/Kickstand/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { v4 as uuidv4 } from 'uuid';
 import { applyImportDefaultsToSupportPayload, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
-import type { SupportSettings } from './Settings/types';
+import { mergeSettingsWithDefaults, type SupportSettings } from './Settings/types';
 import { createDefaultSettings } from './Settings/types';
 import { decodeSupportSettingsHex, encodeSupportSettingsHex } from './Settings/supportSettingsCodec';
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from './SupportTypes/Twig/twigTaper';
+import { hasWindow } from '@/utils/dom';
+import { clonePlainData } from '@/utils/plainDataClone';
 
 export type { SupportState } from './types';
 
 function isSupportSettingsDebugEnabled(): boolean {
-    if (typeof window === 'undefined') return false;
+    if (!hasWindow()) return false;
     try {
         return window.localStorage.getItem('df-debug-support-settings') === '1';
     } catch {
@@ -37,22 +54,21 @@ const listeners = new Set<() => void>();
 let notifyBatchDepth = 0;
 let pendingNotify = false;
 
-type SupportSettingsHexCache = {
-    trunk: Record<string, string>;
-    branch: Record<string, string>;
-    leaf: Record<string, string>;
-};
+/** Settings hex per entity, bucketed by type. Only editable types have one. */
+type SupportSettingsHexCache = Record<EditableSupportKind, Record<string, string>>;
 
+/** An empty bucket per editable type, so a new one needs no change here. */
+function createEmptySettingsHexCache(): SupportSettingsHexCache {
+    const cache = {} as SupportSettingsHexCache;
+    for (const descriptor of EDITABLE_SUPPORT_TYPES) {
+        cache[descriptor.id] = {};
+    }
+    return cache;
+}
+
+// Entity collections come from the registry; only interaction state is listed here.
 const initialState: SupportState = {
-    roots: {},
-    trunks: {},
-    branches: {},
-    leaves: {},
-    twigs: {},
-    sticks: {},
-    braces: {},
-    anchors: {},
-    knots: {},
+    ...createEmptySupportCollections(),
     selectedId: null,
     hoveredId: null,
     selectedCategory: null,
@@ -62,150 +78,89 @@ const initialState: SupportState = {
 
 let state: SupportState = { ...initialState };
 
-let supportSettingsHexCache: SupportSettingsHexCache = {
-    trunk: {},
-    branch: {},
-    leaf: {},
-};
+let supportSettingsHexCache: SupportSettingsHexCache = createEmptySettingsHexCache();
 
-type SelectionCategory = 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'anchor' | 'root' | 'joint' | 'knot' | 'segment' | 'contactDisk' | null;
+type SelectionCategory = SupportSelectionCategory | null;
 
+/**
+ * Primitive ids (joints, segments, contact disks) reachable from support
+ * entities, so selection can resolve an id to its category without re-walking
+ * every collection on every click.
+ *
+ * `sources` holds the collection objects the sets were built from; identity
+ * comparison against them is the invalidation check.
+ */
 interface SelectionLookupCache {
-    trunksRef: SupportState['trunks'];
-    branchesRef: SupportState['branches'];
-    leavesRef: SupportState['leaves'];
-    twigsRef: SupportState['twigs'];
-    sticksRef: SupportState['sticks'];
-    anchorsRef: SupportState['anchors'];
-    kickstandsRef: Record<string, Kickstand>;
+    sources: Partial<Record<SupportCollectionKey, unknown>>;
     jointIds: Set<string>;
     segmentIds: Set<string>;
     contactDiskIds: Set<string>;
-    kickstandIds: Set<string>;
 }
 
 let selectionLookupCache: SelectionLookupCache | null = null;
 
-function getSelectionLookupCache(): SelectionLookupCache {
-    const kickstandSnapshot = getKickstandSnapshot();
-    const kickstands = kickstandSnapshot.kickstands;
+/**
+ * Types that put ids into the cache: anything with segments (joints, segment
+ * ids) or contact fields (contact disk ids).
+ *
+ * Deliberately not every collection -- braces have neither, so watching them
+ * would rebuild the cache on brace edits that cannot change its contents.
+ */
+const SELECTION_LOOKUP_TYPES = SUPPORT_TYPES.filter(
+    (descriptor) => descriptor.hasSegments || descriptor.contactFields.length > 0,
+);
 
-    if (
-        selectionLookupCache
-        && selectionLookupCache.trunksRef === state.trunks
-        && selectionLookupCache.branchesRef === state.branches
-        && selectionLookupCache.leavesRef === state.leaves
-        && selectionLookupCache.twigsRef === state.twigs
-        && selectionLookupCache.sticksRef === state.sticks
-        && selectionLookupCache.anchorsRef === state.anchors
-        && selectionLookupCache.kickstandsRef === kickstands
-    ) {
-        return selectionLookupCache;
+function getSelectionLookupCache(): SelectionLookupCache {
+    if (selectionLookupCache) {
+        let stale = false;
+        for (const descriptor of SELECTION_LOOKUP_TYPES) {
+            if (selectionLookupCache.sources[descriptor.location.key] !== state[descriptor.location.key]) {
+                stale = true;
+                break;
+            }
+        }
+        if (!stale) return selectionLookupCache;
     }
 
     const jointIds = new Set<string>();
     const segmentIds = new Set<string>();
     const contactDiskIds = new Set<string>();
-    const kickstandIds = new Set<string>();
+    const sources: Partial<Record<SupportCollectionKey, unknown>> = {};
 
-    for (const trunk of Object.values(state.trunks)) {
-        for (const segment of trunk.segments) {
-            segmentIds.add(segment.id);
-            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
-            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
-        }
+    for (const descriptor of SELECTION_LOOKUP_TYPES) {
+        const key = descriptor.location.key;
+        sources[key] = state[key];
 
-        if (trunk.contactCone?.id) {
-            contactDiskIds.add(trunk.contactCone.id);
-        }
-    }
-
-    for (const branch of Object.values(state.branches)) {
-        for (const segment of branch.segments) {
-            segmentIds.add(segment.id);
-            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
-            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
-        }
-
-        if (branch.contactCone?.id) {
-            contactDiskIds.add(branch.contactCone.id);
+        for (const entity of Object.values(state[key])) {
+            if (descriptor.hasSegments) {
+                const segments = (entity as { segments?: Segment[] }).segments ?? [];
+                for (const segment of segments) {
+                    segmentIds.add(segment.id);
+                    if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
+                    if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
+                }
+            }
+            const fields = entity as unknown as Record<string, { id?: string } | undefined>;
+            for (const field of descriptor.contactFields) {
+                const contact = fields[field];
+                if (contact?.id) contactDiskIds.add(contact.id);
+            }
         }
     }
 
-    for (const leaf of Object.values(state.leaves)) {
-        if (leaf.contactCone?.id) {
-            contactDiskIds.add(leaf.contactCone.id);
-        }
-    }
-
-    for (const twig of Object.values(state.twigs)) {
-        for (const segment of twig.segments) {
-            segmentIds.add(segment.id);
-            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
-            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
-        }
-
-        if (twig.contactDiskA?.id) contactDiskIds.add(twig.contactDiskA.id);
-        if (twig.contactDiskB?.id) contactDiskIds.add(twig.contactDiskB.id);
-    }
-
-    for (const stick of Object.values(state.sticks)) {
-        for (const segment of stick.segments) {
-            segmentIds.add(segment.id);
-            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
-            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
-        }
-
-        if (stick.contactConeA?.id) contactDiskIds.add(stick.contactConeA.id);
-        if (stick.contactConeB?.id) contactDiskIds.add(stick.contactConeB.id);
-    }
-
-    for (const anchor of Object.values(state.anchors)) {
-        if (anchor.contactCone?.id) {
-            contactDiskIds.add(anchor.contactCone.id);
-        }
-    }
-
-    for (const kickstand of Object.values(kickstands)) {
-        kickstandIds.add(kickstand.id);
-        for (const segment of kickstand.segments) {
-            segmentIds.add(segment.id);
-            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
-            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
-        }
-    }
-
-    selectionLookupCache = {
-        trunksRef: state.trunks,
-        branchesRef: state.branches,
-        leavesRef: state.leaves,
-        twigsRef: state.twigs,
-        sticksRef: state.sticks,
-        anchorsRef: state.anchors,
-        kickstandsRef: kickstands,
-        jointIds,
-        segmentIds,
-        contactDiskIds,
-        kickstandIds,
-    };
-
+    selectionLookupCache = { sources, jointIds, segmentIds, contactDiskIds };
     return selectionLookupCache;
 }
 
 function resolveSelectionCategory(id: string): SelectionCategory {
     if (!id) return null;
-    if (id.startsWith('braceSegment:')) return 'segment';
-    if (state.roots[id]) return 'root';
-    if (state.trunks[id]) return 'trunk';
-    if (state.branches[id]) return 'branch';
-    if (state.leaves[id]) return 'leaf';
-    if (state.twigs[id]) return 'twig';
-    if (state.sticks[id]) return 'stick';
-    if (state.braces[id]) return 'brace';
-    if (state.anchors[id]) return 'anchor';
+    if (parsePrefixedSegmentId(id)) return 'segment';
+    // Entity collections resolve from the registry, in its order.
+    for (const { key, selectionCategory } of SUPPORT_STATE_COLLECTIONS) {
+        if (state[key][id]) return selectionCategory;
+    }
 
     const lookup = getSelectionLookupCache();
-    if (lookup.kickstandIds.has(id)) return 'brace';
     if (state.knots[id]) return 'knot';
     if (lookup.jointIds.has(id)) return 'joint';
     if (lookup.segmentIds.has(id)) return 'segment';
@@ -218,97 +173,192 @@ function deepClone<T>(value: T): T {
     return JSON.parse(JSON.stringify(value));
 }
 
-export function removeTwig(twigId: string): { twig: Twig; knots: Knot[]; leaves: Leaf[] } | null {
-    const existing = state.twigs[twigId];
-    if (!existing) return null;
+/**
+ * Remove a support entity and everything the declared graph says depends on it.
+ * The return type derives from SUPPORT_REMOVAL_SHAPES, so a field renamed in
+ * the registry is a compile error at every consumer.
+ *
+ * Two forms, told apart by the argument count: `removeSupportEntity(id)` reads
+ * the type off the entity and returns the wide union; `(typeId, id)` keeps the
+ * result narrow.
+ */
+export function removeSupportEntity(id: string): SupportRemovalResult<SupportTypeId> | null;
+export function removeSupportEntity<T extends SupportTypeId>(
+    typeId: T,
+    id: string,
+): SupportRemovalResult<T> | null;
+export function removeSupportEntity<T extends SupportTypeId>(
+    typeIdOrId: T | string,
+    maybeId?: string,
+): SupportRemovalResult<T> | SupportRemovalResult<SupportTypeId> | null {
+    const typeId = maybeId === undefined
+        ? getSupportTypeOf(typeIdOrId)
+        : typeIdOrId as T;
+    const id = maybeId ?? typeIdOrId;
+    if (!typeId) return null;
 
-    // Cascade: any knot whose parentShaftId is one of this twig's segments
-    // (i.e. a leaf base sitting on the twig) must be removed, along with the
-    // leaves attached to those knots.
-    const twigSegmentIds = new Set<string>(existing.segments.map((s) => s.id));
-    const knotIdsToRemove = new Set<string>();
-    for (const knot of Object.values(state.knots)) {
-        if (twigSegmentIds.has(knot.parentShaftId)) {
-            knotIdsToRemove.add(knot.id);
-        }
-    }
-    const leafIdsToRemove = new Set<string>();
-    for (const leaf of Object.values(state.leaves)) {
-        if (leaf.parentKnotId && knotIdsToRemove.has(leaf.parentKnotId)) {
-            leafIdsToRemove.add(leaf.id);
-        }
-    }
-
-    const snapshot = {
-        twig: deepClone(existing),
-        knots: Array.from(knotIdsToRemove)
-            .map((id) => state.knots[id])
-            .filter(Boolean)
-            .map((k) => deepClone(k)),
-        leaves: Array.from(leafIdsToRemove)
-            .map((id) => state.leaves[id])
-            .filter(Boolean)
-            .map((l) => deepClone(l)),
-    };
-
-    const { [twigId]: _, ...remainingTwigs } = state.twigs;
-
-    const nextKnots = { ...state.knots };
-    for (const id of knotIdsToRemove) delete nextKnots[id];
-
-    const nextLeaves = { ...state.leaves };
-    for (const id of leafIdsToRemove) delete nextLeaves[id];
-
-    let nextSelectedId = state.selectedId;
-    let nextSelectedCategory = state.selectedCategory;
-    if (
-        state.selectedId === twigId
-        || (state.selectedId && knotIdsToRemove.has(state.selectedId))
-        || (state.selectedId && leafIdsToRemove.has(state.selectedId))
-    ) {
-        nextSelectedId = null;
-        nextSelectedCategory = null;
-    }
-
-    state = {
-        ...state,
-        twigs: remainingTwigs,
-        knots: nextKnots,
-        leaves: nextLeaves,
-        selectedId: nextSelectedId,
-        selectedCategory: nextSelectedCategory,
-    };
-
-    for (const id of leafIdsToRemove) {
-        deleteCachedSupportSettingsHex('leaf', id);
-    }
-
-    notify();
-    return snapshot;
+    return removeSupportEntityCascading(typeId, id) as SupportRemovalResult<T> | null;
 }
 
-export function removeStick(stickId: string): { stick: Stick } | null {
-    const existing = state.sticks[stickId];
+/**
+ * Remove many entities as one cascade, one state write, and one notify.
+ *
+ * The dependency reachability is the same as removing each seed through
+ * `removeSupportEntity` -- seeds that share a host still resolve it once
+ * nothing outside the doomed set references it -- but the graph indexes are
+ * built once. A per-seed loop pays a full graph walk per entity, which made
+ * Clear All quadratic in brace count (16 s for 2 000 braces on the main
+ * thread). Callers that need each removal's history shape still use the
+ * single-entity form.
+ */
+export function removeSupportEntities(seeds: readonly EntityRef[]): void {
+    const existing = seeds.filter((seed) => state[seed.collection][seed.id]);
+    if (existing.length === 0) return;
+
+    commitCascadeRemoval(collectCascade(state, existing));
+}
+
+/*
+ * Per-type wrappers below are DEBT, not API. Each exists only because its call
+ * sites are not converted yet; they bind a type id and nothing else. Adding
+ * logic to one turns a marker into a second source of truth. Remove them as the
+ * callers move to the generic entry points -- see plans/registry-adoption-map.md.
+ */
+
+/**
+ * One entity plus everything the graph says hangs off it, under the field names
+ * its removal shape declares. One builder for both directions, so redo
+ * restores exactly what undo took.
+ */
+function cascadePayload(
+    typeId: SupportTypeId,
+    entity: { id: string },
+    byCollection: Map<SupportCollectionKey, Set<string>>,
+    // A removal's entities are about to be deleted, so its payload owns copies.
+    // An add's are the ones just written, which nothing mutates in place.
+    copy: <T>(value: T) => T,
+): Record<string, unknown> {
+    const shape = removalShapeFor(typeId);
+    const result: Record<string, unknown> = { [shape.self]: copy(entity) };
+    const plural = (field: string) => field.endsWith('s');
+
+    for (const [key, field] of Object.entries(shape.cascade as Record<string, string | readonly string[]>)) {
+        // The seed is included when its own collection is listed in `cascade`,
+        // because undo replays that list wholesale.
+        const ids = [...(byCollection.get(key as SupportCollectionKey) ?? [])];
+        const entities = ids
+            .map((entityId) => state[key as SupportCollectionKey][entityId])
+            .filter(Boolean)
+            .map((member) => copy(member));
+
+        if (typeof field === 'string' && plural(field)) {
+            result[field] = entities;
+            continue;
+        }
+
+        // A named slot holds what the seed pointed at, read from `<slot>Id` or
+        // the declared host field; the rest travel under the collection.
+        const slots = typeof field === 'string' ? [field] : field;
+        const seedFields = entity as unknown as Record<string, unknown>;
+        const entityById = new Map(ids.map((id, index) => [id, entities[index]]));
+        const hostFields = getSupportTypeDescriptor(typeId).edges
+            .filter((edge) => edge.to === key && edge.ownership === 'hostedBy')
+            .map((edge) => edge.field);
+        const claimed = new Set<unknown>();
+        slots.forEach((slot, index) => {
+            const seedId = seedFields[`${slot}Id`] ?? seedFields[hostFields[index] ?? ''];
+            const named = typeof seedId === 'string' ? entityById.get(seedId) : undefined;
+            const member = named ?? entities[index] ?? null;
+            result[slot] = member;
+            if (member) claimed.add(member);
+        });
+        result[key] = entities.filter((member) => !claimed.has(member));
+    }
+    return result;
+}
+
+/**
+ * Remove an entity and everything the declared graph says depends on it.
+ * `collectCascade` finds the doomed set from the registry's edges;
+ * `removalShape` names each piece so history payloads keep their field names.
+ */
+function removeSupportEntityCascading(
+    typeId: SupportTypeId,
+    id: string,
+): Record<string, unknown> | null {
+    const descriptor = getSupportTypeDescriptor(typeId);
+    const collection = descriptor.location.key;
+    const existing = state[collection][id] as { id: string } | undefined;
     if (!existing) return null;
 
-    const snapshot = { stick: deepClone(existing) };
-    const { [stickId]: _, ...remainingSticks } = state.sticks;
+    const doomed = collectCascade(state, [{ collection, id }]);
+    const byCollection = groupByCollection(doomed);
 
-    let nextSelectedId = state.selectedId;
-    let nextSelectedCategory = state.selectedCategory;
-    if (state.selectedId === stickId) {
-        nextSelectedId = null;
-        nextSelectedCategory = null;
+    // Snapshot before deleting: the shape is what undo replays from.
+    const result = cascadePayload(typeId, existing, byCollection, deepClone);
+
+    commitCascadeRemoval(doomed);
+    return result;
+}
+
+/** Apply a cascade result as one state write and one notify. */
+function commitCascadeRemoval(doomed: ReadonlySet<string>): void {
+    const byCollection = groupByCollection(doomed);
+
+    const next: Record<string, unknown> = { ...state };
+    for (const [key, ids] of byCollection) {
+        const record = { ...state[key] } as Record<string, unknown>;
+        for (const entityId of ids) delete record[entityId];
+        next[key] = record;
     }
 
-    state = {
-        ...state,
-        sticks: remainingSticks,
-        selectedId: nextSelectedId,
-        selectedCategory: nextSelectedCategory,
-    };
+    const selectionDoomed = state.selectedId !== null
+        && [...byCollection.values()].some((ids) => ids.has(state.selectedId as string));
+    if (selectionDoomed) {
+        next.selectedId = null;
+        next.selectedCategory = null;
+    }
+
+    setState(next as unknown as SupportState);
+
+    for (const [key, ids] of byCollection) {
+        const descriptor = SUPPORT_TYPES.find((d) => d.location.key === key);
+        if (!descriptor?.hasEditableSettings) continue;
+        for (const entityId of ids) {
+            deleteCachedSupportSettingsHex(descriptor.id, entityId);
+        }
+    }
+
     notify();
-    return snapshot;
+}
+
+/**
+ * Removes every support of `modelId` in one cascade, which also reaches a
+ * dependent of another model hanging off one of them.
+ */
+export function removeSupportEntitiesForModel(modelId: string): number {
+    return removeSupportEntitiesForModels([modelId]);
+}
+
+/**
+ * Removes every support of any of `modelIds` in one cascade and one store
+ * write: deleting a whole selection one model at a time rebuilt the store once
+ * per model.
+ */
+export function removeSupportEntitiesForModels(modelIds: Iterable<string>): number {
+    const targets = new Set(modelIds);
+    const seeds: EntityRef[] = [];
+    for (const descriptor of SUPPORT_TYPES) {
+        const collection = descriptor.location.key;
+        for (const entity of Object.values(state[collection])) {
+            const owned = entity as unknown as { id: string; modelId?: string };
+            if (owned.modelId !== undefined && targets.has(owned.modelId)) seeds.push({ collection, id: owned.id });
+        }
+    }
+    if (seeds.length === 0) return 0;
+
+    removeSupportEntities(seeds);
+    return seeds.length;
 }
 
 function resolveLowerSegmentIndex(segments: Segment[], jointId: string) {
@@ -361,7 +411,7 @@ export function recomputeLeafContactConeAxisAndLength(
     };
 }
 
-function recomputeKnotDependentGeometry(
+export function recomputeKnotDependentGeometry(
     leaves: Record<string, Leaf>,
     updatedKnotPosById: Record<string, Vec3>
 ): Record<string, Leaf> {
@@ -416,7 +466,7 @@ function recomputeKnotDependentGeometry(
     return nextLeaves;
 }
 
-function recomputeLeafConeKnotGeometry(
+export function recomputeConeHostKnotGeometry(
     leaves: Record<string, Leaf>,
     knots: Record<string, Knot>
 ): { knots: Record<string, Knot>; changed: boolean } {
@@ -424,9 +474,9 @@ function recomputeLeafConeKnotGeometry(
     let nextKnots = knots;
 
     for (const knot of Object.values(knots)) {
-        if (!knot.parentShaftId.startsWith('leafCone:')) continue;
-        const leafId = knot.parentShaftId.slice('leafCone:'.length);
-        const leaf = leaves[leafId];
+        const host = parseKnotHostId(knot.parentShaftId);
+        if (!host || !isConeKnotHost(host.typeId)) continue;
+        const leaf = leaves[host.entityId];
         const cone = leaf?.contactCone;
         if (!leaf || !cone) continue;
 
@@ -513,7 +563,24 @@ function computeClosestTOnSegmentFromPoint(
     return THREE.MathUtils.clamp(ap.dot(ab) / abLenSq, 0, 1);
 }
 
-function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots' | 'trunks' | 'branches' | 'braces' | 'leaves' | 'twigs' | 'knots'>): {
+/**
+ * Drops roots no imported entity claims.
+ *
+ * An import writes the file's roots as given, so a file naming a root whose
+ * owner is missing leaves one behind. Every other removal reaches a root
+ * through its owner's cascade; this is the one path that cannot.
+ */
+function pruneUnclaimedRoots(roots: Record<string, Roots>, claimedBy: Pick<SupportState, SupportCollectionKey>): Record<string, Roots> {
+    const owned = collectOwnedRootIds(claimedBy);
+    const unclaimed = Object.keys(roots).filter((id) => !owned.has(id));
+    if (unclaimed.length === 0) return roots;
+
+    const kept = { ...roots };
+    for (const id of unclaimed) delete kept[id];
+    return kept;
+}
+
+function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, SupportCollectionKey>): {
     knots: Record<string, Knot>;
     leaves: Record<string, Leaf>;
 } {
@@ -537,19 +604,20 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
     // its diameter degenerates to the renderer default (oversized) and its position is
     // never reconciled to the twig. Twig segment endpoints are the segment's two joints
     // (same contract useKnotInteraction.resolveEndpoints uses for twig hosts).
-    const twigSegmentMap = new Map<string, { twig: Twig; segment: Segment; segmentIndex: number }>();
-    for (const twig of Object.values(snapshot.twigs)) {
-        twig.segments.forEach((segment, segmentIndex) => {
-            twigSegmentMap.set(segment.id, { twig, segment, segmentIndex });
-        });
+
+    // Segment -> its owning entity and type, so a host can be asked how it sizes
+    // knots without this function knowing which types answer.
+    const shaftHostBySegmentId = new Map<string, { typeId: SupportTypeId; entity: unknown }>();
+    for (const descriptor of SUPPORT_TYPES) {
+        if (!descriptor.hasSegments) continue;
+        const record = snapshot[descriptor.location.key as SupportCollectionKey] as Record<string, { segments: Segment[] }> | undefined;
+        if (!record) continue;
+        for (const entity of Object.values(record)) {
+            for (const segment of entity.segments) {
+                shaftHostBySegmentId.set(segment.id, { typeId: descriptor.id, entity });
+            }
+        }
     }
-    const getTwigSegmentEndpoints = (segment: Segment): { start: Vec3; end: Vec3 } | null => {
-        if (!segment.bottomJoint || !segment.topJoint) return null;
-        return {
-            start: { ...segment.bottomJoint.pos },
-            end: { ...segment.topJoint.pos },
-        };
-    };
 
     // Track branch parent knots that currently host descendants.
     // If a branch parent knot is hosting descendants, keep it projected to ensure
@@ -601,45 +669,33 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
         for (const knotId of targetHostKnotIds) {
             const knot = nextKnots[knotId];
             if (!knot) continue;
-            if (knot.parentShaftId.startsWith('leafCone:') || knot.parentShaftId.startsWith('braceSegment:')) continue;
+            if (isKnotHostId(knot.parentShaftId)) continue;
 
             let segment: Segment | null = null;
             let endpoints: { start: Vec3; end: Vec3 } | null = null;
 
-            const trunkRef = trunkSegmentMap.get(knot.parentShaftId);
-            if (trunkRef?.root) {
-                segment = trunkRef.segment;
-                endpoints = getTrunkSegmentEndpoints(
-                    trunkRef.trunk,
-                    trunkRef.segment,
-                    trunkRef.segmentIndex,
-                    trunkRef.root,
-                );
-            }
+            // One walker for every shafted type; the hosts come from the
+            // declared endpoints rather than a per-type fallback chain.
+            const host = shaftHostBySegmentId.get(knot.parentShaftId);
+            if (host) {
+                const owner = host.entity as ShaftEntity & { rootId?: string; parentKnotId?: string; hostKnotId?: string };
+                const index = owner.segments.findIndex((seg) => seg.id === knot.parentShaftId);
+                if (index !== -1) {
+                    const descriptor = getSupportTypeDescriptor(host.typeId);
+                    const knotField = descriptor.edges.find(
+                        (edge) => edge.to === 'knots' && edge.ownership === 'hostedBy',
+                    )?.field as keyof typeof owner | undefined;
+                    const hostKnotId = knotField ? owner[knotField] : undefined;
 
-            if (!segment || !endpoints) {
-                const branchRef = branchSegmentMap.get(knot.parentShaftId);
-                if (branchRef) {
-                    const parentKnot = nextKnots[branchRef.branch.parentKnotId] ?? snapshot.knots[branchRef.branch.parentKnotId];
-                    if (parentKnot) {
-                        segment = branchRef.segment;
-                        endpoints = getBranchSegmentEndpoints(
-                            branchRef.branch,
-                            branchRef.segment,
-                            branchRef.segmentIndex,
-                            parentKnot,
-                        );
-                    }
-                }
-            }
-
-            if (!segment || !endpoints) {
-                const twigRef = twigSegmentMap.get(knot.parentShaftId);
-                if (twigRef) {
-                    const twigEndpoints = getTwigSegmentEndpoints(twigRef.segment);
-                    if (twigEndpoints) {
-                        segment = twigRef.segment;
-                        endpoints = twigEndpoints;
+                    const resolved = resolveSegmentEndpoints(owner, owner.segments[index], index, {
+                        root: owner.rootId ? snapshot.roots[owner.rootId] : undefined,
+                        hostKnot: typeof hostKnotId === 'string'
+                            ? nextKnots[hostKnotId] ?? snapshot.knots[hostKnotId]
+                            : undefined,
+                    });
+                    if (resolved) {
+                        segment = owner.segments[index];
+                        endpoints = resolved;
                     }
                 }
             }
@@ -704,15 +760,16 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                     };
                 };
 
+                const trunkRef = trunkSegmentMap.get(knot.parentShaftId);
                 if (trunkRef?.root) {
                     const segments = trunkRef.trunk.segments;
                     const firstSeg = segments[0];
                     const lastSeg = segments[segments.length - 1];
                     const firstEndpoints = firstSeg
-                        ? getTrunkSegmentEndpoints(trunkRef.trunk, firstSeg, 0, trunkRef.root)
+                        ? resolveSegmentEndpoints(trunkRef.trunk, firstSeg, 0, { root: trunkRef.root })
                         : null;
                     const lastEndpoints = lastSeg
-                        ? getTrunkSegmentEndpoints(trunkRef.trunk, lastSeg, segments.length - 1, trunkRef.root)
+                        ? resolveSegmentEndpoints(trunkRef.trunk, lastSeg, segments.length - 1, { root: trunkRef.root })
                         : null;
 
                     if (segments.length > 0 && firstEndpoints && lastEndpoints) {
@@ -723,7 +780,7 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
 
                         for (let idx = 0; idx < segments.length; idx++) {
                             const candidateSeg = segments[idx];
-                            const candidateEndpoints = getTrunkSegmentEndpoints(trunkRef.trunk, candidateSeg, idx, trunkRef.root);
+                            const candidateEndpoints = resolveSegmentEndpoints(trunkRef.trunk, candidateSeg, idx, { root: trunkRef.root });
                             if (!candidateEndpoints) continue;
 
                             const candidate = scoreBinding(candidateSeg, candidateEndpoints, idx, segments.length, firstEndpoints.start, lastEndpoints.end);
@@ -749,10 +806,10 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                             const firstSeg = segments[0];
                             const lastSeg = segments[segments.length - 1];
                             const firstEndpoints = firstSeg
-                                ? getBranchSegmentEndpoints(branchRef.branch, firstSeg, 0, parentKnot)
+                                ? resolveSegmentEndpoints(branchRef.branch, firstSeg, 0, { hostKnot: parentKnot })
                                 : null;
                             const lastEndpoints = lastSeg
-                                ? getBranchSegmentEndpoints(branchRef.branch, lastSeg, segments.length - 1, parentKnot)
+                                ? resolveSegmentEndpoints(branchRef.branch, lastSeg, segments.length - 1, { hostKnot: parentKnot })
                                 : null;
 
                             if (segments.length > 0 && firstEndpoints && lastEndpoints) {
@@ -763,7 +820,7 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
 
                                 for (let idx = 0; idx < segments.length; idx++) {
                                     const candidateSeg = segments[idx];
-                                    const candidateEndpoints = getBranchSegmentEndpoints(branchRef.branch, candidateSeg, idx, parentKnot);
+                                    const candidateEndpoints = resolveSegmentEndpoints(branchRef.branch, candidateSeg, idx, { hostKnot: parentKnot });
                                     if (!candidateEndpoints) continue;
 
                                     const candidate = scoreBinding(candidateSeg, candidateEndpoints, idx, segments.length, firstEndpoints.start, lastEndpoints.end);
@@ -793,18 +850,12 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
                 braceHostKnotIds.has(knot.id)
                 && effectiveNormalizationHint === 'braceImported'
                 && Number.isFinite(knot.diameter as number);
-            // Twig hosts size their knots by the 10% taper rule (matching native
-            // LeafPlacementController / twigBuilder), NOT the generic segment+0.1mm
-            // used by trunk/branch. Without this a twig-hosted knot is normalized to
-            // segment.diameter + 0.1 — slightly oversized and unlike a hand-placed leaf.
-            const twigHostRef = twigSegmentMap.get(nextParentShaftId);
-            let twigKnotDiameter: number | null = null;
-            if (twigHostRef) {
-                const localTwigDia = resolveTwigDiameterAtSegmentT(twigHostRef.twig, nextParentShaftId, t);
-                if (localTwigDia !== null && localTwigDia > 0) {
-                    twigKnotDiameter = twigJointDiameterForLocalDiameter(localTwigDia);
-                }
-            }
+            // A host type may size knots its own way -- twigs follow their taper
+            // rather than the generic segment-diameter rule below.
+            const shaftHost = shaftHostBySegmentId.get(nextParentShaftId);
+            const twigKnotDiameter = shaftHost
+                ? resolveKnotDiameter(shaftHost.typeId, shaftHost.entity, nextParentShaftId, t)
+                : null;
             const computedDiameter = preserveImportedBraceUniformDiameter
                 ? (knot.diameter as number)
                 : twigKnotDiameter !== null
@@ -941,18 +992,9 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
         nextLeaves = recomputeKnotDependentGeometry(nextLeaves, changedHostPosById);
     }
 
-    const leafCone1 = recomputeLeafConeKnotGeometry(nextLeaves, nextKnots);
-    const braceSeg1 = recomputeBraceSegmentKnotGeometry(snapshot.braces, leafCone1.knots);
-
-    const changedByBrace1 = getChangedKnotPositions(leafCone1.knots, braceSeg1.knots);
-
-    let finalKnots = braceSeg1.knots;
-    if (Object.keys(changedByBrace1).length > 0) {
-        nextLeaves = recomputeKnotDependentGeometry(nextLeaves, changedByBrace1);
-        const leafCone2 = recomputeLeafConeKnotGeometry(nextLeaves, finalKnots);
-        const braceSeg2 = recomputeBraceSegmentKnotGeometry(snapshot.braces, leafCone2.knots);
-        finalKnots = braceSeg2.knots;
-    }
+    const settled = settleKnotDependentGeometry(snapshot.braces, nextLeaves, nextKnots);
+    nextLeaves = settled.leaves;
+    let finalKnots = settled.knots;
 
     // Strip transient import hints from final runtime output, but persist the resolved
     // normalization intent so VOXL save/load roundtrips can replay the same behavior.
@@ -976,7 +1018,7 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots'
     return { knots: finalKnots, leaves: nextLeaves };
 }
 
-function getChangedKnotPositions(prev: Record<string, Knot>, next: Record<string, Knot>): Record<string, Vec3> {
+export function getChangedKnotPositions(prev: Record<string, Knot>, next: Record<string, Knot>): Record<string, Vec3> {
     const changed: Record<string, Vec3> = {};
     for (const [id, nk] of Object.entries(next)) {
         const pk = prev[id];
@@ -988,7 +1030,7 @@ function getChangedKnotPositions(prev: Record<string, Knot>, next: Record<string
     return changed;
 }
 
-function recomputeBraceSegmentKnotGeometry(
+export function recomputeSpanHostKnotGeometry(
     braces: Record<string, Brace>,
     knots: Record<string, Knot>
 ): { knots: Record<string, Knot>; changed: boolean } {
@@ -996,9 +1038,9 @@ function recomputeBraceSegmentKnotGeometry(
     let nextKnots = knots;
 
     for (const knot of Object.values(knots)) {
-        if (!knot.parentShaftId.startsWith('braceSegment:')) continue;
-        const braceId = knot.parentShaftId.slice('braceSegment:'.length);
-        const brace = braces[braceId];
+        const host = parseKnotHostId(knot.parentShaftId);
+        if (!host || !isSpanKnotHost(host.typeId)) continue;
+        const brace = braces[host.entityId];
         if (!brace) continue;
 
         const startKnot = knots[brace.startKnotId];
@@ -1059,21 +1101,56 @@ function recomputeBraceSegmentKnotGeometry(
     return { knots: nextKnots, changed };
 }
 
-export function removeJoint(trunkId: string, jointId: string): { before: Trunk; after: Trunk } | null {
-    const trunk = state.trunks[trunkId];
-    if (!trunk) return null;
+/**
+ * Settle the geometry hanging off knots after something moved them.
+ *
+ * Three things chain: a moved knot reshapes its leaves, a reshaped leaf cone
+ * moves the knots riding it, and a moved knot moves the knots on a brace
+ * spanning it. The second pass runs only when the brace step moved something.
+ */
+function settleKnotDependentGeometry(
+    braces: Record<string, Brace>,
+    leaves: Record<string, Leaf>,
+    knots: Record<string, Knot>,
+): { knots: Record<string, Knot>; leaves: Record<string, Leaf> } {
+    let nextLeaves = leaves;
+
+    const coneHost1 = recomputeConeHostKnotGeometry(nextLeaves, knots);
+    const spanHost1 = recomputeSpanHostKnotGeometry(braces, coneHost1.knots);
+
+    const changedByBrace = getChangedKnotPositions(coneHost1.knots, spanHost1.knots);
+    if (Object.keys(changedByBrace).length === 0) {
+        return { knots: spanHost1.knots, leaves: nextLeaves };
+    }
+
+    nextLeaves = recomputeKnotDependentGeometry(nextLeaves, changedByBrace);
+    const coneHost2 = recomputeConeHostKnotGeometry(nextLeaves, spanHost1.knots);
+    const spanHost2 = recomputeSpanHostKnotGeometry(braces, coneHost2.knots);
+
+    return { knots: spanHost2.knots, leaves: nextLeaves };
+}
+
+
+/** Remove one joint from a shafted entity, merging the segments it split. */
+function removeShaftJoint<T extends SupportTypeId>(
+    typeId: T,
+    entityId: string,
+    jointId: string,
+): { before: SupportEntityFor<T>; after: SupportEntityFor<T> } | null {
+    const entity = getSupportEntity(typeId, entityId) as { id: string; segments: Segment[]; contactCone?: { socketJointId?: string } } | null;
+    if (!entity) return null;
 
     // Prevent deletion of the top joint that connects to the contact cone
-    if (trunk.contactCone?.socketJointId && trunk.contactCone.socketJointId === jointId) {
+    if (entity.contactCone?.socketJointId && entity.contactCone.socketJointId === jointId) {
         console.warn('Cannot delete the top joint that connects to the contact cone');
         return null;
     }
 
-    const lowerIndex = resolveLowerSegmentIndex(trunk.segments, jointId);
+    const lowerIndex = resolveLowerSegmentIndex(entity.segments, jointId);
     if (lowerIndex === -1) return null;
 
-    const before = deepClone(trunk);
-    const after = deepClone(trunk);
+    const before = deepClone(entity);
+    const after = deepClone(entity);
 
     const segments = after.segments;
     const lowerSegment = segments[lowerIndex];
@@ -1093,12 +1170,14 @@ export function removeJoint(trunkId: string, jointId: string): { before: Trunk; 
     // If we removed a segment, any knots attached to that removed segment must be rebound
     // to the merged segment so they stay connected.
     if (removedSegmentId) {
-        const root = state.roots[trunk.rootId];
+        // The lower end the type declares: its own root, or a host knot.
+        const hosts = resolveDeclaredHosts(typeId, entity as unknown as Record<string, unknown>);
+        const anchored = hosts.root ?? hosts.hostKnot;
         const mergedSegmentId = after.segments[lowerIndex]?.id;
         const mergedSegment = after.segments[lowerIndex];
 
-        if (root && mergedSegmentId && mergedSegment) {
-            const endpoints = getTrunkSegmentEndpoints(after, mergedSegment, lowerIndex, root);
+        if (anchored && mergedSegmentId && mergedSegment) {
+            const endpoints = resolveSegmentEndpoints(after, mergedSegment, lowerIndex, hosts);
             if (endpoints) {
                 const startVec = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
                 const endVec = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
@@ -1134,169 +1213,51 @@ export function removeJoint(trunkId: string, jointId: string): { before: Trunk; 
                 }
 
                 if (knotsChanged) {
-                    state = { ...state, knots: updatedKnots };
+                    setState({ ...state, knots: updatedKnots });
                 }
             }
         }
     }
 
-    // Route through updateTrunk so ALL knots attached to this trunk stay connected after joint removal.
-    updateTrunk(after);
+    // Route through the generic update so ALL knots attached to this shaft stay connected after joint removal.
+    applySupportEntityUpdate(after);
 
     return {
-        before,
-        after: deepClone(after),
+        before: before as SupportEntityFor<T>,
+        after: deepClone(after) as SupportEntityFor<T>,
     };
 }
 
-export function removeBranchJoint(branchId: string, jointId: string): { before: Branch; after: Branch } | null {
-    const branch = state.branches[branchId];
-    if (!branch) return null;
 
-    // Prevent deletion of the top joint that connects to the contact cone
-    if (branch.contactCone?.socketJointId && branch.contactCone.socketJointId === jointId) {
-        console.warn('Cannot delete the top joint that connects to the contact cone');
-        return null;
-    }
-
-    const lowerIndex = resolveLowerSegmentIndex(branch.segments, jointId);
-    if (lowerIndex === -1) return null;
-
-    const before = deepClone(branch);
-    const after = deepClone(branch);
-
-    const segments = after.segments;
-    const lowerSegment = segments[lowerIndex];
-    if (!lowerSegment) return null;
-
-    const nextIndex = lowerIndex + 1;
-    const upperSegment = nextIndex < segments.length ? segments[nextIndex] : undefined;
-    const removedSegmentId = upperSegment?.id ?? null;
-
-    if (upperSegment) {
-        lowerSegment.topJoint = upperSegment.topJoint ? deepClone(upperSegment.topJoint) : undefined;
-        segments.splice(nextIndex, 1);
-    } else {
-        lowerSegment.topJoint = undefined;
-    }
-
-    if (removedSegmentId) {
-        const parentKnot = state.knots[branch.parentKnotId];
-        const mergedSegmentId = after.segments[lowerIndex]?.id;
-        const mergedSegment = after.segments[lowerIndex];
-
-        if (parentKnot && mergedSegmentId && mergedSegment) {
-            const endpoints = getBranchSegmentEndpoints(after, mergedSegment, lowerIndex, parentKnot);
-            if (endpoints) {
-                const startVec = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
-                const endVec = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
-
-                const updatedKnots: Record<string, Knot> = { ...state.knots };
-                let knotsChanged = false;
-
-                for (const knot of Object.values(state.knots)) {
-                    if (knot.parentShaftId !== removedSegmentId) continue;
-
-                    const knotPosVec = new THREE.Vector3(knot.pos.x, knot.pos.y, knot.pos.z);
-                    const segLen = startVec.distanceTo(endVec);
-                    let t = 0;
-                    if (segLen > 0.000001) {
-                        const dir = endVec.clone().sub(startVec);
-                        const lenSq = dir.lengthSq();
-                        if (lenSq > 0.000001) {
-                            const v = knotPosVec.clone().sub(startVec);
-                            t = THREE.MathUtils.clamp(v.dot(dir) / lenSq, 0, 1);
-                        }
-                    }
-
-                    const newPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, mergedSegment, t);
-                    updatedKnots[knot.id] = {
-                        ...knot,
-                        parentShaftId: mergedSegmentId,
-                        t,
-                        pos: newPos,
-                    };
-                    knotsChanged = true;
-                }
-
-                if (knotsChanged) {
-                    state = { ...state, knots: updatedKnots };
-                }
-            }
-        }
-    }
-
-    updateBranch(after);
-
-    return {
-        before,
-        after: deepClone(after),
+/**
+ * Which support lost a joint, and its before/after for the undo payload.
+ *
+ * One variant per type in `JOINT_REMOVAL_BY_TYPE`.
+ */
+export type RemoveJointByIdResult = {
+    [T in JointRemovalTypeId]: {
+        typeId: T;
+        id: string;
+        before: SupportEntityFor<T>;
+        after: SupportEntityFor<T>;
     };
-}
-
-export type RemoveJointByIdResult =
-    | { kind: 'trunk'; trunkId: string; before: Trunk; after: Trunk }
-    | { kind: 'branch'; branchId: string; before: Branch; after: Branch }
-    | { kind: 'kickstand'; kickstandId: string; before: Kickstand; after: Kickstand };
+}[JointRemovalTypeId];
 
 export function removeJointById(jointId: string): RemoveJointByIdResult | null {
-    for (const [trunkId, trunk] of Object.entries(state.trunks)) {
-        const hasJoint = trunk.segments.some(
-            (seg) => seg.topJoint?.id === jointId || seg.bottomJoint?.id === jointId
-        );
-        if (!hasJoint) continue;
-        const result = removeJoint(trunkId, jointId);
-        if (result) {
-            return { kind: 'trunk', trunkId, ...result };
+    // Every type declaring joint removal, in registry order.
+    for (const typeId of JOINT_REMOVAL_TYPES) {
+        const collection = state[getSupportTypeDescriptor(typeId).location.key] as unknown as
+            Record<string, { segments: Segment[] }>;
+        for (const [entityId, entity] of Object.entries(collection ?? {})) {
+            const hasJoint = entity.segments.some(
+                (seg) => seg.topJoint?.id === jointId || seg.bottomJoint?.id === jointId,
+            );
+            if (!hasJoint) continue;
+            const result = removeShaftJoint(typeId, entityId, jointId);
+            if (result) return { typeId, id: entityId, ...result } as RemoveJointByIdResult;
         }
     }
 
-    for (const [branchId, branch] of Object.entries(state.branches)) {
-        const hasJoint = branch.segments.some(
-            (seg) => seg.topJoint?.id === jointId || seg.bottomJoint?.id === jointId
-        );
-        if (!hasJoint) continue;
-        const result = removeBranchJoint(branchId, jointId);
-        if (result) {
-            return { kind: 'branch', branchId, ...result };
-        }
-    }
-
-    // Kickstands live in a separate store — check them too so deleting a
-    // kickstand joint removes just that joint rather than the entire support.
-    const kickstandSnapshot = getKickstandSnapshot();
-    for (const [kickstandId, kickstand] of Object.entries(kickstandSnapshot.kickstands)) {
-        const hasJoint = kickstand.segments.some(
-            (seg) => seg.topJoint?.id === jointId || seg.bottomJoint?.id === jointId,
-        );
-        if (!hasJoint) continue;
-
-        const lowerIndex = resolveLowerSegmentIndex(kickstand.segments, jointId);
-        if (lowerIndex === -1) return null;
-
-        const before = deepClone(kickstand);
-        const after = deepClone(kickstand);
-        const segments = after.segments;
-        const lowerSegment = segments[lowerIndex];
-        if (!lowerSegment) return null;
-
-        const nextIndex = lowerIndex + 1;
-        const upperSegment = nextIndex < segments.length ? segments[nextIndex] : undefined;
-
-        if (upperSegment) {
-            // Merge: lower segment absorbs upper segment's top joint
-            lowerSegment.topJoint = upperSegment.topJoint
-                ? deepClone(upperSegment.topJoint)
-                : undefined;
-            segments.splice(nextIndex, 1);
-        } else {
-            // Last joint in the chain — just drop it
-            lowerSegment.topJoint = undefined;
-        }
-
-        updateKickstand(after);
-        return { kind: 'kickstand', kickstandId, before, after };
-    }
 
     return null;
 }
@@ -1322,35 +1283,42 @@ export function endSupportStateBatch() {
     }
 }
 
-function rebuildSupportSettingsHexCacheFromState() {
-    const next: SupportSettingsHexCache = {
-        trunk: {},
-        branch: {},
-        leaf: {},
-    };
+/**
+ * Runs several store writes as one notification.
+ *
+ * An entity and the primitives it owns are separate writes. Subscribers that
+ * act on what they see -- the renderer culls roots no entity claims -- would
+ * otherwise read the gap between them and delete a root its entity was about
+ * to arrive for.
+ */
+export function asOneSupportEdit<T>(apply: () => T): T {
+    beginSupportStateBatch();
+    try {
+        return apply();
+    } finally {
+        endSupportStateBatch();
+    }
+}
 
-    for (const trunk of Object.values(state.trunks)) {
-        if (trunk.settingsCodeHex) next.trunk[trunk.id] = trunk.settingsCodeHex;
-    }
-    for (const branch of Object.values(state.branches)) {
-        if (branch.settingsCodeHex) next.branch[branch.id] = branch.settingsCodeHex;
-    }
-    for (const leaf of Object.values(state.leaves)) {
-        if (leaf.settingsCodeHex) next.leaf[leaf.id] = leaf.settingsCodeHex;
+function rebuildSupportSettingsHexCacheFromState() {
+    const next = createEmptySettingsHexCache();
+
+    for (const descriptor of EDITABLE_SUPPORT_TYPES) {
+        const bucket = next[descriptor.id];
+        for (const entity of Object.values(state[descriptor.location.key])) {
+            const { id, settingsCodeHex } = entity as { id: string; settingsCodeHex?: string };
+            if (settingsCodeHex) bucket[id] = settingsCodeHex;
+        }
     }
 
     supportSettingsHexCache = next;
 }
 
 function clearSupportSettingsHexCache() {
-    supportSettingsHexCache = {
-        trunk: {},
-        branch: {},
-        leaf: {},
-    };
+    supportSettingsHexCache = createEmptySettingsHexCache();
 }
 
-function getCachedSupportSettingsHex(kind: 'trunk' | 'branch' | 'leaf', id: string, entityHex?: string): string | null {
+function getCachedSupportSettingsHex(kind: EditableSupportKind, id: string, entityHex?: string): string | null {
     const cached = supportSettingsHexCache[kind][id];
     if (cached) return cached;
     if (entityHex) {
@@ -1360,50 +1328,12 @@ function getCachedSupportSettingsHex(kind: 'trunk' | 'branch' | 'leaf', id: stri
     return null;
 }
 
-function setCachedSupportSettingsHex(kind: 'trunk' | 'branch' | 'leaf', id: string, hex: string) {
+function setCachedSupportSettingsHex(kind: EditableSupportKind, id: string, hex: string) {
     supportSettingsHexCache[kind][id] = hex;
 }
 
-function deleteCachedSupportSettingsHex(kind: 'trunk' | 'branch' | 'leaf', id: string) {
+function deleteCachedSupportSettingsHex(kind: EditableSupportKind, id: string) {
     delete supportSettingsHexCache[kind][id];
-}
-
-function syncKickstandHostKnotsFromSharedKnots(sharedKnots: Record<string, Knot>) {
-    const kickstandState = getKickstandSnapshot();
-    let nextKnots = kickstandState.knots;
-    let changed = false;
-
-    for (const kickstand of Object.values(kickstandState.kickstands)) {
-        const hostKnot = sharedKnots[kickstand.hostKnotId];
-        if (!hostKnot) continue;
-
-        const existing = nextKnots[hostKnot.id];
-        if (
-            existing
-            && existing.pos.x === hostKnot.pos.x
-            && existing.pos.y === hostKnot.pos.y
-            && existing.pos.z === hostKnot.pos.z
-            && existing.t === hostKnot.t
-            && existing.diameter === hostKnot.diameter
-            && existing.parentShaftId === hostKnot.parentShaftId
-        ) {
-            continue;
-        }
-
-        if (!changed) {
-            nextKnots = { ...kickstandState.knots };
-            changed = true;
-        }
-
-        nextKnots[hostKnot.id] = { ...hostKnot };
-    }
-
-    if (!changed) return;
-
-    setKickstandSnapshot({
-        ...kickstandState,
-        knots: nextKnots,
-    });
 }
 
 export function subscribe(listener: () => void) {
@@ -1415,120 +1345,239 @@ export function getSnapshot() {
     return state;
 }
 
+/**
+ * Deep-copy a whole support state.
+ *
+ * The copy reads the collection views into data properties, and the `supports`
+ * map it also copies already holds every entity those views hold, so the views
+ * only have to be reinstalled over it. Re-deriving them through
+ * `normaliseSupportState` walked the whole state twice more per snapshot, which
+ * was most of the cost of a history push.
+ */
+export function cloneSupportState(source: SupportState): SupportState {
+    // Through normalise so the clone gets the derived-union accessor: a plain
+    // `installCollectionViews` would treat its frozen collections as a caller's
+    // partial write and leave them unstamped.
+    return normaliseSupportState(clonePlainData({
+        ...source,
+        supports: source.supports ?? {},
+    } as SupportState));
+}
+
+/** Every support entity by id, whatever its type. */
+export function getSupports(): Record<string, SupportEntityAny> {
+    return state.supports ?? {};
+}
+
+/**
+ * How many entities a support state holds, counted by collection.
+ *
+ * For the history budget, which only needs a number: reading `supports` would
+ * materialise the derived union of a whole plate.
+ */
+export function countSupportEntities(source: SupportState): number {
+    let count = 0;
+    for (const descriptor of SUPPORT_TYPES) {
+        const view = source[descriptor.location.key] as Record<string, unknown> | undefined;
+        if (!view) continue;
+        for (const _id in view) count += 1;
+    }
+    return count;
+}
+
 export function reassignAllSupportModelIds(modelId: string): boolean {
     if (!modelId) return false;
 
-    let changed = false;
-    let nextRoots = state.roots;
-    let nextTrunks = state.trunks;
-    let nextBranches = state.branches;
-    let nextLeaves = state.leaves;
-    let nextTwigs = state.twigs;
-    let nextSticks = state.sticks;
-    let nextBraces = state.braces;
-    let nextAnchors = state.anchors;
-
-    for (const root of Object.values(state.roots)) {
-        if (root.modelId === modelId) continue;
-        if (!changed) {
-            nextRoots = { ...state.roots };
-            changed = true;
-        }
-        nextRoots[root.id] = { ...root, modelId };
-    }
-
-    for (const trunk of Object.values(state.trunks)) {
-        if (trunk.modelId === modelId) continue;
-        if (!changed) {
-            nextTrunks = { ...state.trunks };
-            changed = true;
-        }
-        nextTrunks[trunk.id] = { ...trunk, modelId };
-    }
-
-    for (const branch of Object.values(state.branches)) {
-        if (branch.modelId === modelId) continue;
-        if (!changed) {
-            nextBranches = { ...state.branches };
-            changed = true;
-        }
-        nextBranches[branch.id] = { ...branch, modelId };
-    }
-
-    for (const leaf of Object.values(state.leaves)) {
-        if (leaf.modelId === modelId) continue;
-        if (!changed) {
-            nextLeaves = { ...state.leaves };
-            changed = true;
-        }
-        nextLeaves[leaf.id] = { ...leaf, modelId };
-    }
-
-    for (const twig of Object.values(state.twigs)) {
-        if (twig.modelId === modelId) continue;
-        if (!changed) {
-            nextTwigs = { ...state.twigs };
-            changed = true;
-        }
-        nextTwigs[twig.id] = { ...twig, modelId };
-    }
-
-    for (const stick of Object.values(state.sticks)) {
-        if (stick.modelId === modelId) continue;
-        if (!changed) {
-            nextSticks = { ...state.sticks };
-            changed = true;
-        }
-        nextSticks[stick.id] = { ...stick, modelId };
-    }
-
-    for (const brace of Object.values(state.braces)) {
-        if (brace.modelId === modelId) continue;
-        if (!changed) {
-            nextBraces = { ...state.braces };
-            changed = true;
-        }
-        nextBraces[brace.id] = { ...brace, modelId };
-    }
-
-    for (const anchor of Object.values(state.anchors)) {
-        if (anchor.modelId === modelId) continue;
-        if (!changed) {
-            nextAnchors = { ...state.anchors };
-            changed = true;
-        }
-        nextAnchors[anchor.id] = { ...anchor, modelId };
-    }
+    // Driven from SUPPORT_ENTITY_COLLECTIONS so a new type cannot be missed.
+    const { collections, changed } = mapSupportEntities(state, (entity) => (
+        entity.modelId === modelId ? entity : { ...entity, modelId }
+    ));
 
     if (changed) {
-        state = {
-            ...state,
-            roots: nextRoots,
-            trunks: nextTrunks,
-            branches: nextBranches,
-            leaves: nextLeaves,
-            twigs: nextTwigs,
-            sticks: nextSticks,
-            braces: nextBraces,
-            anchors: nextAnchors,
-        };
+        setState({ ...state, ...collections });
         notify();
     }
 
-    const kickstandChanged = reassignAllKickstandModelIds(modelId);
+    const kickstandChanged = reassignAllKickstandModelIdsInState(modelId);
     return changed || kickstandChanged;
 }
 
+
+/**
+ * Views the store has already stamped.
+ *
+ * A view it produced carries `typeId` on every entity, so a later write that
+ * hands it back needs no second pass. Writers that build a view from one of
+ * these (a spread plus one entity) add it here too; anything unmarked is
+ * stamped as it comes in, which is the import path.
+ */
+const stampedViews = new WeakSet<object>();
+
+/**
+ * Install each collection name as a collection, and `supports` as the union.
+ *
+ * The collections are the source of truth. `supports` is derived: eagerly when
+ * the caller handed one in, lazily (on first read) when it can be merged from
+ * the collections. It is non-enumerable so `{ ...state }` does not materialise a
+ * whole-plate map on every write, and the union is cached per state object.
+ */
+function installCollectionViews(
+    next: SupportState,
+    pinned?: ReadonlyMap<SupportCollectionKey, Record<string, SupportEntityAny>>,
+    providedUnion?: Record<string, SupportEntityAny>,
+): SupportState {
+    for (const descriptor of SUPPORT_TYPES) {
+        const pinnedView = pinned?.get(descriptor.location.key);
+        if (pinnedView) {
+            stampedViews.add(pinnedView);
+            Object.defineProperty(next, descriptor.location.key, {
+                configurable: true,
+                enumerable: true,
+                value: pinnedView,
+                writable: true,
+            });
+            continue;
+        }
+
+        // No collection supplied for this type: derive it from the union the
+        // caller handed in, filtered once per state object.
+        let cache: Record<string, SupportEntityAny> | null = null;
+        Object.defineProperty(next, descriptor.location.key, {
+            configurable: true,
+            enumerable: true,
+            get() {
+                if (cache) return cache;
+                const view: Record<string, SupportEntityAny> = {};
+                const all = providedUnion ?? {};
+                for (const id in all) {
+                    if ((all[id] as { typeId?: SupportTypeId }).typeId === descriptor.id) view[id] = all[id];
+                }
+                cache = view;
+                stampedViews.add(view);
+                return view;
+            },
+        });
+    }
+
+    let union: Record<string, SupportEntityAny> | null = providedUnion ?? null;
+    Object.defineProperty(next, 'supports', {
+        configurable: true,
+        enumerable: false,
+        get(this: SupportState) {
+            if (union) return union;
+            const merged: Record<string, SupportEntityAny> = {};
+            for (const descriptor of SUPPORT_TYPES) {
+                const view = this[descriptor.location.key] as Record<string, SupportEntityAny> | undefined;
+                if (!view) continue;
+                for (const id in view) merged[id] = view[id];
+            }
+            union = merged;
+            return merged;
+        },
+        set(value: Record<string, SupportEntityAny> | null) {
+            union = value ?? null;
+        },
+    });
+    return next;
+}
+
+/**
+ * Normalise a state object into the stored shape: the eight collections are the
+ * truth and `supports` is derived from them.
+ */
+function normaliseSupportState(next: SupportState): SupportState {
+    const raw = next as unknown as Record<string, unknown>;
+
+    // An own collection key means a writer set one explicitly, so it wins for
+    // that type. Types without one keep whatever `supports` already held.
+    const overrides = SUPPORT_TYPES.filter((d) => Object.prototype.hasOwnProperty.call(raw, d.location.key));
+    const providedUnion = (next as { supports?: Record<string, SupportEntityAny> }).supports ?? undefined;
+
+    // A write that only touched interaction state carries the previous views
+    // unchanged. Reuse them, and let the union come from the previous state the
+    // first time anything reads it.
+    if (overrides.length === SUPPORT_TYPES.length
+        && overrides.every((d) => (raw[d.location.key] as object) === state?.[d.location.key])) {
+        const carried: Record<string, unknown> = { ...raw };
+        for (const descriptor of SUPPORT_TYPES) delete carried[descriptor.location.key];
+        const kept = Object.assign(Object.create(null), carried) as unknown as SupportState;
+        for (const descriptor of SUPPORT_TYPES) {
+            Object.defineProperty(kept, descriptor.location.key, {
+                configurable: true,
+                enumerable: true,
+                value: state[descriptor.location.key],
+                writable: true,
+            });
+        }
+        const previous = state as SupportState | null;
+        let union: Record<string, SupportEntityAny> | null = providedUnion ?? null;
+        Object.defineProperty(kept, 'supports', {
+            configurable: true,
+            enumerable: false,
+            get() {
+                if (union) return union;
+                union = previous?.supports ?? {};
+                return union;
+            },
+            set(value: Record<string, SupportEntityAny> | null) { union = value ?? null; },
+        });
+        return kept;
+    }
+
+    const pinned = new Map<SupportCollectionKey, Record<string, SupportEntityAny>>();
+    for (const descriptor of overrides) {
+        const supplied = raw[descriptor.location.key] as Record<string, SupportEntityAny>;
+        // A view the store produced is already stamped; handing it back is the
+        // common write (one entity added to a collection), and copying it again
+        // was half of a placement's cost on a full plate.
+        if (stampedViews.has(supplied)) {
+            pinned.set(descriptor.location.key, supplied);
+            continue;
+        }
+        const view: Record<string, SupportEntityAny> = {};
+        for (const id in supplied) {
+            const entity = supplied[id];
+            view[id] = (entity as { typeId?: SupportTypeId }).typeId === descriptor.id
+                ? entity
+                : { ...entity, typeId: descriptor.id } as SupportEntityAny;
+        }
+        stampedViews.add(view);
+        pinned.set(descriptor.location.key, view);
+    }
+
+    const rest: Record<string, unknown> = { ...raw };
+    for (const descriptor of SUPPORT_TYPES) delete rest[descriptor.location.key];
+    delete rest.supports;
+
+    return installCollectionViews(rest as unknown as SupportState, pinned, providedUnion);
+}
+
+/** The only place `state` is assigned, so the derived views cannot be lost. */
+function setState(next: SupportState): void {
+    state = normaliseSupportState(next);
+}
+
 export function setSnapshot(next: SupportState) {
-    state = next;
+    state = normaliseSupportState(next);
     rebuildSupportSettingsHexCacheFromState();
     emitSupportInteractionReset('setSnapshot');
     notify();
 }
 
 function transformVec3(value: Vec3, matrix: THREE.Matrix4): Vec3 {
-    const v = new THREE.Vector3(value.x, value.y, value.z).applyMatrix4(matrix);
-    return { x: v.x, y: v.y, z: v.z };
+    // Inline the affine multiply: a plate move transforms tens of thousands of
+    // these, and allocating a Vector3 for each one was measurable.
+    const e = matrix.elements;
+    const x = value.x;
+    const y = value.y;
+    const z = value.z;
+    const w = e[3] * x + e[7] * y + e[11] * z + e[15];
+    const invW = w !== 0 && w !== 1 ? 1 / w : 1;
+    return {
+        x: (e[0] * x + e[4] * y + e[8] * z + e[12]) * invW,
+        y: (e[1] * x + e[5] * y + e[9] * z + e[13]) * invW,
+        z: (e[2] * x + e[6] * y + e[10] * z + e[14]) * invW,
+    };
 }
 
 function transformVec3PreserveZ(value: Vec3, matrix: THREE.Matrix4): Vec3 {
@@ -1540,10 +1589,14 @@ function transformVec3PreserveZ(value: Vec3, matrix: THREE.Matrix4): Vec3 {
 }
 
 function transformDirection(value: Vec3, normalMatrix: THREE.Matrix3): Vec3 {
-    const v = new THREE.Vector3(value.x, value.y, value.z).applyMatrix3(normalMatrix);
-    if (v.lengthSq() <= 1e-12) return value;
-    v.normalize();
-    return { x: v.x, y: v.y, z: v.z };
+    const e = normalMatrix.elements;
+    const x = e[0] * value.x + e[3] * value.y + e[6] * value.z;
+    const y = e[1] * value.x + e[4] * value.y + e[7] * value.z;
+    const z = e[2] * value.x + e[5] * value.y + e[8] * value.z;
+    const lengthSq = x * x + y * y + z * z;
+    if (lengthSq <= 1e-12) return value;
+    const invLength = 1 / Math.sqrt(lengthSq);
+    return { x: x * invLength, y: y * invLength, z: z * invLength };
 }
 
 function transformJoint(joint: import('./types').Joint | undefined, matrix: THREE.Matrix4) {
@@ -1598,6 +1651,302 @@ function transformContactDisk(
     };
 }
 
+/**
+ * A rigid delta between two model transforms, with the rule that rides on it:
+ * under a pure translation a plate root keeps its Z, so a raft does not climb
+ * with a model lifted off the plate.
+ */
+export type SupportDeltaTransform = {
+    matrix: THREE.Matrix4;
+    normalMatrix: THREE.Matrix3;
+    preserveRootZ: boolean;
+};
+
+/**
+ * The delta carrying support geometry from `beforeTransform` to
+ * `afterTransform`, or null when the two are the same transform.
+ */
+export function buildSupportDeltaTransform(
+    beforeTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
+    afterTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
+): SupportDeltaTransform | null {
+    const beforeMatrix = new THREE.Matrix4().compose(
+        beforeTransform.position.clone(),
+        quaternionFromGlobalEuler(beforeTransform.rotation),
+        beforeTransform.scale.clone(),
+    );
+    const afterMatrix = new THREE.Matrix4().compose(
+        afterTransform.position.clone(),
+        quaternionFromGlobalEuler(afterTransform.rotation),
+        afterTransform.scale.clone(),
+    );
+
+    if (transformsRoughlyEqual(beforeMatrix, afterMatrix)) return null;
+
+    const matrix = afterMatrix.clone().multiply(beforeMatrix.clone().invert());
+    const isPureTranslation = eulersRoughlyEqual(beforeTransform.rotation, afterTransform.rotation)
+        && vectorsRoughlyEqual(beforeTransform.scale, afterTransform.scale);
+    const deltaTranslation = afterTransform.position.clone().sub(beforeTransform.position);
+
+    return {
+        matrix,
+        normalMatrix: new THREE.Matrix3().getNormalMatrix(matrix),
+        preserveRootZ: isPureTranslation && Math.abs(deltaTranslation.z) > 1e-8,
+    };
+}
+
+/**
+ * One support record moved by `delta`, whatever collection it lives in: a
+ * declared shaft, its declared contacts, and whatever `transformExtrasFor`
+ * names. A root keeps its Z under a pure translation, a knot is a point, and a
+ * kickstand's own root and host knot move with the shared collections they
+ * live in.
+ *
+ * Shared by the store's own transform and the paste path, so a pasted copy
+ * lands exactly where a move would have put it.
+ */
+export function transformSupportRecord(
+    target: SupportTypeId | 'roots' | 'knots',
+    record: Record<string, unknown>,
+    delta: SupportDeltaTransform,
+): Record<string, unknown> {
+    const { matrix, normalMatrix, preserveRootZ } = delta;
+
+    if (target === 'roots') {
+        const root = record as unknown as Roots;
+        return {
+            ...root,
+            transform: {
+                ...root.transform,
+                pos: preserveRootZ
+                    ? transformVec3PreserveZ(root.transform.pos, matrix)
+                    : transformVec3(root.transform.pos, matrix),
+            },
+        } as unknown as Record<string, unknown>;
+    }
+
+    if (target === 'knots') {
+        const knot = record as unknown as Knot;
+        return { ...knot, pos: transformVec3(knot.pos, matrix) } as unknown as Record<string, unknown>;
+    }
+
+    const descriptor = getSupportTypeDescriptor(target);
+    let next: Record<string, unknown> | null = null;
+
+    if (descriptor.hasSegments) {
+        next = { ...record };
+        next.segments = ((record.segments ?? []) as Segment[])
+            .map((segment) => transformSegment(segment, matrix, normalMatrix));
+    }
+
+    for (const { kind, field } of contactEndpointsFor(descriptor.id)) {
+        const contact = record[field];
+        if (!contact) continue;
+        if (!next) next = { ...record };
+        next[field] = kind === 'disk'
+            ? transformContactDisk(contact as never, matrix, normalMatrix)
+            : transformContactCone(contact as never, matrix, normalMatrix);
+    }
+
+    for (const field of transformExtrasFor(descriptor.id)) {
+        const value = record[field];
+        if (!value) continue;
+        if (!next) next = { ...record };
+        next[field] = field === 'curve'
+            ? {
+                ...(value as BraceCurve),
+                controlPoint1: transformVec3((value as BraceCurve).controlPoint1, matrix),
+                controlPoint2: transformVec3((value as BraceCurve).controlPoint2, matrix),
+                startTangent: transformDirection((value as BraceCurve).startTangent, normalMatrix),
+                endTangent: transformDirection((value as BraceCurve).endTangent, normalMatrix),
+            }
+            : field === 'joint'
+                ? { ...(value as Joint), pos: transformVec3((value as Joint).pos, matrix) }
+                : transformVec3(value as Vec3, matrix);
+    }
+
+    // Nothing declared reaches this record: return it by reference, so a caller
+    // that signals "unchanged" by identity still sees the original.
+    return next ?? record;
+}
+
+/**
+ * A stump's root is its plate contact, and its joint sits a fixed gap above that
+ * root. A model transform moves both, which lifts the root off the plate and
+ * leaves the cone's length unchanged; seat them back and stretch the cone so its
+ * socket stays on the joint. Only the model-transform paths call this — a paste
+ * is a placement delta and must move the whole stump with the copy.
+ */
+function seatStumpAfterTransform(stump: Stump, preserveRootZ: boolean, original: Stump): Stump {
+    const rootPos = preserveRootZ ? { ...stump.rootPos, z: original.rootPos.z } : stump.rootPos;
+    const socketZ = rootPos.z + stump.rootHeight + INLINE_ROOT_SOCKET_CLEARANCE_MM;
+    return {
+        ...stump,
+        rootPos,
+        joint: { ...stump.joint, pos: { x: rootPos.x, y: rootPos.y, z: socketZ } },
+        contactCone: seatStumpCone(stump.contactCone, socketZ),
+    };
+}
+
+/** Whether a trunk carries anything that would be stranded by removing it. */
+function trunkHasHostedMembers(
+    trunk: Trunk,
+    knots: Record<string, Knot>,
+    kickstands: Record<string, Kickstand>,
+): boolean {
+    const segmentIds = new Set(trunk.segments.map((segment) => segment.id));
+    for (const knot of Object.values(knots)) {
+        if (segmentIds.has(knot.parentShaftId)) return true;
+    }
+    for (const kickstand of Object.values(kickstands)) {
+        if (segmentIds.has(kickstand.hostSegmentId)) return true;
+    }
+    return false;
+}
+
+/**
+ * A stump whose tip has climbed past the near-plate band becomes a trunk: the
+ * stretched cone is reset to its authored length and the rest of the span is a
+ * real shaft over a plate root. Null when the authored cone already reaches the
+ * root, where a trunk would have no shaft to add.
+ */
+function convertStumpToTrunk(stump: Stump): { root: Roots; trunk: Trunk } | null {
+    const decoded = stump.settingsCodeHex ? decodeSupportSettingsHex(stump.settingsCodeHex) : null;
+    const authoredLength = decoded?.tip.lengthMm ?? stump.contactCone.profile.lengthMm;
+    const cone = {
+        ...stump.contactCone,
+        profile: { ...stump.contactCone.profile, lengthMm: authoredLength },
+    };
+    const socket = getFinalSocketPosition(cone);
+    const rootTopZ = stump.rootHeight + INLINE_ROOT_SOCKET_CLEARANCE_MM;
+    if (socket.z <= rootTopZ + 1e-3) return null;
+
+    const rootId = uuidv4();
+    const topJointId = uuidv4();
+    const root: Roots = {
+        id: rootId,
+        modelId: stump.modelId,
+        transform: {
+            pos: { x: stump.rootPos.x, y: stump.rootPos.y, z: 0 },
+            rot: { x: 0, y: 0, z: 0, w: 1 },
+        },
+        diameter: stump.rootBaseDiameter,
+        diskHeight: INLINE_ROOT_SOCKET_CLEARANCE_MM,
+        coneHeight: stump.rootHeight,
+    };
+    // The root is the shaft's bottom, so the segment carries only its top joint.
+    // A bottom joint would move with the model on a Z transform and detach from
+    // the grounded root.
+    const segment: Segment = {
+        id: uuidv4(),
+        type: 'straight',
+        diameter: stump.rootTopDiameter,
+        topJoint: { id: topJointId, pos: socket, diameter: stump.rootTopDiameter },
+    };
+    const trunk: Trunk = {
+        id: stump.id,
+        modelId: stump.modelId,
+        settingsCodeHex: stump.settingsCodeHex,
+        rootId,
+        segments: [segment],
+        contactCone: { ...cone, socketJointId: topJointId },
+        origin: stump.origin,
+    };
+    return { root, trunk };
+}
+
+/**
+ * A bare, vertical, single-segment trunk whose tip has fallen back into the
+ * near-plate band becomes a stump again. Anything diagonal, segmented or
+ * carrying members is left alone: a stump's root sits directly under its cone,
+ * and it cannot host.
+ */
+function convertTrunkToStump(trunk: Trunk, root: Roots | undefined): Stump | null {
+    if (!root || !trunk.contactCone || trunk.segments.length !== 1) return null;
+    const segment = trunk.segments[0];
+    if (segment.type === 'bezier') return null;
+    const top = segment.topJoint;
+    if (!top) return null;
+    // The first segment may leave its bottom to the root, which is the shape a
+    // stump-to-trunk conversion writes.
+    const bottomPos = segment.bottomJoint?.pos ?? root.transform.pos;
+    if (Math.abs(bottomPos.x - root.transform.pos.x) > 0.01
+        || Math.abs(bottomPos.y - root.transform.pos.y) > 0.01
+        || Math.abs(top.pos.x - bottomPos.x) > 0.01
+        || Math.abs(top.pos.y - bottomPos.y) > 0.01) {
+        return null;
+    }
+    const rootTopZ = root.transform.pos.z + root.diskHeight + root.coneHeight;
+    // What matters is whether the tip is above the root, not whether the
+    // authored cone reaches it: a short gap is served by stretching the cone.
+    if (trunk.contactCone.pos.z <= rootTopZ + 1e-3) return null;
+    return {
+        id: trunk.id,
+        modelId: trunk.modelId,
+        settingsCodeHex: trunk.settingsCodeHex,
+        rootPos: { x: root.transform.pos.x, y: root.transform.pos.y, z: 0 },
+        rootBaseDiameter: root.diameter,
+        rootTopDiameter: segment.diameter,
+        rootHeight: root.coneHeight,
+        joint: {
+            id: top.id,
+            pos: { x: root.transform.pos.x, y: root.transform.pos.y, z: rootTopZ },
+            diameter: top.diameter,
+        },
+        segments: [],
+        contactCone: seatStumpCone(trunk.contactCone, rootTopZ),
+        origin: trunk.origin,
+    };
+}
+
+/**
+ * Moves supports across the stump/trunk boundary after a Z move: a stump whose
+ * tip is above the near-plate band becomes a trunk, and a bare vertical trunk
+ * whose tip has dropped into the band becomes a stump. Runs on the transformed
+ * collections, so the conversion lands in the same history step as the move.
+ */
+function convertSupportsAcrossStumpBand(
+    collections: Record<string, unknown>,
+    knots: Record<string, Knot>,
+    modelId?: string,
+): boolean {
+    const stumps = { ...(collections.stumps as Record<string, Stump> | undefined) };
+    const trunks = { ...(collections.trunks as Record<string, Trunk> | undefined) };
+    const roots = { ...(collections.roots as Record<string, Roots> | undefined) };
+    const kickstands = (collections.kickstands as Record<string, Kickstand> | undefined) ?? {};
+    let changed = false;
+
+    for (const stump of Object.values(stumps)) {
+        if (modelId && stump.modelId !== modelId) continue;
+        if (stump.contactCone.pos.z <= ANCHOR_HEIGHT_THRESHOLD_MM) continue;
+        const converted = convertStumpToTrunk(stump);
+        if (!converted) continue;
+        delete stumps[stump.id];
+        roots[converted.root.id] = converted.root;
+        trunks[converted.trunk.id] = converted.trunk;
+        changed = true;
+    }
+
+    for (const trunk of Object.values(trunks)) {
+        if (modelId && trunk.modelId !== modelId) continue;
+        if (!trunk.contactCone || trunk.contactCone.pos.z >= ANCHOR_HEIGHT_THRESHOLD_MM) continue;
+        if (trunkHasHostedMembers(trunk, knots, kickstands)) continue;
+        const converted = convertTrunkToStump(trunk, roots[trunk.rootId]);
+        if (!converted) continue;
+        delete trunks[trunk.id];
+        delete roots[trunk.rootId];
+        stumps[converted.id] = converted;
+        changed = true;
+    }
+
+    if (changed) {
+        collections.stumps = stumps;
+        collections.trunks = trunks;
+        collections.roots = roots;
+    }
+    return changed;
+}
+
 function transformsRoughlyEqual(a: THREE.Matrix4, b: THREE.Matrix4, epsilon = 1e-8) {
     const ae = a.elements;
     const be = b.elements;
@@ -1620,6 +1969,123 @@ function eulersRoughlyEqual(a: THREE.Euler, b: THREE.Euler, epsilon = 1e-8) {
         && a.order === b.order;
 }
 
+/* --- Kickstands: a SupportState collection; their root and host knot live in
+ * the shared `roots`/`knots`. --- */
+
+/** Kickstand plus the root and host knot it owns, as callers still expect it. */
+function buildKickstandResult(kickstand: Kickstand): KickstandBuildResult | null {
+    const root = state.roots[kickstand.rootId];
+    const hostKnot = state.knots[kickstand.hostKnotId];
+    if (!root || !hostKnot) return null;
+    return { kickstand, root, hostKnot };
+}
+
+function removeKickstandFromState(id: string): KickstandBuildResult | null {
+    const kickstand = state.kickstands[id];
+    if (!kickstand) return null;
+
+    const result = buildKickstandResult(kickstand);
+    if (!result) return null;
+
+    const kickstands = { ...state.kickstands };
+    delete kickstands[kickstand.id];
+    const roots = { ...state.roots };
+    delete roots[result.root.id];
+    const knots = { ...state.knots };
+    delete knots[result.hostKnot.id];
+
+    setState({
+        ...state,
+        kickstands,
+        roots,
+        knots,
+        selectedId: state.selectedId === id ? null : state.selectedId,
+    });
+    notify();
+
+    return result;
+}
+
+export function resetKickstandsInState() {
+    if (Object.keys(state.kickstands).length === 0) return;
+    setState({ ...state, kickstands: {} });
+    notify();
+}
+
+/**
+ * Transform kickstand shafts: those owned by `modelId`, plus any grafted onto a
+ * support that moved. Roots and host knots are the main walk's, which already
+ * moves them.
+ */
+function transformKickstandsForModelInState(
+    modelId: string,
+    delta: SupportDeltaTransform,
+    touchedRootIds?: Set<string>,
+    touchedKnotIds?: Set<string>,
+    touchedSegmentIds?: Set<string>,
+): boolean {
+    let changed = false;
+    let nextKickstands = state.kickstands;
+
+    for (const kickstand of Object.values(state.kickstands)) {
+        const isConnectedToTouchedGraph = !!(
+            (touchedRootIds && touchedRootIds.has(kickstand.rootId))
+            || (touchedKnotIds && touchedKnotIds.has(kickstand.hostKnotId))
+            || (touchedSegmentIds && kickstand.segments.some((segment) => touchedSegmentIds.has(segment.id)))
+        );
+
+        if (kickstand.modelId !== modelId && !isConnectedToTouchedGraph) continue;
+
+        if (!changed) {
+            nextKickstands = { ...state.kickstands };
+            changed = true;
+        }
+
+        nextKickstands[kickstand.id] = transformSupportRecord(
+            'kickstand',
+            kickstand as unknown as Record<string, unknown>,
+            delta,
+        ) as unknown as Kickstand;
+    }
+
+    if (!changed) return false;
+
+    setState({ ...state, kickstands: nextKickstands });
+    notify();
+    return true;
+}
+
+function reassignAllKickstandModelIdsInState(modelId: string): boolean {
+    if (!modelId) return false;
+
+    let changed = false;
+    let nextKickstands = state.kickstands;
+    let nextRoots = state.roots;
+
+    for (const kickstand of Object.values(state.kickstands)) {
+        if (kickstand.modelId === modelId) continue;
+
+        if (!changed) {
+            nextKickstands = { ...state.kickstands };
+            nextRoots = { ...state.roots };
+            changed = true;
+        }
+
+        nextKickstands[kickstand.id] = { ...kickstand, modelId };
+
+        const root = state.roots[kickstand.rootId];
+        if (root && root.modelId !== modelId) {
+            nextRoots[root.id] = { ...root, modelId };
+        }
+    }
+
+    if (!changed) return false;
+
+    setState({ ...state, kickstands: nextKickstands, roots: nextRoots });
+    notify();
+    return true;
+}
+
 export type SupportTransformCommitResult = {
     supportsChanged: boolean;
     kickstandsChanged: boolean;
@@ -1637,78 +2103,54 @@ export function transformSupportsForModel(
         };
     }
 
-    const beforeMatrix = new THREE.Matrix4().compose(
-        beforeTransform.position.clone(),
-        quaternionFromGlobalEuler(beforeTransform.rotation),
-        beforeTransform.scale.clone(),
-    );
-    const afterMatrix = new THREE.Matrix4().compose(
-        afterTransform.position.clone(),
-        quaternionFromGlobalEuler(afterTransform.rotation),
-        afterTransform.scale.clone(),
-    );
-
-    if (transformsRoughlyEqual(beforeMatrix, afterMatrix)) {
+    const delta = buildSupportDeltaTransform(beforeTransform, afterTransform);
+    if (!delta) {
         return {
             supportsChanged: false,
             kickstandsChanged: false,
         };
     }
 
-    const isPureTranslation = eulersRoughlyEqual(beforeTransform.rotation, afterTransform.rotation)
-        && vectorsRoughlyEqual(beforeTransform.scale, afterTransform.scale);
-    const deltaTranslation = afterTransform.position.clone().sub(beforeTransform.position);
-    const preserveRootZ = isPureTranslation && Math.abs(deltaTranslation.z) > 1e-8;
-
-    const deltaMatrix = afterMatrix.clone().multiply(beforeMatrix.clone().invert());
-    const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
-
     let changed = false;
+    // Computed here; the rest come from `nextByCollection`. Each copies on its
+    // own first write, so a caller holding the earlier snapshot keeps it.
     let nextRoots = state.roots;
     let nextTrunks = state.trunks;
-    let nextBranches = state.branches;
-    let nextLeaves = state.leaves;
-    let nextTwigs = state.twigs;
-    let nextSticks = state.sticks;
-    let nextBraces = state.braces;
     let nextKnots = state.knots;
 
     const touchedRootIds = new Set<string>();
     const touchedSegmentIds = new Set<string>();
     const touchedJointIds = new Set<string>();
     const touchedKnotIds = new Set<string>();
-    const touchedLeafIds = new Set<string>();
-    const touchedBraceIds = new Set<string>();
-    const affectedBranchIds = new Set<string>();
-    const affectedLeafIds = new Set<string>();
-    const affectedBraceIds = new Set<string>();
-    const affectedTwigIds = new Set<string>();
-    const affectedStickIds = new Set<string>();
+    // Touched hosts of the pseudo-shafts a knot can ride, keyed by the prefix
+    // each type declares.
+    const touchedKnotHostIdsByPrefix = new Map<string, Set<string>>();
+    for (const descriptor of SUPPORT_TYPES) {
+        if (descriptor.knotHostPrefix) touchedKnotHostIdsByPrefix.set(descriptor.knotHostPrefix, new Set());
+    }
 
     const segmentModelIdById = new Map<string, string | undefined>();
-    for (const trunk of Object.values(state.trunks)) {
-        for (const segment of trunk.segments) segmentModelIdById.set(segment.id, trunk.modelId);
-    }
-    for (const branch of Object.values(state.branches)) {
-        for (const segment of branch.segments) segmentModelIdById.set(segment.id, branch.modelId);
-    }
-    for (const twig of Object.values(state.twigs)) {
-        for (const segment of twig.segments) segmentModelIdById.set(segment.id, twig.modelId);
-    }
-    for (const stick of Object.values(state.sticks)) {
-        for (const segment of stick.segments) segmentModelIdById.set(segment.id, stick.modelId);
+    for (const descriptor of SUPPORT_TYPES) {
+        if (!descriptor.hasSegments) continue;
+        const collection = state[descriptor.location.key] as Record<string, { modelId: string; segments?: Segment[] }>;
+        for (const entity of Object.values(collection)) {
+            for (const segment of entity.segments ?? []) segmentModelIdById.set(segment.id, entity.modelId);
+        }
     }
 
     const resolveModelIdFromParentShaft = (parentShaftId: string, visitedBraceIds?: Set<string>): string | undefined => {
-        if (parentShaftId.startsWith('leafCone:')) {
-            const leafId = parentShaftId.slice('leafCone:'.length);
-            const leaf = state.leaves[leafId];
+        // A cone reaches its model through its host knot, a span through either
+        // end, so the two kinds stay separate arms.
+        const host = parseKnotHostId(parentShaftId);
+
+        if (host && isConeKnotHost(host.typeId)) {
+            const leaf = state.leaves[host.entityId];
             if (!leaf) return undefined;
             return leaf.modelId ?? resolveModelIdFromKnot(leaf.parentKnotId, visitedBraceIds);
         }
 
-        if (parentShaftId.startsWith('braceSegment:')) {
-            const braceId = parentShaftId.slice('braceSegment:'.length);
+        if (host && isSpanKnotHost(host.typeId)) {
+            const braceId = host.entityId;
             const brace = state.braces[braceId];
             if (!brace) return undefined;
 
@@ -1733,327 +2175,220 @@ export function transformSupportsForModel(
 
     for (const root of Object.values(state.roots)) {
         if (root.modelId !== modelId) continue;
-        if (!changed) {
-            nextRoots = { ...state.roots };
-            changed = true;
-        }
+        if (nextRoots === state.roots) nextRoots = { ...state.roots };
+        changed = true;
         touchedRootIds.add(root.id);
-        nextRoots[root.id] = {
-            ...root,
-            transform: {
-                ...root.transform,
-                pos: preserveRootZ
-                    ? transformVec3PreserveZ(root.transform.pos, deltaMatrix)
-                    : transformVec3(root.transform.pos, deltaMatrix),
-            },
-        };
+        nextRoots[root.id] = transformSupportRecord(
+            'roots',
+            root as unknown as Record<string, unknown>,
+            delta,
+        ) as unknown as Roots;
     }
 
     for (const trunk of Object.values(state.trunks)) {
         if (trunk.modelId !== modelId) continue;
-        if (!changed) {
-            nextTrunks = { ...state.trunks };
-            changed = true;
-        }
+        if (nextTrunks === state.trunks) nextTrunks = { ...state.trunks };
+        changed = true;
 
-        trunk.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
-        trunk.segments.forEach((segment) => {
-            if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
-            if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
-        });
-        if (trunk.contactCone?.socketJointId) {
-            touchedJointIds.add(trunk.contactCone.socketJointId);
-        }
-        const nextTrunk: Trunk = {
-            ...trunk,
-            segments: trunk.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
-            contactCone: trunk.contactCone ? transformContactCone(trunk.contactCone, deltaMatrix, normalMatrix) : trunk.contactCone,
-        };
+        const nextTrunk = transformSupportRecord(
+            'trunk',
+            trunk as unknown as Record<string, unknown>,
+            delta,
+        ) as unknown as Trunk;
 
         nextTrunks[trunk.id] = nextTrunk;
+    }
+
+    // Which entities the transform reaches. Two declared rules cover every
+    // type: a knot-hosted type follows its host knot or that knot's shaft; a
+    // self-contained one follows a joint it shares with a moved segment.
+    const affectedByType = new Map<SupportTypeId, Set<string>>(
+        SUPPORT_TYPES.map((descriptor) => [descriptor.id, new Set<string>()]),
+    );
+
+    /** Marks a shaft's segments and joints as moved, if the type propagates. */
+    const claimShaft = (descriptor: SupportTypeDescriptor, entity: Record<string, unknown>) => {
+        if (descriptor.hasSegments && descriptor.transformPropagatesToShaft) {
+            for (const segment of (entity.segments ?? []) as Segment[]) {
+                touchedSegmentIds.add(segment.id);
+                if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
+                if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
+            }
+        }
+        for (const { field } of contactEndpointsFor(descriptor.id)) {
+            const contact = entity[field] as { socketJointId?: string } | undefined;
+            if (contact?.socketJointId) touchedJointIds.add(contact.socketJointId);
+        }
+    };
+
+    // A shaft on its own root is reached by no edge, so it claims its segments
+    // here or the knots riding them stay put when the model moves.
+    for (const descriptor of SUPPORT_TYPES) {
+        if (!descriptor.ownsRoot) continue;
+        const collection = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+        for (const entity of Object.values(collection)) {
+            if (entity.modelId === modelId) claimShaft(descriptor, entity);
+        }
     }
 
     let expandedGraph = true;
     while (expandedGraph) {
         expandedGraph = false;
 
-        for (const branch of Object.values(state.branches)) {
-            if (affectedBranchIds.has(branch.id)) continue;
+        for (const descriptor of SUPPORT_TYPES) {
+            // Trunks are seeded above; roots carry them.
+            if (descriptor.ownsRoot) continue;
 
-            const parentKnot = state.knots[branch.parentKnotId];
-            const isConnectedToMovedGraph = touchedKnotIds.has(branch.parentKnotId)
-                || (!!parentKnot && touchedSegmentIds.has(parentKnot.parentShaftId));
-            const resolvedBranchModelId = branch.modelId ?? resolveModelIdFromKnot(branch.parentKnotId);
+            const affected = affectedByType.get(descriptor.id)!;
+            const knotFields = descriptor.edges
+                .filter((edge) => edge.to === 'knots' && edge.ownership === 'hostedBy')
+                .map((edge) => edge.field);
 
-            if (resolvedBranchModelId !== modelId && !isConnectedToMovedGraph) continue;
+            const collection = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+            for (const entity of Object.values(collection)) {
+                const id = entity.id as string;
+                if (affected.has(id)) continue;
 
-            affectedBranchIds.add(branch.id);
-            touchedKnotIds.add(branch.parentKnotId);
-            branch.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
-            branch.segments.forEach((segment) => {
-                if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
-                if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
-            });
-            if (branch.contactCone?.socketJointId) {
-                touchedJointIds.add(branch.contactCone.socketJointId);
-            }
-            expandedGraph = true;
-        }
+                let connected = false;
 
-        for (const leaf of Object.values(state.leaves)) {
-            if (affectedLeafIds.has(leaf.id)) continue;
-
-            const parentKnot = state.knots[leaf.parentKnotId];
-            const isConnectedToMovedGraph = touchedKnotIds.has(leaf.parentKnotId)
-                || (!!parentKnot && touchedSegmentIds.has(parentKnot.parentShaftId));
-            const resolvedLeafModelId = leaf.modelId ?? resolveModelIdFromKnot(leaf.parentKnotId);
-
-            if (resolvedLeafModelId !== modelId && !isConnectedToMovedGraph) continue;
-
-            affectedLeafIds.add(leaf.id);
-            touchedKnotIds.add(leaf.parentKnotId);
-            touchedLeafIds.add(leaf.id);
-            expandedGraph = true;
-        }
-
-        for (const brace of Object.values(state.braces)) {
-            if (affectedBraceIds.has(brace.id)) continue;
-
-            const startKnot = state.knots[brace.startKnotId];
-            const endKnot = state.knots[brace.endKnotId];
-            const startParentShaftId = startKnot?.parentShaftId;
-            const endParentShaftId = endKnot?.parentShaftId;
-            const isConnectedToMovedGraph = touchedKnotIds.has(brace.startKnotId)
-                || touchedKnotIds.has(brace.endKnotId)
-                || (!!startParentShaftId && (touchedSegmentIds.has(startParentShaftId)
-                    || (startParentShaftId.startsWith('braceSegment:')
-                        && touchedBraceIds.has(startParentShaftId.slice('braceSegment:'.length)))))
-                || (!!endParentShaftId && (touchedSegmentIds.has(endParentShaftId)
-                    || (endParentShaftId.startsWith('braceSegment:')
-                        && touchedBraceIds.has(endParentShaftId.slice('braceSegment:'.length)))));
-            const resolvedBraceModelId = brace.modelId
-                ?? resolveModelIdFromKnot(brace.startKnotId)
-                ?? resolveModelIdFromKnot(brace.endKnotId);
-
-            if (resolvedBraceModelId !== modelId && !isConnectedToMovedGraph) continue;
-
-            affectedBraceIds.add(brace.id);
-            touchedKnotIds.add(brace.startKnotId);
-            touchedKnotIds.add(brace.endKnotId);
-            touchedBraceIds.add(brace.id);
-            touchedSegmentIds.add(`braceSegment:${brace.id}`);
-            expandedGraph = true;
-        }
-
-        for (const twig of Object.values(state.twigs)) {
-            if (affectedTwigIds.has(twig.id)) continue;
-
-            const isConnectedToMovedGraph = twig.segments.some((segment) => {
-                const bottomJointId = segment.bottomJoint?.id;
-                const topJointId = segment.topJoint?.id;
-                return (!!bottomJointId && touchedJointIds.has(bottomJointId))
-                    || (!!topJointId && touchedJointIds.has(topJointId));
-            });
-
-            if (twig.modelId !== modelId && !isConnectedToMovedGraph) continue;
-
-            affectedTwigIds.add(twig.id);
-            twig.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
-            twig.segments.forEach((segment) => {
-                if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
-                if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
-            });
-            expandedGraph = true;
-        }
-
-        for (const stick of Object.values(state.sticks)) {
-            if (affectedStickIds.has(stick.id)) continue;
-
-            const isConnectedToMovedGraph = stick.segments.some((segment) => {
-                const bottomJointId = segment.bottomJoint?.id;
-                const topJointId = segment.topJoint?.id;
-                return (!!bottomJointId && touchedJointIds.has(bottomJointId))
-                    || (!!topJointId && touchedJointIds.has(topJointId));
-            });
-
-            if (stick.modelId !== modelId && !isConnectedToMovedGraph) continue;
-
-            affectedStickIds.add(stick.id);
-            stick.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
-            stick.segments.forEach((segment) => {
-                if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
-                if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
-            });
-            if (stick.contactConeA?.socketJointId) touchedJointIds.add(stick.contactConeA.socketJointId);
-            if (stick.contactConeB?.socketJointId) touchedJointIds.add(stick.contactConeB.socketJointId);
-            expandedGraph = true;
-        }
-    }
-
-    for (const branchId of affectedBranchIds) {
-        const branch = state.branches[branchId];
-        if (!branch) continue;
-
-        if (!changed) {
-            nextBranches = { ...state.branches };
-            changed = true;
-        }
-
-        nextBranches[branch.id] = {
-            ...branch,
-            segments: branch.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
-            contactCone: branch.contactCone ? transformContactCone(branch.contactCone, deltaMatrix, normalMatrix) : branch.contactCone,
-        };
-    }
-
-    for (const leafId of affectedLeafIds) {
-        const leaf = state.leaves[leafId];
-        if (!leaf) continue;
-
-        if (!changed) {
-            nextLeaves = { ...state.leaves };
-            changed = true;
-        }
-
-        nextLeaves[leaf.id] = {
-            ...leaf,
-            contactCone: transformContactCone(leaf.contactCone, deltaMatrix, normalMatrix),
-        };
-    }
-
-    for (const twigId of affectedTwigIds) {
-        const twig = state.twigs[twigId];
-        if (!twig) continue;
-        if (!changed) {
-            nextTwigs = { ...state.twigs };
-            changed = true;
-        }
-
-        twig.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
-        twig.segments.forEach((segment) => {
-            if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
-            if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
-        });
-        nextTwigs[twig.id] = {
-            ...twig,
-            segments: twig.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
-            contactDiskA: transformContactDisk(twig.contactDiskA, deltaMatrix, normalMatrix),
-            contactDiskB: transformContactDisk(twig.contactDiskB, deltaMatrix, normalMatrix),
-        };
-    }
-
-    for (const stickId of affectedStickIds) {
-        const stick = state.sticks[stickId];
-        if (!stick) continue;
-        if (!changed) {
-            nextSticks = { ...state.sticks };
-            changed = true;
-        }
-
-        stick.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
-        stick.segments.forEach((segment) => {
-            if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
-            if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
-        });
-        if (stick.contactConeA?.socketJointId) touchedJointIds.add(stick.contactConeA.socketJointId);
-        if (stick.contactConeB?.socketJointId) touchedJointIds.add(stick.contactConeB.socketJointId);
-        nextSticks[stick.id] = {
-            ...stick,
-            segments: stick.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
-            contactConeA: transformContactCone(stick.contactConeA, deltaMatrix, normalMatrix),
-            contactConeB: transformContactCone(stick.contactConeB, deltaMatrix, normalMatrix),
-        };
-    }
-
-    for (const braceId of affectedBraceIds) {
-        const brace = state.braces[braceId];
-        if (!brace) continue;
-
-        if (!changed) {
-            nextBraces = { ...state.braces };
-            changed = true;
-        }
-
-        nextBraces[brace.id] = {
-            ...brace,
-            curve: brace.curve
-                ? {
-                    ...brace.curve,
-                    controlPoint1: transformVec3(brace.curve.controlPoint1, deltaMatrix),
-                    controlPoint2: transformVec3(brace.curve.controlPoint2, deltaMatrix),
-                    startTangent: transformDirection(brace.curve.startTangent, normalMatrix),
-                    endTangent: transformDirection(brace.curve.endTangent, normalMatrix),
+                // Knot-hosted: the host knot, or the shaft that knot sits on.
+                for (const field of knotFields) {
+                    const knotId = entity[field];
+                    if (typeof knotId !== 'string') continue;
+                    if (touchedKnotIds.has(knotId)) { connected = true; break; }
+                    const hostShaftId = state.knots[knotId]?.parentShaftId;
+                    if (hostShaftId && touchedSegmentIds.has(hostShaftId)) { connected = true; break; }
                 }
-                : brace.curve,
-        };
+
+                // Self-contained: a joint shared with something already moved.
+                if (!connected && knotFields.length === 0 && descriptor.hasSegments) {
+                    connected = ((entity.segments ?? []) as Segment[]).some((segment) => (
+                        (!!segment.bottomJoint?.id && touchedJointIds.has(segment.bottomJoint.id))
+                        || (!!segment.topJoint?.id && touchedJointIds.has(segment.topJoint.id))
+                    ));
+                }
+
+                const ownModelId = (entity.modelId as string | undefined)
+                    ?? knotFields.reduce<string | undefined>(
+                        (found, field) => found ?? (typeof entity[field] === 'string'
+                            ? resolveModelIdFromKnot(entity[field] as string)
+                            : undefined),
+                        undefined,
+                    );
+
+                if (ownModelId !== modelId && !connected) continue;
+
+                affected.add(id);
+                for (const field of knotFields) {
+                    const knotId = entity[field];
+                    if (typeof knotId === 'string') touchedKnotIds.add(knotId);
+                }
+                if (descriptor.knotHostPrefix) {
+                    touchedKnotHostIdsByPrefix.get(descriptor.knotHostPrefix)!.add(id);
+                    // A brace's span is itself addressed as a segment; a leaf's
+                    // cone is not, so only a shaftless host claims one.
+                    if (!descriptor.hasSegments && descriptor.segmentSelectionPrefix) {
+                        touchedSegmentIds.add(`${descriptor.segmentSelectionPrefix}${id}`);
+                    }
+                }
+                claimShaft(descriptor, entity);
+                expandedGraph = true;
+            }
+        }
     }
 
-    let nextAnchors = state.anchors;
-    for (const anchor of Object.values(state.anchors)) {
-        if (anchor.modelId !== modelId) continue;
-        if (!changed) {
-            nextAnchors = { ...state.anchors };
-            changed = true;
+    // What moves is declared: segments and contactFields, plus whatever
+    // SUPPORT_TRANSFORM_EXTRAS names (a brace curve, a stump's own root).
+    const nextByCollection: Partial<Record<SupportCollectionKey, Record<string, unknown>>> = {};
+
+    for (const descriptor of SUPPORT_TYPES) {
+        // A root-owning type is transformed above, alongside the root it owns.
+        if (descriptor.ownsRoot) continue;
+
+        const collection = descriptor.location.key;
+        const source = state[collection] as unknown as Record<string, Record<string, unknown>>;
+        const ids = affectedByType.get(descriptor.id) ?? new Set<string>();
+
+        for (const id of ids) {
+            const entity = source[id];
+            if (!entity) continue;
+
+            if (!changed) changed = true;
+            const target = nextByCollection[collection] ?? { ...source };
+            nextByCollection[collection] = target;
+
+            if (descriptor.hasSegments && descriptor.transformPropagatesToShaft) {
+                for (const segment of (entity.segments ?? []) as Segment[]) {
+                    touchedSegmentIds.add(segment.id);
+                    if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
+                    if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
+                }
+            }
+
+            for (const { field } of contactEndpointsFor(descriptor.id)) {
+                const contact = entity[field] as { socketJointId?: string } | undefined;
+                if (contact?.socketJointId) touchedJointIds.add(contact.socketJointId);
+            }
+
+            const transformed = transformSupportRecord(descriptor.id, entity, delta);
+            target[id] = descriptor.id === 'stump'
+                ? seatStumpAfterTransform(transformed as unknown as Stump, delta.preserveRootZ, entity as unknown as Stump)
+                : transformed;
         }
-        nextAnchors[anchor.id] = {
-            ...anchor,
-            rootPos: transformVec3(anchor.rootPos, deltaMatrix),
-            joint: {
-                ...anchor.joint,
-                pos: transformVec3(anchor.joint.pos, deltaMatrix),
-            },
-            segments: anchor.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
-            contactCone: transformContactCone(anchor.contactCone, deltaMatrix, normalMatrix),
-        };
     }
+
 
     for (const knot of Object.values(state.knots)) {
         const parentShaftId = knot.parentShaftId;
-        const isLeafConeKnot = parentShaftId.startsWith('leafCone:')
-            && touchedLeafIds.has(parentShaftId.slice('leafCone:'.length));
-        const isBraceSegmentKnot = parentShaftId.startsWith('braceSegment:')
-            && touchedBraceIds.has(parentShaftId.slice('braceSegment:'.length));
+        let ridesTouchedHost = false;
+        for (const [prefix, touchedHostIds] of touchedKnotHostIdsByPrefix) {
+            if (!parentShaftId.startsWith(prefix)) continue;
+            ridesTouchedHost = touchedHostIds.has(parentShaftId.slice(prefix.length));
+            break;
+        }
         const shouldTransform = touchedKnotIds.has(knot.id)
             || touchedSegmentIds.has(parentShaftId)
-            || isLeafConeKnot
-            || isBraceSegmentKnot;
+            || ridesTouchedHost;
 
         if (!shouldTransform) continue;
 
-        if (!changed) {
-            nextKnots = { ...state.knots };
-            changed = true;
-        }
+        if (nextKnots === state.knots) nextKnots = { ...state.knots };
+        changed = true;
 
-        nextKnots[knot.id] = {
-            ...knot,
-            pos: transformVec3(knot.pos, deltaMatrix),
-        };
+        nextKnots[knot.id] = transformSupportRecord(
+            'knots',
+            knot as unknown as Record<string, unknown>,
+            delta,
+        ) as unknown as Knot;
     }
 
     if (changed) {
-        state = {
-            ...state,
-            roots: nextRoots,
-            trunks: nextTrunks,
-            branches: nextBranches,
-            leaves: nextLeaves,
-            twigs: nextTwigs,
-            sticks: nextSticks,
-            braces: nextBraces,
-            anchors: nextAnchors,
-            knots: nextKnots,
-        };
+        // One entry per collection the loop touched; the rest carry through.
+        const nextCollections: Record<string, unknown> = {};
+        for (const descriptor of SUPPORT_TYPES) {
+            const key = descriptor.location.key;
+            nextCollections[key] = nextByCollection[key] ?? state[key];
+        }
+        // The three this function computes itself win over the generic pass.
+        nextCollections.roots = nextRoots;
+        nextCollections.trunks = nextTrunks;
+        nextCollections.knots = nextKnots;
+
+        // A pure Z move is what changes the gap a near-plate support spans.
+        if (delta.preserveRootZ) {
+            convertSupportsAcrossStumpBand(nextCollections, nextKnots, modelId);
+        }
+
+        setState({ ...state, ...nextCollections } as SupportState);
         notify();
     }
 
-    const kickstandsChanged = transformKickstandsForModel(
+    const kickstandsChanged = transformKickstandsForModelInState(
         modelId,
-        deltaMatrix,
+        delta,
         touchedRootIds,
         touchedKnotIds,
         touchedSegmentIds,
-        preserveRootZ,
     );
 
     return {
@@ -2066,144 +2401,53 @@ export function transformAllSupportsForSingleModel(
     beforeTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
     afterTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
 ): SupportTransformCommitResult {
-    const beforeMatrix = new THREE.Matrix4().compose(
-        beforeTransform.position.clone(),
-        quaternionFromGlobalEuler(beforeTransform.rotation),
-        beforeTransform.scale.clone(),
-    );
-    const afterMatrix = new THREE.Matrix4().compose(
-        afterTransform.position.clone(),
-        quaternionFromGlobalEuler(afterTransform.rotation),
-        afterTransform.scale.clone(),
-    );
-
-    if (transformsRoughlyEqual(beforeMatrix, afterMatrix)) {
+    const delta = buildSupportDeltaTransform(beforeTransform, afterTransform);
+    if (!delta) {
         return {
             supportsChanged: false,
             kickstandsChanged: false,
         };
     }
 
-    const isPureTranslation = eulersRoughlyEqual(beforeTransform.rotation, afterTransform.rotation)
-        && vectorsRoughlyEqual(beforeTransform.scale, afterTransform.scale);
-    const deltaTranslation = afterTransform.position.clone().sub(beforeTransform.position);
-    const preserveRootZ = isPureTranslation && Math.abs(deltaTranslation.z) > 1e-8;
+    // One walk over SUPPORT_ENTITY_COLLECTIONS: a shaft if the type has one,
+    // each declared contact, plus whatever `transformExtrasFor` names. `roots`
+    // stays its own arm, being no support type, and keeps its Z on a translation.
+    const { collections: transformed } = mapSupportEntities(state, (entity, collection) => {
+        const record = entity as unknown as Record<string, unknown>;
+        return (collection === 'roots'
+            ? transformSupportRecord('roots', record, delta)
+            : transformSupportRecord(typeIdForCollection(collection), record, delta)) as unknown as typeof entity;
+    });
 
-    const deltaMatrix = afterMatrix.clone().multiply(beforeMatrix.clone().invert());
-    const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
-
-    const nextRoots: Record<string, Roots> = {};
-    for (const root of Object.values(state.roots)) {
-        nextRoots[root.id] = {
-            ...root,
-            transform: {
-                ...root.transform,
-                pos: preserveRootZ
-                    ? transformVec3PreserveZ(root.transform.pos, deltaMatrix)
-                    : transformVec3(root.transform.pos, deltaMatrix),
-            },
-        };
-    }
-
-    const nextTrunks: Record<string, Trunk> = {};
-    for (const trunk of Object.values(state.trunks)) {
-        nextTrunks[trunk.id] = {
-            ...trunk,
-            segments: trunk.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
-            contactCone: trunk.contactCone ? transformContactCone(trunk.contactCone, deltaMatrix, normalMatrix) : trunk.contactCone,
-        };
-    }
-
-    const nextBranches: Record<string, Branch> = {};
-    for (const branch of Object.values(state.branches)) {
-        nextBranches[branch.id] = {
-            ...branch,
-            segments: branch.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
-            contactCone: branch.contactCone ? transformContactCone(branch.contactCone, deltaMatrix, normalMatrix) : branch.contactCone,
-        };
-    }
-
-    const nextLeaves: Record<string, Leaf> = {};
-    for (const leaf of Object.values(state.leaves)) {
-        nextLeaves[leaf.id] = {
-            ...leaf,
-            contactCone: transformContactCone(leaf.contactCone, deltaMatrix, normalMatrix),
-        };
-    }
-
-    const nextTwigs: Record<string, Twig> = {};
-    for (const twig of Object.values(state.twigs)) {
-        nextTwigs[twig.id] = {
-            ...twig,
-            segments: twig.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
-            contactDiskA: transformContactDisk(twig.contactDiskA, deltaMatrix, normalMatrix),
-            contactDiskB: transformContactDisk(twig.contactDiskB, deltaMatrix, normalMatrix),
-        };
-    }
-
-    const nextSticks: Record<string, Stick> = {};
-    for (const stick of Object.values(state.sticks)) {
-        nextSticks[stick.id] = {
-            ...stick,
-            segments: stick.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
-            contactConeA: transformContactCone(stick.contactConeA, deltaMatrix, normalMatrix),
-            contactConeB: transformContactCone(stick.contactConeB, deltaMatrix, normalMatrix),
-        };
-    }
-
-    const nextBraces: Record<string, Brace> = {};
-    for (const brace of Object.values(state.braces)) {
-        nextBraces[brace.id] = {
-            ...brace,
-            curve: brace.curve
-                ? {
-                    ...brace.curve,
-                    controlPoint1: transformVec3(brace.curve.controlPoint1, deltaMatrix),
-                    controlPoint2: transformVec3(brace.curve.controlPoint2, deltaMatrix),
-                    startTangent: transformDirection(brace.curve.startTangent, normalMatrix),
-                    endTangent: transformDirection(brace.curve.endTangent, normalMatrix),
-                }
-                : brace.curve,
-        };
-    }
-
-    const nextAnchors: Record<string, Anchor> = {};
-    for (const anchor of Object.values(state.anchors)) {
-        nextAnchors[anchor.id] = {
-            ...anchor,
-            rootPos: transformVec3(anchor.rootPos, deltaMatrix),
-            joint: {
-                ...anchor.joint,
-                pos: transformVec3(anchor.joint.pos, deltaMatrix),
-            },
-            segments: anchor.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
-            contactCone: transformContactCone(anchor.contactCone, deltaMatrix, normalMatrix),
-        };
-    }
+    transformed.stumps = Object.fromEntries(
+        Object.entries(transformed.stumps).map(([id, stump]) => [
+            id,
+            seatStumpAfterTransform(stump, delta.preserveRootZ, state.stumps[id] ?? stump),
+        ]),
+    );
 
     const nextKnots: Record<string, Knot> = {};
     for (const knot of Object.values(state.knots)) {
-        nextKnots[knot.id] = {
-            ...knot,
-            pos: transformVec3(knot.pos, deltaMatrix),
-        };
+        nextKnots[knot.id] = transformSupportRecord(
+            'knots',
+            knot as unknown as Record<string, unknown>,
+            delta,
+        ) as unknown as Knot;
     }
 
-    state = {
-        ...state,
-        roots: nextRoots,
-        trunks: nextTrunks,
-        branches: nextBranches,
-        leaves: nextLeaves,
-        twigs: nextTwigs,
-        sticks: nextSticks,
-        braces: nextBraces,
-        anchors: nextAnchors,
-        knots: nextKnots,
-    };
-    notify();
+    if (delta.preserveRootZ) {
+        convertSupportsAcrossStumpBand(transformed as unknown as Record<string, unknown>, nextKnots);
+    }
 
-    const kickstandsChanged = transformAllKickstands(deltaMatrix, preserveRootZ);
+    // Read before `setState` replaces `state`.
+    const kickstandsChanged = transformed.kickstands !== state.kickstands;
+
+    setState({
+        ...state,
+        ...transformed,
+        knots: nextKnots,
+    });
+    notify();
 
     return {
         supportsChanged: true,
@@ -2225,12 +2469,12 @@ export function removeRootById(rootId: string): Roots | null {
         nextSelectedCategory = null;
     }
 
-    state = {
+    setState({
         ...state,
         roots: nextRoots,
         selectedId: nextSelectedId,
         selectedCategory: nextSelectedCategory,
-    };
+    });
     notify();
     return deepClone(root);
 }
@@ -2238,18 +2482,23 @@ export function removeRootById(rootId: string): Roots | null {
 // --- Actions ---
 
 export function toggleSegmentCurve(segmentId: string) {
-    if (segmentId.startsWith('braceSegment:')) {
-        const braceId = segmentId.slice('braceSegment:'.length);
-        const brace = state.braces[braceId];
-        if (!brace) return;
+    // A span-hosted knot has no segments: its span's ends are the declared knots.
+    const span = parsePrefixedSegmentId(segmentId);
+    if (span) {
+        const spanDescriptor = getSupportTypeDescriptor(span.typeId);
+        const spans = state[spanDescriptor.location.key] as unknown as
+            Record<string, Record<string, unknown> & { curve?: BraceCurve } | undefined>;
+        const spanEntity = spans[span.entityId];
+        if (!spanEntity) return;
 
-        const startKnot = state.knots[brace.startKnotId];
-        const endKnot = state.knots[brace.endKnotId];
+        const [startField, endField] = hostKnotFieldsFor(span.typeId);
+        const startKnot = state.knots[spanEntity[startField] as string];
+        const endKnot = state.knots[spanEntity[endField] as string];
         if (!startKnot || !endKnot) return;
 
-        const newBrace = deepClone(brace);
-        if (newBrace.curve?.type === 'bezier') {
-            delete (newBrace as any).curve;
+        const newSpan = deepClone(spanEntity);
+        if (newSpan.curve?.type === 'bezier') {
+            delete newSpan.curve;
         } else {
             const startPos = toVector3(startKnot.pos);
             const endPos = toVector3(endKnot.pos);
@@ -2262,7 +2511,7 @@ export function toggleSegmentCurve(segmentId: string) {
             const bias = 0.5;
             const [cp1, cp2] = calculateBezierControlPoints(startKnot.pos, endKnot.pos, startTangent, endTangent, tension, bias);
 
-            newBrace.curve = {
+            newSpan.curve = {
                 type: 'bezier',
                 controlPoint1: cp1,
                 controlPoint2: cp2,
@@ -2274,164 +2523,53 @@ export function toggleSegmentCurve(segmentId: string) {
             };
         }
 
-        updateBrace(newBrace);
+        updateSupportEntity(span.typeId, newSpan);
         return;
     }
 
-    // Find the segment in trunks/branches/twigs/sticks
-    let targetTrunkId: string | null = null;
-    let targetBranchId: string | null = null;
-    let targetTwigId: string | null = null;
-    let targetStickId: string | null = null;
-    let targetKickstandId: string | null = null;
-    let targetSegmentIndex = -1;
-    let container: Trunk | Branch | Twig | Stick | Kickstand | null = null;
+    // `findShaftOwnerOfSegment` walks every type declaring segments.
+    const owner = findShaftOwnerOfSegment(segmentId);
+    if (!owner) return;
+    const entity = getSupportEntity(owner.typeId, owner.id) as unknown as ShaftEntity | null;
+    if (!entity?.segments) return;
 
-    // Search Trunks
-    for (const t of Object.values(state.trunks)) {
-        const idx = t.segments.findIndex(s => s.id === segmentId);
-        if (idx !== -1) {
-            targetTrunkId = t.id;
-            targetSegmentIndex = idx;
-            container = t;
-            break;
-        }
-    }
+    const segmentIndex = entity.segments.findIndex((candidate) => candidate.id === segmentId);
+    if (segmentIndex === -1) return;
 
-    // Search Branches if not found
-    if (!container) {
-        for (const b of Object.values(state.branches)) {
-            const idx = b.segments.findIndex(s => s.id === segmentId);
-            if (idx !== -1) {
-                targetBranchId = b.id;
-                targetSegmentIndex = idx;
-                container = b;
-                break;
-            }
-        }
-    }
-
-    // Search Twigs if not found
-    if (!container) {
-        for (const t of Object.values(state.twigs)) {
-            const idx = t.segments.findIndex(s => s.id === segmentId);
-            if (idx !== -1) {
-                targetTwigId = t.id;
-                targetSegmentIndex = idx;
-                container = t;
-                break;
-            }
-        }
-    }
-
-    // Search Sticks if not found
-    if (!container) {
-        for (const spt of Object.values(state.sticks)) {
-            const idx = spt.segments.findIndex(s => s.id === segmentId);
-            if (idx !== -1) {
-                targetStickId = spt.id;
-                targetSegmentIndex = idx;
-                container = spt;
-                break;
-            }
-        }
-    }
-
-    // Search Kickstands if not found
-    if (!container) {
-        const kickstands = Object.values(getKickstandSnapshot().kickstands);
-        for (const kickstand of kickstands) {
-            const idx = kickstand.segments.findIndex(s => s.id === segmentId);
-            if (idx !== -1) {
-                targetKickstandId = kickstand.id;
-                targetSegmentIndex = idx;
-                container = kickstand;
-                break;
-            }
-        }
-    }
-
-    if (!container || targetSegmentIndex === -1) return;
-
-    // Create deep clone
-    const newContainer = deepClone(container);
-    const segment = newContainer.segments[targetSegmentIndex];
+    const next = deepClone(entity);
+    const segment = next.segments[segmentIndex];
 
     if (segment.type === 'bezier') {
-        // Convert to Straight
+        // Convert to straight: identical for every type.
         const straight: StraightSegment = {
             id: segment.id,
             diameter: segment.diameter,
             topJoint: segment.topJoint,
             bottomJoint: segment.bottomJoint,
-            type: 'straight'
+            type: 'straight',
         };
-        newContainer.segments[targetSegmentIndex] = straight;
+        next.segments[segmentIndex] = straight;
     } else {
-        // Convert to Bezier
+        // The shaft's ends, from the type's declared lower and upper endpoints.
+        const endpoints = resolveSegmentEndpoints(
+            entity,
+            segment,
+            segmentIndex,
+            resolveDeclaredHosts(owner.typeId, entity as unknown as Record<string, unknown>),
+        );
+        if (!endpoints) return;
 
-        // Get Start Position (Approximation for initialization)
-        let startPos: THREE.Vector3;
-        if (segment.bottomJoint) {
-            startPos = toVector3(segment.bottomJoint.pos);
-        } else if (targetSegmentIndex === 0) {
-            if (targetTrunkId) {
-                const root = state.roots[(newContainer as Trunk).rootId];
-                if (root) {
-                    const startZ = root.transform.pos.z + root.diskHeight + root.coneHeight;
-                    startPos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, startZ);
-                } else {
-                    startPos = new THREE.Vector3();
-                }
-            } else if (targetKickstandId) {
-                const root = state.roots[(newContainer as Kickstand).rootId];
-                if (root) {
-                    const startZ = root.transform.pos.z + root.diskHeight + root.coneHeight;
-                    startPos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, startZ);
-                } else {
-                    startPos = new THREE.Vector3();
-                }
-            } else if (targetBranchId) {
-                const knot = state.knots[(newContainer as Branch).parentKnotId];
-                startPos = knot && knot.pos ? toVector3(knot.pos) : new THREE.Vector3();
-            } else {
-                startPos = new THREE.Vector3();
-            }
-        } else {
-            const prevSeg = newContainer.segments[targetSegmentIndex - 1];
-            if (prevSeg.topJoint) {
-                startPos = toVector3(prevSeg.topJoint.pos);
-            } else {
-                startPos = new THREE.Vector3(); // Fallback
-            }
-        }
-
-        // Get End Position (Approximation)
-        let endPos: THREE.Vector3;
-        if (segment.topJoint) {
-            endPos = toVector3(segment.topJoint.pos);
-        } else if (targetKickstandId) {
-            const hostKnot = state.knots[(newContainer as Kickstand).hostKnotId];
-            endPos = hostKnot ? toVector3(hostKnot.pos) : startPos.clone().add(new THREE.Vector3(0, 0, 10));
-        } else if ((newContainer as Trunk).contactCone) {
-            const cone = (newContainer as Trunk).contactCone!;
-            endPos = toVector3(cone.pos);
-        } else {
-            endPos = startPos.clone().add(new THREE.Vector3(0, 0, 10));
-        }
-
-        // Calculate Tangents (Straight line)
-        const dir = endPos.clone().sub(startPos).normalize();
-        // Handle zero length case
+        const dir = toVector3(endpoints.end).sub(toVector3(endpoints.start)).normalize();
         if (dir.lengthSq() === 0) dir.set(0, 0, 1);
 
-        // Calculate Control Points
+        const startTangent = toVec3(dir);
+        const endTangent = toVec3(dir);
         const [cp1, cp2] = calculateBezierControlPoints(
-            toVec3(startPos),
-            toVec3(endPos),
-            toVec3(dir),
-            toVec3(dir),
-            0.5
+            endpoints.start,
+            endpoints.end,
+            startTangent,
+            endTangent,
+            0.5,
         );
 
         const bezier: BezierSegment = {
@@ -2442,32 +2580,21 @@ export function toggleSegmentCurve(segmentId: string) {
             type: 'bezier',
             controlPoint1: cp1,
             controlPoint2: cp2,
-            startTangent: toVec3(dir),
-            endTangent: toVec3(dir),
+            startTangent,
+            endTangent,
             tension: 0.5,
             bias: 0.5,
-            resolution: 16
+            resolution: 16,
         };
-        newContainer.segments[targetSegmentIndex] = bezier;
+        next.segments[segmentIndex] = bezier;
     }
 
-    if (targetTrunkId) {
-        updateTrunk(newContainer as Trunk);
-    } else if (targetBranchId) {
-        updateBranch(newContainer as Branch);
-    } else if (targetTwigId) {
-        updateTwig(newContainer as Twig);
-    } else if (targetStickId) {
-        updateStick(newContainer as Stick);
-    } else if (targetKickstandId) {
-        updateKickstand(newContainer as Kickstand);
-    }
+    updateSupportEntity(owner.typeId, next);
 }
 
 export function resetStore() {
-    state = { ...initialState };
+    setState({ ...initialState });
     clearSupportSettingsHexCache();
-    resetKickstandStore();
     emitSupportInteractionReset('resetStore');
     notify();
 }
@@ -2476,23 +2603,18 @@ export function resetStore() {
  * Loads support data from the DragonFruit import format into the support store,
  * replacing all existing support data.
  */
+/** Carry the pre-`generatedBy` flag across on read, for older scenes. */
+function migrateLegacyGeneratedBy(kickstand: Kickstand): Kickstand {
+    if (kickstand.generatedBy || !kickstand.autoBracingGenerated) return kickstand;
+    return { ...kickstand, generatedBy: 'autoBracing' };
+}
+
 export function loadFromImportFormat(data: DragonfruitImportFormat) {
     const importDefaults = getSavedImportDefaultsSettings();
-    const effectiveData = applyImportDefaultsToSupportPayload(data, importDefaults);
-
-    // Reset first
-    resetKickstandStore();
+    const effectiveData = applyImportDefaultsToSupportPayload(migrateLegacySupportPayload(data), importDefaults);
 
     const newState: SupportState = {
-        roots: {},
-        trunks: {},
-        branches: {},
-        leaves: {},
-        twigs: {},
-        sticks: {},
-        braces: {},
-        anchors: {},
-        knots: {},
+        ...createEmptySupportCollections(),
         selectedId: null,
         hoveredId: null,
         selectedCategory: null,
@@ -2505,45 +2627,19 @@ export function loadFromImportFormat(data: DragonfruitImportFormat) {
         newState.roots[r.id] = r;
     });
 
-    // Populate Trunks
-    effectiveData.trunks.forEach(t => {
-        newState.trunks[t.id] = t;
-    });
-
-    // Populate Branches
-    effectiveData.branches.forEach(b => {
-        newState.branches[b.id] = b;
-    });
-
-    // Populate Leaves
-    effectiveData.leaves.forEach(l => {
-        newState.leaves[l.id] = l;
-    });
-
-    // Populate Twigs
-    if (effectiveData.twigs) {
-        effectiveData.twigs.forEach((t) => {
-            newState.twigs[t.id] = t;
-        });
-    }
-
-    // Populate Sticks
-    if (effectiveData.sticks) {
-        effectiveData.sticks.forEach((s) => {
-            newState.sticks[s.id] = s;
-        });
-    }
-
-    // Populate Braces
-    effectiveData.braces.forEach(br => {
-        newState.braces[br.id] = br;
-    });
-
-    // Populate Anchors
-    if (effectiveData.anchors) {
-        effectiveData.anchors.forEach(a => {
-            newState.anchors[a.id] = a;
-        });
+    // Every declared type, from the array its collection is named after.
+    // `typeId` is stamped here: a file written before the field existed has it
+    // derived from the array it came out of, which is the only place that
+    // information survives in an older payload.
+    for (const descriptor of SUPPORT_TYPES) {
+        const key = descriptor.location.key;
+        // A bundled type is written as { entity, root, hostKnot } under this
+        // same key rather than as a bare entity, so it is unwrapped below.
+        if (descriptor.serialisedAsBundle) continue;
+        const incoming = (effectiveData as unknown as Record<string, { id: string }[] | undefined>)[key];
+        for (const entity of incoming ?? []) {
+            (newState[key] as Record<string, unknown>)[entity.id] = { ...entity, typeId: descriptor.id };
+        }
     }
 
     // Populate Knots
@@ -2553,29 +2649,26 @@ export function loadFromImportFormat(data: DragonfruitImportFormat) {
         });
     }
 
-    for (const kickstandBuild of effectiveData.kickstands ?? []) {
-        addKickstand(kickstandBuild);
+    // Written into newState directly rather than via addKickstand: kickstands are
+    // a SupportState collection now, and addKickstand would mutate `state` only
+    // for `state = newState` below to discard it.
+    for (const build of effectiveData.kickstands ?? []) {
+        newState.kickstands[build.kickstand.id] = { ...migrateLegacyGeneratedBy(build.kickstand), typeId: bundledSupportTypeId() };
+        newState.roots[build.root.id] = build.root;
+        newState.knots[build.hostKnot.id] = build.hostKnot;
     }
 
     const normalized = normalizeLoadedKnotAndLeafGeometry(newState);
     newState.knots = normalized.knots;
     newState.leaves = normalized.leaves;
+    newState.roots = pruneUnclaimedRoots(newState.roots, newState);
 
-    state = newState;
+    setState(newState);
     rebuildSupportSettingsHexCacheFromState();
     emitSupportInteractionReset('loadFromImportFormat');
-    console.log('[SupportStore] Loaded from LYS:', {
-        roots: Object.keys(state.roots).length,
-        trunks: Object.keys(state.trunks).length,
-        branches: Object.keys(state.branches).length,
-        leaves: Object.keys(state.leaves).length,
-        twigs: Object.keys(state.twigs).length,
-        sticks: Object.keys(state.sticks).length,
-        braces: Object.keys(state.braces).length,
-        anchors: Object.keys(state.anchors).length,
-        knots: Object.keys(state.knots).length,
-        kickstands: Object.keys(getKickstandSnapshot().kickstands).length,
-    });
+    console.log('[SupportStore] Loaded from import:', Object.fromEntries(
+        SUPPORT_COLLECTION_KEYS.map((key) => [key, Object.keys(state[key] ?? {}).length]),
+    ));
     notify();
 }
 
@@ -2612,6 +2705,19 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
     const braceIdMap = new Map<string, string>();
     const segmentIdMap = new Map<string, string>();
     const jointIdMap = new Map<string, string>();
+
+    // A knot's parentShaftId names either a pseudo-shaft (prefix + entity id)
+    // or a real segment; both follow from the host type.
+    const hostIdMapByType = new Map<SupportTypeId, Map<string, string>>();
+    for (const typeId of CONE_KNOT_HOST_TYPES) hostIdMapByType.set(typeId, leafIdMap);
+    for (const typeId of SPAN_KNOT_HOST_TYPES) hostIdMapByType.set(typeId, braceIdMap);
+
+    const remapParentShaftId = (parentShaftId: string): string => {
+        const host = parseKnotHostId(parentShaftId);
+        const hostIdMap = host && hostIdMapByType.get(host.typeId);
+        if (!host || !hostIdMap) return getOrCreateMappedId(parentShaftId, segmentIdMap);
+        return knotHostId(host.typeId, getOrCreateMappedId(host.entityId, hostIdMap));
+    };
 
     const kickstandRootIdMap = new Map<string, string>();
     const kickstandKnotIdMap = new Map<string, string>();
@@ -2775,25 +2881,10 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
         };
     });
 
-    cloned.knots = cloned.knots.map((knot) => {
-        let parentShaftId = knot.parentShaftId;
-        if (parentShaftId.startsWith('leafCone:')) {
-            const leafId = parentShaftId.slice('leafCone:'.length);
-            parentShaftId = `leafCone:${getOrCreateMappedId(leafId, leafIdMap)}`;
-        } else if (parentShaftId.startsWith('braceSegment:')) {
-            const braceId = parentShaftId.slice('braceSegment:'.length);
-            parentShaftId = `braceSegment:${getOrCreateMappedId(braceId, braceIdMap)}`;
-        } else {
-            parentShaftId = getOrCreateMappedId(parentShaftId, segmentIdMap);
-        }
-
-        return {
-            ...knot,
-            id: getOrCreateMappedId(knot.id, knotIdMap),
-            parentShaftId,
-        };
-    });
-
+    // Kickstands are remapped before knots: a knot hosted on a kickstand segment
+    // resolves its parentShaftId through segmentIdMap, and getOrCreateMappedId
+    // mints a fresh id for anything not yet registered. Remapping knots first
+    // left those knots pointing at ids nothing else would ever use.
     cloned.kickstands = (cloned.kickstands ?? []).map((build) => {
         const nextRootId = uuidv4();
         kickstandRootIdMap.set(build.root.id, nextRootId);
@@ -2812,11 +2903,7 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
             };
         });
 
-        const hostParentShaftId = build.hostKnot.parentShaftId.startsWith('leafCone:')
-            ? `leafCone:${getOrCreateMappedId(build.hostKnot.parentShaftId.slice('leafCone:'.length), leafIdMap)}`
-            : build.hostKnot.parentShaftId.startsWith('braceSegment:')
-                ? `braceSegment:${getOrCreateMappedId(build.hostKnot.parentShaftId.slice('braceSegment:'.length), braceIdMap)}`
-                : getOrCreateMappedId(build.hostKnot.parentShaftId, segmentIdMap);
+        const hostParentShaftId = remapParentShaftId(build.hostKnot.parentShaftId);
 
         return {
             root: {
@@ -2839,6 +2926,16 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
         } as KickstandBuildResult;
     });
 
+    cloned.knots = cloned.knots.map((knot) => {
+        const parentShaftId = remapParentShaftId(knot.parentShaftId);
+
+        return {
+            ...knot,
+            id: getOrCreateMappedId(knot.id, knotIdMap),
+            parentShaftId,
+        };
+    });
+
     return cloned;
 }
 
@@ -2847,57 +2944,100 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
  * preserving supports for all models already in the scene.
  * Use this when importing an additional scene file into an already-populated scene.
  */
-export function mergeFromImportFormat(data: DragonfruitImportFormat) {
-    const importDefaults = getSavedImportDefaultsSettings();
-    const effectiveData = applyImportDefaultsToSupportPayload(data, importDefaults);
-    const isolated = isolateImportedSupportPayload(effectiveData);
-
-    const merged: SupportState = {
-        ...state,
-        roots: { ...state.roots },
-        trunks: { ...state.trunks },
-        branches: { ...state.branches },
-        leaves: { ...state.leaves },
-        twigs: { ...state.twigs },
-        sticks: { ...state.sticks },
-        braces: { ...state.braces },
-        anchors: { ...state.anchors },
-        knots: { ...state.knots },
+/**
+ * Stamp `modelId` onto every support entity in an imported payload.
+ *
+ * Kickstands carry theirs on the nested build result, so every collection is
+ * walked; a type missed here stays bound to whatever the plugin wrote.
+ */
+function reconcileSupportModelIds(
+    data: DragonfruitImportFormat,
+    ownerModelId: string,
+): DragonfruitImportFormat {
+    const mismatched = new Set<string>();
+    const stamp = <T extends { modelId?: string }>(entity: T): T => {
+        if (entity.modelId && entity.modelId !== ownerModelId) mismatched.add(entity.modelId);
+        return entity.modelId === ownerModelId ? entity : { ...entity, modelId: ownerModelId };
+    };
+    // Kickstands are nested (kickstands[].kickstand / .root) rather than a flat
+    // collection, so they are stamped separately from the descriptor-driven walk.
+    const next: DragonfruitImportFormat = {
+        ...mapImportPayloadEntities(data, stamp),
+        kickstands: data.kickstands?.map((build) => ({
+            ...build,
+            kickstand: stamp(build.kickstand),
+            root: stamp(build.root),
+        })),
     };
 
+    if (mismatched.size > 0) {
+        console.warn(
+            '[SupportStore] Imported supports carried a modelId that does not match the model '
+            + 'they were imported with; reconciling to the host model id. This indicates a plugin '
+            + 'returning a payload modelId that differs from the id stamped on its supports.',
+            { ownerModelId, foundModelIds: [...mismatched] },
+        );
+    }
+
+    return next;
+}
+
+/**
+ * Merge an imported support payload into the store.
+ *
+ * `ownerModelId` binds every support in `data` to that model, so the
+ * association comes from the host rather than whatever the plugin stamped.
+ * Mismatches are logged rather than accepted, surfacing a plugin bug.
+ */
+export function mergeFromImportFormat(data: DragonfruitImportFormat, ownerModelId?: string) {
+    const importDefaults = getSavedImportDefaultsSettings();
+    const reconciled = ownerModelId ? reconcileSupportModelIds(data, ownerModelId) : data;
+    const effectiveData = applyImportDefaultsToSupportPayload(migrateLegacySupportPayload(reconciled), importDefaults);
+    const isolated = isolateImportedSupportPayload(effectiveData);
+
+    // A copy-on-write shell of every declared collection.
+    const merged: SupportState = {
+        ...state,
+        ...Object.fromEntries(SUPPORT_COLLECTION_KEYS.map((key) => [key, { ...state[key] }])),
+    } as SupportState;
+
     isolated.roots.forEach(r => { merged.roots[r.id] = r; });
-    isolated.trunks.forEach(t => { merged.trunks[t.id] = t; });
-    isolated.branches.forEach(b => { merged.branches[b.id] = b; });
-    isolated.leaves.forEach(l => { merged.leaves[l.id] = l; });
-    if (isolated.twigs) { isolated.twigs.forEach(t => { merged.twigs[t.id] = t; }); }
-    if (isolated.sticks) { isolated.sticks.forEach(s => { merged.sticks[s.id] = s; }); }
-    isolated.braces.forEach(br => { merged.braces[br.id] = br; });
-    if (isolated.anchors) { isolated.anchors.forEach(a => { merged.anchors[a.id] = a; }); }
     if (isolated.knots) { isolated.knots.forEach(k => { merged.knots[k.id] = k; }); }
 
-    for (const kickstandBuild of isolated.kickstands ?? []) {
-        addKickstand(kickstandBuild);
+    // Every declared type, stamped with `typeId` as loadFromImportFormat does.
+    // The geometry pass below reads these arrays before the derived views stamp them.
+    for (const descriptor of SUPPORT_TYPES) {
+        const key = descriptor.location.key;
+        const collection = merged[key] as unknown as Record<string, unknown>;
+
+        if (descriptor.serialisedAsBundle) {
+            // Into `merged` directly: `state = merged` below would discard other writes.
+            const bundles = (isolated[key] ?? []) as unknown as KickstandBuildResult[];
+            for (const build of bundles) {
+                collection[build.kickstand.id] = { ...migrateLegacyGeneratedBy(build.kickstand), typeId: descriptor.id };
+                merged.roots[build.root.id] = build.root;
+                merged.knots[build.hostKnot.id] = build.hostKnot;
+            }
+            continue;
+        }
+
+        const incoming = (isolated as unknown as Record<string, { id: string }[] | undefined>)[key];
+        for (const entity of incoming ?? []) {
+            collection[entity.id] = { ...entity, typeId: descriptor.id };
+        }
     }
 
     const normalized = normalizeLoadedKnotAndLeafGeometry(merged);
     merged.knots = normalized.knots;
     merged.leaves = normalized.leaves;
+    merged.roots = pruneUnclaimedRoots(merged.roots, merged);
 
-    state = merged;
+    setState(merged);
     rebuildSupportSettingsHexCacheFromState();
     emitSupportInteractionReset('mergeFromImportFormat');
-    console.log('[SupportStore] Merged from LYS:', {
-        roots: Object.keys(state.roots).length,
-        trunks: Object.keys(state.trunks).length,
-        branches: Object.keys(state.branches).length,
-        leaves: Object.keys(state.leaves).length,
-        twigs: Object.keys(state.twigs).length,
-        sticks: Object.keys(state.sticks).length,
-        braces: Object.keys(state.braces).length,
-        anchors: Object.keys(state.anchors).length,
-        knots: Object.keys(state.knots).length,
-        kickstands: Object.keys(getKickstandSnapshot().kickstands).length,
-    });
+    console.log('[SupportStore] Merged from import:', Object.fromEntries(
+        SUPPORT_COLLECTION_KEYS.map((key) => [key, Object.keys(merged[key]).length]),
+    ));
     notify();
 }
 
@@ -2905,789 +3045,363 @@ export function setSelectedId(id: string | null) {
     if (state.selectedId === id) return;
     const category: SelectionCategory = id ? resolveSelectionCategory(id) : null;
 
-    state = { ...state, selectedId: id, selectedCategory: category };
+    setState({ ...state, selectedId: id, selectedCategory: category });
     notify();
 }
 
-export function setHoveredId(id: string | null) {
-    if (state.hoveredId === id) return;
-    state = { ...state, hoveredId: id };
+
+/**
+ * Hover writes are trailing-coalesced.
+ *
+ * A hover changes the support snapshot, and in Support mode that snapshot feeds
+ * a large detailed renderer: one hovered support cost 84–112 ms of React commit
+ * before the non-hover derivations were stabilised, and still ~32 ms after. A
+ * pointer sweep crosses several supports in 30 ms, each one paying that. Applying
+ * only the last hover after the pointer has been still for a moment keeps the
+ * highlight responsive enough (80 ms is below the threshold where a hover feels
+ * delayed) while a sweep costs one render instead of one per support.
+ *
+ * Clearing is immediate: leaving a support must not leave its highlight behind.
+ */
+const HOVER_COALESCE_MS = 80;
+let hoverTimer: number | null = null;
+let pendingHover: { category: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo'; id: string } | null = null;
+
+function applyHoveredState(
+    category: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none',
+    id: string | null,
+) {
+    if (state.hoveredCategory === category && state.hoveredId === id) return;
+    setState({ ...state, hoveredCategory: category, hoveredId: id });
     notify();
 }
 
-export function setHoveredCategory(category: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none') {
-    if (state.hoveredCategory === category) return;
-    state = { ...state, hoveredCategory: category };
-    notify();
+/** Whether a support-edit drag owns the pointer right now. */
+function supportEditDragActive(): boolean {
+    if (typeof window === 'undefined') return false;
+    const w = window as unknown as Record<string, unknown>;
+    if (w.__jointGizmoDragging || w.__knotGizmoDragging || w.__bezierGizmoDragging) return true;
+    const guardUntil = Math.max(
+        Number(w.__jointGizmoGuardUntil ?? 0),
+        Number(w.__knotGizmoGuardUntil ?? 0),
+        Number(w.__bezierGizmoGuardUntil ?? 0),
+    );
+    return guardUntil > Date.now();
 }
 
 export function setHoveredState(
     category: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none',
     id: string | null,
 ) {
-    if (state.hoveredCategory === category && state.hoveredId === id) return;
-    state = { ...state, hoveredCategory: category, hoveredId: id };
-    notify();
+    // A hover render (25 ms in Support mode) has no place under a drag: the
+    // pointer is captured, the hovered primitive is the one being moved, and the
+    // coalescing timer would otherwise fire a React render mid-drag.
+    if (supportEditDragActive() && category !== 'none' && id !== null) return;
+
+    if (category === 'none' || id === null || typeof window === 'undefined') {
+        if (hoverTimer !== null) {
+            window.clearTimeout(hoverTimer);
+            hoverTimer = null;
+        }
+        pendingHover = null;
+        applyHoveredState(category, id);
+        return;
+    }
+
+    pendingHover = { category, id };
+    if (hoverTimer !== null) window.clearTimeout(hoverTimer);
+    hoverTimer = window.setTimeout(() => {
+        hoverTimer = null;
+        const next = pendingHover;
+        pendingHover = null;
+        if (next) applyHoveredState(next.category, next.id);
+    }, HOVER_COALESCE_MS);
 }
 
 export function setInteractionWarning(warning: import('./types').WarningCode | null) {
     if (state.interactionWarning === warning) return;
-    state = { ...state, interactionWarning: warning };
+    setState({ ...state, interactionWarning: warning });
     notify();
 }
 
 export function addRoot(root: Roots) {
-    state = {
+    setState({
         ...state,
         roots: { ...state.roots, [root.id]: root }
-    };
+    });
     notify();
 }
 
-export function addTrunk(trunk: Trunk) {
-    if (trunk.settingsCodeHex) {
-        setCachedSupportSettingsHex('trunk', trunk.id, trunk.settingsCodeHex);
+/**
+ * Write an entity into its collection, evicting nothing and cascading nothing.
+ *
+ * The per-type `addX` functions below are thin wrappers: identical apart from
+ * which collection they write and whether the type caches a settings hex, both
+ * of which the registry declares.
+ */
+/**
+ * Add one entity to the collection its type declares.
+ *
+ * Two forms: `addSupportEntity(entity)` reads the type off the entity and is
+ * preferred; `(typeId, entity)` is for a caller with no stamped entity yet.
+ * Roots and host knots are added as ordinary entities, not bundled.
+ */
+export function addSupportEntity<E extends { typeId?: SupportTypeId; id: string; settingsCodeHex?: string }>(entity: E): void;
+export function addSupportEntity<E extends { id: string; settingsCodeHex?: string }>(typeId: SupportTypeId, entity: E): void;
+export function addSupportEntity(
+    typeIdOrEntity: SupportTypeId | { typeId?: SupportTypeId; id: string; settingsCodeHex?: string },
+    maybeEntity?: { id: string; settingsCodeHex?: string },
+): void {
+    const entity = typeof typeIdOrEntity === 'string' ? maybeEntity : typeIdOrEntity;
+    const typeId = typeof typeIdOrEntity === 'string'
+        ? typeIdOrEntity
+        : resolveSupportTypeIdOf(typeIdOrEntity);
+    if (!typeId || !entity) {
+        throw new Error(`addSupportEntity: entity ${entity?.id ?? '?'} carries no type and none was given`);
     }
 
-    state = {
+    const descriptor = getSupportTypeDescriptor(typeId);
+    if (descriptor.hasEditableSettings && entity.settingsCodeHex) {
+        setCachedSupportSettingsHex(typeId, entity.id, entity.settingsCodeHex);
+    }
+
+    const key = descriptor.location.key;
+    // The collection is a stamped view plus one stamped entity, so the store
+    // does not need to walk it again: that pass was half of a placement's cost
+    // on a full plate.
+    const view = { ...state[key], [entity.id]: { ...entity, typeId } };
+    stampedViews.add(view);
+    setState({
         ...state,
-        trunks: { ...state.trunks, [trunk.id]: trunk }
-    };
+        [key]: view,
+    });
     notify();
 }
 
-export function updateTrunk(trunk: Trunk, options?: { skipDependentGeometry?: boolean }) {
-    const skipDependentGeometry = options?.skipDependentGeometry === true;
+/**
+ * Adds an entity and records its undo entry, both keyed on the type: the
+ * descriptor names the adder, the action and the payload key.
+ *
+ * `extras` carries the repair an add has to record so undo can put the scene
+ * back: the knot a member hangs from, and the re-solved host the placement
+ * changed. Those field names are the same ones every type's add payload already
+ * declares, so a caller supplies them without naming the type.
+ */
+export function addSupportEntityWithHistory(
+    typeId: SupportTypeId,
+    entity: { id: string; settingsCodeHex?: string },
+    extras?: Record<string, unknown>,
+) {
+    addSupportEntity(typeId, entity);
+    // Undo removes this entity by cascade, so the entry carries what that
+    // cascade takes -- the same payload a removal records.
+    const recorded = cascadePayload(
+        typeId,
+        entity,
+        ownedPrimitives(state, typeId, entity),
+        (value) => value,
+    );
+    // The declared `self` field is the key that type's add payload carries,
+    // but it is computed here, so the compiler cannot match it to the union.
+    pushSupportHistory({
+        type: getSupportTypeDescriptor(typeId).historyAdd,
+        payload: { ...recorded, ...extras },
+    } as unknown as Parameters<typeof pushSupportHistory>[0]);
+}
 
-    const cachedHex = getCachedSupportSettingsHex('trunk', trunk.id, trunk.settingsCodeHex ?? undefined);
-    const nextTrunk = !trunk.settingsCodeHex && cachedHex
-        ? { ...trunk, settingsCodeHex: cachedHex }
-        : trunk;
+/**
+ * Where a knot sitting on this entity's shaft belongs after the entity moved.
+ *
+ * The one part of an update that genuinely differs per type, and it follows the
+ * declared lower endpoint: a `plateRoot` type resolves segment ends against its
+ * root, a `knot` type against its host knot, and a self-contained shaft reads
+ * the joints straight off the segment.
+ *
+ * Returns null to leave the knot alone.
+ */
+type KnotPlacementOnShaft = (
+    entity: { id: string; segments?: Segment[] },
+    knot: Knot,
+    segment: Segment,
+    segmentIndex: number,
+) => { pos: Vec3; diameter?: number } | null;
 
-    if (nextTrunk.settingsCodeHex) {
-        setCachedSupportSettingsHex('trunk', nextTrunk.id, nextTrunk.settingsCodeHex);
+/** Renders the knot at the joint diameter; the legacy 0.1 sat inside the shaft. */
+const KNOT_JOINT_DIAMETER_BUMP_MM = 0.125;
+
+const KNOT_PLACEMENT_BY_TYPE = new Map<SupportTypeId, KnotPlacementOnShaft>();
+
+/** The rule placing a knot on this type's shaft, if it registers one. */
+export function getKnotPlacementOnShaft(typeId: SupportTypeId): KnotPlacementOnShaft | null {
+    return KNOT_PLACEMENT_BY_TYPE.get(typeId) ?? null;
+}
+
+/**
+ * Apply an entity to its collection, then reposition the knots riding its
+ * shafts and recompute the geometry those knots carry.
+ */
+function applySupportEntityUpdate(entity: { id: string; typeId?: SupportTypeId; settingsCodeHex?: string; segments?: Segment[] }): void;
+function applySupportEntityUpdate(
+    typeId: SupportTypeId,
+    entity: { id: string; settingsCodeHex?: string; segments?: Segment[] },
+): void;
+function applySupportEntityUpdate(
+    typeIdOrEntity: SupportTypeId | { id: string; typeId?: SupportTypeId; settingsCodeHex?: string; segments?: Segment[] },
+    maybeEntity?: { id: string; settingsCodeHex?: string; segments?: Segment[] },
+): void {
+    const typeId = typeof typeIdOrEntity === 'string'
+        ? typeIdOrEntity
+        : resolveSupportTypeIdOf(typeIdOrEntity);
+    const entity = (typeof typeIdOrEntity === 'string' ? maybeEntity : typeIdOrEntity)!;
+    if (!typeId) return;
+    const descriptor = getSupportTypeDescriptor(typeId);
+    const key = descriptor.location.key;
+
+    if (!state[key][entity.id]) return;
+
+    let next = entity;
+    if (descriptor.hasEditableSettings) {
+        const cachedHex = getCachedSupportSettingsHex(typeId, entity.id, entity.settingsCodeHex ?? undefined);
+        if (!entity.settingsCodeHex && cachedHex) next = { ...entity, settingsCodeHex: cachedHex };
+        if (next.settingsCodeHex) setCachedSupportSettingsHex(typeId, next.id, next.settingsCodeHex);
     }
 
-    // Update trunk
-    const nextTrunks = { ...state.trunks, [nextTrunk.id]: nextTrunk };
+    const nextCollection = { ...state[key], [next.id]: { ...next, typeId } };
 
-    // Update any knots attached to this trunk's segments
-    const root = state.roots[nextTrunk.rootId];
+    const place = KNOT_PLACEMENT_BY_TYPE.get(typeId);
     let nextKnots = state.knots;
     let nextLeaves = state.leaves;
-    let knotsChanged = false;
 
-    if (root) {
+    if (place && next.segments) {
         const updatedKnots: Record<string, Knot> = { ...state.knots };
-        const updatedKnotPosById: Record<string, Vec3> = {};
-
-        for (const knot of Object.values(state.knots)) {
-            // Find if this knot is attached to one of this trunk's segments
-            const segIndex = nextTrunk.segments.findIndex(s => s.id === knot.parentShaftId);
-            if (segIndex === -1) continue;
-
-            const seg = nextTrunk.segments[segIndex];
-            const endpoints = getTrunkSegmentEndpoints(nextTrunk, seg, segIndex, root);
-            // +0.125 (not the legacy +0.1): renders at the trunk-joint
-            // diameter; the legacy value rendered at the shaft — invisible.
-            const nextDiameter = seg.diameter + 0.125;
-
-            let nextPos = knot.pos;
-            let posChanged = false;
-            if (endpoints) {
-                // Auto merge/fan knots carry no `t` — project their position
-                // onto the (possibly moved) segment so the leaf follows the
-                // shaft on a joint drag. With a stored `t` the position is
-                // recomputed from it directly.
-                const tForKnot = knot.t !== undefined
-                    ? knot.t
-                    : computeClosestTOnSegmentFromPoint(knot.pos, endpoints.start, endpoints.end, seg);
-                const computed = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, seg, tForKnot);
-                if (computed.x !== knot.pos.x || computed.y !== knot.pos.y || computed.z !== knot.pos.z) {
-                    nextPos = computed;
-                    posChanged = true;
-                }
-            }
-
-            const diaChanged = knot.diameter !== nextDiameter;
-            if (!posChanged && !diaChanged) continue;
-
-            updatedKnots[knot.id] = { ...knot, pos: nextPos, diameter: nextDiameter };
-            knotsChanged = true;
-            if (posChanged) {
-                updatedKnotPosById[knot.id] = nextPos;
-            }
-        }
-
-        if (knotsChanged) {
-            if (skipDependentGeometry) {
-                // Drag-time fast path: keep knot positions responsive, defer expensive
-                // leaf dependent recomputations until drag commit, but keep braces in sync
-                // so they don't visually snap after trunk/branch moves.
-                const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, updatedKnots);
-                nextKnots = braceSeg.knots;
-            } else {
-                nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
-                const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
-                const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
-                nextKnots = braceSeg.knots;
-            }
-        }
-    }
-
-    state = {
-        ...state,
-        trunks: nextTrunks,
-        knots: nextKnots,
-        leaves: nextLeaves,
-    };
-
-    syncKickstandHostKnotsFromSharedKnots(nextKnots);
-
-    notify();
-}
-
-export function addBranch(branch: Branch) {
-    if (branch.settingsCodeHex) {
-        setCachedSupportSettingsHex('branch', branch.id, branch.settingsCodeHex);
-    }
-
-    state = {
-        ...state,
-        branches: { ...state.branches, [branch.id]: branch }
-    };
-    notify();
-}
-
-export function addLeaf(leaf: Leaf) {
-    if (leaf.settingsCodeHex) {
-        setCachedSupportSettingsHex('leaf', leaf.id, leaf.settingsCodeHex);
-    }
-
-    state = {
-        ...state,
-        leaves: { ...state.leaves, [leaf.id]: leaf }
-    };
-    notify();
-}
-
-export function updateLeaf(leaf: Leaf) {
-    if (!state.leaves[leaf.id]) return;
-
-    const cachedHex = getCachedSupportSettingsHex('leaf', leaf.id, leaf.settingsCodeHex ?? undefined);
-    const nextLeaf = !leaf.settingsCodeHex && cachedHex
-        ? { ...leaf, settingsCodeHex: cachedHex }
-        : leaf;
-
-    if (nextLeaf.settingsCodeHex) {
-        setCachedSupportSettingsHex('leaf', nextLeaf.id, nextLeaf.settingsCodeHex);
-    }
-
-    const nextLeaves = { ...state.leaves, [nextLeaf.id]: nextLeaf };
-    const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, state.knots);
-    const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
-
-    state = {
-        ...state,
-        leaves: nextLeaves,
-        knots: braceSeg.knots,
-    };
-    notify();
-}
-
-export function addBrace(brace: Brace) {
-    state = {
-        ...state,
-        braces: { ...state.braces, [brace.id]: brace },
-    };
-    notify();
-}
-
-export function addTwig(twig: Twig) {
-    state = {
-        ...state,
-        twigs: { ...state.twigs, [twig.id]: twig },
-    };
-    notify();
-}
-
-export function addStick(stick: Stick) {
-    state = {
-        ...state,
-        sticks: { ...state.sticks, [stick.id]: stick },
-    };
-    notify();
-}
-
-export function addAnchor(anchor: Anchor) {
-    state = {
-        ...state,
-        anchors: { ...state.anchors, [anchor.id]: anchor },
-    };
-    notify();
-}
-
-export function updateAnchor(anchor: Anchor) {
-    if (!state.anchors[anchor.id]) return;
-    state = {
-        ...state,
-        anchors: { ...state.anchors, [anchor.id]: anchor },
-    };
-    notify();
-}
-
-export function removeAnchor(anchorId: string): { anchor: Anchor } | null {
-    const anchor = state.anchors[anchorId];
-    if (!anchor) return null;
-    const { [anchorId]: _, ...rest } = state.anchors;
-    state = { ...state, anchors: rest };
-    notify();
-    return { anchor };
-}
-
-export function updateTwig(twig: Twig) {
-    if (!state.twigs[twig.id]) return;
-
-    const nextTwigs = { ...state.twigs, [twig.id]: twig };
-
-    let nextKnots = state.knots;
-    let nextLeaves = state.leaves;
-
-    const updatedKnots: Record<string, Knot> = { ...state.knots };
-    const updatedKnotPosById: Record<string, Vec3> = {};
-    let knotsChanged = false;
-
-    for (const knot of Object.values(state.knots)) {
-        const segIndex = twig.segments.findIndex(s => s.id === knot.parentShaftId);
-        if (segIndex === -1) continue;
-
-        const seg = twig.segments[segIndex];
-        if (!seg.bottomJoint || !seg.topJoint || knot.t === undefined) continue;
-
-        const newPos = calculateKnotPositionOnSegmentFromT(seg.bottomJoint.pos, seg.topJoint.pos, seg, knot.t);
-        if (newPos.x === knot.pos.x && newPos.y === knot.pos.y && newPos.z === knot.pos.z) continue;
-
-        updatedKnots[knot.id] = { ...knot, pos: newPos };
-        updatedKnotPosById[knot.id] = newPos;
-        knotsChanged = true;
-    }
-
-    if (knotsChanged) {
-        nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
-        const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
-        const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
-        nextKnots = braceSeg.knots;
-    }
-
-    state = {
-        ...state,
-        twigs: nextTwigs,
-        knots: nextKnots,
-        leaves: nextLeaves,
-    };
-    notify();
-}
-
-export function updateStick(stick: Stick) {
-    if (!state.sticks[stick.id]) return;
-
-    const nextSticks = { ...state.sticks, [stick.id]: stick };
-
-    let nextKnots = state.knots;
-    let nextLeaves = state.leaves;
-
-    const updatedKnots: Record<string, Knot> = { ...state.knots };
-    const updatedKnotPosById: Record<string, Vec3> = {};
-    let knotsChanged = false;
-
-    for (const knot of Object.values(state.knots)) {
-        const segIndex = stick.segments.findIndex(s => s.id === knot.parentShaftId);
-        if (segIndex === -1) continue;
-
-        const seg = stick.segments[segIndex];
-        if (!seg.bottomJoint || !seg.topJoint || knot.t === undefined) continue;
-
-        const newPos = calculateKnotPositionOnSegmentFromT(seg.bottomJoint.pos, seg.topJoint.pos, seg, knot.t);
-        if (newPos.x === knot.pos.x && newPos.y === knot.pos.y && newPos.z === knot.pos.z) continue;
-
-        updatedKnots[knot.id] = { ...knot, pos: newPos };
-        updatedKnotPosById[knot.id] = newPos;
-        knotsChanged = true;
-    }
-
-    if (knotsChanged) {
-        nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
-        const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
-        const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
-        nextKnots = braceSeg.knots;
-    }
-
-    state = {
-        ...state,
-        sticks: nextSticks,
-        knots: nextKnots,
-        leaves: nextLeaves,
-    };
-    notify();
-}
-
-export function updateBrace(brace: Brace) {
-    if (!state.braces[brace.id]) return;
-    const nextBraces = { ...state.braces, [brace.id]: brace };
-
-    const braceSeg1 = recomputeBraceSegmentKnotGeometry(nextBraces, state.knots);
-    const changedByBrace1 = getChangedKnotPositions(state.knots, braceSeg1.knots);
-
-    let nextLeaves = state.leaves;
-    let nextKnots = braceSeg1.knots;
-
-    if (Object.keys(changedByBrace1).length > 0) {
-        nextLeaves = recomputeKnotDependentGeometry(nextLeaves, changedByBrace1);
-        const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, nextKnots);
-        const braceSeg2 = recomputeBraceSegmentKnotGeometry(nextBraces, leafCone.knots);
-        nextKnots = braceSeg2.knots;
-    }
-
-    state = {
-        ...state,
-        braces: nextBraces,
-        knots: nextKnots,
-        leaves: nextLeaves,
-    };
-    notify();
-}
-
-export function removeBrace(braceId: string): { brace: Brace; startKnot: Knot | null; endKnot: Knot | null } | null {
-    const existing = state.braces[braceId];
-    if (!existing) return null;
-
-    const snapshots: { brace: Brace; startKnot: Knot | null; endKnot: Knot | null } = {
-        brace: deepClone(existing),
-        startKnot: null,
-        endKnot: null,
-    };
-
-    const startKnotId = existing.startKnotId;
-    const endKnotId = existing.endKnotId;
-
-    const { [braceId]: _, ...remainingBraces } = state.braces;
-
-    let nextKnots = state.knots;
-    const knotsToRemove = [startKnotId, endKnotId].filter(Boolean);
-    if (knotsToRemove.length > 0) {
-        const updatedKnots: Record<string, Knot> = { ...state.knots };
-        if (startKnotId && updatedKnots[startKnotId]) {
-            snapshots.startKnot = deepClone(updatedKnots[startKnotId]);
-            delete updatedKnots[startKnotId];
-        }
-        if (endKnotId && updatedKnots[endKnotId]) {
-            snapshots.endKnot = deepClone(updatedKnots[endKnotId]);
-            delete updatedKnots[endKnotId];
-        }
-        nextKnots = updatedKnots;
-    }
-
-    let nextSelectedId = state.selectedId;
-    let nextSelectedCategory = state.selectedCategory;
-    if (
-        state.selectedId === braceId ||
-        (startKnotId && state.selectedId === startKnotId) ||
-        (endKnotId && state.selectedId === endKnotId)
-    ) {
-        nextSelectedId = null;
-        nextSelectedCategory = null;
-    }
-
-    state = {
-        ...state,
-        braces: remainingBraces,
-        knots: nextKnots,
-        selectedId: nextSelectedId,
-        selectedCategory: nextSelectedCategory,
-    };
-    notify();
-    return snapshots;
-}
-
-export function removeKickstandCascade(kickstandId: string): KickstandRemoveResult | null {
-    const kickstandState = getKickstandSnapshot();
-    const kickstand = kickstandState.kickstands[kickstandId];
-    if (!kickstand) return null;
-
-    const kickstandSegmentIds = new Set(kickstand.segments.map((segment) => segment.id));
-    const directKnotIds = new Set<string>();
-    for (const knot of Object.values(state.knots)) {
-        if (kickstandSegmentIds.has(knot.parentShaftId)) {
-            directKnotIds.add(knot.id);
-        }
-    }
-
-    const branchIdsToRemove: string[] = [];
-    for (const branch of Object.values(state.branches)) {
-        if (branch.parentKnotId && directKnotIds.has(branch.parentKnotId)) {
-            branchIdsToRemove.push(branch.id);
-        }
-    }
-
-    const leafIdsToRemove: string[] = [];
-    for (const leaf of Object.values(state.leaves)) {
-        if (leaf.parentKnotId && directKnotIds.has(leaf.parentKnotId)) {
-            leafIdsToRemove.push(leaf.id);
-        }
-    }
-
-    const braceIdsToRemove: string[] = [];
-    for (const brace of Object.values(state.braces)) {
-        if ((brace.startKnotId && directKnotIds.has(brace.startKnotId)) || (brace.endKnotId && directKnotIds.has(brace.endKnotId))) {
-            braceIdsToRemove.push(brace.id);
-        }
-    }
-
-    const build = removeKickstand(kickstandId);
-    if (!build) return null;
-
-    const snapshots: KickstandRemoveResult = {
-        build,
-        branches: [],
-        braces: [],
-        kickstands: [],
-        leaves: [],
-        knots: [],
-    };
-
-    const seenBranchIds = new Set<string>();
-    const seenBraceIds = new Set<string>();
-    const seenKickstandIds = new Set<string>();
-    const seenLeafIds = new Set<string>();
-    const seenKnotIds = new Set<string>();
-
-    for (const branchId of branchIdsToRemove) {
-        const removed = removeBranch(branchId);
-        if (!removed) continue;
-
-        for (const branch of removed.branches ?? []) {
-            if (!branch || seenBranchIds.has(branch.id)) continue;
-            seenBranchIds.add(branch.id);
-            snapshots.branches.push(branch);
-        }
-
-        for (const brace of removed.braces ?? []) {
-            if (!brace || seenBraceIds.has(brace.id)) continue;
-            seenBraceIds.add(brace.id);
-            snapshots.braces.push(brace);
-        }
-
-        for (const nestedKickstand of removed.kickstands ?? []) {
-            if (!nestedKickstand || seenKickstandIds.has(nestedKickstand.kickstand.id)) continue;
-            seenKickstandIds.add(nestedKickstand.kickstand.id);
-            snapshots.kickstands.push(nestedKickstand);
-        }
-
-        for (const leaf of removed.leaves ?? []) {
-            if (!leaf || seenLeafIds.has(leaf.id)) continue;
-            seenLeafIds.add(leaf.id);
-            snapshots.leaves.push(leaf);
-        }
-
-        for (const knot of removed.knots ?? []) {
-            if (!knot || seenKnotIds.has(knot.id)) continue;
-            seenKnotIds.add(knot.id);
-            snapshots.knots.push(knot);
-        }
-    }
-
-    for (const leafId of leafIdsToRemove) {
-        const removed = removeLeaf(leafId);
-        if (!removed) continue;
-
-        if (removed.leaf && !seenLeafIds.has(removed.leaf.id)) {
-            seenLeafIds.add(removed.leaf.id);
-            snapshots.leaves.push(removed.leaf);
-        }
-
-        if (removed.knot && !seenKnotIds.has(removed.knot.id)) {
-            seenKnotIds.add(removed.knot.id);
-            snapshots.knots.push(removed.knot);
-        }
-    }
-
-    for (const braceId of braceIdsToRemove) {
-        const removed = removeBrace(braceId);
-        if (!removed) continue;
-
-        if (removed.brace && !seenBraceIds.has(removed.brace.id)) {
-            seenBraceIds.add(removed.brace.id);
-            snapshots.braces.push(removed.brace);
-        }
-
-        if (removed.startKnot && !seenKnotIds.has(removed.startKnot.id)) {
-            seenKnotIds.add(removed.startKnot.id);
-            snapshots.knots.push(removed.startKnot);
-        }
-
-        if (removed.endKnot && !seenKnotIds.has(removed.endKnot.id)) {
-            seenKnotIds.add(removed.endKnot.id);
-            snapshots.knots.push(removed.endKnot);
-        }
-    }
-
-    for (const knotId of directKnotIds) {
-        const removedKnot = removeKnotById(knotId);
-        if (!removedKnot || seenKnotIds.has(removedKnot.id)) continue;
-        seenKnotIds.add(removedKnot.id);
-        snapshots.knots.push(removedKnot);
-    }
-
-    if (state.knots[build.hostKnot.id]) {
-        removeKnotById(build.hostKnot.id);
-    }
-
-    if (state.roots[build.root.id]) {
-        removeRootById(build.root.id);
-    }
-
-    return snapshots;
-}
-
-export function removeBranch(branchId: string): { branches: Branch[]; braces: Brace[]; kickstands: KickstandBuildResult[]; leaves: Leaf[]; knots: Knot[] } | null {
-    const rootBranch = state.branches[branchId];
-    if (!rootBranch) return null;
-
-    const branchIdsToRemove = new Set<string>([branchId]);
-    const knotIdsToRemove = new Set<string>();
-
-    // Collect branches recursively: if a branch is attached to a knot we remove, it must be removed too.
-    // Also remove all knots created on the segments of those branches.
-    let grew = true;
-    while (grew) {
-        grew = false;
-
-        for (const bId of Array.from(branchIdsToRemove)) {
-            const b = state.branches[bId];
-            if (!b) continue;
-
-            if (b.parentKnotId) {
-                knotIdsToRemove.add(b.parentKnotId);
-            }
-
-            for (const seg of b.segments) {
-                for (const knot of Object.values(state.knots)) {
-                    if (knot.parentShaftId === seg.id) {
-                        knotIdsToRemove.add(knot.id);
-                    }
-                }
-            }
-        }
-
-        for (const b of Object.values(state.branches)) {
-            if (branchIdsToRemove.has(b.id)) continue;
-            if (b.parentKnotId && knotIdsToRemove.has(b.parentKnotId)) {
-                branchIdsToRemove.add(b.id);
-                grew = true;
-            }
-        }
-    }
-
-    const leafIdsToRemove = new Set<string>();
-    for (const leaf of Object.values(state.leaves)) {
-        if (leaf.parentKnotId && knotIdsToRemove.has(leaf.parentKnotId)) {
-            leafIdsToRemove.add(leaf.id);
-        }
-    }
-
-    const braceIdsToRemove = new Set<string>();
-    for (const brace of Object.values(state.braces)) {
-        if ((brace.startKnotId && knotIdsToRemove.has(brace.startKnotId)) || (brace.endKnotId && knotIdsToRemove.has(brace.endKnotId))) {
-            braceIdsToRemove.add(brace.id);
-        }
-    }
-
-    const branchSegmentIds = new Set<string>();
-    for (const bId of branchIdsToRemove) {
-        const b = state.branches[bId];
-        if (!b) continue;
-        for (const seg of b.segments) {
-            branchSegmentIds.add(seg.id);
-        }
-    }
-
-    const kickstandState = getKickstandSnapshot();
-    const kickstandIdsToRemove = new Set<string>();
-    for (const kickstand of Object.values(kickstandState.kickstands)) {
-        if (branchSegmentIds.has(kickstand.hostSegmentId) || knotIdsToRemove.has(kickstand.hostKnotId)) {
-            kickstandIdsToRemove.add(kickstand.id);
-            if (kickstand.hostKnotId) {
-                knotIdsToRemove.add(kickstand.hostKnotId);
-            }
-        }
-    }
-
-    const snapshots = {
-        branches: Array.from(branchIdsToRemove).map((id) => deepClone(state.branches[id])).filter(Boolean),
-        braces: Array.from(braceIdsToRemove).map((id) => deepClone(state.braces[id])).filter(Boolean),
-        kickstands: [] as KickstandBuildResult[],
-        leaves: Array.from(leafIdsToRemove).map((id) => deepClone(state.leaves[id])).filter(Boolean),
-        knots: Array.from(knotIdsToRemove).map((id) => deepClone(state.knots[id])).filter(Boolean),
-    };
-
-    const kickstandRootIdsToRemove = new Set<string>();
-    for (const kickstandId of kickstandIdsToRemove) {
-        const removed = removeKickstandCascade(kickstandId);
-        if (!removed) continue;
-
-        snapshots.kickstands.push(removed.build);
-        kickstandRootIdsToRemove.add(removed.build.root.id);
-
-        for (const nestedKickstand of removed.kickstands ?? []) {
-            snapshots.kickstands.push(nestedKickstand);
-            kickstandRootIdsToRemove.add(nestedKickstand.root.id);
-        }
-
-        snapshots.branches.push(...removed.branches);
-        snapshots.braces.push(...removed.braces);
-        snapshots.leaves.push(...removed.leaves);
-        snapshots.knots.push(...removed.knots);
-    }
-
-    const nextBranches = { ...state.branches };
-    for (const id of branchIdsToRemove) {
-        delete nextBranches[id];
-    }
-
-    const nextBraces = { ...state.braces };
-    for (const id of braceIdsToRemove) {
-        delete nextBraces[id];
-    }
-
-    const nextLeaves = { ...state.leaves };
-    for (const id of leafIdsToRemove) {
-        delete nextLeaves[id];
-    }
-
-    const nextKnots = { ...state.knots };
-    for (const id of knotIdsToRemove) {
-        delete nextKnots[id];
-    }
-
-    let nextRoots = state.roots;
-    if (kickstandRootIdsToRemove.size > 0) {
-        const updatedRoots: Record<string, Roots> = { ...state.roots };
-        for (const rootId of kickstandRootIdsToRemove) {
-            delete updatedRoots[rootId];
-        }
-        nextRoots = updatedRoots;
-    }
-
-    let nextSelectedId = state.selectedId;
-    let nextSelectedCategory = state.selectedCategory;
-    if (
-        (nextSelectedId && branchIdsToRemove.has(nextSelectedId)) ||
-        (nextSelectedId && braceIdsToRemove.has(nextSelectedId)) ||
-        (nextSelectedId && kickstandIdsToRemove.has(nextSelectedId)) ||
-        (nextSelectedId && leafIdsToRemove.has(nextSelectedId)) ||
-        (nextSelectedId && knotIdsToRemove.has(nextSelectedId)) ||
-        (nextSelectedId && kickstandRootIdsToRemove.has(nextSelectedId))
-    ) {
-        nextSelectedId = null;
-        nextSelectedCategory = null;
-    }
-
-    state = {
-        ...state,
-        branches: nextBranches,
-        braces: nextBraces,
-        leaves: nextLeaves,
-        roots: nextRoots,
-        knots: nextKnots,
-        selectedId: nextSelectedId,
-        selectedCategory: nextSelectedCategory,
-    };
-
-    for (const id of branchIdsToRemove) {
-        deleteCachedSupportSettingsHex('branch', id);
-    }
-    for (const id of leafIdsToRemove) {
-        deleteCachedSupportSettingsHex('leaf', id);
-    }
-
-    notify();
-    return snapshots;
-}
-
-export function updateBranch(branch: Branch, options?: { skipDependentGeometry?: boolean }) {
-    const skipDependentGeometry = options?.skipDependentGeometry === true;
-
-    if (!state.branches[branch.id]) return;
-
-    const cachedHex = getCachedSupportSettingsHex('branch', branch.id, branch.settingsCodeHex ?? undefined);
-    const nextBranch = !branch.settingsCodeHex && cachedHex
-        ? { ...branch, settingsCodeHex: cachedHex }
-        : branch;
-
-    if (nextBranch.settingsCodeHex) {
-        setCachedSupportSettingsHex('branch', nextBranch.id, nextBranch.settingsCodeHex);
-    }
-
-    const nextBranches = { ...state.branches, [nextBranch.id]: nextBranch };
-
-    // Update any knots attached to this branch's segments
-    const parentKnot = state.knots[nextBranch.parentKnotId];
-    let nextKnots = state.knots;
-    let nextLeaves = state.leaves;
-
-    if (parentKnot) {
-        const updatedKnots: Record<string, Knot> = { ...state.knots };
-        const updatedKnotPosById: Record<string, Vec3> = {};
+        const movedKnotPosById: Record<string, Vec3> = {};
         let knotsChanged = false;
 
         for (const knot of Object.values(state.knots)) {
-            const segIndex = nextBranch.segments.findIndex(s => s.id === knot.parentShaftId);
-            if (segIndex === -1) continue;
+            const segmentIndex = next.segments.findIndex((s) => s.id === knot.parentShaftId);
+            if (segmentIndex === -1) continue;
 
-            const seg = nextBranch.segments[segIndex];
-            const endpoints = getBranchSegmentEndpoints(nextBranch, seg, segIndex, parentKnot);
-            if (!endpoints || knot.t === undefined) continue;
+            const placed = place(next, knot, next.segments[segmentIndex], segmentIndex);
+            if (!placed) continue;
 
-            const newPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, seg, knot.t);
-            if (newPos.x === knot.pos.x && newPos.y === knot.pos.y && newPos.z === knot.pos.z) continue;
+            const posChanged = placed.pos.x !== knot.pos.x
+                || placed.pos.y !== knot.pos.y
+                || placed.pos.z !== knot.pos.z;
+            const diameterChanged = placed.diameter !== undefined && placed.diameter !== knot.diameter;
+            if (!posChanged && !diameterChanged) continue;
 
-            updatedKnots[knot.id] = { ...knot, pos: newPos };
-            updatedKnotPosById[knot.id] = newPos;
+            updatedKnots[knot.id] = {
+                ...knot,
+                pos: posChanged ? placed.pos : knot.pos,
+                ...(placed.diameter !== undefined ? { diameter: placed.diameter } : {}),
+            };
             knotsChanged = true;
+            if (posChanged) movedKnotPosById[knot.id] = placed.pos;
         }
 
         if (knotsChanged) {
-            if (skipDependentGeometry) {
-                // Drag-time fast path: defer expensive leaf dependent recomputations until commit,
-                // but keep brace geometry current so it stays anchored to the moving branch.
-                const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, updatedKnots);
-                nextKnots = braceSeg.knots;
-            } else {
-                nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
-                const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
-                const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
-                nextKnots = braceSeg.knots;
-            }
+            nextLeaves = recomputeKnotDependentGeometry(state.leaves, movedKnotPosById);
+            const coneHost = recomputeConeHostKnotGeometry(nextLeaves, updatedKnots);
+            const spanHost = recomputeSpanHostKnotGeometry(state.braces, coneHost.knots);
+            nextKnots = spanHost.knots;
         }
     }
 
-    state = {
+    // What else this type touches, in the order it needs. A type with no
+    // registered cascade settles to nothing.
+    const settle = supportSettleFor(typeId);
+    const settled = settle ? settle({
+        next: { ...state, [key]: nextCollection, knots: nextKnots, leaves: nextLeaves },
+    }) : null;
+
+    setState({
         ...state,
-        branches: nextBranches,
+        // Defaults first, then the entity's own collection, so a type whose
+        // collection is one of the defaults writes the post-write one.
         knots: nextKnots,
         leaves: nextLeaves,
-    };
-
-    syncKickstandHostKnotsFromSharedKnots(nextKnots);
-
+        [key]: nextCollection,
+        ...(settled ?? {}),
+    });
     notify();
 }
 
+/**
+ * Overwrite an existing entity in place, no-op if the id is unknown.
+ *
+ * Only for a plain write. A shafted type goes through `applySupportEntityUpdate`
+ * instead, which also repositions the knots riding its segments. The settings
+ * applier wants exactly this: it has moved the root already, and the knot pass
+ * would settle the geometry twice.
+ */
+function replaceSupportEntity(
+    typeId: SupportTypeId,
+    entity: { id: string },
+): boolean {
+    const key = getSupportTypeDescriptor(typeId).location.key;
+    if (!state[key][entity.id]) return false;
+
+    setState({
+        ...state,
+        [key]: { ...state[key], [entity.id]: { ...entity, typeId } },
+    });
+    notify();
+    return true;
+}
+
+/**
+ * Where a knot rides a shaft: interpolate along the segment its `t` names.
+ *
+ * The ends come from the declared endpoints, so a plate-rooted shaft measures
+ * from its root and a knot-hosted one from its host without either being named
+ * here. Two rules stay per type, both trunk's:
+ *
+ * - the knot renders at the joint diameter, not the shaft's, or it is invisible;
+ * - a knot carrying no `t` (auto merge and fan knots do not) is projected onto
+ *   the possibly-moved segment, so a leaf follows the shaft on a joint drag.
+ */
+for (const descriptor of SUPPORT_TYPES) {
+    if (!descriptor.hasSegments) continue;
+
+    KNOT_PLACEMENT_BY_TYPE.set(descriptor.id, (entity, knot, segment, segmentIndex) => {
+        // Both hosts come off the declared edges: a kickstand's knot is at its
+        // upper end, so `lower.kind` would find none.
+        const hosts = resolveDeclaredHosts(descriptor.id, entity as Record<string, unknown>);
+
+        // A type declaring a host it was handed none of cannot place anything.
+        if (descriptor.lower.kind === 'plateRoot' && !hosts.root) return null;
+        if (descriptor.lower.kind === 'knot' && !hosts.hostKnot) return null;
+
+        const diameter = descriptor.knotTakesJointDiameter
+            ? segment.diameter + KNOT_JOINT_DIAMETER_BUMP_MM
+            : undefined;
+
+        const endpoints = resolveSegmentEndpoints(entity as ShaftEntity, segment, segmentIndex, hosts);
+        if (!endpoints) return diameter === undefined ? null : { pos: knot.pos, diameter };
+
+        const t = knot.t !== undefined
+            ? knot.t
+            : (descriptor.projectsUnparameterisedKnots
+                ? computeClosestTOnSegmentFromPoint(knot.pos, endpoints.start, endpoints.end, segment)
+                : undefined);
+        if (t === undefined) return null;
+
+        const pos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, t);
+        return diameter === undefined ? { pos } : { pos, diameter };
+    });
+}
+
+
+/**
+ * @deprecated for removal -- prefer `updateSupportEntity('branch', entity)`.
+ * Kept for `SupportTypes/Branch/`, which may name its own type, and for tests.
+ */
+
 export function addKnot(knot: Knot) {
-    state = {
+    setState({
         ...state,
         knots: { ...state.knots, [knot.id]: knot }
-    };
+    });
     notify();
 }
 
@@ -3705,12 +3419,12 @@ export function removeKnotById(knotId: string): Knot | null {
         nextSelectedCategory = null;
     }
 
-    state = {
+    setState({
         ...state,
         knots: nextKnots,
         selectedId: nextSelectedId,
         selectedCategory: nextSelectedCategory,
-    };
+    });
     notify();
     return deepClone(knot);
 }
@@ -3720,461 +3434,118 @@ export function updateKnot(knot: Knot, options?: { skipDependentGeometry?: boole
     const existing = state.knots[knot.id];
     if (!existing) return;
 
-    const kickstandState = getKickstandSnapshot();
-    const hostKickstand = Object.values(kickstandState.kickstands).find((kickstand) => kickstand.hostKnotId === knot.id);
-    if (hostKickstand) {
-        setKickstandSnapshot({
-            ...kickstandState,
-            knots: {
-                ...kickstandState.knots,
-                [knot.id]: knot,
-            },
-        });
-    }
-
     const baseKnots = { ...state.knots, [knot.id]: knot };
 
     if (skipDependentGeometry) {
         // Drag-time fast path: keep knot + brace-segment knots responsive while
         // deferring expensive leaf-dependent geometry recomputes until commit.
-        const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, baseKnots);
-        state = { ...state, knots: braceSeg.knots };
+        const spanHost = recomputeSpanHostKnotGeometry(state.braces, baseKnots);
+        setState({ ...state, knots: spanHost.knots });
         notify();
         return;
     }
 
-    let nextLeaves = recomputeKnotDependentGeometry(state.leaves, { [knot.id]: knot.pos });
-    const leafCone1 = recomputeLeafConeKnotGeometry(nextLeaves, baseKnots);
-    const braceSeg1 = recomputeBraceSegmentKnotGeometry(state.braces, leafCone1.knots);
+    const settled = settleKnotDependentGeometry(
+        state.braces,
+        recomputeKnotDependentGeometry(state.leaves, { [knot.id]: knot.pos }),
+        baseKnots,
+    );
 
-    const changedByBrace1 = getChangedKnotPositions(leafCone1.knots, braceSeg1.knots);
-
-    let nextKnots = braceSeg1.knots;
-    if (Object.keys(changedByBrace1).length > 0) {
-        nextLeaves = recomputeKnotDependentGeometry(nextLeaves, changedByBrace1);
-        const leafCone2 = recomputeLeafConeKnotGeometry(nextLeaves, nextKnots);
-        const braceSeg2 = recomputeBraceSegmentKnotGeometry(state.braces, leafCone2.knots);
-        nextKnots = braceSeg2.knots;
-    }
-
-    state = { ...state, knots: nextKnots, leaves: nextLeaves };
+    setState({ ...state, knots: settled.knots, leaves: settled.leaves });
     notify();
 }
 
-export function applyKnotDragFramePreview(
-    knot: Knot,
-    branchSegmentsById: Record<string, Branch['segments']> = {},
-) {
-    const existing = state.knots[knot.id];
-    if (!existing) return;
-
-    const knotUnchanged = existing.parentShaftId === knot.parentShaftId
-        && existing.t === knot.t
-        && existing.diameter === knot.diameter
-        && existing.pos.x === knot.pos.x
-        && existing.pos.y === knot.pos.y
-        && existing.pos.z === knot.pos.z;
-
-    let nextBranches = state.branches;
-    const branchIds = Object.keys(branchSegmentsById);
-    let branchesChanged = false;
-    if (branchIds.length > 0) {
-        const updatedBranches: Record<string, Branch> = { ...state.branches };
-
-        for (const branchId of branchIds) {
-            const branch = state.branches[branchId];
-            const nextSegments = branchSegmentsById[branchId];
-            if (!branch || !nextSegments) continue;
-            if (branch.segments === nextSegments) continue;
-            updatedBranches[branchId] = { ...branch, segments: nextSegments };
-            branchesChanged = true;
-        }
-
-        if (branchesChanged) {
-            nextBranches = updatedBranches;
-        }
-    }
-
-    if (knotUnchanged && !branchesChanged) {
-        return;
-    }
-
-    if (!knotUnchanged) {
-        const kickstandState = getKickstandSnapshot();
-        const hostKickstand = Object.values(kickstandState.kickstands).find((kickstand) => kickstand.hostKnotId === knot.id);
-        if (hostKickstand) {
-            setKickstandSnapshot({
-                ...kickstandState,
-                knots: {
-                    ...kickstandState.knots,
-                    [knot.id]: knot,
-                },
-            });
-        }
-    }
-
-    let nextKnots = state.knots;
-    if (!knotUnchanged) {
-        const baseKnots = { ...state.knots, [knot.id]: knot };
-        const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, baseKnots);
-        nextKnots = braceSeg.knots;
-    }
-
-    state = {
-        ...state,
-        branches: nextBranches,
-        knots: nextKnots,
-    };
-
-    if (!knotUnchanged) {
-        syncKickstandHostKnotsFromSharedKnots(nextKnots);
-    }
-
-    notify();
-}
-
-export function removeLeaf(leafId: string): { leaf: Leaf; knot: Knot | null } | null {
-    const existingLeaf = state.leaves[leafId];
-    if (!existingLeaf) return null;
-
-    const snapshots: { leaf: Leaf; knot: Knot | null } = {
-        leaf: deepClone(existingLeaf),
-        knot: null,
-    };
-
-    const knotId = existingLeaf.parentKnotId;
-    const { [leafId]: _, ...remainingLeaves } = state.leaves;
-
-    let nextKnots = state.knots;
-    let knotDeleted = false;
-    if (knotId && state.knots[knotId]) {
-        const isShared =
-            Object.values(state.leaves).some((l) => l.id !== leafId && l.parentKnotId === knotId) ||
-            Object.values(state.branches).some((b) => b.parentKnotId === knotId) ||
-            Object.values(state.braces).some((brace) => brace.startKnotId === knotId || brace.endKnotId === knotId) ||
-            Object.values(getKickstandSnapshot().kickstands).some((k) => k.hostKnotId === knotId);
-
-        if (!isShared) {
-            const { [knotId]: removedKnot, ...restKnots } = state.knots;
-            snapshots.knot = deepClone(removedKnot);
-            nextKnots = restKnots;
-            knotDeleted = true;
-        }
-    }
-
-    let nextSelectedId = state.selectedId;
-    let nextSelectedCategory = state.selectedCategory;
-    if (state.selectedId === leafId || (knotId && knotDeleted && state.selectedId === knotId)) {
-        nextSelectedId = null;
-        nextSelectedCategory = null;
-    }
-
-    state = {
-        ...state,
-        leaves: remainingLeaves,
-        knots: nextKnots,
-        selectedId: nextSelectedId,
-        selectedCategory: nextSelectedCategory,
-    };
-
-    deleteCachedSupportSettingsHex('leaf', leafId);
-
-    notify();
-    return snapshots;
-}
-
-export function removeTrunk(
-    trunkId: string
-): { trunk: Trunk; root: Roots | null; branches: Branch[]; braces: Brace[]; kickstands: KickstandBuildResult[]; leaves: Leaf[]; knots: Knot[] } | null {
-    const existingTrunk = state.trunks[trunkId];
-    if (!existingTrunk) return null;
-
-    const trunkSegmentIds = new Set(existingTrunk.segments.map((s) => s.id));
-    const trunkHostedKnotIds = new Set<string>();
-    for (const knot of Object.values(state.knots)) {
-        if (trunkSegmentIds.has(knot.parentShaftId)) trunkHostedKnotIds.add(knot.id);
-    }
-
-    const branchIdsToRemove: string[] = [];
-    for (const branch of Object.values(state.branches)) {
-        if (branch.parentKnotId && trunkHostedKnotIds.has(branch.parentKnotId)) {
-            branchIdsToRemove.push(branch.id);
-        }
-    }
-
-    const leafIdsToRemove: string[] = [];
-    for (const leaf of Object.values(state.leaves)) {
-        if (leaf.parentKnotId && trunkHostedKnotIds.has(leaf.parentKnotId)) {
-            leafIdsToRemove.push(leaf.id);
-        }
-    }
-
-    const braceIdsToRemove: string[] = [];
-    for (const brace of Object.values(state.braces)) {
-        if ((brace.startKnotId && trunkHostedKnotIds.has(brace.startKnotId)) || (brace.endKnotId && trunkHostedKnotIds.has(brace.endKnotId))) {
-            braceIdsToRemove.push(brace.id);
-        }
-    }
-
-    const snapshots: { trunk: Trunk; root: Roots | null; branches: Branch[]; braces: Brace[]; kickstands: KickstandBuildResult[]; leaves: Leaf[]; knots: Knot[] } = {
-        trunk: deepClone(existingTrunk),
-        root: null,
-        branches: [],
-        braces: [],
-        kickstands: [],
-        leaves: [],
-        knots: [],
-    };
-
-    const seenBranchIds = new Set<string>();
-    const seenBraceIds = new Set<string>();
-    const seenKickstandIds = new Set<string>();
-    const seenLeafIds = new Set<string>();
-    const seenKnotIds = new Set<string>();
-    const kickstandRootIdsToRemove = new Set<string>();
-
-    for (const branchId of branchIdsToRemove) {
-        const removed = removeBranch(branchId);
-        if (!removed) continue;
-        for (const b of removed.branches ?? []) {
-            if (!b || seenBranchIds.has(b.id)) continue;
-            seenBranchIds.add(b.id);
-            snapshots.branches.push(b);
-        }
-        for (const br of removed.braces ?? []) {
-            if (!br || seenBraceIds.has(br.id)) continue;
-            seenBraceIds.add(br.id);
-            snapshots.braces.push(br);
-        }
-        for (const kickstandBuild of removed.kickstands ?? []) {
-            if (!kickstandBuild || seenKickstandIds.has(kickstandBuild.kickstand.id)) continue;
-            seenKickstandIds.add(kickstandBuild.kickstand.id);
-            snapshots.kickstands.push(kickstandBuild);
-            kickstandRootIdsToRemove.add(kickstandBuild.root.id);
-            seenKnotIds.add(kickstandBuild.hostKnot.id);
-        }
-        for (const l of removed.leaves ?? []) {
-            if (!l || seenLeafIds.has(l.id)) continue;
-            seenLeafIds.add(l.id);
-            snapshots.leaves.push(l);
-        }
-        for (const k of removed.knots ?? []) {
-            if (!k || seenKnotIds.has(k.id)) continue;
-            seenKnotIds.add(k.id);
-            snapshots.knots.push(k);
-        }
-    }
-
-    for (const leafId of leafIdsToRemove) {
-        const removed = removeLeaf(leafId);
-        if (!removed) continue;
-        if (removed.leaf && !seenLeafIds.has(removed.leaf.id)) {
-            seenLeafIds.add(removed.leaf.id);
-            snapshots.leaves.push(removed.leaf);
-        }
-        if (removed.knot && !seenKnotIds.has(removed.knot.id)) {
-            seenKnotIds.add(removed.knot.id);
-            snapshots.knots.push(removed.knot);
-        }
-    }
-
-    for (const braceId of braceIdsToRemove) {
-        const removed = removeBrace(braceId);
-        if (!removed) continue;
-        if (removed.brace && !seenBraceIds.has(removed.brace.id)) {
-            seenBraceIds.add(removed.brace.id);
-            snapshots.braces.push(removed.brace);
-        }
-        if (removed.startKnot && !seenKnotIds.has(removed.startKnot.id)) {
-            seenKnotIds.add(removed.startKnot.id);
-            snapshots.knots.push(removed.startKnot);
-        }
-        if (removed.endKnot && !seenKnotIds.has(removed.endKnot.id)) {
-            seenKnotIds.add(removed.endKnot.id);
-            snapshots.knots.push(removed.endKnot);
-        }
-    }
-
-    const kickstandState = getKickstandSnapshot();
-    const kickstandIdsToRemove = new Set<string>();
-    for (const kickstand of Object.values(kickstandState.kickstands)) {
-        if (trunkSegmentIds.has(kickstand.hostSegmentId) || trunkHostedKnotIds.has(kickstand.hostKnotId)) {
-            kickstandIdsToRemove.add(kickstand.id);
-        }
-    }
-
-    for (const kickstandId of kickstandIdsToRemove) {
-        const removed = removeKickstandCascade(kickstandId);
-        if (!removed) continue;
-
-        if (!seenKickstandIds.has(removed.build.kickstand.id)) {
-            seenKickstandIds.add(removed.build.kickstand.id);
-            snapshots.kickstands.push(removed.build);
-            kickstandRootIdsToRemove.add(removed.build.root.id);
-        }
-
-        for (const nestedKickstand of removed.kickstands ?? []) {
-            if (!nestedKickstand || seenKickstandIds.has(nestedKickstand.kickstand.id)) continue;
-            seenKickstandIds.add(nestedKickstand.kickstand.id);
-            snapshots.kickstands.push(nestedKickstand);
-            kickstandRootIdsToRemove.add(nestedKickstand.root.id);
-        }
-
-        for (const branch of removed.branches ?? []) {
-            if (!branch || seenBranchIds.has(branch.id)) continue;
-            seenBranchIds.add(branch.id);
-            snapshots.branches.push(branch);
-        }
-
-        for (const brace of removed.braces ?? []) {
-            if (!brace || seenBraceIds.has(brace.id)) continue;
-            seenBraceIds.add(brace.id);
-            snapshots.braces.push(brace);
-        }
-
-        for (const leaf of removed.leaves ?? []) {
-            if (!leaf || seenLeafIds.has(leaf.id)) continue;
-            seenLeafIds.add(leaf.id);
-            snapshots.leaves.push(leaf);
-        }
-
-        for (const knot of removed.knots ?? []) {
-            if (!knot || seenKnotIds.has(knot.id)) continue;
-            seenKnotIds.add(knot.id);
-            snapshots.knots.push(knot);
-        }
-    }
-
-    const remainingKnotsToRemove: string[] = [];
-    for (const knotId of Array.from(trunkHostedKnotIds)) {
-        if (state.knots[knotId]) remainingKnotsToRemove.push(knotId);
-    }
-
-    let nextKnots = state.knots;
-    if (remainingKnotsToRemove.length > 0) {
-        const updatedKnots: Record<string, Knot> = { ...state.knots };
-        for (const knotId of remainingKnotsToRemove) {
-            const k = updatedKnots[knotId];
-            if (!k) continue;
-            if (!seenKnotIds.has(k.id)) {
-                seenKnotIds.add(k.id);
-                snapshots.knots.push(deepClone(k));
-            }
-            delete updatedKnots[knotId];
-        }
-        nextKnots = updatedKnots;
-    }
-
-    const { [trunkId]: _, ...remainingTrunks } = state.trunks;
-    let nextRoots = state.roots;
-    if (kickstandRootIdsToRemove.size > 0) {
-        const updatedRoots: Record<string, Roots> = { ...nextRoots };
-        for (const rootId of kickstandRootIdsToRemove) {
-            delete updatedRoots[rootId];
-        }
-        nextRoots = updatedRoots;
-    }
-    if (existingTrunk.rootId && state.roots[existingTrunk.rootId]) {
-        const { [existingTrunk.rootId]: removedRoot, ...restRoots } = state.roots;
-        snapshots.root = deepClone(removedRoot);
-        nextRoots = { ...restRoots, ...nextRoots };
-        delete nextRoots[existingTrunk.rootId];
-    }
-
-    let nextSelectedId = state.selectedId;
-    let nextSelectedCategory = state.selectedCategory;
-
-    if (state.selectedId === trunkId || state.selectedId === existingTrunk.rootId) {
-        nextSelectedId = null;
-        nextSelectedCategory = null;
-    } else if (state.selectedCategory === 'joint' && state.selectedId) {
-        const jointInTrunk =
-            existingTrunk.segments.some((s) => s.topJoint?.id === state.selectedId || s.bottomJoint?.id === state.selectedId) ||
-            (!!existingTrunk.contactCone?.socketJointId && existingTrunk.contactCone.socketJointId === state.selectedId);
-        if (jointInTrunk) {
-            nextSelectedId = null;
-            nextSelectedCategory = null;
-        }
-    } else if (state.selectedCategory === 'segment' && state.selectedId) {
-        if (trunkSegmentIds.has(state.selectedId)) {
-            nextSelectedId = null;
-            nextSelectedCategory = null;
-        }
-    } else if (state.selectedCategory === 'knot' && state.selectedId) {
-        if (trunkHostedKnotIds.has(state.selectedId)) {
-            nextSelectedId = null;
-            nextSelectedCategory = null;
-        }
-    } else if (state.selectedId && seenKickstandIds.has(state.selectedId)) {
-        nextSelectedId = null;
-        nextSelectedCategory = null;
-    }
-
-    state = {
-        ...state,
-        trunks: remainingTrunks,
-        roots: nextRoots,
-        knots: nextKnots,
-        selectedId: nextSelectedId,
-        selectedCategory: nextSelectedCategory,
-    };
-
-    deleteCachedSupportSettingsHex('trunk', trunkId);
-    for (const branch of snapshots.branches) {
-        deleteCachedSupportSettingsHex('branch', branch.id);
-    }
-    for (const leaf of snapshots.leaves) {
-        deleteCachedSupportSettingsHex('leaf', leaf.id);
-    }
-
-    notify();
-    return snapshots;
-}
 
 // --- Selectors / Hooks Helpers ---
 
-export function getRoots() {
-    return Object.values(state.roots);
+
+/**
+ * The root and host knot an entity's declared endpoints resolve from. Absent
+ * when it has no edge of that kind, or the id it names is not in the store.
+ */
+export function resolveDeclaredHosts(
+    typeId: SupportTypeId,
+    entity: Record<string, unknown>,
+): { root?: Roots; hostKnot?: Knot } {
+    const descriptor = getSupportTypeDescriptor(typeId);
+    const fieldOf = (to: 'roots' | 'knots', ownership: 'owns' | 'hostedBy') =>
+        descriptor.edges.find((edge) => edge.to === to && edge.ownership === ownership)?.field;
+    const rootId = entity[fieldOf('roots', 'owns') ?? ''];
+    const knotId = entity[fieldOf('knots', 'hostedBy') ?? ''];
+
+    return {
+        root: typeof rootId === 'string' ? state.roots[rootId] : undefined,
+        hostKnot: typeof knotId === 'string' ? state.knots[knotId] : undefined,
+    };
 }
 
-export function getTrunks() {
-    return Object.values(state.trunks);
+/** Every entity of one type. */
+export function getSupportEntities<T = unknown>(typeId: SupportTypeId): T[] {
+    const { key } = getSupportTypeDescriptor(typeId).location;
+    return Object.values(state[key]) as T[];
 }
 
-export function getBranches() {
-    return Object.values(state.branches);
+
+/**
+ * The primitives a type's entities reference, keyed by id.
+ *
+ * Which fields point where is declared as the type's `edges`, so a caller asks
+ * for "the roots kickstands own" without knowing the field name. For a consumer
+ * that needs one type's primitives apart from every other type's -- note that
+ * they are NOT a separate collection, so a caller already walking `roots` has
+ * them and must not add them again.
+ */
+export function getOwnedPrimitives<T = unknown>(
+    typeId: SupportTypeId,
+    collection: SupportCollectionKey,
+): Record<string, T> {
+    const descriptor = getSupportTypeDescriptor(typeId);
+    const fields = descriptor.edges
+        .filter((edge) => edge.to === collection)
+        .map((edge) => edge.field);
+    if (fields.length === 0) return {};
+
+    const source = state[collection] as unknown as Record<string, T>;
+    const owned: Record<string, T> = {};
+    for (const entity of Object.values(state[descriptor.location.key]) as Record<string, unknown>[]) {
+        for (const field of fields) {
+            const id = entity[field];
+            if (typeof id !== 'string') continue;
+            const found = source[id];
+            if (found !== undefined) owned[id] = found;
+        }
+    }
+    return owned;
 }
 
-export function getLeaves() {
-    return Object.values(state.leaves);
+/**
+ * Owned-primitive views, cached by snapshot identity.
+ *
+ * `useSyncExternalStore` compares by reference, so returning a fresh object per
+ * call would re-render forever. Rebuilt only when the snapshot changes.
+ */
+const ownedPrimitiveCache = new Map<string, { source: SupportState; view: Record<string, unknown> }>();
+
+function cachedOwnedPrimitives<T>(
+    typeId: SupportTypeId,
+    collection: SupportCollectionKey,
+): Record<string, T> {
+    const key = `${typeId}:${collection}`;
+    const hit = ownedPrimitiveCache.get(key);
+    if (hit && hit.source === state) return hit.view as Record<string, T>;
+    const view = getOwnedPrimitives<T>(typeId, collection);
+    ownedPrimitiveCache.set(key, { source: state, view: view as Record<string, unknown> });
+    return view;
 }
 
-export function getTwigs() {
-    return Object.values(state.twigs);
+/** The roots kickstands own. */
+export function getKickstandRoots(): Record<string, Roots> {
+    return cachedOwnedPrimitives<Roots>(bundledSupportTypeId(), 'roots');
 }
 
-export function getSticks() {
-    return Object.values(state.sticks);
-}
-
-export function getBraces() {
-    return Object.values(state.braces);
-}
-
-export function getAnchors() {
-    return Object.values(state.anchors);
-}
-
-export function getAnchorById(anchorId: string) {
-    return state.anchors[anchorId] ?? null;
-}
-
-export function getKnotsMap() {
-    return state.knots;
-}
-
-export function getKnots() {
-    return Object.values(state.knots);
+/** The knots kickstands host. */
+export function getKickstandKnots(): Record<string, Knot> {
+    return cachedOwnedPrimitives<Knot>(bundledSupportTypeId(), 'knots');
 }
 
 export function getKnotById(knotId: string) {
@@ -4200,199 +3571,228 @@ export function getHoveredCategory() {
 export function getModelIdForSupportEntityId(id: string | null | undefined): string | null {
     if (!id) return null;
 
-    if (id.startsWith('braceSegment:')) {
-        const braceId = id.slice('braceSegment:'.length);
-        return state.braces[braceId]?.modelId ?? null;
+    const span = parsePrefixedSegmentId(id);
+    if (span) {
+        return (state.braces[span.entityId] as { modelId?: string } | undefined)?.modelId ?? null;
     }
 
-    if (state.roots[id]) return state.roots[id].modelId ?? null;
-    if (state.trunks[id]) return state.trunks[id].modelId ?? null;
-    if (state.branches[id]) return state.branches[id].modelId ?? null;
-    if (state.leaves[id]) return state.leaves[id].modelId ?? null;
-    if (state.twigs[id]) return state.twigs[id].modelId ?? null;
-    if (state.sticks[id]) return state.sticks[id].modelId ?? null;
-    if (state.braces[id]) return state.braces[id].modelId ?? null;
-    if (state.anchors[id]) return state.anchors[id].modelId ?? null;
+    const modelIdOf = (entity: unknown) => (entity as { modelId?: string } | undefined)?.modelId ?? null;
 
-    const kickstandState = getKickstandSnapshot();
-    const directKickstand = kickstandState.kickstands[id];
-    if (directKickstand) return directKickstand.modelId ?? null;
-
-    for (const trunk of Object.values(state.trunks)) {
-        if (trunk.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
-            return trunk.modelId ?? null;
-        }
+    // Direct hit on any modelId-bearing collection.
+    for (const key of MODEL_ID_COLLECTION_KEYS) {
+        const entity = state[key][id];
+        if (entity) return modelIdOf(entity);
     }
 
-    for (const branch of Object.values(state.branches)) {
-        if (branch.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
-            return branch.modelId ?? null;
-        }
-    }
+    // One pass over every support, asking each what it is. Segments and edges
+    // are matched in the same pass because they take disjoint id kinds -- a
+    // segment or joint id, versus
+    // the knot id an edge points at -- so no id can satisfy both. Walked by
+    // collection, not through the derived union.
+    for (const descriptor of SUPPORT_TYPES) {
+        const view = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+        for (const entityId in view) {
+            const entity = view[entityId];
+            // A primitive on a shaft: segment, or either of its joints.
+            if (descriptor.hasSegments) {
+                const segments = (entity.segments as Segment[] | undefined) ?? [];
+                if (segments.some((segment) =>
+                    segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+                    return modelIdOf(entity);
+                }
+            }
 
-    for (const twig of Object.values(state.twigs)) {
-        if (twig.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
-            return twig.modelId ?? null;
-        }
-    }
-
-    for (const stick of Object.values(state.sticks)) {
-        if (stick.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
-            return stick.modelId ?? null;
+            // Or the entity points at the id through one of its declared edges.
+            if (descriptor.edges.some((edge) => edge.to === 'knots' && entity[edge.field] === id)) {
+                return modelIdOf(entity);
+            }
         }
     }
 
-    for (const brace of Object.values(state.braces)) {
-        if (brace.startKnotId === id || brace.endKnotId === id) {
-            return brace.modelId ?? null;
-        }
-    }
-
-    for (const kickstand of Object.values(kickstandState.kickstands)) {
-        if (kickstand.hostKnotId === id) return kickstand.modelId ?? null;
-        if (kickstand.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
-            return kickstand.modelId ?? null;
-        }
-    }
-
-    if (state.knots[id]) {
-        const parentShaftId = state.knots[id].parentShaftId;
-        if (parentShaftId) {
-            const byParent = getModelIdForSupportEntityId(parentShaftId);
-            if (byParent) return byParent;
-        }
-
-        for (const branch of Object.values(state.branches)) {
-            if (branch.parentKnotId === id) return branch.modelId ?? null;
-        }
-        for (const leaf of Object.values(state.leaves)) {
-            if (leaf.parentKnotId === id) return leaf.modelId ?? null;
-        }
-    }
+    // A knot resolves from its host shaft.
+    const knot = state.knots[id];
+    if (knot?.parentShaftId) return getModelIdForSupportEntityId(knot.parentShaftId);
 
     return null;
 }
 
-export function getTrunkById(trunkId: string) {
-    return state.trunks[trunkId] ?? null;
+/**
+ * One entity by id. `getSupportEntity(id)` resolves the type from the store and
+ * is preferred; `(typeId, id)` is generic on the id, so it comes back narrowed
+ * with no cast. Null for an unknown id, or one whose type cannot be resolved.
+ */
+export function getSupportEntity(id: string): SupportEntityAny | null;
+export function getSupportEntity<T extends SupportTypeId>(typeId: T, id: string): SupportEntityFor<T> | null;
+export function getSupportEntity(
+    // `string`, not `SupportTypeId`: the one-argument form takes any entity id.
+    typeIdOrId: string,
+    maybeId?: string,
+): SupportEntityAny | null {
+    // One argument means the id alone.
+    if (maybeId === undefined) {
+        const resolved = getSupportTypeOf(typeIdOrId);
+        if (!resolved) return null;
+        return getSupportEntity(resolved, typeIdOrId);
+    }
+    const { key } = getSupportTypeDescriptor(typeIdOrId as SupportTypeId).location;
+    // The store's value type is the union of every entity; the overloads narrow it.
+    return (state[key] as Record<string, SupportEntityAny>)[maybeId] ?? null;
+}
+
+/**
+ * What type of support an id names, or null if it names none.
+ *
+ * Reads the entity's own `typeId` rather than asking which collection holds it.
+ */
+export function getSupportTypeOf(id: string): SupportTypeId | null {
+    if (!id) return null;
+
+    // Eight lookups, not the whole union: `supports` is derived, and building it
+    // to answer one id would materialise a plate-wide map.
+    for (const descriptor of SUPPORT_TYPES) {
+        const entity = (state[descriptor.location.key] as Record<string, { typeId?: SupportTypeId }>)[id];
+        if (!entity) continue;
+        return entity.typeId ?? descriptor.id;
+    }
+    return null;
+}
+
+
+/**
+ * The first entity matching `predicate`, walking the collections rather than the
+ * derived union.
+ */
+function findSupportEntityWhere(
+    predicate: (entity: Record<string, unknown>) => boolean,
+): Record<string, unknown> | null {
+    for (const descriptor of SUPPORT_TYPES) {
+        const view = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+        for (const id in view) {
+            const entity = view[id];
+            if (predicate(entity)) return entity;
+        }
+    }
+    return null;
+}
+
+/** Which support owns a shaft segment, searching every shafted type. */
+export function findShaftOwnerOfSegment(
+    segmentId: string,
+): { typeId: SupportTypeId; id: string } | null {
+    // A type whose segments are selected under a prefix names its owner in the
+    // id itself, so there is nothing to scan for.
+    const prefixed = parsePrefixedSegmentId(segmentId);
+    if (prefixed) {
+        return getSupportEntity(prefixed.typeId, prefixed.entityId)
+            ? { typeId: prefixed.typeId, id: prefixed.entityId }
+            : null;
+    }
+
+    const owner = findSupportEntityWhere((entity) => (
+        ((entity.segments as Segment[] | undefined) ?? []).some((segment) => segment.id === segmentId)
+    ));
+    if (owner) {
+        const typeId = getSupportTypeOf(owner.id as string);
+        if (typeId) return { typeId, id: owner.id as string };
+    }
+    return null;
+}
+
+/** Where a joint sits within a segment list, or null if it is not there. */
+export function jointPosIn(segments: readonly Segment[], jointId: string): Vec3 | null {
+    for (const segment of segments) {
+        if (segment.topJoint?.id === jointId) return segment.topJoint.pos;
+        if (segment.bottomJoint?.id === jointId) return segment.bottomJoint.pos;
+    }
+    return null;
+}
+
+/** Which support owns a joint, searching every shafted type. */
+export function findShaftOwnerOfJoint(
+    jointId: string,
+): { typeId: SupportTypeId; id: string; pos: Vec3 } | null {
+    const owner = findSupportEntityWhere((entity) => (
+        jointPosIn((entity.segments as Segment[] | undefined) ?? [], jointId) !== null
+    ));
+    if (owner) {
+        const pos = jointPosIn((owner.segments as Segment[] | undefined) ?? [], jointId);
+        const typeId = getSupportTypeOf(owner.id as string);
+        if (pos && typeId) return { typeId, id: owner.id as string, pos };
+    }
+    return null;
 }
 
 export function getRootById(rootId: string) {
     return state.roots[rootId] ?? null;
 }
 
-export function getBranchById(branchId: string) {
-    return state.branches[branchId] ?? null;
-}
-
-export function getTwigById(twigId: string) {
-    return state.twigs[twigId] ?? null;
-}
-
-export function getStickById(stickId: string) {
-    return state.sticks[stickId] ?? null;
-}
-
-export type EditableSupportKind = 'trunk' | 'branch' | 'leaf';
+/**
+ * A type whose entities have editable settings.
+ *
+ * Widened to SupportTypeId rather than listing the three: which types are
+ * editable is `hasEditableSettings`, and the runtime already reads it. Narrowing
+ * this by hand would be a second source of truth.
+ */
+export type EditableSupportKind = SupportTypeId;
 
 export type EditableSupportTarget = {
     kind: EditableSupportKind;
     id: string;
 };
 
-function mergeSettingsWithDefaults(base?: SupportSettings): SupportSettings {
-    const defaults = createDefaultSettings();
-    if (!base) return defaults;
-
-    return {
-        ...defaults,
-        ...base,
-        tip: { ...defaults.tip, ...base.tip },
-        shaft: { ...defaults.shaft, ...base.shaft },
-        roots: { ...defaults.roots, ...base.roots },
-        baseFlare: { ...defaults.baseFlare, ...base.baseFlare },
-        joint: { ...defaults.joint, ...base.joint },
-        grid: { ...defaults.grid, ...base.grid },
-        meshToMesh: { ...defaults.meshToMesh, ...base.meshToMesh },
-        autoBracing: { ...defaults.autoBracing, ...base.autoBracing },
-    };
-}
-
-function inferSettingsFromTrunk(trunk: Trunk, root: Roots | null, base?: SupportSettings): SupportSettings {
+/**
+ * Settings read back off an entity using only what its descriptor declares:
+ * the first `contactFields` cone for the tip, the owned root for the roots, and
+ * segment 0 for the shaft. Each half is skipped when the type declares nothing.
+ */
+function inferSettingsFromDescriptor(
+    descriptor: SupportTypeDescriptor,
+    entity: SupportEntityAny,
+    base?: SupportSettings,
+): SupportSettings {
     const merged = mergeSettingsWithDefaults(base);
-    const coneProfile = trunk.contactCone?.profile;
+    const record = entity as unknown as Record<string, unknown>;
+
+    const cone = descriptor.contactFields
+        .map((field) => record[field] as { profile?: SupportTipProfile } | undefined)
+        .find(Boolean);
+    const coneProfile = cone?.profile;
     const diskConeProfile = coneProfile?.type === 'disk' ? coneProfile : undefined;
-    const shaftDiameter = trunk.baseDiameterMm ?? trunk.segments[0]?.diameter ?? merged.shaft.diameterMm;
+
+    const segments = (record.segments as Segment[] | undefined) ?? [];
+    const shaftDiameter = (record.baseDiameterMm as number | undefined)
+        ?? segments[0]?.diameter
+        ?? merged.shaft.diameterMm;
+
+    const root = descriptor.ownsRoot
+        ? state.roots[(record.rootId as string | undefined) ?? ''] ?? null
+        : null;
 
     return {
         ...merged,
-        tip: {
-            ...merged.tip,
-            contactDiameterMm: coneProfile?.contactDiameterMm ?? merged.tip.contactDiameterMm,
-            bodyDiameterMm: coneProfile?.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
-            lengthMm: coneProfile?.lengthMm ?? merged.tip.lengthMm,
-            penetrationMm: coneProfile?.penetrationMm ?? merged.tip.penetrationMm,
-            diskThicknessMm: diskConeProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
-            maxStandoffMm: diskConeProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
-            standoffAngleThreshold: diskConeProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
-        },
-        shaft: {
-            ...merged.shaft,
-            diameterMm: shaftDiameter,
-            secondaryDiameterMm: shaftDiameter,
-        },
-        roots: {
-            ...merged.roots,
-            diameterMm: root?.diameter ?? merged.roots.diameterMm,
-            diskHeightMm: root?.diskHeight ?? merged.roots.diskHeightMm,
-            coneHeightMm: root?.coneHeight ?? merged.roots.coneHeightMm,
-        },
-    };
-}
-
-function inferSettingsFromBranch(branch: Branch, base?: SupportSettings): SupportSettings {
-    const merged = mergeSettingsWithDefaults(base);
-    const coneProfile = branch.contactCone?.profile;
-    const diskConeProfile = coneProfile?.type === 'disk' ? coneProfile : undefined;
-    const shaftDiameter = branch.segments[0]?.diameter ?? merged.shaft.diameterMm;
-
-    return {
-        ...merged,
-        tip: {
-            ...merged.tip,
-            contactDiameterMm: coneProfile?.contactDiameterMm ?? merged.tip.contactDiameterMm,
-            bodyDiameterMm: coneProfile?.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
-            lengthMm: coneProfile?.lengthMm ?? merged.tip.lengthMm,
-            penetrationMm: coneProfile?.penetrationMm ?? merged.tip.penetrationMm,
-            diskThicknessMm: diskConeProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
-            maxStandoffMm: diskConeProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
-            standoffAngleThreshold: diskConeProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
-        },
-        shaft: {
-            ...merged.shaft,
-            diameterMm: shaftDiameter,
-            secondaryDiameterMm: shaftDiameter,
-        },
-    };
-}
-
-function inferSettingsFromLeaf(leaf: Leaf, base?: SupportSettings): SupportSettings {
-    const merged = mergeSettingsWithDefaults(base);
-    const coneProfile = leaf.contactCone?.profile;
-    const diskConeProfile = coneProfile?.type === 'disk' ? coneProfile : undefined;
-
-    return {
-        ...merged,
-        tip: {
-            ...merged.tip,
-            contactDiameterMm: coneProfile?.contactDiameterMm ?? merged.tip.contactDiameterMm,
-            bodyDiameterMm: coneProfile?.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
-            lengthMm: coneProfile?.lengthMm ?? merged.tip.lengthMm,
-            penetrationMm: coneProfile?.penetrationMm ?? merged.tip.penetrationMm,
-            diskThicknessMm: diskConeProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
-            maxStandoffMm: diskConeProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
-            standoffAngleThreshold: diskConeProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
-        },
+        tip: coneProfile
+            ? {
+                ...merged.tip,
+                contactDiameterMm: coneProfile.contactDiameterMm ?? merged.tip.contactDiameterMm,
+                bodyDiameterMm: coneProfile.bodyDiameterMm ?? merged.tip.bodyDiameterMm,
+                lengthMm: coneProfile.lengthMm ?? merged.tip.lengthMm,
+                penetrationMm: coneProfile.penetrationMm ?? merged.tip.penetrationMm,
+                diskThicknessMm: diskConeProfile?.diskThicknessMm ?? merged.tip.diskThicknessMm,
+                maxStandoffMm: diskConeProfile?.maxStandoffMm ?? merged.tip.maxStandoffMm,
+                standoffAngleThreshold: diskConeProfile?.standoffAngleThreshold ?? merged.tip.standoffAngleThreshold,
+            }
+            : merged.tip,
+        shaft: descriptor.hasSegments
+            ? { ...merged.shaft, diameterMm: shaftDiameter, secondaryDiameterMm: shaftDiameter }
+            : merged.shaft,
+        roots: root
+            ? {
+                ...merged.roots,
+                diameterMm: root.diameter ?? merged.roots.diameterMm,
+                diskHeightMm: root.diskHeight ?? merged.roots.diskHeightMm,
+                coneHeightMm: root.coneHeight ?? merged.roots.coneHeightMm,
+            }
+            : merged.roots,
     };
 }
 
@@ -4436,166 +3836,84 @@ function updateSegmentDiametersAndJoints(
 export function resolveEditableSupportTarget(selectedId: string | null, selectedCategory: SelectionCategory | undefined): EditableSupportTarget | null {
     if (!selectedId) return null;
 
-    if (selectedCategory === 'trunk' || selectedCategory === 'branch' || selectedCategory === 'leaf') {
-        return { kind: selectedCategory, id: selectedId };
+    if (selectedCategory && isEditableSupportType(selectedCategory)) {
+        return { kind: selectedCategory as EditableSupportKind, id: selectedId };
     }
+
+    /** The editable entity owning `matches`, in registry order. */
+    const findOwner = (
+        matches: (entity: Record<string, unknown>, descriptor: SupportTypeDescriptor) => boolean,
+    ): EditableSupportTarget | null => {
+        for (const descriptor of EDITABLE_SUPPORT_TYPES) {
+            for (const entity of Object.values(state[descriptor.location.key])) {
+                if (matches(entity as unknown as Record<string, unknown>, descriptor)) {
+                    return { kind: descriptor.id, id: (entity as { id: string }).id };
+                }
+            }
+        }
+        return null;
+    };
+
+    const segmentsOf = (entity: Record<string, unknown>) => (entity.segments as Segment[] | undefined) ?? [];
+    const contactOf = (entity: Record<string, unknown>, descriptor: SupportTypeDescriptor) =>
+        descriptor.contactFields
+            .map((field) => entity[field] as { id?: string; socketJointId?: string } | undefined)
+            .filter(Boolean);
 
     if (selectedCategory === 'root') {
-        const trunk = Object.values(state.trunks).find((candidate) => candidate.rootId === selectedId);
-        if (!trunk) return null;
-        return { kind: 'trunk', id: trunk.id };
+        // A type owning a `Roots` row matches by id; one declaring an inline
+        // root carries the geometry itself, so its primitive id names the entity.
+        const inlineOwner = parseInlineRootId(selectedId);
+        return findOwner((entity, descriptor) =>
+            entity.rootId === selectedId
+            || (descriptor.lower.kind === 'inlineRoot' && entity.id === inlineOwner));
     }
 
-    if (selectedCategory === 'segment' || selectedCategory === 'joint') {
-        for (const trunk of Object.values(state.trunks)) {
-            const owns = trunk.segments.some((segment) => {
-                if (selectedCategory === 'segment') return segment.id === selectedId;
-                return segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId || trunk.contactCone?.socketJointId === selectedId;
-            });
-            if (owns) return { kind: 'trunk', id: trunk.id };
-        }
+    if (selectedCategory === 'segment') {
+        return findOwner((entity) => segmentsOf(entity).some((segment) => segment.id === selectedId));
+    }
 
-        for (const branch of Object.values(state.branches)) {
-            const owns = branch.segments.some((segment) => {
-                if (selectedCategory === 'segment') return segment.id === selectedId;
-                return segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId || branch.contactCone?.socketJointId === selectedId;
-            });
-            if (owns) return { kind: 'branch', id: branch.id };
-        }
+    if (selectedCategory === 'joint') {
+        return findOwner((entity, descriptor) =>
+            segmentsOf(entity).some((segment) =>
+                segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId)
+            || contactOf(entity, descriptor).some((contact) => contact?.socketJointId === selectedId));
     }
 
     if (selectedCategory === 'contactDisk') {
-        for (const trunk of Object.values(state.trunks)) {
-            if (trunk.contactCone?.id === selectedId) {
-                return { kind: 'trunk', id: trunk.id };
-            }
-        }
-
-        for (const branch of Object.values(state.branches)) {
-            if (branch.contactCone?.id === selectedId) {
-                return { kind: 'branch', id: branch.id };
-            }
-        }
-
-        for (const leaf of Object.values(state.leaves)) {
-            if (leaf.contactCone?.id === selectedId) {
-                return { kind: 'leaf', id: leaf.id };
-            }
-        }
+        return findOwner((entity, descriptor) =>
+            contactOf(entity, descriptor).some((contact) => contact?.id === selectedId));
     }
 
     if (selectedCategory === 'knot') {
         const knot = state.knots[selectedId];
         if (!knot) return null;
 
-        if (knot.parentShaftId.startsWith('leafCone:')) {
-            const leafId = knot.parentShaftId.slice('leafCone:'.length);
-            if (state.leaves[leafId]) return { kind: 'leaf', id: leafId };
-        }
-
-        for (const trunk of Object.values(state.trunks)) {
-            if (trunk.segments.some((segment) => segment.id === knot.parentShaftId)) {
-                return { kind: 'trunk', id: trunk.id };
+        // A cone-knot host encodes its owner in the shaft id -- both the type
+        // and the id -- so the collection to look in comes from it too.
+        const coneHost = parseKnotHostId(knot.parentShaftId);
+        if (coneHost && isConeKnotHost(coneHost.typeId)) {
+            const ownerCollection = state[getSupportTypeDescriptor(coneHost.typeId).location.key] as
+                Record<string, unknown> | undefined;
+            if (ownerCollection?.[coneHost.entityId]) {
+                return { kind: coneHost.typeId, id: coneHost.entityId };
             }
         }
 
-        for (const branch of Object.values(state.branches)) {
-            if (branch.segments.some((segment) => segment.id === knot.parentShaftId) || branch.parentKnotId === selectedId) {
-                return { kind: 'branch', id: branch.id };
-            }
-        }
-
-        for (const leaf of Object.values(state.leaves)) {
-            if (leaf.parentKnotId === selectedId) {
-                return { kind: 'leaf', id: leaf.id };
-            }
-        }
-    }
-
-    // Fallback: if category-based routing failed, resolve by ownership scans.
-    if (state.trunks[selectedId]) return { kind: 'trunk', id: selectedId };
-    if (state.branches[selectedId]) return { kind: 'branch', id: selectedId };
-    if (state.leaves[selectedId]) return { kind: 'leaf', id: selectedId };
-
-    for (const trunk of Object.values(state.trunks)) {
-        if (trunk.rootId === selectedId) return { kind: 'trunk', id: trunk.id };
-        if (trunk.contactCone?.id === selectedId) return { kind: 'trunk', id: trunk.id };
-        if (trunk.contactCone?.socketJointId === selectedId) return { kind: 'trunk', id: trunk.id };
-        if (trunk.segments.some((segment) => segment.id === selectedId || segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId)) {
-            return { kind: 'trunk', id: trunk.id };
-        }
-    }
-
-    for (const branch of Object.values(state.branches)) {
-        if (branch.contactCone?.id === selectedId) return { kind: 'branch', id: branch.id };
-        if (branch.contactCone?.socketJointId === selectedId) return { kind: 'branch', id: branch.id };
-        if (branch.segments.some((segment) => segment.id === selectedId || segment.topJoint?.id === selectedId || segment.bottomJoint?.id === selectedId)) {
-            return { kind: 'branch', id: branch.id };
-        }
-    }
-
-    for (const leaf of Object.values(state.leaves)) {
-        if (leaf.contactCone?.id === selectedId) return { kind: 'leaf', id: leaf.id };
-        if (leaf.contactCone?.socketJointId === selectedId) return { kind: 'leaf', id: leaf.id };
-        if (leaf.parentKnotId === selectedId) return { kind: 'leaf', id: leaf.id };
-    }
-
-    if (state.knots[selectedId]) {
-        const knot = state.knots[selectedId];
-        if (knot.parentShaftId.startsWith('leafCone:')) {
-            const leafId = knot.parentShaftId.slice('leafCone:'.length);
-            if (state.leaves[leafId]) return { kind: 'leaf', id: leafId };
-        }
-
-        for (const trunk of Object.values(state.trunks)) {
-            if (trunk.segments.some((segment) => segment.id === knot.parentShaftId)) {
-                return { kind: 'trunk', id: trunk.id };
-            }
-        }
-
-        for (const branch of Object.values(state.branches)) {
-            if (branch.segments.some((segment) => segment.id === knot.parentShaftId) || branch.parentKnotId === selectedId) {
-                return { kind: 'branch', id: branch.id };
-            }
-        }
+        return findOwner((entity) =>
+            segmentsOf(entity).some((segment) => segment.id === knot.parentShaftId)
+            || entity.parentKnotId === selectedId);
     }
 
     return null;
 }
 
 export function getSupportSettingsForTarget(target: EditableSupportTarget, base?: SupportSettings): SupportSettings | null {
-    if (target.kind === 'trunk') {
-        const trunk = state.trunks[target.id];
-        if (!trunk) return null;
-        const root = state.roots[trunk.rootId] ?? null;
-        const encoded = getCachedSupportSettingsHex('trunk', trunk.id, trunk.settingsCodeHex);
-        const decoded = encoded ? decodeSupportSettingsHex(encoded, base) : null;
-        logSupportSettingsDebug('read target', target, {
-            hasHex: Boolean(encoded),
-            hexPreview: encoded?.slice(0, 18),
-            decodeOk: Boolean(decoded),
-            source: decoded ? 'hex' : 'inferred',
-        });
-        return decoded ?? inferSettingsFromTrunk(trunk, root, base);
-    }
+    const descriptor = getSupportTypeDescriptor(target.kind);
+    const entity = state[descriptor.location.key][target.id] as { settingsCodeHex?: string } | undefined;
+    if (!entity) return null;
 
-    if (target.kind === 'branch') {
-        const branch = state.branches[target.id];
-        if (!branch) return null;
-        const encoded = getCachedSupportSettingsHex('branch', branch.id, branch.settingsCodeHex);
-        const decoded = encoded ? decodeSupportSettingsHex(encoded, base) : null;
-        logSupportSettingsDebug('read target', target, {
-            hasHex: Boolean(encoded),
-            hexPreview: encoded?.slice(0, 18),
-            decodeOk: Boolean(decoded),
-            source: decoded ? 'hex' : 'inferred',
-        });
-        return decoded ?? inferSettingsFromBranch(branch, base);
-    }
-
-    const leaf = state.leaves[target.id];
-    if (!leaf) return null;
-    const encoded = getCachedSupportSettingsHex('leaf', leaf.id, leaf.settingsCodeHex);
+    const encoded = getCachedSupportSettingsHex(target.kind, target.id, entity.settingsCodeHex);
     const decoded = encoded ? decodeSupportSettingsHex(encoded, base) : null;
     logSupportSettingsDebug('read target', target, {
         hasHex: Boolean(encoded),
@@ -4603,17 +3921,67 @@ export function getSupportSettingsForTarget(target: EditableSupportTarget, base?
         decodeOk: Boolean(decoded),
         source: decoded ? 'hex' : 'inferred',
     });
-    return decoded ?? inferSettingsFromLeaf(leaf, base);
+
+    return decoded ?? inferSupportSettings<SupportSettings>(target.kind, entity, base);
 }
 
-export function getSupportSettingsForSelection(
-    selectedId: string | null,
-    selectedCategory: SelectionCategory | undefined,
-    base?: SupportSettings,
-): SupportSettings | null {
-    const target = resolveEditableSupportTarget(selectedId, selectedCategory);
-    if (!target) return null;
-    return getSupportSettingsForTarget(target, base);
+
+/**
+ * The profile with the taper's start moved to the new shaft width. Its end
+ * stays as built, matching the host. Null when the taper reads elsewhere.
+ */
+function resizeTaperStart(
+    descriptor: SupportTypeDescriptor,
+    entity: Record<string, unknown>,
+    shaftDiameterMm: number,
+): Record<string, unknown> | null {
+    const taper = descriptor.shaftTaper;
+    if (!taper) return null;
+    const [startPath, endPath] = taper.from;
+    if (!startPath.startsWith('profile.') || !endPath.startsWith('profile.')) return null;
+
+    const profile = entity.profile as Record<string, unknown> | undefined;
+    if (!profile) return null;
+
+    const startKey = startPath.slice('profile.'.length);
+    return {
+        ...profile,
+        bodyDiameterMm: shaftDiameterMm,
+        [startKey]: shaftDiameterMm,
+    };
+}
+
+/** Gap a stump's joint keeps above its own root top. */
+const INLINE_ROOT_SOCKET_CLEARANCE_MM = 0.1;
+
+/**
+ * Lengthen a cone so its socket lands at `socketZ`, leaving the contact point
+ * where it is. A cone with no vertical reach cannot be stretched to a height,
+ * so it is returned untouched.
+ */
+function stretchConeToSocketZ<T extends { pos: Vec3; normal: Vec3; profile: { lengthMm: number } }>(
+    cone: T,
+    socketZ: number,
+): T {
+    const dz = cone.normal.z;
+    if (!(Math.abs(dz) > 1e-6)) return cone;
+    const lengthMm = (socketZ - cone.pos.z) / dz;
+    if (!Number.isFinite(lengthMm) || lengthMm <= 0) return cone;
+    return { ...cone, profile: { ...cone.profile, lengthMm } };
+}
+
+/**
+ * The stump's cone, stretched so its socket lands on the joint. Unlike the
+ * generic helper this measures from the socket `getFinalSocketPosition` reports,
+ * so the contact disk's own offset is part of the answer.
+ */
+function seatStumpCone(cone: ContactCone, socketZ: number): ContactCone {
+    const dz = cone.normal.z;
+    if (!(Math.abs(dz) > 1e-6)) return cone;
+    const current = getFinalSocketPosition(cone);
+    const lengthMm = cone.profile.lengthMm + (socketZ - current.z) / dz;
+    if (!Number.isFinite(lengthMm) || lengthMm <= 0) return cone;
+    return { ...cone, profile: { ...cone.profile, lengthMm } };
 }
 
 function applyTipSettingsToConeProfile(
@@ -4657,140 +4025,198 @@ function applyTipSettingsToConeProfile(
     return baseProfile;
 }
 
+/**
+ * Write settings onto whichever support the sidebar is editing.
+ *
+ * One path for every editable type: a type owning a root rewrites it, a type
+ * with segments resizes them, and a type without one has no shaft-to-tip
+ * transition so the tip's body and length do not apply.
+ */
 export function applySettingsToSupportTarget(target: EditableSupportTarget, settings: SupportSettings): boolean {
     logSupportSettingsDebug('apply start', target);
 
-    if (target.kind === 'trunk') {
-        const trunk = state.trunks[target.id];
-        if (!trunk) return false;
+    const descriptor = SUPPORT_TYPES.find((d) => d.id === target.kind);
+    if (!descriptor?.hasEditableSettings) return false;
 
-        const root = state.roots[trunk.rootId];
-        if (!root) return false;
+    const collection = state[descriptor.location.key] as Record<string, unknown>;
+    const entity = collection[target.id] as {
+        id: string;
+        segments?: Segment[];
+        contactCone?: Trunk['contactCone'];
+        rootId?: string;
+        settingsCodeHex?: string;
+        joint?: Joint;
+    } | undefined;
+    if (!entity) return false;
 
+    const root = descriptor.ownsRoot ? state.roots[entity.rootId ?? ''] : null;
+    if (descriptor.ownsRoot && !root) return false;
+
+    const nextContactCone = entity.contactCone
+        ? {
+            ...entity.contactCone,
+            profile: applyTipSettingsToConeProfile(
+                entity.contactCone.profile,
+                settings.tip,
+                { includeBodyAndLength: descriptor.hasSegments },
+            ),
+        }
+        : entity.contactCone;
+
+    const nextHex = encodeSupportSettingsHex(settings);
+    const next: Record<string, unknown> = { ...entity, settingsCodeHex: nextHex, contactCone: nextContactCone };
+
+    if (descriptor.hasSegments) {
+        const socketPos = nextContactCone ? getFinalSocketPosition(nextContactCone) : undefined;
+        next.segments = updateSegmentDiametersAndJoints(
+            entity.segments ?? [],
+            settings.shaft.diameterMm,
+            nextContactCone?.socketJointId,
+            socketPos,
+        );
+    }
+    // Only a root-owning type records its shaft width on the entity.
+    if (descriptor.ownsRoot) next.baseDiameterMm = settings.shaft.diameterMm;
+
+    // Without this the terminal segment keeps its build-time width.
+    const taperedProfile = resizeTaperStart(descriptor, entity, settings.shaft.diameterMm);
+    if (taperedProfile) next.profile = taperedProfile;
+
+    // An inline root is geometry on the entity, so the same settings land on the
+    // fields it declares rather than on a shared `Roots` row.
+    if (descriptor.lower.kind === 'inlineRoot') {
+        const { field, radiusField, topRadiusField, heightField } = descriptor.lower;
+        if (radiusField) next[radiusField] = settings.roots.diameterMm;
+        if (topRadiusField) next[topRadiusField] = settings.roots.neckDiameterMm;
+        if (heightField) next[heightField] = settings.roots.coneHeightMm;
+
+        // That root is the body carrying the joint, and the cone sockets on the
+        // joint, so a taller root has to take both up with it or it swallows
+        // them and draws as a bare disc.
+        const basePos = field ? (next[field] as Vec3 | undefined) : undefined;
+        const joint = (next.joint ?? entity.joint) as Joint | undefined;
+        if (basePos && joint && heightField) {
+            const rootTopZ = basePos.z + (next[heightField] as number);
+            const socketZ = rootTopZ + INLINE_ROOT_SOCKET_CLEARANCE_MM;
+            if (socketZ > joint.pos.z) {
+                next.joint = { ...joint, pos: { ...joint.pos, z: socketZ } };
+                if (nextContactCone) {
+                    next.contactCone = stretchConeToSocketZ(nextContactCone, socketZ);
+                }
+            }
+        }
+    }
+
+    setCachedSupportSettingsHex(descriptor.id, entity.id, nextHex);
+
+    logSupportSettingsDebug(`apply ${descriptor.id} hex`, {
+        target,
+        prevHex: entity.settingsCodeHex?.slice(0, 18),
+        nextHex: nextHex.slice(0, 18),
+    });
+
+    if (root) {
         const nextRoot: Roots = {
             ...root,
             diameter: settings.roots.diameterMm,
             diskHeight: settings.roots.diskHeightMm,
             coneHeight: settings.roots.coneHeightMm,
         };
-
-        const nextContactCone = trunk.contactCone
-            ? {
-                ...trunk.contactCone,
-                profile: applyTipSettingsToConeProfile(trunk.contactCone.profile, settings.tip),
-            }
-            : trunk.contactCone;
-
-        const socketPos = nextContactCone ? getFinalSocketPosition(nextContactCone) : undefined;
-        const nextSegments = updateSegmentDiametersAndJoints(
-            trunk.segments,
-            settings.shaft.diameterMm,
-            nextContactCone?.socketJointId,
-            socketPos,
-        );
-        const nextTrunkSettingsCodeHex = encodeSupportSettingsHex(settings);
-
-        const nextTrunk: Trunk = {
-            ...trunk,
-            settingsCodeHex: nextTrunkSettingsCodeHex,
-            baseDiameterMm: settings.shaft.diameterMm,
-            segments: nextSegments,
-            contactCone: nextContactCone,
-        };
-
-        setCachedSupportSettingsHex('trunk', nextTrunk.id, nextTrunkSettingsCodeHex);
-
-        logSupportSettingsDebug('apply trunk hex', {
-            target,
-            prevHex: trunk.settingsCodeHex?.slice(0, 18),
-            nextHex: nextTrunk.settingsCodeHex?.slice(0, 18),
-        });
-
-        state = {
-            ...state,
-            roots: {
-                ...state.roots,
-                [nextRoot.id]: nextRoot,
-            },
-        };
-
-        updateTrunk(nextTrunk);
-        logSupportSettingsDebug('apply done', target);
-        return true;
+        setState({ ...state, roots: { ...state.roots, [nextRoot.id]: nextRoot } });
     }
 
-    if (target.kind === 'branch') {
-        const branch = state.branches[target.id];
-        if (!branch) return false;
-
-        const nextContactCone = branch.contactCone
-            ? {
-                ...branch.contactCone,
-                profile: applyTipSettingsToConeProfile(branch.contactCone.profile, settings.tip),
-            }
-            : branch.contactCone;
-
-        const socketPos = nextContactCone ? getFinalSocketPosition(nextContactCone) : undefined;
-        const nextSegments = updateSegmentDiametersAndJoints(
-            branch.segments,
-            settings.shaft.diameterMm,
-            nextContactCone?.socketJointId,
-            socketPos,
-        );
-        const nextBranchSettingsCodeHex = encodeSupportSettingsHex(settings);
-
-        const nextBranch: Branch = {
-            ...branch,
-            settingsCodeHex: nextBranchSettingsCodeHex,
-            segments: nextSegments,
-            contactCone: nextContactCone,
-        };
-
-        setCachedSupportSettingsHex('branch', nextBranch.id, nextBranchSettingsCodeHex);
-
-        logSupportSettingsDebug('apply branch hex', {
-            target,
-            prevHex: branch.settingsCodeHex?.slice(0, 18),
-            nextHex: nextBranch.settingsCodeHex?.slice(0, 18),
-        });
-
-        updateBranch(nextBranch);
-        logSupportSettingsDebug('apply done', target);
-        return true;
-    }
-
-    const leaf = state.leaves[target.id];
-    if (!leaf) return false;
-
-    const nextLeafSettingsCodeHex = encodeSupportSettingsHex(settings);
-    const nextLeaf: Leaf = {
-        ...leaf,
-        settingsCodeHex: nextLeafSettingsCodeHex,
-        contactCone: {
-            ...leaf.contactCone,
-            profile: applyTipSettingsToConeProfile(leaf.contactCone.profile, settings.tip, { includeBodyAndLength: false }),
-        },
-    };
-
-    setCachedSupportSettingsHex('leaf', nextLeaf.id, nextLeafSettingsCodeHex);
-
-    logSupportSettingsDebug('apply leaf hex', {
-        target,
-        prevHex: leaf.settingsCodeHex?.slice(0, 18),
-        nextHex: nextLeaf.settingsCodeHex?.slice(0, 18),
-    });
-
-    updateLeaf(nextLeaf);
+    replaceSupportEntity(descriptor.id, next as never);
     logSupportSettingsDebug('apply done', target);
     return true;
 }
 
-export function applySettingsToSupportSelection(
-    selectedId: string | null,
-    selectedCategory: SelectionCategory | undefined,
-    settings: SupportSettings,
-): boolean {
-    const target = resolveEditableSupportTarget(selectedId, selectedCategory);
-    if (!target) return false;
-    return applySettingsToSupportTarget(target, settings);
+
+// Per-type registrations live in each type's folder; importing them here runs
+// their side effects once the store exists. The list is GENERATED from those
+// folders (scripts/generate-support-registrations.mjs) rather than written out,
+// so a new type's registration loads because the folder exists -- and the
+// export seam's completeness check in `exportGeometry/seam.ts` then finds it.
+import './generatedSupportRegistrations';
+
+/* --- Updater registration ------------------------------------------------
+ * Every type updates through `applySupportEntityUpdate`. A type needing more
+ * registers its own from its folder, and the pass below fills only the slots
+ * left empty.
+ *
+ * Must run after `generatedSupportRegistrations` above, or the generic updater
+ * claims every slot and the bespoke ones never take effect.
+ * ---------------------------------------------------------------------- */
+for (const descriptor of SUPPORT_TYPES) {
+    if (hasSupportUpdater(descriptor.id)) continue;
+    registerSupportUpdater(
+        descriptor.id,
+        (entity: { id: string }) => applySupportEntityUpdate(descriptor.id, entity),
+    );
+}
+
+// The registry's `updateSupportEntity(entity)` form reads the type off the
+// entity, and needs this only for one that lost it on the way in. A slot for
+// the same cycle reason as the updaters above.
+registerSupportTypeResolver(getSupportTypeOf);
+
+// Generic inference for every editable type that registered none of its own.
+// What it reads is declared: `contactFields` for the tip, `ownsRoot` for the
+// root, and the shaft from segment 0. A type wanting more registers its own.
+for (const descriptor of EDITABLE_SUPPORT_TYPES) {
+    if (hasSettingsInference(descriptor.id)) continue;
+    registerSettingsInference<SupportEntityAny, SupportSettings, SupportSettings>(
+        descriptor.id,
+        (entity, base) => inferSettingsFromDescriptor(descriptor, entity, base),
+    );
+}
+
+
+// How each collection puts an entity back, for undo. Every type goes through
+// the generic adder; only the two primitives have their own.
+for (const descriptor of SUPPORT_TYPES) {
+    registerCollectionRestore(descriptor.location.key, (entity) => {
+        // History payloads written before kickstands were flattened still carry
+        // a { kickstand, root, hostKnot } build. Unwrap it rather than break
+        // undo of an entry already on the stack.
+        const build = entity as Partial<KickstandBuildResult>;
+        if (build.kickstand) {
+            if (build.root) addRoot(build.root);
+            if (build.hostKnot) addKnot(build.hostKnot);
+            addSupportEntity(descriptor.id, build.kickstand);
+            return;
+        }
+        addSupportEntity(descriptor.id, entity as { id: string });
+    });
+}
+registerCollectionRestore('roots', (entity) => addRoot(entity as Roots));
+registerCollectionRestore('knots', (entity) => addKnot(entity as Knot));
+
+const missingRestore = collectionsMissingRestore();
+if (missingRestore.length > 0) {
+    throw new Error(`No restore registered for: ${missingRestore.join(', ')}`);
+}
+
+// Every type exports geometry, so a missing export group builder means a
+// registration module did not load -- which would otherwise surface as a type
+// silently missing from every exported mesh. Same check, same place, as the
+// restore registrations above: fail at load, not at export.
+const missingExportGroups = typesMissingExportGroupBuilder();
+if (missingExportGroups.length > 0) {
+    throw new Error(`No export group builder registered for: ${missingExportGroups.join(', ')}`);
+}
+
+// The joint-drag path pushes a type's own typed history action when it owns its
+// entry. A type declaring the flag without the action would push nothing, so the
+// drag would leave no undo entry and no error.
+const missingHistoryUpdate = typesDeclaringOwnHistoryEntryWithoutUpdate();
+if (missingHistoryUpdate.length > 0) {
+    throw new Error(`Declares ownsEditHistoryEntry but no historyUpdate: ${missingHistoryUpdate.join(', ')}`);
+}
+
+// Same again for the auto-placement override: a type that claims a tip-height
+// band would be SELECTED by the engine, so it must be buildable. Without this
+// the engine picks a type it has no way to construct.
+const missingAutoPlacement = typesMissingContactOverride();
+if (missingAutoPlacement.length > 0) {
+    throw new Error(`Claims a tipHeight band but registered no auto-placement builder: ${missingAutoPlacement.join(', ')}`);
 }

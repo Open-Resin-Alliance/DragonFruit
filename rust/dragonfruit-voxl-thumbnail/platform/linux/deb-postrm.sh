@@ -5,7 +5,7 @@ set -e
 
 case "$1" in
   remove|purge)
-    # Refresh MIME database so the .voxl association is cleaned up.
+    # Refresh MIME database so the .voxl and .lumen associations are cleaned up.
     update-mime-database /usr/share/mime 2>/dev/null || true
     ;;
 esac

@@ -3,12 +3,29 @@ import { createStore } from 'zustand';
 import { detectPlatform } from '../hooks/usePlatform';
 import { HotkeyConfig, DEFAULT_KEYBINDINGS } from './hotkeyConfig';
 
+export interface HotkeyModifierFlags {
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+    shiftKey?: boolean;
+    altKey?: boolean;
+}
+
 export interface HotkeyState {
     activeKeys: Set<string>;
+    /**
+     * Keys that were pressed as part of a modified combination and are therefore
+     * owned by that combination until released. See `isActionActiveSync`.
+     */
+    comboKeys: Set<string>;
+    /**
+     * Keys pressed while Cmd/Meta was held. Firefox on macOS sends no keyup for a
+     * key released before Cmd, so these are released together with Cmd instead.
+     */
+    metaHeldKeys: Set<string>;
     config: HotkeyConfig;
     
     // Actions
-    pressKey: (key: string) => void;
+    pressKey: (key: string, modifiers?: HotkeyModifierFlags) => void;
     releaseKey: (key: string) => void;
     clearKeys: () => void;
     updateBinding: (category: string, action: string, key: string, modifier?: string) => void;
@@ -16,21 +33,66 @@ export interface HotkeyState {
 
 export const hotkeyStore = createStore<HotkeyState>((set) => ({
     activeKeys: new Set<string>(),
+    comboKeys: new Set<string>(),
+    metaHeldKeys: new Set<string>(),
     config: DEFAULT_KEYBINDINGS,
 
-    pressKey: (key) => set((state) => {
+    pressKey: (key, modifiers) => set((state) => {
+        const normalized = key.toLowerCase();
         const next = new Set(state.activeKeys);
-        next.add(key.toLowerCase());
-        return { activeKeys: next };
+        next.add(normalized);
+
+        const claimed = normalizeKey(normalized);
+        const nextCombo = new Set(state.comboKeys);
+        // Only a real configured combination claims the key. Holding another
+        // modifier while pressing a hold action (Alt+Q, for example) must not
+        // suppress the bare binding: Q is not part of an Alt+Q shortcut.
+        if (
+            modifiers
+            && otherModifierHeld(normalized, modifiers)
+            && hasConfiguredComboFor(claimed, next, state.config)
+        ) {
+            nextCombo.add(claimed);
+        } else {
+            nextCombo.delete(claimed);
+        }
+
+        // Modifier keys always get their keyup; only the others can be lost.
+        const nextMetaHeld = new Set(state.metaHeldKeys);
+        if (modifiers?.metaKey && !SELF_MODIFIER_FLAG[normalized]) {
+            nextMetaHeld.add(normalized);
+        } else {
+            nextMetaHeld.delete(normalized);
+        }
+
+        return { activeKeys: next, comboKeys: nextCombo, metaHeldKeys: nextMetaHeld };
     }),
 
     releaseKey: (key) => set((state) => {
+        const normalized = key.toLowerCase();
         const next = new Set(state.activeKeys);
-        next.delete(key.toLowerCase());
-        return { activeKeys: next };
+        next.delete(normalized);
+
+        const nextCombo = new Set(state.comboKeys);
+        nextCombo.delete(normalizeKey(normalized));
+
+        const nextMetaHeld = new Set(state.metaHeldKeys);
+        nextMetaHeld.delete(normalized);
+        // Without this, the V of a Cmd+V stayed pressed and every later Cmd press
+        // (a Cmd+Z, say) pasted again. A key really still held comes back with
+        // its next auto-repeat keydown.
+        if (SELF_MODIFIER_FLAG[normalized] === 'metaKey') {
+            for (const held of nextMetaHeld) {
+                next.delete(held);
+                nextCombo.delete(normalizeKey(held));
+            }
+            nextMetaHeld.clear();
+        }
+
+        return { activeKeys: next, comboKeys: nextCombo, metaHeldKeys: nextMetaHeld };
     }),
 
-    clearKeys: () => set({ activeKeys: new Set() }),
+    clearKeys: () => set({ activeKeys: new Set(), comboKeys: new Set(), metaHeldKeys: new Set() }),
 
     updateBinding: (category, action, key, modifier) => set((state) => ({
         config: {
@@ -58,6 +120,63 @@ function normalizeKey(key: string): string {
 
 export function getPrimaryModifierKey(): 'ctrl' | 'meta' {
     return detectPlatform() === 'mac' ? 'meta' : 'ctrl';
+}
+
+/**
+ * Which modifier flag a key *is*, so that pressing Shift does not count as
+ * "a modifier was held" for Shift itself. Bare modifier keys are bindings of
+ * their own (Alt places branches, Ctrl+Alt places leaves).
+ */
+const SELF_MODIFIER_FLAG: Record<string, keyof HotkeyModifierFlags> = {
+    ctrl: 'ctrlKey',
+    control: 'ctrlKey',
+    shift: 'shiftKey',
+    alt: 'altKey',
+    altgraph: 'altKey',
+    meta: 'metaKey',
+    command: 'metaKey',
+    os: 'metaKey',
+};
+
+/**
+ * Whether a binding with this base key and at least one modifier is fully
+ * active. Used to tell a real combination (Ctrl+A) apart from a hold action
+ * pressed while an unrelated modifier happens to be down (Alt+Q).
+ */
+function hasConfiguredComboFor(
+    key: string,
+    activeKeys: ReadonlySet<string>,
+    config: HotkeyConfig,
+): boolean {
+    const normalizedActiveKeys = new Set<string>();
+    for (const activeKey of activeKeys) {
+        normalizedActiveKeys.add(normalizeKey(activeKey));
+    }
+
+    for (const category of Object.values(config)) {
+        for (const binding of Object.values(category)) {
+            if (!binding.modifier) continue;
+            if (normalizeKey(binding.key) !== key) continue;
+            const required = getRequiredKeys(binding);
+            let matched = true;
+            for (const requiredKey of required) {
+                if (!normalizedActiveKeys.has(requiredKey)) {
+                    matched = false;
+                    break;
+                }
+            }
+            if (matched) return true;
+        }
+    }
+    return false;
+}
+
+function otherModifierHeld(key: string, flags: HotkeyModifierFlags): boolean {
+    const self = SELF_MODIFIER_FLAG[key];
+    return (!!flags.ctrlKey && self !== 'ctrlKey')
+        || (!!flags.metaKey && self !== 'metaKey')
+        || (!!flags.shiftKey && self !== 'shiftKey')
+        || (!!flags.altKey && self !== 'altKey');
 }
 
 export function isPrimaryModifierPressed(activeKeys: ReadonlySet<string>): boolean {
@@ -113,6 +232,14 @@ export function isActionActiveSync(category: string, action: string): boolean {
 
     const targetRequiredKeys = getRequiredKeys(targetBinding);
     if (!isBindingMatched(targetRequiredKeys, normalizedActiveKeys)) {
+        return false;
+    }
+
+    // A key pressed as part of a modified combination stays owned by it until it
+    // is released. Without this, releasing Control before the A of Ctrl+A dropped
+    // the overlap suppression above and made the bare A binding (CANVAS.TOOL_ARRANGE)
+    // match, so a select-all opened Arrange.
+    if (!targetBinding.modifier && state.comboKeys.has(normalizeKey(targetBinding.key))) {
         return false;
     }
 

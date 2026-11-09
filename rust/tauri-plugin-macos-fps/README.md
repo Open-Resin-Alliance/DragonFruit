@@ -10,7 +10,7 @@ Upstream has a single published version (0.1.0, 2026-03) and calls
 `PlatformWebview::inner()`. That method is gone: `PlatformWebview` is now
 generic over the runtime (`PlatformWebview<R>(R::Webview)`) and only `Deref`s to
 the runtime's own webview type. The crate therefore fails to compile against the
-tauri pin adopted in ADR 0005 (`tauri-cef-v3.0.0-alpha.22`), and macOS builds
+tauri pin adopted in ADR 0005 (`tauri-cef-v3.0.0-alpha.22`, still true on alpha.26), and macOS builds
 cannot link without it.
 
 ## Local modification

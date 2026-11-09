@@ -5,7 +5,7 @@ set -e
 
 case "$1" in
   configure)
-    # Refresh the system MIME database so file managers recognise .voxl files.
+    # Refresh the system MIME database so file managers recognise .voxl and .lumen files.
     update-mime-database /usr/share/mime 2>/dev/null || true
     ;;
 esac

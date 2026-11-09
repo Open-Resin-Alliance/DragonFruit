@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { computeForestDiameterProfile } from '../SupportTypes/Trunk/TrunkReplacement/maxConnectedDiameter';
+import { syncContactConeDiameters } from '../autoSupport/autoPlace';
+import { createEmptySupportCollections } from '../supportTypeRegistry';
 import type { Branch, Knot, Roots, SupportState, Trunk } from '../types';
 
 function createRoot(id: string, modelId: string, x: number, y = 0): Roots {
@@ -18,6 +20,7 @@ function createRoot(id: string, modelId: string, x: number, y = 0): Roots {
 function createTrunk(id: string, modelId: string, rootId: string, segmentId: string, x: number, y = 0, topZ = 10, shaftDia = 0.8): Trunk {
     return {
         id,
+        typeId: 'trunk',
         modelId,
         rootId,
         segments: [
@@ -34,6 +37,7 @@ function createTrunk(id: string, modelId: string, rootId: string, segmentId: str
 function createBranch(id: string, modelId: string, parentKnotId: string, diameter: number): Branch {
     return {
         id,
+        typeId: 'branch',
         modelId,
         parentKnotId,
         segments: [{ id: `${id}-seg`, diameter }],
@@ -42,15 +46,7 @@ function createBranch(id: string, modelId: string, parentKnotId: string, diamete
 
 function createEmptySnapshot(): SupportState {
     return {
-        roots: {},
-        trunks: {},
-        branches: {},
-        leaves: {},
-        twigs: {},
-        sticks: {},
-        braces: {},
-        anchors: {},
-        knots: {},
+        ...createEmptySupportCollections(),
         selectedId: null,
         selectedCategory: null,
         hoveredId: null,
@@ -153,4 +149,119 @@ test('forest resize is deterministic and pure', () => {
     const inputSegDia = input.trunks['t1'].segments[0].diameter;
     computeForestDiameterProfile(input);
     assert.equal(input.trunks['t1'].segments[0].diameter, inputSegDia, 'input not mutated');
+});
+
+test('syncContactConeDiameters scales lagging cone bodies up to resized shafts', () => {
+    // The resize pass thickens the shaft AFTER the cone is built: the cone
+    // body keeps its placed diameter and renders as a step under the tip.
+    const s = createEmptySnapshot();
+    s.roots['r1'] = createRoot('r1', 'm', 0);
+    s.trunks['t1'] = {
+        ...createTrunk('t1', 'm', 'r1', 'seg-1', 0, 0, 10, 1.15),
+        contactCone: {
+            id: 'cone-t1',
+            pos: { x: 0, y: 0, z: 10 },
+            normal: { x: 0, y: 0, z: 1 },
+            profile: {
+                type: 'disk',
+                contactDiameterMm: 0.28,
+                bodyDiameterMm: 1.0,
+                lengthMm: 2.5,
+                penetrationMm: 0,
+                diskThicknessMm: 0.1,
+                maxStandoffMm: 1.5,
+                standoffAngleThreshold: Math.PI / 4,
+            },
+        },
+    };
+
+    const synced = syncContactConeDiameters(s);
+    assert.equal(synced.trunks['t1'].contactCone?.profile?.bodyDiameterMm, 1.15, 'cone body matches the resized shaft');
+    assert.ok(Math.abs(synced.trunks['t1'].contactCone!.profile!.contactDiameterMm! - 1.15 * 0.3) < 1e-9,
+        'contact rises with the resized shaft to the 30% floor');
+});
+
+test('syncContactConeDiameters still clamps oversized cone bodies down', () => {
+    const s = createEmptySnapshot();
+    s.roots['r1'] = createRoot('r1', 'm', 0);
+    s.trunks['t1'] = {
+        ...createTrunk('t1', 'm', 'r1', 'seg-1', 0, 0, 10, 1.0),
+        contactCone: {
+            id: 'cone-t1',
+            pos: { x: 0, y: 0, z: 10 },
+            normal: { x: 0, y: 0, z: 1 },
+            profile: {
+                type: 'disk',
+                contactDiameterMm: 0.28,
+                bodyDiameterMm: 1.3,
+                lengthMm: 2.5,
+                penetrationMm: 0,
+                diskThicknessMm: 0.1,
+                maxStandoffMm: 1.5,
+                standoffAngleThreshold: Math.PI / 4,
+            },
+        },
+    };
+
+    const synced = syncContactConeDiameters(s);
+    assert.equal(synced.trunks['t1'].contactCone?.profile?.bodyDiameterMm, 1.0, 'oversized cone clamped to the shaft');
+    assert.ok(Math.abs(synced.trunks['t1'].contactCone!.profile!.contactDiameterMm! - 0.3) < 1e-9,
+        'contact also meets the 30% floor of the clamped shaft');
+});
+
+test('syncContactConeDiameters lifts leaf cones to thickened hosts', () => {
+    const s = createEmptySnapshot();
+    s.roots['r1'] = createRoot('r1', 'm', 0);
+    s.trunks['t1'] = createTrunk('t1', 'm', 'r1', 'seg-1', 0, 0, 10, 1.12);
+    s.knots['k1'] = { id: 'k1', parentShaftId: 'seg-1', pos: { x: 0, y: 0, z: 5.5 }, diameter: 1.0 };
+    s.leaves['l1'] = {
+        id: 'l1',
+        modelId: 'm',
+        parentKnotId: 'k1',
+        contactCone: {
+            id: 'cone-l1',
+            pos: { x: 1, y: 0, z: 8 },
+            normal: { x: 0, y: 0, z: 1 },
+            profile: {
+                type: 'disk',
+                contactDiameterMm: 0.28,
+                bodyDiameterMm: 1.0,
+                lengthMm: 2.5,
+                penetrationMm: 0,
+                diskThicknessMm: 0.1,
+                maxStandoffMm: 1.5,
+                standoffAngleThreshold: Math.PI / 4,
+            },
+        },
+    };
+
+    const synced = syncContactConeDiameters(s);
+    assert.equal(synced.leaves['l1'].contactCone?.profile?.bodyDiameterMm, 1.12, 'leaf cone body follows the host shaft');
+    assert.ok(Math.abs(synced.leaves['l1'].contactCone!.profile!.contactDiameterMm! - 1.12 * 0.3) < 1e-9,
+        'leaf contact rises to the 30% floor of the host it splays from');
+});
+
+test('syncContactConeDiameters is a no-op when bodies already match', () => {
+    const s = createEmptySnapshot();
+    s.roots['r1'] = createRoot('r1', 'm', 0);
+    s.trunks['t1'] = {
+        ...createTrunk('t1', 'm', 'r1', 'seg-1', 0, 0, 10, 1.0),
+        contactCone: {
+            id: 'cone-t1',
+            pos: { x: 0, y: 0, z: 10 },
+            normal: { x: 0, y: 0, z: 1 },
+            profile: {
+                type: 'disk',
+                contactDiameterMm: 0.35,
+                bodyDiameterMm: 1.0,
+                lengthMm: 2.5,
+                penetrationMm: 0,
+                diskThicknessMm: 0.1,
+                maxStandoffMm: 1.5,
+                standoffAngleThreshold: Math.PI / 4,
+            },
+        },
+    };
+
+    assert.equal(syncContactConeDiameters(s), s, 'matching forest returned untouched');
 });

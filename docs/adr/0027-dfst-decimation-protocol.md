@@ -6,6 +6,13 @@ kind: pattern
 
 # ADR-0027: DFST binary IPC protocol and dynamic decimation budget
 
+> **Superseded (2026-10-10).** The `DFST` payload was retired when the STL load
+> path folded into the universal `load_mesh_file`, whose `DFMX` payload carries
+> the same facts (preview flag, original and model triangle counts) for any
+> number of bodies — see `dev/mesh-wire-formats.md`. The decision below is kept
+> as the record of why the preview path exists. Two names it cites,
+> `load_stl_file` and `encode_stl_response`, no longer exist.
+
 ## Context
 
 Large STL imports (>4M triangles) required a high-performance path from

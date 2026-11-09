@@ -1,49 +1,36 @@
-import { clamp } from '@/utils/math';
 import React from 'react';
-import windowLayouts from '@/config/window-layouts.json';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { RotateCcw, LayoutPanelTop } from 'lucide-react';
+import { clamp } from '@/utils/math';
+import { ContextMenu } from '@/components/ui/ContextMenu';
 import {
-  type FloatingLayoutDebugRequestDetail,
-  type FloatingLayoutDebugSnapshot,
   FLOATING_LAYOUT_DEBUG_REQUEST_EVENT,
   FLOATING_LAYOUT_PERSISTENCE_EVENT,
   FLOATING_LAYOUT_STORAGE_KEY,
+  LEGACY_FLOATING_LAYOUT_STORAGE_KEY,
   isFloatingLayoutPersistenceEnabled,
+  type FloatingLayoutDebugRequestDetail,
+  type FloatingLayoutDebugSnapshot,
 } from '@/components/layout/floatingLayoutPreferences';
 
-type PanelPosition = {
-  x: number;
-  y: number;
+type PanelPosition = { x: number; y: number };
+type PanelSize = { width: number; height: number };
+type PanelDock = 'left' | 'right' | 'float';
+
+type PanelPlacement = {
+  dock: PanelDock;
+  order: number;
+  /** Where a floating panel sits. Docked panels are placed by their dock. */
+  float?: PanelPosition;
+  /** The panel's own width. Docking never changes it; the dock is sized to it. */
+  width?: number;
 };
 
-type PanelSize = {
-  width: number;
-  height: number;
+type PanelLayoutState = {
+  panels: Record<string, PanelPlacement>;
+  docks: { leftWidth?: number; rightWidth?: number };
 };
-
-type PanelRect = PanelPosition & PanelSize;
-
-type EdgeHint = {
-  left: boolean;
-  right: boolean;
-  top: boolean;
-  bottom: boolean;
-};
-
-type DropPreview = {
-  id: string;
-  position: PanelPosition;
-  size: PanelSize;
-};
-
-type PanelAttachmentSide = 'below' | 'above' | 'right' | 'left';
-
-type PanelAttachment = {
-  to: string;
-  side: PanelAttachmentSide;
-  gap: number;
-};
-
-type AttachmentPanelRect = PanelRect & { id: string };
 
 type CollapsiblePanelRegistration = {
   expanded: boolean;
@@ -53,6 +40,8 @@ type CollapsiblePanelRegistration = {
 
 type FloatingPanelStackContextValue = {
   registerCollapsiblePanel: (panelId: string, registration: CollapsiblePanelRegistration) => () => void;
+  /** Start a dock resize from a panel's own edge handle. */
+  beginDockResize: (side: 'left' | 'right', clientX: number) => void;
   requestPanelExpand: (panelId: string) => void;
 };
 
@@ -62,15 +51,26 @@ const FloatingPanelItemContext = React.createContext<string | null>(null);
 type FloatingPanelItemProps = {
   id: string;
   index: number;
-  position: PanelPosition;
+  position: PanelPosition | null;
   panelWidth: number;
+  hidden: boolean;
+  docked: boolean;
   isDragging: boolean;
-  magnetic: boolean;
+  dragOffset: PanelPosition | null;
   onPointerDown: (id: string, event: React.PointerEvent<HTMLDivElement>) => void;
   onContextMenu: (id: string, event: React.MouseEvent<HTMLDivElement>) => void;
   onSizeChange: (id: string, size: PanelSize) => void;
   children: React.ReactNode;
 };
+
+/**
+ * A panel's own edge handle resizes the dock it sits in, so the visible
+ * affordance and the working one are the same control.
+ */
+export function useFloatingPanelDockResize() {
+  const stack = React.useContext(FloatingPanelStackContext);
+  return stack?.beginDockResize ?? null;
+}
 
 export function useFloatingPanelCollapse(defaultExpanded = true, options?: { autoCollapse?: boolean }) {
   const stack = React.useContext(FloatingPanelStackContext);
@@ -109,57 +109,95 @@ type WindowContextMenuState = {
   y: number;
 };
 
-const PANEL_MARGIN = 4;
-const EDGE_SNAP_THRESHOLD = 20;
-const EDGE_MAGNET_THRESHOLD = 22;
-const EDGE_HINT_THRESHOLD = 36;
-const PANEL_MAGNET_THRESHOLD = 24;
-const PANEL_GAP = 4;
+type DragState = {
+  id: string;
+  startX: number;
+  startY: number;
+  offsetX: number;
+  offsetY: number;
+  moved: boolean;
+  originDock: PanelDock;
+  /** Pointer delta from the grab point, applied to the panel while dragging. */
+  offset: PanelPosition;
+};
+
+type DropTarget = {
+  dock: 'left' | 'right';
+  index: number;
+  y: number;
+  /** Where the panel would land in the dock, and how tall that slot is. */
+  slotTop: number;
+  height: number;
+  /** The dock's box in container coordinates, measured when the target was set. */
+  dockLeft: number;
+  dockTop: number;
+  dockWidth: number;
+};
+
+const PANEL_MARGIN = 6;
+const PANEL_GAP = 6;
 const DEFAULT_PANEL_WIDTH = 320;
 const DEFAULT_PANEL_HEIGHT = 150;
+const MIN_DOCK_WIDTH = 200;
+const MAX_DOCK_WIDTH = 520;
+const COLLAPSED_PANEL_HEIGHT = 48;
+
 const PANEL_WIDTH_OVERRIDES: Record<string, number> = {
-  'visual-settings': 48,
   'transform-debug-overlay': 420,
 };
-const LOCKED_PANEL_IDS = new Set<string>(['visual-settings']);
-const CHAIN_ATTACH_TOLERANCE = 30;
+
+// Panels the layout does not let the user move. `always` is the shell chrome. The
+// model list is only pinned while the tool rail is a column down the left edge.
+// Panels whose width the dock edge drags, because they are the ones the user
+// sizes to their content. Every other panel keeps its natural width.
+const RESIZABLE_PANELS = new Set(['prepare-models', 'support-models']);
+
+const LOCKED_PANELS: Record<string, 'always' | 'rail-column'> = {
+  'prepare-models': 'rail-column',
+  'support-models': 'rail-column',
+};
+
+// First-run placement. Every panel is either in a dock or floating; the dock
+// order follows the order the tool renders its panels in.
+const DEFAULT_PANEL_DOCKS: Record<string, PanelDock> = {
+  'prepare-models': 'left',
+  'prepare-debug-primitives': 'left',
+  'support-models': 'left',
+  'analysis-scan-card': 'left',
+  'analysis-island-list': 'left',
+  'analysis-workflow': 'left',
+  'export-main': 'left',
+  'curve-settings': 'left',
+  'prepare-transform-controls': 'right',
+  'prepare-orientation': 'right',
+  'prepare-smoothing-settings': 'right',
+  'prepare-arrange-panel': 'right',
+  'prepare-duplicate-panel': 'right',
+  'prepare-organic-cut-panel': 'right',
+  'analysis-overlay-controls': 'right',
+  'analysis-territory-voxel': 'right',
+  'analysis-island-voxel': 'right',
+  'analysis-volumes': 'right',
+  'support-islands': 'right',
+  'support-settings': 'right',
+  'support-auto': 'right',
+  'support-hollowing': 'right',
+  'support-hole-punch': 'right',
+  'export-slicing': 'right',
+  'transform-debug-overlay': 'right',
+};
 
 function getPanelBaseWidth(panelId: string) {
   return PANEL_WIDTH_OVERRIDES[panelId] ?? DEFAULT_PANEL_WIDTH;
 }
 
-type AnchorSide = 'below' | 'above' | 'right' | 'left' | 'right-edge' | 'left-edge';
+function isPanelLocked(panelId: string, railIsColumn: boolean): boolean {
+  const rule = LOCKED_PANELS[panelId];
+  return rule === 'always' || (rule === 'rail-column' && railIsColumn);
+}
 
-type LayoutAnchorRule = {
-  to: string;
-  side: AnchorSide;
-  gap?: number;
-  offsetX?: number;
-  offsetY?: number;
-};
-
-type LayoutProfile = {
-  id: string;
-  matchPanelIds: string[];
-  order?: string[];
-  anchors?: Record<string, LayoutAnchorRule>;
-};
-
-type LayoutConfig = {
-  version: number;
-  profiles: LayoutProfile[];
-};
-
-const WINDOW_LAYOUTS: LayoutConfig = windowLayouts as unknown as LayoutConfig;
-
-
-function overlaps(a: PanelRect, b: PanelRect, gap = PANEL_GAP) {
-  return !(
-    a.x + a.width + gap <= b.x ||
-    b.x + b.width + gap <= a.x ||
-    a.y + a.height + gap <= b.y ||
-    b.y + b.height + gap <= a.y
-  );
+function defaultPlacement(panelId: string, order: number): PanelPlacement {
+  return { dock: DEFAULT_PANEL_DOCKS[panelId] ?? 'right', order };
 }
 
 function clampPosition(position: PanelPosition, size: PanelSize, bounds: PanelSize): PanelPosition {
@@ -169,56 +207,6 @@ function clampPosition(position: PanelPosition, size: PanelSize, bounds: PanelSi
     x: clamp(position.x, PANEL_MARGIN, maxX),
     y: clamp(position.y, PANEL_MARGIN, maxY),
   };
-}
-
-function findNearestFreePosition(
-  desired: PanelPosition,
-  size: PanelSize,
-  occupied: PanelRect[],
-  bounds: PanelSize,
-  panelGap = PANEL_GAP,
-): PanelPosition {
-  const base = clampPosition(desired, size, bounds);
-
-  const collidesAt = (position: PanelPosition) => {
-    const candidate: PanelRect = { ...position, ...size };
-    return occupied.some((rect) => overlaps(candidate, rect, panelGap));
-  };
-
-  if (!collidesAt(base)) {
-    return base;
-  }
-
-  const xMin = PANEL_MARGIN;
-  const xMax = Math.max(PANEL_MARGIN, bounds.width - size.width - PANEL_MARGIN);
-  const yMin = PANEL_MARGIN;
-  const yMax = Math.max(PANEL_MARGIN, bounds.height - size.height - PANEL_MARGIN);
-
-  const step = 18;
-  for (let radius = step; radius <= 720; radius += step) {
-    const samples = [
-      { x: base.x + radius, y: base.y },
-      { x: base.x - radius, y: base.y },
-      { x: base.x, y: base.y + radius },
-      { x: base.x, y: base.y - radius },
-      { x: base.x + radius, y: base.y + radius },
-      { x: base.x + radius, y: base.y - radius },
-      { x: base.x - radius, y: base.y + radius },
-      { x: base.x - radius, y: base.y - radius },
-    ];
-
-    for (const point of samples) {
-      const candidate = {
-        x: clamp(point.x, xMin, xMax),
-        y: clamp(point.y, yMin, yMax),
-      };
-      if (!collidesAt(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  return base;
 }
 
 function isDragBlockedByTarget(target: EventTarget | null) {
@@ -233,403 +221,11 @@ function isPanelHeaderDragHandleTarget(target: EventTarget | null) {
   return Boolean(target.closest('[data-panel-drag-handle="true"]'));
 }
 
-function getEdgeHint(position: PanelPosition, size: PanelSize, bounds: PanelSize, threshold: number): EdgeHint {
-  const rightEdgeX = Math.max(PANEL_MARGIN, bounds.width - size.width - PANEL_MARGIN);
-  const bottomEdgeY = Math.max(PANEL_MARGIN, bounds.height - size.height - PANEL_MARGIN);
-
-  return {
-    left: Math.abs(position.x - PANEL_MARGIN) <= threshold,
-    right: Math.abs(position.x - rightEdgeX) <= threshold,
-    top: Math.abs(position.y - PANEL_MARGIN) <= threshold,
-    bottom: Math.abs(position.y - bottomEdgeY) <= threshold,
-  };
-}
-
-function hasEdgeHint(hint: EdgeHint) {
-  return hint.left || hint.right || hint.top || hint.bottom;
-}
-
-function applyEdgeMagnet(position: PanelPosition, size: PanelSize, bounds: PanelSize): PanelPosition {
-  const rightEdgeX = Math.max(PANEL_MARGIN, bounds.width - size.width - PANEL_MARGIN);
-  const bottomEdgeY = Math.max(PANEL_MARGIN, bounds.height - size.height - PANEL_MARGIN);
-
-  const next = { ...position };
-
-  if (Math.abs(next.x - PANEL_MARGIN) <= EDGE_MAGNET_THRESHOLD) {
-    next.x = PANEL_MARGIN;
-  } else if (Math.abs(next.x - rightEdgeX) <= EDGE_MAGNET_THRESHOLD) {
-    next.x = rightEdgeX;
-  }
-
-  if (Math.abs(next.y - PANEL_MARGIN) <= EDGE_MAGNET_THRESHOLD) {
-    next.y = PANEL_MARGIN;
-  } else if (Math.abs(next.y - bottomEdgeY) <= EDGE_MAGNET_THRESHOLD) {
-    next.y = bottomEdgeY;
-  }
-
-  return next;
-}
-
-function rangesOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number) {
-  return aStart < bEnd && bStart < aEnd;
-}
-
-function applyPanelMagnet(position: PanelPosition, size: PanelSize, otherPanels: PanelRect[], panelGap = PANEL_GAP): PanelPosition {
-  const next = { ...position };
-  let bestXDistance = PANEL_MAGNET_THRESHOLD + 1;
-  let bestYDistance = PANEL_MAGNET_THRESHOLD + 1;
-
-  for (const panel of otherPanels) {
-    const verticalOverlap = rangesOverlap(next.y, next.y + size.height, panel.y, panel.y + panel.height);
-    const horizontalOverlap = rangesOverlap(next.x, next.x + size.width, panel.x, panel.x + panel.width);
-
-    if (verticalOverlap) {
-      const dockLeftX = panel.x - size.width - panelGap;
-      const dockRightX = panel.x + panel.width + panelGap;
-
-      const leftDistance = Math.abs(next.x - dockLeftX);
-      if (leftDistance <= PANEL_MAGNET_THRESHOLD && leftDistance < bestXDistance) {
-        bestXDistance = leftDistance;
-        next.x = dockLeftX;
-      }
-
-      const rightDistance = Math.abs(next.x - dockRightX);
-      if (rightDistance <= PANEL_MAGNET_THRESHOLD && rightDistance < bestXDistance) {
-        bestXDistance = rightDistance;
-        next.x = dockRightX;
-      }
-    }
-
-    if (horizontalOverlap) {
-      const dockTopY = panel.y - size.height - panelGap;
-      const dockBottomY = panel.y + panel.height + panelGap;
-
-      const topDistance = Math.abs(next.y - dockTopY);
-      if (topDistance <= PANEL_MAGNET_THRESHOLD && topDistance < bestYDistance) {
-        bestYDistance = topDistance;
-        next.y = dockTopY;
-      }
-
-      const bottomDistance = Math.abs(next.y - dockBottomY);
-      if (bottomDistance <= PANEL_MAGNET_THRESHOLD && bottomDistance < bestYDistance) {
-        bestYDistance = bottomDistance;
-        next.y = dockBottomY;
-      }
-    }
-  }
-
-  return next;
-}
-
-function EdgeSnapOverlay({ hint }: { hint: EdgeHint }) {
-  const baseClass = 'absolute pointer-events-none rounded-full bg-blue-400/35 shadow-[0_0_18px_rgba(79,140,255,0.55)] transition-opacity duration-120';
-
-  return (
-    <>
-      {hint.left && <div className={`${baseClass} left-1 top-2 bottom-2 w-1`} />}
-      {hint.right && <div className={`${baseClass} right-1 top-2 bottom-2 w-1`} />}
-      {hint.top && <div className={`${baseClass} top-1 left-2 right-2 h-1`} />}
-      {hint.bottom && <div className={`${baseClass} bottom-1 left-2 right-2 h-1`} />}
-    </>
-  );
-}
-
-function positionsEqual(
-  previous: Record<string, PanelPosition>,
-  next: Record<string, PanelPosition>,
-  panelIds: string[],
-) {
-  if (Object.keys(previous).length !== panelIds.length) {
-    return false;
-  }
-
-  return panelIds.every((panelId) => {
-    const prevPos = previous[panelId];
-    const nextPos = next[panelId];
-    return !!prevPos && !!nextPos && prevPos.x === nextPos.x && prevPos.y === nextPos.y;
-  });
-}
-
-function resolveLayoutProfile(panelIds: string[]): LayoutProfile | null {
-  const ids = new Set(panelIds);
-  let best: LayoutProfile | null = null;
-  let bestSpecificity = -1;
-
-  for (const profile of WINDOW_LAYOUTS.profiles ?? []) {
-    const matchIds = profile.matchPanelIds ?? [];
-    if (!matchIds.every((id) => ids.has(id))) continue;
-
-    if (matchIds.length > bestSpecificity) {
-      best = profile;
-      bestSpecificity = matchIds.length;
-    }
-  }
-
-  return best;
-}
-
-function buildOrderedPanelIds(panelIds: string[], profile: LayoutProfile | null): string[] {
-  if (!profile?.order || profile.order.length === 0) {
-    return panelIds;
-  }
-
-  const existing = new Set(panelIds);
-  const ordered = profile.order.filter((id) => existing.has(id));
-  const seen = new Set(ordered);
-
-  for (const id of panelIds) {
-    if (!seen.has(id)) {
-      ordered.push(id);
-      seen.add(id);
-    }
-  }
-
-  return ordered;
-}
-
-function getAnchoredDesiredPosition(
-  panelId: string,
-  panelSize: PanelSize,
-  profile: LayoutProfile | null,
-  placedPositions: Record<string, PanelPosition>,
-  previousPositions: Record<string, PanelPosition>,
-  panelMemory: Record<string, PanelPosition>,
-  bounds: PanelSize,
-  getPanelSize: (id: string) => PanelSize,
-  panelGap = PANEL_GAP,
-  anchorTargetOverride?: string,
-): PanelPosition | null {
-  if (!profile?.anchors) return null;
-  const rule = profile.anchors[panelId];
-  if (!rule) return null;
-
-  const offsetX = rule.offsetX ?? 0;
-  const offsetY = rule.offsetY ?? 0;
-
-  if (rule.side === 'right-edge') {
-    return {
-      x: bounds.width - panelSize.width - PANEL_MARGIN + offsetX,
-      y: PANEL_MARGIN + offsetY,
-    };
-  }
-
-  if (rule.side === 'left-edge') {
-    return {
-      x: PANEL_MARGIN + offsetX,
-      y: PANEL_MARGIN + offsetY,
-    };
-  }
-
-  const anchorTargetId = anchorTargetOverride ?? rule.to;
-  const anchorPos = placedPositions[anchorTargetId] ?? previousPositions[anchorTargetId] ?? panelMemory[anchorTargetId];
-  if (!anchorPos) return null;
-
-  const anchorSize = getPanelSize(anchorTargetId);
-  const gap = rule.gap ?? panelGap;
-
-  if (rule.side === 'below') {
-    return {
-      x: anchorPos.x + offsetX,
-      y: anchorPos.y + anchorSize.height + gap + offsetY,
-    };
-  }
-
-  if (rule.side === 'above') {
-    return {
-      x: anchorPos.x + offsetX,
-      y: anchorPos.y - panelSize.height - gap + offsetY,
-    };
-  }
-
-  if (rule.side === 'right') {
-    return {
-      x: anchorPos.x + anchorSize.width + gap + offsetX,
-      y: anchorPos.y + offsetY,
-    };
-  }
-
-  return {
-    x: anchorPos.x - panelSize.width - gap + offsetX,
-    y: anchorPos.y + offsetY,
-  };
-}
-
-function isEdgeAnchored(panelId: string, profile: LayoutProfile | null): boolean {
-  const side = profile?.anchors?.[panelId]?.side;
-  return side === 'right-edge' || side === 'left-edge';
-}
-
-function inferAttachments(
-  panelId: string,
-  panelPos: PanelPosition,
-  panelSize: PanelSize,
-  others: AttachmentPanelRect[],
-): PanelAttachment[] {
-  const maxDistance = CHAIN_ATTACH_TOLERANCE * 2;
-  const candidates: Array<{ attachment: PanelAttachment; distance: number }> = [];
-  const seen = new Set<string>();
-
-  const pushCandidate = (attachment: PanelAttachment, distance: number) => {
-    const key = `${attachment.to}:${attachment.side}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    candidates.push({ attachment, distance });
-  };
-
-  for (const other of others) {
-    if (other.id === panelId) continue;
-
-    const horizontalOverlap = rangesOverlap(panelPos.x, panelPos.x + panelSize.width, other.x, other.x + other.width);
-    const verticalOverlap = rangesOverlap(panelPos.y, panelPos.y + panelSize.height, other.y, other.y + other.height);
-
-    if (horizontalOverlap) {
-      const belowGap = panelPos.y - (other.y + other.height);
-      if (belowGap >= -maxDistance && belowGap <= maxDistance) {
-        const dist = Math.abs(belowGap);
-        pushCandidate({ to: other.id, side: 'below', gap: Math.max(0, belowGap) }, dist);
-      }
-
-      const aboveGap = other.y - (panelPos.y + panelSize.height);
-      if (aboveGap >= -maxDistance && aboveGap <= maxDistance) {
-        const dist = Math.abs(aboveGap);
-        pushCandidate({ to: other.id, side: 'above', gap: Math.max(0, aboveGap) }, dist);
-      }
-    }
-
-    if (verticalOverlap) {
-      const rightGap = panelPos.x - (other.x + other.width);
-      if (rightGap >= -maxDistance && rightGap <= maxDistance) {
-        const dist = Math.abs(rightGap);
-        pushCandidate({ to: other.id, side: 'right', gap: Math.max(0, rightGap) }, dist);
-      }
-
-      const leftGap = other.x - (panelPos.x + panelSize.width);
-      if (leftGap >= -maxDistance && leftGap <= maxDistance) {
-        const dist = Math.abs(leftGap);
-        pushCandidate({ to: other.id, side: 'left', gap: Math.max(0, leftGap) }, dist);
-      }
-    }
-  }
-
-  return candidates
-    .sort((a, b) => a.distance - b.distance)
-    .slice(0, 4)
-    .map((entry) => entry.attachment);
-}
-
-function getAttachmentDesiredPosition(
-  attachment: PanelAttachment,
-  panelSize: PanelSize,
-  parentPos: PanelPosition,
-  parentSize: PanelSize,
-): PanelPosition {
-  if (attachment.side === 'below') {
-    return {
-      x: parentPos.x,
-      y: parentPos.y + parentSize.height + attachment.gap,
-    };
-  }
-
-  if (attachment.side === 'above') {
-    return {
-      x: parentPos.x,
-      y: parentPos.y - panelSize.height - attachment.gap,
-    };
-  }
-
-  if (attachment.side === 'right') {
-    return {
-      x: parentPos.x + parentSize.width + attachment.gap,
-      y: parentPos.y,
-    };
-  }
-
-  return {
-    x: parentPos.x - panelSize.width - attachment.gap,
-    y: parentPos.y,
-  };
-}
-
-function addAssociationEdge(edges: Map<string, Set<string>>, from: string, to: string) {
-  const fromEdges = edges.get(from) ?? new Set<string>();
-  fromEdges.add(to);
-  edges.set(from, fromEdges);
-
-  const toEdges = edges.get(to) ?? new Set<string>();
-  toEdges.add(from);
-  edges.set(to, toEdges);
-}
-
-function collectVerticalAssociationGroup(rootId: string, edges: Map<string, Set<string>>) {
-  const result = new Set<string>([rootId]);
-  const queue = [rootId];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) break;
-
-    for (const next of edges.get(current) ?? []) {
-      if (result.has(next)) continue;
-      result.add(next);
-      queue.push(next);
-    }
-  }
-
-  return result;
-}
-
-function estimateStackHeight(panelIds: string[], getSize: (panelId: string) => PanelSize, panelGap: number) {
-  if (panelIds.length === 0) return 0;
-  return panelIds.reduce((total, panelId) => total + getSize(panelId).height, 0) + panelGap * (panelIds.length - 1);
-}
-
-function buildSeededPositions(
-  orderedPanelIds: string[],
-  profile: LayoutProfile | null,
-  bounds: PanelSize,
-  getPanelSize: (id: string) => PanelSize,
-  panelGap = PANEL_GAP,
-): Record<string, PanelPosition> {
-  const occupied: PanelRect[] = [];
-  const next: Record<string, PanelPosition> = {};
-
-  for (const panelId of orderedPanelIds) {
-    const size = getPanelSize(panelId);
-    const anchored = getAnchoredDesiredPosition(panelId, size, profile, next, {}, {}, bounds, getPanelSize, panelGap);
-
-    const desired = anchored
-      ? clampPosition(anchored, size, bounds)
-      : occupied.length > 0
-        ? {
-            x: PANEL_MARGIN,
-            y: occupied[occupied.length - 1].y + occupied[occupied.length - 1].height + panelGap,
-          }
-        : {
-            x: PANEL_MARGIN,
-            y: PANEL_MARGIN,
-          };
-
-    const freePosition = isEdgeAnchored(panelId, profile)
-      ? desired
-      : findNearestFreePosition(desired, size, occupied, bounds, panelGap);
-    next[panelId] = freePosition;
-    occupied.push({ ...freePosition, ...size });
-  }
-
-  return next;
-}
-
-type PanelEntry = {
-  id: string;
-  node: React.ReactNode;
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-};
-
-function flattenPanelChildren(children: React.ReactNode, prefix = 'panel'): PanelEntry[] {
-  const entries: PanelEntry[] = [];
+function flattenPanelChildren(
+  children: React.ReactNode,
+  prefix = 'panel',
+): Array<{ id: string; node: React.ReactNode; hidden: boolean }> {
+  const entries: Array<{ id: string; node: React.ReactNode; hidden: boolean }> = [];
 
   React.Children.forEach(children, (child, index) => {
     if (child == null) return;
@@ -642,16 +238,98 @@ function flattenPanelChildren(children: React.ReactNode, prefix = 'panel'): Pane
     }
 
     const id = React.isValidElement(child) && child.key != null ? String(child.key) : fallbackId;
-    if (React.isValidElement<{ x?: number; y?: number; width?: number; height?: number }>(child)) {
-      const { x, y, width, height } = child.props;
-      entries.push({ id, node: child, x, y, width, height });
-      return;
-    }
-
-    entries.push({ id, node: child });
+    // A tool hides the panels it is not using with `display: none` on the
+    // wrapper. They must leave the dock's flow too, or their gap pushes every
+    // panel below them down.
+    const style = React.isValidElement<{ style?: React.CSSProperties }>(child) ? child.props.style : undefined;
+    entries.push({ id, node: child, hidden: style?.display === 'none' });
   });
 
   return entries;
+}
+
+function loadPanelLayout(): PanelLayoutState {
+  if (typeof window === 'undefined') return { panels: {}, docks: {} };
+
+  try {
+    const raw = window.localStorage.getItem(FLOATING_LAYOUT_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { version?: number; panels?: Record<string, PanelPlacement>; docks?: PanelLayoutState['docks'] };
+      if (parsed?.version === 6 && parsed.panels && typeof parsed.panels === 'object') {
+        return { panels: parsed.panels, docks: parsed.docks ?? {} };
+      }
+    }
+
+    // v5 stored absolute positions for moved panels only. Keep the intent: a
+    // panel parked near an edge joins that dock, anything else floats in place.
+    const legacy = window.localStorage.getItem(LEGACY_FLOATING_LAYOUT_STORAGE_KEY);
+    if (legacy) {
+      const parsed = JSON.parse(legacy) as { positions?: Record<string, PanelPosition> };
+      const positions = parsed?.positions ?? {};
+      const panels: Record<string, PanelPlacement> = {};
+      const width = window.innerWidth;
+      let order = 0;
+
+      for (const [panelId, position] of Object.entries(positions)) {
+        if (typeof position?.x !== 'number' || typeof position?.y !== 'number') continue;
+        const center = position.x + getPanelBaseWidth(panelId) / 2;
+        const dock: PanelDock = center < width * 0.4
+          ? 'left'
+          : center > width * 0.6
+            ? 'right'
+            : 'float';
+        panels[panelId] = {
+          dock,
+          order: order++,
+          ...(dock === 'float' ? { float: { x: position.x, y: position.y } } : {}),
+        };
+      }
+
+      return { panels, docks: {} };
+    }
+  } catch {
+    // Fall through to defaults.
+  }
+
+  return { panels: {}, docks: {} };
+}
+
+function placePanel(
+  layout: PanelLayoutState,
+  panelId: string,
+  dock: PanelDock,
+  index: number,
+  float?: PanelPosition,
+): PanelLayoutState {
+  const panels = { ...layout.panels };
+  const sourceDock = panels[panelId]?.dock;
+
+  if (dock === 'float') {
+    const order = Object.values(panels)
+      .filter((placement) => placement.dock === 'float')
+      .reduce((max, placement) => Math.max(max, placement.order), -1) + 1;
+    panels[panelId] = { dock: 'float', order, float };
+  } else {
+    const targetIds = Object.keys(panels)
+      .filter((id) => id !== panelId && panels[id].dock === dock)
+      .sort((a, b) => panels[a].order - panels[b].order);
+    const insertAt = Math.max(0, Math.min(index, targetIds.length));
+    targetIds.splice(insertAt, 0, panelId);
+    targetIds.forEach((id, order) => {
+      panels[id] = { ...panels[id], dock, order };
+    });
+  }
+
+  if (sourceDock && sourceDock !== dock && sourceDock !== 'float') {
+    const sourceIds = Object.keys(panels)
+      .filter((id) => panels[id].dock === sourceDock)
+      .sort((a, b) => panels[a].order - panels[b].order);
+    sourceIds.forEach((id, order) => {
+      panels[id] = { ...panels[id], order };
+    });
+  }
+
+  return { ...layout, panels };
 }
 
 function FloatingPanelItem({
@@ -659,8 +337,10 @@ function FloatingPanelItem({
   index,
   position,
   panelWidth,
+  hidden,
+  docked,
   isDragging,
-  magnetic,
+  dragOffset,
   onPointerDown,
   onContextMenu,
   onSizeChange,
@@ -673,39 +353,26 @@ function FloatingPanelItem({
     const element = itemRef.current;
     if (!element) return;
 
-    const emitSize = () => {
-      onSizeChange(id, {
-        width: element.offsetWidth || panelWidth,
-        height: element.offsetHeight || DEFAULT_PANEL_HEIGHT,
-      });
-    };
-
-    emitSize();
-
-    const observer = new ResizeObserver(() => {
-      emitSize();
-    });
-
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [id, onSizeChange, panelWidth]);
+    onSizeChange(id, { width: element.offsetWidth, height: element.offsetHeight });
+  });
 
   return (
     <div
       ref={itemRef}
       data-panel-id={id}
-      className="absolute pointer-events-auto"
+      className="pointer-events-auto"
       style={{
-        left: position.x,
-        top: position.y,
+        display: hidden ? 'none' : undefined,
+        position: docked ? 'relative' : 'absolute',
+        left: docked ? undefined : position?.x ?? 0,
+        top: docked ? undefined : position?.y ?? 0,
         width: panelWidth,
+        flex: docked ? '0 0 auto' : undefined,
         zIndex: isDragging ? 100 : 20 + index,
         cursor: isDragging ? 'grabbing' : 'default',
-        boxShadow: magnetic
-          ? '0 0 0 1px color-mix(in srgb, var(--accent), white 15%), 0 0 0 5px color-mix(in srgb, var(--accent), transparent 76%), 0 14px 24px rgba(0, 0, 0, 0.28)'
-          : undefined,
-        borderRadius: magnetic ? '12px' : undefined,
-        transition: isDragging ? 'none' : 'box-shadow 140ms ease',
+        transform: dragOffset ? `translate(${dragOffset.x}px, ${dragOffset.y}px)` : undefined,
+        pointerEvents: isDragging ? 'none' : 'auto',
+        borderRadius: 12,
       }}
       onPointerDown={(event) => {
         if (event.button === 2) {
@@ -718,9 +385,7 @@ function FloatingPanelItem({
         if (!gesture) return;
         const dx = event.clientX - gesture.x;
         const dy = event.clientY - gesture.y;
-        if ((dx * dx + dy * dy) > 36) {
-          gesture.moved = true;
-        }
+        if ((dx * dx + dy * dy) > 36) gesture.moved = true;
       }}
       onContextMenu={(event) => {
         const gesture = rightClickGestureRef.current;
@@ -744,222 +409,107 @@ function FloatingPanelItem({
 }
 
 /**
- * A container for floating UI panels that overlays the canvas.
- * Allows clicking through empty spaces to the canvas below.
+ * A container for floating UI panels that overlays the canvas. Panels live in a
+ * left dock, a right dock, or float at a remembered position; dragging a panel
+ * between them is the only way its placement changes.
  */
-export function FloatingPanelStack({ children }: { children: React.ReactNode }) {
+export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0, railIsColumn = true }: { children: React.ReactNode; leftInsetPx?: number; rightInsetPx?: number; railIsColumn?: boolean }) {
+  const { _ } = useLingui();
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const panelSizesRef = React.useRef<Record<string, PanelSize>>({});
-  const expandedPanelSizesRef = React.useRef<Record<string, PanelSize>>({});
-  const collapsedPanelSizesRef = React.useRef<Record<string, PanelSize>>({});
   const collapsiblePanelsRef = React.useRef<Record<string, CollapsiblePanelRegistration>>({});
-  const dragRef = React.useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
 
-  const [panelPositions, setPanelPositions] = React.useState<Record<string, PanelPosition>>({});
-  const [containerSize, setContainerSize] = React.useState<PanelSize>({ width: 1200, height: 800 });
+  const [layout, setLayout] = React.useState<PanelLayoutState>(() => (
+    isFloatingLayoutPersistenceEnabled() ? loadPanelLayout() : { panels: {}, docks: {} }
+  ));
+  const [viewportSize, setViewportSize] = React.useState<PanelSize>({ width: 1200, height: 800 });
   const [panelSizeVersion, setPanelSizeVersion] = React.useState(0);
-  const [activeDragPanelId, setActiveDragPanelId] = React.useState<string | null>(null);
-  const [edgeHint, setEdgeHint] = React.useState<EdgeHint>({ left: false, right: false, top: false, bottom: false });
-  const [dropPreview, setDropPreview] = React.useState<DropPreview | null>(null);
+  const [registryVersion, setRegistryVersion] = React.useState(0);
+  const [drag, setDrag] = React.useState<DragState | null>(null);
+  const [dropTarget, setDropTarget] = React.useState<DropTarget | null>(null);
+  const [dockResize, setDockResize] = React.useState<{ side: 'left' | 'right'; startX: number; startWidth: number } | null>(null);
   const [windowContextMenu, setWindowContextMenu] = React.useState<WindowContextMenuState | null>(null);
   const [persistLayout, setPersistLayout] = React.useState<boolean>(() => isFloatingLayoutPersistenceEnabled());
-  const [collapsibleRegistryVersion, setCollapsibleRegistryVersion] = React.useState(0);
-
-  const panelIdsRef = React.useRef<string[]>([]);
-  const panelPositionsRef = React.useRef<Record<string, PanelPosition>>({});
-  const panelMemoryRef = React.useRef<Record<string, PanelPosition>>({});
-  const attachmentMemoryRef = React.useRef<Record<string, PanelAttachment[]>>({});
-  const manualOverrideRef = React.useRef<Record<string, boolean>>({});
-  const dropPreviewRef = React.useRef<DropPreview | null>(null);
-  const layoutHydratedRef = React.useRef(false);
 
   const panelEntries = React.useMemo(() => flattenPanelChildren(children), [children]);
+  const hiddenPanelIds = React.useMemo(
+    () => new Set(panelEntries.filter((entry) => entry.hidden).map((entry) => entry.id)),
+    [panelEntries],
+  );
   const panelIds = React.useMemo(() => panelEntries.map((entry) => entry.id), [panelEntries]);
   const panelIdsSignature = React.useMemo(() => panelIds.join('\u001f'), [panelIds]);
-  const stablePanelIds = React.useMemo(
-    () => (panelIdsSignature.length > 0 ? panelIdsSignature.split('\u001f') : []),
-    [panelIdsSignature],
+  const panelIdsRef = React.useRef(panelIds);
+
+  React.useEffect(() => {
+    panelIdsRef.current = panelIds;
+  }, [panelIds]);
+
+  const getPanelWidth = React.useCallback(
+    (panelId: string) => layout.panels[panelId]?.width ?? getPanelBaseWidth(panelId),
+    [layout.panels],
   );
-  // Panel widths and gaps are fixed; no resolution-based scale factor is applied.
-  // Native webview DPI scaling (plus the user UI-scale setting via useUiScale)
-  // keeps the UI at a consistent physical size on every monitor.
-  const panelGap = PANEL_GAP;
+  const getPanelSize = React.useCallback((panelId: string): PanelSize => (
+    panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT }
+  ), [getPanelWidth]);
 
-  const getPanelWidth = React.useCallback((panelId: string) => {
-    return getPanelBaseWidth(panelId);
-  }, []);
-
-  const getPanelSize = React.useCallback((panelId: string): PanelSize => {
-    return panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT };
-  }, [getPanelWidth]);
-
-  const layoutProfile = React.useMemo(() => resolveLayoutProfile(stablePanelIds), [stablePanelIds]);
-  const orderedPanelIds = React.useMemo(() => buildOrderedPanelIds(stablePanelIds, layoutProfile), [layoutProfile, stablePanelIds]);
-  const orderedPanelIdsSignature = React.useMemo(() => orderedPanelIds.join('\u001f'), [orderedPanelIds]);
-  const seededPositions = React.useMemo(
-    () => buildSeededPositions(orderedPanelIds, layoutProfile, containerSize, getPanelSize, panelGap),
-    [containerSize, getPanelSize, layoutProfile, orderedPanelIds, panelGap],
-  );
-
-  const buildVerticalAssociationEdges = React.useCallback(() => {
-    const validIds = new Set(panelIdsRef.current);
-    const edges = new Map<string, Set<string>>();
-
-    for (const [panelId, rule] of Object.entries(layoutProfile?.anchors ?? {})) {
-      if (rule.side !== 'below' && rule.side !== 'above') continue;
-      if (!validIds.has(panelId) || !validIds.has(rule.to)) continue;
-      if (manualOverrideRef.current[panelId]) continue;
-      addAssociationEdge(edges, panelId, rule.to);
-    }
-
-    for (const [panelId, attachments] of Object.entries(attachmentMemoryRef.current)) {
-      if (!validIds.has(panelId)) continue;
-
-      for (const attachment of attachments) {
-        if (attachment.side !== 'below' && attachment.side !== 'above') continue;
-        if (!validIds.has(attachment.to)) continue;
-        addAssociationEdge(edges, panelId, attachment.to);
-      }
-    }
-
-    return edges;
-  }, [layoutProfile]);
-
-  const getPredictedPanelSize = React.useCallback((panelId: string, expandedOverride?: boolean): PanelSize => {
-    const registration = collapsiblePanelsRef.current[panelId];
-    const isExpanded = expandedOverride ?? registration?.expanded;
-
-    if (registration) {
-      if (isExpanded) {
-        return expandedPanelSizesRef.current[panelId] ?? panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT };
-      }
-
-      return collapsedPanelSizesRef.current[panelId] ?? panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: 48 };
-    }
-
-    return panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT };
-  }, [getPanelWidth]);
-
-  const getAssociatedPanelOrder = React.useCallback((panelIdsInGroup: Set<string>) => {
-    const orderIndexById = new Map(orderedPanelIds.map((panelId, index) => [panelId, index] as const));
-
-    return [...panelIdsInGroup].sort((a, b) => {
-      const aPos = panelPositionsRef.current[a];
-      const bPos = panelPositionsRef.current[b];
-      if (aPos && bPos && Math.abs(aPos.y - bPos.y) > 0.5) {
-        return aPos.y - bPos.y;
-      }
-
-      return (orderIndexById.get(a) ?? Number.MAX_SAFE_INTEGER)
-        - (orderIndexById.get(b) ?? Number.MAX_SAFE_INTEGER);
+  // Every panel has a placement once it has been seen. Panels that are absent
+  // keep theirs, so a tool switch does not erase a move.
+  React.useEffect(() => {
+    setLayout((previous) => {
+      let changed = false;
+      const panels = { ...previous.panels };
+      panelIdsRef.current.forEach((panelId, index) => {
+        if (panels[panelId]) return;
+        panels[panelId] = defaultPlacement(panelId, index);
+        changed = true;
+      });
+      return changed ? { ...previous, panels } : previous;
     });
-  }, [orderedPanelIds]);
+  }, [panelIdsSignature]);
 
-  const requestPanelExpand = React.useCallback((panelId: string) => {
-    if (!panelId) return;
+  const placementFor = React.useCallback((panelId: string): PanelPlacement => (
+    layout.panels[panelId] ?? defaultPlacement(panelId, panelIds.indexOf(panelId))
+  ), [layout.panels, panelIds]);
 
-    const edges = buildVerticalAssociationEdges();
-    const group = collectVerticalAssociationGroup(panelId, edges);
-    const associatedIds = getAssociatedPanelOrder(group)
-      .filter((id) => collapsiblePanelsRef.current[id]);
+  const leftPanels = React.useMemo(() => panelIds
+    .filter((id) => placementFor(id).dock === 'left')
+    .sort((a, b) => placementFor(a).order - placementFor(b).order), [panelIds, placementFor]);
+  const rightPanels = React.useMemo(() => panelIds
+    .filter((id) => placementFor(id).dock === 'right')
+    .sort((a, b) => placementFor(a).order - placementFor(b).order), [panelIds, placementFor]);
+  const floatingPanels = React.useMemo(() => panelIds
+    .filter((id) => placementFor(id).dock === 'float')
+    .sort((a, b) => placementFor(a).order - placementFor(b).order), [panelIds, placementFor]);
 
-    if (associatedIds.length <= 1) return;
+  const dockWidth = React.useCallback((side: 'left' | 'right', ids: string[]) => {
+    const stored = side === 'left' ? layout.docks.leftWidth : layout.docks.rightWidth;
+    const widestPanel = ids.reduce((max, id) => Math.max(max, getPanelWidth(id)), 0);
+    const content = (widestPanel || DEFAULT_PANEL_WIDTH) + PANEL_MARGIN * 2;
+    // Only a dock holding a panel the edge drag can size keeps a stored width;
+    // the others stay snug around their panels. Either way the dock is never
+    // narrower than the panel it holds, because it clips horizontally.
+    const resizable = ids.some((id) => RESIZABLE_PANELS.has(id));
+    const width = resizable && stored != null ? Math.max(stored, content) : content;
+    return clamp(width, MIN_DOCK_WIDTH, MAX_DOCK_WIDTH);
+  }, [getPanelWidth, layout.docks]);
 
-    const topY = associatedIds.reduce((minY, id) => {
-      const pos = panelPositionsRef.current[id];
-      return pos ? Math.min(minY, pos.y) : minY;
-    }, Number.POSITIVE_INFINITY);
-
-    const availableHeight = containerSize.height - (Number.isFinite(topY) ? topY : PANEL_MARGIN) - PANEL_MARGIN;
-    let predictedHeight = estimateStackHeight(
-      associatedIds,
-      (id) => getPredictedPanelSize(id, id === panelId ? true : undefined),
-      panelGap,
-    );
-
-    if (predictedHeight <= availableHeight) return;
-
-    const targetIndex = associatedIds.indexOf(panelId);
-    const candidates = associatedIds
-      .filter((id) => id !== panelId)
-      .filter((id) => {
-        const registration = collapsiblePanelsRef.current[id];
-        return registration?.expanded && registration.autoCollapse;
-      })
-      .sort((a, b) => Math.abs(associatedIds.indexOf(a) - targetIndex) - Math.abs(associatedIds.indexOf(b) - targetIndex));
-
-    for (const candidateId of candidates) {
-      const expandedSize = getPredictedPanelSize(candidateId, true);
-      const collapsedSize = getPredictedPanelSize(candidateId, false);
-      collapsiblePanelsRef.current[candidateId]?.setExpanded(false);
-      predictedHeight -= Math.max(0, expandedSize.height - collapsedSize.height);
-
-      if (predictedHeight <= availableHeight) break;
-    }
-  }, [buildVerticalAssociationEdges, containerSize.height, getAssociatedPanelOrder, getPredictedPanelSize, panelGap]);
-
-  const registerCollapsiblePanel = React.useCallback((
-    panelId: string,
-    registration: CollapsiblePanelRegistration,
-  ) => {
-    collapsiblePanelsRef.current = {
-      ...collapsiblePanelsRef.current,
-      [panelId]: registration,
-    };
-    setCollapsibleRegistryVersion((version) => version + 1);
-
-    return () => {
-      if (collapsiblePanelsRef.current[panelId] !== registration) return;
-
-      const next = { ...collapsiblePanelsRef.current };
-      delete next[panelId];
-      collapsiblePanelsRef.current = next;
-      setCollapsibleRegistryVersion((version) => version + 1);
-    };
-  }, []);
-
-  const floatingPanelStackContext = React.useMemo<FloatingPanelStackContextValue>(() => ({
-    registerCollapsiblePanel,
-    requestPanelExpand,
-  }), [registerCollapsiblePanel, requestPanelExpand]);
-
-  React.useEffect(() => {
-    panelIdsRef.current = stablePanelIds;
-  }, [stablePanelIds]);
-
-  React.useEffect(() => {
-    panelPositionsRef.current = panelPositions;
-    panelMemoryRef.current = {
-      ...panelMemoryRef.current,
-      ...panelPositions,
-    };
-  }, [panelPositions]);
-
-  React.useEffect(() => {
-    dropPreviewRef.current = dropPreview;
-  }, [dropPreview]);
+  const leftWidth = dockWidth('left', leftPanels);
+  const rightWidth = dockWidth('right', rightPanels);
 
   React.useLayoutEffect(() => {
     const element = containerRef.current;
     if (!element) return;
 
-    const updateContainerSize = () => {
-      const nextWidth = element.clientWidth;
-      const nextHeight = element.clientHeight;
-      setContainerSize((previous) => {
-        if (previous.width === nextWidth && previous.height === nextHeight) {
-          return previous;
-        }
-
-        return {
-          width: nextWidth,
-          height: nextHeight,
-        };
+    const update = () => {
+      setViewportSize((previous) => {
+        const next = { width: window.innerWidth, height: window.innerHeight - element.offsetTop };
+        return previous.width === next.width && previous.height === next.height ? previous : next;
       });
     };
 
-    updateContainerSize();
-    const observer = new ResizeObserver(updateContainerSize);
+    update();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
@@ -967,552 +517,257 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const syncPreference = () => {
-      setPersistLayout(isFloatingLayoutPersistenceEnabled());
-    };
-
-    syncPreference();
-    window.addEventListener(FLOATING_LAYOUT_PERSISTENCE_EVENT, syncPreference as EventListener);
-    window.addEventListener('storage', syncPreference);
+    const sync = () => setPersistLayout(isFloatingLayoutPersistenceEnabled());
+    sync();
+    window.addEventListener(FLOATING_LAYOUT_PERSISTENCE_EVENT, sync as EventListener);
+    window.addEventListener('storage', sync);
 
     return () => {
-      window.removeEventListener(FLOATING_LAYOUT_PERSISTENCE_EVENT, syncPreference as EventListener);
-      window.removeEventListener('storage', syncPreference);
+      window.removeEventListener(FLOATING_LAYOUT_PERSISTENCE_EVENT, sync as EventListener);
+      window.removeEventListener('storage', sync);
     };
   }, []);
 
-  React.useLayoutEffect(() => {
-    if (layoutHydratedRef.current) return;
-    if (typeof window === 'undefined') return;
-    if (!persistLayout) {
-      layoutHydratedRef.current = true;
-      return;
-    }
-
-    try {
-      const raw = window.localStorage.getItem(FLOATING_LAYOUT_STORAGE_KEY);
-      if (!raw) {
-        layoutHydratedRef.current = true;
-        return;
-      }
-
-      const parsed = JSON.parse(raw) as { positions?: Record<string, PanelPosition> };
-      const saved = parsed?.positions;
-      if (!saved || typeof saved !== 'object') {
-        layoutHydratedRef.current = true;
-        return;
-      }
-
-      const restored: Record<string, PanelPosition> = {};
-      for (const panelId of stablePanelIds) {
-        if (LOCKED_PANEL_IDS.has(panelId)) continue;
-        const pos = saved[panelId];
-        if (!pos) continue;
-        if (typeof pos.x !== 'number' || typeof pos.y !== 'number') continue;
-        restored[panelId] = { x: pos.x, y: pos.y };
-      }
-
-      panelMemoryRef.current = {
-        ...panelMemoryRef.current,
-        ...saved,
-      };
-
-      if (Object.keys(restored).length > 0) {
-        const modelsId = 'prepare-models';
-        const debugId = 'prepare-debug-primitives';
-        const modelPos = restored[modelsId];
-        const debugPos = restored[debugId];
-
-        if (modelPos && debugPos && Math.abs(debugPos.x - modelPos.x) <= CHAIN_ATTACH_TOLERANCE * 2) {
-          const modelSize = getPanelSize(modelsId);
-          const expectedDebugY = modelPos.y + modelSize.height + panelGap;
-          const hasLargeGap = debugPos.y - expectedDebugY > panelGap;
-
-          if (hasLargeGap) {
-            restored[debugId] = {
-              ...debugPos,
-              y: expectedDebugY,
-            };
-          }
-        }
-
-        setPanelPositions((previous) => ({ ...previous, ...restored }));
-      }
-    } catch {
-      // Fall back to auto-layout defaults
-    } finally {
-      layoutHydratedRef.current = true;
-    }
-  }, [getPanelSize, panelGap, persistLayout, stablePanelIds]);
-
   React.useEffect(() => {
-    if (!layoutHydratedRef.current) return;
-    if (typeof window === 'undefined') return;
-    if (Object.keys(panelPositions).length === 0) return;
-    if (!persistLayout) return;
-
-    const positionsToSave: Record<string, PanelPosition> = {};
-    for (const [panelId, pos] of Object.entries(panelMemoryRef.current)) {
-      if (!pos) continue;
-      positionsToSave[panelId] = pos;
-    }
-
+    if (!persistLayout || typeof window === 'undefined') return;
     try {
-      window.localStorage.setItem(FLOATING_LAYOUT_STORAGE_KEY, JSON.stringify({ positions: positionsToSave }));
+      window.localStorage.setItem(FLOATING_LAYOUT_STORAGE_KEY, JSON.stringify({
+        version: 6,
+        panels: layout.panels,
+        docks: layout.docks,
+      }));
     } catch {
-      // Ignore storage write failures
+      // Ignore storage failures.
     }
-  }, [panelIdsSignature, panelPositions, persistLayout]);
-
-  React.useEffect(() => {
-    setPanelPositions((previous) => {
-      const occupied: PanelRect[] = [];
-      const next: Record<string, PanelPosition> = {};
-
-      orderedPanelIds.forEach((panelId) => {
-        const size = getPanelSize(panelId);
-        const existing = previous[panelId];
-        const remembered = panelMemoryRef.current[panelId];
-        const linkedCandidates = attachmentMemoryRef.current[panelId] ?? [];
-        const isLockedPanel = LOCKED_PANEL_IDS.has(panelId);
-        const hasManualOverride = !isLockedPanel && manualOverrideRef.current[panelId] === true;
-        const anchorRule = layoutProfile?.anchors?.[panelId];
-        let effectiveAnchorTarget: string | undefined;
-
-        if (anchorRule) {
-          let candidate = anchorRule.to;
-          const visited = new Set<string>([panelId]);
-
-          while (manualOverrideRef.current[candidate] === true) {
-            if (visited.has(candidate)) break;
-            visited.add(candidate);
-
-            const parentRule = layoutProfile?.anchors?.[candidate];
-            if (!parentRule) break;
-            candidate = parentRule.to;
-          }
-
-          effectiveAnchorTarget = candidate;
-        }
-
-        const anchored = getAnchoredDesiredPosition(
-          panelId,
-          size,
-          layoutProfile,
-          next,
-          previous,
-          panelMemoryRef.current,
-          containerSize,
-          getPanelSize,
-          panelGap,
-          effectiveAnchorTarget,
-        );
-        const linkedDesired = linkedCandidates
-          .map((linked) => {
-            if (!panelIdsRef.current.includes(linked.to)) return null;
-            const linkedParentPos = next[linked.to] ?? previous[linked.to] ?? panelMemoryRef.current[linked.to];
-            if (!linkedParentPos) return null;
-            const linkedParentSize = getPanelSize(linked.to);
-            return clampPosition(getAttachmentDesiredPosition(linked, size, linkedParentPos, linkedParentSize), size, containerSize);
-          })
-          .find((pos): pos is PanelPosition => !!pos) ?? null;
-        const forceAnchoredPanelIds = new Set(['visual-settings', 'support-settings', 'prepare-smoothing-settings']);
-        const hasProfileAnchor = !!layoutProfile?.anchors?.[panelId];
-        const shouldPreferAnchor = !hasManualOverride && !!anchored && (forceAnchoredPanelIds.has(panelId) || hasProfileAnchor || isLockedPanel);
-        const shouldPinEdgeAnchor = shouldPreferAnchor && isEdgeAnchored(panelId, layoutProfile);
-        const desired = hasManualOverride
-          ? (linkedDesired
-            ? linkedDesired
-            : existing
-              ? clampPosition(existing, size, containerSize)
-              : remembered
-                ? clampPosition(remembered, size, containerSize)
-                : anchored
-                  ? clampPosition(anchored, size, containerSize)
-                  : occupied.length > 0
-                    ? {
-                        x: PANEL_MARGIN,
-                        y: occupied[occupied.length - 1].y + occupied[occupied.length - 1].height + panelGap,
-                      }
-                    : {
-                        x: PANEL_MARGIN,
-                        y: PANEL_MARGIN,
-                      })
-          : (shouldPreferAnchor
-            ? clampPosition(anchored!, size, containerSize)
-            : linkedDesired
-              ? linkedDesired
-              : existing
-                ? clampPosition(existing, size, containerSize)
-                : remembered
-                  ? clampPosition(remembered, size, containerSize)
-                  : anchored
-                    ? clampPosition(anchored, size, containerSize)
-                    : occupied.length > 0
-                      ? {
-                          x: PANEL_MARGIN,
-                          y: occupied[occupied.length - 1].y + occupied[occupied.length - 1].height + panelGap,
-                        }
-                      : {
-                          x: PANEL_MARGIN,
-                          y: PANEL_MARGIN,
-                        });
-
-        const freePosition = shouldPinEdgeAnchor
-          ? desired
-          : findNearestFreePosition(desired, size, occupied, containerSize, panelGap);
-        next[panelId] = freePosition;
-        panelMemoryRef.current[panelId] = freePosition;
-        occupied.push({ ...freePosition, ...size });
-      });
-
-      return positionsEqual(previous, next, stablePanelIds) ? previous : next;
-    });
-  }, [containerSize, getPanelSize, layoutProfile, orderedPanelIdsSignature, panelGap, panelIdsSignature, panelSizeVersion, stablePanelIds, orderedPanelIds]);
+  }, [layout, persistLayout]);
 
   const handlePanelSizeChange = React.useCallback((panelId: string, size: PanelSize) => {
-    const prev = panelSizesRef.current[panelId];
-    if (prev && prev.width === size.width && prev.height === size.height) {
-      return;
-    }
+    const previous = panelSizesRef.current[panelId];
+    if (previous && previous.width === size.width && previous.height === size.height) return;
+    panelSizesRef.current = { ...panelSizesRef.current, [panelId]: size };
+    setPanelSizeVersion((version) => version + 1);
+  }, []);
 
-    panelSizesRef.current = {
-      ...panelSizesRef.current,
-      [panelId]: size,
+  const registerCollapsiblePanel = React.useCallback((
+    panelId: string,
+    registration: CollapsiblePanelRegistration,
+  ) => {
+    collapsiblePanelsRef.current = { ...collapsiblePanelsRef.current, [panelId]: registration };
+    setRegistryVersion((version) => version + 1);
+
+    return () => {
+      if (collapsiblePanelsRef.current[panelId] !== registration) return;
+      const next = { ...collapsiblePanelsRef.current };
+      delete next[panelId];
+      collapsiblePanelsRef.current = next;
+      setRegistryVersion((version) => version + 1);
     };
+  }, []);
 
-    const registration = collapsiblePanelsRef.current[panelId];
-    if (registration) {
-      if (registration.expanded) {
-        expandedPanelSizesRef.current = {
-          ...expandedPanelSizesRef.current,
-          [panelId]: size,
-        };
-      } else {
-        collapsedPanelSizesRef.current = {
-          ...collapsedPanelSizesRef.current,
-          [panelId]: size,
-        };
-      }
-    }
+  const requestPanelExpand = React.useCallback((panelId: string) => {
+    const placement = placementFor(panelId);
+    if (placement.dock === 'float') return;
 
-    setPanelSizeVersion((v) => v + 1);
+    const ids = placement.dock === 'left' ? leftPanels : rightPanels;
+    const available = viewportSize.height - PANEL_MARGIN * 2;
+    let total = ids.reduce((sum, id) => sum + getPanelSize(id).height + PANEL_GAP, 0);
+    if (total <= available) return;
 
-    setPanelPositions((previous) => {
-      const current = previous[panelId];
-      if (!current) return previous;
-
-      const clamped = clampPosition(current, size, containerSize);
-      const heightDelta = prev ? (prev.height - size.height) : 0;
-      if (clamped.x === current.x && clamped.y === current.y && Math.abs(heightDelta) < 0.5) {
-        return previous;
-      }
-
-      const next: Record<string, PanelPosition> = {
-        ...previous,
-        [panelId]: clamped,
-      };
-
-      if (Math.abs(heightDelta) >= 0.5) {
-        const queue: Array<{ id: string; delta: number }> = [{ id: panelId, delta: heightDelta }];
-        const visited = new Set<string>([panelId]);
-
-        while (queue.length > 0) {
-          const item = queue.shift();
-          if (!item) break;
-
-          const basePos = next[item.id];
-          if (!basePos) continue;
-
-          const baseSize = getPanelSize(item.id);
-          const expectedAttachedY = basePos.y + baseSize.height + panelGap + item.delta;
-
-          for (const candidateId of panelIdsRef.current) {
-            if (candidateId === item.id || visited.has(candidateId)) continue;
-
-            const candidatePos = next[candidateId];
-            if (!candidatePos) continue;
-
-            const candidateSize = getPanelSize(candidateId);
-            const overlapsHorizontally = rangesOverlap(
-              basePos.x,
-              basePos.x + baseSize.width,
-              candidatePos.x,
-              candidatePos.x + candidateSize.width,
-            );
-
-            const sameColumnish = Math.abs(candidatePos.x - basePos.x) <= CHAIN_ATTACH_TOLERANCE * 2;
-
-            if (!overlapsHorizontally && !sameColumnish) continue;
-
-            const attachedAboveMinY = expectedAttachedY - CHAIN_ATTACH_TOLERANCE;
-            const attachedBelowMaxY = expectedAttachedY + (CHAIN_ATTACH_TOLERANCE * 3);
-            const isLikelyAttached = candidatePos.y >= attachedAboveMinY && candidatePos.y <= attachedBelowMaxY;
-            if (!isLikelyAttached) continue;
-
-            const shiftedY = clampPosition(
-              { x: candidatePos.x, y: candidatePos.y - item.delta },
-              candidateSize,
-              containerSize,
-            ).y;
-
-            const movedAmount = candidatePos.y - shiftedY;
-            next[candidateId] = {
-              ...candidatePos,
-              y: shiftedY,
-            };
-            visited.add(candidateId);
-
-            if (Math.abs(movedAmount) >= 0.5) {
-              queue.push({ id: candidateId, delta: movedAmount });
-            }
-          }
-        }
-      }
-
-      return next;
-    });
-  }, [containerSize, getPanelSize, panelGap]);
-
-  React.useEffect(() => {
-    if (activeDragPanelId) return;
-
-    const edges = buildVerticalAssociationEdges();
-    const visited = new Set<string>();
-    const orderIndexById = new Map(orderedPanelIds.map((panelId, index) => [panelId, index] as const));
-
-    for (const rootId of panelIdsRef.current) {
-      if (visited.has(rootId)) continue;
-
-      const group = collectVerticalAssociationGroup(rootId, edges);
-      group.forEach((id) => visited.add(id));
-
-      const associatedIds = [...group]
-        .filter((id) => collapsiblePanelsRef.current[id]?.autoCollapse)
-        .sort((a, b) => {
-          const aPos = panelPositionsRef.current[a];
-          const bPos = panelPositionsRef.current[b];
-          if (aPos && bPos && Math.abs(aPos.y - bPos.y) > 0.5) {
-            return aPos.y - bPos.y;
-          }
-
-          return (orderIndexById.get(a) ?? Number.MAX_SAFE_INTEGER)
-            - (orderIndexById.get(b) ?? Number.MAX_SAFE_INTEGER);
-        });
-
-      if (associatedIds.length <= 1) continue;
-
-      const topY = associatedIds.reduce((minY, id) => {
-        const pos = panelPositionsRef.current[id];
-        return pos ? Math.min(minY, pos.y) : minY;
-      }, Number.POSITIVE_INFINITY);
-      const availableHeight = containerSize.height - (Number.isFinite(topY) ? topY : PANEL_MARGIN) - PANEL_MARGIN;
-
-      let predictedHeight = estimateStackHeight(associatedIds, getPredictedPanelSize, panelGap);
-      let hasColumnBreak = false;
-
-      for (const [from, targets] of edges) {
-        if (!group.has(from)) continue;
-        const fromRegistration = collapsiblePanelsRef.current[from];
-        const fromPos = panelPositionsRef.current[from];
-        if (!fromRegistration?.expanded || !fromPos) continue;
-
-        for (const to of targets) {
-          if (from > to || !group.has(to)) continue;
-          const toRegistration = collapsiblePanelsRef.current[to];
-          const toPos = panelPositionsRef.current[to];
-          if (!toRegistration?.expanded || !toPos) continue;
-
-          if (Math.abs(fromPos.x - toPos.x) > CHAIN_ATTACH_TOLERANCE * 2) {
-            hasColumnBreak = true;
-            break;
-          }
-        }
-
-        if (hasColumnBreak) break;
-      }
-
-      if (predictedHeight <= availableHeight && !hasColumnBreak) continue;
-
-      const candidates = associatedIds
-        .slice(1)
-        .reverse()
-        .filter((id) => collapsiblePanelsRef.current[id]?.expanded);
-
-      for (const candidateId of candidates) {
-        const expandedSize = getPredictedPanelSize(candidateId, true);
-        const collapsedSize = getPredictedPanelSize(candidateId, false);
-        collapsiblePanelsRef.current[candidateId]?.setExpanded(false);
-        predictedHeight -= Math.max(0, expandedSize.height - collapsedSize.height);
-
-        if (predictedHeight <= availableHeight) break;
-      }
-    }
-  }, [
-    activeDragPanelId,
-    buildVerticalAssociationEdges,
-    collapsibleRegistryVersion,
-    containerSize.height,
-    getPredictedPanelSize,
-    orderedPanelIds,
-    panelGap,
-    panelPositions,
-    panelSizeVersion,
-  ]);
-
-  const snapPanelToNearestSpot = React.useCallback((panelId: string, position: PanelPosition) => {
-    const size = getPanelSize(panelId);
-    const clamped = clampPosition(position, size, containerSize);
-
-    const otherPanels = stablePanelIds
+    const candidates = ids
       .filter((id) => id !== panelId)
-      .map((id) => {
-        const otherPos = panelPositions[id] ?? { x: PANEL_MARGIN, y: PANEL_MARGIN };
-        const otherSize = getPanelSize(id);
-        return {
-          ...otherPos,
-          ...otherSize,
-        };
-      });
+      .filter((id) => {
+        const registration = collapsiblePanelsRef.current[id];
+        return registration?.expanded && registration.autoCollapse;
+      })
+      .reverse();
 
-    const edgeMagnetic = applyEdgeMagnet(clamped, size, containerSize);
-    const snappedToPanels = applyPanelMagnet(edgeMagnetic, size, otherPanels, panelGap);
+    for (const id of candidates) {
+      if (total <= available) break;
+      const size = getPanelSize(id);
+      collapsiblePanelsRef.current[id]?.setExpanded(false);
+      total -= Math.max(0, size.height - COLLAPSED_PANEL_HEIGHT);
+    }
+  }, [getPanelSize, leftPanels, placementFor, rightPanels, viewportSize.height]);
 
-    const rightEdgeX = Math.max(PANEL_MARGIN, containerSize.width - size.width - PANEL_MARGIN);
-    const bottomEdgeY = Math.max(PANEL_MARGIN, containerSize.height - size.height - PANEL_MARGIN);
+  const beginDockResize = React.useCallback((side: 'left' | 'right', clientX: number) => {
+    const dock = containerRef.current?.querySelector(`[data-dock="${side}"]`);
+    const startWidth = dock?.getBoundingClientRect().width ?? (side === 'left' ? leftWidth : rightWidth);
+    setDockResize({ side, startX: clientX, startWidth });
+  }, [leftWidth, rightWidth]);
 
-    const snapped = {
-      x: Math.abs(snappedToPanels.x - PANEL_MARGIN) <= EDGE_SNAP_THRESHOLD
-        ? PANEL_MARGIN
-        : Math.abs(snappedToPanels.x - rightEdgeX) <= EDGE_SNAP_THRESHOLD
-          ? rightEdgeX
-          : snappedToPanels.x,
-      y: Math.abs(snappedToPanels.y - PANEL_MARGIN) <= EDGE_SNAP_THRESHOLD
-        ? PANEL_MARGIN
-        : Math.abs(snappedToPanels.y - bottomEdgeY) <= EDGE_SNAP_THRESHOLD
-          ? bottomEdgeY
-          : snappedToPanels.y,
-    };
+  const floatingPanelStackContext = React.useMemo<FloatingPanelStackContextValue>(() => ({
+    registerCollapsiblePanel,
+    requestPanelExpand,
+    beginDockResize,
+  }), [registerCollapsiblePanel, requestPanelExpand, beginDockResize]);
 
-    return findNearestFreePosition(snapped, size, otherPanels, containerSize, panelGap);
-  }, [containerSize, getPanelSize, panelGap, panelPositions, stablePanelIds]);
+  // Auto-compact a dock that no longer fits, from the bottom up.
+  React.useEffect(() => {
+    if (drag) return;
+
+    for (const ids of [leftPanels, rightPanels]) {
+      const available = viewportSize.height - PANEL_MARGIN * 2;
+      let total = ids.reduce((sum, id) => sum + getPanelSize(id).height + PANEL_GAP, 0);
+      if (total <= available) continue;
+
+      const candidates = ids
+        .filter((id) => {
+          const registration = collapsiblePanelsRef.current[id];
+          return registration?.expanded && registration.autoCollapse;
+        })
+        .reverse();
+
+      for (const id of candidates) {
+        if (total <= available) break;
+        const size = getPanelSize(id);
+        collapsiblePanelsRef.current[id]?.setExpanded(false);
+        total -= Math.max(0, size.height - COLLAPSED_PANEL_HEIGHT);
+      }
+    }
+  }, [drag, getPanelSize, leftPanels, panelSizeVersion, registryVersion, rightPanels, viewportSize.height]);
+
+  // Panels a tool is not showing stay in the dock's list (their placement is
+  // kept) but have no box, so they must not take part in drop maths.
+  const visibleDockIds = React.useCallback((dock: 'left' | 'right', draggedId: string) => (
+    (dock === 'left' ? leftPanels : rightPanels).filter((id) => {
+      if (id === draggedId) return false;
+      const rect = containerRef.current?.querySelector(`[data-panel-id="${id}"]`)?.getBoundingClientRect();
+      return !!rect && rect.height > 0;
+    })
+  ), [leftPanels, rightPanels]);
+
+  const dockIndexAt = React.useCallback((dock: 'left' | 'right', clientY: number, draggedId: string) => {
+    let index = 0;
+    for (const id of visibleDockIds(dock, draggedId)) {
+      const rect = containerRef.current?.querySelector(`[data-panel-id="${id}"]`)?.getBoundingClientRect();
+      if (rect && clientY > rect.top + rect.height / 2) index += 1;
+    }
+    return index;
+  }, [visibleDockIds]);
+
+  // The top of the slot the dragged panel would occupy, so the drop preview
+  // can be drawn where the panel will actually land.
+  const dockSlotTop = React.useCallback((
+    dock: 'left' | 'right',
+    index: number,
+    draggedId: string,
+  ) => {
+    const dockTop = containerRef.current
+      ?.querySelector(`[data-dock="${dock}"]`)
+      ?.getBoundingClientRect().top ?? 0;
+    const ids = visibleDockIds(dock, draggedId);
+    const rectFor = (id: string) => containerRef.current
+      ?.querySelector(`[data-panel-id="${id}"]`)
+      ?.getBoundingClientRect();
+    if (ids.length === 0) return PANEL_MARGIN;
+    if (index >= ids.length) {
+      const last = rectFor(ids[ids.length - 1]);
+      return last ? Math.max(PANEL_MARGIN, last.bottom - dockTop + PANEL_GAP) : PANEL_MARGIN;
+    }
+    const next = rectFor(ids[index]);
+    return next ? Math.max(PANEL_MARGIN, next.top - dockTop) : PANEL_MARGIN;
+  }, [visibleDockIds]);
+
+  const handlePointerDown = React.useCallback((panelId: string, event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    if (isPanelLocked(panelId, railIsColumn)) return;
+    if (!isPanelHeaderDragHandleTarget(event.target)) return;
+    if (isDragBlockedByTarget(event.target)) return;
+
+    const containerRect = containerRef.current?.getBoundingClientRect();
+    const panelRect = event.currentTarget.getBoundingClientRect();
+    if (!containerRect) return;
+
+    setDrag({
+      id: panelId,
+      startX: event.clientX,
+      startY: event.clientY,
+      offsetX: event.clientX - panelRect.left,
+      offsetY: event.clientY - panelRect.top,
+      moved: false,
+      originDock: placementFor(panelId).dock,
+      offset: { x: 0, y: 0 },
+    });
+    event.preventDefault();
+  }, [placementFor, railIsColumn]);
 
   React.useEffect(() => {
-    if (!activeDragPanelId) return;
+    if (!drag) return;
 
     const onPointerMove = (event: PointerEvent) => {
-      const drag = dragRef.current;
-      if (!drag || drag.id !== activeDragPanelId) return;
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+      if (!drag.moved && (dx * dx + dy * dy) < 16) return;
+
+      setDrag((previous) => (previous ? { ...previous, moved: true, offset: { x: dx, y: dy } } : previous));
 
       const containerRect = containerRef.current?.getBoundingClientRect();
-      if (!containerRect) return;
-
-      const size = getPanelSize(activeDragPanelId);
-      const clamped = clampPosition(
-        {
-          x: event.clientX - containerRect.left - drag.offsetX,
-          y: event.clientY - containerRect.top - drag.offsetY,
-        },
-        size,
-        containerSize,
-      );
-
-      const otherPanels = panelIdsRef.current
-        .filter((id) => id !== activeDragPanelId)
-        .map((id) => {
-          const otherPos = panelPositionsRef.current[id] ?? { x: PANEL_MARGIN, y: PANEL_MARGIN };
-          const otherSize = getPanelSize(id);
-          return {
-            ...otherPos,
-            ...otherSize,
-          };
+      // Snap on how much of the dragged panel is over the dock, not on where
+      // the pointer is: a wide dock would otherwise hold the panel until the
+      // pointer had travelled its whole width.
+      const draggedWidth = getPanelWidth(drag.id);
+      const panelLeft = event.clientX - drag.offsetX;
+      const panelRight = panelLeft + draggedWidth;
+      const leftDockRight = leftInsetPx + leftWidth;
+      const rightDockLeft = window.innerWidth - rightInsetPx - rightWidth;
+      const leftOverlap = Math.min(panelRight, leftDockRight) - Math.max(panelLeft, 0);
+      const rightOverlap = Math.min(panelRight, window.innerWidth) - Math.max(panelLeft, rightDockLeft);
+      const containerTop = containerRect?.top ?? 0;
+      const containerLeft = containerRect?.left ?? 0;
+      const dockBox = (side: 'left' | 'right') => {
+        const rect = containerRef.current?.querySelector(`[data-dock="${side}"]`)?.getBoundingClientRect();
+        return {
+          dockLeft: rect ? rect.left - containerLeft : 0,
+          dockTop: rect ? rect.top - containerTop : 0,
+          dockWidth: rect ? rect.width : 0,
+        };
+      };
+      if (leftOverlap > draggedWidth / 2) {
+        const index = dockIndexAt('left', event.clientY, drag.id);
+        setDropTarget({
+          dock: 'left',
+          index,
+          y: event.clientY - containerTop,
+          slotTop: dockSlotTop('left', index, drag.id),
+          height: getPanelSize(drag.id).height,
+          ...dockBox('left'),
         });
-
-      const edgeMagnetic = applyEdgeMagnet(clamped, size, containerSize);
-      const magneticPosition = applyPanelMagnet(edgeMagnetic, size, otherPanels, panelGap);
-      const hint = getEdgeHint(magneticPosition, size, containerSize, EDGE_HINT_THRESHOLD);
-      setEdgeHint(hint);
-
-      const previewPosition = findNearestFreePosition(magneticPosition, size, otherPanels, containerSize, panelGap);
-      setDropPreview({ id: activeDragPanelId, position: previewPosition, size });
-
-      setPanelPositions((previous) => ({
-        ...previous,
-        [activeDragPanelId]: magneticPosition,
-      }));
+      } else if (rightOverlap > draggedWidth / 2) {
+        const index = dockIndexAt('right', event.clientY, drag.id);
+        setDropTarget({
+          dock: 'right',
+          index,
+          y: event.clientY - containerTop,
+          slotTop: dockSlotTop('right', index, drag.id),
+          height: getPanelSize(drag.id).height,
+          ...dockBox('right'),
+        });
+      } else {
+        setDropTarget(null);
+      }
     };
 
-    const onPointerUp = () => {
-      const drag = dragRef.current;
-      if (!drag || drag.id !== activeDragPanelId) {
-        setActiveDragPanelId(null);
-        return;
+    const onPointerUp = (event: PointerEvent) => {
+      if (drag.moved) {
+        const containerRect = containerRef.current?.getBoundingClientRect();
+        if (dropTarget) {
+          setLayout((previous) => placePanel(previous, drag.id, dropTarget.dock, dropTarget.index));
+        } else if (containerRect) {
+          const size = getPanelSize(drag.id);
+          const float = clampPosition(
+            {
+              x: event.clientX - containerRect.left - drag.offsetX,
+              y: event.clientY - containerRect.top - drag.offsetY,
+            },
+            size,
+            viewportSize,
+          );
+          setLayout((previous) => placePanel(previous, drag.id, 'float', 0, float));
+        }
       }
 
-      setPanelPositions((previous) => {
-        const currentPreview = dropPreviewRef.current;
-        const current = currentPreview?.id === activeDragPanelId
-          ? currentPreview.position
-          : previous[activeDragPanelId] ?? { x: PANEL_MARGIN, y: PANEL_MARGIN };
-        const snapped = snapPanelToNearestSpot(activeDragPanelId, current);
-
-        const otherPanels = panelIdsRef.current
-          .filter((id) => id !== activeDragPanelId)
-          .map((id) => {
-            const otherPos = previous[id] ?? { x: PANEL_MARGIN, y: PANEL_MARGIN };
-            const otherSize = getPanelSize(id);
-            return {
-              id,
-              ...otherPos,
-              ...otherSize,
-            };
-          });
-
-        const attachments = inferAttachments(activeDragPanelId, snapped, getPanelSize(activeDragPanelId), otherPanels);
-        manualOverrideRef.current = {
-          ...manualOverrideRef.current,
-          [activeDragPanelId]: true,
-        };
-
-        if (attachments.length > 0) {
-          attachmentMemoryRef.current = {
-            ...attachmentMemoryRef.current,
-            [activeDragPanelId]: attachments,
-          };
-        } else {
-          const nextAttachments = { ...attachmentMemoryRef.current };
-          delete nextAttachments[activeDragPanelId];
-          attachmentMemoryRef.current = nextAttachments;
-        }
-
-        const childLinksToMoved = Object.entries(attachmentMemoryRef.current)
-          .filter(([, childAttachments]) => childAttachments.some((childAttachment) => childAttachment.to === activeDragPanelId));
-
-        if (childLinksToMoved.length > 0) {
-          const nextAttachments = { ...attachmentMemoryRef.current };
-
-          for (const [childId, childAttachments] of childLinksToMoved) {
-            const filtered = childAttachments.filter((childAttachment) => childAttachment.to !== activeDragPanelId);
-            if (filtered.length > 0) {
-              nextAttachments[childId] = filtered;
-            } else {
-              delete nextAttachments[childId];
-            }
-          }
-
-          attachmentMemoryRef.current = nextAttachments;
-        }
-
-        return {
-          ...previous,
-          [activeDragPanelId]: snapped,
-        };
-      });
-
-      dragRef.current = null;
-      setEdgeHint({ left: false, right: false, top: false, bottom: false });
-      setDropPreview(null);
-      setActiveDragPanelId(null);
+      setDrag(null);
+      setDropTarget(null);
     };
 
     window.addEventListener('pointermove', onPointerMove);
@@ -1522,50 +777,66 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
     };
-  }, [activeDragPanelId, containerSize, getPanelSize, panelGap, snapPanelToNearestSpot]);
+  }, [
+    dockIndexAt,
+    dockSlotTop,
+    visibleDockIds,
+    drag,
+    dropTarget,
+    getPanelSize,
+    getPanelWidth,
+    leftInsetPx,
+    leftWidth,
+    rightInsetPx,
+    rightWidth,
+    viewportSize,
+  ]);
 
   React.useEffect(() => {
-    const validIds = new Set(panelIdsRef.current);
-    const cleaned: Record<string, PanelAttachment[]> = {};
-    const cleanedOverrides: Record<string, boolean> = {};
+    if (!dockResize) return;
 
-    for (const [panelId, attachments] of Object.entries(attachmentMemoryRef.current)) {
-      if (!validIds.has(panelId)) continue;
-      const filtered = attachments.filter((attachment) => validIds.has(attachment.to) && panelId !== attachment.to);
-      if (filtered.length === 0) continue;
-      cleaned[panelId] = filtered;
-    }
-
-    for (const [panelId, manual] of Object.entries(manualOverrideRef.current)) {
-      if (!validIds.has(panelId)) continue;
-      if (!manual) continue;
-      cleanedOverrides[panelId] = true;
-    }
-
-    attachmentMemoryRef.current = cleaned;
-    manualOverrideRef.current = cleanedOverrides;
-  }, [panelIds]);
-
-  const handlePointerDown = React.useCallback((panelId: string, event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    if (LOCKED_PANEL_IDS.has(panelId)) return;
-    if (!isPanelHeaderDragHandleTarget(event.target)) return;
-    if (isDragBlockedByTarget(event.target)) return;
-
-    const containerRect = containerRef.current?.getBoundingClientRect();
-    if (!containerRect) return;
-
-    const panelPosition = panelPositions[panelId] ?? seededPositions[panelId] ?? { x: PANEL_MARGIN, y: PANEL_MARGIN };
-    setActiveDragPanelId(panelId);
-    setEdgeHint({ left: false, right: false, top: false, bottom: false });
-    setDropPreview({ id: panelId, position: panelPosition, size: getPanelSize(panelId) });
-    dragRef.current = {
-      id: panelId,
-      offsetX: event.clientX - containerRect.left - panelPosition.x,
-      offsetY: event.clientY - containerRect.top - panelPosition.y,
+    const onPointerMove = (event: PointerEvent) => {
+      const delta = event.clientX - dockResize.startX;
+      const width = clamp(
+        dockResize.startWidth + (dockResize.side === 'left' ? delta : -delta),
+        MIN_DOCK_WIDTH,
+        MAX_DOCK_WIDTH,
+      );
+      const side = dockResize.side;
+      setLayout((previous) => {
+        const panels = { ...previous.panels };
+        // The drag sets the panels' own width; the dock follows them, so a
+        // panel keeps that width when it is dragged out to float. The drag can
+        // only widen: a panel never goes below its natural width.
+        let widest = 0;
+        (side === 'left' ? leftPanels : rightPanels).forEach((id) => {
+          if (!RESIZABLE_PANELS.has(id)) return;
+          const nextWidth = Math.max(getPanelBaseWidth(id), width - PANEL_MARGIN * 2);
+          widest = Math.max(widest, nextWidth);
+          panels[id] = { ...(panels[id] ?? defaultPlacement(id, 0)), width: nextWidth };
+        });
+        const dockWidth = widest > 0 ? widest + PANEL_MARGIN * 2 : width;
+        return {
+          ...previous,
+          panels,
+          docks: {
+            ...previous.docks,
+            [side === 'left' ? 'leftWidth' : 'rightWidth']: dockWidth,
+          },
+        };
+      });
     };
-    event.preventDefault();
-  }, [getPanelSize, panelPositions, seededPositions]);
+
+    const onPointerUp = () => setDockResize(null);
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+  }, [dockResize, leftPanels, rightPanels]);
 
   const closeWindowContextMenu = React.useCallback(() => {
     setWindowContextMenu(null);
@@ -1574,106 +845,54 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
   const handlePanelContextMenu = React.useCallback((panelId: string, event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    setWindowContextMenu({
-      panelId,
-      x: event.clientX,
-      y: event.clientY,
-    });
+    setWindowContextMenu({ panelId, x: event.clientX, y: event.clientY });
   }, []);
 
   const resetSingleWindow = React.useCallback((panelId: string) => {
     closeWindowContextMenu();
-    setPanelPositions((previous) => {
-      const target = seededPositions[panelId] ?? previous[panelId] ?? { x: PANEL_MARGIN, y: PANEL_MARGIN };
-      const next = { ...previous, [panelId]: target };
-      panelMemoryRef.current = { ...panelMemoryRef.current, [panelId]: target };
-
-      const nextAttachments = { ...attachmentMemoryRef.current };
-      delete nextAttachments[panelId];
-      attachmentMemoryRef.current = nextAttachments;
-
-      const nextOverrides = { ...manualOverrideRef.current };
-      delete nextOverrides[panelId];
-      manualOverrideRef.current = nextOverrides;
-
-      return next;
-    });
-
-    // Reset any manual width set by a resize handle — directly set the correct default
-    if (typeof document !== 'undefined') {
-      const panelEl = document.querySelector(`[data-panel-id="${panelId}"]`) as HTMLElement | null;
-      if (panelEl) {
-        const base = PANEL_WIDTH_OVERRIDES[panelId] ?? DEFAULT_PANEL_WIDTH;
-        const defaultWidth = Math.max(72, base);
-        panelEl.style.width = `${defaultWidth}px`;
-      }
-    }
-  }, [closeWindowContextMenu, seededPositions]);
+    const dock = DEFAULT_PANEL_DOCKS[panelId] ?? 'right';
+    setLayout((previous) => placePanel(previous, panelId, dock, Number.MAX_SAFE_INTEGER));
+  }, [closeWindowContextMenu]);
 
   const resetAllWindows = React.useCallback(() => {
     closeWindowContextMenu();
-    setPanelPositions(() => {
-      const next: Record<string, PanelPosition> = {};
-      for (const panelId of panelIdsRef.current) {
-        next[panelId] = seededPositions[panelId] ?? { x: PANEL_MARGIN, y: PANEL_MARGIN };
-      }
-      panelMemoryRef.current = { ...panelMemoryRef.current, ...next };
-      attachmentMemoryRef.current = {};
-      manualOverrideRef.current = {};
-      return next;
-    });
+    setLayout({ panels: {}, docks: {} });
+    setPanelSizeVersion((version) => version + 1);
 
     if (typeof window !== 'undefined') {
       try {
         window.localStorage.removeItem(FLOATING_LAYOUT_STORAGE_KEY);
+        window.localStorage.removeItem(LEGACY_FLOATING_LAYOUT_STORAGE_KEY);
       } catch {
-        // ignore storage failures
+        // Ignore storage failures.
       }
     }
-  }, [closeWindowContextMenu, seededPositions]);
-
-  React.useEffect(() => {
-    if (!windowContextMenu) return;
-
-    const handlePointerDown = () => closeWindowContextMenu();
-    const handleEscape = (e: CustomEvent) => {
-      if (e.detail.key === 'Escape') closeWindowContextMenu();
-    };
-
-    window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('app-hotkey-keydown', handleEscape as EventListener);
-
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('app-hotkey-keydown', handleEscape as EventListener);
-    };
-  }, [windowContextMenu, closeWindowContextMenu]);
+  }, [closeWindowContextMenu]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const handleDebugDumpRequest = (event: Event) => {
-      const customEvent = event as CustomEvent<FloatingLayoutDebugRequestDetail>;
-      const detail = customEvent.detail;
+      const detail = (event as CustomEvent<FloatingLayoutDebugRequestDetail>).detail;
       if (!detail?.onResult) return;
 
       const positions: Record<string, PanelPosition> = {};
-      for (const panelId of panelIdsRef.current) {
-        const pos = panelPositionsRef.current[panelId]
-          ?? panelMemoryRef.current[panelId]
-          ?? seededPositions[panelId]
-          ?? { x: PANEL_MARGIN, y: PANEL_MARGIN };
-
-        positions[panelId] = { x: pos.x, y: pos.y };
+      for (const panelId of panelIds) {
+        const placement = placementFor(panelId);
+        if (placement.dock === 'float' && placement.float) {
+          positions[panelId] = { ...placement.float };
+        }
       }
 
       const snapshot: FloatingLayoutDebugSnapshot = {
-        version: 1,
+        version: 2,
         capturedAt: new Date().toISOString(),
         persistenceEnabled: persistLayout,
         storageKey: FLOATING_LAYOUT_STORAGE_KEY,
-        panelIds: [...panelIdsRef.current],
+        panelIds: [...panelIds],
         positions,
+        placements: { ...layout.panels },
+        docks: { ...layout.docks },
       };
 
       detail.onResult(snapshot);
@@ -1683,103 +902,149 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     return () => {
       window.removeEventListener(FLOATING_LAYOUT_DEBUG_REQUEST_EVENT, handleDebugDumpRequest as EventListener);
     };
-  }, [persistLayout, seededPositions]);
+  }, [layout.docks, layout.panels, panelIds, persistLayout, placementFor]);
 
-  const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
-  const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1080;
+  const renderPanel = (panelId: string, index: number, docked: boolean) => {
+    const entry = panelEntries.find((candidate) => candidate.id === panelId);
+    if (!entry?.node) return null;
+
+    const placement = placementFor(panelId);
+    const position = docked
+      ? null
+      : clampPosition(
+        placement.float ?? { x: PANEL_MARGIN, y: PANEL_MARGIN + index * 18 },
+        { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT },
+        viewportSize,
+      );
+    const isDragging = drag?.id === panelId;
+    const dragOffset = isDragging && drag ? drag.offset : null;
+
+    return (
+      <FloatingPanelItem
+        key={panelId}
+        id={panelId}
+        index={index}
+        position={position}
+        panelWidth={getPanelWidth(panelId)}
+        hidden={hiddenPanelIds.has(panelId)}
+        docked={docked}
+        isDragging={isDragging}
+        dragOffset={dragOffset}
+        onPointerDown={handlePointerDown}
+        onContextMenu={handlePanelContextMenu}
+        onSizeChange={handlePanelSizeChange}
+      >
+        {entry.node}
+      </FloatingPanelItem>
+    );
+  };
 
   return (
     <FloatingPanelStackContext.Provider value={floatingPanelStackContext}>
       <div
         ref={containerRef}
-        className="absolute left-0 right-0 top-[var(--topbar-height)] bottom-0 z-10 pointer-events-none"
+        className="absolute right-0 top-[var(--topbar-height)] bottom-0 z-10 pointer-events-none"
+        style={{ left: 0 }}
       >
-      {panelEntries.map((entry, index) => {
-        const panelId = entry.id;
-        const panelPosition = panelPositions[panelId] ?? seededPositions[panelId] ?? {
-          x: PANEL_MARGIN,
-          y: PANEL_MARGIN + index * 18,
-        };
-
-        const magnetic = activeDragPanelId === panelId && hasEdgeHint(edgeHint);
-
-        return entry.node ? (
-          <FloatingPanelItem
-            key={panelId}
-            id={panelId}
-            index={index}
-            position={panelPosition}
-            panelWidth={getPanelWidth(panelId)}
-            isDragging={activeDragPanelId === panelId}
-            magnetic={magnetic}
-            onPointerDown={handlePointerDown}
-            onContextMenu={handlePanelContextMenu}
-            onSizeChange={handlePanelSizeChange}
-          >
-            {entry.node}
-          </FloatingPanelItem>
-        ) : null;
-      })}
-
-      {activeDragPanelId && hasEdgeHint(edgeHint) ? <EdgeSnapOverlay hint={edgeHint} /> : null}
-
-      {dropPreview ? (
         <div
-          className="absolute pointer-events-none rounded-lg border-2 border-dashed"
+          data-dock="left"
+          className="absolute top-0 bottom-0 flex flex-col pointer-events-none"
           style={{
-            left: dropPreview.position.x,
-            top: dropPreview.position.y,
-            width: dropPreview.size.width,
-            height: dropPreview.size.height,
-            borderColor: 'color-mix(in srgb, var(--accent), white 12%)',
-            background: 'color-mix(in srgb, var(--accent), transparent 88%)',
-            boxShadow: '0 0 0 4px color-mix(in srgb, var(--accent), transparent 82%)',
-            zIndex: 90,
+            left: leftInsetPx,
+            width: leftWidth,
+            padding: PANEL_MARGIN,
+            gap: PANEL_GAP,
+            alignItems: 'flex-start',
+            overflowY: drag ? 'visible' : 'auto',
+            overflowX: drag ? 'visible' : 'hidden',
           }}
-        />
-      ) : null}
-
-      {windowContextMenu ? (
-        <div
-          className="fixed z-[140] pointer-events-auto w-56 rounded-lg border p-1.5 shadow-xl"
-          style={{
-            left: Math.max(8, Math.min(windowContextMenu.x, viewportWidth - 232)),
-            top: Math.max(8, Math.min(windowContextMenu.y, viewportHeight - 120)),
-            borderColor: 'var(--border-subtle)',
-            background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
         >
-          <button
-            type="button"
-            className="w-full rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-            style={{ color: 'var(--text-strong)' }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)';
+          {leftPanels.map((panelId, index) => renderPanel(panelId, index, true))}
+          <div
+            className="absolute inset-y-0 cursor-col-resize pointer-events-auto"
+            style={{ right: 0, width: 6 }}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              // Read the rendered width: a closure captured before the last
+              // commit would start the drag from a stale value and jump.
+              setDockResize({
+                side: 'left',
+                startX: event.clientX,
+                startWidth: event.currentTarget.parentElement?.getBoundingClientRect().width ?? leftWidth,
+              });
             }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent';
-            }}
-            onClick={() => resetSingleWindow(windowContextMenu.panelId)}
-          >
-            Reset this window
-          </button>
-          <button
-            type="button"
-            className="w-full rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors"
-            style={{ color: 'var(--text-strong)' }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent';
-            }}
-            onClick={resetAllWindows}
-          >
-            Reset all windows layout
-          </button>
+          />
         </div>
-      ) : null}
+
+        <div
+          data-dock="right"
+          className="absolute top-0 bottom-0 flex flex-col pointer-events-none"
+          style={{
+            right: rightInsetPx,
+            width: rightWidth,
+            padding: PANEL_MARGIN,
+            gap: PANEL_GAP,
+            alignItems: 'flex-end',
+            overflowY: drag ? 'visible' : 'auto',
+            overflowX: drag ? 'visible' : 'hidden',
+          }}
+        >
+          {rightPanels.map((panelId, index) => renderPanel(panelId, index, true))}
+          <div
+            className="absolute inset-y-0 cursor-col-resize pointer-events-auto"
+            style={{ left: 0, width: 6 }}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              setDockResize({
+                side: 'right',
+                startX: event.clientX,
+                startWidth: event.currentTarget.parentElement?.getBoundingClientRect().width ?? rightWidth,
+              });
+            }}
+          />
+        </div>
+
+        {floatingPanels.map((panelId, index) => renderPanel(panelId, index, false))}
+
+        {dropTarget ? (() => {
+          const dockLeft = dropTarget.dockLeft;
+          const dockWidthPx = dropTarget.dockWidth;
+          return (
+            <>
+              {/* The panel's shape where it will land, as the floating layout
+                  used to show it. */}
+              <div
+                className="absolute pointer-events-none rounded-lg border-2 border-dashed"
+                style={{
+                  left: dockLeft + PANEL_MARGIN,
+                  top: dropTarget.dockTop + dropTarget.slotTop,
+                  width: dockWidthPx - PANEL_MARGIN * 2,
+                  height: dropTarget.height,
+                  borderColor: 'color-mix(in srgb, var(--accent), white 12%)',
+                  background: 'color-mix(in srgb, var(--accent), transparent 88%)',
+                  boxShadow: '0 0 0 4px color-mix(in srgb, var(--accent), transparent 82%)',
+                  zIndex: 120,
+                }}
+              />
+            </>
+          );
+        })() : null}
+
+        <ContextMenu
+          position={windowContextMenu}
+          entries={[
+            { id: 'reset-window', label: _(msg`Reset Window`), icon: RotateCcw },
+            { id: 'reset-all-windows', label: _(msg`Reset Layout`), icon: LayoutPanelTop },
+          ]}
+          onSelect={(id) => {
+            if (!windowContextMenu) return;
+            if (id === 'reset-window') resetSingleWindow(windowContextMenu.panelId);
+            if (id === 'reset-all-windows') resetAllWindows();
+          }}
+          onClose={closeWindowContextMenu}
+          title={_(msg({ message: 'Window', comment: 'Heading of the floating panel right-click menu that resets panel positions.' }))}
+          ariaLabel={_(msg({ message: 'Window context menu', comment: 'Accessible name of the floating panel right-click menu that resets panel positions.' }))}
+        />
       </div>
     </FloatingPanelStackContext.Provider>
   );

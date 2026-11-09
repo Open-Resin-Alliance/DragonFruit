@@ -8,23 +8,34 @@ import {
   CloudOff,
   Download,
   ExternalLink,
-  Loader2,
   Package,
   RotateCcw,
 } from 'lucide-react';
 import { FLATPAK_APP_ID, LINUX_RELEASES_URL } from '@/features/updater/updateBridge';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { Button, Spinner } from '@/components/atoms';
 import { useUpdateChecker } from '@/features/updater/useUpdateChecker';
 import type { UpdateState } from '@/features/updater/useUpdateChecker';
 import { isAllowSameVersionEnabled, enableAllowSameVersionForSession } from '@/features/updater/debugForceSession';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import {
+  formatUpdateDownloadedBytes,
+  formatUpdateReadyToInstall,
+  formatUpdateVersionChip,
+  formatUpdateVersionReady,
+} from '@/features/updater/updaterMessages';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+import type { UnitFormat } from '@/utils/unitFormatting';
 
 // Helpers
 // ---------------------------------------------------------------------------
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+function formatBytes(bytes: number, fmt: UnitFormat): string {
+  if (bytes < 1024) return fmt.quantity(bytes, 0, 'B');
+  if (bytes < 1024 * 1024) return fmt.quantity(bytes / 1024, 1, 'KB');
+  return fmt.quantity(bytes / (1024 * 1024), 1, 'MB');
 }
 
 async function openExternal(url: string): Promise<void> {
@@ -58,25 +69,28 @@ function ProgressBar({ pct }: { pct: number }) {
 // ---------------------------------------------------------------------------
 
 function IdleState({ onCheck }: { onCheck: () => void }) {
+  const { _ } = useLingui();
   return (
     <div className="grid grid-cols-2 gap-2">
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="md"
         onClick={onCheck}
-        className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+        className="inline-flex items-center justify-center gap-1.5"
       >
         <RotateCcw className="h-3.5 w-3.5" />
-        Check for Updates
-      </button>
-      <button
-        type="button"
+        <Trans>Check for Updates</Trans>
+      </Button>
+      <Button
+        variant="secondary"
+        size="md"
         disabled
-        className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5 opacity-50 cursor-not-allowed"
-        title="No update available"
+        className="inline-flex items-center justify-center gap-1.5 opacity-50 cursor-not-allowed"
+        title={_(msg`No update available`)}
       >
         <Download className="h-3.5 w-3.5" />
-        Install
-      </button>
+        <Trans>Install</Trans>
+      </Button>
     </div>
   );
 }
@@ -93,14 +107,14 @@ function CheckingState() {
             color: 'var(--accent)',
           }}
         >
-          <Loader2 className="h-6 w-6 animate-spin" />
+          <Spinner size="xl" />
         </span>
         <span className="min-w-0">
           <span className="block text-lg font-bold" style={{ color: 'var(--text-strong)' }}>
-            Checking for Updates…
+            <Trans>Checking for Updates…</Trans>
           </span>
           <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>
-            Querying GitHub releases
+            <Trans>Querying GitHub releases</Trans>
           </span>
         </span>
       </div>
@@ -115,30 +129,31 @@ function UpToDateState({ onCheck }: { onCheck: () => void }) {
         <span
           className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border"
           style={{
-            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 40%)',
-            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 82%)',
-            color: 'var(--accent-secondary)',
+            borderColor: 'color-mix(in srgb, var(--success), var(--border-subtle) 40%)',
+            background: 'color-mix(in srgb, var(--success), var(--surface-1) 82%)',
+            color: 'var(--success)',
           }}
         >
           <Check className="h-6 w-6" />
         </span>
         <span className="min-w-0">
-          <span className="block text-lg font-bold" style={{ color: 'var(--accent-secondary)' }}>
-            Up to date
+          <span className="block text-lg font-bold" style={{ color: 'var(--success)' }}>
+            <Trans>Up to date</Trans>
           </span>
           <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>
-            You’re on the latest version
+            <Trans>You’re on the latest version</Trans>
           </span>
         </span>
       </div>
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="auto"
         onClick={onCheck}
-        className="ui-button ui-button-secondary !h-10 px-8 text-sm inline-flex items-center justify-center gap-1.5"
+        className="!h-10 px-8 text-sm inline-flex items-center justify-center gap-1.5"
       >
         <RotateCcw className="h-4 w-4" />
-        Check Again
-      </button>
+        <Trans>Check Again</Trans>
+      </Button>
     </div>
   );
 }
@@ -152,6 +167,7 @@ function AvailableState({
   onDownload: () => void;
   onCheck: () => void;
 }) {
+  const { _ } = useLingui();
   const info = s.info;
   const [showWarning, setShowWarning] = React.useState(false);
 
@@ -170,14 +186,12 @@ function AvailableState({
         </span>
         <span className="min-w-0">
           <span className="block text-base font-bold" style={{ color: 'var(--accent-secondary)' }}>
-            Update Available
+            <Trans>Update Available</Trans>
           </span>
           <span className="block text-xs mt-1 font-medium" style={{ color: 'var(--text-muted)' }}>
-            {info.version === info.currentVersion ? (
-              <>Version {info.version}</>
-            ) : (
-              <>Version {info.version} • update ready</>
-            )}
+            {info.version === info.currentVersion
+              ? formatUpdateVersionChip(info.version, _)
+              : formatUpdateVersionReady(info.version, _)}
           </span>
         </span>
       </div>
@@ -198,20 +212,22 @@ function AvailableState({
       )}
 
       <div className="grid grid-cols-3 gap-2">
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="md"
           onClick={onCheck}
-          className="ui-button ui-button-secondary !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+          className="inline-flex items-center justify-center gap-1.5"
         >
           <RotateCcw className="h-3.5 w-3.5" />
-          Check for Updates
-        </button>
-        <button
-          type="button"
+          <Trans>Check for Updates</Trans>
+        </Button>
+        <Button
+          variant="secondary"
+          size="md"
+          className="inline-flex items-center justify-center gap-1.5"
           onClick={() => {
             void openExternal(`https://github.com/Open-Resin-Alliance/DragonFruit/releases/tag/v${info.version}`);
           }}
-          className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
           style={{
             borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
             background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 86%)',
@@ -219,50 +235,46 @@ function AvailableState({
           }}
         >
           <ExternalLink className="h-3.5 w-3.5" />
-          View on GitHub
-        </button>
-        <button
-          type="button"
+          <Trans>View on GitHub</Trans>
+        </Button>
+        <Button
+          variant="tinted-accent"
+          size="md"
           onClick={() => setShowWarning(true)}
-          className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
-          style={{
-            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
-            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)',
-            color: 'var(--accent)',
-          }}
+          className="inline-flex items-center justify-center gap-1.5"
         >
           <Download className="h-3.5 w-3.5" />
-          Install
-        </button>
+          <Trans>Install</Trans>
+        </Button>
       </div>
       <StructuredDialogModal
         open={showWarning}
-        ariaLabel="Confirm update and restart"
-        title="Update & Restart?"
-        subtitle={`Version ${info.version} is ready to install`}
+        ariaLabel={_(msg`Confirm update and restart`)}
+        title={_(msg`Update & Restart?`)}
+        subtitle={formatUpdateReadyToInstall(info.version, _)}
         icon={<Download className="h-4 w-4" />}
         iconTone="warning"
         onClose={() => setShowWarning(false)}
         onBackdropClick={() => setShowWarning(false)}
         actions={
           <>
-            <button type="button" onClick={() => setShowWarning(false)} className="ui-button ui-button-secondary !h-9 px-4 text-xs">Cancel</button>
-            <button type="button" onClick={async () => { setShowWarning(false); try { await (window as unknown as { __df_flushAutosave?: () => Promise<void> }).__df_flushAutosave?.(); } catch {} try { await new Promise<void>((r) => setTimeout(r, 400)); } catch {} onDownload(); }} className="ui-button !h-9 px-4 text-xs inline-flex items-center justify-center gap-1.5" style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 86%)', color: 'var(--accent)' }}>Update & Restart</button>
+            <Button variant="secondary" size="auto" className="!h-9 px-4 text-xs" onClick={() => setShowWarning(false)}>{_(msg`Cancel`)}</Button>
+            <Button variant="tinted-accent" size="auto" className="!h-9 px-4 text-xs inline-flex items-center justify-center gap-1.5" onClick={async () => { setShowWarning(false); try { await (window as unknown as { __df_flushAutosave?: () => Promise<void> }).__df_flushAutosave?.(); } catch {} try { await new Promise<void>((r) => setTimeout(r, 400)); } catch {} onDownload(); }}>{_(msg`Update & Restart`)}</Button>
           </>
         }
       >
         <div className="space-y-3 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
           <p>
-            DragonFruit will <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>download, verify and install</span> the update, then restart automatically.
+            <Trans>DragonFruit will <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>download, verify and install</span> the update, then restart automatically.</Trans>
           </p>
           <p>
-            Please <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>save your scene and any unsaved progress</span> before continuing.
+            <Trans>Please <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>save your scene and any unsaved progress</span> before continuing.</Trans>
           </p>
           <p
             className="pt-3 mt-1 border-t text-sm font-semibold leading-relaxed"
             style={{ borderColor: 'var(--border-subtle)', color: 'color-mix(in srgb, var(--danger), white 32%)' }}
           >
-            Unsaved changes may be lost.
+            <Trans>Unsaved changes may be lost.</Trans>
           </p>
         </div>
       </StructuredDialogModal>
@@ -275,10 +287,11 @@ function DownloadingState({
 }: {
   state: UpdateState & { status: 'downloading' };
 }) {
+  const { _ } = useLingui();
+  const fmt = useLocaleFormat();
   const { contentLength, downloaded } = s.progress;
-  const pct = contentLength > 0
-    ? ((downloaded / contentLength) * 100).toFixed(1)
-    : '0.0';
+  const pctValue = contentLength > 0 ? (downloaded / contentLength) * 100 : 0;
+  const pct = fmt.fixed(pctValue, 1);
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 py-16">
@@ -291,19 +304,19 @@ function DownloadingState({
             color: 'var(--accent)',
           }}
         >
-          <Loader2 className="h-6 w-6 animate-spin" />
+          <Spinner size="xl" />
         </span>
         <span className="min-w-0">
           <span className="block text-lg font-bold" style={{ color: 'var(--text-strong)' }}>
-            Downloading Update
+            <Trans>Downloading update</Trans>
           </span>
           <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>
-            {formatBytes(downloaded)} / {formatBytes(contentLength)} ({pct}%)
+            {formatUpdateDownloadedBytes(formatBytes(downloaded, fmt), formatBytes(contentLength, fmt), pct, _)}
           </span>
         </span>
       </div>
       <div className="w-full max-w-sm">
-        <ProgressBar pct={parseFloat(pct)} />
+        <ProgressBar pct={pctValue} />
       </div>
     </div>
   );
@@ -321,14 +334,14 @@ function InstallingState() {
             color: 'var(--accent)',
           }}
         >
-          <Loader2 className="h-6 w-6 animate-spin" />
+          <Spinner size="xl" />
         </span>
         <span className="min-w-0">
           <span className="block text-lg font-bold" style={{ color: 'var(--text-strong)' }}>
-            Installing Update…
+            <Trans>Installing Update…</Trans>
           </span>
           <span className="block text-sm mt-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>
-            The update is being installed. DragonFruit will restart automatically.
+            <Trans>The update is being installed. DragonFruit will restart automatically.</Trans>
           </span>
         </span>
       </div>
@@ -358,7 +371,7 @@ function InstalledState() {
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Update installed. DragonFruit will restart.
+            <Trans>Update installed. DragonFruit will restart.</Trans>
           </span>
         </span>
       </div>
@@ -387,11 +400,10 @@ function ExternalState() {
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Managed by Flatpak
+            <Trans>Managed by Flatpak</Trans>
           </span>
           <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-            DragonFruit for Linux ships as a Flatpak, so updates are installed
-            outside the app.
+            <Trans>DragonFruit for Linux ships as a Flatpak, so updates are installed outside the app.</Trans>
           </span>
         </span>
         <button
@@ -405,7 +417,7 @@ function ExternalState() {
           }}
         >
           <ExternalLink className="h-3.5 w-3.5" />
-          Releases
+          <Trans>Releases</Trans>
         </button>
       </div>
       <code
@@ -449,7 +461,7 @@ function ErrorState({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-            Update Failed
+            <Trans>Update failed</Trans>
           </span>
           <span className="block text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
             {message}
@@ -466,7 +478,7 @@ function ErrorState({
           }}
         >
           <RotateCcw className="h-3 w-3" />
-          Retry
+          <Trans>Retry</Trans>
         </button>
       </div>
     </div>

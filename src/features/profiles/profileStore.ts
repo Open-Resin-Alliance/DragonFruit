@@ -1,6 +1,7 @@
 import printerPresetsData from '../../../profiles/printers';
 import materialTemplatesData from '../../../profiles/materials';
 import {
+    getPluginRegistryRevision,
     getProfileLocalMaterialSettingsAdapter,
     getInstalledProfilePlugins,
     getRuntimeMaterialTemplates,
@@ -16,9 +17,9 @@ import {
     normalizeFormatVersion,
     normalizeSettingsMode,
     normalizeWebcamRotationDeg,
-    DEFAULT_OUTPUT_FORMAT,
     DEFAULT_WEBCAM_ROTATION_DEG,
 } from '@/features/profiles/outputFormatUtils';
+import { hasWindow } from '@/utils/dom';
 
 export type PrinterOutputFormat = string;
 export type PrinterNetworkSupport = string;
@@ -66,6 +67,14 @@ export type PrinterBitDepth = {
 };
 
 export type PrinterBuildDimensionMode = 'manual' | 'auto';
+
+/**
+ * How a machine handles materials. `single` is the default every printer had
+ * before the field existed; `multiTank` marks a machine that carries more than one
+ * tank and switches between them. The switching semantics are not defined yet, so
+ * nothing but the profile field and its UI depend on this value.
+ */
+export type PrinterMaterialMode = 'single' | 'multiTank';
 export type PrinterWebcamRotationDeg = 0 | 90 | 180 | 270;
 
 export type PrinterPreset = {
@@ -83,6 +92,18 @@ export type PrinterPreset = {
     pixelSize?: PrinterPixelSize;
     bitDepth?: PrinterBitDepth;
     buildDimensionMode?: PrinterBuildDimensionMode;
+    /** A machine that ships with more than one tank declares it here. */
+    materialMode?: PrinterMaterialMode;
+    /** How many tanks a Multi-Tank machine carries. */
+    tankCount?: number;
+    /**
+     * Whether the machine works with more than one build plate. Absent means true;
+     * false hides the plate name and the plate's side buttons, which are the
+     * multi-plate controls.
+     */
+    allowMultiPlate?: boolean;
+    /** The build plate's silhouette: a rectangle (default) or a circle. */
+    plateShape?: 'rectangle' | 'circle';
     /**
      * Concrete variant presetIds for a "family" preset (e.g. an Athena II 16K
      * entry that resolves to separate 3-bit / 8-bit variants). When set, the
@@ -142,8 +163,30 @@ export type PrinterProfile = {
     pixelSize?: PrinterPixelSize;
     bitDepth?: PrinterBitDepth;
     buildDimensionMode?: PrinterBuildDimensionMode;
+    materialMode?: PrinterMaterialMode;
+    /** How many tanks a Multi-Tank machine carries (2..16). */
+    tankCount?: number;
+    /** Whether the machine works with more than one build plate. Defaults to true. */
+    allowMultiPlate?: boolean;
+    /** The build plate's silhouette: a rectangle (default) or a circle. */
+    plateShape?: 'rectangle' | 'circle';
+    /**
+     * Which material sits in each tank, by index. `''` is an unassigned tank; the
+     * array is trimmed to `tankCount` and entries are dropped if their material is.
+     */
+    tankMaterials?: string[];
+    /** Free-text notes the user keeps with this machine; never part of a preset. */
+    notes?: string;
     officialPresetId?: string;
     officialPresetVersion?: number;
+    /** Set when the plugin that contributed this profile's preset was removed. */
+    missingPlugin?: { id: string; name: string };
+    /**
+     * The user chose "None" for network support on a profile whose preset has one.
+     * `networkSupport` alone cannot express that: an absent value means "inherit the
+     * preset", so without this flag clearing the mode snapped back to the preset's.
+     */
+    networkSupportDisabled?: boolean;
     isOfficial?: boolean;
     isCustom?: boolean;
     safetyMarginMm?: {
@@ -255,6 +298,7 @@ export type MaterialAntiAliasingSettings = {
     tipOffsetMode: 'disabled' | 'auto' | 'manual';
     tipOffsetMm: number;
     tipOffsetDisplayInUi: boolean;
+    supportTipShrinkPercent: number;
 };
 
 export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettings = {
@@ -284,9 +328,10 @@ export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettin
     ditherEnabled: false,
     ditherBitDepth: 8,
     ditherDeviceGamma: 2.2,
-    tipOffsetMode: 'disabled',
+    tipOffsetMode: 'auto',
     tipOffsetMm: 0.05,
     tipOffsetDisplayInUi: false,
+    supportTipShrinkPercent: 10,
 };
 
 const MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS = new Set<keyof MaterialProfile>([
@@ -314,6 +359,8 @@ export type MaterialProfile = {
     locked?: boolean;
     name: string;
     brand: string;
+    /** Swatch colour, `#rrggbb`. Optional: older profiles have none. */
+    color?: string;
     currencyCode: string;
     bottlePrice: number;
     bottleCapacityMl: number;
@@ -333,7 +380,31 @@ export type MaterialProfile = {
     minimumAaAlphaPercent: number;
     antiAliasingSettings: MaterialAntiAliasingSettings;
     localSettingsByOutput?: Record<string, LocalMaterialSettingsMap>;
+    /** Other printers this profile is shared with. The owner remains `printerProfileId`. */
+    compatiblePrinterProfileIds?: string[];
 };
+
+function sanitizeCompatiblePrinterIds(value: unknown, ownerPrinterId?: string): string[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const owner = ownerPrinterId?.trim();
+    const ids = Array.from(new Set(value
+        .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== owner)));
+    return ids.length > 0 ? ids : undefined;
+}
+
+/** Whether a material profile is the owner's or explicitly shared with a printer. */
+export function materialProfileIsAvailableForPrinter(profile: MaterialProfile, printerId: string): boolean {
+    return profile.printerProfileId === printerId
+        || (profile.compatiblePrinterProfileIds?.includes(printerId) ?? false);
+}
+
+function sanitizeMaterialColor(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed.toLowerCase() : undefined;
+}
 
 function normalizeMinimumAaAlphaPercent(value: unknown, fallback = 35): number {
     const numeric = Number(value);
@@ -366,8 +437,8 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
     const levelRaw = typeof source.level === 'string' ? source.level.trim().toLowerCase() : defaults.level;
     const levelSteps = Number(levelRaw.endsWith('x') ? levelRaw.slice(0, -1) : levelRaw);
     const level = `${Math.max(2, Math.min(64, Number.isFinite(levelSteps) ? Math.round(levelSteps) : 4))}x`;
-    const tipOffsetMode = source.tipOffsetMode === 'auto' || source.tipOffsetMode === 'manual' 
-        ? source.tipOffsetMode 
+    const tipOffsetMode = source.tipOffsetMode === 'auto' || source.tipOffsetMode === 'manual' || source.tipOffsetMode === 'disabled'
+        ? source.tipOffsetMode
         : defaults.tipOffsetMode;
 
     const enableCustomSettings = typeof source.enableCustomSettings === 'boolean'
@@ -406,6 +477,9 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
         tipOffsetMode,
         tipOffsetMm: Number.isFinite(Number(source.tipOffsetMm)) ? Number(source.tipOffsetMm) : defaults.tipOffsetMm,
         tipOffsetDisplayInUi: Boolean(source.tipOffsetDisplayInUi ?? defaults.tipOffsetDisplayInUi),
+        supportTipShrinkPercent: source.supportTipShrinkPercent == null
+            ? defaults.supportTipShrinkPercent
+            : Math.round(clampNumber(source.supportTipShrinkPercent, defaults.supportTipShrinkPercent, 0, 90)),
     };
 }
 
@@ -434,7 +508,8 @@ function sanitizeLocalSettingsByOutput(input: unknown): Record<string, LocalMate
     Object.entries(source).forEach(([outputFormatRaw, value]) => {
         const outputFormat = normalizeOutputFormat(outputFormatRaw);
         const sanitized = sanitizeLocalMaterialSettingsMap(value);
-        if (!sanitized) return;
+        // A key that is not a format has nothing to key settings by.
+        if (!sanitized || !outputFormat) return;
         next[outputFormat] = sanitized;
     });
 
@@ -474,7 +549,7 @@ function resolveLocalMaterialOverrideTargetKey(
 
 function coerceLocalMaterialOverrideValue(
     rawValue: LocalMaterialSettingsValue,
-    kind: 'number' | 'integer' | 'text' | 'boolean' | 'select',
+    kind: 'number' | 'integer' | 'text' | 'textfield' | 'boolean' | 'select',
 ): LocalMaterialSettingsValue | null {
     if (kind === 'boolean') {
         if (typeof rawValue === 'boolean') return rawValue;
@@ -502,6 +577,9 @@ function resolveMaterialProfileWithLocalSettings(
     if (!printerProfile) return materialProfile;
 
     const normalizedOutput = normalizeOutputFormat(printerProfile.display.outputFormat);
+    // A printer profile with no resolvable format has no plugin-owned material
+    // settings to apply, so the material stays as it is.
+    if (!normalizedOutput) return materialProfile;
     const outputWithoutDot = normalizedOutput.replace(/^\./, '');
     const adapter = getProfileLocalMaterialSettingsAdapter(
         normalizedOutput,
@@ -600,7 +678,7 @@ function readActiveMaterialByPrinterProfileFromStorage(): Record<string, string>
         return { ...activeMaterialByPrinterProfileCache };
     }
 
-    if (typeof window === 'undefined') return {};
+    if (!hasWindow()) return {};
 
     const raw = window.localStorage.getItem(ACTIVE_MATERIAL_BY_PRINTER_PROFILE_STORAGE_KEY)
         ?? window.sessionStorage.getItem(ACTIVE_MATERIAL_BY_PRINTER_PROFILE_STORAGE_KEY);
@@ -628,7 +706,7 @@ function readActiveMaterialByPrinterProfileFromStorage(): Record<string, string>
 }
 
 function writeActiveMaterialByPrinterProfileToStorage(next: Record<string, string>): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
 
     const sanitized: Record<string, string> = {};
     Object.entries(next).forEach(([printerId, materialId]) => {
@@ -652,6 +730,13 @@ const DEFAULT_PRINTER_NETWORK_SETTINGS: PrinterNetworkSettings = {
 
 function normalizeAntiAliasingSupport(value: unknown): boolean | undefined {
     if (typeof value === 'boolean') return value;
+    return undefined;
+}
+
+function normalizeMaterialMode(value: unknown): PrinterMaterialMode | undefined {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim();
+    if (normalized === 'single' || normalized === 'multiTank') return normalized;
     return undefined;
 }
 
@@ -871,7 +956,7 @@ const BUILTIN_PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterP
     ...preset,
     display: {
         ...preset.display,
-        outputFormat: normalizeOutputFormat(preset.display?.outputFormat),
+        outputFormat: normalizeOutputFormat(preset.display?.outputFormat) ?? '',
         formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown } | undefined)?.formatVersion),
         settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown } | undefined)?.settingsMode),
         webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -907,6 +992,10 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
     pixelSize: sanitizePixelSize((preset as any).pixelSize),
     bitDepth: sanitizeBitDepth((preset as any).bitDepth),
     buildDimensionMode: normalizeBuildDimensionMode((preset as any).buildDimensionMode),
+    materialMode: normalizeMaterialMode((preset as any).materialMode),
+    tankCount: sanitizeTankCount((preset as any).tankCount),
+    allowMultiPlate: (preset as any).allowMultiPlate !== false,
+    plateShape: (preset as any).plateShape === 'circle' ? 'circle' : 'rectangle',
     officialPresetId: preset.presetId,
     officialPresetVersion: normalizeProfileVersion((preset as any).profileVersion, 1),
     isOfficial: true,
@@ -916,6 +1005,36 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
     display: preset.display,
     network: sanitizePrinterNetworkSettings((preset as any).network),
 }));
+
+function sanitizeTankMaterials(value: unknown, tankCount: number | undefined, availableMaterialIds: ReadonlySet<string>): string[] | undefined {
+    if (!Array.isArray(value) || !tankCount) return undefined;
+    const entries = value.slice(0, tankCount).map((entry) => (
+        typeof entry === 'string' && availableMaterialIds.has(entry) ? entry : ''
+    ));
+    while (entries.length < tankCount) entries.push('');
+    return entries.some((entry) => entry.length > 0) ? entries : undefined;
+}
+
+function sanitizeTankCount(value: unknown): number | undefined {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return undefined;
+    return Math.min(16, Math.max(2, Math.round(parsed)));
+}
+
+function sanitizePrinterNotes(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim().slice(0, 2000);
+    return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function sanitizeMissingPlugin(value: unknown): PrinterProfile['missingPlugin'] {
+    if (!value || typeof value !== 'object') return undefined;
+    const source = value as { id?: unknown; name?: unknown };
+    const id = typeof source.id === 'string' ? source.id.trim() : '';
+    if (!id) return undefined;
+    const name = typeof source.name === 'string' ? source.name.trim() : '';
+    return { id, name: name || id };
+}
 
 function resolveOfficialPresetId(profile: Partial<PrinterProfile>): string | undefined {
     if (typeof (profile as any).officialPresetId === 'string') {
@@ -946,6 +1065,7 @@ function resolveSafetyMarginForProfile(profile: Partial<PrinterProfile>): Printe
 }
 
 function resolveNetworkSupport(profile: Partial<PrinterProfile>): PrinterNetworkSupport | undefined {
+    if ((profile as any).networkSupportDisabled === true) return undefined;
     const explicit = normalizeNetworkSupport((profile as any).networkSupport);
     if (explicit) return explicit;
 
@@ -998,6 +1118,7 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
 
     return getAllMaterialTemplates().map((template) => ({
         ...template,
+        color: sanitizeMaterialColor((template as any).color),
         currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : 'USD',
         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((template as any).minimumAaAlphaPercent, 35),
         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((template as any).antiAliasingSettings),
@@ -1043,6 +1164,32 @@ function notify(): void {
 
 function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): ProfileStoreState {
     const fallback = createDefaultState();
+    // Tank assignments reference material profiles by id. A tank may only hold a
+    // material this printer owns or one explicitly shared with it, so a stale id
+    // from a deleted or unshared profile is cleared rather than left dangling.
+    const materialAvailability = new Map<string, { ownerPrinterId: string; compatiblePrinterIds: Set<string> }>();
+    for (const material of Array.isArray(input?.materialProfiles) ? input!.materialProfiles : []) {
+        if (typeof material?.id !== 'string' || material.id.length === 0) continue;
+        const ownerPrinterId = typeof material.printerProfileId === 'string' ? material.printerProfileId : '';
+        const compatible = (material as any).compatiblePrinterProfileIds;
+        materialAvailability.set(material.id, {
+            ownerPrinterId,
+            compatiblePrinterIds: new Set(
+                Array.isArray(compatible)
+                    ? compatible.filter((id): id is string => typeof id === 'string' && id.length > 0)
+                    : [],
+            ),
+        });
+    }
+    const availableMaterialIdsForPrinter = (printerId: string): Set<string> => {
+        const available = new Set<string>();
+        for (const [materialId, availability] of materialAvailability) {
+            if (availability.ownerPrinterId === printerId || availability.compatiblePrinterIds.has(printerId)) {
+                available.add(materialId);
+            }
+        }
+        return available;
+    };
 
     const printerProfiles = Array.isArray(input?.printerProfiles)
         ? input!.printerProfiles
@@ -1074,6 +1221,12 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     && resolvedPixelSize != null;
                 const resolvedBuildDimensionMode: PrinterBuildDimensionMode = explicitBuildDimensionMode
                     ?? (inferAutoBuildDimensionMode ? 'auto' : 'manual');
+                const resolvedMaterialMode = normalizeMaterialMode((profile as any).materialMode)
+                    ?? normalizeMaterialMode((matchedPreset as any)?.materialMode);
+                const resolvedTankCount = sanitizeTankCount((profile as any).tankCount)
+                    ?? sanitizeTankCount((matchedPreset as any)?.tankCount)
+                    ?? (resolvedMaterialMode === 'multiTank' ? 2 : undefined);
+                const availableTankMaterialIds = availableMaterialIdsForPrinter(profile.id);
                 const networkSupport = resolveNetworkSupport(profile);
                 const networkProfileState = networkSupport
                     ? deriveNetworkProfileState(profile, networkSupport)
@@ -1092,6 +1245,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     antiAliasing: normalizeAntiAliasingSupport((profile as any).antiAliasing)
                         ?? normalizeAntiAliasingSupport((matchedPreset as any)?.antiAliasing),
                     networkSupport,
+                    networkSupportDisabled: networkSupport ? undefined : ((profile as any).networkSupportDisabled === true ? true : undefined),
                     hasCamera: normalizeCameraSupport((profile as any).hasCamera)
                         ?? normalizeCameraSupport((matchedPreset as any)?.hasCamera),
                     networkFilter: sanitizeNetworkFilter((profile as any).networkFilter) ?? sanitizeNetworkFilter((matchedPreset as any)?.networkFilter),
@@ -1099,8 +1253,23 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     pixelSize: resolvedPixelSize,
                     bitDepth: sanitizeBitDepth((profile as any).bitDepth) ?? sanitizeBitDepth((matchedPreset as any)?.bitDepth),
                     buildDimensionMode: resolvedBuildDimensionMode,
+                    materialMode: resolvedMaterialMode,
+                    // A Multi-Tank machine has at least two by definition; the count is
+                    // never left undefined in that mode, so nothing has to re-derive it.
+                    tankCount: resolvedTankCount,
+                    allowMultiPlate: (profile as any).allowMultiPlate !== false
+                        && (matchedPreset as any)?.allowMultiPlate !== false,
+                    plateShape: (profile as any).plateShape === 'circle'
+                        || ((profile as any).plateShape == null && (matchedPreset as any)?.plateShape === 'circle')
+                        ? 'circle'
+                        : 'rectangle',
+                    tankMaterials: resolvedMaterialMode === 'multiTank'
+                        ? sanitizeTankMaterials((profile as any).tankMaterials, resolvedTankCount, availableTankMaterialIds)
+                        : undefined,
+                    notes: sanitizePrinterNotes((profile as any).notes),
                     officialPresetId,
                     officialPresetVersion: normalizeProfileVersion((profile as any).officialPresetVersion, fallbackOfficialPresetVersion),
+                    missingPlugin: sanitizeMissingPlugin((profile as any).missingPlugin),
                     isOfficial: isOfficialProfileByHeuristic(profile),
                     isCustom: typeof profile.isCustom === 'boolean' ? profile.isCustom : !isOfficialProfileByHeuristic(profile),
                     buildVolumeMm: (() => {
@@ -1136,7 +1305,9 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                     display: {
                         resolutionX: Number(rawDisplay?.resolutionX) || fallbackDisplay?.resolutionX || 2560,
                         resolutionY: Number(rawDisplay?.resolutionY) || fallbackDisplay?.resolutionY || 1620,
-                        outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat ?? fallbackDisplay?.outputFormat),
+                        outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat)
+                            ?? normalizeOutputFormat(fallbackDisplay?.outputFormat)
+                            ?? '',
                         formatVersion: normalizeFormatVersion(rawDisplay?.formatVersion ?? fallbackDisplay?.formatVersion),
                         settingsMode: normalizeSettingsMode(rawDisplay?.settingsMode ?? fallbackDisplay?.settingsMode),
                         webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -1197,6 +1368,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         locked: materialProfile.locked === true,
                         name: profile.name,
                         brand: typeof (profile as any).brand === 'string' ? (profile as any).brand : 'Default',
+                        color: sanitizeMaterialColor((profile as any).color),
                         currencyCode: typeof (profile as any).currencyCode === 'string' ? (profile as any).currencyCode.toUpperCase() : 'USD',
                         bottlePrice: Number((profile as any).bottlePrice) || 0,
                         bottleCapacityMl: Number((profile as any).bottleCapacityMl) || 1000,
@@ -1216,6 +1388,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((profile as any).minimumAaAlphaPercent, 35),
                         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((profile as any).antiAliasingSettings),
                         localSettingsByOutput: sanitizeLocalSettingsByOutput((profile as any).localSettingsByOutput),
+                        compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds((profile as any).compatiblePrinterProfileIds),
                     };
                 })
                 .filter((profile): profile is MaterialProfile => profile !== null)
@@ -1227,11 +1400,19 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
             ? materialProfiles
             : createDefaultMaterials(printerProfiles);
 
-    const activePrinterProfileId =
+    const requestedActivePrinterId =
         typeof input?.activePrinterProfileId === 'string'
             && printerProfiles.some((profile) => profile.id === input.activePrinterProfileId)
             ? input.activePrinterProfileId
             : printerProfiles[0]?.id ?? '';
+    // A printer whose plugin is gone cannot print, so it must not stay the active
+    // one: fall through to the next usable profile in the user's order. If every
+    // profile is marked, the selection stays where it was rather than going blank.
+    const requestedActiveIsUsable = requestedActivePrinterId.length > 0
+        && !printerProfiles.find((profile) => profile.id === requestedActivePrinterId)?.missingPlugin;
+    const activePrinterProfileId = requestedActiveIsUsable
+        ? requestedActivePrinterId
+        : (printerProfiles.find((profile) => !profile.missingPlugin)?.id ?? requestedActivePrinterId);
 
     const materialsForActivePrinter = ensuredMaterials.filter((profile) => profile.printerProfileId === activePrinterProfileId);
     const fallbackActiveMaterialId = materialsForActivePrinter[0]?.id ?? ensuredMaterials[0]?.id ?? '';
@@ -1299,7 +1480,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
 }
 
 function persist(next: ProfileStoreState): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
     try {
         const payload: PersistedProfileStoreEnvelope = {
             version: PROFILE_STORE_SCHEMA_VERSION,
@@ -1333,14 +1514,14 @@ function parsePersistedState(raw: string | null): Partial<ProfileStoreState> | n
 }
 
 function ensureHydrated(): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
     if (isHydrated) return;
     hydratePluginRegistry();
     hydrateProfilesFromStorage();
 }
 
 export function hydrateProfilesFromStorage(): void {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
     if (isHydrated) return;
 
     isHydrated = true;
@@ -1378,9 +1559,26 @@ export function subscribeToProfileStore(listener: Listener): () => void {
     return () => listeners.delete(listener);
 }
 
+let snapshot: ProfileStoreState | null = null;
+let snapshotState: ProfileStoreState | null = null;
+let snapshotRevision = -1;
+
+/**
+ * The snapshot changes identity when the state does *or* when the plugin
+ * registry does. Presets and material templates are read out of the registry on
+ * every call, so a snapshot that never moved would leave a freshly installed
+ * plugin invisible until a reload: `useSyncExternalStore` compares by identity and
+ * would skip the re-render that recomputes them.
+ */
 export function getProfileStoreSnapshot(): ProfileStoreState {
     ensureHydrated();
-    return state;
+    const revision = getPluginRegistryRevision();
+    if (!snapshot || snapshotState !== state || snapshotRevision !== revision) {
+        snapshotState = state;
+        snapshotRevision = revision;
+        snapshot = { ...state };
+    }
+    return snapshot;
 }
 
 export function getProfileStoreServerSnapshot(): ProfileStoreState {
@@ -1617,7 +1815,7 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
         display: {
             resolutionX: partial?.display?.resolutionX ?? 2560,
             resolutionY: partial?.display?.resolutionY ?? 1620,
-            outputFormat: normalizeOutputFormat(partial?.display?.outputFormat),
+            outputFormat: normalizeOutputFormat(partial?.display?.outputFormat) ?? '',
             formatVersion: normalizeFormatVersion(partial?.display?.formatVersion),
             settingsMode: normalizeSettingsMode(partial?.display?.settingsMode),
             webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -1644,6 +1842,48 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     setState(ensureActiveMaterialForActivePrinter(nextState));
 
     return profile.id;
+}
+
+/**
+ * Marks every profile whose preset came from `pluginId` as missing, which is what
+ * the printer rail greys out. Profiles are matched by preset id, so profiles created
+ * before the package ever recorded provenance are covered too.
+ */
+export function markPrinterProfilesMissingPlugin(
+    pluginId: string,
+    pluginName: string,
+    presetIds: readonly string[],
+): void {
+    ensureHydrated();
+    const ids = new Set(presetIds);
+    if (ids.size === 0) return;
+    let changed = false;
+    const printerProfiles = state.printerProfiles.map((profile) => {
+        const presetId = resolveOfficialPresetId(profile);
+        if (!presetId || !ids.has(presetId)) return profile;
+        if (profile.missingPlugin?.id === pluginId) return profile;
+        changed = true;
+        return { ...profile, missingPlugin: { id: pluginId, name: pluginName } };
+    });
+    if (!changed) return;
+    setState({ ...state, printerProfiles });
+}
+
+/** Clears the mark once the plugin (and the presets behind those profiles) is back. */
+export function clearPrinterProfilesMissingPlugin(pluginId: string, presetIds: readonly string[]): void {
+    ensureHydrated();
+    const ids = new Set(presetIds);
+    let changed = false;
+    const printerProfiles = state.printerProfiles.map((profile) => {
+        if (profile.missingPlugin?.id !== pluginId) return profile;
+        const presetId = resolveOfficialPresetId(profile);
+        if (ids.size > 0 && (!presetId || !ids.has(presetId))) return profile;
+        changed = true;
+        const { missingPlugin: _missing, ...rest } = profile;
+        return rest;
+    });
+    if (!changed) return;
+    setState({ ...state, printerProfiles });
 }
 
 export function getAvailablePrinterPresets(): PrinterPreset[] {
@@ -1682,6 +1922,14 @@ export function getPrinterPresetVariants(presetId: string): PrinterPreset[] {
 export function matchPrinterVariantByBitDepth(variants: PrinterPreset[], detectedBitDepth: number | null | undefined): PrinterPreset | null {
     if (!Number.isFinite(detectedBitDepth)) return null;
     return variants.find((variant) => variant.bitDepth?.bits === detectedBitDepth) ?? null;
+}
+
+/** Add an official profile from a preset when this build still has that preset. */
+export function addPrinterProfileFromPresetIfAvailable(presetId: string | null | undefined): string | null {
+    const id = typeof presetId === 'string' ? presetId.trim() : '';
+    if (!id) return null;
+    if (!getAllPrinterPresets().some((preset) => preset.presetId === id)) return null;
+    return addPrinterProfileFromPreset(id);
 }
 
 export function addPrinterProfileFromPreset(presetId: string): string {
@@ -1741,7 +1989,7 @@ export function addPrinterProfileFromPreset(presetId: string): string {
         display: {
             resolutionX: preset.display.resolutionX,
             resolutionY: preset.display.resolutionY,
-            outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+            outputFormat: normalizeOutputFormat(preset.display.outputFormat) ?? '',
             formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
             settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown }).settingsMode),
             webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -1776,6 +2024,7 @@ export function addMaterialProfile(
         locked: (partial as any)?.locked === true,
         name: partial?.name?.trim() || `Material ${state.materialProfiles.length + 1}`,
         brand: partial?.brand?.trim() || 'Default',
+        color: sanitizeMaterialColor(partial?.color),
         currencyCode: partial?.currencyCode?.trim().toUpperCase() || 'USD',
         bottlePrice: partial?.bottlePrice ?? 0,
         bottleCapacityMl: partial?.bottleCapacityMl ?? 1000,
@@ -1795,6 +2044,7 @@ export function addMaterialProfile(
         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(partial?.minimumAaAlphaPercent, 35),
         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(partial?.antiAliasingSettings),
         localSettingsByOutput: sanitizeLocalSettingsByOutput(partial?.localSettingsByOutput),
+        compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds(partial?.compatiblePrinterProfileIds, printerProfileId),
     };
 
     setState(ensureActiveMaterialForActivePrinter({
@@ -1824,6 +2074,22 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
             nextUpdates.hasCamera = sourceUpdates.hasCamera;
         }
 
+        if (Object.prototype.hasOwnProperty.call(sourceUpdates, 'materialMode')) {
+            nextUpdates.materialMode = sourceUpdates.materialMode;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(sourceUpdates, 'notes')) {
+            nextUpdates.notes = sourceUpdates.notes;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(sourceUpdates, 'tankCount')) {
+            nextUpdates.tankCount = sourceUpdates.tankCount;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(sourceUpdates, 'tankMaterials')) {
+            nextUpdates.tankMaterials = sourceUpdates.tankMaterials;
+        }
+
         if (sourceUpdates.display) {
             const nextDisplay: Partial<PrinterProfile['display']> = {};
             if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'outputFormat')) {
@@ -1831,6 +2097,11 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
             }
             if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'formatVersion')) {
                 nextDisplay.formatVersion = sourceUpdates.display.formatVersion;
+            }
+            // Which material-settings source a job uses is a user preference, not a
+            // fact about the machine, so an official profile may change it.
+            if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'settingsMode')) {
+                nextDisplay.settingsMode = sourceUpdates.display.settingsMode;
             }
             if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'webcamRotationDeg')) {
                 nextDisplay.webcamRotationDeg = sourceUpdates.display.webcamRotationDeg;
@@ -1864,6 +2135,14 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
         const nextNetworkSupport = hasNetworkSupportUpdate
             ? normalizeNetworkSupport(appliedUpdates.networkSupport)
             : profile.networkSupport;
+        // An explicit "None" has to outlive the empty value, or hydration reads the
+        // profile as "no choice made" and restores the preset's mode.
+        const nextNetworkSupportDisabled = hasNetworkSupportUpdate
+            ? !nextNetworkSupport
+            : profile.networkSupportDisabled;
+        const nextTankCount = appliedUpdates.tankCount !== undefined
+            ? sanitizeTankCount(appliedUpdates.tankCount)
+            : profile.tankCount;
         const nextNetwork = appliedUpdates.network !== undefined
             ? sanitizePrinterNetworkSettings(appliedUpdates.network)
             : sanitizePrinterNetworkSettings(profile.network);
@@ -1900,12 +2179,29 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
         return {
             ...profile,
             ...appliedUpdates,
+            networkSupportDisabled: nextNetworkSupportDisabled,
             name: appliedUpdates.name !== undefined ? appliedUpdates.name : profile.name,
             manufacturer: appliedUpdates.manufacturer !== undefined ? appliedUpdates.manufacturer : profile.manufacturer,
             antiAliasing: appliedUpdates.antiAliasing !== undefined
                 ? normalizeAntiAliasingSupport(appliedUpdates.antiAliasing)
                 : profile.antiAliasing,
             networkSupport: nextNetworkSupport,
+            materialMode: appliedUpdates.materialMode !== undefined
+                ? normalizeMaterialMode(appliedUpdates.materialMode)
+                : profile.materialMode,
+            tankCount: nextTankCount,
+            // Resized to the tank count here; `sanitizeState` is what drops ids whose
+            // material is gone, so it can see the material list this update produces.
+            tankMaterials: nextTankCount
+                ? Array.from({ length: nextTankCount }, (_, index) => (
+                    (appliedUpdates.tankMaterials !== undefined
+                        ? appliedUpdates.tankMaterials
+                        : profile.tankMaterials)?.[index] ?? ''
+                ))
+                : undefined,
+            notes: appliedUpdates.notes !== undefined
+                ? sanitizePrinterNotes(appliedUpdates.notes)
+                : profile.notes,
             hasCamera: appliedUpdates.hasCamera !== undefined
                 ? normalizeCameraSupport(appliedUpdates.hasCamera)
                 : profile.hasCamera,
@@ -1934,7 +2230,9 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
                 ? {
                     resolutionX: Number(appliedUpdates.display.resolutionX) || profile.display.resolutionX,
                     resolutionY: Number(appliedUpdates.display.resolutionY) || profile.display.resolutionY,
-                    outputFormat: normalizeOutputFormat(appliedUpdates.display.outputFormat ?? profile.display.outputFormat),
+                    outputFormat: normalizeOutputFormat(appliedUpdates.display.outputFormat)
+                        ?? normalizeOutputFormat(profile.display.outputFormat)
+                        ?? profile.display.outputFormat,
                     formatVersion: normalizeFormatVersion(appliedUpdates.display.formatVersion ?? profile.display.formatVersion),
                     settingsMode: normalizeSettingsMode(appliedUpdates.display.settingsMode ?? profile.display.settingsMode),
                     webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -2100,6 +2398,12 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
             printerProfileId: profile.printerProfileId,
             locked: profile.locked,
             brand: updates.brand !== undefined ? updates.brand : profile.brand,
+            // An explicit `color: undefined` is "remove the colour", not "leave it".
+            // The editor sends exactly that when the user picks None, and testing the
+            // value instead of the key kept the old colour on save.
+            color: Object.prototype.hasOwnProperty.call(updates, 'color')
+                ? sanitizeMaterialColor(updates.color)
+                : profile.color,
             currencyCode: updates.currencyCode !== undefined ? updates.currencyCode.toUpperCase() : profile.currencyCode,
             name: updates.name !== undefined ? updates.name : profile.name,
             localSettingsByOutput: updates.localSettingsByOutput !== undefined
@@ -2108,6 +2412,9 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
             antiAliasingSettings: updates.antiAliasingSettings !== undefined
                 ? sanitizeMaterialAntiAliasingSettings(updates.antiAliasingSettings)
                 : profile.antiAliasingSettings,
+            compatiblePrinterProfileIds: updates.compatiblePrinterProfileIds !== undefined
+                ? sanitizeCompatiblePrinterIds(updates.compatiblePrinterProfileIds, profile.printerProfileId)
+                : profile.compatiblePrinterProfileIds,
         };
     });
 
@@ -2152,7 +2459,16 @@ export function removePrinterProfile(id: string): void {
     if (!state.printerProfiles.some((profile) => profile.id === id)) return;
 
     const printerProfiles = state.printerProfiles.filter((profile) => profile.id !== id);
-    const materialProfiles = state.materialProfiles.filter((profile) => profile.printerProfileId !== id);
+    const materialProfiles = state.materialProfiles
+        .filter((profile) => profile.printerProfileId !== id)
+        .map((profile) => {
+            const shared = profile.compatiblePrinterProfileIds?.filter((printerId) => printerId !== id);
+            if (!profile.compatiblePrinterProfileIds?.includes(id)) return profile;
+            return {
+                ...profile,
+                compatiblePrinterProfileIds: shared && shared.length > 0 ? shared : undefined,
+            };
+        });
     const activePrinterProfileId =
         state.activePrinterProfileId === id
             ? printerProfiles[0]?.id ?? ''
@@ -2306,6 +2622,10 @@ export function importPrinterBundle(payload: unknown): string {
         pixelSize: sanitizePixelSize(sourcePrinter.pixelSize),
         bitDepth: sanitizeBitDepth(sourcePrinter.bitDepth),
         buildDimensionMode: normalizeBuildDimensionMode(sourcePrinter.buildDimensionMode) ?? 'manual',
+        materialMode: normalizeMaterialMode(sourcePrinter.materialMode),
+        tankCount: sanitizeTankCount(sourcePrinter.tankCount),
+        allowMultiPlate: sourcePrinter.allowMultiPlate !== false,
+        plateShape: sourcePrinter.plateShape === 'circle' ? 'circle' : 'rectangle',
         officialPresetId: undefined,
         officialPresetVersion: undefined,
         isOfficial: false,
@@ -2315,7 +2635,7 @@ export function importPrinterBundle(payload: unknown): string {
         display: {
             resolutionX: sourcePrinter.display?.resolutionX ?? 2560,
             resolutionY: sourcePrinter.display?.resolutionY ?? 1620,
-            outputFormat: normalizeOutputFormat(sourcePrinter.display?.outputFormat),
+            outputFormat: normalizeOutputFormat(sourcePrinter.display?.outputFormat) ?? '',
             formatVersion: normalizeFormatVersion(sourcePrinter.display?.formatVersion),
             settingsMode: normalizeSettingsMode(sourcePrinter.display?.settingsMode),
             webcamRotationDeg: normalizeWebcamRotationDeg(
@@ -2338,10 +2658,16 @@ export function importPrinterBundle(payload: unknown): string {
     };
 
     const sourceMaterials = Array.isArray(bundle.materials) ? (bundle.materials as unknown[]) : [];
+    const materialIdMap = new Map<string, string>();
     const importedMaterials: MaterialProfile[] = sourceMaterials
         .filter((item): item is MaterialProfile => Boolean(item) && typeof item === 'object')
         .map((material, index) => ({
-            id: createId('material'),
+            id: (() => {
+                const id = createId('material');
+                const sourceId = typeof material.id === 'string' ? material.id.trim() : '';
+                if (sourceId) materialIdMap.set(sourceId, id);
+                return id;
+            })(),
             printerProfileId: importedPrinterId,
             officialTemplateId: typeof material.officialTemplateId === 'string' && material.officialTemplateId.trim().length > 0
                 ? material.officialTemplateId.trim()
@@ -2355,6 +2681,7 @@ export function importPrinterBundle(payload: unknown): string {
             brand: typeof material.brand === 'string' && material.brand.trim().length > 0
                 ? material.brand.trim()
                 : 'Default',
+            color: sanitizeMaterialColor(material.color),
             currencyCode: typeof material.currencyCode === 'string' && material.currencyCode.trim().length > 0
                 ? material.currencyCode.trim().toUpperCase()
                 : 'USD',
@@ -2376,7 +2703,17 @@ export function importPrinterBundle(payload: unknown): string {
             minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(material.minimumAaAlphaPercent, 35),
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(material.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
+            compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds(material.compatiblePrinterProfileIds),
         }));
+
+    const sourceTankMaterials = Array.isArray(sourcePrinter.tankMaterials)
+        ? sourcePrinter.tankMaterials
+            .map((id) => (typeof id === 'string' ? materialIdMap.get(id) ?? id : ''))
+            .filter((id) => id.length > 0)
+        : [];
+    if (sourceTankMaterials.length > 0) {
+        importedPrinter.tankMaterials = sourceTankMaterials;
+    }
 
     if (importedMaterials.length === 0) {
         importedMaterials.push({
@@ -2644,12 +2981,12 @@ export function getActiveMaterialProfile(stateOverride?: ProfileStoreState): Mat
 
     const materialProfile = (
         snapshot.materialProfiles.find(
-            (profile) => profile.id === mappedActiveMaterialId && profile.printerProfileId === activePrinterId,
+            (profile) => profile.id === mappedActiveMaterialId && materialProfileIsAvailableForPrinter(profile, activePrinterId),
         )
         ?? snapshot.materialProfiles.find(
-            (profile) => profile.id === snapshot.activeMaterialProfileId && profile.printerProfileId === activePrinterId,
+            (profile) => profile.id === snapshot.activeMaterialProfileId && materialProfileIsAvailableForPrinter(profile, activePrinterId),
         )
-        ?? snapshot.materialProfiles.find((profile) => profile.printerProfileId === activePrinterId)
+        ?? snapshot.materialProfiles.find((profile) => materialProfileIsAvailableForPrinter(profile, activePrinterId))
         ?? snapshot.materialProfiles[0]
         ?? null
     );
@@ -2658,11 +2995,119 @@ export function getActiveMaterialProfile(stateOverride?: ProfileStoreState): Mat
     return resolveMaterialProfileWithLocalSettings(materialProfile, activePrinterProfile);
 }
 
+/**
+ * Adopts the material profiles a scene carries (VOXL `MATP`), keeping their ids so
+ * the models' `materialProfileId` / `bodyMaterialProfileIds` references still point
+ * at them. They are attached to `printerProfileId`, which is the profile the scene
+ * resolved to on this machine.
+ *
+ * A profile already present under that id is left alone: it is either the same
+ * material on its original machine, or the local edit the user made to it.
+ */
+export function importSceneMaterials(printerProfileId: string, materials: unknown[]): Map<string, string> {
+    ensureHydrated();
+    const remap = new Map<string, string>();
+    if (!Array.isArray(materials) || materials.length === 0) return remap;
+
+    const byId = new Map(state.materialProfiles.map((profile) => [profile.id, profile]));
+    const identity = (profile: Pick<MaterialProfile, 'brand' | 'resinFamily' | 'name'>): string => (
+        `${profile.brand.trim().toLowerCase()}\u0000${profile.resinFamily}\u0000${profile.name.trim().toLowerCase()}`
+    );
+    const byTemplate = new Map<string, MaterialProfile>();
+    const bySignature = new Map<string, MaterialProfile>();
+    const index = (profile: MaterialProfile) => {
+        if (profile.printerProfileId !== printerProfileId) return;
+        const templateId = profile.officialTemplateId?.trim();
+        if (templateId) byTemplate.set(templateId, profile);
+        bySignature.set(identity(profile), profile);
+    };
+    for (const profile of byId.values()) index(profile);
+
+    let changed = false;
+
+    for (const raw of materials) {
+        if (!raw || typeof raw !== 'object') continue;
+        const source = raw as Partial<MaterialProfile>;
+        const requestedId = typeof source.id === 'string' && source.id.trim().length > 0
+            ? source.id.trim()
+            : createId('material');
+        const existingById = byId.get(requestedId);
+        const sourceTemplateId = typeof source.officialTemplateId === 'string'
+            ? source.officialTemplateId.trim()
+            : '';
+        const sourceSignature = identity({
+            brand: typeof source.brand === 'string' && source.brand.trim().length > 0 ? source.brand : 'Default',
+            resinFamily: source.resinFamily ?? 'standard',
+            name: typeof source.name === 'string' && source.name.trim().length > 0 ? source.name.trim() : 'Imported material',
+        });
+
+        // The same material can carry a different local id on another machine or in
+        // an older save. Match its template first, then its brand/type/name, before
+        // adding a second copy beside the one already in this printer.
+        const match = (existingById?.printerProfileId === printerProfileId ? existingById : undefined)
+            ?? (sourceTemplateId ? byTemplate.get(sourceTemplateId) : undefined)
+            ?? bySignature.get(sourceSignature);
+        if (match && match.printerProfileId === printerProfileId) {
+            remap.set(requestedId, match.id);
+            continue;
+        }
+
+        // An id already owned by another printer cannot be moved here; give this
+        // printer its own profile and leave the other profile alone.
+        const id = existingById ? createId('material') : requestedId;
+        const profile: MaterialProfile = {
+            id,
+            printerProfileId,
+            officialTemplateId: typeof source.officialTemplateId === 'string' ? source.officialTemplateId : undefined,
+            officialTemplateVersion: Number.isFinite(Number(source.officialTemplateVersion))
+                ? normalizeProfileVersion(source.officialTemplateVersion, 1)
+                : undefined,
+            name: typeof source.name === 'string' && source.name.trim().length > 0 ? source.name.trim() : 'Imported material',
+            brand: typeof source.brand === 'string' && source.brand.trim().length > 0 ? source.brand.trim() : 'Default',
+            color: sanitizeMaterialColor(source.color),
+            currencyCode: typeof source.currencyCode === 'string' && source.currencyCode.trim().length > 0
+                ? source.currencyCode.trim().toUpperCase()
+                : 'USD',
+            bottlePrice: Number.isFinite(Number(source.bottlePrice)) ? Number(source.bottlePrice) : 0,
+            bottleCapacityMl: Number.isFinite(Number(source.bottleCapacityMl)) ? Number(source.bottleCapacityMl) : 1000,
+            resinFamily: source.resinFamily ?? 'standard',
+            scaleCompensationPct: {
+                x: Number(source.scaleCompensationPct?.x ?? 0),
+                y: Number(source.scaleCompensationPct?.y ?? 0),
+                z: Number(source.scaleCompensationPct?.z ?? 0),
+            },
+            layerHeightMm: Number.isFinite(Number(source.layerHeightMm)) ? Number(source.layerHeightMm) : 0.05,
+            normalExposureSec: Number.isFinite(Number(source.normalExposureSec)) ? Number(source.normalExposureSec) : 2.5,
+            bottomExposureSec: Number.isFinite(Number(source.bottomExposureSec)) ? Number(source.bottomExposureSec) : 28,
+            bottomLayerCount: Math.max(1, Math.round(Number(source.bottomLayerCount ?? 5))),
+            liftDistanceMm: Number.isFinite(Number(source.liftDistanceMm)) ? Number(source.liftDistanceMm) : 6,
+            liftSpeedMmMin: Number.isFinite(Number(source.liftSpeedMmMin)) ? Number(source.liftSpeedMmMin) : 60,
+            retractSpeedMmMin: Number.isFinite(Number(source.retractSpeedMmMin)) ? Number(source.retractSpeedMmMin) : 150,
+            minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(source.minimumAaAlphaPercent, 35),
+            antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(source.antiAliasingSettings),
+            localSettingsByOutput: sanitizeLocalSettingsByOutput(source.localSettingsByOutput),
+            compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds(source.compatiblePrinterProfileIds),
+            locked: source.locked === true,
+        };
+        changed = true;
+        byId.set(id, profile);
+        index(profile);
+        remap.set(requestedId, id);
+    }
+
+    if (!changed) return remap;
+    setState(ensureActiveMaterialForActivePrinter({
+        ...state,
+        materialProfiles: [...byId.values()],
+    }));
+    return remap;
+}
+
 export function getMaterialProfilesForPrinter(printerProfileId: string, stateOverride?: ProfileStoreState): MaterialProfile[] {
     const snapshot = stateOverride ?? state;
     const printerProfile = snapshot.printerProfiles.find((entry) => entry.id === printerProfileId) ?? null;
     return snapshot.materialProfiles
-        .filter((profile) => profile.printerProfileId === printerProfileId)
+        .filter((profile) => materialProfileIsAvailableForPrinter(profile, printerProfileId))
         .map((profile) => resolveMaterialProfileWithLocalSettings(profile, printerProfile));
 }
 
@@ -2768,7 +3213,9 @@ export function applyOfficialPrinterProfileUpdate(printerProfileId: string): App
                     display: {
                         resolutionX: preset.display.resolutionX,
                         resolutionY: preset.display.resolutionY,
-                        outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+                        outputFormat: normalizeOutputFormat(preset.display.outputFormat)
+                            ?? normalizeOutputFormat(item.display.outputFormat)
+                            ?? item.display.outputFormat,
                         formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
                         settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown }).settingsMode),
                         mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),

@@ -1,4 +1,5 @@
 import React from 'react';
+import { hasWindow } from '@/utils/dom';
 
 const EVENT_NAME = 'dragonfruit-joint-drag-position';
 
@@ -8,7 +9,7 @@ export interface JointDragPositionPayload {
 }
 
 export function emitJointDragPosition(jointId: string, position: { x: number; y: number; z: number } | null) {
-  if (typeof window === 'undefined') return;
+  if (!hasWindow()) return;
   window.dispatchEvent(new CustomEvent<JointDragPositionPayload>(EVENT_NAME, { detail: { jointId, position } }));
 }
 
@@ -20,7 +21,7 @@ export function useJointDragPosition(jointId: string) {
   const [position, setPosition] = React.useState<{ x: number; y: number; z: number } | null>(null);
 
   React.useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (!hasWindow()) return;
 
     const handle = (event: Event) => {
       const detail = (event as CustomEvent<JointDragPositionPayload>).detail;

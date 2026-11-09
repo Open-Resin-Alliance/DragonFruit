@@ -1,5 +1,6 @@
 import React from 'react';
-import type { Branch, Knot } from '../types';
+import type { Knot } from '../types';
+import type { ShaftSegmentsById } from '../SupportPrimitives/Knot/elasticShaftPreview';
 import { subscribeSupportInteractionReset } from './supportInteractionReset';
 
 const EVENT_NAME = 'dragonfruit-knot-drag-preview';
@@ -7,7 +8,8 @@ const EVENT_NAME = 'dragonfruit-knot-drag-preview';
 export interface KnotDragPreviewSnapshot {
   knotId: string;
   knot: Knot;
-  branchSegmentsById: Record<string, Branch['segments']>;
+  /** Solved segments by shaft id, whichever flexing type each shaft is. */
+  shaftSegmentsById: ShaftSegmentsById;
   coincidentKnots?: Knot[];
 }
 

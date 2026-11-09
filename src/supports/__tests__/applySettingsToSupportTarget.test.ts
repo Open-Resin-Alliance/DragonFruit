@@ -1,0 +1,153 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { addKnot, addRoot, addSupportEntity, applySettingsToSupportTarget, getSnapshot, resetStore } from '../state';
+import { EDITABLE_SUPPORT_TYPES, getSupportTypeDescriptor } from '../supportTypeRegistry';
+import { createDefaultSettings } from '../Settings/types';
+import { DEFAULT_TIP_PROFILE } from '../SupportPrimitives/ContactCone/types';
+import type { Branch, Leaf, Trunk } from '../types';
+
+/**
+ * Writing sidebar settings onto the selected support.
+ *
+ * Pins what each editable type writes.
+ */
+
+const MODEL = 'model-a';
+
+const segment = (id: string) => ({
+    id,
+    diameter: 1,
+    bottomJoint: { id: `${id}-bj`, pos: { x: 0, y: 0, z: 0 }, diameter: 1 },
+    topJoint: { id: `${id}-tj`, pos: { x: 0, y: 0, z: 4 }, diameter: 1 },
+});
+
+const cone = (id: string) => ({
+    id,
+    socketJointId: `${id}-socket`,
+    pos: { x: 0, y: 0, z: 4 },
+    normal: { x: 0, y: 0, z: 1 },
+    surfaceNormal: { x: 0, y: 0, z: 1 },
+    diameter: 1,
+    height: 1,
+    profile: { ...DEFAULT_TIP_PROFILE },
+});
+
+function scene() {
+    resetStore();
+    addRoot({
+        id: 'root-a', modelId: MODEL,
+        transform: { pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+        diameter: 3, diskHeight: 0.5, coneHeight: 1.5,
+    } as never);
+    addSupportEntity('trunk', {
+        id: 'trunk-a', modelId: MODEL, rootId: 'root-a',
+        segments: [segment('seg-ta')], contactCone: cone('cone-ta'),
+    } as unknown as Trunk);
+    addKnot({ id: 'knot-a', parentShaftId: 'seg-ta', t: 0.5, pos: { x: 0, y: 0, z: 2 }, diameter: 1 } as never);
+    addSupportEntity('branch', {
+        id: 'branch-a', modelId: MODEL, parentKnotId: 'knot-a',
+        segments: [segment('seg-ba')], contactCone: cone('cone-ba'),
+    } as unknown as Branch);
+    addSupportEntity('leaf', { id: 'leaf-a', modelId: MODEL, parentKnotId: 'knot-a', contactCone: cone('cone-la') } as unknown as Leaf);
+    addRoot({
+        id: 'root-k', modelId: MODEL,
+        transform: { pos: { x: 5, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+        diameter: 3, diskHeight: 0.5, coneHeight: 1.5,
+    } as never);
+    addSupportEntity('stump', {
+        id: 'stump-a', modelId: MODEL,
+        rootPos: { x: 10, y: 0, z: 0 }, rootBaseDiameter: 3, rootTopDiameter: 1.5, rootHeight: 2,
+        joint: { id: 'stump-a-joint', pos: { x: 10, y: 0, z: 2 }, diameter: 1.2 },
+        segments: [segment('seg-sa')],
+        // A stump's cone hangs down onto the model from above its socket.
+        contactCone: { ...cone('cone-sa'), pos: { x: 10, y: 0, z: 4 }, normal: { x: 0, y: 0, z: -1 } },
+    } as never);
+    addSupportEntity('kickstand', {
+        id: 'kickstand-a', modelId: MODEL, rootId: 'root-k',
+        hostKnotId: 'knot-a', hostSegmentId: 'seg-ta',
+        segments: [segment('seg-ka')],
+    } as never);
+}
+
+/** Settings distinguishable from the defaults in every field this reads. */
+function settings() {
+    const base = createDefaultSettings();
+    return {
+        ...base,
+        shaft: { ...base.shaft, diameterMm: 2.75 },
+        tip: { ...base.tip, contactDiameterMm: 0.85, bodyDiameterMm: 1.9, lengthMm: 3.25, penetrationMm: 0.2 },
+        roots: { ...base.roots, diameterMm: 6.5, diskHeightMm: 1.25, coneHeightMm: 2.5 },
+    };
+}
+
+test('every editable type applies without falling through', () => {
+    // The leaf branch used to be an unguarded fallthrough, so an unhandled kind
+    // was silently written as a leaf.
+    for (const descriptor of EDITABLE_SUPPORT_TYPES) {
+        scene();
+        assert.equal(
+            applySettingsToSupportTarget({ kind: descriptor.id, id: `${descriptor.id}-a` }, settings() as never),
+            true,
+            `${descriptor.id} should apply`,
+        );
+    }
+});
+
+
+test('an inline root takes the root settings, as a shared one does', () => {
+    // A `Roots` row is written separately; an inline root is fields on the
+    // entity, so without this the settings were silently dropped.
+    scene();
+    const settingsToApply = settings();
+    assert.equal(
+        applySettingsToSupportTarget({ kind: 'stump', id: 'stump-a' }, settingsToApply as never),
+        true,
+    );
+
+    const stump = getSnapshot().stumps['stump-a'] as unknown as Record<string, number>;
+    assert.equal(stump.rootBaseDiameter, settingsToApply.roots.diameterMm);
+    assert.equal(stump.rootTopDiameter, settingsToApply.roots.neckDiameterMm);
+    assert.equal(stump.rootHeight, settingsToApply.roots.coneHeightMm);
+});
+
+test('growing an inline root carries its joint and cone up with it', () => {
+    // The root IS a stump's body: it carries the joint, and the cone sockets on
+    // that joint. Writing a taller root without moving them swallows both, which
+    // draws as a bare disc lying on the plate.
+    scene();
+    const settingsToApply = settings();
+    assert.equal(
+        applySettingsToSupportTarget({ kind: 'stump', id: 'stump-a' }, settingsToApply as never),
+        true,
+    );
+
+    const stump = getSnapshot().stumps['stump-a'] as unknown as {
+        rootPos: { z: number };
+        rootHeight: number;
+        joint: { pos: { z: number } };
+        contactCone: { pos: { z: number }; normal: { z: number }; profile: { lengthMm: number } };
+    };
+
+    const rootTopZ = stump.rootPos.z + stump.rootHeight;
+    assert.ok(
+        stump.joint.pos.z > rootTopZ,
+        `joint ${stump.joint.pos.z} must clear the root top ${rootTopZ}`,
+    );
+
+    // A stump's cone points down onto the model, so its socket is BELOW the
+    // contact: without stretching it stays where the old, shorter root left it.
+    const socketZ = stump.contactCone.pos.z
+        + stump.contactCone.normal.z * stump.contactCone.profile.lengthMm;
+    assert.ok(
+        Math.abs(socketZ - stump.joint.pos.z) < 1e-6,
+        `cone socket ${socketZ.toFixed(3)} must meet the joint ${stump.joint.pos.z.toFixed(3)}`,
+    );
+});
+
+test('a missing entity or non-editable type applies nothing', () => {
+    scene();
+    assert.equal(applySettingsToSupportTarget({ kind: 'trunk', id: 'nope' }, settings() as never), false);
+    assert.equal(applySettingsToSupportTarget({ kind: 'stick', id: 'stick-a' } as never, settings() as never), false);
+});
+

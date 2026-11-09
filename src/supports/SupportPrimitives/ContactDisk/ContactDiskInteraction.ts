@@ -70,26 +70,39 @@ export function recomputeContactConeForMovedDisk(
     fixedSocketPos?: Vec3,
     collisionMesh?: THREE.Mesh,
 ): ContactCone {
-    const socketTarget = fixedSocketPos
-        ? new THREE.Vector3(fixedSocketPos.x, fixedSocketPos.y, fixedSocketPos.z)
-        : (() => { const p = getFinalSocketPosition(cone); return new THREE.Vector3(p.x, p.y, p.z); })();
+    // This runs for every trunk/branch/leaf the placement builds, so the axis
+    // math is scalar and only the vectors the thickness resolver takes are
+    // materialised. The arithmetic is the same `sub`/`normalize` sequence the
+    // Vector3 calls performed.
+    const socket = fixedSocketPos ?? getFinalSocketPosition(cone);
+    const socketX = socket.x;
+    const socketY = socket.y;
+    const socketZ = socket.z;
 
-    const contactPos = new THREE.Vector3(nextContactPos.x, nextContactPos.y, nextContactPos.z);
-    const surfaceNormal = new THREE.Vector3(nextSurfaceNormal.x, nextSurfaceNormal.y, nextSurfaceNormal.z);
-    if (surfaceNormal.lengthSq() < 0.000001) {
-        surfaceNormal.set(0, 0, 1);
+    let nx = nextSurfaceNormal.x;
+    let ny = nextSurfaceNormal.y;
+    let nz = nextSurfaceNormal.z;
+    if (nx * nx + ny * ny + nz * nz < 0.000001) {
+        nx = 0; ny = 0; nz = 1;
     }
-    surfaceNormal.normalize();
+    const nl = Math.sqrt(nx * nx + ny * ny + nz * nz);
+    nx /= nl; ny /= nl; nz /= nl;
+    const surfaceNormal = new THREE.Vector3(nx, ny, nz);
 
     // Pass 1: approximate axis from contact point to socket for disk thickness calc
-    let approxAxis = socketTarget.clone().sub(contactPos);
-    if (approxAxis.lengthSq() < 0.000001) {
-        approxAxis = new THREE.Vector3(cone.normal.x, cone.normal.y, cone.normal.z);
+    let ax = socketX - nextContactPos.x;
+    let ay = socketY - nextContactPos.y;
+    let az = socketZ - nextContactPos.z;
+    if (ax * ax + ay * ay + az * az < 0.000001) {
+        ax = cone.normal.x; ay = cone.normal.y; az = cone.normal.z;
     }
-    if (approxAxis.lengthSq() < 0.000001) {
-        approxAxis = surfaceNormal.clone();
+    if (ax * ax + ay * ay + az * az < 0.000001) {
+        ax = nx; ay = ny; az = nz;
     }
-    approxAxis.normalize();
+    const al = Math.sqrt(ax * ax + ay * ay + az * az);
+    ax /= al; ay /= al; az /= al;
+    const socketTarget = new THREE.Vector3(socketX, socketY, socketZ);
+    const approxAxis = new THREE.Vector3(ax, ay, az);
 
     const thickness = resolveCollisionAwareDiskThickness(
         cone,
@@ -100,15 +113,21 @@ export function recomputeContactConeForMovedDisk(
     );
 
     // Cone body starts after the disk offset along surface normal
-    const coneStart = contactPos.clone().add(surfaceNormal.clone().multiplyScalar(thickness));
+    const coneStartX = nextContactPos.x + nx * thickness;
+    const coneStartY = nextContactPos.y + ny * thickness;
+    const coneStartZ = nextContactPos.z + nz * thickness;
 
     // Pass 2: final axis from coneStart to socket (matches how the renderer applies it)
-    let finalAxis = socketTarget.clone().sub(coneStart);
-    if (finalAxis.lengthSq() < 0.000001) {
-        finalAxis = approxAxis.clone();
+    let fx = socketX - coneStartX;
+    let fy = socketY - coneStartY;
+    let fz = socketZ - coneStartZ;
+    if (fx * fx + fy * fy + fz * fz < 0.000001) {
+        fx = ax; fy = ay; fz = az;
     }
-    const lengthMm = Math.max(0.05, finalAxis.length());
-    finalAxis.normalize();
+    const fl = Math.sqrt(fx * fx + fy * fy + fz * fz);
+    const lengthMm = Math.max(0.05, fl);
+    fx /= fl; fy /= fl; fz /= fl;
+    const finalAxis = new THREE.Vector3(fx, fy, fz);
 
     return {
         ...cone,

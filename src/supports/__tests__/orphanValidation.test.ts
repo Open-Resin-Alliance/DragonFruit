@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { collectFanShaftPoints, fanLeafToTrunk, rehostLegacyKnots, validateAndCullOrphans } from '../autoSupport/autoPlace';
+import { collectFanShaftPoints, fanLeafToHost, rehostLegacyKnots, validateAndCullOrphans } from '../autoSupport/autoPlace';
 import type { SupportState } from '../types';
 
 function emptySnapshot(): SupportState {
@@ -49,13 +49,13 @@ test('rehostLegacyKnots converts trunkId parent to segmentId', () => {
     assert.ok(typeof knot.t === 'number' && knot.t >= 0 && knot.t <= 1, 't computed');
 });
 
-test('fanLeafToTrunk creates knot with segmentId and t (not trunkId)', () => {
+test('fanLeafToHost creates knot with segmentId and t (not trunkId)', () => {
     const draft = trunkWithShaft('host', 0, 0, 0, 10);
     const pool = collectFanShaftPoints(draft);
     assert.ok(pool.length > 0 && pool[0].segmentId, 'pool has segmentId');
     assert.ok(typeof pool[0].t === 'number', 'pool has t');
 
-    const result = fanLeafToTrunk(
+    const result = fanLeafToHost(
         { x: 1, y: 0, z: 9 },
         'm',
         pool,
@@ -77,7 +77,8 @@ test('fanLeafToTrunk creates knot with segmentId and t (not trunkId)', () => {
         // Validate passes (no drift, not missing)
         const validated = validateAndCullOrphans(result.draft, undefined);
         assert.equal(validated.orphans.length, 0, 'valid leaf not orphaned');
-        assert.ok(validated.draft.leaves[result.leafId], 'leaf remains after validation');
+        assert.equal(result.kind, 'leaf', 'short span stays a leaf');
+        if (result.kind === 'leaf') assert.ok(validated.draft.leaves[result.entityId], 'leaf remains after validation');
     }
 });
 
@@ -138,4 +139,100 @@ test('validateAndCullOrphans reports cross but keeps leaf (non-destructive)', ()
     // Cross is reported but not culled (kept for backward compat with existing tests)
     assert.ok(orphans.some((o) => o.reason === 'cross'), 'cross reported');
     assert.ok(kept.leaves['leaf-cross'], 'cross leaf kept (reported, not culled)');
+});
+
+test('validateAndCullOrphans keeps knots hosted on top segments', () => {
+    // Top trunk segments carry no topJoint by design (they end at the
+    // contact cone). A knot hosted there is valid — the cone is the top.
+    const draft = emptySnapshot();
+    draft.trunks['host'] = {
+        id: 'host',
+        modelId: 'm',
+        rootId: 'r-host',
+        segments: [{
+            id: 'seg-host',
+            diameter: 1,
+            bottomJoint: { id: 'host-b', pos: { x: 0, y: 0, z: 0 }, diameter: 1.2 },
+        }],
+        contactCone: { id: 'c-host', pos: { x: 0, y: 0, z: 10 }, normal: { x: 0, y: 0, z: -1 } },
+    } as unknown as SupportState['trunks'][string];
+    draft.knots['k1'] = {
+        id: 'k1', parentShaftId: 'seg-host', pos: { x: 0, y: 0, z: 8 }, diameter: 1.1,
+    } as unknown as SupportState['knots'][string];
+    draft.leaves['l1'] = {
+        id: 'l1',
+        modelId: 'm',
+        parentKnotId: 'k1',
+        contactCone: { id: 'c-l1', pos: { x: 1, y: 0, z: 10 }, normal: { x: 0, y: 0, z: -1 } },
+    } as unknown as SupportState['leaves'][string];
+
+    const { draft: kept, orphans } = validateAndCullOrphans(draft, undefined);
+    assert.equal(orphans.length, 0, 'no orphans from a top-segment host');
+    assert.ok(kept.leaves['l1'], 'leaf on a top segment survives validation');
+});
+
+test('validateAndCullOrphans still culls cone-less topless segments', () => {
+    // Same geometry but no contact cone ANYWHERE: with neither topJoint
+    // nor cone, the segment top is genuinely unknown → still culled.
+    const draft = emptySnapshot();
+    draft.trunks['host'] = {
+        id: 'host',
+        modelId: 'm',
+        rootId: 'r-host',
+        segments: [{
+            id: 'seg-host',
+            diameter: 1,
+            bottomJoint: { id: 'host-b', pos: { x: 0, y: 0, z: 0 }, diameter: 1.2 },
+        }],
+    } as unknown as SupportState['trunks'][string];
+    draft.knots['k1'] = {
+        id: 'k1', parentShaftId: 'seg-host', pos: { x: 0, y: 0, z: 8 }, diameter: 1.1,
+    } as unknown as SupportState['knots'][string];
+    draft.leaves['l1'] = {
+        id: 'l1',
+        modelId: 'm',
+        parentKnotId: 'k1',
+        contactCone: { id: 'c-l1', pos: { x: 1, y: 0, z: 10 }, normal: { x: 0, y: 0, z: -1 } },
+    } as unknown as SupportState['leaves'][string];
+
+    const { draft: culled, orphans } = validateAndCullOrphans(draft, undefined);
+    assert.ok(!culled.leaves['l1'], 'leaf on an unknowable segment still culled');
+    assert.ok(orphans.some((o) => o.id === 'l1' && o.reason === 'missingHost'), 'reported as missingHost');
+});
+
+test('validateAndCullOrphans keeps knots hosted on bottom segments', () => {
+    // Bottom trunk segments carry no bottomJoint by design (they rise from
+    // the root plate) — the root top stands in as the segment start.
+    const draft = emptySnapshot();
+    draft.roots['r-host'] = {
+        id: 'r-host',
+        transform: { pos: { x: 0, y: 0, z: 0 } },
+        diameter: 3,
+        diskHeight: 0.5,
+        coneHeight: 0.5,
+    } as unknown as SupportState['roots'][string];
+    draft.trunks['host'] = {
+        id: 'host',
+        modelId: 'm',
+        rootId: 'r-host',
+        segments: [{
+            id: 'seg-host',
+            diameter: 1,
+            topJoint: { id: 'host-t', pos: { x: 0, y: 0, z: 10 }, diameter: 1.2 },
+        }],
+        contactCone: { id: 'c-host', pos: { x: 0, y: 0, z: 10 }, normal: { x: 0, y: 0, z: -1 } },
+    } as unknown as SupportState['trunks'][string];
+    draft.knots['k1'] = {
+        id: 'k1', parentShaftId: 'seg-host', pos: { x: 0, y: 0, z: 2 }, diameter: 1.1,
+    } as unknown as SupportState['knots'][string];
+    draft.leaves['l1'] = {
+        id: 'l1',
+        modelId: 'm',
+        parentKnotId: 'k1',
+        contactCone: { id: 'c-l1', pos: { x: 1, y: 0, z: 4 }, normal: { x: 0, y: 0, z: -1 } },
+    } as unknown as SupportState['leaves'][string];
+
+    const { draft: kept, orphans } = validateAndCullOrphans(draft, undefined);
+    assert.equal(orphans.length, 0, 'no orphans from a bottom-segment host');
+    assert.ok(kept.leaves['l1'], 'leaf on a bottom segment survives validation');
 });

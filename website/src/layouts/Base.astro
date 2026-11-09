@@ -1,0 +1,155 @@
+---
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import BackToTop from '../components/BackToTop.astro';
+import { SITE } from '../data/site';
+import { OG_HEIGHT, OG_WIDTH, cardFingerprint, ogImagePath } from '../lib/og';
+import '../styles/ora.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+  /** The line the social card carries. The home page's is the project's own tagline. */
+  cardSummary?: string;
+  /** A short label for the card's right corner, for pages that have two of a kind. */
+  cardMeta?: string;
+  /** Alternate documentation versions are branch snapshots, not the indexed pages. */
+  noindex?: boolean;
+}
+
+const {
+  title = SITE.name,
+  description = SITE.description,
+  cardSummary = title === SITE.name ? SITE.motto : description,
+  cardMeta,
+  noindex = false,
+} = Astro.props;
+
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const pageTitle = title === SITE.name ? `${SITE.name} – ${SITE.org}` : `${title} · ${SITE.name}`;
+
+/* The card is rendered at build time by src/og/, from these three values, and its URL
+   carries a digest of them so a crawler sees a new image when the words change and the
+   old URL a share already points at keeps resolving. */
+const card = {
+  pathname: Astro.url.pathname,
+  title,
+  summary: cardSummary,
+  meta: cardMeta,
+};
+const socialImage = new URL(
+  `${ogImagePath(card.pathname)}?v=${cardFingerprint(card)}`,
+  Astro.site,
+).href;
+
+/* Google Search only reads WebSite structured data from the site's home page. The
+   name there is the one it will use for the whole domain; without it the system
+   falls back to the hostname. `alternateName` gives it the short brand too. */
+const website = {
+  '@context': 'https://schema.org',
+  '@type': 'WebSite',
+  name: SITE.siteName,
+  alternateName: ['DragonFruit', 'DragonFruit Resin Slicer', 'dragonfruit-slicer.com'],
+  url: new URL('/', Astro.site).href,
+};
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    {noindex && <meta name="robots" content="noindex" />}
+    <meta name="generator" content={Astro.generator} />
+
+    {/* The icon has two forms. A browser tab shows the bare emblem — the SVG, and
+        the 16/32/48 frames in the ICO — the same thing openresin.org shows. Google
+        only accepts bitmap favicons and serves the largest one a page declares, on a
+        white card where the bare mark disappears, so the tiled PNGs are declared for
+        it. 384 and 192 are multiples of 48, the size grid Google asks for. The
+        manifest is what names the site in Chrome's UI, off the search index. */}
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" href="/favicon-384.png" type="image/png" sizes="384x384" />
+    <link rel="icon" href="/favicon-192.png" type="image/png" sizes="192x192" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={SITE.siteName} />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={socialImage} />
+    <meta property="og:image:alt" content={pageTitle} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content={String(OG_WIDTH)} />
+    <meta property="og:image:height" content={String(OG_HEIGHT)} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={pageTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={socialImage} />
+
+    {/* What the card is made of, carried to the build for src/og/. The <title> is not
+        used: it ends in the site name, and the card already says that in its footer. */}
+    <meta name="card:title" content={title} />
+    <meta name="card:summary" content={cardSummary} />
+    {cardMeta && <meta name="card:meta" content={cardMeta} />}
+
+    <meta name="theme-color" content="#ec2a77" />
+
+    {
+      Astro.url.pathname === '/' && (
+        <script type="application/ld+json" set:html={JSON.stringify(website)} />
+      )
+    }
+
+    <script is:inline>
+      // Theme bootstrap: applied before the first paint, so a reader who chose the
+      // dark theme never sees the light one flash. The same key openresin.org uses,
+      // so the two sites agree on a visitor's preference.
+      (() => {
+        const preferred = () => {
+          try {
+            const stored = localStorage.getItem('ora-theme');
+            if (stored === 'light' || stored === 'dark') return stored;
+          } catch {
+            /* storage unavailable - fall back to the system preference */
+          }
+          return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        };
+
+        document.documentElement.dataset.theme = preferred();
+      })();
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <Header />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer />
+    <BackToTop />
+
+    <script is:inline>
+      // Delegated from document, so the listener outlives the header it acts on:
+      // the theme lives on <html>, which no navigation replaces.
+      document.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof Element) || !target.closest('[data-theme-toggle]')) return;
+
+        const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = next;
+        try {
+          localStorage.setItem('ora-theme', next);
+        } catch {
+          /* storage unavailable - the theme applies to this page view only */
+        }
+      });
+    </script>
+  </body>
+</html>

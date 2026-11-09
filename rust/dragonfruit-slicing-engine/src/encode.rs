@@ -13,10 +13,40 @@ use libdeflater::{CompressionLvl, Compressor};
 
 const PNG_SIG: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 
+/// Map a job's PNG compression strategy onto a libdeflate level.
+///
+/// Mirrors `resolveContainerCompressionLevel()` in `sliceExportOrchestrator.ts`,
+/// which already defines what these four words mean for the container; the two
+/// ladders must agree or the same setting compresses the archive and its layers
+/// by different amounts.  `balanced` in particular is not decorative: `auto`
+/// (the shipped default) resolves to it for every job with anti-aliasing on.
 fn png_compression_level(strategy: &str) -> CompressionLvl {
-    match strategy {
-        "smallest" | "optimal" => CompressionLvl::new(6).unwrap_or(CompressionLvl::best()),
-        _ => CompressionLvl::fastest(),
+    let level = match strategy {
+        "fastest" => 1,
+        "balanced" => 3,
+        "smallest" => 6,
+        "optimal" => 9,
+        _ => 1,
+    };
+    CompressionLvl::new(level).unwrap_or(CompressionLvl::best())
+}
+
+#[cfg(test)]
+mod compression_level_tests {
+    use super::png_compression_level;
+
+    #[test]
+    fn compression_strategies_map_to_distinct_levels() {
+        // The four names come from the UI and are already given these levels for
+        // the container in sliceExportOrchestrator.ts; a silent collapse to
+        // "fastest" is what made the settings tab's On button inert.
+        let level = |s: &str| format!("{:?}", png_compression_level(s));
+        assert_ne!(level("balanced"), level("fastest"), "balanced must not be fastest");
+        assert_ne!(level("smallest"), level("balanced"));
+        assert_ne!(level("optimal"), level("smallest"));
+        // Anything unrecognised stays on the fast path rather than silently
+        // costing the user time they did not ask for.
+        assert_eq!(level("nonsense"), level("fastest"));
     }
 }
 
@@ -844,4 +874,167 @@ pub fn encode_grayscale_averaged_png_from_rle(
     write_chunk(&mut out, b"IDAT", &idat);
     write_chunk(&mut out, b"IEND", &[]);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rle::RleRun;
+    use libdeflater::Decompressor;
+
+    fn runs(spans: &[(u32, u8)]) -> Vec<RleRun> {
+        spans
+            .iter()
+            .map(|&(length, value)| RleRun { length, value })
+            .collect()
+    }
+
+    /// Naive reference: expand runs into a flat pixel buffer.  The encoders under
+    /// test never materialise this — that is the whole point of them — so it is
+    /// the independent oracle their output is compared against.
+    fn expand(runs: &[RleRun]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for run in runs {
+            out.extend(std::iter::repeat(run.value).take(run.length as usize));
+        }
+        out
+    }
+
+    /// Walk the PNG chunk stream, verifying each chunk's CRC.
+    fn chunks(png: &[u8]) -> Vec<([u8; 4], Vec<u8>)> {
+        assert_eq!(&png[0..8], &PNG_SIG, "bad PNG signature");
+        let mut out = Vec::new();
+        let mut i = 8;
+        while i + 8 <= png.len() {
+            let len = u32::from_be_bytes(png[i..i + 4].try_into().unwrap()) as usize;
+            let ty: [u8; 4] = png[i + 4..i + 8].try_into().unwrap();
+            let data = png[i + 8..i + 8 + len].to_vec();
+            let crc = u32::from_be_bytes(png[i + 8 + len..i + 12 + len].try_into().unwrap());
+            assert_eq!(crc, chunk_crc32(&ty, &data), "bad CRC on {:?}", std::str::from_utf8(&ty));
+            i += 12 + len;
+            out.push((ty, data));
+        }
+        assert_eq!(i, png.len(), "trailing bytes after IEND");
+        out
+    }
+
+    fn chunk<'a>(cs: &'a [([u8; 4], Vec<u8>)], name: &[u8; 4]) -> Option<&'a [u8]> {
+        cs.iter().find(|(ty, _)| ty == name).map(|(_, d)| d.as_slice())
+    }
+
+    /// Inflate the IDAT stream and strip the per-row filter bytes, which these
+    /// encoders always emit as 0 (None).  Returns (width, height, pixels).
+    fn decode(png: &[u8], bytes_per_px: usize) -> (u32, u32, Vec<u8>) {
+        let cs = chunks(png);
+        let ihdr = chunk(&cs, b"IHDR").expect("no IHDR");
+        let width = u32::from_be_bytes(ihdr[0..4].try_into().unwrap());
+        let height = u32::from_be_bytes(ihdr[4..8].try_into().unwrap());
+
+        let mut idat = Vec::new();
+        for (ty, data) in &cs {
+            if ty == b"IDAT" {
+                idat.extend_from_slice(data);
+            }
+        }
+
+        let stride = 1 + width as usize * bytes_per_px;
+        let mut raw = vec![0u8; stride * height as usize];
+        let n = Decompressor::new()
+            .zlib_decompress(&idat, &mut raw)
+            .expect("IDAT is not valid zlib");
+        assert_eq!(n, raw.len(), "inflated size does not match the declared IHDR");
+
+        let mut pixels = Vec::with_capacity(width as usize * height as usize * bytes_per_px);
+        for row in raw.chunks_exact(stride) {
+            assert_eq!(row[0], 0, "expected filter type 0 (None)");
+            pixels.extend_from_slice(&row[1..]);
+        }
+        (width, height, pixels)
+    }
+
+    #[test]
+    fn grayscale_png_from_rle_round_trips_to_the_naive_expansion() {
+        let width = 9u32;
+        let height = 4u32;
+        let input = runs(&[(5, 0), (7, 200), (3, 17), (21, 255)]);
+        assert_eq!(expand(&input).len(), (width * height) as usize);
+
+        let png = encode_grayscale_png_from_rle(width, height, &input, "fast", false).unwrap();
+        let (w, h, pixels) = decode(&png, 1);
+
+        assert_eq!((w, h), (width, height));
+        assert_eq!(pixels, expand(&input));
+    }
+
+    #[test]
+    fn averaging_pairs_collapses_runs_and_halves_the_length() {
+        // Two whole pixels inside one run average to that run's own value.
+        let out = average_rle_pairs_div2(&runs(&[(4, 100), (2, 200)]));
+        assert_eq!(out, runs(&[(2, 100), (1, 200)]));
+
+        // A pair straddling two runs takes the mean of the two values.
+        let out = average_rle_pairs_div2(&runs(&[(3, 100), (3, 200)]));
+        assert_eq!(out, runs(&[(1, 100), (1, 150), (1, 200)]));
+
+        // An odd trailing pixel is averaged against an implicit 0.
+        let out = average_rle_pairs_div2(&runs(&[(3, 80)]));
+        assert_eq!(out, runs(&[(1, 80), (1, 40)]));
+    }
+
+    #[test]
+    fn averaged_png_matches_pairwise_averaging_of_the_expansion() {
+        // gray3_div2: physical width 8 packs into a logical width of 4.
+        let physical_width = 8usize;
+        let logical_width = 4u32;
+        let height = 3u32;
+        let input = runs(&[(6, 0), (5, 240), (4, 60), (9, 255)]);
+        assert_eq!(expand(&input).len(), physical_width * height as usize);
+
+        let png = encode_grayscale_averaged_png_from_rle(logical_width, height, &input).unwrap();
+        let (w, h, pixels) = decode(&png, 1);
+        assert_eq!((w, h), (logical_width, height));
+
+        let expected: Vec<u8> = expand(&input)
+            .chunks_exact(2)
+            .map(|pair| ((pair[0] as u16 + pair[1] as u16) >> 1) as u8)
+            .collect();
+        assert_eq!(pixels, expected);
+    }
+
+    #[test]
+    fn averaged_png_declares_grayscale_and_a_two_to_one_pixel_ratio() {
+        let png = encode_grayscale_averaged_png_from_rle(4, 2, &runs(&[(16, 128)])).unwrap();
+        let cs = chunks(&png);
+
+        let ihdr = chunk(&cs, b"IHDR").expect("no IHDR");
+        assert_eq!(u32::from_be_bytes(ihdr[0..4].try_into().unwrap()), 4, "IHDR must carry the logical width");
+        assert_eq!(ihdr[8], 8, "8 bits per channel");
+        assert_eq!(ihdr[9], 0, "colour type 0 (grayscale)");
+
+        // pHYs records the 2:1 aspect so viewers do not squash the packed layer.
+        let phys = chunk(&cs, b"pHYs").expect("no pHYs");
+        assert_eq!(u32::from_be_bytes(phys[0..4].try_into().unwrap()), 2);
+        assert_eq!(u32::from_be_bytes(phys[4..8].try_into().unwrap()), 1);
+        assert_eq!(phys[8], 0, "unit unknown — this is a ratio, not a density");
+    }
+
+    #[test]
+    fn filter_bytes_are_interspersed_once_per_row() {
+        let width = 4u64;
+        let height = 3u64;
+        let out = intersperse_filter_runs(&runs(&[(12, 7)]), width, height);
+
+        let total: u64 = out.iter().map(|&(len, _)| len).sum();
+        assert_eq!(total, height * (width + 1), "one filter byte per row");
+
+        // Reconstruct and check every row starts with the filter byte.
+        let mut flat = Vec::new();
+        for &(len, value) in &out {
+            flat.extend(std::iter::repeat(value).take(len as usize));
+        }
+        for row in flat.chunks_exact(width as usize + 1) {
+            assert_eq!(row[0], 0);
+            assert!(row[1..].iter().all(|&v| v == 7));
+        }
+    }
 }

@@ -7,6 +7,7 @@ import { UpdateCheckerSection } from '@/features/updater/UpdateCheckerSection';
 import { setUpdateChannel } from '@/features/updater/updateBridge';
 import type { UpdateChannel } from '@/features/updater/updateBridge';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
+import { Button, IconButton } from '@/components/atoms';
 const activeChannelStyle: React.CSSProperties = {
   borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
   background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
@@ -62,16 +63,17 @@ export function UpdatesSettingsTab({
         style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
       >
         {!isLinux && (
-          <button
-            type="button"
+          <IconButton
+            variant="surface"
+            size="sm"
+            tone="accent"
             onClick={() => setShowChannelSettings(true)}
-            className="absolute right-3 top-3 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors hover:brightness-110"
-            style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)', color: 'var(--accent)' }}
+            className="absolute right-3 top-3 hover:brightness-110"
             aria-label="Release channel settings"
             title="Release channel settings"
           >
             <Settings className="h-4 w-4" />
-          </button>
+          </IconButton>
         )}
         <div className="flex min-h-0 flex-1 flex-col">
           <UpdateCheckerSection className="flex min-h-0 flex-1 flex-col" />
@@ -88,16 +90,17 @@ export function UpdatesSettingsTab({
         onBackdropClick={() => setShowChannelSettings(false)}
         actions={
           <>
-            <button
-              type="button"
-              className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+            <Button
+              variant="secondary"
+              size="md"
               onClick={() => setShowChannelSettings(false)}
             >
               Cancel
-            </button>
-            <button
-              type="button"
-              className="ui-button !h-9 px-3 text-xs inline-flex items-center justify-center gap-1.5"
+            </Button>
+            <Button
+              variant="secondary"
+              size="md"
+              className="inline-flex items-center justify-center gap-1.5"
               style={
                 pendingChannel === channel
                   ? { borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)', opacity: 0.6 as unknown as string }
@@ -116,17 +119,18 @@ export function UpdatesSettingsTab({
               ) : (
                 'Apply'
               )}
-            </button>
+            </Button>
           </>
         }
       >
         <div className="grid gap-2.5" role="tablist" aria-label="Release channel">
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="auto"
             role="tab"
             aria-selected={pendingChannel === 'stable'}
             onClick={() => handleChannelSelect('stable')}
-            className="ui-button ui-button-secondary flex flex-col items-center justify-center gap-1.5 px-2 py-6 text-center min-h-[64px]"
+            className="flex flex-col items-center justify-center gap-1.5 px-2 py-6 text-center min-h-[64px]"
             style={pendingChannel === 'stable' ? activeChannelStyle : undefined}
           >
             <span className="inline-flex items-center gap-1.5 text-sm font-semibold leading-none">
@@ -136,13 +140,14 @@ export function UpdatesSettingsTab({
             <span className="text-xs font-normal leading-tight" style={{ color: 'var(--text-muted)' }}>
               Recommended · Production
             </span>
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="secondary"
+            size="auto"
             role="tab"
             aria-selected={pendingChannel === 'dev'}
             onClick={() => handleChannelSelect('dev')}
-            className="ui-button ui-button-secondary flex flex-col items-center justify-center gap-1.5 px-2 py-6 text-center min-h-[64px]"
+            className="flex flex-col items-center justify-center gap-1.5 px-2 py-6 text-center min-h-[64px]"
             style={pendingChannel === 'dev' ? activeChannelStyle : undefined}
           >
             <span className="inline-flex items-center gap-1.5 text-sm font-semibold leading-none">
@@ -152,7 +157,7 @@ export function UpdatesSettingsTab({
             <span className="text-xs font-normal leading-tight" style={{ color: 'var(--text-muted)' }}>
               Early access · May be unstable
             </span>
-          </button>
+          </Button>
         </div>
         {isPendingDevSwitch && (
           <div className="mt-3 rounded-md border px-3 py-2.5 flex gap-2.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 40%)', background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 90%)' }}>
