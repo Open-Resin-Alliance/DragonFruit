@@ -885,6 +885,17 @@ struct NativeSliceTempPathResult {
     runtime: NativeSlicerRuntimeMetrics,
 }
 
+/// A warm export restores its snapshot and pins its payload inside the slice
+/// command, so one invoke does the whole job. The miss variants let the frontend
+/// fall back without a second round trip to discover the same thing.
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+enum SliceStartResult {
+    Done(NativeSliceTempPathResult),
+    SnapshotMiss,
+    PayloadMiss,
+}
+
 fn v3_runtime_metrics(
     output_path: &std::path::Path,
     daa_post_threads: u32,
@@ -1442,11 +1453,28 @@ async fn slice_solid_native_to_temp_path(
     window: DragonFruitWindow,
     job_json: String,
     payload_lease_id: Option<String>,
-) -> Result<NativeSliceTempPathResult, String> {
+    payload_fields: Option<Vec<job_payload_cache::FieldSpec>>,
+    snapshot_id: Option<String>,
+) -> Result<SliceStartResult, String> {
+    // A warm export restores its retained snapshot here instead of in a separate
+    // invoke. A miss leaves the previous stage and the snapshot untouched.
+    if let Some(snapshot_id) = snapshot_id.as_deref() {
+        if crate::mesh_chunk_upload::restore_snapshot(snapshot_id)?.is_none() {
+            return Ok(SliceStartResult::SnapshotMiss);
+        }
+    }
+
     // Resolve/validate every bulk reference and metadata field before consuming
     // the shared mesh. resolve releases its lease on success and all errors.
     let metadata_parse_start = std::time::Instant::now();
-    let expanded = job_payload_upload::resolve(&job_json, payload_lease_id.as_deref())?;
+    let expanded = match (payload_lease_id.as_deref(), payload_fields) {
+        (Some(lease), _) => job_payload_upload::resolve(&job_json, Some(lease))?,
+        (None, Some(fields)) => match job_payload_upload::begin_and_resolve(&job_json, fields)? {
+            job_payload_upload::PayloadStart::Resolved(value) => value,
+            job_payload_upload::PayloadStart::Miss => return Ok(SliceStartResult::PayloadMiss),
+        },
+        (None, None) => job_payload_upload::resolve(&job_json, None)?,
+    };
     let meta: SliceJobMetadata = serde_json::from_value(expanded)
         .map_err(|err| format!("Invalid slice job metadata JSON: {err}"))?;
     let metadata_parse_ns = duration_ns_u64(metadata_parse_start.elapsed());
@@ -1681,12 +1709,12 @@ async fn slice_solid_native_to_temp_path(
     .await
     .map_err(|err| format!("Native slicer task failed to join: {err}"))??;
 
-    Ok(NativeSliceTempPathResult {
+    Ok(SliceStartResult::Done(NativeSliceTempPathResult {
         temp_path: result.0,
         byte_len: result.1,
         perf: Some(result.2),
         runtime: result.3,
-    })
+    }))
 }
 
 #[tauri::command]
@@ -4460,7 +4488,6 @@ fn main() {
             mesh_chunk_upload::retain_loaded_slice_mesh,
             mesh_chunk_upload::mesh_chunk_upload_append_source,
             mesh_chunk_upload::mesh_chunk_upload_abort,
-            mesh_chunk_upload::restore_cached_slice_mesh,
             job_payload_upload::job_payload_begin,
             job_payload_upload::job_payload_append,
             job_payload_upload::job_payload_finish,

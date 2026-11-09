@@ -50,3 +50,24 @@ pub fn job_payload_release(lease_id: String) -> Result<(), String> { release(&le
 pub fn resolve(json: &str, lease: Option<&str>) -> Result<serde_json::Value, String> {
     cache().lock().map_err(|e| format!("Job payload cache lock poisoned: {e}"))?.resolve(json, lease)
 }
+
+pub enum PayloadStart {
+    Resolved(serde_json::Value),
+    /// At least one field is not resident natively. The lease is released and
+    /// nothing is pinned, so the caller can upload and retry.
+    Miss,
+}
+
+/// Pin every field and expand the job in one step, for a caller that already
+/// holds the bytes and wants no separate `job_payload_begin` round trip.
+pub fn begin_and_resolve(json: &str, fields: Vec<FieldSpec>) -> Result<PayloadStart, String> {
+    let expected = fields.len();
+    let mut cache = cache().lock().map_err(|e| format!("Job payload cache lock poisoned: {e}"))?;
+    let ack = cache.begin(fields)?;
+    if ack.accepted_fields.len() != expected || !ack.missing_fields.is_empty() {
+        cache.release(&ack.lease_id);
+        return Ok(PayloadStart::Miss);
+    }
+    let value = cache.resolve(json, Some(&ack.lease_id))?;
+    Ok(PayloadStart::Resolved(value))
+}

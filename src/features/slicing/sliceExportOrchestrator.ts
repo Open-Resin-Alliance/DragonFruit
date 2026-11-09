@@ -284,7 +284,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     const meshTransferMode = 'cached-chunks' as const;
     return runWithSliceMesh(options, options.abortSignal,
         () => options.onProgress?.(0, 1, 'Baking Modifiers'),
-        async (descriptor, chunkAck, meshPrepMs) => {
+        async (descriptor, chunkAck, meshPrepMs, snapshotId) => {
         const sourceModelIds = new Set(descriptor.sourceModelIds);
         const visibleModels = options.models.filter((model) => sourceModelIds.has(model.id));
         const solidMesh = { ...descriptor, trianglesXYZ: new Float32Array(0) };
@@ -372,6 +372,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             nativeJob,
             options.abortSignal,
             slicerProgressCallback,
+            snapshotId ? { snapshotId } : undefined,
         );
         const coreSlicingMs = performance.now() - coreStartMs;
         logDebug('Native slicing completed', { coreSlicingMs });

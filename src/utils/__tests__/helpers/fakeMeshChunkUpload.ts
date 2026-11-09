@@ -177,42 +177,20 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
         pending.uploadedBytes += bytes.byteLength;
         break;
       }
-      case 'mesh_chunk_upload_finish': {
-        assert.ok(pending);
-        assert.equal(fields?.uploadId, pending.uploadId);
-        const totalBytes = pending.uploadedBytes + pending.reusedBytes;
-        const bytes = new Uint8Array(totalBytes);
-        let offset = 0;
-        for (const chunk of pending.chunks) {
-          bytes.set(chunk, offset);
-          offset += chunk.byteLength;
+      case 'slice_solid_native_to_temp_path': {
+        // The real command restores the retained snapshot itself before slicing.
+        const snapshotId = fields?.snapshotId;
+        if (typeof snapshotId === 'string') {
+          stats.restoreCalls += 1;
+          if (!retained || retained.snapshotId !== snapshotId) {
+            result = { status: 'snapshotMiss' };
+            break;
+          }
+          staged = retained.bytes.slice();
         }
-        if (fields?.stage) staged = bytes;
-        else ready = { uploadId: pending.uploadId, bytes };
-        result = {
-          uploadId: pending.uploadId, totalBytes, capacityBytes: Math.max(totalBytes, pending.reserveBytes),
-          reserveGrew: totalBytes > pending.reserveBytes, chunksReceived: pending.chunks.length,
-          chunkBytes: pending.chunks[pending.chunks.length - 1]?.byteLength ?? 0, appendNs: 0, appendNsTotal: 0,
-          uploadedBytes: pending.uploadedBytes, reusedBytes: pending.reusedBytes,
-          ...(fields?.stage && pending.retainForSlice && retentionAvailable ? { sliceSnapshotId: pending.uploadId } : {}),
-        } satisfies MeshChunkUploadAck;
-        if (fields?.stage && pending.retainForSlice && retentionAvailable) {
-          retained = { snapshotId: pending.uploadId, bytes: bytes.slice(), ack: result as MeshChunkUploadAck };
-        }
-        pending = undefined;
+        result = await nativeInvoke(command, args, headers ? { headers } : undefined);
         break;
       }
-      case 'restore_cached_slice_mesh':
-        stats.restoreCalls += 1;
-        assert.equal(pending, undefined, 'restoring while an upload is pending');
-        assert.equal(ready, undefined, 'restoring while a snapshot awaits consumption');
-        if (!retained || retained.snapshotId !== fields?.snapshotId) {
-          result = null;
-        } else {
-          staged = retained.bytes.slice();
-          result = { ...retained.ack, uploadedBytes: 0, reusedBytes: staged.byteLength, reserveGrew: false, appendNs: 0, appendNsTotal: 0 };
-        }
-        break;
       case 'mesh_chunk_upload_abort':
         if (pending?.uploadId === fields?.uploadId) pending = undefined;
         if (ready?.uploadId === fields?.uploadId) ready = undefined;

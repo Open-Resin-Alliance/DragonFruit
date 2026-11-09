@@ -12,7 +12,8 @@ import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelat
 import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
 import { getSavedSlicingPerformanceSettings, subscribeToSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import { invoke } from '@tauri-apps/api/core';
-import { createMeshChunkUpload, restoreCachedSliceMesh, type MeshChunkUploadResult } from '@/utils/meshChunkUpload';
+import { createMeshChunkUpload, type MeshChunkUploadResult } from '@/utils/meshChunkUpload';
+import { SliceSnapshotMissError } from './tauri/nativeSlicerBridge';
 import { runExclusiveNativeMesh } from '@/utils/tauriMeshBridge';
 import { buildSolidSliceMeshForWasm, type SolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { resolveSliceJobAntiAliasing } from './sliceAntiAliasing';
@@ -252,30 +253,41 @@ export async function runWithSliceMesh<T>(
     options: SliceMeshPrewarmOptions,
     signal: AbortSignal | undefined,
     onBake: () => void,
-    consume: (descriptor: SliceMeshDescriptor, ack: MeshChunkUploadResult, meshPrepMs: number) => Promise<T>,
+    consume: (descriptor: SliceMeshDescriptor, ack: MeshChunkUploadResult, meshPrepMs: number, snapshotId?: string) => Promise<T>,
 ): Promise<T> {
     const started = performance.now();
     throwIfAborted(signal);
     const signature = getSliceMeshInputSignature(options);
-    const restore = async (snapshot: Snapshot): Promise<{ result: T } | null> => {
+    // The slice command restores the retained snapshot itself, so a warm export
+    // is one invoke. A native miss falls through to the cold path below.
+    const consumeSnapshot = async (snapshot: Snapshot): Promise<{ result: T } | null> => {
         if (!snapshot.snapshotId || !equalSliceMeshInputSignatures(signature, snapshot.signature)) return null;
         return runExclusiveNativeMesh(async () => {
             throwIfAborted(signal);
             if (!equalSliceMeshInputSignatures(signature, getSliceMeshInputSignature(options))) return null;
-            const ack = await restoreCachedSliceMesh(invoke, snapshot.snapshotId!, signal);
-            throwIfAborted(signal);
-            if (!ack) { if (latest === snapshot) latest = null; return null; }
-            return { result: await consume(snapshot.descriptor, ack, performance.now() - started) };
+            try {
+                // No staging invoke happened; the stored preparation describes the mesh.
+                const ack: MeshChunkUploadResult = {
+                    ...snapshot.preparationAck, ipcMs: 0, wallMs: 0, hashMs: 0, commands: {},
+                };
+                return { result: await consume(snapshot.descriptor, ack, performance.now() - started, snapshot.snapshotId ?? undefined) };
+            } catch (error) {
+                if (error instanceof SliceSnapshotMissError) {
+                    if (latest === snapshot) latest = null;
+                    return null;
+                }
+                throw error;
+            }
         }, signal);
     };
     if (latest && equalSliceMeshInputSignatures(signature, latest.signature)) {
-        const hit = await restore(latest);
+        const hit = await consumeSnapshot(latest);
         if (hit) return hit.result;
     }
     if (preparation && !preparation.controller.signal.aborted
         && equalSliceMeshInputSignatures(preparation.signature, signature)) {
         const snapshot = await requestSnapshot(options, signal, onBake);
-        const hit = await restore(snapshot);
+        const hit = await consumeSnapshot(snapshot);
         if (hit) return hit.result;
     }
     // A cold export consumes its freshly staged bytes inside the same guard.

@@ -325,13 +325,47 @@ export type NativeSlicerRuntimeMetrics = {
  *   1. Stage raw mesh bytes via efficient binary IPC (no JSON serialization)
  *   2. Send tiny metadata JSON to kick off slicing
  */
+/** The slice is single-flight, so one listener serves every job. */
+let activeProgress: SlicerProgressCallback | null = null;
+let progressListener: Promise<void> | null = null;
+
+function ensureProgressListener(eventModule: TauriEventModule): Promise<void> {
+  progressListener ??= eventModule
+    .listen<SliceProgressEvent>('slicer://progress', (event) => {
+      activeProgress?.(event.payload.done, event.payload.total, event.payload.phase ?? 'Slicing');
+    })
+    .then(() => undefined)
+    .catch(() => { progressListener = null; });
+  return progressListener;
+}
+
+export type NativeSliceStartResult =
+  | ({ status: 'done' } & {
+      tempPath: string;
+      byteLen: number;
+      perf?: NativeSlicerPerfMetrics | null;
+      runtime?: NativeSlicerRuntimeMetrics | null;
+    })
+  | { status: 'snapshotMiss' }
+  | { status: 'payloadMiss' };
+
+/** The retained snapshot is gone; the caller must prepare the mesh again. */
+export class SliceSnapshotMissError extends Error {
+  constructor() {
+    super('Slice snapshot is no longer resident.');
+    this.name = 'SliceSnapshotMissError';
+  }
+}
+
 export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
   job: NativeSolidSliceJobEnvelope,
   abortSignal?: AbortSignal,
   onProgress?: SlicerProgressCallback,
+  options: { snapshotId?: string } = {},
 ): Promise<NativeSliceTempPathArtifact> {
   const bridgeStart = performance.now();
-  const core = await loadTauriCore();
+  // Both modules are needed before the invoke; load them together.
+  const [core, eventModule] = await Promise.all([loadTauriCore(), loadTauriEvent()]);
   if (!core) {
     throw new Error('Native slicer is only available in DragonFruit Desktop (Tauri runtime).');
   }
@@ -340,96 +374,35 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
     throw createAbortError();
   }
 
-  const eventModule = await loadTauriEvent();
-  let unlistenProgress: (() => void) | null = null;
-
   if (eventModule && onProgress) {
-    unlistenProgress = await eventModule.listen<SliceProgressEvent>(
-      'slicer://progress',
-      (event) => {
-        onProgress(event.payload.done, event.payload.total, event.payload.phase ?? 'Slicing');
-      },
-    );
+    activeProgress = onProgress;
+    await ensureProgressListener(eventModule);
   }
 
   const meshBytesLen = job.meshByteLength ?? job.trianglesXYZ.byteLength;
   const triangleFloatCount = meshBytesLen / Float32Array.BYTES_PER_ELEMENT;
-  let preparedPayload: Awaited<ReturnType<typeof prepareJobPayload>> | undefined;
+  const payload = toNativeMetadataPayload(job);
+  let preparedPayload: PreparedJobPayload | undefined;
   let nativeConsumedPayload = false;
+  let payloadBuildMs = 0;
+  let invokeStart = 0;
 
   const cleanup = () => {
-    if (unlistenProgress) {
-      unlistenProgress();
-      unlistenProgress = null;
-    }
+    if (activeProgress === onProgress) activeProgress = null;
   };
 
-  try {
-    // --- Step 1: Compute Payload Stats ---
-    const payloadBuildStart = performance.now();
-    preparedPayload = await prepareJobPayload(core.invoke, toNativeMetadataPayload(job), abortSignal);
-    const metadataJson = preparedPayload.jobJson;
-
-    // Release the JS-side empty array 
-    job.trianglesXYZ = new Float32Array(0);
-
-    const payloadBuildMs = performance.now() - payloadBuildStart;
-
-    if (abortSignal?.aborted) {
-      cleanup();
-      throw createAbortError();
-    }
-
-    // --- Step 2: Send tiny metadata JSON to kick off slicing ---
-
-    if (abortSignal?.aborted) {
-      cleanup();
-      throw createAbortError();
-    }
-
-    let settled = false;
-    const invokeStart = performance.now();
-    const resultPromise = core.invoke<{
-      tempPath: string;
-      byteLen: number;
-      perf?: NativeSlicerPerfMetrics | null;
-      runtime?: NativeSlicerRuntimeMetrics | null;
-    }>('slice_solid_native_to_temp_path', { jobJson: metadataJson, payloadLeaseId: preparedPayload.leaseId });
-
-    const buildResult = (result: {
-      tempPath: string;
-      byteLen: number;
-      perf?: NativeSlicerPerfMetrics | null;
-      runtime?: NativeSlicerRuntimeMetrics | null;
-    }): NativeSliceTempPathArtifact => ({
-      tempPath: result.tempPath,
-      byteLen: Number.isFinite(result.byteLen) ? result.byteLen : 0,
-      perf: result.perf ?? null,
-      runtime: result.runtime ?? null,
-      bridge: {
-        payloadBuildMs,
-        invokeRoundTripMs: performance.now() - invokeStart,
-        bridgeTotalMs: performance.now() - bridgeStart,
-        payloadChars: metadataJson.length,
-        triangleFloatCount,
-        meshBytesLen,
-        ...preparedPayload!.metrics,
-      },
+  // The command restores the snapshot, pins the payload and slices, so a warm
+  // export is one round trip. `snapshotMiss`/`payloadMiss` are retried here.
+  const invokeSlice = (prepared: PreparedJobPayload): Promise<NativeSliceStartResult> => {
+    const promise = core.invoke<NativeSliceStartResult>('slice_solid_native_to_temp_path', {
+      jobJson: prepared.jobJson,
+      payloadLeaseId: prepared.leaseId ?? null,
+      payloadFields: prepared.fieldSpecs ?? null,
+      snapshotId: options.snapshotId ?? null,
     });
-
-    if (!abortSignal) {
-      const result = await resultPromise;
-      nativeConsumedPayload = true;
-      cleanup();
-      return buildResult(result);
-    }
-
-    const result = await new Promise<{
-      tempPath: string;
-      byteLen: number;
-      perf?: NativeSlicerPerfMetrics | null;
-      runtime?: NativeSlicerRuntimeMetrics | null;
-    }>((resolve, reject) => {
+    if (!abortSignal) return promise;
+    return new Promise<NativeSliceStartResult>((resolve, reject) => {
+      let settled = false;
       const handleAbort = () => {
         if (settled) return;
         settled = true;
@@ -440,7 +413,7 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
       abortSignal.addEventListener('abort', handleAbort, { once: true });
       if (abortSignal.aborted) handleAbort();
 
-      resultPromise
+      promise
         .then((res) => {
           if (settled) return;
           settled = true;
@@ -458,10 +431,66 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
           }
         });
     });
+  };
+
+  try {
+    // --- Step 1: Compute Payload Stats ---
+    const payloadBuildStart = performance.now();
+    preparedPayload = await prepareJobPayload(core.invoke, payload, abortSignal, { deferPin: true });
+    payloadBuildMs += performance.now() - payloadBuildStart;
+
+    // Release the JS-side empty array 
+    job.trianglesXYZ = new Float32Array(0);
+
+    if (abortSignal?.aborted) {
+      cleanup();
+      throw createAbortError();
+    }
+
+    // --- Step 2: One invoke restores the snapshot, pins the payload and slices ---
+    invokeStart = performance.now();
+    let result = await invokeSlice(preparedPayload);
+
+    if (result.status === 'payloadMiss') {
+      // Native evicted a field the JS hot cache still holds; pin it the normal way.
+      await preparedPayload.release().catch(() => undefined);
+      const retryStart = performance.now();
+      preparedPayload = await prepareJobPayload(core.invoke, payload, abortSignal);
+      payloadBuildMs += performance.now() - retryStart;
+      if (abortSignal?.aborted) {
+        cleanup();
+        throw createAbortError();
+      }
+      invokeStart = performance.now();
+      result = await invokeSlice(preparedPayload);
+    }
+
+    if (result.status === 'snapshotMiss') {
+      cleanup();
+      throw new SliceSnapshotMissError();
+    }
+    if (result.status !== 'done') {
+      cleanup();
+      throw new Error(`Unexpected slice start status: ${String(result.status)}`);
+    }
 
     nativeConsumedPayload = true;
     cleanup();
-    return buildResult(result);
+    return {
+      tempPath: result.tempPath,
+      byteLen: Number.isFinite(result.byteLen) ? result.byteLen : 0,
+      perf: result.perf ?? null,
+      runtime: result.runtime ?? null,
+      bridge: {
+        payloadBuildMs,
+        invokeRoundTripMs: performance.now() - invokeStart,
+        bridgeTotalMs: performance.now() - bridgeStart,
+        payloadChars: preparedPayload.jobJson.length,
+        triangleFloatCount,
+        meshBytesLen,
+        ...preparedPayload.metrics,
+      },
+    };
   } catch (error) {
     cleanup();
     throw error;

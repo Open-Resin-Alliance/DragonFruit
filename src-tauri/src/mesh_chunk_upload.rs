@@ -429,12 +429,11 @@ fn finish_upload(
 
 /// A miss is ordinary: never take or clear the caller's existing staged mesh.
 /// The frontend holds its native-mesh operation queue and upload turn throughout.
-#[tauri::command(rename_all = "camelCase")]
-pub async fn restore_cached_slice_mesh(
-    snapshot_id: String,
-) -> Result<Option<MeshChunkUploadAck>, String> {
+/// A warm export calls this from inside the slice command, so the export needs
+/// one invoke instead of a restore followed by a slice.
+pub(crate) fn restore_snapshot(snapshot_id: &str) -> Result<Option<MeshChunkUploadAck>, String> {
     let mut uploads = uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?;
-    let Some(finished) = uploads.restore_slice(&snapshot_id)? else {
+    let Some(finished) = uploads.restore_slice(snapshot_id)? else {
         return Ok(None);
     };
     // Restore does not consume the retained snapshot. A staging-lock error also
@@ -447,7 +446,7 @@ pub async fn restore_cached_slice_mesh(
         .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))?;
     let mut appender = crate::staged_mesh_file_appender().lock()
         .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
-    let ack = MeshChunkUploadAck::new(snapshot_id, finished.stats, finished.slice_snapshot_id);
+    let ack = MeshChunkUploadAck::new(snapshot_id.to_string(), finished.stats, finished.slice_snapshot_id);
     *staged = finished.staged_bytes;
     *stats = crate::StageMeshStats {
         chunks_received: ack.chunks_received,

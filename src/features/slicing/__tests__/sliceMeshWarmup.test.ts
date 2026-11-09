@@ -208,13 +208,18 @@ test('Slice adopts matching in-flight preparation without the busy pause abortin
     await started;
     const before = f.upload.readStats();
     f.warmer.update(f.options, 1, true, true);
-    const foreground = runWithSliceMesh(f.options, undefined, () => {}, async (descriptor) => descriptor);
+    let consumedSnapshotId: string | undefined;
+    const foreground = runWithSliceMesh(f.options, undefined, () => {}, async (descriptor, _ack, _ms, snapshotId) => {
+      consumedSnapshotId = snapshotId;
+      return descriptor;
+    });
     f.warmer.cancel(); // Explicit Cancel releases only the background subscriber.
     release();
     const mesh = await foreground;
     assert.ok(mesh.modelTriangleCount > 0);
     assert.equal(f.upload.readStats().workerStarts, before.workerStarts, 'foreground joins the existing worker');
     assert.equal(f.upload.readStats().uploadBegins, 1);
-    assert.equal(f.upload.readStats().restoreCalls, 1);
+    assert.equal(f.upload.readStats().restoreCalls, 0, 'the slice command restores; no separate restore invoke');
+    assert.equal(typeof consumedSnapshotId, 'string', 'the snapshot id rides the slice invoke');
   } finally { release(); f.dispose(); }
 });

@@ -22,15 +22,17 @@ function checkAbort(signal?: AbortSignal): void {
   if (signal?.aborted) throw new DOMException('Slicing canceled by user.', 'AbortError');
 }
 
-async function encodeField(field: string, value: unknown, json: string, bytes: Uint8Array): Promise<EncodedField> {
+type EncodedFieldResult = { encoded: EncodedField; reused: boolean };
+
+async function encodeField(field: string, value: unknown, json: string, bytes: Uint8Array): Promise<EncodedFieldResult> {
   const previous = hot.get(field);
   const source = typeof value === 'string' ? value : json;
-  if (previous?.source === source) return previous.encoded;
+  if (previous?.source === source) return { encoded: previous.encoded, reused: true };
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource));
   const encoded = { field, hash: Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join(''), bytes, chars: json.length };
   // Another preparation may have populated/replaced this field while hashing.
   const current = hot.get(field);
-  if (current?.source === source) return current.encoded;
+  if (current?.source === source) return { encoded: current.encoded, reused: true };
   if (current) { hotBytes -= current.charge; hot.delete(field); }
   const charge = bytes.byteLength + source.length * 2;
   if (charge <= BUDGET) {
@@ -42,8 +44,29 @@ async function encodeField(field: string, value: unknown, json: string, bytes: U
     hot.set(field, { source, encoded, charge });
     hotBytes += charge;
   }
-  return encoded;
+  return { encoded, reused: false };
 }
+
+/** A field manifest the consumer may pin itself instead of calling `job_payload_begin`. */
+export type JobPayloadFieldSpec = { field: string; hash: string; byteLen: number };
+
+export type PreparedJobPayload = {
+  jobJson: string;
+  leaseId?: string;
+  /** Present only when `deferPin` skipped `job_payload_begin`. */
+  fieldSpecs?: JobPayloadFieldSpec[];
+  metrics: JobPayloadMetrics;
+  release: (consumed?: boolean) => Promise<void>;
+};
+
+export type PrepareJobPayloadOptions = {
+  /**
+   * Skip `job_payload_begin` when every field is already in the JS hot cache, and
+   * return `fieldSpecs` for the consumer to pin inside its own command. A native
+   * miss is reported back, so the caller can retry through the normal path.
+   */
+  deferPin?: boolean;
+};
 
 /** Each eligible top-level semantic JSON value has its own immutable hash.
  * Scene attachments remain inside metadata_json, unchanged, including strings
@@ -53,7 +76,8 @@ export async function prepareJobPayload(
   invoke: JobPayloadInvoke,
   payload: Record<string, unknown>,
   signal?: AbortSignal,
-): Promise<{ jobJson: string; leaseId?: string; metrics: JobPayloadMetrics; release: (consumed?: boolean) => Promise<void> }> {
+  options: PrepareJobPayloadOptions = {},
+): Promise<PreparedJobPayload> {
   const start = performance.now();
   checkAbort(signal);
   const encoder = new TextEncoder();
@@ -77,12 +101,15 @@ export async function prepareJobPayload(
     }
   }
   const fields: EncodedField[] = [];
+  const reusedFields = new Set<string>();
   let admittedBytes = 0;
   // Fixed priority and total budget: oversize values retain the original inline path.
   for (const field of FIELDS) {
     const candidate = candidates.get(field);
     if (!candidate || admittedBytes + candidate.bytes.byteLength > BUDGET) continue;
-    fields.push(await encodeField(field, candidate.value, candidate.json, candidate.bytes));
+    const encoded = await encodeField(field, candidate.value, candidate.json, candidate.bytes);
+    fields.push(encoded.encoded);
+    if (encoded.reused) reusedFields.add(field);
     admittedBytes += candidate.bytes.byteLength;
     checkAbort(signal);
   }
@@ -97,6 +124,26 @@ export async function prepareJobPayload(
     let payloadUploadedBytes = 0;
     let payloadReusedBytes = 0;
     const envelope = { ...payload };
+    // Every field is already encoded and was accepted before: let the consumer
+    // pin it inside its own command instead of paying a begin round trip here.
+    if (options.deferPin && fields.length > 0 && fields.every((field) => reusedFields.has(field.field))) {
+      const refs: Record<string, string> = {};
+      for (const field of fields) {
+        refs[field.field] = field.hash;
+        delete envelope[field.field];
+        payloadReusedBytes += field.bytes.byteLength;
+      }
+      envelope._payload_refs = refs;
+      checkAbort(signal);
+      const jobJson = JSON.stringify(envelope);
+      return {
+        jobJson,
+        fieldSpecs: fields.map(({ field, hash, bytes }) => ({ field, hash, byteLen: bytes.byteLength })),
+        release: async () => {},
+        metrics: { payloadContributors, payloadUploadedBytes, payloadReusedBytes,
+          payloadCacheMs: performance.now() - start },
+      };
+    }
     if (fields.length) {
       const ack = await invoke<LeaseAck>('job_payload_begin', {
         fields: fields.map(({ field, hash, bytes }) => ({ field, hash, byteLen: bytes.byteLength })),

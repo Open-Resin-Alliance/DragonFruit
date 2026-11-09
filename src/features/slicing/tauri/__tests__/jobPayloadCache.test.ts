@@ -108,6 +108,37 @@ test('cold fields round-trip every semantic value; warm envelope sends only refe
   assert.equal(native.leases.size, 0);
 });
 
+test('deferPin skips the begin round trip when every field is already encoded', async () => {
+  const native = nativePayloadFixture();
+  const payload = payloadMetricsSmokeFixture();
+  const cold = await prepareJobPayload(native.invoke, payload);
+  await cold.release();
+  const before = native.commands.length;
+  const deferred = await prepareJobPayload(native.invoke, payload, undefined, { deferPin: true });
+  assert.deepEqual(native.commands.slice(before), [], 'no begin, append or finish round trip');
+  assert.ok(deferred.fieldSpecs && deferred.fieldSpecs.length > 0);
+  assert.equal(deferred.leaseId, undefined);
+  assert.equal(deferred.metrics.payloadUploadedBytes, 0);
+  assert.equal(deferred.metrics.payloadReusedBytes, cold.metrics.payloadUploadedBytes);
+  const envelope = JSON.parse(deferred.jobJson);
+  assert.deepEqual(
+    Object.fromEntries(deferred.fieldSpecs!.map((spec) => [spec.field, spec.hash])),
+    envelope._payload_refs,
+    'the manifest pins exactly the hashes the envelope references',
+  );
+  await deferred.release();
+});
+
+test('deferPin falls back to begin when a field is not in the hot cache', async () => {
+  const native = nativePayloadFixture();
+  const payload = { ...payloadMetricsSmokeFixture(), metadata_json: JSON.stringify({ fresh: 'x'.repeat(20_000) }) };
+  const before = native.commands.length;
+  const prepared = await prepareJobPayload(native.invoke, payload, undefined, { deferPin: true });
+  assert.ok(native.commands.slice(before).includes('job_payload_begin'), 'a cold field still begins');
+  assert.equal(prepared.fieldSpecs, undefined);
+  await prepared.release();
+});
+
 test('mutating a tank array changes its exact field reference, not metadata/thumbnail', async () => {
   const native = nativePayloadFixture();
   const payload = payloadMetricsSmokeFixture();

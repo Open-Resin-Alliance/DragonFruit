@@ -40,6 +40,7 @@ function fixture(hollow = false) {
   let onHollow: (() => Promise<void>) | undefined;
   const jobs: Array<Record<string, unknown>> = [];
   const slicedBytes: Uint8Array[] = [];
+  const snapshotIds: unknown[] = [];
   const reachedSlicer = new Error('captured warm snapshot slice');
   const upload = installFakeMeshChunkUpload(async (command, args) => {
     switch (command) {
@@ -56,6 +57,7 @@ function fixture(hollow = false) {
       case 'slice_solid_native_to_temp_path':
         slices += 1;
         assert.ok(args && typeof args === 'object' && 'jobJson' in args && typeof args.jobJson === 'string');
+        snapshotIds.push((args as { snapshotId?: unknown }).snapshotId);
         jobs.push(JSON.parse(args.jobJson));
         slicedBytes.push(upload.readStaged());
         throw reachedSlicer;
@@ -78,7 +80,7 @@ function fixture(hollow = false) {
     materialProfile: { id: 'warm-material', name: 'Warm material', layerHeightMm: 0.05 } as MaterialProfile,
   };
   return {
-    model, position, options, upload, hollowing, jobs, slicedBytes,
+    model, position, options, upload, hollowing, jobs, slicedBytes, snapshotIds,
     get hollowCalls() { return hollowCalls; }, get slices() { return slices; },
     get vertexReads() { return vertexReads; },
     setOnHollow(callback: () => Promise<void>) { onHollow = callback; },
@@ -115,6 +117,10 @@ test('idle prewarm bakes and uploads before the first slice; repeated exports on
     assert.equal(f.upload.readStats().workerStarts, warmed.workerStarts, 'warm start does not create a hashing worker');
     assert.equal(f.upload.readStats().uploadBegins, warmed.uploadBegins, 'warm start does not begin an upload');
     assert.equal(f.slices, 2, 'rendered layers are recomputed on every export');
+    assert.equal(typeof f.snapshotIds[0], 'string', 'a warm export carries the snapshot id on the slice invoke');
+    assert.equal(f.snapshotIds[0], f.snapshotIds[1], 'both warm exports use the same retained snapshot');
+    assert.equal(f.upload.readStats().restoreCalls, 2,
+      'the slice command restores; no separate restore invoke');
     assert.deepEqual(f.slicedBytes[0], f.slicedBytes[1]);
     assert.equal(f.jobs[1].export_thumbnail_png_base64, Buffer.from([9, 8, 7]).toString('base64'));
     assert.equal(f.jobs[1].output_path, '/different/output.ctb');
