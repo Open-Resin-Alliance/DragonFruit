@@ -23,6 +23,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Initialize printer profile submodules
+        run: git submodule update --init plugins/sdcp-v1 plugins/elegoo
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
