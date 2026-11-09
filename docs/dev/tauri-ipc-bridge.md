@@ -57,7 +57,9 @@ grep -rhoE '\binvoke(<[^>]*>)?\(' src plugins --include=*.ts --include=*.tsx \
 
 3. **Events** — long-running native work streams progress via Tauri events, e.g.
    `listen('slicer://progress', …)`. Wrappers that need progress expose a
-   callback or a subscription rather than blocking on the invoke.
+   callback or a subscription rather than blocking on the invoke. The slicer keeps
+   **one** listener for the app lifetime and dispatches to the active job (slices are
+   single-flight); registering per slice cost an extra invoke on the critical path.
 
 ## Conventions to respect
 
@@ -121,12 +123,15 @@ layers on every job: these caches retain inputs, not previous printed output.
 
 `useSceneSliceMeshWarmup` mounts once in `src/app/page.tsx`, independently of
 `SlicingPanel` and of whether scene autosave is enabled. It waits for completed
-import batches and finalized geometry operations. It never starts a whole-scene
-assembly immediately on import: dirty input waits for **15 seconds of quiet** and
-then `requestIdleCallback`, without a forced idle timeout. Activity, hidden
-windows, imports, autosaving, printing and transient geometry tools defer work.
-The deadline is not a recurring 15-second worker poll: a completed or explicitly
-cancelled unchanged signature starts no new worker.
+import batches and finalized geometry operations. A settled import arms a **250 ms**
+deadline (the user is about to slice); an edit or interaction arms **2 s**. Both
+then wait for `requestIdleCallback` with a **2 s timeout**, so a busy frame loop
+cannot starve preparation forever. Activity, hidden windows, imports, autosaving,
+printing and transient geometry tools defer work. A signature a foreground export
+already published (`hasWarmSliceMesh`) schedules nothing, and the deadline is not a
+recurring worker poll: a completed or explicitly cancelled unchanged signature
+starts no new worker. One failed preparation is retried once for the same signature;
+a second failure waits for a real input change.
 
 `useSceneAutosave` accepts `onSceneContentChanged(revision)`. History edits and
 model add/remove triggers notify it **before** the autosave-enabled guard; it is
@@ -263,10 +268,14 @@ finishes. This budget is not a process-RSS limit, and the loader/AO registry ret
 its own existing bounded entry lifetime.
 
 `MeshChunkUploadSession.appendSource` flushes preceding worker partial bytes before
-calling `mesh_chunk_upload_append_source`. The JSON command takes the upload ID,
-source ID, original corner count, triangle range, geometry-or-soup order, a
-column-major matrix, export centre, plate offset, winding flag and
-`negativeZeroMask`. The worker carries f64 negative-zero sign bits separately
+calling `mesh_chunk_upload_append_source`. The JSON command takes an optional upload
+ID, the session's reserve/retention options, source ID, original corner count,
+triangle range, geometry-or-soup order, a column-major matrix, export centre, plate
+offset, winding flag and `negativeZeroMask`. The first source of a session creates
+the upload itself and returns its ID in the ack, so a retained import pays one
+invoke for the transform instead of a separate begin round trip; a retention miss
+aborts the upload it just created and returns `null`. The worker carries f64
+negative-zero sign bits separately
 because JSON normalizes them; native parsing also enables exact float round trips.
 Source eviction returns `null` before adding source bytes, so the caller can emit
 the exact live geometry instead. Invalid ranges/ownership are errors.
@@ -291,10 +300,33 @@ promised free.
 `createMeshChunkUpload(invoke, { reserveBytes?, signal?, retainForSlice? })` creates
 one upload; await `append(bytes)` before changing the input. The worker reblocks
 producer batches into fixed 4 MiB chunks plus a tail and hashes SHA-256. Only missing
-raw mesh bytes cross IPC. Renderer buffers are never detached; one transferred
-chunk and a bounded partial reblocking buffer are additional transport memory,
-not a claim that the renderer or existing mesh producer is out-of-core. A normal
-worker has no Tauri window globals: only the window relay calls native invoke.
+raw mesh bytes cross IPC. Renderer buffers are never detached; up to
+`MESH_PLAN_BATCH_CHUNKS` hashed chunks and a bounded partial reblocking buffer are
+additional transport memory, not a claim that the renderer or existing mesh producer
+is out-of-core. A normal worker has no Tauri window globals: only the window relay
+calls native invoke.
+
+The worker is created on the first raw chunk, not when the session opens. A
+retained-source session never hashes, so it relays `mesh_chunk_upload_append_source`
+and the final plan from the window and starts no worker at all — worth a measured
+~60 ms of module-worker startup on a path whose only native work is the transform.
+If a source append created the upload before a worker existed, the worker adopts that
+ID from its `begin` message instead of creating a second upload.
+
+The upload is created lazily by the first plan or retained-source append, so a
+session that never sends data costs no native call. `mesh_chunk_upload_plan({
+uploadId?, reserveBytes?, retainForSlice?, chunks: [{ hash, byteLength }],
+finalUpload?, stage? })` is one round trip for a whole batch: it creates the upload
+when `uploadId` is absent, appends the leading run of chunks that already exist (hot
+LRU or retained backing), and returns `{ uploadId, cached, ack? }`. The worker relays
+raw `mesh_chunk_upload_append` only for `chunks[cached..]`. When `finalUpload` is set
+and every chunk was cached, the plan also consumes the upload and returns the ack, so
+an all-cached mesh costs ONE invoke; a batch with misses uploads them and plans once
+more with no chunks to finalize. Batching exists because each invoke is a webview
+round trip whose latency dominates the native work: a 14.7 MB, four-chunk warm upload
+measured ~2 ms of native cache work against 159 ms of six round trips (begin, four
+lookups, finish), so the round trips — not the copies — are what the protocol has to
+remove.
 
 Rust `mesh_chunk_cache.rs` keeps a 64 MiB hot payload LRU with 4096-entry metadata
 bound. Committed `retainForSlice` uploads also retain ONE last-slice backing, at
@@ -307,12 +339,14 @@ rehashing, and disk reads are SHA-256 verified. Unchanged snapshots are not
 rewritten; safe same-offset changes write dirty ranges only. Actual cache IO errors
 or over-budget inputs disable retention without changing the uploaded geometry.
 
-A successful retained ack includes `sliceSnapshotId`.
-`restore_cached_slice_mesh({ snapshotId })` returns an ack or `null`; only an exact
-current snapshot ID is accepted, and a miss never replaces the existing stage.
-The frontend `restoreCachedSliceMesh` wrapper holds its upload turn while the
-caller holds `runExclusiveNativeMesh` across restore, slicing and readback.
-Cold slicing acquires stage ownership after modifier baking to avoid nested locks.
+A successful retained ack includes `sliceSnapshotId`. A warm export passes that id
+to `slice_solid_native_to_temp_path`, which restores the exact snapshot into the
+staged mesh before taking it — one invoke instead of a restore followed by a slice.
+Only an exact current snapshot id is accepted; a miss returns
+`{ status: "snapshotMiss" }` without touching the stage, and the frontend falls back
+to a cold preparation. The frontend holds `runExclusiveNativeMesh` across the slice
+and its readback. Cold slicing acquires stage ownership after modifier baking to
+avoid nested locks.
 
 `finish(true)` atomically publishes staged input. The shared stage guard also
 covers repair, hollowing, punching, remeshing, organic cut and path-based writers.
@@ -320,12 +354,43 @@ covers repair, hollowing, punching, remeshing, organic cut and path-based writer
 until `abort()`; `invokeWithChunkedMesh` sends authoritative
 `{ ...options.args, meshUploadId, expectedBytes }` and cleans up errors. Indexed
 outputs never borrow another operation's anonymous stage. The commands are
-`mesh_chunk_upload_begin`, `mesh_chunk_upload_append_cached`,
-`mesh_chunk_upload_append`, `mesh_chunk_upload_finish`, `mesh_chunk_upload_abort`
-and `restore_cached_slice_mesh`. Raw appends use ASCII `x-mesh-upload-id` and
-`x-mesh-chunk-hash` headers. Native validation precedes mutation; float alignment,
-4 MiB chunk limits, whole 36-byte triangles, requested order/duplicates and stale-ID
-cancellation rules remain enforced.
+`mesh_chunk_upload_plan`, `mesh_chunk_upload_append`,
+`mesh_chunk_upload_append_source` and `mesh_chunk_upload_abort`. Raw appends use
+ASCII `x-mesh-upload-id` and `x-mesh-chunk-hash` headers. Native validation precedes
+mutation; float alignment, 4 MiB chunk limits, whole 36-byte triangles, requested
+order/duplicates and stale-ID cancellation rules remain enforced.
+
+### Bulk readbacks over the `mesh` protocol
+
+Every bulk readback publishes its body instead of returning it. The command returns
+`{ id, byteLength }` and the frontend fetches `http://mesh.localhost/<id>` once
+(`fetchMeshReadback` in `tauriMeshBridge.ts`). The runtime registers custom protocols
+under the app's HTTP scheme with a `{scheme}.localhost` domain, which is why the URL
+is not `mesh://`; the origin follows `location.protocol` so an `https` shell works.
+
+Migrated: the staged/repair/punch/hollow/organic-cut position and voxel-index reads,
+the ambient-occlusion bake, `refine_mesh_soup`, the print artifact bytes and chunks,
+and the single and batched layer-preview PNGs.
+
+Why: a raw `Response::new(Vec<u8>)` over 1 KB goes through the channel path —
+`eval("invoke('plugin:__TAURI_CHANNEL__|fetch', …)")`, then a JS invoke, then the
+body — so every readback pays an extra eval and round trip. On macOS/iOS the same
+body becomes a JSON number array inside an eval string. The protocol is one GET.
+
+`mesh_readback.rs` owns the transport and `mesh_readback_arena.rs` the bounded
+arena (std only, its tests run with `rustc --test`): 256 MiB, 64 entries, 30 s TTL,
+oldest-first eviction, and one oversized body published alone. The id is consumed by
+the first successful fetch; a failed fetch is recovered by invoking the read command
+again. Responses carry `Access-Control-Allow-Origin: *` and `Cache-Control: no-store`,
+and the handler only addresses ids the arena holds — never a caller-supplied path.
+`Range` is not implemented yet.
+
+Independent readbacks are issued together (`Promise.all`) rather than one after
+another: the hollow preview used to await seven reads in sequence, and the membrane
+preview two. A fetched body is a fresh, aligned `ArrayBuffer`, so `decodeF32` aliases
+it instead of copying; only a view or number array is copied.
+`window.__dfPerfMarks = true` records the invoke and fetch spans as
+`[df] mesh readback …` measures.
 
 ### Large job payloads are separate from mesh data
 
@@ -339,15 +404,21 @@ Values below 16 KiB, oversized values and nonadmitted fields stay inline.
 
 - `job_payload_begin({ fields: [{ field, hash, byteLen }] })` returns
   `{ leaseId, acceptedFields, missingFields }` and pins accepted values.
+- When every admitted field is already in the frontend's hot cache,
+  `prepareJobPayload(..., { deferPin: true })` skips `job_payload_begin` and returns
+  `fieldSpecs`; the slice command pins them itself (`begin_and_resolve`). A native
+  miss returns `{ status: "payloadMiss" }`, the lease is released and nothing is
+  pinned, and the bridge retries through the normal begin/upload path.
 - `job_payload_append` accepts at most 4 MiB raw bytes with
   `x-job-payload-lease`, `x-job-payload-field`, `x-job-payload-hash` and decimal
   `x-job-payload-offset` headers. SHA-256, bounds, order, UTF-8/JSON and field types
   are checked before a field becomes reusable.
 - `job_payload_finish({ leaseId })` completes new fields; an all-hit lease needs
   no finish round trip. `job_payload_release({ leaseId })` is idempotent cleanup.
-- Slice invocation passes `{ jobJson, payloadLeaseId? }`; admitted fields are
-  represented by the internal `_payload_refs` map. Rust restores exact semantic
-  JSON values and deserializes `SliceJobMetadata` once, BEFORE taking staged mesh
+- Slice invocation passes `{ jobJson, payloadLeaseId?, payloadFields?, snapshotId? }`;
+  admitted fields are represented by the internal `_payload_refs` map. Rust restores
+  exact semantic JSON values and deserializes `SliceJobMetadata` once, BEFORE taking
+  staged mesh
   bytes. Leases release on success/error; failed references never steal geometry.
 
 ### Reading cache-hit metrics
@@ -358,7 +429,14 @@ count is likewise real; per-layer geometry counts are no longer reported as zero
 `stageMeshBytes`/chunk count describe logical input, while
 `stageMeshUploadedBytes` and `stageMeshReusedBytes` distinguish raw transfer/reuse.
 `stageMeshMs` measures native invoke round trips; `stageMeshWallMs` also includes
-worker startup, copying and hashing. A warm restore creates no geometry worker.
+worker startup, copying and hashing, and `stageMeshHashMs` is the SHA-256 share of
+that worker time. `stageMeshCommands` splits `stageMeshMs` by native command
+(`mesh_chunk_upload_plan`, `mesh_chunk_upload_append`,
+`mesh_chunk_upload_append_source`) with a count and total per command — the first
+place to look when the stage looks slow, because it separates round-trip latency
+from native work inside the same invoke. A warm export performs no staging invoke at
+all (the slice command restores the snapshot), so `stageMeshMs` is 0 and the byte
+counters come from the stored preparation; a warm restore creates no geometry worker.
 
 `bridgePayloadChars` is the actual small invoke job JSON, not the original bulk
 values. `bridgePayloadContributors` measures each semantic JSON value's chars and
