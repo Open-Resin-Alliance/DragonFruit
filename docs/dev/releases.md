@@ -302,7 +302,8 @@ executable inside the installer and destructive to the updater signature.
 
 OIDC only; there is no client secret anywhere in the pipeline:
 
-1. `release.yml` grants the build job `id-token: write`.
+1. `release.yml` and `build-preview.yml` grant the Windows build job
+   `id-token: write`.
 2. `azure/login@v3` exchanges that token for an Azure CLI login using the
    federated credential on the app registration.
 3. `Invoke-ArtifactSigning` resolves credentials through
@@ -311,7 +312,9 @@ OIDC only; there is no client secret anywhere in the pipeline:
    path so a misconfiguration fails immediately instead of after nine probes.
 
 The federated credential's subject must match the refs releases are cut from
-(`ref:refs/heads/main` and `ref:refs/heads/dev`), and the app registration
+(`ref:refs/heads/main` and `ref:refs/heads/dev`). Preview builds sign Windows
+too and are dispatched on the pull request's base branch, so the same two
+subjects cover them. The app registration
 needs the **Artifact Signing Certificate Profile Signer** role on the signing
 account.
 

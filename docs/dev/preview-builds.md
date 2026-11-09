@@ -30,8 +30,9 @@ Remove the label to stop.
 
 The reason is worth understanding rather than working around: a preview build
 runs the branch's own code — `npm ci` lifecycle scripts, `build.rs` scripts,
-the whole toolchain — in a job that holds the updater signing key. Building a
-branch is running its code with that secret in reach.
+the whole toolchain — in jobs that hold the updater signing key, the Apple
+Developer ID certificate and an Azure Artifact Signing login. Building a branch
+is running its code with those secrets in reach.
 
 Once you have **read the diff**, run:
 
@@ -100,30 +101,38 @@ GitHub does not give repository secrets to a workflow triggered by a
 rely on it: the macOS check that runs on every pull request builds fork code
 with no keys and proves the app compiles. Nothing more.
 
-## macOS builds are only signed for releases
+## What gets signed
 
-Neither the pull-request check nor a preview build imports the Developer ID
-certificate or notarizes anything. Both rewrite the identity in
-`src-tauri/tauri.macos.conf.json` to `-` before building. Only `release.yml`
-signs with the Developer ID and notarizes, because only a release is something
-users install and keep.
+| Build | Workflow | macOS | Windows |
+|---|---|---|---|
+| Pull request check (this repo or a fork) | `pr-check-build.yml` | ad-hoc, not notarized | not built |
+| `/preview` and `/create-preview-external` | `build-preview.yml` | Developer ID, notarized | Azure Artifact Signing |
+| Release and pre-release | `release.yml` | Developer ID, notarized | Azure Artifact Signing |
 
-The rewrite is inlined in each workflow rather than kept in a helper script.
-A `pull_request` run takes its workflow from the base branch but checks out the
-pull request head, so a branch that predates a helper would fail on a missing
-module before it compiled anything.
+Apple throttles a team that signs and notarizes too often, and the check runs
+on every push to every pull request, so the check never signs (#980). It
+rewrites the identity in `src-tauri/tauri.macos.conf.json` to `-` before
+building. The rewrite is inlined in the workflow rather than kept in a helper
+script: a `pull_request` run takes its workflow from the base branch but checks
+out the pull request head, so a branch that predates a helper would fail on a
+missing module before it compiled anything.
 
 Ad-hoc rather than unsigned: Tauri skips signing altogether when no identity is
 configured, and an unsigned `.app` does not launch on Apple Silicon. Ad-hoc
-keeps the bundle loadable on the machine that built it.
+keeps the bundle loadable on the machine that built it, but a downloaded one
+fails Gatekeeper. The check publishes no DMG for that reason; previews build
+their own, signed.
 
-The consequence is that a downloaded check or preview build fails Gatekeeper —
-macOS refuses to open it because it cannot verify the developer. To run one,
-either:
+Every preview signs and notarizes once per platform, and so does every push to
+a pull request carrying the `preview-build` label. Remove the label when you no
+longer need a rebuild on each push.
 
-- **System Settings → Privacy & Security → Open Anyway** after the first
-  refusal, or
-- `xattr -dr com.apple.quarantine /Applications/DragonFruit.app` after dragging
-  it in.
+The Windows preview logs in to Azure with the run's OIDC token, whose subject
+is the ref the preview was dispatched on: the pull request's base branch. The
+federated credential trusts `dev` and `main` (see
+[Releases and channels](releases.md)), so a preview of a pull request stacked
+on another feature branch fails at the Azure login. Retarget it to `dev`, or
+dispatch `build-preview` by hand from `dev`.
 
-A release build needs neither.
+A branch that predates the Windows signing overlay (#966) fails the preview
+with a message asking to merge `dev` in.
