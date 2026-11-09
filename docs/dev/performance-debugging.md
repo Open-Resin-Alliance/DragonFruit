@@ -448,7 +448,7 @@ incremental compilation. It is for testing, not for shipping: fat LTO is what
 buys the slicer's cross-crate inlining. Tauri writes it to
 `src-tauri/target/release-fast`. Measured on this checkout: the first build of
 the profile recompiles the dependency graph in 6m09s; a shell-only rebuild then
-takes **1m02s** against **6m03s** for `release`.
+takes **58s to 1m26s** against **6m03s** for `release`.
 
 Two more things worth knowing:
 
