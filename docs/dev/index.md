@@ -13,7 +13,7 @@ Internals of DragonFruit, for people changing them. Start with [Architecture Ove
 | Bind a key | [Hotkeys](hotkeys.md), [Support Placement Modifiers](../reference/support-placement-modifiers.md) |
 | Call native code | [Tauri IPC and Native Bridge](tauri-ipc-bridge.md) |
 | Ship something unfinished | [Experiments Framework](experiments-framework.md) |
-| Support a new printer or format | [Plugin Framework](plugins-framework.md), [Complex Plugin Contributing](plugins-complex-contributing.md), [Formats](formats.md) |
+| Support a new printer or format | [Plugin Framework](plugins-framework.md), [Complex Plugin Contributing](plugins-complex-contributing.md), [SDCP v1](sdcp-v1-plugin.md), [Formats](formats.md) |
 | Change automatic support placement | [Auto-Supports](auto-supports.md) |
 | Add a support type | [Adding a New Support Type](support-type-extension.md), [Support System](support-system.md) |
 | Touch slicing or the raster pipeline | [ADR-0036](../adr/0036-stream-ctb-layer-payloads-to-disk.md), and the 3DAA vocabulary in `CONTEXT.md` |

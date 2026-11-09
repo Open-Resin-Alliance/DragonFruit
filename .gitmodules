@@ -4,6 +4,9 @@
 [submodule "plugins/sdcp-v3"]
 	path = plugins/sdcp-v3
 	url = https://github.com/Open-Resin-Alliance/df-plugin-sdcp-v3.git
+[submodule "plugins/sdcp-v1"]
+	path = plugins/sdcp-v1
+	url = https://github.com/ElMougo/df-plugin-sdcp-v1.git
 [submodule "plugins/anycubic"]
 	path = plugins/anycubic
 	url = https://github.com/Open-Resin-Alliance/df-plugin-anycubic.git

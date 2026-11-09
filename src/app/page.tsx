@@ -4965,7 +4965,7 @@ export default function Home() {
                 printingUploadProcessingHandoffTimeoutRef.current = null;
                 setPrintingUploadDialogStage('processing');
                 setPrintingSendStageText('Processing on device…');
-                setPrintingSendStatusText(`Upload complete. ${activeNetworkUiAdapter.displayName} is processing file metadata…`);
+                setPrintingSendStatusText(update.message);
                 setPrintingUploadTelemetry(null);
                 setPrintingDeviceProcessingStartedAtMs(Date.now());
               }, 220);
@@ -4998,10 +4998,10 @@ export default function Home() {
       const startedAt = Date.now();
       const timeoutMs = 10 * 60 * 1000;
       const pollMs = 1250;
-      let metadataReady = false;
+      let metadataReady = networkMode === 'sdcp-v1';
       let pollFailureCount = 0;
 
-      while ((Date.now() - startedAt) < timeoutMs) {
+      while (!metadataReady && (Date.now() - startedAt) < timeoutMs) {
         throwIfCanceled();
         try {
           const responseReady = await pluginNetworkFetch({
@@ -5064,7 +5064,9 @@ export default function Home() {
         setPrintingDeviceProcessingStartedAtMs(null);
         setPrintingUploadTelemetry(null);
         setPrintingSendStatusText(
-          `Import complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Click Print Now when ready.`,
+          networkMode === 'sdcp-v1'
+            ? `Upload complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Click Print Now when ready.`
+            : `Import complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Click Print Now when ready.`,
         );
       } else {
         setPrintingSendProgress(1);

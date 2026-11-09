@@ -107,6 +107,7 @@ nav:
           - Experiments Framework: dev/experiments-framework.md
           - Plugin Framework: dev/plugins-framework.md
           - Complex Plugin Contributing: dev/plugins-complex-contributing.md
+          - SDCP v1 Network Plugin: dev/sdcp-v1-plugin.md
       - Core Systems and Contracts:
           - History and Undo/Redo: dev/history-and-undo-redo.md
           - Registration Seams: dev/registration-seams.md
