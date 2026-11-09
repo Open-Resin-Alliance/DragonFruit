@@ -414,6 +414,49 @@ in Chrome against `npm run dev`. Chrome has the better flame chart and exports a
 `.cpuprofile` that `npx speedscope` opens, but it will not reproduce anything
 WKWebView-specific.
 
+## Build times
+
+`npm run tauri:build` is a release build: `next build`, the frontend copy, the
+thumbnail sidecar crates, the desktop shell, then MSI/NSIS packaging. Only the
+first two are cached between runs.
+
+- **Dependencies are cached.** `src-tauri/target` holds every compiled crate
+  (21 GB on a working checkout), and `.next/cache` holds the Turbopack cache.
+- **The shell crate is not.** `[profile.release]` is `lto = "fat"` with
+  `codegen-units = 1`, which is what makes the slicer fast at runtime. Any change
+  under `src-tauri/`, or to the embedded frontend, recompiles and relinks the
+  whole 38 MB binary. Measured: **11m16s** for the shell alone with every
+  dependency cached.
+- **The frontend copy used to invalidate it every run.** `tauri-build` watches
+  `frontend-dist`; `prepare-tauri-frontend.mjs` now syncs by content and leaves
+  identical files (and their mtimes) alone, so a build with an unchanged
+  frontend is a 1.4s cargo no-op.
+- **Bundling is never cached.** MSI, NSIS and updater artifacts are regenerated
+  on every run.
+
+For local iteration:
+
+| Goal | Command |
+| --- | --- |
+| Skip packaging, keep the release binary | `npm run tauri:build -- --no-bundle` |
+| Rebuild the shell without fat LTO | `npm run tauri:build -- --profile release-fast` |
+| Iterate on Rust without a release build | `npm run tauri:dev` |
+
+`release-fast` inherits `release` but uses thin LTO, 16 codegen units and
+incremental compilation. It is for testing, not for shipping: fat LTO is what
+buys the slicer's cross-crate inlining. Tauri writes it to
+`src-tauri/target/release-fast`.
+
+Two more things worth knowing:
+
+- `tauri:build` writes to `target/release`; `tauri:bundle:windows` passes
+  `--target x86_64-pc-windows-msvc` and writes to
+  `target/x86_64-pc-windows-msvc/release`. Alternating between them rebuilds
+  everything.
+- `src-tauri/build.rs` watches all of `plugins/`, so any file added under a
+  plugin reruns the registry generator. It only rewrites generated files whose
+  content changed.
+
 ## Known gaps
 
 **A hung Rust command is invisible to the stall detector.** `invoke` is

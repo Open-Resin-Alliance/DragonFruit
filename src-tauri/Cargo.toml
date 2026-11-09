@@ -130,6 +130,16 @@ opt-level = 3
 panic = "abort"
 strip = "none"  # keep debug info for crash reports; strip handled by Tauri bundler
 
+# Local iteration: the same optimised dependencies, but thin LTO and parallel
+# codegen, so a shell change rebuilds in a fraction of the release time.
+# Not for shipping; `release` keeps fat LTO for the slicer's cross-crate
+# inlining. Use it with `npm run tauri:build -- --profile release-fast`.
+[profile.release-fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+incremental = true
+
 # Compile ALL dependencies with full optimizations in dev builds.
 # The slicer and its deps (flate2, crc32fast, png, zip, rayon) are
 # 50-200x slower in debug mode due to heavy numerical/compression work.

@@ -24,6 +24,7 @@ Internals of DragonFruit, for people changing them. Start with [Architecture Ove
 | Touch slicing or the raster pipeline | [Slicing Engine](slicing-engine/index.md), [ADR-0036](../adr/0036-stream-ctb-layer-payloads-to-disk.md), and the 3DAA vocabulary in `CONTEXT.md` |
 | Build a slice job from printer and material profiles | [Slice Job Assembly](slice-job-assembly.md) |
 | Measure slicing performance | [Benchmark Suite](slicing-benchmarks.md), [Slicing Engine Benchmarking](slicing-engine/benchmarking.md) |
+| Speed up local builds | [Performance Debugging](performance-debugging.md#build-times) |
 | Drive DragonFruit from a script | [Command-Line Interface](../reference/cli.md) |
 | Add a config file | [Config Schemas](config-schemas.md) |
 | Persist something | [Data Storage](data-storage.md), [VOXL Format Spec](voxl-format-spec.md) |
