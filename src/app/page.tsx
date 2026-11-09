@@ -10646,7 +10646,7 @@ export default function Home() {
   }, [mirror.flushPendingBake]);
 
   // One dirty-only producer. Imports/transient tools settle before its independent
-  // 15-second quiet deadline; foreground Slice pauses scheduling, not its subscriber.
+  // short settle deadline; foreground Slice pauses scheduling, not its subscriber.
   useSceneSliceMeshWarmup({
     models: scene.models,
     plateFrames: scene.plateFrames,

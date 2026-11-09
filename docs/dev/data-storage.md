@@ -28,9 +28,10 @@ cache and last-slice backing, not a total-process memory limit. Missing or evict
 sources use the real live-geometry path.
 
 Scene cache refresh shares autosave's change notification, not its enablement or
-write clock: after 15 seconds of quiet, dirty inputs may prepare at idle even when
-autosave is disabled. Clean signatures do not periodically launch workers, and
-cache completion does not advance autosave's saved revision.
+write clock: a settled import arms a 250 ms deadline and an edit 2 s, after which
+dirty inputs may prepare at idle even when autosave is disabled. Clean signatures do
+not periodically launch workers, and cache completion does not advance autosave's
+saved revision.
 No new user-setting key or main app version migration is required.
 
 ## Key conventions

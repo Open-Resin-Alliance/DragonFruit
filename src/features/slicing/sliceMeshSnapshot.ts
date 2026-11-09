@@ -65,6 +65,10 @@ function geometrySignature(target: Array<string | number | boolean | null | unde
 export function equalSliceMeshInputSignatures(a: SliceMeshInputSignature, b: SliceMeshInputSignature): boolean {
     return a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
 }
+/** Whether a prepared snapshot already covers this exact input. */
+export function hasWarmSliceMesh(signature: SliceMeshInputSignature): boolean {
+    return latest !== null && equalSliceMeshInputSignatures(latest.signature, signature);
+}
 export function getSliceMeshInputSignature(options: SliceMeshPrewarmOptions): SliceMeshInputSignature {
     const raster = resolveSliceRasterSettings(options);
     const { supportTipShrinkPercent } = resolveSliceJobAntiAliasing({ ...options, layerHeightMm: raster.layerHeightMm, request: options.antiAliasing });

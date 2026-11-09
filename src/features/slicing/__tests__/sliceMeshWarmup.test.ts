@@ -7,7 +7,7 @@ import { getRaftSettings, setRaftSettings, updateRaftSettings } from '@/supports
 import { installFakeWindow } from '@/utils/__tests__/helpers/fakeWindow';
 import { installFakeMeshChunkUpload } from '@/utils/__tests__/helpers/fakeMeshChunkUpload';
 import { cubeModel } from './helpers/captureAppSliceJob';
-import { SliceMeshWarmup, SLICE_MESH_CACHE_QUIET_MS } from '../sliceMeshWarmup';
+import { SliceMeshWarmup, SLICE_MESH_CACHE_SETTLE_MS } from '../sliceMeshWarmup';
 import { prewarmSliceMesh, runWithSliceMesh } from '../sliceMeshSnapshot';
 import type { SliceMeshPrewarmOptions } from '../sliceMeshSnapshot';
 
@@ -74,14 +74,14 @@ function fixture(onBegin?: () => Promise<void>) {
   };
 }
 
-test('scene cache waits fifteen seconds and idle, then keeps equivalent inputs worker-free', async () => {
+test('a settled import arms a short deadline and equivalent inputs stay worker-free', async () => {
   const f = fixture();
   try {
-    f.warmer.update(f.options);
-    const delay = [...f.delays.values()][0];
-    assert.ok(delay > SLICE_MESH_CACHE_QUIET_MS - 100 && delay <= SLICE_MESH_CACHE_QUIET_MS,
-      'initial import preparation uses the full independent quiet deadline');
-    assert.equal(f.upload.readStats().uploadBegins, 0);
+    f.warmer.update(f.options, 0, false);
+    f.warmer.update(f.options, 0, true);
+    const settle = [...f.delays.values()][0];
+    assert.ok(settle > SLICE_MESH_CACHE_SETTLE_MS - 100 && settle <= SLICE_MESH_CACHE_SETTLE_MS,
+      'a settled import prepares after the short settle deadline');
     f.quiet();
     assert.equal(f.upload.readStats().uploadBegins, 0, 'quiet period alone does not force work on a busy UI');
     assert.equal(f.idle.size, 1);
@@ -193,6 +193,36 @@ test('busy import/transient windows retain only the latest dirty input', async (
     f.quiet(); f.idleTurn();
     assert.deepEqual(f.upload.readStats(), before, 'a content notification with an unchanged signature does no work');
     assert.equal(f.timers.size, 0, 'a clean cache has no periodic deadline');
+  } finally { f.dispose(); }
+});
+
+test('a foreground export leaves nothing for the background producer', async () => {
+  const f = fixture();
+  try {
+    await runWithSliceMesh(f.options, undefined, () => {}, async (descriptor) => descriptor);
+    f.warmer.update(f.options);
+    assert.equal(f.timers.size, 0, 'a warm snapshot needs no background deadline');
+    assert.equal(f.idle.size, 0);
+  } finally { f.dispose(); }
+});
+
+test('a failed preparation retries once for the same signature', async () => {
+  let plans = 0;
+  const f = fixture(async () => {
+    plans += 1;
+    if (plans === 1) throw new Error('native unavailable');
+  });
+  try {
+    f.warmer.update(f.options);
+    f.quiet(); f.idleTurn();
+    // Joining the warmup's own preparation settles exactly when it fails.
+    await prewarmSliceMesh(f.options).catch(() => undefined);
+    for (let tick = 0; tick < 20 && f.timers.size === 0; tick += 1) await Promise.resolve();
+    assert.equal(plans, 1);
+    assert.equal(f.timers.size, 1, 'a failure arms one retry deadline');
+    f.quiet(); f.idleTurn();
+    await prewarmSliceMesh(f.options);
+    assert.equal(f.upload.readStats().uploadBegins, 1, 'the retry completed the preparation');
   } finally { f.dispose(); }
 });
 

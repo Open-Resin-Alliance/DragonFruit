@@ -2,18 +2,22 @@ import { isTauriRuntime } from '@/utils/tauriRuntime';
 import {
   equalSliceMeshInputSignatures,
   getSliceMeshInputSignature,
+  hasWarmSliceMesh,
   prewarmSliceMesh,
   subscribeSliceMeshInputChanges,
 } from './sliceMeshSnapshot';
 import type { SliceMeshInputSignature, SliceMeshPrewarmOptions } from './sliceMeshSnapshot';
 
-export const SLICE_MESH_CACHE_QUIET_MS = 15_000;
+export const SLICE_MESH_CACHE_SETTLE_MS = 250;
+export const SLICE_MESH_CACHE_QUIET_MS = 2_000;
+export const SLICE_MESH_CACHE_IDLE_TIMEOUT_MS = 2_000;
 
 /** One dirty-only scene producer, independent of autosave's enablement and clock. */
 export class SliceMeshWarmup {
   private options: SliceMeshPrewarmOptions | null = null;
   private signature: SliceMeshInputSignature | null = null;
   private attempted: SliceMeshInputSignature | null = null;
+  private retried = false;
   private timer: number | undefined;
   private idle: number | null = null;
   private preparing: AbortController | null = null;
@@ -69,11 +73,14 @@ export class SliceMeshWarmup {
     if (changed) {
       this.signature = signature;
       this.attempted = null;
+      this.retried = false;
       this.cancelScheduled();
       this.preparing?.abort();
     }
     if (changed || revisionChanged || becameReady || resumed) {
-      this.quietUntil = Date.now() + SLICE_MESH_CACHE_QUIET_MS;
+      // A settled import is about to be sliced; an edit waits for the user to pause.
+      this.quietUntil = Date.now()
+        + (becameReady ? SLICE_MESH_CACHE_SETTLE_MS : SLICE_MESH_CACHE_QUIET_MS);
       this.cancelScheduled();
     }
     if (paused) {
@@ -120,16 +127,18 @@ export class SliceMeshWarmup {
     if (this.disposed || !this.ready || this.paused || !this.options || !this.signature
       || this.preparing || this.timer !== undefined || this.idle !== null || this.pointers.size > 0
       || this.host.document.hidden || (this.attempted
-        && equalSliceMeshInputSignatures(this.signature, this.attempted))) return;
+        && equalSliceMeshInputSignatures(this.signature, this.attempted))
+      // A foreground export already published this exact input; nothing to prepare.
+      || hasWarmSliceMesh(this.signature)) return;
     this.timer = this.host.setTimeout(() => {
       this.timer = undefined;
       if (!this.ready || this.paused || this.pointers.size > 0 || this.host.document.hidden) return;
       if (typeof this.host.requestIdleCallback === 'function') {
-        // No timeout: never force background preparation while the UI is busy.
+        // Bounded: a busy frame loop must not starve preparation forever.
         this.idle = this.host.requestIdleCallback(() => {
           this.idle = null;
           this.start();
-        });
+        }, { timeout: SLICE_MESH_CACHE_IDLE_TIMEOUT_MS });
       } else {
         this.start();
       }
@@ -148,7 +157,14 @@ export class SliceMeshWarmup {
     const controller = new AbortController();
     this.preparing = controller;
     void prewarmSliceMesh(this.options, controller.signal).catch((error: unknown) => {
-      if (!controller.signal.aborted) console.warn('[SliceMeshWarmup] Preparation unavailable; slice will prepare on demand.', error);
+      if (controller.signal.aborted) return;
+      console.warn('[SliceMeshWarmup] Preparation unavailable; slice will prepare on demand.', error);
+      // One retry per signature: a transient failure must not disable warmup until
+      // the scene changes, and a permanent one must not spin.
+      if (!this.retried) {
+        this.retried = true;
+        this.attempted = null;
+      }
     }).finally(() => {
       if (this.preparing === controller) this.preparing = null;
       // Superseding edits wait for release before another producer can start.
