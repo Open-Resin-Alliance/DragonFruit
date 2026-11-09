@@ -278,12 +278,14 @@ export async function computeMembranePreview(
       tenonDetail?: string;
       tenonFrame?: TenonPreviewFrame | null;
     };
-    const membrane = report.triangleCount
-      ? await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_membrane')
-      : null;
-    const tenonPreview = report.jointTriangleCount
-      ? await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_tenon')
-      : null;
+    const [membrane, tenonPreview] = await Promise.all([
+      report.triangleCount
+        ? readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_membrane')
+        : null,
+      report.jointTriangleCount
+        ? readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_tenon')
+        : null,
+    ]);
     return {
       membrane,
       tenonPreview,
