@@ -174,6 +174,11 @@ see [Slice Job Assembly](slice-job-assembly.md#layer-settings-range-resolution)
 for validation, units and overlap precedence. This additive field does not
 raise the binary container floor. A present key is validated before model/mesh
 processing: malformed ranges fail rather than being silently sanitized.
+Each range may also carry `blendStart` and `blendEnd`: nonnegative distances in its own
+unit, with whole layer steps required for layer-number ranges. Zero/absent disables an
+edge and canonical serialization omits zero. The distances persist with SCNE, participate
+in scene/encoded fingerprints, and survive save/load/undo without altering material presets.
+No additional binary chunk or container version is introduced.
 
 The writer retains present `[]` as an explicit cleared schedule. On successful
 scene import a present schedule replaces the current one, including `[]`;

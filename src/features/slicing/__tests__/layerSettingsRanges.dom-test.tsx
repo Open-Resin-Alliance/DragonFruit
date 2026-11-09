@@ -538,6 +538,12 @@ function overrideSwitch(label: string) {
   return element;
 }
 
+function blurSwitch(label: 'Blur start' | 'Blur end') {
+  const element = dialog().querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${label}"]`);
+  assert.ok(element);
+  return element;
+}
+
 async function selectUnits(unit: 'Layers' | 'mm') {
   const group = dialog().querySelector<HTMLElement>('[role="group"][aria-label="Range units"]');
   assert.ok(group);
@@ -740,6 +746,188 @@ test('zero and off-grid mm point ranges stay saved even without matching printed
     await click(button(savedRows()[0], 'Edit'));
     assert.equal(field('Start height').value, '0.075');
     await click(button(dialog(), 'Cancel'));
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('independent blur edges apply without changing overrides and reopen without an extra history action', async () => {
+  const original: LayerSettingsRange = { id: 'blur-edges', startLayer: 3, endLayer: 10, settings: { exposureSec: 7 } };
+  const tree = await mountHarness({ ranges: [original] });
+  try {
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    await act(async () => field('Blur start').focus());
+    assert.equal(blurSwitch('Blur start').getAttribute('aria-checked'), 'false', 'focus does not enable blur');
+    await act(async () => field('Blur start').blur());
+    await click(blurSwitch('Blur start'));
+    assert.equal(field('Blur start').value, '1', 'layer blur starts at one layer');
+    assert.equal(blurSwitch('Blur end').getAttribute('aria-checked'), 'false');
+    await typeValue('Blur start', '4');
+    await click(button(dialog(), 'Apply'));
+    assert.deepEqual(tree.state().ranges[0], { ...original, blendStart: 4 });
+    assert.equal(tree.state().applies, 1, 'a blur-only edit is not suppressed as unchanged');
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    assert.equal(field('Blur start').value, '4');
+    assert.equal(field('Blur end').value, '0');
+    await click(button(dialog(), 'Apply'));
+    assert.equal(tree.state().applies, 1, 'unchanged blur creates no history action');
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    await click(blurSwitch('Blur end'));
+    await typeValue('Blur end', '6');
+    await click(button(dialog(), 'Apply'));
+    assert.deepEqual(tree.state().ranges[0], { ...original, blendStart: 4, blendEnd: 6 });
+    assert.equal(tree.state().applies, 2);
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('Cancel discards blur edits; disabling and entering zero remove only the selected edge', async () => {
+  const original: LayerSettingsRange = { id: 'remove-blur', startLayer: 3, endLayer: 10, blendStart: 2, blendEnd: 3, settings: { exposureSec: 7 } };
+  const tree = await mountHarness({ ranges: [original] });
+  try {
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    await click(blurSwitch('Blur start'));
+    await typeValue('Blur end', '8');
+    await click(button(dialog(), 'Cancel'));
+    assert.deepEqual(tree.state().ranges[0], original);
+    assert.equal(tree.state().applies, 0);
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    assert.equal(field('Blur start').value, '2');
+    assert.equal(field('Blur end').value, '3');
+    await click(blurSwitch('Blur start'));
+    await click(button(dialog(), 'Apply'));
+    assert.deepEqual(tree.state().ranges[0], { id: original.id, startLayer: 3, endLayer: 10, blendEnd: 3, settings: original.settings });
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    await typeValue('Blur end', '0');
+    assert.equal(blurSwitch('Blur end').getAttribute('aria-checked'), 'false');
+    await click(button(dialog(), 'Apply'));
+    assert.deepEqual(tree.state().ranges[0], { id: original.id, startLayer: 3, endLayer: 10, settings: original.settings });
+    assert.equal(tree.state().applies, 2);
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('blur uses selected physical units and converts both distances without rounding enabled blur to zero', async () => {
+  const original: LayerSettingsRange = { id: 'convert-blur', startLayer: 3, endLayer: 10, blendStart: 2, blendEnd: 3, settings: { exposureSec: 7 } };
+  const tree = await mountHarness({ ranges: [original], layerHeightMm: 0.05 });
+  try {
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    await selectUnits('mm');
+    assert.equal(field('Blur start').value, '0.1');
+    assert.equal(field('Blur end').value, '0.15');
+    await click(button(dialog(), 'Apply'));
+    const asMm = tree.state().ranges[0];
+    assert.ok(asMm.unit === 'mm');
+    assert.equal(asMm.blendStart, 2 * 0.05);
+    assert.equal(asMm.blendEnd, 3 * 0.05);
+    assert.deepEqual(asMm.settings, original.settings);
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    await typeValue('Blur start', '0.001');
+    await typeValue('Blur end', '0.125');
+    await act(async () => field('Blur end').blur());
+    await selectUnits('Layers');
+    assert.equal(field('Blur start').value, '1', 'positive sub-layer blur remains enabled');
+    assert.equal(field('Blur end').value, '3', 'fractional distances round to the nearest layer');
+    assert.equal(blurSwitch('Blur start').getAttribute('aria-checked'), 'true');
+    await click(button(dialog(), 'Apply'));
+    assert.deepEqual(tree.state().ranges[0], { ...original, blendStart: 1, blendEnd: 3 });
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('mm blur defaults to one nominal layer and blur alone never satisfies the required setting override', async () => {
+  const tree = await mountHarness({ ranges: [], layerHeightMm: 0.035 });
+  try {
+    await tree.rightClick(5);
+    await click(button(menu(), 'Add range'));
+    await selectUnits('mm');
+    await click(blurSwitch('Blur end'));
+    assert.equal(field('Blur end').value, '0.035');
+    assert.equal(blurSwitch('Blur start').getAttribute('aria-checked'), 'false');
+    assert.equal(overrideSwitch('Exposure').getAttribute('aria-checked'), 'false');
+    assert.equal(button(dialog(), 'Apply').disabled, true, 'blur is not a setting override');
+    await typeValue('Exposure', '6');
+    await typeValue('Blur end', '0.012345');
+    await click(button(dialog(), 'Apply'));
+    assert.equal(tree.state().ranges[0].blendStart, undefined);
+    assert.equal(tree.state().ranges[0].blendEnd, 0.012345);
+    assert.equal(tree.state().ranges[0].unit, 'mm');
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    assert.equal(field('Blur end').value, '0.012345');
+    await click(button(dialog(), 'Cancel'));
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('fractional layer blur is rejected and physical blur beyond layer capacity cannot switch to layers', async () => {
+  const original: LayerSettingsRange = { id: 'validate-blur', startLayer: 3, endLayer: 10, settings: { exposureSec: 7 } };
+  const tree = await mountHarness({ ranges: [original] });
+  try {
+    await manage(tree);
+    await click(button(savedRows()[0], 'Edit'));
+    await typeValue('Blur start', '1.5');
+    assert.equal(button(dialog(), 'Apply').disabled, true);
+    await typeValue('Blur start', '2');
+    assert.equal(button(dialog(), 'Apply').disabled, false);
+    await selectUnits('mm');
+    await typeValue('Blur end', '300000000');
+    const group = dialog().querySelector<HTMLElement>('[role="group"][aria-label="Range units"]');
+    assert.ok(group);
+    assert.equal(button(group, 'Layers').disabled, true, 'conversion cannot overflow the layer distance limit');
+    await click(button(dialog(), 'Apply'));
+    assert.equal(tree.state().ranges[0].blendEnd, 300000000);
+    assert.equal(tree.state().ranges[0].unit, 'mm');
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('enabling an inherited override uses the lower range blur at the edited range start layer', async () => {
+  const tree = await mountHarness({ ranges: [
+    { id: 'blurred-underneath', startLayer: 3, endLayer: 10, blendStart: 4, settings: { exposureSec: 10 } },
+    { id: 'edit-above-blur', startLayer: 5, endLayer: 6, settings: { liftHeightMm: 9 } },
+  ] });
+  try {
+    await manage(tree);
+    await click(button(savedRows()[1], 'Edit'));
+    assert.equal(field('Exposure').value, '6', 'half influence blends the lower override with normal exposure');
+    assert.equal(overrideSwitch('Exposure').getAttribute('aria-checked'), 'false');
+    await toggle('Exposure');
+    await click(button(dialog(), 'Apply'));
+    assert.deepEqual(tree.state().ranges[1].settings, { exposureSec: 6, liftHeightMm: 9 });
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('editing above blurred motion settings supplies display baselines for inherited fields', async () => {
+  const tree = await mountHarness({ ranges: [
+    { id: 'blurred-motion-underneath', startLayer: 3, endLayer: 10, blendStart: 4, settings: { liftHeightMm: 8, liftSpeedMmMin: 120, waitTimeBeforeCureSec: 4 } },
+    { id: 'edit-above-motion-blur', startLayer: 5, endLayer: 6, settings: { exposureSec: 7 } },
+  ] });
+  try {
+    await manage(tree);
+    await click(button(savedRows()[1], 'Edit'));
+    assert.equal(field('Total lift travel').value, '4', 'half influence uses the existing zero motion display baseline');
+    assert.equal(field('Lift speed').value, '60');
+    assert.equal(overrideSwitch('Lift travel').getAttribute('aria-checked'), 'false');
+    await toggle('Lift travel');
+    await toggle('Lift speed');
+    await click(button(dialog(), 'Apply'));
+    assert.deepEqual(tree.state().ranges[1].settings, { exposureSec: 7, liftHeightMm: 4, liftHeight2Mm: 0, liftSpeedMmMin: 60, liftSpeed2MmMin: 0 });
   } finally {
     await tree.unmount();
   }

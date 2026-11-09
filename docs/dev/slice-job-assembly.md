@@ -105,7 +105,8 @@ const job = assembleSliceJob({
 
 `src/features/slicing/layerSettingsRanges.ts` is the pure scene-range contract. Use
 `parseLayerSettingsRanges` at input boundaries to validate and own an array;
-`compileLayerSettingsRanges` returns compact inclusive printed-layer segments.
+`compileLayerSettingsRanges` returns compact inclusive coverage segments and full-strength target
+patches for slider display. Use `resolveLayerSettingsAt` for actual blended point values.
 It imports no React, THREE, storage or translation runtime.
 
 ```ts
@@ -180,8 +181,36 @@ A narrow exposure-only patch inherits motion from the highest-priority wider
 supplier. Editing preserves id/order; Add appends. Segment `rangeId` is the
 overall display winner, not necessarily every inherited field's supplier.
 
+Optional `blendStart` and `blendEnd` distances soften the corresponding edge **inside** a
+range. Distances use that range's unit: nonnegative integer layer steps (at most u32 max)
+or finite nonnegative millimetres (at most f32 max). Absent/zero disables an edge; the parser
+omits explicit zero. A distance may exceed the range span; overlapping ramps need not reach
+full strength. Priority still uses the original range span, not the unblurred interior.
+
+At a matching layer, influence is the clamped minimum of 1, distance from the start divided
+by `blendStart` when enabled, and distance from the end divided by `blendEnd` when enabled.
+MM positions and endpoints use the existing final-binary32 height space; distances remain f64.
+Resolve supplied fields from lowest to highest priority, interpolating against the value
+underneath at that same layer, including lower-range blurs. Missing fields are not attenuated.
+When no lower supplier exists, use that physical record's actual bottom/transition/normal
+baseline, never an assumed zero. PWM rounds to the nearest integer only after all blending.
+
+```ts
+import { resolveLayerSettingsAt } from '@/features/slicing/layerSettingsRanges';
+
+resolveLayerSettingsAt([
+  { id: 'wide', startLayer: 1, endLayer: 30, settings: { exposureSec: 4 } },
+  { id: 'edge', startLayer: 10, endLayer: 20, blendStart: 2, settings: { exposureSec: 8 } },
+], 11, { exposureSec: 2 }); // exposureSec = 6
+```
+
+The TypeScript point resolver takes a one-based printed layer and a sparse baseline patch;
+it rejects a missing baseline field when that field is needed for partial interpolation.
+It validates/owns ranges per call and is intended for editor/point queries, not a native
+per-layer loop. Changing a blur distance changes encoded identity even if coverage is unchanged.
+
 `fingerprintLayerSettingsRanges` excludes ids and colors, but retains range
-order, the raw unit/physical bounds and fields in whitelist order. `findUnsupportedLayerSetting`
+order, the raw unit/physical bounds, enabled blur distances and fields in whitelist order. `findUnsupportedLayerSetting`
 returns the first incompatible supplied field in original range/whitelist
 order, including shadowed and out-of-print ranges; consumers must reject it,
 not silently drop it.
@@ -190,12 +219,15 @@ The native counterpart is
 `rust/dragonfruit-slicing-engine/src/layer_settings.rs`:
 `LayerSettingsSchedule::from_job` validates the root `layerSettingsRanges`
 metadata key and format-owned supported fields, resolving mm against
-`SliceJobV3.layer_height_mm`; `patch_at` accepts a zero-based
-physical layer index. Parsed values remain f64 until record emission. Both
-resolvers sweep endpoints with per-field priority heaps, rather than allocate
-an array proportional to the print's layer count. Native `is_empty()` means
-the original array was empty: a beyond-EOF schedule still requests the format's
-per-layer activation policy even when `patch_at` never matches.
+`SliceJobV3.layer_height_mm`; `resolve_at` accepts a zero-based physical layer index and
+a callback returning that record's canonical baseline field. It returns an owned stack patch;
+parsed values remain f64 until record emission. Constant schedules retain endpoint-swept
+per-field priority heaps and binary-search lookup. Blurred schedules additionally retain
+original priority-ordered ranges and interpolate without per-record parsing or allocation.
+Neither allocates an array proportional to the print's layer count. Native `is_empty()` means
+the original array was empty: a beyond-EOF schedule still requests the format's per-layer
+activation policy even when `resolve_at` never matches. Blurred motion validation checks
+interior physical records before opening a destination, not just interval endpoints.
 
 The scene supplies `SliceJobScene.layerSettingsRanges`; assembly validates and
 owns it, then writes the root metadata key after material/plugin overrides.
@@ -290,6 +322,12 @@ Supported numeric inputs remain editable when off; focus alone creates no
 override. MM endpoint fields use six decimal places and a 0.001 mm step. Empty
 or beyond-u32 mm coverage cannot be converted into a fabricated layer range;
 its physical data remains editable/savable as mm.
+Blur start/end have independent toggle/value controls aligned with that same far column.
+Unit conversion also converts their distances; mm-to-layers rounds to the nearest integer,
+retaining at least one layer for an enabled edge. Overflowing conversions are disabled.
+Where no lower range supplies a value, the material-mode-default label remains unchanged;
+encoded interpolation always uses the format's actual physical-record baseline.
+
 
 ### Profile model view
 

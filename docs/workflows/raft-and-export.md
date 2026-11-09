@@ -39,8 +39,10 @@ Shift+F10 also opens range commands at the current layer.
 2. Type into a supported setting box to enable its override automatically, or
    enable its toggle first. Focusing alone changes nothing. A new range starts
    with no overrides; unchecked fields inherit rather than copy defaults.
-3. Apply once. Cancel leaves the scene unchanged; undo/redo also applies to ranges.
-4. Use **Manage ranges** to reach every saved range, including fully shadowed or
+3. Optionally enable **Blur start**, **Blur end**, or both and enter a distance in the
+   selected range units. Zero disables that edge.
+4. Apply once. Cancel leaves the scene unchanged; undo/redo also applies to ranges.
+5. Use **Manage ranges** to reach every saved range, including fully shadowed or
    beyond-print ranges. Right-click a layer to edit/delete any range matching it.
 5. Choose **Profile** in the view selector to tint model surfaces with those same
    range colors at their printed heights. Uncovered areas keep ordinary shading;
@@ -69,6 +71,18 @@ The narrowest original resolved layer span wins each supplied field before
 clipping to this print; equal spans prefer the later-created range, including
 mixed units. Editing does not reorder priority. A
 narrow exposure-only range can inherit lift/wait values from a wider range.
+
+Blur interpolates each explicit override against the lower-priority settings at the same
+layer, including any blur on those lower ranges. With no lower supplier it blends into
+the material's actual settings for that printed layer. The enabled edge itself has zero
+influence, reaching full influence after the specified distance; nothing spills outside
+the saved range. For example, an 8-second range starting at layer 10 over a 4-second wider
+range, with start blur 2, gives 4 seconds at layer 10, 6 at layer 11 and 8 at layer 12.
+Both edges can be blurred; overlapping ramps use the smaller influence and may never
+reach full strength. Unspecified fields continue to inherit normally. Changing layer
+height preserves mm blur distances; converting mm to Layers rounds to the nearest whole
+layer, with a minimum of one layer for an enabled blur.
+
 
 Travel heights are totals: stage 2 is a part of that total, not extra travel.
 Speeds are mm/min and durations seconds; PLS Light PWM is a byte value (0–255),

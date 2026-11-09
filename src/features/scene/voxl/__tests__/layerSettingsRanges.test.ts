@@ -15,6 +15,7 @@ import {
 } from './voxlTestSupport';
 import {
   compileLayerSettingsRanges,
+  resolveLayerSettingsAt,
   type LayerSettingsRange,
 } from '@/features/slicing/layerSettingsRanges';
 
@@ -230,6 +231,8 @@ test('malformed stored schedules fail before eager or deferred mesh processing',
     ['inverted endpoints', [{ ...valid, startLayer: 11 }]],
     ['fractional endpoint', [{ ...valid, startLayer: 3.5 }]],
     ['unknown range key', [{ ...valid, color: '#ffffff' }]],
+    ['fractional layer blur', [{ ...valid, blendStart: 0.5 }]],
+    ['null edge blur', [{ ...valid, blendEnd: null }]],
     ['null settings', [{ ...valid, settings: null }]],
     ['empty settings', [{ ...valid, settings: {} }]],
     ['null field', [{ ...valid, settings: { exposureSec: null } }]],
@@ -245,4 +248,36 @@ test('malformed stored schedules fail before eager or deferred mesh processing',
       }
     });
   }
+});
+
+test('layer and millimetre edge blurs reopen with their distances and effective inheritance intact', async () => {
+  const stored: LayerSettingsRange[] = [
+    { id: 'wide', startLayer: 1, endLayer: 30, settings: { exposureSec: 4, liftHeightMm: 8 } },
+    { id: 'layers', startLayer: 10, endLayer: 20, blendStart: 2, blendEnd: 3, settings: { exposureSec: 8 } },
+    { id: 'mm', unit: 'mm', startMm: 0.125, endMm: 0.375, blendEnd: 0.125, settings: { exposureSec: 12 } },
+  ];
+  const input = { ...testInput(['m1']), layerSettingsRanges: stored };
+  const eager = await serializeVoxlDocumentV2(input, new Map());
+  const streamed = await streamSerialize(input, {});
+  for (const bytes of [eager, streamed.bytes]) {
+    const reopened = (await parseVoxlBinaryV2(bytes)).document.scene.layerSettingsRanges!;
+    assert.deepEqual(reopened, stored);
+    assert.deepEqual(resolveLayerSettingsAt(reopened, 11, { exposureSec: 2 }, 0.05), { exposureSec: 6, liftHeightMm: 8 });
+    assert.deepEqual(resolveLayerSettingsAt(reopened, 5, { exposureSec: 2 }, 0.0625), { exposureSec: 8, liftHeightMm: 8 });
+  }
+});
+
+test('a blur-only edit changes streamed scene content even with unchanged coverage and clock', async () => {
+  await withFrozenClock(async () => {
+    const chunkCache = new VoxlChunkCache();
+    const original: LayerSettingsRange[] = [{ id: 'edge', startLayer: 3, endLayer: 10, blendStart: 1, settings: { exposureSec: 8 } }];
+    const edited: LayerSettingsRange[] = [{ ...original[0], blendStart: 2 }];
+    assert.deepEqual(compileLayerSettingsRanges(original, 12), compileLayerSettingsRanges(edited, 12));
+    const first = await streamSerialize({ ...testInput(['m1']), layerSettingsRanges: original }, { chunkCache });
+    const changed = await streamSerialize({ ...testInput(['m1']), layerSettingsRanges: edited }, { chunkCache, previousFingerprint: first.fingerprint });
+    assert.equal(changed.skipped, false);
+    assert.notEqual(changed.fingerprint, first.fingerprint);
+    assert.deepEqual(changed.chunkReport.filter((chunk) => chunk.changed).map((chunk) => chunk.type), ['SCNE']);
+    assert.deepEqual((await parseVoxlBinaryV2(changed.bytes)).document.scene.layerSettingsRanges, edited);
+  });
 });

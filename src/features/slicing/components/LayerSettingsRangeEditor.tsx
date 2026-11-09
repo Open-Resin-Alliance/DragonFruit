@@ -24,6 +24,7 @@ import {
   LAYER_SETTING_FIELDS,
   parseLayerSettingsRanges,
   resolveLayerSettingsRangeBounds,
+  resolveLayerSettingsAt,
   type LayerSettingField,
   type LayerPrintSettingsPatch,
   type LayerSettingsRange,
@@ -109,6 +110,22 @@ function hasValidBounds(range: LayerSettingsRange): boolean {
     : [range.startLayer, range.endLayer].every((value) => Number.isInteger(value) && value >= 1 && value <= MAX_LAYER) && range.startLayer <= range.endLayer;
 }
 
+function hasValidBlur(range: { unit?: 'layers' | 'mm'; blendStart?: number; blendEnd?: number }): boolean {
+  return [range.blendStart, range.blendEnd].every((value) => value === undefined
+    || (Number.isFinite(value) && value >= 0 && value <= (range.unit === 'mm' ? MAX_F32 : MAX_LAYER)
+      && (range.unit === 'mm' || Number.isInteger(value))));
+}
+
+function convertBlur(range: LayerSettingsRange, unit: 'layers' | 'mm', layerHeightMm: number): Pick<LayerSettingsRange, 'blendStart' | 'blendEnd'> {
+  const converted: Pick<LayerSettingsRange, 'blendStart' | 'blendEnd'> = {};
+  for (const edge of ['blendStart', 'blendEnd'] as const) {
+    const value = range[edge];
+    if (value) converted[edge] = (range.unit === 'mm') === (unit === 'mm') ? value
+      : unit === 'mm' ? value * layerHeightMm : Math.max(1, Math.round(value / layerHeightMm));
+  }
+  return converted;
+}
+
 function RangeSwatch({ color }: { color: string | undefined }) {
   return color ? <span aria-hidden="true" className="inline-block h-3 w-3 shrink-0 rounded-sm" style={{ backgroundColor: color }} /> : null;
 }
@@ -180,12 +197,19 @@ export function LayerSettingsRangeEditor({
 
   const resolvedDraft = draft && hasValidBounds(draft) ? resolveLayerSettingsRangeBounds(draft, layerHeightMm) : null;
   const inheritedLayer = resolvedDraft?.startLayer;
+  const inheritedRangeId = draft?.id;
   const inheritedPatch = React.useMemo<LayerPrintSettingsPatch>(() => {
     if (inheritedLayer === undefined || inheritedLayer > MAX_LAYER) return {};
-    // Stored ranges beyond the current print are editable and retain their inheritance.
-    return compileLayerSettingsRanges(ranges, Math.min(MAX_LAYER, Math.max(totalLayers, inheritedLayer)), layerHeightMm)
+    const underneath = ranges.filter((range) => range.id !== inheritedRangeId);
+    // Keep material-mode defaults distinct from fields supplied by lower ranges.
+    const supplied = compileLayerSettingsRanges(underneath, Math.min(MAX_LAYER, Math.max(totalLayers, inheritedLayer)), layerHeightMm)
       .find((segment) => segment.startLayer <= inheritedLayer && segment.endLayer >= inheritedLayer)?.settings ?? {};
-  }, [ranges, totalLayers, layerHeightMm, inheritedLayer]);
+    const resolved = resolveLayerSettingsAt(underneath, inheritedLayer, Object.fromEntries(
+      LAYER_SETTING_FIELDS.map((field) => [field, field === 'exposureSec' ? normalExposureSec : field === 'lightPwm' ? 255 : 0]),
+    ) as LayerPrintSettingsPatch, layerHeightMm);
+    return Object.fromEntries(LAYER_SETTING_FIELDS.filter((field) => supplied[field] !== undefined)
+      .map((field) => [field, resolved[field]])) as LayerPrintSettingsPatch;
+  }, [ranges, totalLayers, layerHeightMm, inheritedLayer, inheritedRangeId, normalExposureSec]);
   const inheritedValue = (field: LayerSettingField) => inheritedPatch[field]
     ?? (field === 'exposureSec' ? normalExposureSec : field === 'lightPwm' ? 255 : 0);
   const updateDraft = (update: (current: LayerSettingsRange) => LayerSettingsRange) => {
@@ -201,16 +225,25 @@ export function LayerSettingsRangeEditor({
       return { ...current, settings };
     });
   };
-  const canUseLayerBounds = draft?.unit !== 'mm' || (resolvedDraft !== null && resolvedDraft.startLayer <= MAX_LAYER && resolvedDraft.endLayer <= MAX_LAYER);
+  const setBlur = (edge: 'blendStart' | 'blendEnd', value: number) => {
+    updateDraft((current) => {
+      const next = { ...current };
+      if (value === 0) delete next[edge];
+      else next[edge] = value;
+      return next;
+    });
+  };
+  const canConvertBlur = (unit: 'layers' | 'mm') => !draft || (hasValidBlur(draft) && hasValidBlur({ unit, ...convertBlur(draft, unit, layerHeightMm) }));
+  const canUseLayerBounds = (draft?.unit !== 'mm' || (resolvedDraft !== null && resolvedDraft.startLayer <= MAX_LAYER && resolvedDraft.endLayer <= MAX_LAYER)) && canConvertBlur('layers');
   const switchUnit = (unit: 'layers' | 'mm') => {
     updateDraft((current) => {
-      if (unit === 'mm' && current.unit !== 'mm') {
-        return { id: current.id, unit: 'mm', startMm: current.startLayer * layerHeightMm, endMm: current.endLayer * layerHeightMm, settings: current.settings };
+      if (unit === 'mm' && current.unit !== 'mm' && canConvertBlur('mm')) {
+        return { id: current.id, unit: 'mm', startMm: current.startLayer * layerHeightMm, endMm: current.endLayer * layerHeightMm, settings: current.settings, ...convertBlur(current, unit, layerHeightMm) };
       }
       if (unit === 'layers' && current.unit === 'mm' && hasValidBounds(current)) {
         const resolved = resolveLayerSettingsRangeBounds(current, layerHeightMm);
-        if (resolved && resolved.startLayer <= MAX_LAYER && resolved.endLayer <= MAX_LAYER) {
-          return { id: current.id, startLayer: resolved.startLayer, endLayer: resolved.endLayer, settings: current.settings };
+        if (resolved && resolved.startLayer <= MAX_LAYER && resolved.endLayer <= MAX_LAYER && canConvertBlur('layers')) {
+          return { id: current.id, startLayer: resolved.startLayer, endLayer: resolved.endLayer, settings: current.settings, ...convertBlur(current, unit, layerHeightMm) };
         }
       }
       return current;
@@ -230,6 +263,10 @@ export function LayerSettingsRangeEditor({
       error = formatBoundsError(_, fmt.number(1), fmt.number(4294967295));
     } else if (draft.unit !== 'mm' && draft.startLayer > draft.endLayer) {
       error = _(msg`The start layer must not exceed the end layer.`);
+    } else if (!hasValidBlur(draft)) {
+      error = draft.unit === 'mm'
+        ? _(msg`Blur distances must be finite, nonnegative numbers within the supported numeric range.`)
+        : _(msg`Blur distances must be whole, nonnegative layer counts within the supported numeric range.`);
     } else if (Object.keys(draft.settings).length === 0) {
       error = _(msg`Enable at least one setting override.`);
     } else if (Object.values(draft.settings).some((value) => !Number.isFinite(value) || value < 0 || value > 3.4028234663852886e38)) {
@@ -259,6 +296,8 @@ export function LayerSettingsRangeEditor({
       && (previous.unit === 'mm'
         ? draft.unit === 'mm' && previous.startMm === draft.startMm && previous.endMm === draft.endMm
         : draft.unit !== 'mm' && previous.startLayer === draft.startLayer && previous.endLayer === draft.endLayer)
+      && (previous.blendStart ?? 0) === (draft.blendStart ?? 0)
+      && (previous.blendEnd ?? 0) === (draft.blendEnd ?? 0)
       && LAYER_SETTING_FIELDS.every((field) => previous.settings[field] === draft.settings[field]);
     if (!unchanged) onApply(validatedNext);
     closeDialog();
@@ -311,7 +350,7 @@ export function LayerSettingsRangeEditor({
                 value={draft.unit === 'mm' ? 'mm' : 'layers'}
                 options={[
                   { value: 'layers', label: _(msg`Layers`), disabled: !canEditNumbers || !canUseLayerBounds },
-                  { value: 'mm', label: fmt.unit('mm', ''), disabled: !canEditNumbers },
+                  { value: 'mm', label: fmt.unit('mm', ''), disabled: !canEditNumbers || !canConvertBlur('mm') },
                 ]}
                 onChange={switchUnit}
               />
@@ -344,6 +383,35 @@ export function LayerSettingsRangeEditor({
                       className="ui-input w-full pr-5"
                     />
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{isMm ? fmt.unit('mm', '') : null}</span>
+                  </div>
+                </SettingRow>
+              );
+            })}
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {_(msg`Blur linearly blends each overridden setting into the lower-priority settings at the same layer, only inside this range. Overlapping start and end ramps use the smaller influence and may never reach the full override value. Distances use the selected range units. Converting to layers rounds to the nearest whole layer, with a minimum of one layer for enabled blur.`)}
+            </p>
+            {(['blendStart', 'blendEnd'] as const).map((edge) => {
+              const isMm = draft.unit === 'mm';
+              const label = edge === 'blendStart' ? _(msg`Blur start`) : _(msg`Blur end`);
+              const value = draft[edge] ?? 0;
+              return (
+                <SettingRow key={edge} label={label} bordered surface="raised">
+                  <div className={CONTROL_GRID}>
+                    <Toggle label={label} checked={value > 0} disabled={!canEditNumbers} size="sm" onChange={(checked) => setBlur(edge, checked ? isMm ? layerHeightMm : 1 : 0)} />
+                    <span aria-hidden="true" />
+                    <span aria-hidden="true" />
+                    <NumberInput
+                      aria-label={label}
+                      value={value}
+                      min={0}
+                      max={isMm ? MAX_F32 : MAX_LAYER}
+                      step={isMm ? 0.001 : 1}
+                      decimalPlaces={isMm ? 6 : undefined}
+                      disabled={!canEditNumbers}
+                      onChange={(next) => setBlur(edge, next)}
+                      className="ui-input w-full pr-5"
+                    />
+                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{isMm ? fmt.unit('mm', '') : _(msg`Layers`)}</span>
                   </div>
                 </SettingRow>
               );

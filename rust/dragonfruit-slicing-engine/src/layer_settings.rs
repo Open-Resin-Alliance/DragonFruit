@@ -74,6 +74,10 @@ pub struct LayerNumberSettingsRange {
     pub start_layer: u32,
     #[serde(deserialize_with = "deserialize_layer_number")]
     pub end_layer: u32,
+    #[serde(default, deserialize_with = "deserialize_layer_blend", skip_serializing_if = "disabled_blend")]
+    pub blend_start: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_layer_blend", skip_serializing_if = "disabled_blend")]
+    pub blend_end: Option<f64>,
     pub settings: LayerPrintSettingsPatch,
 }
 
@@ -84,6 +88,10 @@ pub struct MillimeterSettingsRange {
     pub unit: MillimeterUnit,
     pub start_mm: f64,
     pub end_mm: f64,
+    #[serde(default, deserialize_with = "deserialize_mm_blend", skip_serializing_if = "disabled_blend")]
+    pub blend_start: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_mm_blend", skip_serializing_if = "disabled_blend")]
+    pub blend_end: Option<f64>,
     pub settings: LayerPrintSettingsPatch,
 }
 
@@ -113,6 +121,27 @@ impl LayerSettingsRange {
             Self::Layers(range) => &mut range.settings,
             Self::Millimeters(range) => &mut range.settings,
         }
+    }
+
+    fn blend(&self) -> (f64, f64) {
+        match self {
+            Self::Layers(range) => (range.blend_start.unwrap_or(0.0), range.blend_end.unwrap_or(0.0)),
+            Self::Millimeters(range) => (range.blend_start.unwrap_or(0.0), range.blend_end.unwrap_or(0.0)),
+        }
+    }
+
+    fn influence(&self, layer: u32, nominal_height: f64) -> f64 {
+        let (x, start, end) = match self {
+            Self::Layers(range) => (f64::from(layer), f64::from(range.start_layer), f64::from(range.end_layer)),
+            Self::Millimeters(range) => (f64::from((f64::from(layer) * nominal_height) as f32),
+                f64::from(range.start_mm as f32), f64::from(range.end_mm as f32)),
+        };
+        if x < start || x > end { return 0.0; }
+        let (blend_start, blend_end) = self.blend();
+        let mut weight: f64 = 1.0;
+        if blend_start > 0.0 { weight = weight.min((x - start) / blend_start); }
+        if blend_end > 0.0 { weight = weight.min((end - x) / blend_end); }
+        weight.clamp(0.0, 1.0)
     }
 
     // Resolve original bounds before clipping or ranking. Round n * nominal h
@@ -170,11 +199,35 @@ fn deserialize_layer_number<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
     }
 }
 
-/// One nonempty patch interval. Endpoints are inclusive, one-based printed layers.
+fn disabled_blend(value: &Option<f64>) -> bool {
+    value.unwrap_or(0.0) == 0.0
+}
+
+fn deserialize_blend<'de, D: Deserializer<'de>>(deserializer: D, millimeters: bool) -> Result<Option<f64>, D::Error> {
+    let value = f64::deserialize(deserializer)?;
+    if value.is_finite() && value >= 0.0 && if millimeters { value <= f64::from(f32::MAX) }
+        else { value.fract() == 0.0 && value <= f64::from(u32::MAX) }
+    {
+        Ok((value != 0.0).then_some(value))
+    } else {
+        Err(serde::de::Error::custom("expected a nonnegative blend distance within its unit's range"))
+    }
+}
+
+fn deserialize_layer_blend<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<f64>, D::Error> {
+    deserialize_blend(deserializer, false)
+}
+
+fn deserialize_mm_blend<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<f64>, D::Error> {
+    deserialize_blend(deserializer, true)
+}
+
+/// A compact coverage/priority interval, inclusive one-based printed layers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerSettingsSegment {
     pub start_layer: u32,
     pub end_layer: u32,
+    /// Constant target values only; use `resolve_at` for baseline-aware blur.
     pub settings: LayerPrintSettingsPatch,
     /// Original array index of the highest-priority matching range overall.
     pub range_index: usize,
@@ -184,6 +237,9 @@ pub struct LayerSettingsSegment {
 pub struct LayerSettingsSchedule {
     segments: Vec<LayerSettingsSegment>,
     originally_nonempty: bool,
+    // Only populated for blurred schedules, in low-to-high original priority.
+    blended_ranges: Vec<(Priority, LayerSettingsRange)>,
+    nominal_height: f64,
 }
 
 impl LayerSettingsSchedule {
@@ -209,9 +265,21 @@ impl LayerSettingsSchedule {
         } else {
             f64::from(job.layer_height_mm)
         };
+        let segments = compile_ranges(&ranges, job.total_layers, nominal_height);
+        let originally_nonempty = !ranges.is_empty();
+        let mut blended_ranges = Vec::new();
+        if ranges.iter().any(|range| range.blend() != (0.0, 0.0)) {
+            blended_ranges = ranges.into_iter().enumerate().filter_map(|(index, range)| {
+                let (start, end) = range.bounds(nominal_height)?;
+                (start <= f64::from(job.total_layers)).then_some(((Reverse(Span(end - start + 1.0)), index), range))
+            }).collect();
+            blended_ranges.sort_unstable_by_key(|(priority, _)| *priority);
+        }
         Ok(Self {
-            segments: compile_ranges(&ranges, job.total_layers, nominal_height),
-            originally_nonempty: !ranges.is_empty(),
+            segments,
+            originally_nonempty,
+            blended_ranges,
+            nominal_height,
         })
     }
 
@@ -224,8 +292,56 @@ impl LayerSettingsSchedule {
         &self.segments
     }
 
-    /// Encoder indices are zero-based; stored printed-layer endpoints are not.
-    pub fn patch_at(&self, layer_index: u32) -> Option<&LayerPrintSettingsPatch> {
+    /// Resolve sparse fields against this physical record's canonical baseline.
+    /// Encoder indices are zero-based. PWM remains fractional until serialization.
+    /// The callback is only consulted when a blurred field has no lower supplier.
+    pub fn resolve_at(
+        &self, layer_index: u32, mut baseline: impl FnMut(LayerSettingField) -> f64,
+    ) -> Option<LayerPrintSettingsPatch> {
+        let constant = self.constant_patch_at(layer_index)?;
+        if self.blended_ranges.is_empty() { return Some(*constant); }
+        let layer = layer_index + 1;
+        let mut patch = LayerPrintSettingsPatch::default();
+        for (_, range) in &self.blended_ranges {
+            let weight = range.influence(layer, self.nominal_height);
+            if weight == 0.0 { continue; }
+            for field in LayerSettingField::ALL {
+                if let Some(target) = range.settings().get(field) {
+                    let value = if weight == 1.0 { target } else {
+                        let lower = patch.get(field).unwrap_or_else(|| baseline(field));
+                        lower + (target - lower) * weight
+                    };
+                    patch.set(field, value);
+                }
+            }
+        }
+        Some(patch)
+    }
+
+    /// Validate every affected physical record for blurred height combinations;
+    /// constant schedules need only interval starts and the bottom boundary.
+    pub fn validate_heights(
+        &self, bottom_layers: u32, mut validate: impl FnMut(u32) -> Result<(), SlicerV3Error>,
+    ) -> Result<(), SlicerV3Error> {
+        let varying_heights = self.blended_ranges.iter().any(|(_, range)| {
+            range.blend() != (0.0, 0.0) && [LayerSettingField::LiftHeightMm, LayerSettingField::LiftHeight2Mm,
+                LayerSettingField::RetractHeightMm, LayerSettingField::RetractHeight2Mm]
+                .iter().any(|field| range.settings().get(*field).is_some())
+        });
+        for segment in &self.segments {
+            if varying_heights {
+                for layer in segment.start_layer..=segment.end_layer { validate(layer)?; }
+            } else {
+                validate(segment.start_layer)?;
+                if segment.start_layer <= bottom_layers && bottom_layers < segment.end_layer {
+                    validate(bottom_layers + 1)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn constant_patch_at(&self, layer_index: u32) -> Option<&LayerPrintSettingsPatch> {
         let layer = u64::from(layer_index) + 1;
         let next = self.segments.partition_point(|segment| u64::from(segment.start_layer) <= layer);
         let segment = self.segments.get(next.checked_sub(1)?)?;
@@ -309,7 +425,7 @@ fn parse_ranges(metadata: &Value) -> Result<Vec<LayerSettingsRange>, SlicerV3Err
             &["id", "startLayer", "endLayer", "settings"][..]
         };
         for key in range.keys() {
-            if !keys.contains(&key.as_str()) {
+            if !keys.contains(&key.as_str()) && key != "blendStart" && key != "blendEnd" {
                 return Err(invalid(format!("range {index} has unknown key {key}")));
             }
         }
@@ -336,6 +452,16 @@ fn parse_ranges(metadata: &Value) -> Result<Vec<LayerSettingsRange>, SlicerV3Err
             if !valid {
                 let expected = if millimeters { "a finite number in 0..f32::MAX" } else { "an integer in 1..4294967295" };
                 return Err(invalid(format!("range {index} {key} must be {expected}")));
+            }
+        }
+        for key in ["blendStart", "blendEnd"] {
+            let Some(value) = range.get(key) else { continue };
+            let valid = value.as_f64().is_some_and(|number| number.is_finite() && number >= 0.0
+                && if millimeters { number <= f64::from(f32::MAX) }
+                    else { number.fract() == 0.0 && number <= f64::from(u32::MAX) });
+            if !valid {
+                return Err(invalid(format!("range {index} {key} must be a nonnegative finite {}",
+                    if millimeters { "number up to f32::MAX" } else { "integer up to 4294967295" })));
             }
         }
         if range[start_key].as_f64() > range[end_key].as_f64() {
@@ -509,6 +635,99 @@ mod tests {
         LayerSettingsSchedule::from_job(&job, &LayerSettingField::ALL).unwrap()
     }
 
+    fn exposure_at(schedule: &LayerSettingsSchedule, layer: u32, baseline: f64) -> f64 {
+        schedule.resolve_at(layer - 1, |_| baseline).and_then(|patch| patch.exposure_sec).unwrap_or(baseline)
+    }
+
+    #[test]
+    fn layer_settings_ranges_blend_edges_minimum_and_sparse_inheritance() {
+        let result = schedule(json!([
+            range("wide", 1, 30, json!({"exposureSec":4,"liftHeightMm":7})),
+            {"id":"narrow","startLayer":10,"endLayer":20,"blendStart":2,"blendEnd":2,"settings":{"exposureSec":8}}
+        ]), 30);
+        for (layer, expected) in [(9,4.),(10,4.),(11,6.),(12,8.),(18,8.),(19,6.),(20,4.),(21,4.)] {
+            assert_eq!(exposure_at(&result, layer, 2.), expected, "layer {layer}");
+            assert_eq!(result.resolve_at(layer - 1, |_| 2.).unwrap().lift_height_mm, Some(7.));
+        }
+        let overlap = schedule(json!([
+            {"id":"overlap","startLayer":10,"endLayer":14,"blendStart":4,"blendEnd":4,"settings":{"exposureSec":10}}
+        ]), 20);
+        assert_eq!(exposure_at(&overlap, 12, 2.), 6.); // min(.5,.5), not their product
+        assert_eq!(exposure_at(&overlap, 9, 2.), 2.);
+        assert_eq!(exposure_at(&overlap, 10, 2.), 2.);
+        assert_eq!(exposure_at(&overlap, 14, 2.), 2.);
+        assert_eq!(exposure_at(&overlap, 15, 2.), 2.);
+        assert!(overlap.resolve_at(10, |_| 2.).unwrap().lift_height_mm.is_none());
+    }
+
+    #[test]
+    fn layer_settings_ranges_blend_nested_suppliers_use_same_layer_baseline_without_rounding() {
+        let result = schedule(json!([
+            {"id":"wide","startLayer":1,"endLayer":100,"blendStart":20,"settings":{"exposureSec":4}},
+            {"id":"middle","startLayer":5,"endLayer":25,"blendStart":12,"settings":{"exposureSec":8}},
+            {"id":"narrow","startLayer":9,"endLayer":15,"blendStart":4,"settings":{"exposureSec":12}}
+        ]), 30);
+        assert_eq!(exposure_at(&result, 11, 2.), 8.75); // 2 -> 3 -> 5.5 -> 8.75
+        assert_eq!(exposure_at(&result, 11, 6.), 9.25); // physical baseline remains relevant through every ramp
+        assert_eq!(exposure_at(&result, 1, 20.), 20.);
+        let pwm = schedule(json!([
+            {"id":"wide","startLayer":1,"endLayer":20,"blendStart":2,"settings":{"lightPwm":1}},
+            {"id":"narrow","startLayer":1,"endLayer":10,"blendStart":2,"settings":{"lightPwm":0}}
+        ]), 20);
+        assert_eq!(pwm.resolve_at(1, |_| 0.).unwrap().light_pwm, Some(0.25));
+    }
+
+    #[test]
+    fn layer_settings_ranges_blend_mm_original_endpoints_and_clipped_priorities() {
+        let result = mm_schedule(json!([
+            {"id":"mm","unit":"mm","startMm":0.3,"endMm":0.9,"blendStart":0.2,"blendEnd":0.2,"settings":{"exposureSec":10}}
+        ]), 6, 0.1);
+        assert_eq!(exposure_at(&result, 3, 2.), 2.);
+        let weight = (f64::from(0.4f32) - f64::from(0.3f32)) / 0.2;
+        assert_eq!(exposure_at(&result, 4, 2.), 2. + 8. * weight);
+        assert_eq!(exposure_at(&result, 6, 2.), 10.); // EOF must not become the ramp endpoint
+        let clipped = schedule(json!([
+            {"id":"narrow","startLayer":1,"endLayer":10,"blendStart":4,"settings":{"exposureSec":8}},
+            {"id":"wide","startLayer":1,"endLayer":100,"blendStart":4,"settings":{"exposureSec":4}}
+        ]), 3);
+        assert_eq!(exposure_at(&clipped, 3, 2.), 5.5); // original spans, not clipped equal widths
+    }
+
+    #[test]
+    fn layer_settings_ranges_blend_validation_and_zero_canonicalization() {
+        for millimeters in [false, true] {
+            let valid = if millimeters { mm_range("a", 0., 1., json!({"exposureSec":4})) }
+                else { range("a", 1, 20, json!({"exposureSec":4})) };
+            for key in ["blendStart", "blendEnd"] {
+                for bad in [Value::Null, json!(true), json!("2"), json!(-1),
+                    json!(if millimeters { f64::from(f32::MAX) * 2. } else { f64::from(u32::MAX) + 1. })] {
+                    let mut invalid = valid.clone();
+                    invalid[key] = bad;
+                    assert!(parse_ranges(&json!({"layerSettingsRanges":[invalid]})).is_err());
+                }
+                let mut zero = valid.clone();
+                zero[key] = json!(-0.0);
+                let parsed = parse_ranges(&json!({"layerSettingsRanges":[zero]})).unwrap();
+                assert!(serde_json::to_value(parsed).unwrap()[0].get(key).is_none());
+                let mut distance = valid.clone();
+                distance[key] = json!(0.5);
+                assert_eq!(parse_ranges(&json!({"layerSettingsRanges":[distance]})).is_ok(), millimeters);
+                let mut maximum = valid.clone();
+                maximum[key] = json!(if millimeters { f64::from(f32::MAX) } else { f64::from(u32::MAX) });
+                assert!(parse_ranges(&json!({"layerSettingsRanges":[maximum]})).is_ok());
+            }
+        }
+        let legacy = fixture();
+        let mut disabled = legacy.clone();
+        for range in disabled.as_array_mut().unwrap() { range["blendStart"] = json!(0); range["blendEnd"] = json!(0); }
+        let legacy = schedule(legacy, 12);
+        let disabled = schedule(disabled, 12);
+        for index in 0..12 {
+            assert_eq!(legacy.resolve_at(index, |_| panic!("constant path needs no baseline")),
+                disabled.resolve_at(index, |_| panic!("zero blend needs no baseline")));
+        }
+    }
+
     #[test]
     fn layer_settings_ranges_mm_abc_fixture_matches_layers_and_inheritance() {
         let millimeters = mm_schedule(json!([
@@ -518,7 +737,7 @@ mod tests {
         ]), 12, 0.05);
         assert_eq!(millimeters.segments(), schedule(fixture(), 12).segments());
         let exposures: Vec<f64> = (0..12).map(|index| {
-            millimeters.patch_at(index).and_then(|patch| patch.exposure_sec)
+            millimeters.constant_patch_at(index).and_then(|patch| patch.exposure_sec)
                 .unwrap_or(if index < 2 { 10.0 } else { 2.0 })
         }).collect();
         assert_eq!(exposures, [10., 10., 4., 4., 7., 9., 9., 4., 4., 4., 2., 2.]);
@@ -534,10 +753,10 @@ mod tests {
         ]);
         let result = mm_schedule(ranges.clone(), 12, 0.05);
         assert_eq!(result.segments().len(), 2);
-        assert_eq!(result.patch_at(0).unwrap().exposure_sec, Some(1.0));
-        assert_eq!(result.patch_at(5).unwrap().exposure_sec, Some(6.0));
-        assert!(result.patch_at(4).is_none());
-        assert!(result.patch_at(6).is_none());
+        assert_eq!(result.constant_patch_at(0).unwrap().exposure_sec, Some(1.0));
+        assert_eq!(result.constant_patch_at(5).unwrap().exposure_sec, Some(6.0));
+        assert!(result.constant_patch_at(4).is_none());
+        assert!(result.constant_patch_at(6).is_none());
         let parsed = parse_ranges(&json!({"layerSettingsRanges": ranges})).unwrap();
         let saved = serde_json::to_value(&parsed).unwrap();
         assert_eq!(saved[0]["startMm"], json!(0.3));
@@ -566,7 +785,7 @@ mod tests {
         let mm = mm_range("mm", 0.25, 0.3, json!({"exposureSec": 9}));
         for (ranges, expected) in [(json!([layer.clone(), mm.clone()]), 9.0), (json!([mm, layer]), 7.0)] {
             let result = mm_schedule(ranges, 12, 0.05);
-            let patch = result.patch_at(5).unwrap();
+            let patch = result.constant_patch_at(5).unwrap();
             assert_eq!(patch.exposure_sec, Some(expected));
             assert_eq!(patch.lift_height_mm, Some(8.0));
             assert_eq!(result.segments()[0].range_index, 1);
@@ -575,8 +794,8 @@ mod tests {
             mm_range("narrow", 0.05, 0.5, json!({"exposureSec": 7})),
             mm_range("wide", 0.05, 5.0, json!({"exposureSec": 4, "liftHeightMm": 8}))
         ]), 5, 0.05);
-        assert_eq!(result.patch_at(0).unwrap().exposure_sec, Some(7.0));
-        assert_eq!(result.patch_at(0).unwrap().lift_height_mm, Some(8.0));
+        assert_eq!(result.constant_patch_at(0).unwrap().exposure_sec, Some(7.0));
+        assert_eq!(result.constant_patch_at(0).unwrap().lift_height_mm, Some(8.0));
     }
 
     #[test]
@@ -605,7 +824,7 @@ mod tests {
         let result = mm_schedule(ranges.clone(), 12, 0.03);
         assert_eq!(result.segments().len(), 1);
         assert_eq!((result.segments()[0].start_layer, result.segments()[0].end_layer), (3, 3));
-        assert_eq!(result.patch_at(2).unwrap().exposure_sec, Some(9.0));
+        assert_eq!(result.constant_patch_at(2).unwrap().exposure_sec, Some(9.0));
         let mut job = job(ranges.clone(), 12);
         job.layer_height_mm = 0.03;
         job.metadata_json = json!({
@@ -714,8 +933,8 @@ mod tests {
         assert_eq!(result.segments().len(), 1);
         assert_eq!(result.segments()[0].end_layer, u32::MAX);
         assert!(result.segments()[0].start_layer > u32::MAX - 256);
-        assert_eq!(result.patch_at(u32::MAX - 1).unwrap().exposure_sec, Some(9.0));
-        assert!(result.patch_at(u32::MAX).is_none());
+        assert_eq!(result.constant_patch_at(u32::MAX - 1).unwrap().exposure_sec, Some(9.0));
+        assert!(result.constant_patch_at(u32::MAX).is_none());
         // Both cover the whole physical print, but unclipped extrapolated spans
         // exceed u64 and the earlier narrower range must still win.
         let height = f32::from_bits(1);
@@ -725,8 +944,8 @@ mod tests {
             mm_range("beyond", 1e30, 2e30, json!({"exposureSec": 99}))
         ]), u32::MAX, height);
         assert_eq!(result.segments().len(), 1);
-        assert_eq!(result.patch_at(u32::MAX - 1).unwrap().exposure_sec, Some(7.0));
-        assert_eq!(result.patch_at(0).unwrap().lift_height_mm, Some(8.0));
+        assert_eq!(result.constant_patch_at(u32::MAX - 1).unwrap().exposure_sec, Some(7.0));
+        assert_eq!(result.constant_patch_at(0).unwrap().lift_height_mm, Some(8.0));
         // A finite endpoint must not match an infinite grid height.
         let result = mm_schedule(json!([
             mm_range("finite", f64::from(f32::MAX), f64::from(f32::MAX), json!({"exposureSec": 3}))
@@ -812,22 +1031,22 @@ mod tests {
     fn layer_settings_ranges_abc_sparse_inheritance_and_edit_order() {
         let resolved = schedule(fixture(), 12);
         let exposures: Vec<f64> = (0..12).map(|index| {
-            resolved.patch_at(index).and_then(|patch| patch.exposure_sec)
+            resolved.constant_patch_at(index).and_then(|patch| patch.exposure_sec)
                 .unwrap_or(if index < 2 { 10.0 } else { 2.0 })
         }).collect();
         assert_eq!(exposures, [10., 10., 4., 4., 7., 9., 9., 4., 4., 4., 2., 2.]);
         for index in 2..10 {
-            assert_eq!(resolved.patch_at(index).unwrap().lift_height_mm, Some(8.0));
+            assert_eq!(resolved.constant_patch_at(index).unwrap().lift_height_mm, Some(8.0));
         }
         assert_eq!(resolved.segments()[2].range_index, 2);
         let mut edited = fixture();
         edited[1]["settings"]["exposureSec"] = json!(11);
-        assert_eq!(schedule(edited, 12).patch_at(5).unwrap().exposure_sec, Some(9.0));
+        assert_eq!(schedule(edited, 12).constant_patch_at(5).unwrap().exposure_sec, Some(9.0));
         let mut deleted = fixture();
         deleted.as_array_mut().unwrap().pop();
         let deleted = schedule(deleted, 12);
-        assert_eq!(deleted.patch_at(5).unwrap().exposure_sec, Some(7.0));
-        assert_eq!(deleted.patch_at(6).unwrap().exposure_sec, Some(4.0));
+        assert_eq!(deleted.constant_patch_at(5).unwrap().exposure_sec, Some(7.0));
+        assert_eq!(deleted.constant_patch_at(6).unwrap().exposure_sec, Some(4.0));
     }
 
     #[test]
@@ -837,8 +1056,8 @@ mod tests {
             range("medium", 1, 10, json!({"exposureSec": 7, "liftHeightMm": 6})),
             range("narrow", 2, 3, json!({"exposureSec": 9}))
         ]), 5);
-        assert_eq!(result.patch_at(0).unwrap().exposure_sec, Some(7.0));
-        let patch = result.patch_at(1).unwrap();
+        assert_eq!(result.constant_patch_at(0).unwrap().exposure_sec, Some(7.0));
+        let patch = result.constant_patch_at(1).unwrap();
         assert_eq!(patch.exposure_sec, Some(9.0));
         assert_eq!(patch.lift_height_mm, Some(6.0));
         assert_eq!(patch.wait_time_after_lift_sec, Some(3.0));
@@ -854,9 +1073,9 @@ mod tests {
             range("last", 8, 8, json!({"exposureSec": 5}))
         ]), 8);
         let actual: Vec<Option<f64>> = (0..8)
-            .map(|index| result.patch_at(index).and_then(|patch| patch.exposure_sec)).collect();
+            .map(|index| result.constant_patch_at(index).and_then(|patch| patch.exposure_sec)).collect();
         assert_eq!(actual, [Some(1.), Some(2.), Some(2.), Some(3.), Some(4.), Some(4.), None, Some(5.)]);
-        assert!(result.patch_at(8).is_none());
+        assert!(result.constant_patch_at(8).is_none());
     }
 
     #[test]
@@ -900,7 +1119,7 @@ mod tests {
         settings.insert("lightOffDelaySec".into(), json!(-0.0));
         settings.insert("liftHeightMm".into(), json!(f64::from(f32::MAX)));
         let result = schedule(json!([range("all", 1, 1, Value::Object(settings))]), 1);
-        let patch = result.patch_at(0).unwrap();
+        let patch = result.constant_patch_at(0).unwrap();
         assert_eq!(patch.exposure_sec, Some(precise));
         assert_eq!(patch.light_off_delay_sec.unwrap().to_bits(), 0.0f64.to_bits());
         assert_eq!(patch.lift_height_mm, Some(f64::from(f32::MAX)));
@@ -909,7 +1128,7 @@ mod tests {
         }
         assert_eq!(patch.light_pwm, Some(0.0));
         let decimal_endpoint = json!([{"id":"decimal", "startLayer":1.0, "endLayer":1.0, "settings":{"lightPwm":255}}]);
-        assert_eq!(schedule(decimal_endpoint, 1).patch_at(0).unwrap().light_pwm, Some(255.0));
+        assert_eq!(schedule(decimal_endpoint, 1).constant_patch_at(0).unwrap().light_pwm, Some(255.0));
     }
 
     #[test]
@@ -919,11 +1138,11 @@ mod tests {
             range("last", u32::MAX, u32::MAX, json!({"exposureSec": 9}))
         ]), u32::MAX);
         assert_eq!(result.segments().len(), 2);
-        let last = result.patch_at(u32::MAX - 1).unwrap();
+        let last = result.constant_patch_at(u32::MAX - 1).unwrap();
         assert_eq!(last.exposure_sec, Some(9.0));
         assert_eq!(last.lift_height_mm, Some(8.0));
         assert_eq!(result.segments()[1].end_layer, u32::MAX);
-        assert!(result.patch_at(u32::MAX).is_none());
+        assert!(result.constant_patch_at(u32::MAX).is_none());
     }
 
     #[test]

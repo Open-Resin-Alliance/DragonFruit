@@ -76,18 +76,54 @@ when supplied it must cast to the job's f32 layer height. Raw jobs without it
 use that f32 height's shortest display-decimal. Bounds and computed end heights
 are compared after a single final binary32 rounding, avoiding unit-switch loss
 at heights such as 0.03 mm. This changes neither geometry nor raster settings.
-`patch_at` is indexed by the actual zero-based physical layer index, independent
-of layer arrival order. The record writer selects its existing bottom,
-transition or normal baseline first, then merges the sparse patch. Image
-compression and raster data do not change. See [Slice Job Assembly](../slice-job-assembly.md)
-for the whitelist, units, inheritance, endpoint and priority contracts.
+`LayerSettingsSchedule::resolve_at(layer_index, baseline)` uses the actual
+zero-based physical layer index, independent of layer arrival order. The record
+writer first selects its existing bottom, transition or normal baseline. Its
+callback returns the canonical value for a requested `LayerSettingField` from
+that physical record, not a global material default or zero for an absent patch:
+
+```rust
+// For an exposure-only encoder, after computing its legacy layer exposure:
+let schedule = LayerSettingsSchedule::from_job(job, &[LayerSettingField::ExposureSec])?;
+let patch = schedule.resolve_at(layer_index, |_| f64::from(exposure));
+```
+
+The returned `Option<LayerPrintSettingsPatch>` is owned, stack-resident and sparse;
+apply only its supplied fields. Writers with additional capabilities match each
+field to its existing record member. Constant schedules
+retain the compact compiled-interval lookup. Blurred schedules retain original
+ranges sorted low-to-high by original width and array order, and interpolate at
+lookup time without per-record parsing or heap allocation. `segments()` describes
+compact coverage/display priority and constant targets, not evaluated blur values.
+
+Optional `blendStart` and `blendEnd` use the range's units: integer layer steps
+through `u32::MAX`, or finite nonnegative millimeters through `f32::MAX`. Zero is
+disabled and serializes as omitted. Outside the inclusive original bounds a
+range has no influence. Inside, its weight is the clamped minimum of 1, the
+distance from the start divided by `blendStart` when enabled, and the distance
+to the end divided by `blendEnd` when enabled. Overlapping edge ramps use the
+minimum, not a product. Millimeter positions and bounds use the same final f32
+rounding described above; blend distances retain their f64 values.
+
+Each explicit field blends into its already resolved lower-priority value at
+the same layer, including lower suppliers' ramps. Missing fields inherit without
+attenuation. Falling through all suppliers uses the callback's physical-record
+baseline. Intermediate results remain f64, including PWM; the writer rounds PWM
+to the nearest integer only after the final blend. Zero-influence fields stay
+omitted so legacy stage values and speed conversions remain bit-for-bit intact.
+Image compression and raster data do not change. See
+[Slice Job Assembly](../slice-job-assembly.md) for the whitelist, units,
+inheritance, endpoint and priority contracts.
 
 GOO height overrides are total travel plus a stage-2 part; stage 1 is their
 difference. Untouched stage pairs keep their original f32 values. CTB stores
 total lift directly and derives total retract from it. Both reject an effective
-stage-2 height above its total before opening output, checking compiled interval
-starts and crossed bottom/nonbottom boundaries. Explicit exposure is a final
-constant, not another interpolation endpoint.
+stage-2 height above its total before opening output. `validate_heights` checks
+constant interval starts and crossed bottom/nonbottom boundaries; when height
+ramps exist it visits every covered physical record, without allocating a
+per-layer schedule, so an invalid interior combination cannot escape preflight.
+Explicit exposure remains a final constant when blur is disabled; when enabled
+its lower endpoint is that version's existing physical-layer exposure formula.
 
 AFF/AZF convert explicitly supplied speeds from mm/min to mm/s. AFF writes
 parameters in LAYERDEF; SUBIMGS has image references and padding, not duplicate

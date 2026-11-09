@@ -22,6 +22,8 @@ export type LayerNumberSettingsRange = {
   unit?: undefined;
   startLayer: number;
   endLayer: number;
+  blendStart?: number;
+  blendEnd?: number;
   settings: LayerPrintSettingsPatch;
 };
 export type MillimeterSettingsRange = {
@@ -29,6 +31,8 @@ export type MillimeterSettingsRange = {
   unit: 'mm';
   startMm: number;
   endMm: number;
+  blendStart?: number;
+  blendEnd?: number;
   settings: LayerPrintSettingsPatch;
 };
 export type LayerSettingsRange = LayerNumberSettingsRange | MillimeterSettingsRange;
@@ -43,6 +47,7 @@ const MAX_LAYER = 4294967295;
 const MAX_F32 = 3.4028234663852886e38;
 const LAYER_RANGE_KEYS: readonly string[] = ['id', 'startLayer', 'endLayer', 'settings'];
 const MM_RANGE_KEYS: readonly string[] = ['id', 'unit', 'startMm', 'endMm', 'settings'];
+const BLEND_KEYS = ['blendStart', 'blendEnd'] as const;
 const FIELD_KEYS = new Set<string>(LAYER_SETTING_FIELDS);
 
 function invalid(reason: string): never {
@@ -71,7 +76,7 @@ export function parseLayerSettingsRanges(input: unknown): LayerSettingsRange[] {
     if (millimeters && value.unit !== 'mm') invalid(`${label} unit must be mm when supplied`);
     const rangeKeys = millimeters ? MM_RANGE_KEYS : LAYER_RANGE_KEYS;
     for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string' || !rangeKeys.includes(key)) {
+      if (typeof key !== 'string' || (!rangeKeys.includes(key) && !BLEND_KEYS.some((field) => field === key))) {
         invalid(`${label} has unknown key ${String(key)}`);
       }
     }
@@ -124,7 +129,17 @@ export function parseLayerSettingsRanges(input: unknown): LayerSettingsRange[] {
       }
       patch[field] = numeric === 0 ? 0 : numeric;
     }
-    result.push({ id, ...bounds, settings: patch });
+    const blending: { blendStart?: number; blendEnd?: number } = {};
+    for (const field of BLEND_KEYS) {
+      if (!hasOwn(value, field)) continue;
+      const distance = value[field];
+      if (typeof distance !== 'number' || !Number.isFinite(distance) || distance < 0
+        || distance > (millimeters ? MAX_F32 : MAX_LAYER) || (!millimeters && !Number.isInteger(distance))) {
+        invalid(`${label} ${field} must be a nonnegative ${millimeters ? 'finite mm distance' : 'integer layer distance'} within the supported numeric range`);
+      }
+      if (distance > 0) blending[field] = distance;
+    }
+    result.push({ id, ...bounds, ...blending, settings: patch });
   }
   return result;
 }
@@ -215,7 +230,7 @@ function samePatch(left: LayerPrintSettingsPatch, right: LayerPrintSettingsPatch
   return LAYER_SETTING_FIELDS.every((field) => left[field] === right[field]);
 }
 
-/** Compile only covered intervals, never an array proportional to the print height. */
+/** Compile coverage and full-strength target patches, not per-layer blended values. */
 export function compileLayerSettingsRanges(
   ranges: readonly LayerSettingsRange[],
   totalLayers: number,
@@ -274,17 +289,59 @@ export function compileLayerSettingsRanges(
   return segments;
 }
 
+/** Resolve one printed layer against its actual format baseline, including lower-range blends. */
+export function resolveLayerSettingsAt(
+  ranges: readonly LayerSettingsRange[],
+  layerNumber: number,
+  baseline: LayerPrintSettingsPatch,
+  layerHeightMm?: number,
+): LayerPrintSettingsPatch {
+  if (!Number.isInteger(layerNumber) || layerNumber < 1 || layerNumber > MAX_LAYER) {
+    invalid('layerNumber must be an integer in 1..4294967295');
+  }
+  const active = parseLayerSettingsRanges(ranges)
+    .map((range, index) => ({ range, index, bounds: resolveLayerSettingsRangeBounds(range, layerHeightMm) }))
+    .filter((entry) => entry.bounds !== null && entry.bounds.startLayer <= layerNumber && layerNumber <= entry.bounds.endLayer)
+    .sort((left, right) => (right.bounds!.endLayer - right.bounds!.startLayer)
+      - (left.bounds!.endLayer - left.bounds!.startLayer) || left.index - right.index);
+  const settings = { ...baseline };
+  for (const { range } of active) {
+    const position = range.unit === 'mm' ? Math.fround(layerNumber * layerHeightMm!) : layerNumber;
+    const start = range.unit === 'mm' ? Math.fround(range.startMm) : range.startLayer;
+    const end = range.unit === 'mm' ? Math.fround(range.endMm) : range.endLayer;
+    const influence = Math.max(0, Math.min(1,
+      range.blendStart ? (position - start) / range.blendStart : 1,
+      range.blendEnd ? (end - position) / range.blendEnd : 1));
+    if (influence === 0) continue;
+    for (const field of LAYER_SETTING_FIELDS) {
+      const target = range.settings[field];
+      if (target === undefined) continue;
+      if (influence === 1) settings[field] = target;
+      else {
+        const underneath = settings[field];
+        if (underneath === undefined) invalid(`baseline must supply ${field} when blending an inherited value`);
+        settings[field] = underneath + (target - underneath) * influence;
+      }
+    }
+  }
+  if (settings.lightPwm !== undefined) settings.lightPwm = Math.round(settings.lightPwm);
+  return settings;
+}
+
 /** Printing identity excludes display ids but preserves original priority/order. */
 export function fingerprintLayerSettingsRanges(ranges: readonly LayerSettingsRange[]): string {
-  return JSON.stringify(parseLayerSettingsRanges(ranges).map((range) => range.unit === 'mm' ? {
-    unit: 'mm',
-    startMm: range.startMm,
-    endMm: range.endMm,
-    settings: range.settings,
-  } : {
-    startLayer: range.startLayer,
-    endLayer: range.endLayer,
-    settings: range.settings,
+  return JSON.stringify(parseLayerSettingsRanges(ranges).map((range) => {
+    const blending = {
+      ...(range.blendStart === undefined ? {} : { blendStart: range.blendStart }),
+      ...(range.blendEnd === undefined ? {} : { blendEnd: range.blendEnd }),
+    };
+    return range.unit === 'mm' ? {
+      unit: 'mm', startMm: range.startMm, endMm: range.endMm,
+      ...blending, settings: range.settings,
+    } : {
+      startLayer: range.startLayer, endLayer: range.endLayer,
+      ...blending, settings: range.settings,
+    };
   }));
 }
 
