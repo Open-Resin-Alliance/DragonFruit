@@ -3,7 +3,8 @@
 The `sdcp-v1` complex plugin connects DragonFruit to printers that implement
 the original SDCP v1 transport over MQTT for older printers.
 Use it for v1 devices; the separate `sdcp-v3` plugin handles the WebSocket-based
-v3 protocol.
+v3 protocol. Its built-in printer presets select SDCP v1 by default for the
+Saturn 3 Ultra, Saturn 3, Saturn 2 (8K), Mars 3, and Mars 3 Pro.
 
 ## Plugin surface
 
@@ -11,8 +12,8 @@ The public registration and runtime implementation live in:
 
 - `plugins/sdcp-v1/pluginDefinition.ts`: registers the `sdcp-v1` network and
   monitoring adapters.
-- `plugins/sdcp-v1/pluginManifest.ts`: exposes the Saturn 3 Ultra network-mode
-  override while retaining its existing CTB output profile.
+- `plugins/sdcp-v1/pluginManifest.ts`: exposes SDCP v1 network-mode overrides
+  for supported ELEGOO presets while retaining their existing print profiles.
 - `plugins/sdcp-v1/rust/network.rs`: native UDP, MQTT and HTTP transport.
 - `plugins/sdcp-v1/network/index.ts`: streams a print file to the native
   transport in bounded chunks and reports progress.
