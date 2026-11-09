@@ -202,9 +202,11 @@ Run from `rust/dragonfruit-islands/`:
 
 ## Tauri IPC Integration
 
-The island scan is exposed to the frontend through Tauri commands. All of them
-take geometry as raw `f32` bytes on the shared staging buffer
-(`stage_mesh_binary_set`); no mesh crosses the boundary as a JSON number array.
+The island scan is exposed to the frontend through Tauri commands. Geometry
+crosses through the chunk upload protocol (`mesh_chunk_upload_plan` and
+`mesh_chunk_upload_append`, wrapped by `invokeWithChunkedMesh`), and the command
+references the finished upload by `meshUploadId`; no mesh crosses the boundary as
+a JSON number array.
 
 | Command | Used for | Mesh source |
 |---|---|---|
@@ -225,10 +227,10 @@ staged soup, so its `triangleIds` index the rendered geometry.
 ```text
 Frontend                         Tauri IPC                  Rust Backend
 ────────                         ─────────                  ────────────
-stage_mesh_binary_set()  ────►  raw binary body  ──────►  staged_mesh (Mutex)
+plan + append chunks     ────►  raw binary bodies  ──────►  staged_mesh (Mutex)
 
-run_island_scan_native() ────►  { paramsJson }   ──────►  spawn_blocking {
-                                                           parse triangles
+run_island_scan_native() ────►  { paramsJson,    ──────►  spawn_blocking {
+                                  meshUploadId }           parse triangles
   ◄─ islandscan://progress ──  window.emit()   ◄──────    rasterize (rayon, chunked)
   ◄─ islandscan://progress ──  window.emit()   ◄──────    run_island_scan_streaming()
   ◄─ NativeIslandScanResult ─  return JSON     ◄──────    serialize

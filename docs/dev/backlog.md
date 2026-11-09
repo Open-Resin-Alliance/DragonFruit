@@ -1718,7 +1718,7 @@ numbers below are what the *commit* frame did not improve.
 
 The pointerup of a model drag blocked one frame for ~285–400 ms while p50/p95
 stayed at 6.1 ms. A CDP network trace during the release showed the frame's IPC:
-`stage_mesh_binary_set`, `mesh_hollow_preview_capture_staged_source`, then the
+the mesh chunk upload, `mesh_hollow_preview_capture_staged_source`, then the
 whole read-back family (`…read_positions`, `…read_cavity_positions`,
 `…read_removed_voxel_centers/indices`, `…read_blocked_voxel_centers/indices`).
 
@@ -1732,7 +1732,7 @@ voxelized during the gesture.
 It now waits for a 1.2 s quiet period and then runs in `requestIdleCallback`,
 cancelled when the selection changes again. Verified by the same trace on the
 rebuilt app: a fresh selection's commit window (first 600 ms) contains no preview
-IPC at all, and `stage_mesh_binary_set` lands afterwards.
+IPC at all, and the mesh chunk upload lands afterwards.
 
 `hollowPreviewFromCapturedSource` was already async in the IPC sense — each
 read-back is a separate `await` — so what remains is one long task after the

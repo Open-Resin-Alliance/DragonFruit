@@ -20,7 +20,8 @@ shaped the current design.
 ### 1. Rust-side voxelization via staged binary mesh
 
 The hollowing engine lives in Rust (`mesh_repair.rs`). TS sends geometry as a
-binary triangle soup via `stage_mesh_binary_set` (Tauri IPC), then invokes
+binary triangle soup through the chunk upload protocol (`mesh_chunk_upload_plan`
+/ `mesh_chunk_upload_append`), then invokes
 `mesh_hollow` / `mesh_hollow_preview` / `mesh_hollow_apply`. The engine
 voxelizes the model, classifies shell vs. interior voxels, computes cavity
 surfaces, and returns results as binary Float32Array/Uint32Array buffers read
