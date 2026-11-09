@@ -136,12 +136,14 @@ impl LayerSettingsRange {
             Self::Millimeters(range) => (f64::from((f64::from(layer) * nominal_height) as f32),
                 f64::from(range.start_mm as f32), f64::from(range.end_mm as f32)),
         };
-        if x < start || x > end { return 0.0; }
         let (blend_start, blend_end) = self.blend();
-        let mut weight: f64 = 1.0;
-        if blend_start > 0.0 { weight = weight.min((x - start) / blend_start); }
-        if blend_end > 0.0 { weight = weight.min((end - x) / blend_end); }
-        weight.clamp(0.0, 1.0)
+        if x < start {
+            if blend_start == 0.0 { 0.0 } else { (1.0 - (start - x) / blend_start).clamp(0.0, 1.0) }
+        } else if x > end {
+            if blend_end == 0.0 { 0.0 } else { (1.0 - (x - end) / blend_end).clamp(0.0, 1.0) }
+        } else {
+            1.0
+        }
     }
 
     // Resolve original bounds before clipping or ranking. Round n * nominal h
@@ -158,14 +160,33 @@ impl LayerSettingsRange {
                 let start = if start_mm > grid_end {
                     (f64::from(start_mm) / layer_height_mm).ceil().max(beyond)
                 } else {
-                    grid_bound(start_mm, layer_height_mm, false) as f64
+                    grid_bound(f64::from(start_mm), layer_height_mm, false) as f64
                 };
                 let end = if end_mm > grid_end {
                     (f64::from(end_mm) / layer_height_mm).floor()
                 } else {
-                    (grid_bound(end_mm, layer_height_mm, true) - 1) as f64
+                    (grid_bound(f64::from(end_mm), layer_height_mm, true) - 1) as f64
                 };
                 (start <= end).then_some((start, end))
+            }
+        }
+    }
+
+    fn span(&self, layer_height_mm: f64) -> Span {
+        Span(self.bounds(layer_height_mm).map_or(0.0, |(start, end)| end - start + 1.0))
+    }
+
+    fn support(&self, layer_height_mm: f64) -> Option<(f64, f64)> {
+        let (blend_start, blend_end) = self.blend();
+        if (blend_start, blend_end) == (0.0, 0.0) { return self.bounds(layer_height_mm); }
+        match self {
+            Self::Layers(range) => Some(((f64::from(range.start_layer) - blend_start).max(1.0),
+                f64::from(range.end_layer) + blend_end)),
+            Self::Millimeters(range) => {
+                // Expanded endpoints remain f64, even beyond the finite f32 range.
+                let start = grid_bound(f64::from(range.start_mm as f32) - blend_start, layer_height_mm, false);
+                let end = grid_bound(f64::from(range.end_mm as f32) + blend_end, layer_height_mm, true) - 1;
+                (start <= end).then_some((start as f64, end as f64))
             }
         }
     }
@@ -173,12 +194,12 @@ impl LayerSettingsRange {
 
 // First printed layer whose height is >= endpoint (or > for an upper bound).
 // The u32::MAX + 1 sentinel is never evaluated as a physical layer.
-fn grid_bound(endpoint: f32, layer_height_mm: f64, upper: bool) -> u64 {
+fn grid_bound(endpoint: f64, layer_height_mm: f64, upper: bool) -> u64 {
     let mut low = 1u64;
     let mut high = u64::from(u32::MAX) + 1;
     while low < high {
         let middle = low + (high - low) / 2;
-        let height = (middle as f64 * layer_height_mm) as f32;
+        let height = f64::from((middle as f64 * layer_height_mm) as f32);
         if if upper { height <= endpoint } else { height < endpoint } {
             low = middle + 1;
         } else {
@@ -270,8 +291,8 @@ impl LayerSettingsSchedule {
         let mut blended_ranges = Vec::new();
         if ranges.iter().any(|range| range.blend() != (0.0, 0.0)) {
             blended_ranges = ranges.into_iter().enumerate().filter_map(|(index, range)| {
-                let (start, end) = range.bounds(nominal_height)?;
-                (start <= f64::from(job.total_layers)).then_some(((Reverse(Span(end - start + 1.0)), index), range))
+                let (start, _) = range.support(nominal_height)?;
+                (start <= f64::from(job.total_layers)).then(|| ((Reverse(range.span(nominal_height)), index), range))
             }).collect();
             blended_ranges.sort_unstable_by_key(|(priority, _)| *priority);
         }
@@ -506,8 +527,8 @@ fn parse_ranges(metadata: &Value) -> Result<Vec<LayerSettingsRange>, SlicerV3Err
     Ok(ranges)
 }
 
-// All spans are positive finite f64, including extrapolated bounds beyond the
-// u32 grid. total_cmp keeps heap ordering deterministic without narrowing them.
+// Original spans are nonnegative finite f64; an off-grid mm core has span zero.
+// total_cmp keeps extrapolated bounds deterministic without narrowing them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Span(f64);
 
@@ -540,8 +561,9 @@ fn compile_ranges(ranges: &[LayerSettingsRange], total_layers: u32, layer_height
     // u32::MAX + 1 without overflowing, even at the last possible printed layer.
     let mut events = Vec::with_capacity(ranges.len() * 2);
     for (index, range) in ranges.iter().enumerate() {
-        let Some((start, end)) = range.bounds(layer_height_mm) else { continue };
-        let span = Span(end - start + 1.0);
+        let bounds = range.bounds(layer_height_mm);
+        let span = Span(bounds.map_or(0.0, |(start, end)| end - start + 1.0));
+        let Some((start, end)) = (if range.blend() == (0.0, 0.0) { bounds } else { range.support(layer_height_mm) }) else { continue };
         if start <= f64::from(total_layers) {
             events.push((start as u64, true, index, span));
             events.push((end.min(f64::from(total_layers)) as u64 + 1, false, index, span));
@@ -640,39 +662,51 @@ mod tests {
     }
 
     #[test]
-    fn layer_settings_ranges_blend_edges_minimum_and_sparse_inheritance() {
+    fn layer_settings_ranges_blend_outward_edges_full_core_and_sparse_inheritance() {
         let result = schedule(json!([
             range("wide", 1, 30, json!({"exposureSec":4,"liftHeightMm":7})),
             {"id":"narrow","startLayer":10,"endLayer":20,"blendStart":2,"blendEnd":2,"settings":{"exposureSec":8}}
         ]), 30);
-        for (layer, expected) in [(9,4.),(10,4.),(11,6.),(12,8.),(18,8.),(19,6.),(20,4.),(21,4.)] {
+        for (layer, expected) in [(7,4.),(8,4.),(9,6.),(10,8.),(11,8.),(19,8.),(20,8.),(21,6.),(22,4.),(23,4.)] {
             assert_eq!(exposure_at(&result, layer, 2.), expected, "layer {layer}");
             assert_eq!(result.resolve_at(layer - 1, |_| 2.).unwrap().lift_height_mm, Some(7.));
         }
-        let overlap = schedule(json!([
-            {"id":"overlap","startLayer":10,"endLayer":14,"blendStart":4,"blendEnd":4,"settings":{"exposureSec":10}}
+        let short = schedule(json!([
+            {"id":"short","startLayer":10,"endLayer":14,"blendStart":4,"blendEnd":4,"settings":{"exposureSec":10}}
         ]), 20);
-        assert_eq!(exposure_at(&overlap, 12, 2.), 6.); // min(.5,.5), not their product
-        assert_eq!(exposure_at(&overlap, 9, 2.), 2.);
-        assert_eq!(exposure_at(&overlap, 10, 2.), 2.);
-        assert_eq!(exposure_at(&overlap, 14, 2.), 2.);
-        assert_eq!(exposure_at(&overlap, 15, 2.), 2.);
-        assert!(overlap.resolve_at(10, |_| 2.).unwrap().lift_height_mm.is_none());
+        for layer in 10..=14 {
+            assert_eq!(exposure_at(&short, layer, 2.), 10.); // even tails longer than the core never attenuate it
+        }
+        for (layer, expected) in [(6,2.),(7,4.),(8,6.),(9,8.),(15,8.),(16,6.),(17,4.),(18,2.)] {
+            assert_eq!(exposure_at(&short, layer, 2.), expected);
+        }
+        assert!(short.resolve_at(10, |_| 2.).unwrap().lift_height_mm.is_none());
+        let disabled = schedule(json!([
+            {"id":"one-edge","startLayer":10,"endLayer":14,"blendStart":0,"blendEnd":2,"settings":{"exposureSec":10}}
+        ]), 20);
+        assert!(disabled.resolve_at(8, |_| panic!("disabled start has no supplier")).is_none());
+        assert_eq!(exposure_at(&disabled, 10, 2.), 10.);
+        assert_eq!(exposure_at(&disabled, 15, 2.), 6.);
+        let disabled_end = schedule(json!([
+            {"id":"one-edge","startLayer":10,"endLayer":14,"blendStart":2,"settings":{"exposureSec":10}}
+        ]), 20);
+        assert_eq!(exposure_at(&disabled_end, 9, 2.), 6.);
+        assert!(disabled_end.resolve_at(14, |_| panic!("absent end has no supplier")).is_none());
     }
 
     #[test]
     fn layer_settings_ranges_blend_nested_suppliers_use_same_layer_baseline_without_rounding() {
         let result = schedule(json!([
-            {"id":"wide","startLayer":1,"endLayer":100,"blendStart":20,"settings":{"exposureSec":4}},
-            {"id":"middle","startLayer":5,"endLayer":25,"blendStart":12,"settings":{"exposureSec":8}},
-            {"id":"narrow","startLayer":9,"endLayer":15,"blendStart":4,"settings":{"exposureSec":12}}
+            {"id":"wide","startLayer":21,"endLayer":100,"blendStart":20,"settings":{"exposureSec":4}},
+            {"id":"middle","startLayer":17,"endLayer":25,"blendStart":12,"settings":{"exposureSec":8}},
+            {"id":"narrow","startLayer":13,"endLayer":15,"blendStart":4,"settings":{"exposureSec":12}}
         ]), 30);
         assert_eq!(exposure_at(&result, 11, 2.), 8.75); // 2 -> 3 -> 5.5 -> 8.75
-        assert_eq!(exposure_at(&result, 11, 6.), 9.25); // physical baseline remains relevant through every ramp
+        assert_eq!(exposure_at(&result, 11, 6.), 9.25); // same physical layer, different transition baseline
         assert_eq!(exposure_at(&result, 1, 20.), 20.);
         let pwm = schedule(json!([
-            {"id":"wide","startLayer":1,"endLayer":20,"blendStart":2,"settings":{"lightPwm":1}},
-            {"id":"narrow","startLayer":1,"endLayer":10,"blendStart":2,"settings":{"lightPwm":0}}
+            {"id":"wide","startLayer":3,"endLayer":20,"blendStart":2,"settings":{"lightPwm":1}},
+            {"id":"narrow","startLayer":3,"endLayer":10,"blendStart":2,"settings":{"lightPwm":0}}
         ]), 20);
         assert_eq!(pwm.resolve_at(1, |_| 0.).unwrap().light_pwm, Some(0.25));
     }
@@ -682,15 +716,90 @@ mod tests {
         let result = mm_schedule(json!([
             {"id":"mm","unit":"mm","startMm":0.3,"endMm":0.9,"blendStart":0.2,"blendEnd":0.2,"settings":{"exposureSec":10}}
         ]), 6, 0.1);
-        assert_eq!(exposure_at(&result, 3, 2.), 2.);
-        let weight = (f64::from(0.4f32) - f64::from(0.3f32)) / 0.2;
-        assert_eq!(exposure_at(&result, 4, 2.), 2. + 8. * weight);
-        assert_eq!(exposure_at(&result, 6, 2.), 10.); // EOF must not become the ramp endpoint
+        let weight = 1. - (f64::from(0.3f32) - f64::from(0.2f32)) / 0.2;
+        assert_eq!(exposure_at(&result, 2, 2.), 2. + 8. * weight);
+        assert_eq!(exposure_at(&result, 3, 2.), 10.);
+        assert_eq!(exposure_at(&result, 6, 2.), 10.); // EOF must not become a feather endpoint
         let clipped = schedule(json!([
-            {"id":"narrow","startLayer":1,"endLayer":10,"blendStart":4,"settings":{"exposureSec":8}},
-            {"id":"wide","startLayer":1,"endLayer":100,"blendStart":4,"settings":{"exposureSec":4}}
+            {"id":"narrow","startLayer":5,"endLayer":10,"blendStart":4,"settings":{"exposureSec":8}},
+            {"id":"wide","startLayer":5,"endLayer":100,"blendStart":4,"settings":{"exposureSec":4}}
         ]), 3);
-        assert_eq!(exposure_at(&clipped, 3, 2.), 5.5); // original spans, not clipped equal widths
+        assert_eq!(exposure_at(&clipped, 3, 2.), 5.5); // cores outside EOF still use original spans
+        assert_eq!(clipped.segments().last().unwrap().end_layer, 3);
+        let expanded = schedule(json!([
+            {"id":"narrow","startLayer":10,"endLayer":10,"blendStart":2,"blendEnd":2,"settings":{"exposureSec":8}},
+            range("wide", 9, 11, json!({"exposureSec":4}))
+        ]), 20);
+        assert_eq!(exposure_at(&expanded, 9, 2.), 6.); // expanded width five must not lose to core width three
+        let tied = schedule(json!([
+            {"id":"first","startLayer":10,"endLayer":10,"blendStart":4,"settings":{"exposureSec":8}},
+            {"id":"last","startLayer":10,"endLayer":10,"blendStart":2,"settings":{"exposureSec":4}}
+        ]), 20);
+        assert_eq!(exposure_at(&tied, 9, 2.), 5.25); // 2 -> 6.5 -> 5.25; later equal core span wins
+    }
+
+    #[test]
+    fn layer_settings_ranges_blend_off_grid_mm_point_tails_have_zero_priority_span() {
+        let result = mm_schedule(json!([
+            {"id":"point","unit":"mm","startMm":0.325,"endMm":0.325,"blendStart":0.05,"blendEnd":0.05,"settings":{"exposureSec":8}},
+            range("grid", 6, 7, json!({"exposureSec":4}))
+        ]), 12, 0.05);
+        let (priority, _) = result.blended_ranges.last().unwrap();
+        assert_eq!(priority.0, Reverse(Span(0.)));
+        for (layer, x) in [(6, 0.3f32), (7, 0.35f32)] {
+            let weight = 1. - (f64::from(x) - f64::from(0.325f32)).abs() / 0.05;
+            assert_eq!(exposure_at(&result, layer, 2.), 4. + 4. * weight);
+        }
+        assert!(result.resolve_at(4, |_| 2.).is_none());
+        assert!(result.resolve_at(7, |_| 2.).is_none());
+        let outside = mm_schedule(json!([
+            {"id":"later","unit":"mm","startMm":0.325,"endMm":0.325,"blendStart":0.05,"settings":{"exposureSec":8}}
+        ]), 6, 0.05);
+        let weight = 1. - (f64::from(0.325f32) - f64::from(0.3f32)) / 0.05;
+        assert_eq!(exposure_at(&outside, 6, 2.), 2. + 6. * weight);
+    }
+
+    #[test]
+    fn layer_settings_ranges_blend_expanded_mm_endpoints_remain_f64_without_epsilon() {
+        let maximum = f64::from(f32::MAX);
+        let result = mm_schedule(json!([
+            {"id":"maximum","unit":"mm","startMm":maximum,"endMm":maximum,"blendStart":maximum,"blendEnd":maximum,"settings":{"exposureSec":8}}
+        ]), 3, f32::MAX);
+        assert_eq!(result.segments().len(), 1);
+        assert_eq!((result.segments()[0].start_layer, result.segments()[0].end_layer), (1, 1));
+        assert_eq!(exposure_at(&result, 1, 2.), 8.);
+        assert!(result.resolve_at(1, |_| 2.).is_none()); // infinite printed f32 height exceeds finite expanded f64 end
+        let exact = mm_schedule(json!([
+            {"id":"exact","unit":"mm","startMm":0.5,"endMm":0.5,"blendStart":0.25,"blendEnd":0.25,"settings":{"exposureSec":8}}
+        ]), 4, 0.25);
+        assert_eq!(exposure_at(&exact, 1, 2.), 2.);
+        assert_eq!(exposure_at(&exact, 2, 2.), 8.);
+        assert_eq!(exposure_at(&exact, 3, 2.), 2.);
+        assert!(exact.resolve_at(3, |_| 2.).is_none());
+    }
+
+    #[test]
+    fn layer_settings_ranges_blend_height_preflight_visits_outward_support_compactly() {
+        let result = schedule(json!([
+            {"id":"outside","startLayer":13,"endLayer":20,"blendStart":12,"settings":{"liftHeightMm":1}}
+        ]), 12);
+        let mut visited = Vec::new();
+        result.validate_heights(2, |layer| { visited.push(layer); Ok(()) }).unwrap();
+        assert_eq!(visited, (1..=12).collect::<Vec<_>>());
+        assert_eq!(result.segments().len(), 1);
+        let both_edges = schedule(json!([
+            {"id":"both","startLayer":4,"endLayer":5,"blendStart":2,"blendEnd":3,"settings":{"liftHeight2Mm":2}}
+        ]), 10);
+        visited.clear();
+        both_edges.validate_heights(2, |layer| { visited.push(layer); Ok(()) }).unwrap();
+        assert_eq!(visited, (2..=8).collect::<Vec<_>>());
+        let huge = schedule(json!([
+            {"id":"last","startLayer":u32::MAX,"endLayer":u32::MAX,"blendStart":2,"blendEnd":u32::MAX,"settings":{"exposureSec":8}}
+        ]), u32::MAX);
+        assert_eq!(huge.segments().len(), 1);
+        assert_eq!(exposure_at(&huge, u32::MAX - 1, 4.), 6.);
+        assert_eq!(exposure_at(&huge, u32::MAX, 4.), 8.);
+        assert!(huge.resolve_at(u32::MAX, |_| 4.).is_none());
     }
 
     #[test]

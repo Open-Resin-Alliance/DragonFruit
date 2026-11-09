@@ -179,6 +179,9 @@ unit, with whole layer steps required for layer-number ranges. Zero/absent disab
 edge and canonical serialization omits zero. The distances persist with SCNE, participate
 in scene/encoded fingerprints, and survive save/load/undo without altering material presets.
 No additional binary chunk or container version is introduced.
+The saved bounds describe the full-strength core. Distances extend before/after it; neither
+save/load nor resolution rewrites those bounds to include the outward support. The encoded
+fingerprint's outward-mode discriminator is derived identity data, not a persisted range key.
 
 The writer retains present `[]` as an explicit cleared schedule. On successful
 scene import a present schedule replaces the current one, including `[]`;

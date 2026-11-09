@@ -67,7 +67,7 @@ import {
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
 import { CrossSliderPanel } from '@/components/controls/CrossSliderPanel';
 import { contactEndpointsFor, countSupportCollections, knotHostId, spanKnotHostType, getSupportTypeDescriptor, MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, updateSupportEntity, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
-import { LayerSlider, type LayerSliderRangeBand } from '@/components/controls/LayerSlider';
+import { LayerSlider } from '@/components/controls/LayerSlider';
 import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import { SupportSidebar } from '@/supports/Settings/SupportSidebar';
 import { getSettings as getSupportDisplaySettings, subscribeToSettings as subscribeToSupportSettings, updateNavigationDiscsOnly } from '@/supports/Settings/state';
@@ -75,12 +75,12 @@ import { useLeafPlacementState } from '@/supports/SupportTypes/Leaf/leafPlacemen
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { buildSceneSaveContext } from '@/features/export/logic/sceneSaveContext';
-import { compileLayerSettingsRanges, fingerprintLayerSettingsRanges, parseLayerSettingsRanges, type LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
+import { fingerprintLayerSettingsRanges, parseLayerSettingsRanges, type LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
 import { LayerSettingsRangeEditor } from '@/features/slicing/components/LayerSettingsRangeEditor';
 import { buildLayerSettingsProfileBands } from '@/features/slicing/layerSettingsProfileBands';
 import { useLayerSettingsRangeColors } from '@/features/slicing/useLayerSettingsRangeColors';
 import { formatLayerSettingsRangeBounds } from '@/features/slicing/layerSettingsRangeMessages';
-import type { UnitFormat } from '@/utils/unitFormatting';
+import { buildLayerSettingsRangeBands } from '@/features/slicing/layerSettingsSliderBands';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { joinSliceOutputPath, sliceFileBaseName } from '@/features/slicing/plateSliceNaming';
@@ -797,38 +797,6 @@ function formatPlateLockedNotice(
   }), { plateName });
 }
 
-function buildLayerSettingsRangeBands(
-  ranges: readonly LayerSettingsRange[],
-  colors: ReadonlyMap<string, string>,
-  totalLayers: number,
-  printing: boolean,
-  layerHeightMm: number,
-  translate: (descriptor: MessageDescriptor) => string,
-  fmt: UnitFormat,
-): LayerSliderRangeBand[] {
-  if (totalLayers === 0) return [];
-  const originals = new Map(ranges.map((range) => [range.id, range]));
-  const bands: LayerSliderRangeBand[] = [];
-  for (const segment of compileLayerSettingsRanges(ranges, totalLayers, layerHeightMm)) {
-    const color = colors.get(segment.rangeId);
-    if (!color) continue;
-    const original = originals.get(segment.rangeId)!;
-    const bottomPercent = printing
-      ? totalLayers === 1 ? 0 : 100 * (Math.max(1, segment.startLayer - 0.5) - 1) / (totalLayers - 1)
-      : 100 * (segment.startLayer - 1) / totalLayers;
-    const topPercent = printing
-      ? totalLayers === 1 ? 100 : 100 * (Math.min(totalLayers, segment.endLayer + 0.5) - 1) / (totalLayers - 1)
-      : 100 * segment.endLayer / totalLayers;
-    bands.push({
-      id: `${segment.rangeId}:${segment.startLayer}:${segment.endLayer}`,
-      bottomPercent,
-      topPercent,
-      color,
-      label: formatLayerSettingsRangeBounds(translate, fmt, original),
-    });
-  }
-  return bands;
-}
 
 export default function Home() {
   const { _, i18n } = useLingui();
@@ -7215,10 +7183,12 @@ export default function Home() {
   }, [activePrinterProfile?.buildVolumeMm.height, crossSectionLayerHeightMm, sceneZRange.max, slicingModels.length]);
 
   const sceneLayerSettingsBands = React.useMemo(() => buildLayerSettingsRangeBands(
-    scene.layerSettingsRanges, layerSettingsRangeColors, slicing.numLayers, false, slicing.layerHeightMm, _, fmt,
+    scene.layerSettingsRanges, layerSettingsRangeColors, slicing.numLayers, false, slicing.layerHeightMm,
+    (range) => formatLayerSettingsRangeBounds(_, fmt, range),
   ), [scene.layerSettingsRanges, layerSettingsRangeColors, slicing.numLayers, slicing.layerHeightMm, _, fmt]);
   const printingLayerSettingsBands = React.useMemo(() => buildLayerSettingsRangeBands(
-    scene.layerSettingsRanges, layerSettingsRangeColors, printingPreviewTotalLayers, true, crossSectionLayerHeightMm, _, fmt,
+    scene.layerSettingsRanges, layerSettingsRangeColors, printingPreviewTotalLayers, true, crossSectionLayerHeightMm,
+    (range) => formatLayerSettingsRangeBounds(_, fmt, range),
   ), [scene.layerSettingsRanges, layerSettingsRangeColors, printingPreviewTotalLayers, crossSectionLayerHeightMm, _, fmt]);
   const handleSceneRangeContextMenu = React.useCallback((value: number, position: { x: number; y: number }) => {
     const total = slicing.numLayers;

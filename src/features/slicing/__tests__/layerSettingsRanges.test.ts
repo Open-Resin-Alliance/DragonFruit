@@ -9,6 +9,8 @@ import {
   parseLayerSettingsRanges,
   resolveLayerSettingsRangeBounds,
   resolveLayerSettingsAt,
+  resolveLayerSettingsRangeSupport,
+  layerSettingsRangeInfluence,
   type LayerNumberSettingsRange,
   type MillimeterSettingsRange,
   type LayerPrintSettingsPatch,
@@ -591,54 +593,59 @@ test('pure format capability resolver preserves version replacement, defaults an
   assert.deepEqual(resolveLayerSettingsFields({ ...definition, formatVersions: definition.formatVersions?.slice(0, 1) }), ['lightPwm']);
 });
 
-test('range edges interpolate into wider settings without attenuating inherited fields', () => {
+test('outward edges interpolate into wider settings while the saved core stays full strength', () => {
   const ranges = [
     range('wide', 1, 30, { exposureSec: 4, liftHeightMm: 8 }),
     { ...range('edge', 10, 20, { exposureSec: 8 }), blendStart: 2, blendEnd: 2 },
   ];
-  const layers = [9, 10, 11, 12, 18, 19, 20, 21];
-  assert.deepEqual(layers.map((layer) => resolveLayerSettingsAt(ranges, layer, { exposureSec: 2 }).exposureSec), [4, 4, 6, 8, 8, 6, 4, 4]);
+  const layers = [7, 8, 9, 10, 12, 18, 20, 21, 22, 23];
+  assert.deepEqual(layers.map((layer) => resolveLayerSettingsAt(ranges, layer, { exposureSec: 2 }).exposureSec), [4, 4, 6, 8, 8, 8, 8, 6, 4, 4]);
   for (const layer of layers) assert.equal(resolveLayerSettingsAt(ranges, layer, {}).liftHeightMm, 8);
-  const first = { ...range('baseline', 1, 5, { exposureSec: 8 }), blendStart: 4 };
-  assert.deepEqual([1, 2, 3, 4, 5].map((layer) => resolveLayerSettingsAt([first], layer, { exposureSec: layer <= 2 ? 10 : 2 }).exposureSec), [10, 9.5, 5, 6.5, 8]);
+  const first = { ...range('baseline', 3, 5, { exposureSec: 8 }), blendStart: 2, blendEnd: 2 };
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map((layer) => resolveLayerSettingsAt([first], layer, { exposureSec: layer <= 2 ? 10 : 2 }).exposureSec), [10, 9, 8, 8, 8, 5, 2]);
 });
 
-test('blurred suppliers compose at the same layer and preserve equal-span ordering', () => {
+test('outward suppliers compose at the same layer and preserve original-span ordering', () => {
   const ranges = [
-    { ...range('wide', 1, 21, { exposureSec: 10, liftHeightMm: 8 }), blendStart: 10 },
-    { ...range('middle', 4, 10, { exposureSec: 14 }), blendStart: 4 },
-    { ...range('narrow', 6, 8, { exposureSec: 20 }), blendStart: 2 },
+    { ...range('wide', 10, 20, { exposureSec: 10, liftHeightMm: 8 }), blendStart: 10 },
+    { ...range('middle', 12, 16, { exposureSec: 14 }), blendStart: 8 },
+    { ...range('narrow', 14, 15, { exposureSec: 20 }), blendStart: 8 },
   ];
-  assert.equal(resolveLayerSettingsAt(ranges, 6, { exposureSec: 2, liftHeightMm: 3 }).exposureSec, 10);
-  assert.ok(Math.abs(resolveLayerSettingsAt(ranges, 7, { exposureSec: 2, liftHeightMm: 3 }).exposureSec! - 16.1) < 1e-12);
-  assert.equal(resolveLayerSettingsAt(ranges, 7, { exposureSec: 2, liftHeightMm: 3 }).liftHeightMm, 6);
-  const first = { ...range('first', 2, 6, { exposureSec: 10 }), blendStart: 4 };
-  const later = { ...range('later', 2, 6, { exposureSec: 14 }), blendStart: 4 };
-  assert.equal(resolveLayerSettingsAt([first, later], 4, { exposureSec: 2 }).exposureSec, 10);
-  assert.equal(resolveLayerSettingsAt([later, first], 4, { exposureSec: 2 }).exposureSec, 9);
+  assert.ok(Math.abs(resolveLayerSettingsAt(ranges, 8, { exposureSec: 2, liftHeightMm: 3 }).exposureSec! - 13.4) < 1e-12);
+  assert.equal(resolveLayerSettingsAt(ranges, 12, { exposureSec: 2, liftHeightMm: 3 }).exposureSec, 18.5);
+  assert.equal(resolveLayerSettingsAt(ranges, 8, { exposureSec: 2, liftHeightMm: 3 }).liftHeightMm, 7);
+  const first = { ...range('first', 10, 20, { exposureSec: 10 }), blendStart: 4 };
+  const later = { ...range('later', 10, 20, { exposureSec: 14 }), blendStart: 4 };
+  assert.equal(resolveLayerSettingsAt([first, later], 8, { exposureSec: 2 }).exposureSec, 10);
+  assert.equal(resolveLayerSettingsAt([later, first], 8, { exposureSec: 2 }).exposureSec, 9);
+  const short = { ...range('short', 10, 12, { exposureSec: 8 }), blendStart: 20, blendEnd: 20 };
+  assert.equal(resolveLayerSettingsAt([range('wide', 1, 40, { exposureSec: 4 }), short], 9, {}).exposureSec, 7.8);
 });
 
-test('overlapping edge ramps remain piecewise linear and do not invent a full-strength plateau', () => {
-  const blurred = { ...range('overlap', 10, 14, { exposureSec: 8 }), blendStart: 4, blendEnd: 4 };
-  assert.deepEqual([10, 11, 12, 13, 14].map((layer) => resolveLayerSettingsAt([blurred], layer, { exposureSec: 4 }).exposureSec), [4, 5, 6, 5, 4]);
-  assert.deepEqual(resolveLayerSettingsAt([{ ...range('point', 12, 12, { exposureSec: 8 }), blendEnd: 1 }], 12, { exposureSec: 4 }), { exposureSec: 4 });
+test('long outward distances never attenuate even a single-layer core', () => {
+  const blurred = { ...range('long', 10, 14, { exposureSec: 8 }), blendStart: 100, blendEnd: 100 };
+  assert.deepEqual([10, 11, 12, 13, 14].map((layer) => resolveLayerSettingsAt([blurred], layer, { exposureSec: 4 }).exposureSec), [8, 8, 8, 8, 8]);
+  assert.deepEqual(resolveLayerSettingsRangeBounds(blurred), { startLayer: 10, endLayer: 14 });
+  assert.deepEqual(resolveLayerSettingsRangeSupport(blurred), { startLayer: 1, endLayer: 114 });
+  const point = { ...range('point', 12, 12, { exposureSec: 8 }), blendStart: 2, blendEnd: 2 };
+  assert.deepEqual([10, 11, 12, 13, 14].map((layer) => resolveLayerSettingsAt([point], layer, { exposureSec: 4 }).exposureSec), [4, 6, 8, 6, 4]);
 });
 
 test('PWM rounds only after all lower-priority blends have been applied', () => {
   const ranges = [
-    { ...range('wide', 1, 9, { lightPwm: 1 }), blendStart: 4 },
-    { ...range('narrow', 2, 4, { lightPwm: 0 }), blendStart: 2 },
+    { ...range('wide', 5, 9, { lightPwm: 1 }), blendStart: 4 },
+    { ...range('narrow', 4, 6, { lightPwm: 0 }), blendStart: 2 },
   ];
   assert.equal(resolveLayerSettingsAt(ranges, 3, { lightPwm: 0 }).lightPwm, 0);
   assert.equal(resolveLayerSettingsAt(ranges.slice(0, 1), 3, { lightPwm: 0 }).lightPwm, 1);
 });
 
 test('millimetre blur distances remain physical when the layer grid changes', () => {
-  const blurred = { ...mmRange('height', 0.125, 0.625, { exposureSec: 10 }), blendStart: 0.25, blendEnd: 0.125 };
+  const blurred = { ...mmRange('height', 0.25, 0.5, { exposureSec: 10 }), blendStart: 0.125, blendEnd: 0.25 };
   const original = JSON.stringify(blurred);
   const at = (height: number, layer: number) => resolveLayerSettingsAt([blurred], layer, { exposureSec: 2 }, height).exposureSec;
-  assert.deepEqual([1, 2, 3, 4, 5].map((layer) => at(0.125, layer)), [2, 6, 10, 10, 2]);
-  assert.deepEqual([2, 3, 8, 9, 10].map((layer) => at(0.0625, layer)), [2, 4, 10, 6, 2]);
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map((layer) => at(0.125, layer)), [2, 10, 10, 10, 6, 2]);
+  assert.deepEqual([2, 3, 4, 8, 10, 12].map((layer) => at(0.0625, layer)), [2, 6, 10, 10, 6, 2]);
   assert.equal(JSON.stringify(blurred), original);
 });
 
@@ -660,8 +667,26 @@ test('blur distances validate their units and canonical identity invalidates cha
 });
 
 test('blending requires an actual lower baseline only when it contributes to the result', () => {
-  const blurred = { ...range('edge', 1, 5, { exposureSec: 8 }), blendStart: 2 };
+  const blurred = { ...range('edge', 3, 5, { exposureSec: 8 }), blendStart: 2 };
   assert.deepEqual(resolveLayerSettingsAt([blurred], 1, {}), {});
   assert.throws(() => resolveLayerSettingsAt([blurred], 2, {}), /baseline must supply exposureSec/);
   assert.deepEqual(resolveLayerSettingsAt([blurred], 3, {}), { exposureSec: 8 });
+});
+
+test('off-grid physical cores still supply outward feathers without inventing a core layer', () => {
+  const point = { ...mmRange('off-grid', 0.1875, 0.1875, { exposureSec: 10 }), blendStart: 0.125, blendEnd: 0.125 };
+  assert.equal(resolveLayerSettingsRangeBounds(point, 0.125), null);
+  assert.deepEqual(resolveLayerSettingsRangeSupport(point, 0.125), { startLayer: 1, endLayer: 2 });
+  assert.deepEqual(compileLayerSettingsRanges([point], 4, 0.125), []);
+  assert.deepEqual([1, 2, 3].map((layer) => resolveLayerSettingsAt([point], layer, { exposureSec: 2 }, 0.125).exposureSec), [6, 6, 2]);
+  assert.equal(resolveLayerSettingsAt([range('broad', 1, 4, { exposureSec: 4 }), point], 2, {}, 0.125).exposureSec, 7);
+});
+
+test('out-of-print cores can feather into the print and disabled edges remain unaffected', () => {
+  const afterPrint = { ...range('later', 10, 12, { exposureSec: 8 }), blendStart: 10 };
+  assert.equal(resolveLayerSettingsAt([afterPrint], 5, { exposureSec: 4 }).exposureSec, 6);
+  assert.equal(resolveLayerSettingsAt([afterPrint], 13, { exposureSec: 4 }).exposureSec, 4);
+  assert.equal(layerSettingsRangeInfluence(afterPrint, 5.5), 0.55);
+  assert.equal(layerSettingsRangeInfluence(afterPrint, 10), 1);
+  assert.equal(layerSettingsRangeInfluence(afterPrint, 13), 0);
 });

@@ -105,8 +105,10 @@ const job = assembleSliceJob({
 
 `src/features/slicing/layerSettingsRanges.ts` is the pure scene-range contract. Use
 `parseLayerSettingsRanges` at input boundaries to validate and own an array;
-`compileLayerSettingsRanges` returns compact inclusive coverage segments and full-strength target
-patches for slider display. Use `resolveLayerSettingsAt` for actual blended point values.
+`compileLayerSettingsRanges` returns compact inclusive **nominal core** segments and full-strength
+target patches. `resolveLayerSettingsRangeSupport` includes outward tails; `resolveLayerSettingsAt`
+returns actual blended point values. `layerSettingsRangeInfluence` also accepts continuous layer
+positions for slider opacity sampling, while the point resolver requires whole printed layers.
 It imports no React, THREE, storage or translation runtime.
 
 ```ts
@@ -181,19 +183,20 @@ A narrow exposure-only patch inherits motion from the highest-priority wider
 supplier. Editing preserves id/order; Add appends. Segment `rangeId` is the
 overall display winner, not necessarily every inherited field's supplier.
 
-Optional `blendStart` and `blendEnd` distances soften the corresponding edge **inside** a
-range. Distances use that range's unit: nonnegative integer layer steps (at most u32 max)
-or finite nonnegative millimetres (at most f32 max). Absent/zero disables an edge; the parser
-omits explicit zero. A distance may exceed the range span; overlapping ramps need not reach
-full strength. Priority still uses the original range span, not the unblurred interior.
+Optional `blendStart` and `blendEnd` distances extend **outside** the saved range: before
+its start and after its end. The entire saved core stays at full strength, even for long
+distances or a one-layer core. Distances use that range's unit: nonnegative integer layer
+steps (at most u32 max), or finite nonnegative millimetres (at most f32 max). Absent/zero
+disables that side and canonical parsing omits explicit zero.
 
-At a matching layer, influence is the clamped minimum of 1, distance from the start divided
-by `blendStart` when enabled, and distance from the end divided by `blendEnd` when enabled.
-MM positions and endpoints use the existing final-binary32 height space; distances remain f64.
-Resolve supplied fields from lowest to highest priority, interpolating against the value
-underneath at that same layer, including lower-range blurs. Missing fields are not attenuated.
-When no lower supplier exists, use that physical record's actual bottom/transition/normal
-baseline, never an assumed zero. PWM rounds to the nearest integer only after all blending.
+Core influence is 1. Before the start it is `max(0, 1 - distanceFromStart / blendStart)`;
+after the end use the analogous `blendEnd` expression. MM positions and core endpoints
+use the existing final-binary32 height space; distances and expanded endpoints remain f64.
+Original nominal spans, not feather widths or clipped support, still determine priority.
+Resolve supplied fields from lowest to highest priority against the value underneath at
+that same layer, including lower-range feathers. Missing fields are not attenuated. With
+no lower supplier, use the actual bottom/transition/normal record baseline, never assumed
+zero. PWM rounds to the nearest integer only after all blending.
 
 ```ts
 import { resolveLayerSettingsAt } from '@/features/slicing/layerSettingsRanges';
@@ -201,16 +204,23 @@ import { resolveLayerSettingsAt } from '@/features/slicing/layerSettingsRanges';
 resolveLayerSettingsAt([
   { id: 'wide', startLayer: 1, endLayer: 30, settings: { exposureSec: 4 } },
   { id: 'edge', startLayer: 10, endLayer: 20, blendStart: 2, settings: { exposureSec: 8 } },
-], 11, { exposureSec: 2 }); // exposureSec = 6
+], 9, { exposureSec: 2 }); // exposureSec = 6; layer 10 and the rest of the core stay at 8.
 ```
 
 The TypeScript point resolver takes a one-based printed layer and a sparse baseline patch;
 it rejects a missing baseline field when that field is needed for partial interpolation.
 It validates/owns ranges per call and is intended for editor/point queries, not a native
 per-layer loop. Changing a blur distance changes encoded identity even if coverage is unchanged.
+Support can intersect the print even when the saved core lies beyond EOF. An off-grid mm
+core can also have a nonzero feather without inventing a matching core plane; its original
+resolved span is zero for priority. `resolveLayerSettingsRangeBounds` always returns only
+the nominal core, so unit conversion never grows saved bounds to include a feather.
+
 
 `fingerprintLayerSettingsRanges` excludes ids and colors, but retains range
-order, the raw unit/physical bounds, enabled blur distances and fields in whitelist order. `findUnsupportedLayerSetting`
+order, raw unit/physical bounds, enabled distances, the outward-blur mode, and fields in whitelist order.
+The mode is an encoded-identity discriminator only, not a new saved range key; it makes artifacts
+from the previous inward-blur implementation stale. `findUnsupportedLayerSetting`
 returns the first incompatible supplied field in original range/whitelist
 order, including shadowed and out-of-print ranges; consumers must reject it,
 not silently drop it.
@@ -227,7 +237,7 @@ original priority-ordered ranges and interpolate without per-record parsing or a
 Neither allocates an array proportional to the print's layer count. Native `is_empty()` means
 the original array was empty: a beyond-EOF schedule still requests the format's per-layer
 activation policy even when `resolve_at` never matches. Blurred motion validation checks
-interior physical records before opening a destination, not just interval endpoints.
+all affected core and tail records before opening a destination, not just interval endpoints.
 
 The scene supplies `SliceJobScene.layerSettingsRanges`; assembly validates and
 owns it, then writes the root metadata key after material/plugin overrides.
@@ -277,6 +287,23 @@ installs no rail cut geometry; a nonempty singleton-layer rail retains its full
 logical span. These are view-only changes: saved bounds, labels and encoded
 settings remain unchanged, and restoring the clip window restores the colors.
 
+`layerSettingsSliderBands.ts` owns pure `buildLayerSettingsRangeBands(ranges, colors,
+totalLayers, printing, layerHeightMm, label)`. Both page slider hosts supply the localized
+label callback. It retains existing nominal core marker coordinates and adds independent
+feather records, including for hidden, off-grid or out-of-print cores. `LayerSliderRangeBand`
+has optional `feather: { bottomOpacity, topOpacity }` (0..1) and `paintOrder` (low-to-high
+original range priority). These are transient drawing data, never scene settings.
+
+The colored core and its real transparent separator remain sharp. Only the paint outside
+that separation fades into the neighboring rail or lower-priority color. Feather records
+do not punch new rail holes or replace core hover hints. Shared SVG gap rings mask feather
+paint away from the original core separators; core/feather painting follows range priority.
+Print/live-window clipping preserves the original gradient phase instead of stretching it.
+Feathers have no minimum pixel height and cannot paint beyond their support or clip window.
+No blur filter is applied to handles, labels or hit targets. The model-profile color table
+continues to show nominal core intervals; the slider alone uses feather paint records.
+
+
 Call `useLayerSettingsRangeColors` once and share its map across both rails,
 menus and Manage rows. It allocates distinct resolved RGB values in persisted
 array order, observes root/OS theme changes and does not persist colors.
@@ -322,7 +349,8 @@ Supported numeric inputs remain editable when off; focus alone creates no
 override. MM endpoint fields use six decimal places and a 0.001 mm step. Empty
 or beyond-u32 mm coverage cannot be converted into a fabricated layer range;
 its physical data remains editable/savable as mm.
-Blur start/end have independent toggle/value controls aligned with that same far column.
+Blur start/end have independent toggle/value controls aligned with that same far column,
+for the distance **before** the start and **after** the end; the saved bounds remain full-strength.
 Unit conversion also converts their distances; mm-to-layers rounds to the nearest integer,
 retaining at least one layer for an enabled edge. Overflowing conversions are disabled.
 Where no lower range supplies a value, the material-mode-default label remains unchanged;

@@ -150,14 +150,48 @@ export function resolveLayerSettingsRangeBounds(
   layerHeightMm?: number,
 ): { startLayer: number; endLayer: number } | null {
   if (range.unit !== 'mm') return { startLayer: range.startLayer, endLayer: range.endLayer };
+  return resolveHeightRangeBounds(Math.fround(range.startMm), Math.fround(range.endMm), layerHeightMm);
+}
+
+/** Coverage includes the zero-influence outer edge, without changing saved core bounds. */
+export function resolveLayerSettingsRangeSupport(
+  range: LayerSettingsRange,
+  layerHeightMm?: number,
+): { startLayer: number; endLayer: number } | null {
+  if (range.unit !== 'mm') return {
+    startLayer: Math.max(1, range.startLayer - (range.blendStart ?? 0)),
+    endLayer: range.endLayer + (range.blendEnd ?? 0),
+  };
+  return resolveHeightRangeBounds(
+    Math.fround(range.startMm) - (range.blendStart ?? 0),
+    Math.fround(range.endMm) + (range.blendEnd ?? 0),
+    layerHeightMm,
+  );
+}
+
+/** Full core strength and outward falloff; continuous layer positions support slider paint. */
+export function layerSettingsRangeInfluence(range: LayerSettingsRange, layerNumber: number, layerHeightMm?: number): number {
+  if (!Number.isFinite(layerNumber)) invalid('layer position must be finite');
+  if (range.unit === 'mm') requireLayerHeight(layerHeightMm);
+  const position = range.unit === 'mm' ? Math.fround(layerNumber * layerHeightMm!) : layerNumber;
+  const start = range.unit === 'mm' ? Math.fround(range.startMm) : range.startLayer;
+  const end = range.unit === 'mm' ? Math.fround(range.endMm) : range.endLayer;
+  if (position < start) return range.blendStart ? Math.max(0, 1 - (start - position) / range.blendStart) : 0;
+  if (position > end) return range.blendEnd ? Math.max(0, 1 - (position - end) / range.blendEnd) : 0;
+  return 1;
+}
+
+function requireLayerHeight(layerHeightMm: number | undefined): asserts layerHeightMm is number {
   if (typeof layerHeightMm !== 'number' || !Number.isFinite(layerHeightMm)
     || layerHeightMm <= 0 || !Number.isFinite(Math.fround(layerHeightMm)) || Math.fround(layerHeightMm) === 0) {
     invalid('layerHeightMm must be a finite positive f32-representable number for mm ranges');
   }
+}
+
+function resolveHeightRangeBounds(start: number, end: number, layerHeightMm?: number): { startLayer: number; endLayer: number } | null {
+  requireLayerHeight(layerHeightMm);
   // Keep the nominal profile/job height and integer layer in f64 until the
-  // single printed-height f32 rounding; pre-rounding either changes the grid.
-  const start = Math.fround(range.startMm);
-  const end = Math.fround(range.endMm);
+  // single printed-height f32 rounding; expanded endpoints remain in f64.
   const gridEnd = Math.fround(MAX_LAYER * layerHeightMm);
   // MAX_LAYER + 1 is an exact sentinel, never a physical layer. Each search
   // visits at most 32 cells, including f32 plateaus near the end of the grid.
@@ -300,18 +334,15 @@ export function resolveLayerSettingsAt(
     invalid('layerNumber must be an integer in 1..4294967295');
   }
   const active = parseLayerSettingsRanges(ranges)
-    .map((range, index) => ({ range, index, bounds: resolveLayerSettingsRangeBounds(range, layerHeightMm) }))
-    .filter((entry) => entry.bounds !== null && entry.bounds.startLayer <= layerNumber && layerNumber <= entry.bounds.endLayer)
-    .sort((left, right) => (right.bounds!.endLayer - right.bounds!.startLayer)
-      - (left.bounds!.endLayer - left.bounds!.startLayer) || left.index - right.index);
+    .map((range, index) => {
+      const bounds = resolveLayerSettingsRangeBounds(range, layerHeightMm);
+      return { range, index, span: bounds ? bounds.endLayer - bounds.startLayer + 1 : 0, support: resolveLayerSettingsRangeSupport(range, layerHeightMm) };
+    })
+    .filter((entry) => entry.support !== null && entry.support.startLayer <= layerNumber && layerNumber <= entry.support.endLayer)
+    .sort((left, right) => right.span - left.span || left.index - right.index);
   const settings = { ...baseline };
   for (const { range } of active) {
-    const position = range.unit === 'mm' ? Math.fround(layerNumber * layerHeightMm!) : layerNumber;
-    const start = range.unit === 'mm' ? Math.fround(range.startMm) : range.startLayer;
-    const end = range.unit === 'mm' ? Math.fround(range.endMm) : range.endLayer;
-    const influence = Math.max(0, Math.min(1,
-      range.blendStart ? (position - start) / range.blendStart : 1,
-      range.blendEnd ? (end - position) / range.blendEnd : 1));
+    const influence = layerSettingsRangeInfluence(range, layerNumber, layerHeightMm);
     if (influence === 0) continue;
     for (const field of LAYER_SETTING_FIELDS) {
       const target = range.settings[field];
@@ -332,6 +363,7 @@ export function resolveLayerSettingsAt(
 export function fingerprintLayerSettingsRanges(ranges: readonly LayerSettingsRange[]): string {
   return JSON.stringify(parseLayerSettingsRanges(ranges).map((range) => {
     const blending = {
+      ...((range.blendStart || range.blendEnd) ? { blendMode: 'outward' } : {}),
       ...(range.blendStart === undefined ? {} : { blendStart: range.blendStart }),
       ...(range.blendEnd === undefined ? {} : { blendEnd: range.blendEnd }),
     };

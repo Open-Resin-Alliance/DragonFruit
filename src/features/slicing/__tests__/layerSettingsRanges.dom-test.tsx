@@ -13,6 +13,7 @@ import type { SlicingFormatDefinition } from '../formats/types';
 import { formatLayerSettingsRangeBounds } from '../layerSettingsRangeMessages';
 import { compileLayerSettingsRanges, parseLayerSettingsRanges, resolveLayerSettingsRangeBounds, type LayerSettingsRange } from '../layerSettingsRanges';
 import { useLayerSettingsRangeColors } from '../useLayerSettingsRangeColors';
+import { buildLayerSettingsRangeBands } from '../layerSettingsSliderBands';
 import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
 
 const initialRanges: LayerSettingsRange[] = [
@@ -52,20 +53,10 @@ async function mountHarness({
     const colors = useLayerSettingsRangeColors(ownedRanges);
     const fmt = useLocaleFormat();
     const { _ } = useLingui();
-    const segments = compileLayerSettingsRanges(ownedRanges, totalLayers, height);
-    const bands: LayerSliderRangeBand[] = segments.flatMap((segment) => {
-      const color = colors.get(segment.rangeId);
-      if (!color || totalLayers === 0) return [];
-      const original = ownedRanges.find((range) => range.id === segment.rangeId)!;
-      const span = Math.max(1, totalLayers - 1);
-      return [{
-        id: `${segment.rangeId}:${segment.startLayer}:${segment.endLayer}`,
-        bottomPercent: preview ? (totalLayers === 1 ? 0 : 100 * (Math.max(1, segment.startLayer - 0.5) - 1) / span) : 100 * (segment.startLayer - 1) / totalLayers,
-        topPercent: preview ? (totalLayers === 1 ? 100 : 100 * (Math.min(totalLayers, segment.endLayer + 0.5) - 1) / span) : 100 * segment.endLayer / totalLayers,
-        color,
-        label: formatLayerSettingsRangeBounds(_, fmt, original),
-      }];
-    });
+    const bands: LayerSliderRangeBand[] = buildLayerSettingsRangeBands(
+      ownedRanges, colors, totalLayers, preview, height,
+      (range) => formatLayerSettingsRangeBounds(_, fmt, range),
+    );
     useLayoutEffect(() => {
       bridge.current = {
         ranges: ownedRanges,
@@ -761,7 +752,6 @@ test('independent blur edges apply without changing overrides and reopen without
     assert.equal(blurSwitch('Blur start').getAttribute('aria-checked'), 'false', 'focus does not enable blur');
     await act(async () => field('Blur start').blur());
     await click(blurSwitch('Blur start'));
-    assert.equal(field('Blur start').value, '1', 'layer blur starts at one layer');
     assert.equal(blurSwitch('Blur end').getAttribute('aria-checked'), 'false');
     await typeValue('Blur start', '4');
     await click(button(dialog(), 'Apply'));
@@ -846,14 +836,13 @@ test('blur uses selected physical units and converts both distances without roun
   }
 });
 
-test('mm blur defaults to one nominal layer and blur alone never satisfies the required setting override', async () => {
+test('enabling mm blur alone never satisfies the required setting override', async () => {
   const tree = await mountHarness({ ranges: [], layerHeightMm: 0.035 });
   try {
     await tree.rightClick(5);
     await click(button(menu(), 'Add range'));
     await selectUnits('mm');
     await click(blurSwitch('Blur end'));
-    assert.equal(field('Blur end').value, '0.035');
     assert.equal(blurSwitch('Blur start').getAttribute('aria-checked'), 'false');
     assert.equal(overrideSwitch('Exposure').getAttribute('aria-checked'), 'false');
     assert.equal(button(dialog(), 'Apply').disabled, true, 'blur is not a setting override');
@@ -897,7 +886,7 @@ test('fractional layer blur is rejected and physical blur beyond layer capacity 
 
 test('enabling an inherited override uses the lower range blur at the edited range start layer', async () => {
   const tree = await mountHarness({ ranges: [
-    { id: 'blurred-underneath', startLayer: 3, endLayer: 10, blendStart: 4, settings: { exposureSec: 10 } },
+    { id: 'blurred-underneath', startLayer: 7, endLayer: 10, blendStart: 4, settings: { exposureSec: 10 } },
     { id: 'edit-above-blur', startLayer: 5, endLayer: 6, settings: { liftHeightMm: 9 } },
   ] });
   try {
@@ -915,7 +904,7 @@ test('enabling an inherited override uses the lower range blur at the edited ran
 
 test('editing above blurred motion settings supplies display baselines for inherited fields', async () => {
   const tree = await mountHarness({ ranges: [
-    { id: 'blurred-motion-underneath', startLayer: 3, endLayer: 10, blendStart: 4, settings: { liftHeightMm: 8, liftSpeedMmMin: 120, waitTimeBeforeCureSec: 4 } },
+    { id: 'blurred-motion-underneath', startLayer: 7, endLayer: 10, blendStart: 4, settings: { liftHeightMm: 8, liftSpeedMmMin: 120, waitTimeBeforeCureSec: 4 } },
     { id: 'edit-above-motion-blur', startLayer: 5, endLayer: 6, settings: { exposureSec: 7 } },
   ] });
   try {
@@ -928,6 +917,33 @@ test('editing above blurred motion settings supplies display baselines for inher
     await toggle('Lift speed');
     await click(button(dialog(), 'Apply'));
     assert.deepEqual(tree.state().ranges[1].settings, { exposureSec: 7, liftHeightMm: 4, liftHeight2Mm: 0, liftSpeedMmMin: 60, liftSpeed2MmMin: 0 });
+  } finally {
+    await tree.unmount();
+  }
+});
+
+test('right-clicking an outward tail edits its saved core and zero influence falls through', async () => {
+  const tree = await mountHarness({ totalLayers: 30, ranges: [
+    { id: 'wide', startLayer: 1, endLayer: 30, settings: { exposureSec: 4 } },
+    { id: 'feather', startLayer: 10, endLayer: 20, blendStart: 2, blendEnd: 2, settings: { exposureSec: 8 } },
+  ] });
+  try {
+    await tree.rightClick(9);
+    let matches = menu().querySelectorAll<HTMLButtonElement>('button[aria-haspopup="menu"]');
+    assert.equal(matches.length, 2);
+    await click(matches[0]);
+    await click(button(menu(), 'Edit'));
+    assert.equal(field('Start layer').value, '10');
+    assert.equal(field('End layer').value, '20');
+    await click(button(dialog(), 'Cancel'));
+    await tree.rightClick(8);
+    matches = menu().querySelectorAll<HTMLButtonElement>('button[aria-haspopup="menu"]');
+    assert.equal(matches.length, 1);
+    await click(matches[0]);
+    await click(button(menu(), 'Edit'));
+    assert.equal(field('Start layer').value, '1');
+    assert.equal(field('End layer').value, '30');
+    assert.equal(tree.state().applies, 0);
   } finally {
     await tree.unmount();
   }

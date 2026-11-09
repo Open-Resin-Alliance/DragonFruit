@@ -35,6 +35,10 @@ export type LayerSliderRangeBand = {
   topPercent: number;
   color: string;
   label: string;
+  /** A paint-only outward ramp; endpoints retain their alpha after print clipping. */
+  feather?: { bottomOpacity: number; topOpacity: number };
+  /** Low-to-high original range priority, independent of clipped coverage. */
+  paintOrder?: number;
 };
 
 type LayerSliderProps = {
@@ -67,6 +71,21 @@ type LayerSliderProps = {
 
 // SVG geometry properties are supported by browsers but absent from CSSProperties.
 type RailClipRectStyle = React.CSSProperties & Pick<React.SVGProps<SVGRectElement>, 'x' | 'y' | 'rx' | 'ry'>;
+
+function rangeBandGapRectStyle(band: LayerSliderRangeBand, outer: boolean): RailClipRectStyle {
+  const span = band.topPercent - band.bottomPercent;
+  const halfHeight = outer
+    ? `max(2px, calc(${span / 2}% + 0.5px))`
+    : `max(1px, calc(${span / 2}% - 0.5px))`;
+  return {
+    x: 'calc(50% - var(--spacing) * 0.75)',
+    y: `calc(${100 - (band.bottomPercent + band.topPercent) / 2}% - ${halfHeight})`,
+    width: 'calc(var(--spacing) * 1.5)',
+    height: outer ? `max(4px, calc(${span}% + 1px))` : `max(2px, calc(${span}% - 1px))`,
+    rx: 'calc(var(--spacing) * 0.75)',
+    ry: 'calc(var(--spacing) * 0.75)',
+  };
+}
 
 function rangeBandIntersectsWindow(band: LayerSliderRangeBand, bottom: number, top: number): boolean {
   if (top <= bottom) return false;
@@ -746,14 +765,23 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const singletonLayer = min === max && max > 0;
   const bandWindowBottom = singletonLayer ? 0 : lowerPercent ?? 0;
   const bandWindowTop = singletonLayer ? 100 : percent;
-  const orderedRangeBands = React.useMemo(() => [...(rangeBands ?? [])].sort((a, b) => a.bottomPercent - b.bottomPercent), [rangeBands]);
-  const visibleRangeBands = React.useMemo(() => (rangeBands ?? []).filter((band) => rangeBandIntersectsWindow(band, bandWindowBottom, bandWindowTop)), [rangeBands, bandWindowBottom, bandWindowTop]);
+  const coreRangeBands = React.useMemo(() => (rangeBands ?? []).filter((band) => !band.feather), [rangeBands]);
+  const orderedRangeBands = React.useMemo(() => [...coreRangeBands].sort((a, b) => a.bottomPercent - b.bottomPercent), [coreRangeBands]);
+  const visibleRangeBands = React.useMemo(() => coreRangeBands.filter((band) => rangeBandIntersectsWindow(band, bandWindowBottom, bandWindowTop)), [coreRangeBands, bandWindowBottom, bandWindowTop]);
+  const visiblePaintBands = React.useMemo(() => {
+    const bands = (rangeBands ?? []).filter((band) => rangeBandIntersectsWindow(band, bandWindowBottom, bandWindowTop));
+    return bands.some((band) => band.feather)
+      ? bands.sort((a, b) => (a.paintOrder ?? 0) - (b.paintOrder ?? 0))
+      : bands;
+  }, [rangeBands, bandWindowBottom, bandWindowTop]);
+  const hasVisibleFeathers = visiblePaintBands.some((band) => band.feather);
   const hoveredBandLabel = hoveredBand && hoveredBand.bottom === bandWindowBottom && hoveredBand.top === bandWindowTop
     ? visibleRangeBands.find((band) => band.id === hoveredBand.id)?.label
     : undefined;
   const rangeTrackHint = onRangeContextMenu ? _(RANGE_TRACK_HINT) : null;
   const railClassName = `relative mx-auto ${embedded ? (expandToContainer ? 'flex-1 h-full min-h-[300px]' : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`;
   const railClipId = `layer-slider-rail-${React.useId()}`;
+  const bandGapMaskId = `layer-slider-gaps-${React.useId()}`;
   const visibleRailSpans = React.useMemo(() => {
     if (!visibleRangeBands.length) return null;
     const holes: { topPercent: number; starts: string[]; ends: string[] }[] = [];
@@ -952,12 +980,47 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               />
             </div>
 
+            {/* Subtract exact outer-minus-inner core rings from every color, never the thumbs. */}
+            {hasVisibleFeathers && visibleRangeBands.length > 0 && (
+              <svg className="absolute inset-0 h-full w-full pointer-events-none" aria-hidden="true" focusable="false">
+                <defs>
+                  {visibleRangeBands.map((band, index) => (
+                    <mask key={band.id} id={`${bandGapMaskId}-${index}`} maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%" style={{ maskType: 'luminance' }}>
+                      <rect width="100%" height="100%" fill="white" />
+                      <rect style={rangeBandGapRectStyle(band, false)} fill="black" />
+                    </mask>
+                  ))}
+                  <mask id={bandGapMaskId} maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%" style={{ maskType: 'luminance' }}>
+                    <rect width="100%" height="100%" fill="white" />
+                    {visibleRangeBands.map((band, index) => (
+                      <rect key={band.id} style={rangeBandGapRectStyle(band, true)} fill="black" mask={`url(#${bandGapMaskId}-${index})`} />
+                    ))}
+                  </mask>
+                </defs>
+              </svg>
+            )}
+
             {/* Clip colors to the same interval as the fill; saved ranges remain unchanged. */}
             <div
               className="absolute inset-0 pointer-events-none"
-              style={{ clipPath: `inset(${100 - bandWindowTop}% 0 ${bandWindowBottom}% 0)` }}
+              style={{
+                clipPath: `inset(${100 - bandWindowTop}% 0 ${bandWindowBottom}% 0)`,
+                mask: hasVisibleFeathers && visibleRangeBands.length > 0 ? `url(#${bandGapMaskId})` : undefined,
+              }}
             >
-              {visibleRangeBands.map((band) => (
+              {visiblePaintBands.map((band) => band.feather ? (
+                <div
+                  key={band.id}
+                  data-layer-range-feather={band.id}
+                  aria-hidden="true"
+                  className="absolute left-1/2 w-1.5 -translate-x-1/2 pointer-events-none"
+                  style={{
+                    bottom: `${band.bottomPercent}%`,
+                    height: `${band.topPercent - band.bottomPercent}%`,
+                    background: `linear-gradient(to top, color-mix(in srgb, ${band.color} ${band.feather.bottomOpacity * 100}%, transparent), color-mix(in srgb, ${band.color} ${band.feather.topOpacity * 100}%, transparent))`,
+                  }}
+                />
+              ) : (
                 <div
                   key={band.id}
                   data-layer-range-band={band.id}

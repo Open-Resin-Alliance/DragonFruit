@@ -44,7 +44,7 @@ Shift+F10 also opens range commands at the current layer.
 4. Apply once. Cancel leaves the scene unchanged; undo/redo also applies to ranges.
 5. Use **Manage ranges** to reach every saved range, including fully shadowed or
    beyond-print ranges. Right-click a layer to edit/delete any range matching it.
-5. Choose **Profile** in the view selector to tint model surfaces with those same
+6. Choose **Profile** in the view selector to tint model surfaces with those same
    range colors at their printed heights. Uncovered areas keep ordinary shading;
    model transforms and cross-section clipping are respected. This is only a
    visualization and does not modify geometry or encoded settings.
@@ -58,6 +58,11 @@ track and handles have no glow. Colors and cutouts now follow both clip handles:
 ranges outside the visible interval are hidden and partly visible ranges are
 clipped. Moving the handles back restores them. This changes only the display,
 not saved range bounds or encoded settings.
+When blur is enabled, the colored core stays solid and its sharp separator stays visible.
+Only the color outside that separation feathers into neighboring slider regions. Moving
+the clip handles crops the feather without stretching its fade; labels and handles stay sharp.
+The model Profile view continues to mark the nominal saved core rather than this slider feather.
+
 Editable settings follow the selected printer's material-mode definitions,
 intersected with its encoder/version support. Only fields opted into per-layer
 editing appear. Material-declared motion pairs use one toggle per row; missing
@@ -72,16 +77,17 @@ clipping to this print; equal spans prefer the later-created range, including
 mixed units. Editing does not reorder priority. A
 narrow exposure-only range can inherit lift/wait values from a wider range.
 
-Blur interpolates each explicit override against the lower-priority settings at the same
-layer, including any blur on those lower ranges. With no lower supplier it blends into
-the material's actual settings for that printed layer. The enabled edge itself has zero
-influence, reaching full influence after the specified distance; nothing spills outside
-the saved range. For example, an 8-second range starting at layer 10 over a 4-second wider
-range, with start blur 2, gives 4 seconds at layer 10, 6 at layer 11 and 8 at layer 12.
-Both edges can be blurred; overlapping ramps use the smaller influence and may never
-reach full strength. Unspecified fields continue to inherit normally. Changing layer
-height preserves mm blur distances; converting mm to Layers rounds to the nearest whole
-layer, with a minimum of one layer for an enabled blur.
+Blur extends **past** the saved bounds: before the start and after the end. Every layer in
+the saved core keeps the full override. Outside it, the override fades linearly into the
+lower-priority settings at that same layer, including any feathers on those lower ranges;
+with no lower supplier it blends into the actual material settings for that printed layer.
+For example, an 8-second range starting at layer 10 over a 4-second wider range, with start
+blur 2, gives 4 seconds at layer 8, 6 at layer 9, then the full 8 at layer 10 and throughout
+the core. End blur works outward in the same way. Discrete printed layers sample the ramp,
+so a one-layer distance can have no intermediate layer. Neither the core bounds nor their
+priority grow with the feather. Unspecified fields continue to inherit normally.
+Changing layer height preserves mm blur distances; converting mm to Layers rounds to the
+nearest whole layer, with a minimum of one layer for an enabled blur.
 
 
 Travel heights are totals: stage 2 is a part of that total, not extra travel.

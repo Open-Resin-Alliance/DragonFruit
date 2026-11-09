@@ -19,11 +19,11 @@ import { resolveLayerSettingsFields } from '../formats/layerSettingsFields';
 import { resolveLayerSettingsMaterialRows } from '../layerSettingsMaterialFields';
 import type { SlicingFormatDefinition } from '../formats/types';
 import {
-  compileLayerSettingsRanges,
   findUnsupportedLayerSetting,
   LAYER_SETTING_FIELDS,
   parseLayerSettingsRanges,
   resolveLayerSettingsRangeBounds,
+  layerSettingsRangeInfluence,
   resolveLayerSettingsAt,
   type LayerSettingField,
   type LayerPrintSettingsPatch,
@@ -176,9 +176,12 @@ export function LayerSettingsRangeEditor({
   };
 
   const matchingRanges = layerNumber === null ? [] : ranges
-    .map((range, index) => ({ range, index, resolved: resolveLayerSettingsRangeBounds(range, layerHeightMm) }))
-    .filter(({ resolved }) => resolved !== null && resolved.startLayer <= layerNumber && resolved.endLayer >= layerNumber)
-    .sort((a, b) => (a.resolved!.endLayer - a.resolved!.startLayer) - (b.resolved!.endLayer - b.resolved!.startLayer) || b.index - a.index);
+    .map((range, index) => {
+      const core = resolveLayerSettingsRangeBounds(range, layerHeightMm);
+      return { range, index, span: core ? core.endLayer - core.startLayer + 1 : 0 };
+    })
+    .filter(({ range }) => layerSettingsRangeInfluence(range, layerNumber, layerHeightMm) > 0)
+    .sort((a, b) => a.span - b.span || b.index - a.index);
   const entries: ContextMenuEntry[] = [
     { id: 'add-range', label: _(msg`Add range`), icon: Plus, disabled: !canAdd },
     { id: 'manage-ranges', label: _(msg`Manage ranges`) },
@@ -202,14 +205,17 @@ export function LayerSettingsRangeEditor({
     if (inheritedLayer === undefined || inheritedLayer > MAX_LAYER) return {};
     const underneath = ranges.filter((range) => range.id !== inheritedRangeId);
     // Keep material-mode defaults distinct from fields supplied by lower ranges.
-    const supplied = compileLayerSettingsRanges(underneath, Math.min(MAX_LAYER, Math.max(totalLayers, inheritedLayer)), layerHeightMm)
-      .find((segment) => segment.startLayer <= inheritedLayer && segment.endLayer >= inheritedLayer)?.settings ?? {};
+    const supplied = new Set<LayerSettingField>();
+    for (const range of underneath) {
+      if (layerSettingsRangeInfluence(range, inheritedLayer, layerHeightMm) === 0) continue;
+      for (const field of LAYER_SETTING_FIELDS) if (range.settings[field] !== undefined) supplied.add(field);
+    }
     const resolved = resolveLayerSettingsAt(underneath, inheritedLayer, Object.fromEntries(
       LAYER_SETTING_FIELDS.map((field) => [field, field === 'exposureSec' ? normalExposureSec : field === 'lightPwm' ? 255 : 0]),
     ) as LayerPrintSettingsPatch, layerHeightMm);
-    return Object.fromEntries(LAYER_SETTING_FIELDS.filter((field) => supplied[field] !== undefined)
+    return Object.fromEntries(LAYER_SETTING_FIELDS.filter((field) => supplied.has(field))
       .map((field) => [field, resolved[field]])) as LayerPrintSettingsPatch;
-  }, [ranges, totalLayers, layerHeightMm, inheritedLayer, inheritedRangeId, normalExposureSec]);
+  }, [ranges, layerHeightMm, inheritedLayer, inheritedRangeId, normalExposureSec]);
   const inheritedValue = (field: LayerSettingField) => inheritedPatch[field]
     ?? (field === 'exposureSec' ? normalExposureSec : field === 'lightPwm' ? 255 : 0);
   const updateDraft = (update: (current: LayerSettingsRange) => LayerSettingsRange) => {
@@ -388,7 +394,7 @@ export function LayerSettingsRangeEditor({
               );
             })}
             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              {_(msg`Blur linearly blends each overridden setting into the lower-priority settings at the same layer, only inside this range. Overlapping start and end ramps use the smaller influence and may never reach the full override value. Distances use the selected range units. Converting to layers rounds to the nearest whole layer, with a minimum of one layer for enabled blur.`)}
+              {_(msg`Keep these bounds at full strength; blur fades outward before the start and after the end into lower-priority settings. The slider keeps the boundary separators sharp. Distances use the selected units.`)}
             </p>
             {(['blendStart', 'blendEnd'] as const).map((edge) => {
               const isMm = draft.unit === 'mm';

@@ -262,8 +262,10 @@ test('layer and millimetre edge blurs reopen with their distances and effective 
   for (const bytes of [eager, streamed.bytes]) {
     const reopened = (await parseVoxlBinaryV2(bytes)).document.scene.layerSettingsRanges!;
     assert.deepEqual(reopened, stored);
-    assert.deepEqual(resolveLayerSettingsAt(reopened, 11, { exposureSec: 2 }, 0.05), { exposureSec: 6, liftHeightMm: 8 });
-    assert.deepEqual(resolveLayerSettingsAt(reopened, 5, { exposureSec: 2 }, 0.0625), { exposureSec: 8, liftHeightMm: 8 });
+    assert.deepEqual(resolveLayerSettingsAt(reopened, 11, { exposureSec: 2 }, 0.05), { exposureSec: 8, liftHeightMm: 8 });
+    assert.deepEqual(resolveLayerSettingsAt(reopened, 5, { exposureSec: 2 }, 0.0625), { exposureSec: 12, liftHeightMm: 8 });
+    assert.deepEqual(resolveLayerSettingsAt(reopened, 7, { exposureSec: 2 }, 0.0625), { exposureSec: 8, liftHeightMm: 8 });
+    assert.deepEqual(resolveLayerSettingsAt(reopened, 8, { exposureSec: 2 }, 0.0625), { exposureSec: 4, liftHeightMm: 8 });
   }
 });
 
