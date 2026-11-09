@@ -8,8 +8,12 @@ on:
         required: true
         type: string
         default: dev
+      # Ignored. Previews used to reuse the PR check's DMG; they now build and
+      # sign their own. Kept only because pr-build-followup.yml runs from main
+      # (workflow_run always does) and still passes it until main catches up:
+      # dispatching with an undeclared input fails.
       pr_run_id:
-        description: Workflow run ID of the PR check to download macOS artifacts from
+        description: Ignored (kept for older callers)
         required: false
         type: string
       release_name:
@@ -415,52 +419,15 @@ jobs:
           # the tag comes out as preview_preview_pr-N.
           release_tag="preview_${safe_branch#preview_}"
 
-          echo "branch=${branch_name}" >> "$GITHUB_OUTPUT"
-          echo "safe_branch=${safe_branch}" >> "$GITHUB_OUTPUT"
-          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
-          echo "release_name=${human_name}" >> "$GITHUB_OUTPUT"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "commit_hash=${commit_hash}" >> "$GITHUB_OUTPUT"
-          echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
-
-  # ── Fetch macOS DMG from PR check run ──────────────────────────────────
-  fetch-macos-artifacts:
-    if: github.event_name == 'workflow_dispatch' && inputs.pr_run_id
-    needs:
-      - derive
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download macOS DMG from PR check
-        uses: actions/download-artifact@v8
-        with:
-          name: macos-dmg
-          path: macos-artifacts
-          run-id: ${{ inputs.pr_run_id }}
-          github-token: ${{ github.token }}
-
-      - name: Rename DMG to preview convention
-        shell: bash
-        env:
-          SAFE_BRANCH: ${{ needs.derive.outputs.safe_branch }}
-          COMMIT_HASH: ${{ needs.derive.outputs.commit_hash }}
-          VERSION: ${{ needs.derive.outputs.version }}
-        run: |
-          find macos-artifacts -name "*.dmg" -type f 2>/dev/null || echo "No .dmg files found"
-          preview_tag="${SAFE_BRANCH}_${COMMIT_HASH}_${VERSION}_DragonFruit_preview"
-          src="$(find macos-artifacts -name "*.dmg" -type f | head -1)"
-          if [ -n "$src" ]; then
-            cp -v "$src" "macos-artifacts/${preview_tag}.dmg"
-          else
-            echo "No DMG file found in downloaded artifacts"
-            exit 1
-          fi
-
-      - name: Upload renamed DMG
-        uses: actions/upload-artifact@v7
-        with:
-          name: dragonfruit-macos-universal
-          path: macos-artifacts/*_DragonFruit_preview.dmg
-          if-no-files-found: error
+          {
+            echo "branch=${branch_name}"
+            echo "safe_branch=${safe_branch}"
+            echo "release_tag=${release_tag}"
+            echo "release_name=${human_name}"
+            echo "version=${version}"
+            echo "commit_hash=${commit_hash}"
+            echo "commit_sha=${commit_sha}"
+          } >> "$GITHUB_OUTPUT"
 
   # ── Build matrix ────────────────────────────────────────────────────────
   build-tauri:
@@ -479,7 +446,9 @@ jobs:
         include:
           - platform: windows-latest
             build_kind: tauri
-            args: --target x86_64-pc-windows-msvc --bundles nsis
+            # The signing overlay is the same one release.yml uses: previews are
+            # signed (#980).
+            args: --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.windows-signing.conf.json
             artifact_name: dragonfruit-windows-x64
           - platform: ubuntu-22.04
             build_kind: flatpak
@@ -488,6 +457,10 @@ jobs:
     permissions:
       actions: write
       contents: write
+      # Windows code signing logs in to Azure with the workflow's OIDC token.
+      # The token's subject is the ref this run was dispatched on (the pull
+      # request's base branch), which the federated credential must trust.
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -572,20 +545,126 @@ jobs:
           git config --system core.longpaths true
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
 
+      # This workflow comes from the base branch but builds the pull request's
+      # branch, so the signing overlay and script come from that branch. One
+      # that predates them (#966) would fail inside the bundler with no reason.
+      - name: Check the branch carries the Windows signing files
+        if: matrix.build_kind == 'tauri'
+        shell: bash
+        run: |
+          for f in src-tauri/tauri.windows-signing.conf.json scripts/sign-windows.cmd scripts/sign-windows.ps1; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing: merge or rebase dev into this branch to get a signed preview."
+              exit 1
+            fi
+          done
+
+      # Windows installers are signed with Azure Artifact Signing. The login is
+      # OIDC: no client secret is stored, the federated credential on the app
+      # registration trusts this repository and ref. `scripts/sign-windows.ps1`
+      # then picks the login up through DefaultAzureCredential's CLI credential.
+      - name: Azure login (Artifact Signing)
+        if: matrix.build_kind == 'tauri'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # The same PowerShell module `azure/artifact-signing-action` installs;
+      # it is invoked per file from the Tauri bundler instead of once over a
+      # folder, so the signature lands before the updater artifacts are made.
+      - name: Install the Artifact Signing module
+        if: matrix.build_kind == 'tauri'
+        shell: pwsh
+        run: |
+          Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
+
+      # The bundler discards the signer's stderr: any non-zero exit becomes
+      # "failed to run pwsh", with no reason attached. Signing a throwaway
+      # binary first turns a broken signer into a two-minute failure that
+      # prints its own error, instead of a nine-minute build that says nothing.
+      - name: Sign a probe executable
+        if: matrix.build_kind == 'tauri'
+        shell: pwsh
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+        run: |
+          # csc, not Add-Type: PowerShell 7 cannot emit an assembly ("Both the
+          # assembly types 'ConsoleApplication' and 'WindowsApplication' are not
+          # currently supported"), and this step runs on 7.
+          $probe = Join-Path $env:RUNNER_TEMP 'signing-probe.exe'
+          $source = Join-Path $env:RUNNER_TEMP 'signing-probe.cs'
+          'public static class Probe { public static void Main() {} }' |
+            Out-File -FilePath $source -Encoding ascii
+          & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
+            /nologo /target:exe "/out:$probe" $source | Out-Null
+          $overlay = Get-Content src-tauri/tauri.windows-signing.conf.json -Raw | ConvertFrom-Json
+          $signCommand = $overlay.bundle.windows.signCommand
+          $arguments = @($signCommand.args | ForEach-Object { if ($_ -eq '%1') { $probe } else { $_ } })
+          & $signCommand.cmd @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "The signing command exited $LASTEXITCODE."
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $probe
+          if (-not $signature.SignerCertificate) {
+            throw "The probe came back unsigned: $($signature.StatusMessage)"
+          }
+          if ($signature.Status -eq 'HashMismatch') {
+            throw 'The probe signature does not match its contents.'
+          }
+          if (-not $signature.TimeStamperCertificate) {
+            throw 'The probe is signed but not timestamped.'
+          }
+          # The subject carries the certificate holder's name and locality, and
+          # these logs are public. The thumbprint identifies the certificate
+          # without naming anyone; the full subject is on the artifact itself.
+          Write-Host "Probe signed: status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
+
       - name: Build Tauri bundle (Windows)
         if: matrix.build_kind == 'tauri'
         uses: tauri-apps/tauri-action@v0
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
         with:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
 
+      # Tauri discards the signer's stderr; the script writes what happened here.
+      - name: Show the signing log
+        if: always() && matrix.build_kind == 'tauri'
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'dragonfruit-sign.log'
+          if (Test-Path $log) { Get-Content $log } else { Write-Host 'the signing script never ran' }
+
+      # -RequireSignature checks the executable inside the installer; the next
+      # step checks the installer itself.
       - name: Verify Windows installer runtime payload
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./scripts/verify-windows-bundles.ps1 -Formats nsis
+        run: ./scripts/verify-windows-bundles.ps1 -Formats nsis -RequireSignature
+
+      - name: Verify the Windows installer is signed
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis' -File -Filter '*-setup.exe')
+          if ($files.Count -eq 0) { throw 'No NSIS installer was built.' }
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if (-not $signature.SignerCertificate) { throw "$($file.Name) is not signed." }
+            if ($signature.Status -eq 'HashMismatch') { throw "$($file.Name) has a signature that does not match its contents." }
+            if (-not $signature.TimeStamperCertificate) { throw "$($file.Name) is signed but not timestamped." }
+            Write-Host "$($file.Name): status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
+          }
 
       - name: Install Flatpak build tooling
         if: matrix.build_kind == 'flatpak'
@@ -659,9 +738,11 @@ jobs:
           path: src-tauri/target/release/bundle/flatpak/*_DragonFruit_preview.flatpak
           if-no-files-found: error
 
-  # ── Fallback: build macOS Universal natively (manual dispatch, no PR check) ─
-  build-macos-fallback:
-    name: Build macOS Universal (fallback)
+  # ── macOS Universal, signed with the Developer ID and notarized ─────────
+  # Built here rather than taken from the pull request check: that check runs
+  # without secrets and is ad-hoc signed, and a preview ships signed (#980).
+  build-macos:
+    name: Build macOS Universal
     # The shipped profile, stated here as well as in Cargo.toml so that the cache it
     # restores is the one the warmer wrote (see `env-vars` below); the compile check
     # links thin and keeps its artifacts under a different key.
@@ -678,11 +759,9 @@ jobs:
     if: >-
       !cancelled() &&
       needs.derive.result == 'success' &&
-      github.event_name == 'workflow_dispatch' &&
-      (!inputs.pr_run_id || needs.fetch-macos-artifacts.result != 'success')
+      github.event_name == 'workflow_dispatch'
     needs:
       - derive
-      - fetch-macos-artifacts
     runs-on: macos-latest
     permissions:
       # Deliberately no actions: write. This job compiles whatever ref it is
@@ -720,23 +799,11 @@ jobs:
           toolchain: ${{ steps.rust_toolchain.outputs.channel }}
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Use ad-hoc signing
-        # Inlined rather than kept in a script: this workflow checks out the pull
-        # request head, while the workflow itself comes from the base branch, so
-        # a branch that predates a helper file would fail on a missing module.
-        shell: bash
-        run: |
-          node - <<'JS'
-          const fs = require('node:fs');
-          const file = 'src-tauri/tauri.macos.conf.json';
-          const config = JSON.parse(fs.readFileSync(file, 'utf8'));
-          config.bundle ??= {};
-          config.bundle.macOS ??= {};
-          const previous = config.bundle.macOS.signingIdentity;
-          config.bundle.macOS.signingIdentity = '-';
-          fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n');
-          console.log(`macOS signing identity: ${previous ?? '(unset)'} -> "-" (ad-hoc; this build is not notarized)`);
-          JS
+      - name: Install Apple Certificate
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASS }}
 
       # `swatinem/rust-cache` hashes every toolchain `rustup` lists, not only the
       # one the build uses, and the runner image ships its own `stable` (1.98.1
@@ -788,11 +855,18 @@ jobs:
           DF_BUILD_TARGET_TRIPLE: universal-apple-darwin
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: MHNF3GA2MM
         with:
           tauriScript: npx tauri
           args: --target universal-apple-darwin --bundles app,dmg
 
       - name: Embed QuickLook extension + verify universal bundle
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: MHNF3GA2MM
         run: |
           node scripts/macos-embed-appex.mjs --target universal-apple-darwin
           node scripts/verify-universal-bundle.mjs
@@ -824,8 +898,7 @@ jobs:
     needs:
       - derive
       - build-tauri
-      - fetch-macos-artifacts
-      - build-macos-fallback
+      - build-macos
     runs-on: ubuntu-latest
     steps:
       - name: Download build artifacts
