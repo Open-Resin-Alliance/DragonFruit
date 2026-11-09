@@ -79,13 +79,13 @@ fn restore_active_edges_sorted(active_edges: &mut [ActiveEdge]) {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Segment {
-    x1: f32,
-    y1: f32,
-    dx_dy: f32,
-    y_min: f32,
-    y_max: f32,
-    wind: i32,
+pub(crate) struct Segment {
+    pub(crate) x1: f32,
+    pub(crate) y1: f32,
+    pub(crate) dx_dy: f32,
+    pub(crate) y_min: f32,
+    pub(crate) y_max: f32,
+    pub(crate) wind: i32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -323,7 +323,7 @@ fn edge_plane_intersection_t(az: f32, bz: f32, z: f32) -> Option<f32> {
 }
 
 #[inline]
-fn distinct_points_push(points: &mut [(f32, f32); 3], count: &mut usize, candidate: (f32, f32)) {
+pub(crate) fn distinct_points_push(points: &mut [(f32, f32); 3], count: &mut usize, candidate: (f32, f32)) {
     let eps = 1e-5;
     for i in 0..*count {
         let p = points[i];
@@ -514,9 +514,9 @@ fn build_row_spans_nonzero_inner(
 }
 
 #[inline]
-fn push_segment_for_triangle_at_z(
+pub(crate) fn push_segment_for_triangle_at_z(
     job: &SliceJobV3,
-    tri: Triangle,
+    tri: &Triangle,
     z_mm: f32,
     segments: &mut Vec<Segment>,
 ) {
@@ -615,7 +615,7 @@ fn build_segments_for_layer_into(
     segments.clear();
 
     for tri_idx in layer_indices {
-        push_segment_for_triangle_at_z(job, triangles[*tri_idx], z_mm, segments);
+        push_segment_for_triangle_at_z(job, &triangles[*tri_idx], z_mm, segments);
     }
 }
 
@@ -627,6 +627,19 @@ fn build_segments_for_layer(
 ) -> Vec<Segment> {
     let mut segments = Vec::with_capacity(layer_indices.len());
     build_segments_for_layer_into(job, triangles, layer_indices, z_mm, &mut segments);
+    segments
+}
+
+fn build_single_plane_segments(
+    job: &SliceJobV3, triangles: &[Triangle], candidates: &[usize], z_mm: f32,
+) -> Vec<Segment> {
+    if !raw_binary_geometry_eligible(job, triangles.len()) {
+        return build_segments_for_layer(job, triangles, candidates, z_mm);
+    }
+    let mut segments = Vec::new();
+    crate::raw_simd::build_segments_into(
+        job, triangles, candidates, z_mm, &mut segments, Backend::detected(),
+    );
     segments
 }
 
@@ -653,7 +666,7 @@ fn build_z_perturbed_segments_list(
         .collect::<Vec<_>>();
 
     for &tri_idx in layer_indices {
-        let tri = triangles[tri_idx];
+        let tri = &triangles[tri_idx];
         if sample_z_is_sorted {
             if tri.z_max <= sample_z[0] || tri.z_min > sample_z[z_steps - 1] {
                 continue;
@@ -1110,6 +1123,11 @@ fn supports_should_bypass_aa(job: &SliceJobV3, triangle_count: usize) -> bool {
     };
 
     aa_steps > 1 || blur_radius > 0
+}
+
+#[inline]
+pub(crate) fn raw_binary_geometry_eligible(job: &SliceJobV3, triangle_count: usize) -> bool {
+    job.effective_xy_aa_steps() <= 1 && !supports_should_bypass_aa(job, triangle_count)
 }
 
 #[inline]
@@ -2485,13 +2503,14 @@ fn rasterize_layer_with_stats_impl(
     layer_indices: &[usize],
     layer_index: u32,
     compute_area_stats: bool,
+    prebuilt_segments: Option<&[Segment]>,
 ) -> (Vec<u8>, LayerAreaStatsV3) {
     let width = job.effective_render_width_px() as usize;
     let height = job.source_height_px as usize;
     let mut mask = crate::pipeline::get_recycled_mask(width * height);
     let mut stats = LayerAreaStatsV3::default();
 
-    if layer_indices.is_empty() {
+    if layer_indices.is_empty() && prebuilt_segments.is_none() {
         return (mask, stats);
     }
 
@@ -2519,11 +2538,15 @@ fn rasterize_layer_with_stats_impl(
     } else {
         Vec::new()
     };
-    let segments = if use_z_perturbation {
-        Vec::new()
+    let owned_segments;
+    let segments: &[Segment] = if use_z_perturbation {
+        &[]
+    } else if let Some(segments) = prebuilt_segments {
+        segments
     } else {
         let z_mm = (layer_index as f32 + 0.5) * job.layer_height_mm;
-        build_segments_for_layer(job, triangles, layer_indices, z_mm)
+        owned_segments = build_single_plane_segments(job, triangles, layer_indices, z_mm);
+        &owned_segments
     };
 
     if use_z_perturbation {
@@ -2902,6 +2925,12 @@ fn rasterize_layer_with_stats_impl(
     (mask, stats)
 }
 
+pub(crate) fn rasterize_layer_with_stats_from_segments(
+    job: &SliceJobV3, segments: &[Segment], compute_area_stats: bool,
+) -> (Vec<u8>, LayerAreaStatsV3) {
+    rasterize_layer_with_stats_impl(job, &[], &[], 0, compute_area_stats, Some(segments))
+}
+
 /// Rasterize one layer into an 8-bit grayscale mask (`0` or `255`), optionally
 /// bypassing AA for support/raft geometry when model/support split metadata is
 /// provided in `job.model_triangle_count`.
@@ -2919,6 +2948,7 @@ pub fn rasterize_layer_with_stats(
             layer_indices,
             layer_index,
             compute_area_stats,
+            None,
         );
     }
 
@@ -2939,11 +2969,12 @@ pub fn rasterize_layer_with_stats(
             &model_layer_indices,
             layer_index,
             compute_area_stats,
+            None,
         );
     }
 
     let (mut model_mask, _model_stats) =
-        rasterize_layer_with_stats_impl(job, triangles, &model_layer_indices, layer_index, false);
+        rasterize_layer_with_stats_impl(job, triangles, &model_layer_indices, layer_index, false, None);
 
     let mut support_job = job.clone();
     support_job.anti_aliasing_level = "Off".to_string();
@@ -2959,6 +2990,7 @@ pub fn rasterize_layer_with_stats(
         &support_layer_indices,
         layer_index,
         false,
+        None,
     );
 
     for (dst, src) in model_mask.iter_mut().zip(support_mask.iter()) {
@@ -3281,12 +3313,24 @@ pub fn rasterize_layer_rle(
         return (runs, stats);
     }
 
-    // Binary single-Z streaming path.
-    // AA (SSAA supersampling + optional blur) is applied at the engine level
-    // before this function is called — the rasterizer always sees a binary job.
     let z_mm = (layer_index as f32 + 0.5) * job.layer_height_mm;
-    let segments = build_segments_for_layer(job, triangles, layer_indices, z_mm);
-    if segments.is_empty() {
+    let segments = build_single_plane_segments(job, triangles, layer_indices, z_mm);
+    rasterize_binary_layer_rle_from_segments(job, &segments, compute_area_stats)
+}
+
+/// Full-frame binary rasterization retains previous-row winding coherence.
+#[allow(unused_assignments)]
+pub(crate) fn rasterize_binary_layer_rle_from_segments(
+    job: &SliceJobV3,
+    segments: &[Segment],
+    compute_area_stats: bool,
+) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
+    use crate::rle::{emit_zero_rows, RleAccum};
+    let width = job.effective_render_width_px() as usize;
+    let height = job.source_height_px as usize;
+    let mut rle = RleAccum::new();
+    let mut stats = LayerAreaStatsV3::default();
+    if segments.is_empty() || width == 0 || height == 0 {
         emit_zero_rows(&mut rle, height, width);
         return (rle.finish(), stats);
     }
@@ -3811,9 +3855,35 @@ pub fn rasterize_layer_rle_block(
         return (runs, stats);
     }
 
-    // Binary single-Z streaming path, window-clamped.
     let z_mm = (layer_index as f32 + 0.5) * job.layer_height_mm;
-    let segments = build_segments_for_layer(job, triangles, layer_indices, z_mm);
+    let segments = build_single_plane_segments(job, triangles, layer_indices, z_mm);
+    rasterize_binary_layer_rle_block_from_segments(job, &segments, compute_area_stats, block)
+}
+
+/// Blocks use global coordinates but intentionally no previous-row coherence.
+#[allow(unused_assignments)]
+pub(crate) fn rasterize_binary_layer_rle_block_from_segments(
+    job: &SliceJobV3,
+    segments: &[Segment],
+    compute_area_stats: bool,
+    block: crate::rle::RleBlockSpec,
+) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
+    use crate::rle::{emit_zero_rows, RleAccum};
+    let full_width = job.effective_render_width_px() as usize;
+    let height = job.source_height_px as usize;
+    let wstart = (block.start_col as usize).min(full_width);
+    let wend = wstart.saturating_add(block.width as usize).min(full_width);
+    let wwidth = wend - wstart;
+    let mut rle = RleAccum::new();
+    let mut stats = LayerAreaStatsV3::default();
+    if wwidth == 0 || height == 0 { return (rle.finish(), stats); }
+    let pixel_area_mm2 = ((job.build_width_mm as f64)
+        / (job.effective_render_width_px().max(1) as f64))
+        * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
     if segments.is_empty() {
         emit_zero_rows(&mut rle, height, wwidth);
         return (rle.finish(), stats);

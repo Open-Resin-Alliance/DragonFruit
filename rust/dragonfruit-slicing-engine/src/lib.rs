@@ -19,6 +19,7 @@ pub mod index;
 pub mod metrics;
 pub mod pipeline;
 mod pulp_simd;
+mod raw_simd;
 pub mod raster;
 pub mod rle;
 pub mod tanks;
