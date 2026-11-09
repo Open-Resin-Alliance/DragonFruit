@@ -45,6 +45,64 @@ edge pixels; old raster hashes are not a correctness oracle for the fix.
 `binary_annulus_matches_center_samples_and_global_block_coordinates` cover
 half-pixel ties, clipping, thin geometry, annulus symmetry and block seams.
 
+### Coverage-off RAW work-pair SIMD
+
+`raw_simd` batches independent triangle/layer intersection work through the
+existing Pulp backend. SIMD lanes are real candidate/plane pairs, not AA samples
+of one triangle; neighboring layers need not intersect the same triangles.
+The parsed/projected triangle array and `LayerIndex` candidate slices remain
+shared. Batching creates no model copy or triangle-by-layer Cartesian-product
+queue.
+
+`RawLayerRequest` names a layer, its exact existing Z plane and borrowed
+candidates. `build_segments_into` reuses a single caller's segment vector;
+`for_each_layer_segments` streams `LayerSegments` for a bounded request group.
+Candidate order, duplicates and model/support classification are retained.
+Support-stream presence follows input candidates, including support candidates
+that produce no segment. Empty layers and partial SIMD/batch tails are emitted
+normally.
+
+Crate-internal model-only example, called on the worker executing the chunk:
+
+```rust
+let requests = [crate::raw_simd::RawLayerRequest {
+    layer_index: layer,
+    z_mm: (layer as f32 + 0.5) * job.layer_height_mm,
+    candidates: index.candidates_for_layer(layer),
+}];
+crate::raw_simd::for_each_layer_segments(
+    job, triangles, &requests, None, backend, cancel_flag, |prepared| {
+        let (runs, stats) = crate::raster::rasterize_binary_layer_rle_from_segments(
+            job, &prepared.model, compute_area_stats,
+        );
+        on_layer(prepared.layer_index, runs, stats)
+    },
+)?;
+```
+
+Request groups must not exceed `MAX_RAW_LAYER_BATCH`. The callback consumes each
+layer before the next allocation grows; send its output through the existing
+bounded channel rather than retaining completed layers. Support-split consumers
+must retain the separate optional support stream and union-statistics policy.
+See [Pipeline](pipeline.md) for producer integration and ordered draining.
+
+Layer-major packet filling drains completed layers before fetching more work.
+At most one full layer's segment storage plus packet-sized spill is retained;
+it does not accumulate eight fully rendered layers or full-plate masks. Rayon
+still schedules chunks in parallel, with small-job grain selection preserving
+thread-level concurrency. Per-layer winding/repair, scanline history, RLE
+emission and block coordinates remain independent.
+
+The vector kernel preserves scalar crossing predicates, exact division,
+separate multiply/add rounding, point-deduplication tolerances and orientation.
+Inactive divisions use safe operands. No FMA, approximate reciprocal or
+closed-form replacement of incremental scanline X history is introduced.
+Expand validity through `Simd::select_u32s`, not a size-preserving mask bitcast:
+AVX512 masks are compact and scalar masks are booleans, unlike their u32 vectors.
+Non-binary AA/perturbation and postprocessing keep their existing algorithms.
+Evaluate complete coverage-off RAW output and resource behavior; throughput
+benchmarks are a separate acceptance step, not implied by SIMD lane width.
+
 ### `rle`
 
 - always merge adjacent same-value runs
@@ -127,9 +185,10 @@ or image buffer is introduced.
 
 ### Portable SIMD arithmetic
 
-`pulp_simd` is a crate-private seam shared by XY raster blur and Z blur. Each
-operation implements `pulp::WithSimd` once, with generic integer arithmetic; the
-application owns no x86 intrinsics or handwritten CPU-feature-gated kernels. Pulp 0.22.3
+`pulp_simd` is a crate-private dispatch seam shared by XY/Z blur and RAW geometry.
+Operations implement `pulp::WithSimd` once: blur uses generic integer arithmetic,
+while `raw_simd` uses exact FP32 work-pair arithmetic. The application owns no
+x86 intrinsics or handwritten CPU-feature-gated kernels. Pulp 0.22.3
 provides the runtime-gated native implementations. On x86 the cached selection
 is AVX512/x86-64-v4, then AVX2/x86-64-v3, then SSE/x86-64-v2, then scalar. The
 explicit v2 choice is important: Pulp's stock x86 dispatcher otherwise skips

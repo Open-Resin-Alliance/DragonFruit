@@ -12,6 +12,8 @@ use crate::metrics::SlicingPerfV3;
 use crate::raster::{
     rasterize_layer_rle, rasterize_layer_with_stats, recompute_layer_stats_from_rle,
 };
+use crate::raw_simd::{LayerSegments, RawLayerRequest, MAX_RAW_LAYER_BATCH};
+use crate::pulp_simd::Backend;
 use crate::rle::{RleAccum, RleRun};
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceJobV3, SliceProgressPhaseV3,
@@ -338,6 +340,75 @@ fn rasterize_layer_rle_with_support_split(
     (model_runs, Some(support_runs), stats)
 }
 
+fn rasterize_raw_layer_segments(
+    job: &SliceJobV3, layer: &LayerSegments, compute_area_stats: bool,
+) -> (Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3) {
+    let (runs, model_stats) = crate::raster::rasterize_binary_layer_rle_from_segments(
+        job, &layer.model, compute_area_stats && layer.support.is_none(),
+    );
+    let Some(support) = layer.support.as_ref() else { return (runs, None, model_stats); };
+    let (support_runs, support_stats) = crate::raster::rasterize_binary_layer_rle_from_segments(
+        job, support, compute_area_stats && layer.model_candidates == 0,
+    );
+    if layer.model_candidates == 0 { return (runs, Some(support_runs), support_stats); }
+    let width = job.effective_render_width_px() as usize;
+    let height = job.source_height_px as usize;
+    let pixel_area_mm2 = ((job.build_width_mm as f64) / (job.effective_render_width_px().max(1) as f64))
+        * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
+    let stats = if compute_area_stats {
+        let merged = merge_rle_max(&runs, &support_runs);
+        recompute_layer_stats_from_rle(&merged, width, height, pixel_area_mm2, true)
+    } else {
+        compute_rle_max_basic_stats(&runs, &support_runs, width, height, pixel_area_mm2)
+    };
+    (runs, Some(support_runs), stats)
+}
+
+fn layer_batch_grain(total_layers: u32, max_concurrent: usize, raw_eligible: bool) -> u32 {
+    if !raw_eligible { return 1; }
+    ((total_layers as usize / max_concurrent.max(1)).max(1).min(MAX_RAW_LAYER_BATCH)) as u32
+}
+
+fn for_each_geometry_layer(
+    job: &SliceJobV3, triangles: &[Triangle], layer_index: &LayerIndex,
+    start: u32, end: u32, support_split: Option<usize>, backend: Backend,
+    cancel_flag: Option<&AtomicBool>, raster_ns: &AtomicU64,
+    mut emit: impl FnMut(u32, Option<LayerSegments>) -> Result<(), SlicerV3Error>,
+) -> Result<(), SlicerV3Error> {
+    if !crate::raster::raw_binary_geometry_eligible(job, triangles.len()) {
+        for layer in start..end {
+            if cancel_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                return Err(SlicerV3Error::Cancelled);
+            }
+            emit(layer, None)?;
+        }
+        return Ok(());
+    }
+    let mut requests = [RawLayerRequest { layer_index: 0, z_mm: 0.0, candidates: &[] }; MAX_RAW_LAYER_BATCH];
+    let count = (end - start) as usize;
+    for (offset, request) in requests[..count].iter_mut().enumerate() {
+        let layer = start + offset as u32;
+        *request = RawLayerRequest {
+            layer_index: layer, z_mm: (layer as f32 + 0.5) * job.layer_height_mm,
+            candidates: layer_index.candidates_for_layer(layer),
+        };
+    }
+    // Dispatch on the executing Rayon worker. Callback work is accounted by its
+    // original raster/encode timers, not charged again as geometry work.
+    let mut geometry_start = std::time::Instant::now();
+    let result = crate::raw_simd::for_each_layer_segments(
+        job, triangles, &requests[..count], support_split, backend, cancel_flag,
+        |segments| {
+            raster_ns.fetch_add(geometry_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            let result = emit(segments.layer_index, Some(segments));
+            geometry_start = std::time::Instant::now();
+            result
+        },
+    );
+    raster_ns.fetch_add(geometry_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    result
+}
+
 fn encode_uniform_png_cached(
     width: u32,
     height: u32,
@@ -531,9 +602,14 @@ pub fn render_layers_bounded(
             let produce = |tx: std::sync::mpsc::SyncSender<
                 Result<(u32, Option<Vec<u8>>, Option<Vec<u8>>, LayerAreaStatsV3), SlicerV3Error>,
             >| {
-                (0..total_layers)
-                    .into_par_iter()
-                    .for_each_with(tx, |tx, layer| {
+                let grain = layer_batch_grain(total_layers, max_concurrent,
+                    crate::raster::raw_binary_geometry_eligible(job, triangles.len()));
+                let batches = total_layers.div_ceil(grain);
+                (0..batches).into_par_iter().for_each_with(tx, |tx, batch| {
+                    let start = batch * grain;
+                    let result = for_each_geometry_layer(
+                        job, triangles, layer_index, start, (start + grain).min(total_layers),
+                        None, Backend::detected(), cancel_flag, &raster_ns, |layer, segments| {
                         let result = (|| -> Result<
                             (u32, Option<Vec<u8>>, Option<Vec<u8>>, LayerAreaStatsV3),
                             SlicerV3Error,
@@ -588,13 +664,13 @@ pub fn render_layers_bounded(
                             // ── Fast path: RLE rasteriser + streaming PNG ──
                             if use_rle_png_path {
                                 let raster_start = std::time::Instant::now();
-                                let (runs, stats) = rasterize_layer_rle(
-                                    job,
-                                    triangles,
-                                    layer_candidates,
-                                    layer,
-                                    compute_area_stats,
-                                );
+                                let (runs, stats) = if let Some(segments) = segments.as_ref() {
+                                    crate::raster::rasterize_binary_layer_rle_from_segments(
+                                        job, &segments.model, compute_area_stats,
+                                    )
+                                } else {
+                                    rasterize_layer_rle(job, triangles, layer_candidates, layer, compute_area_stats)
+                                };
                                 raster_ns.fetch_add(
                                     raster_start.elapsed().as_nanos() as u64,
                                     Ordering::Relaxed,
@@ -615,13 +691,13 @@ pub fn render_layers_bounded(
                             }
 
                             let raster_start = std::time::Instant::now();
-                            let (mask, stats) = rasterize_layer_with_stats(
-                                job,
-                                triangles,
-                                layer_candidates,
-                                layer,
-                                compute_area_stats,
-                            );
+                            let (mask, stats) = if let Some(segments) = segments.as_ref() {
+                                crate::raster::rasterize_layer_with_stats_from_segments(
+                                    job, &segments.model, compute_area_stats,
+                                )
+                            } else {
+                                rasterize_layer_with_stats(job, triangles, layer_candidates, layer, compute_area_stats)
+                            };
                             raster_ns.fetch_add(
                                 raster_start.elapsed().as_nanos() as u64,
                                 Ordering::Relaxed,
@@ -682,8 +758,11 @@ pub fn render_layers_bounded(
 
                             Ok((layer, png, raw_mask, stats))
                         })();
-                        let _ = tx.send(result);
+                        let output = result?;
+                        tx.send(Ok(output)).map_err(|_| SlicerV3Error::Cancelled)
                     });
+                    if let Err(error) = result { let _ = tx.send(Err(error)); }
+                });
             };
 
             match ThreadPoolBuilder::new().num_threads(max_concurrent).build() {
@@ -798,13 +877,30 @@ pub fn render_layers_rle(
     layer_index: &LayerIndex,
     compute_area_stats: bool,
     support_split_model_triangle_count: Option<usize>,
-    mut on_rle_layer: impl FnMut(u32, Vec<RleRun>, Option<Vec<RleRun>>) -> Result<(), SlicerV3Error>,
+    on_rle_layer: impl FnMut(u32, Vec<RleRun>, Option<Vec<RleRun>>) -> Result<(), SlicerV3Error>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+    render_layers_rle_with_execution(
+        job, triangles, layer_index, compute_area_stats, support_split_model_triangle_count,
+        on_rle_layer, on_progress, cancel_flag, choose_max_concurrent(), Backend::detected(),
+    )
+}
+
+fn render_layers_rle_with_execution(
+    job: &SliceJobV3,
+    triangles: &[Triangle],
+    layer_index: &LayerIndex,
+    compute_area_stats: bool,
+    support_split_model_triangle_count: Option<usize>,
+    mut on_rle_layer: impl FnMut(u32, Vec<RleRun>, Option<Vec<RleRun>>) -> Result<(), SlicerV3Error>,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+    max_concurrent: usize,
+    backend: Backend,
+) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
     let render_wall_start = std::time::Instant::now();
     let total_layers = job.total_layers;
-    let max_concurrent = choose_max_concurrent();
     // RLE output is small; allow a generous channel buffer so producers stay fed.
     let buffer = (max_concurrent * 4).clamp(4, 64);
 
@@ -827,9 +923,15 @@ pub fn render_layers_rle(
             let produce = |tx: std::sync::mpsc::SyncSender<
                 Result<(u32, Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3), SlicerV3Error>,
             >| {
-                (0..total_layers)
-                    .into_par_iter()
-                    .for_each_with(tx, |tx, layer| {
+                let grain = layer_batch_grain(total_layers, max_concurrent,
+                    crate::raster::raw_binary_geometry_eligible(job, triangles.len()));
+                let batches = total_layers.div_ceil(grain);
+                (0..batches).into_par_iter().for_each_with(tx, |tx, batch| {
+                    let start = batch * grain;
+                    let result = for_each_geometry_layer(
+                        job, triangles, layer_index, start, (start + grain).min(total_layers),
+                        support_split_model_triangle_count, backend, cancel_flag,
+                        &raster_ns, |layer, segments| {
                         let result =
                             (|| -> Result<
                                 (u32, Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3),
@@ -845,9 +947,9 @@ pub fn render_layers_rle(
                                 let layer_candidates = layer_index.candidates_for_layer(layer);
                                 let raster_start = std::time::Instant::now();
                                 let (runs, support_runs, stats) =
-                                    if let Some(model_triangle_count) =
-                                        support_split_model_triangle_count
-                                    {
+                                    if let Some(segments) = segments.as_ref() {
+                                        rasterize_raw_layer_segments(job, segments, compute_area_stats)
+                                    } else if let Some(model_triangle_count) = support_split_model_triangle_count {
                                         rasterize_layer_rle_with_support_split(
                                             job,
                                             triangles,
@@ -874,8 +976,11 @@ pub fn render_layers_rle(
 
                                 Ok((layer, runs, support_runs, stats))
                             })();
-                        let _ = tx.send(result);
+                        let output = result?;
+                        tx.send(Ok(output)).map_err(|_| SlicerV3Error::Cancelled)
                     });
+                    if let Err(error) = result { let _ = tx.send(Err(error)); }
+                });
             };
 
             match ThreadPoolBuilder::new().num_threads(max_concurrent).build() {
@@ -993,9 +1098,15 @@ pub fn render_layers_rle_encoded(
                 Result<(u32, Vec<u8>, LayerAreaStatsV3), SlicerV3Error>,
             >| {
                 let encode_fn = &encode_fn;
-                (0..total_layers)
-                    .into_par_iter()
-                    .for_each_with(tx, |tx, layer| {
+                let grain = layer_batch_grain(total_layers, max_concurrent,
+                    crate::raster::raw_binary_geometry_eligible(job, triangles.len()));
+                let batches = total_layers.div_ceil(grain);
+                (0..batches).into_par_iter().for_each_with(tx, |tx, batch| {
+                    let start = batch * grain;
+                    let result = for_each_geometry_layer(
+                        job, triangles, layer_index, start, (start + grain).min(total_layers),
+                        support_split_model_triangle_count, Backend::detected(), cancel_flag,
+                        &raster_ns, |layer, segments| {
                         let result =
                             (|| -> Result<(u32, Vec<u8>, LayerAreaStatsV3), SlicerV3Error> {
                                 if cancel_flag
@@ -1008,9 +1119,9 @@ pub fn render_layers_rle_encoded(
                                 let layer_candidates = layer_index.candidates_for_layer(layer);
                                 let raster_start = std::time::Instant::now();
                                 let (runs, support_runs, stats) =
-                                    if let Some(model_triangle_count) =
-                                        support_split_model_triangle_count
-                                    {
+                                    if let Some(segments) = segments.as_ref() {
+                                        rasterize_raw_layer_segments(job, segments, compute_area_stats)
+                                    } else if let Some(model_triangle_count) = support_split_model_triangle_count {
                                         rasterize_layer_rle_with_support_split(
                                             job,
                                             triangles,
@@ -1044,8 +1155,11 @@ pub fn render_layers_rle_encoded(
 
                                 Ok((layer, bytes, stats))
                             })();
-                        let _ = tx.send(result);
+                        let output = result?;
+                        tx.send(Ok(output)).map_err(|_| SlicerV3Error::Cancelled)
                     });
+                    if let Err(error) = result { let _ = tx.send(Err(error)); }
+                });
             };
 
             match ThreadPoolBuilder::new().num_threads(max_concurrent).build() {
@@ -1130,21 +1244,22 @@ pub enum RleBlockPayload {
     Encoded(Vec<u8>),
 }
 
-/// Parallel scaffold for the block-partitioned RLE path.
-///
-/// `produce_layer` runs inside rayon workers and returns every block payload
-/// for one layer (in `rle_blocks()` order) plus that layer's merged stats.
-/// Payloads are drained in display order: all blocks of layer N before any
-/// block of layer N+1.
-pub fn render_layers_rle_blocks(
-    total_layers: u32,
-    produce_layer: impl Fn(u32) -> Result<(Vec<RleBlockPayload>, LayerAreaStatsV3), SlicerV3Error>
-        + Sync,
+/// Parallel block producer with streamed, shared RAW geometry per layer.
+/// Each prepared layer is consumed before building the next layer; block
+/// payloads retain the existing ordered per-layer drain.
+pub(crate) fn render_layers_rle_blocks(
+    job: &SliceJobV3,
+    triangles: &[Triangle],
+    layer_index: &LayerIndex,
+    support_split: Option<usize>,
+    produce_layer: impl Fn(u32, Option<LayerSegments>)
+        -> Result<(Vec<RleBlockPayload>, LayerAreaStatsV3), SlicerV3Error> + Sync,
     mut on_block: impl FnMut(u32, u32, RleBlockPayload) -> Result<(), SlicerV3Error>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
     let render_wall_start = std::time::Instant::now();
+    let total_layers = job.total_layers;
     let max_concurrent = choose_max_concurrent();
     let buffer = (max_concurrent * 4).clamp(4, 64);
 
@@ -1163,9 +1278,15 @@ pub fn render_layers_rle_blocks(
             let produce = |tx: std::sync::mpsc::SyncSender<
                 Result<(u32, Vec<RleBlockPayload>, LayerAreaStatsV3), SlicerV3Error>,
             >| {
-                (0..total_layers)
-                    .into_par_iter()
-                    .for_each_with(tx, |tx, layer| {
+                let grain = layer_batch_grain(total_layers, max_concurrent,
+                    crate::raster::raw_binary_geometry_eligible(job, triangles.len()));
+                let batches = total_layers.div_ceil(grain);
+                (0..batches).into_par_iter().for_each_with(tx, |tx, batch| {
+                    let start = batch * grain;
+                    let result = for_each_geometry_layer(
+                        job, triangles, layer_index, start, (start + grain).min(total_layers),
+                        support_split, Backend::detected(), cancel_flag, &raster_ns,
+                        |layer, segments| {
                         let result = (|| {
                             if cancel_flag
                                 .map(|flag| flag.load(Ordering::Relaxed))
@@ -1174,15 +1295,18 @@ pub fn render_layers_rle_blocks(
                                 return Err(SlicerV3Error::Cancelled);
                             }
                             let raster_start = std::time::Instant::now();
-                            let (payloads, stats) = produce_layer(layer)?;
+                            let (payloads, stats) = produce_layer(layer, segments)?;
                             raster_ns.fetch_add(
                                 raster_start.elapsed().as_nanos() as u64,
                                 Ordering::Relaxed,
                             );
                             Ok((layer, payloads, stats))
                         })();
-                        let _ = tx.send(result);
+                        let output = result?;
+                        tx.send(Ok(output)).map_err(|_| SlicerV3Error::Cancelled)
                     });
+                    if let Err(error) = result { let _ = tx.send(Err(error)); }
+                });
             };
 
             match ThreadPoolBuilder::new().num_threads(max_concurrent).build() {
@@ -1251,4 +1375,347 @@ pub fn render_layers_rle_blocks(
     };
 
     Ok((area_stats, perf))
+}
+
+#[cfg(test)]
+mod raw_consumer_tests {
+    use super::*;
+    use crate::geometry::{parse_triangles, project_triangles_inplace};
+    use crate::raster::{push_segment_for_triangle_at_z, rasterize_binary_layer_rle_block_from_segments};
+    use crate::rle::{expand_rle_to_mask, make_rle_block};
+    use std::sync::Arc;
+
+    fn add_box(xyz: &mut Vec<f32>, x0: f32, x1: f32, y0: f32, y1: f32, z0: f32, z1: f32) {
+        let vertices = [[x0,y0,z0], [x1,y0,z0], [x1,y1,z0], [x0,y1,z0],
+            [x0,y0,z1], [x1,y0,z1], [x1,y1,z1], [x0,y1,z1]];
+        for [a,b,c] in [[0,1,2], [0,2,3], [4,6,5], [4,7,6], [0,4,5], [0,5,1],
+            [1,5,6], [1,6,2], [2,6,7], [2,7,3], [3,7,4], [3,4,0]] {
+            for vertex in [a,b,c] { xyz.extend_from_slice(&vertices[vertex]); }
+        }
+    }
+
+    fn fixture(mirror_x: bool, mirror_y: bool) -> (SliceJobV3, Vec<Triangle>, LayerIndex, usize) {
+        let mut job = SliceJobV3 {
+            source_width_px: 17, source_height_px: 13, width_px: 17, height_px: 13,
+            build_width_mm: 16.0, build_depth_mm: 12.0, layer_height_mm: 1.0,
+            total_layers: 11, anti_aliasing_level: "Off".into(), anti_aliasing_mode: "Coverage".into(),
+            blur_brush_radius_px: 0, aa_on_supports: true, mirror_x, mirror_y,
+            png_compression_strategy: "fastest".into(), ..Default::default()
+        };
+        add_box(&mut job.triangles_xyz, -5.5, -5.4, -4.0, 3.0, 0.5, 2.5);
+        add_box(&mut job.triangles_xyz, -4.0, 1.5, -3.0, 4.0, 0.0, 8.5);
+        add_box(&mut job.triangles_xyz, -1.0, 4.0, -4.0, 2.0, 1.5, 7.5);
+        add_box(&mut job.triangles_xyz, 5.0, 7.0, 2.0, 5.0, 0.0, 11.0);
+        // An inverted wall exercises the real winding repair, not only healthy unions.
+        for axis in 0..3 { job.triangles_xyz.swap(6 * 9 + 3 + axis, 6 * 9 + 6 + axis); }
+        let split = job.triangles_xyz.len() / 9;
+        job.model_triangle_count = split as u32;
+        add_box(&mut job.triangles_xyz, -2.0, 6.0, -1.0, 1.0, 0.0, 11.0);
+        job.triangles_xyz.extend_from_slice(&[0.0,0.0,0.5, 1.0,1.0,0.5, 2.0,2.0,0.5]);
+        let mut triangles = parse_triangles(&job.triangles_xyz);
+        project_triangles_inplace(&mut triangles, &job);
+        let all: Vec<usize> = (0..triangles.len()).rev().collect();
+        let mut permuted = all.clone();
+        permuted.rotate_left(7);
+        permuted.extend_from_slice(&[6, 6, split + 6]);
+        let buckets = vec![all.clone(), permuted.clone(), vec![6], all.clone(), vec![],
+            permuted, vec![split + 6, split + 7], all, vec![],
+            (split..triangles.len()).collect(), vec![triangles.len() - 1]];
+        (job, triangles, LayerIndex::Dense(buckets), split)
+    }
+
+    fn scalar_layer(job: &SliceJobV3, triangles: &[Triangle], candidates: &[usize],
+        layer_index: u32, split: Option<usize>) -> LayerSegments {
+        let mut model = Vec::new();
+        let mut support = None;
+        let mut model_candidates = 0;
+        for &candidate in candidates {
+            let output = if split.is_some_and(|split| candidate >= split) {
+                support.get_or_insert_with(Vec::new)
+            } else {
+                model_candidates += 1;
+                &mut model
+            };
+            push_segment_for_triangle_at_z(job, &triangles[candidate],
+                (layer_index as f32 + 0.5) * job.layer_height_mm, output);
+        }
+        LayerSegments { layer_index, model_candidates, model, support }
+    }
+
+    fn assert_stats(actual: &LayerAreaStatsV3, expected: &LayerAreaStatsV3) {
+        assert_eq!(serde_json::to_value(actual).unwrap(), serde_json::to_value(expected).unwrap());
+    }
+
+    #[test]
+    fn raw_rle_consumers_match_scalar_all_backends_splits_indices_low_caps_and_tails() {
+        for mirror in [(false,false), (true,false), (false,true), (true,true)] {
+            let (job, triangles, index, split) = fixture(mirror.0, mirror.1);
+            let banded = match &index {
+                LayerIndex::Dense(buckets) => LayerIndex::Banded { band_size_layers: 1, bands: buckets.clone() },
+                _ => unreachable!(),
+            };
+            for index in [&index, &banded] {
+                for split in [None, Some(split)] {
+                    for compute_area_stats in [false, true] {
+                        let golden: Vec<_> = (0..job.total_layers).map(|layer| {
+                            let segments = scalar_layer(&job, &triangles, index.candidates_for_layer(layer), layer, split);
+                            rasterize_raw_layer_segments(&job, &segments, compute_area_stats)
+                        }).collect();
+                        for backend in Backend::supported_for_tests() {
+                            for cap in [1, 2, 3, 8] {
+                                let completions = Arc::new(Mutex::new(Vec::new()));
+                                let recorded = Arc::clone(&completions);
+                                let total = job.total_layers;
+                                let progress: ProgressCallbackV3 = Arc::new(move |update| {
+                                    assert_eq!(update.total, total);
+                                    assert_eq!(update.phase, SliceProgressPhaseV3::Slicing);
+                                    recorded.lock().unwrap().push(update.done);
+                                });
+                                let mut next = 0;
+                                let (_, stats, _) = render_layers_rle_with_execution(
+                                    &job, &triangles, index, compute_area_stats, split,
+                                    |layer, runs, support| {
+                                        assert_eq!(layer, next);
+                                        assert_eq!(runs, golden[layer as usize].0, "{backend:?}, cap={cap}, layer={layer}");
+                                        assert_eq!(support, golden[layer as usize].1);
+                                        assert!(runs.iter().all(|run| run.value == 0 || run.value == 255));
+                                        assert_eq!(expand_rle_to_mask(&runs, 17*13),
+                                            expand_rle_to_mask(&golden[layer as usize].0, 17*13));
+                                        next += 1;
+                                        Ok(())
+                                    }, Some(progress), None, cap, backend,
+                                ).unwrap();
+                                assert_eq!(next, job.total_layers);
+                                assert_eq!(*completions.lock().unwrap(), (1..=job.total_layers).collect::<Vec<_>>());
+                                for (actual, expected) in stats.iter().zip(&golden) { assert_stats(actual, &expected.2); }
+                            }
+                        }
+                        if split.is_some() {
+                            assert!(golden[10].1.as_ref().unwrap().iter().all(|run| run.value == 0));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn raw_pipeline_low_cap_sink_errors_and_cancellation_stop_ordered_drain() {
+        let (job, triangles, index, split) = fixture(false, false);
+        for backend in Backend::supported_for_tests() {
+            for cap in [1, 2, 3] {
+                let mut seen = Vec::new();
+                let result = render_layers_rle_with_execution(&job, &triangles, &index, true, Some(split),
+                    |layer, _, _| {
+                        seen.push(layer);
+                        Err(SlicerV3Error::ExternalEncoder("raw sink failure".into()))
+                    }, None, None, cap, backend);
+                assert!(matches!(result, Err(SlicerV3Error::ExternalEncoder(message)) if message == "raw sink failure"));
+                assert_eq!(seen, [0]);
+                let cancel = AtomicBool::new(false);
+                seen.clear();
+                let result = render_layers_rle_with_execution(&job, &triangles, &index, false, Some(split),
+                    |layer, _, _| { seen.push(layer); cancel.store(true, Ordering::Relaxed); Ok(()) },
+                    None, Some(&cancel), cap, backend);
+                assert!(matches!(result, Err(SlicerV3Error::Cancelled)));
+                assert_eq!(seen, [0]);
+                let result = render_layers_rle(&job, &triangles, &index, false, None,
+                    |_, _, _| panic!("pre-cancelled pipeline delivered a layer"), None, Some(&cancel));
+                assert!(matches!(result, Err(SlicerV3Error::Cancelled)));
+            }
+        }
+    }
+
+    #[test]
+    fn raw_encoded_pipeline_matches_scalar_real_png_and_propagates_encoder_failure() {
+        let (job, triangles, index, split) = fixture(true, true);
+        let encode = Arc::new(|_: u32, runs: &[RleRun], support: Option<&[RleRun]>| {
+            let merged;
+            let runs: &[RleRun] = if let Some(support) = support {
+                merged = merge_rle_max(runs, support);
+                &merged
+            } else { runs };
+            crate::encode::encode_grayscale_png_from_rle(17, 13, runs, "fastest", true)
+        });
+        let golden: Vec<_> = (0..job.total_layers).map(|layer| {
+            let segments = scalar_layer(&job, &triangles, index.candidates_for_layer(layer), layer, Some(split));
+            let (runs, support, stats) = rasterize_raw_layer_segments(&job, &segments, true);
+            (encode(layer, &runs, support.as_deref()).unwrap(), stats)
+        }).collect();
+        let mut next = 0;
+        let (_, stats, _) = render_layers_rle_encoded(&job, &triangles, &index, true, Some(split), encode,
+            |layer, bytes| { assert_eq!(layer, next); assert_eq!(bytes, golden[layer as usize].0); next += 1; Ok(()) },
+            None, None).unwrap();
+        assert_eq!(next, job.total_layers);
+        for (actual, expected) in stats.iter().zip(&golden) { assert_stats(actual, &expected.1); }
+        let result = render_layers_rle_encoded(&job, &triangles, &index, false, None,
+            Arc::new(|_, _, _| Err(SlicerV3Error::ExternalEncoder("raw encode failure".into()))),
+            |_, _| panic!("failed encoder delivered a layer"), None, None);
+        assert!(matches!(result, Err(SlicerV3Error::ExternalEncoder(message)) if message == "raw encode failure"));
+    }
+
+    #[test]
+    fn raw_streamed_masks_and_blocks_match_scalar_all_backends_splits_and_batch_tails() {
+        let (job, triangles, index, split) = fixture(true, true);
+        let blocks = [make_rle_block(0,0), make_rle_block(0,5), make_rle_block(5,7),
+            make_rle_block(12,5), make_rle_block(15,20), make_rle_block(30,1)];
+        for backend in Backend::supported_for_tests() {
+            for split in [None, Some(split)] {
+                let timer = AtomicU64::new(0);
+                let mut seen = 0;
+                for start in [0,8] {
+                    for_each_geometry_layer(&job, &triangles, &index, start,
+                        (start + 8).min(job.total_layers), split, backend, None, &timer,
+                        |layer, segments| {
+                            assert_eq!(layer, seen);
+                            let segments = segments.unwrap();
+                            let scalar = scalar_layer(&job, &triangles, index.candidates_for_layer(layer), layer, split);
+                            let (mask, stats) = crate::raster::rasterize_layer_with_stats_from_segments(&job, &segments.model, true);
+                            let (expected, expected_stats) = crate::raster::rasterize_layer_with_stats_from_segments(&job, &scalar.model, true);
+                            assert_eq!(mask, expected, "{backend:?}, layer={layer}");
+                            assert_stats(&stats, &expected_stats);
+                            assert_eq!(segments.support.is_some(), scalar.support.is_some());
+                            for block in blocks {
+                                for (actual, expected) in std::iter::once((&segments.model, &scalar.model))
+                                    .chain(segments.support.as_ref().zip(scalar.support.as_ref())) {
+                                    let (runs, stats) = rasterize_binary_layer_rle_block_from_segments(&job, actual, true, block);
+                                    let (expected, expected_stats) = rasterize_binary_layer_rle_block_from_segments(&job, expected, true, block);
+                                    assert_eq!(runs, expected, "{backend:?}, layer={layer}, block={block:?}");
+                                    assert_stats(&stats, &expected_stats);
+                                }
+                            }
+                            seen += 1;
+                            Ok(())
+                        }).unwrap();
+                }
+                assert_eq!(seen, job.total_layers);
+            }
+        }
+    }
+
+    #[test]
+    fn raw_bounded_consumers_match_scalar_masks_and_png() {
+        let (job, triangles, index, _) = fixture(false, true);
+        let golden: Vec<_> = (0..job.total_layers).map(|layer| {
+            let segments = scalar_layer(&job, &triangles, index.candidates_for_layer(layer), layer, None);
+            crate::raster::rasterize_layer_with_stats_from_segments(&job, &segments.model, true)
+        }).collect();
+        let mut next = 0;
+        let mut sink = |layer: u32, mask: Vec<u8>, stats: LayerAreaStatsV3| {
+            assert_eq!(layer, next);
+            let mask = if mask.is_empty() { vec![0;17*13] } else { mask };
+            assert_eq!(mask, golden[layer as usize].0);
+            assert_stats(&stats, &golden[layer as usize].1);
+            next += 1;
+            Ok(())
+        };
+        render_layers_bounded(&job, &triangles, &index, true, false, false, Some(&mut sink), None, None).unwrap();
+        assert_eq!(next, job.total_layers);
+        let (rendered, stats, _) = render_layers_bounded(&job, &triangles, &index, true, true, false, None, None, None).unwrap();
+        for (layer, png) in rendered.png_layers.unwrap().iter().enumerate() {
+            let segments = scalar_layer(&job, &triangles, index.candidates_for_layer(layer as u32), layer as u32, None);
+            let (runs, _, _) = rasterize_raw_layer_segments(&job, &segments, true);
+            let expected = if index.candidates_for_layer(layer as u32).is_empty() {
+                crate::encode::encode_binary_grayscale_png_1bit(17,13,&vec![0;17*13],"fastest").unwrap()
+            } else { crate::encode::encode_grayscale_png_from_rle(17,13,&runs,"fastest",true).unwrap() };
+            assert_eq!(*png, expected);
+            assert_stats(&stats[layer], &golden[layer].1);
+        }
+        let mut delivered = 0;
+        let mut failing_sink = |_: u32, _: Vec<u8>, _: LayerAreaStatsV3| {
+            delivered += 1;
+            Err(SlicerV3Error::ExternalEncoder("bounded raw sink failure".into()))
+        };
+        let result = render_layers_bounded(&job, &triangles, &index, false, false, false,
+            Some(&mut failing_sink), None, None);
+        assert!(matches!(result, Err(SlicerV3Error::ExternalEncoder(message)) if message == "bounded raw sink failure"));
+        assert_eq!(delivered, 1);
+        let cancel = AtomicBool::new(false);
+        let mut delivered = Vec::new();
+        let mut cancelling_sink = |layer: u32, _: Vec<u8>, _: LayerAreaStatsV3| {
+            delivered.push(layer); cancel.store(true, Ordering::Relaxed); Ok(())
+        };
+        let result = render_layers_bounded(&job, &triangles, &index, false, false, false,
+            Some(&mut cancelling_sink), None, Some(&cancel));
+        assert!(matches!(result, Err(SlicerV3Error::Cancelled)));
+        assert_eq!(delivered, [0]);
+    }
+
+    #[test]
+    fn raw_engine_blocks_match_scalar_global_windows_empty_blocks_and_order() {
+        let (job, triangles, _, _) = fixture(true, false);
+        let blocks = [make_rle_block(0,0), make_rle_block(0,5), make_rle_block(5,7), make_rle_block(12,5)];
+        let all: Vec<_> = (0..triangles.len()).collect();
+        let golden: Vec<_> = (0..job.total_layers).map(|layer| {
+            let segments = scalar_layer(&job, &triangles, &all, layer, None);
+            blocks.iter().map(|&block| rasterize_binary_layer_rle_block_from_segments(&job, &segments.model, true, block)).collect::<Vec<_>>()
+        }).collect();
+        let mut next = (0,0);
+        let (stats, _) = crate::engine::slice_and_rasterize_rle_blocks_v3(&job, &blocks, true, None,
+            |layer, block, payload| {
+                assert_eq!((layer,block), next);
+                let RleBlockPayload::Runs(runs) = payload else { panic!("expected runs"); };
+                assert_eq!(runs, golden[layer as usize][block as usize].0);
+                next = if block + 1 == blocks.len() as u32 { (layer+1,0) } else { (layer,block+1) };
+                Ok(())
+            }, None, None).unwrap();
+        assert_eq!(next, (job.total_layers,0));
+        for (layer, actual) in stats.iter().enumerate() {
+            let parts = &golden[layer];
+            assert_eq!(actual.total_solid_pixels, parts.iter().map(|part| part.1.total_solid_pixels).sum::<u32>());
+            assert_eq!(actual.area_count, parts.iter().map(|part| part.1.area_count).sum::<u32>());
+            let nonempty: Vec<_> = parts.iter().filter(|part| part.1.total_solid_pixels > 0).collect();
+            if !nonempty.is_empty() {
+                assert_eq!(actual.min_x, nonempty.iter().map(|part| part.1.min_x).min().unwrap());
+                assert_eq!(actual.max_x, nonempty.iter().map(|part| part.1.max_x).max().unwrap());
+            }
+        }
+        let mut seen = 0;
+        let result = crate::engine::slice_and_rasterize_rle_blocks_v3(&job, &blocks, false, None,
+            |_, _, _| { seen += 1; Err(SlicerV3Error::ExternalEncoder("block sink failure".into())) }, None, None);
+        assert!(matches!(result, Err(SlicerV3Error::ExternalEncoder(message)) if message == "block sink failure"));
+        assert_eq!(seen, 1);
+        let cancel = AtomicBool::new(false);
+        let mut layers = Vec::new();
+        let result = crate::engine::slice_and_rasterize_rle_blocks_v3(&job, &blocks, false, None,
+            |layer, _, _| { layers.push(layer); cancel.store(true, Ordering::Relaxed); Ok(()) },
+            None, Some(&cancel));
+        assert!(matches!(result, Err(SlicerV3Error::Cancelled)));
+        assert!(!layers.is_empty());
+        assert!(layers.iter().all(|&layer| layer == 0));
+    }
+
+    #[test]
+    fn raw_engine_prepared_geometry_preserves_ssaa_support_and_blur_halo_pixels() {
+        let (mut base, _, _, _) = fixture(true, true);
+        // Full-frame/block row-history policies differ only on defective rows;
+        // compare the post-process seam on correctly wound, overlapping geometry.
+        for axis in 0..3 { base.triangles_xyz.swap(6 * 9 + 3 + axis, 6 * 9 + 6 + axis); }
+        base.aa_on_supports = false;
+        base.minimum_aa_alpha_percent = 35.0;
+        let blocks = [make_rle_block(0,5), make_rle_block(5,7), make_rle_block(12,5)];
+        for (mode, level, radius) in [("Coverage","4x",0), ("Blur","Off",2), ("3DAA","4x",2)] {
+            let mut job = base.clone();
+            job.anti_aliasing_mode = mode.into();
+            job.anti_aliasing_level = level.into();
+            job.blur_brush_radius_px = radius;
+            let mut full = vec![Vec::new(); job.total_layers as usize];
+            crate::engine::slice_and_rasterize_rle_v3(&job, false,
+                |layer, runs| { full[layer as usize] = expand_rle_to_mask(&runs,17*13); Ok(()) }, None, None).unwrap();
+            let mut assembled = vec![vec![0;17*13]; job.total_layers as usize];
+            crate::engine::slice_and_rasterize_rle_blocks_v3(&job, &blocks, false, None,
+                |layer, block, payload| {
+                    let RleBlockPayload::Runs(runs) = payload else { panic!("expected runs"); };
+                    let block = blocks[block as usize];
+                    let width = block.width as usize;
+                    let mask = expand_rle_to_mask(&runs,width*13);
+                    for y in 0..13 {
+                        let start = y*17 + block.start_col as usize;
+                        assembled[layer as usize][start..start+width].copy_from_slice(&mask[y*width..(y+1)*width]);
+                    }
+                    Ok(())
+                }, None, None).unwrap();
+            assert_eq!(assembled, full, "mode={mode}, level={level}");
+        }
+    }
 }

@@ -62,6 +62,33 @@ This path is still bounded/cancelable and useful for encoders not exposing paral
 - AA on => subscanline coverage accumulation to grayscale
 - output is row-major `Vec<RleRun>`
 
+### Coverage-off RAW batching
+
+Binary-core jobs prepare bounded groups of real layers through `raw_simd`.
+Each SIMD packet contains pending triangle/layer pairs and can fill across
+layer boundaries without requiring geometry overlap. Candidate slices borrow
+the existing index/model. Completed layers are rasterized and encoded/sent
+individually; channels, ordered draining and per-arrival progress stay per
+layer. Batches retain one full current layer of segments plus packet-sized
+spill, not a group of full framebuffer or RLE outputs.
+
+Single-layer and block callers use the same SIMD geometry preparation for
+binary work. Blocks reuse a layer's prepared geometry while preserving their
+context-free span behavior, absolute-column phase, halo/crop handling and
+window-local statistics; full-width output retains previous-row span history.
+Model/support streams, cancellation and sink failures retain their original
+per-layer contracts. Noneligible AA/perturbation work remains on its existing
+path, without changes to blur, dithering or encoding quality.
+
+`pipeline::render_layers_rle_blocks` is crate-private: it takes the shared
+job, triangles, layer index and optional support split, then calls
+`produce_layer(layer, prepared_segments)`. Binary-eligible layers supply
+`Some(LayerSegments)` for reuse across all block windows; noneligible layers
+supply `None` and use the existing AA raster path. The producer returns one
+layer's block payloads and statistics. Its sole engine caller consumes the
+prepared geometry without cloning it or re-running intersection per block.
+The old total-layer-count-only producer API has been removed.
+
 ## 8) O(num_runs) PNG encode details
 
 Encode functions in `encode.rs` operate from runs directly:

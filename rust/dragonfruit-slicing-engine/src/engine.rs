@@ -4288,7 +4288,7 @@ pub fn slice_and_rasterize_rle_blocks_v3(
     let tail_cure_lut_ref = tail_cure_lut.as_ref();
     let encode_block_fn_ref = encode_block_fn.as_ref();
 
-    let produce_layer = |layer: u32| -> Result<
+    let produce_layer = |layer: u32, prepared: Option<crate::raw_simd::LayerSegments>| -> Result<
         (Vec<crate::pipeline::RleBlockPayload>, LayerAreaStatsV3),
         SlicerV3Error,
     > {
@@ -4298,7 +4298,9 @@ pub fn slice_and_rasterize_rle_blocks_v3(
         let layer_candidates = layer_index.candidates_for_layer(layer);
 
         let (model_indices, support_indices): (Vec<usize>, Vec<usize>) =
-            if let Some(model_triangle_count) = support_split_model_triangle_count {
+            if prepared.is_some() {
+                (Vec::new(), Vec::new())
+            } else if let Some(model_triangle_count) = support_split_model_triangle_count {
                 let mut model = Vec::with_capacity(layer_candidates.len());
                 let mut support = Vec::new();
                 for &candidate in layer_candidates {
@@ -4310,13 +4312,36 @@ pub fn slice_and_rasterize_rle_blocks_v3(
                 }
                 (model, support)
             } else {
-                (layer_candidates.to_vec(), Vec::new())
+                (Vec::new(), Vec::new())
             };
+        let model_candidates = if support_split_model_triangle_count.is_none() {
+            layer_candidates
+        } else {
+            &model_indices
+        };
+        // Perturbation model geometry remains on its original path, but its
+        // separate binary support geometry is also staged just once per layer.
+        let support_segments_owned = if prepared.is_none() && !support_indices.is_empty() {
+            support_job_ref.map(|support_job| {
+                let mut segments = Vec::new();
+                crate::raw_simd::build_segments_into(
+                    support_job, triangles, &support_indices,
+                    (layer as f32 + 0.5) * support_job.layer_height_mm,
+                    &mut segments, Backend::detected(),
+                );
+                segments
+            })
+        } else { None };
+        let support_segments = prepared.as_ref().and_then(|layer| layer.support.as_deref())
+            .or(support_segments_owned.as_deref());
 
         let mut payloads = Vec::with_capacity(blocks.len());
         let mut layer_stats = LayerAreaStatsV3::default();
 
         for (block_index, block) in blocks.iter().enumerate() {
+            if cancel_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                return Err(SlicerV3Error::Cancelled);
+            }
             let out_start = (block.start_col as usize).min(out_width);
             let out_end = out_start
                 .saturating_add(block.width as usize)
@@ -4343,29 +4368,21 @@ pub fn slice_and_rasterize_rle_blocks_v3(
                 (wid_w * ssaa_factor) as u32,
             );
 
-            let (raster_runs, _) = crate::raster::rasterize_layer_rle_block(
-                raster_job_ref,
-                triangles,
-                &model_indices,
-                layer,
-                false,
-                raster_block,
-            );
-
-            let support_raster_runs = match (support_job_ref, support_indices.is_empty()) {
-                (Some(sj), false) => Some(
-                    crate::raster::rasterize_layer_rle_block(
-                        sj,
-                        triangles,
-                        &support_indices,
-                        layer,
-                        false,
-                        raster_block,
-                    )
-                    .0,
-                ),
-                _ => None,
+            let (raster_runs, _) = if let Some(prepared) = prepared.as_ref() {
+                crate::raster::rasterize_binary_layer_rle_block_from_segments(
+                    raster_job_ref, &prepared.model, false, raster_block,
+                )
+            } else {
+                crate::raster::rasterize_layer_rle_block(
+                    raster_job_ref, triangles, model_candidates, layer, false, raster_block,
+                )
             };
+
+            let support_raster_runs = support_segments.map(|segments| {
+                crate::raster::rasterize_binary_layer_rle_block_from_segments(
+                    support_job_ref.unwrap_or(raster_job_ref), segments, false, raster_block,
+                ).0
+            });
 
             // Per-block stats over the exact (halo-cropped) raster window,
             // merged with support geometry, in absolute raster-space columns.
@@ -4461,7 +4478,10 @@ pub fn slice_and_rasterize_rle_blocks_v3(
     };
 
     let (layer_area_stats, mut perf) = crate::pipeline::render_layers_rle_blocks(
-        job.total_layers,
+        raster_job_ref,
+        triangles,
+        layer_index,
+        support_split_model_triangle_count,
         produce_layer,
         on_block,
         on_progress,
