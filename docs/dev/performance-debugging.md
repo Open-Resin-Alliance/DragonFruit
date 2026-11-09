@@ -425,8 +425,9 @@ first two are cached between runs.
 - **The shell crate is not.** `[profile.release]` is `lto = "fat"` with
   `codegen-units = 1`, which is what makes the slicer fast at runtime. Any change
   under `src-tauri/`, or to the embedded frontend, recompiles and relinks the
-  whole 38 MB binary. Measured: **11m16s** for the shell alone with every
-  dependency cached.
+  whole 38 MB binary. Measured with every dependency cached: **6m03s** for the
+  shell's single rustc unit (codegen plus fat LTO link); **11m16s** when the
+  slicer recompiles with it.
 - **The frontend copy used to invalidate it every run.** `tauri-build` watches
   `frontend-dist`; `prepare-tauri-frontend.mjs` now syncs by content and leaves
   identical files (and their mtimes) alone, so a build with an unchanged
