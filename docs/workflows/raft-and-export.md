@@ -42,6 +42,10 @@ Shift+F10 also opens range commands at the current layer.
 3. Apply once. Cancel leaves the scene unchanged; undo/redo also applies to ranges.
 4. Use **Manage ranges** to reach every saved range, including fully shadowed or
    beyond-print ranges. Right-click a layer to edit/delete any range matching it.
+5. Choose **Profile** in the view selector to tint model surfaces with those same
+   range colors at their printed heights. Uncovered areas keep ordinary shading;
+   model transforms and cross-section clipping are respected. This is only a
+   visualization and does not modify geometry or encoded settings.
 
 Ranges have distinct colors shared by bands, menu swatches and Manage. The bands
 overlay the slider track above the cross-section fill and below its handles.

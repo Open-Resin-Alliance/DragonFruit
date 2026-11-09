@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import React from 'react';
 import { blendTintColor, clampTintStrength } from './tint';
+import { applyProfileColorShader, type ProfileColorUniformsRef } from './profileShader';
 
 
 export function SoftClayMaterial({
@@ -15,6 +16,7 @@ export function SoftClayMaterial({
   materialRoughness,
   clippingPlanes,
   bakedAoStrength = 0,
+  profileColorUniformsRef,
 }: {
   isSelected: boolean;
   isHovered: boolean;
@@ -32,6 +34,7 @@ export function SoftClayMaterial({
    *  gates it through this uniform, so unbaked meshes are untouched rather than
    *  needing a branch. */
   bakedAoStrength?: number;
+  profileColorUniformsRef?: ProfileColorUniformsRef | null;
 }) {
   const baseColor = meshColor ?? '#a3a3a3';
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.70);
@@ -58,6 +61,7 @@ export function SoftClayMaterial({
 
   return (
     <meshStandardMaterial
+      key={profileColorUniformsRef ? 'soft-clay-profile' : 'soft-clay-standard'}
       vertexColors={useVertexColors ?? true}
       color={tintColor}
       emissive="#000000"
@@ -68,6 +72,7 @@ export function SoftClayMaterial({
       clippingPlanes={clippingPlanes}
       side={THREE.FrontSide}
       flatShading={false}
+      customProgramCacheKey={() => profileColorUniformsRef ? 'soft-clay-profile-v1' : 'soft-clay-standard-v1'}
       onBeforeCompile={(shader) => {
         shader.uniforms.uFakeAoStrength = { value: AO_STRENGTH };
         shader.uniforms.uFakeLightDir = { value: FAKE_LIGHT_DIRECTION.clone() };
@@ -112,6 +117,9 @@ export function SoftClayMaterial({
             gl_FragColor.rgb *= mix(1.0, clamp(vBakedAo, 0.0, 1.0), uBakedAoStrength);
           `,
         );
+        if (profileColorUniformsRef?.current) {
+          applyProfileColorShader(shader, profileColorUniformsRef.current);
+        }
       }}
     />
   );

@@ -146,6 +146,8 @@ import { plateCascadeOffsetMm, type PlateOrdering } from '@/features/scene/plate
 import { modelAnswersPointer, modelPlateScope, sceneryModelIds, SCENERY_DIM, type PlateScope } from '@/features/scene/plates/plateInteractivity';
 import type { PlateFrame, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { StlMesh } from './StlMesh';
+import { ProfileColorOverlayProvider } from '@/features/shaders/mesh/profile';
+import type { ProfileLayerColorBand } from '@/features/shaders/mesh/types';
 import { setClipBounds } from './clipBoundsStore';
 import { getSceneClip, subscribeSceneClip } from '@/features/slicing/sceneClipStore';
 import { setSupportPlacementGuideZ, useSupportPlacementGuideActive } from './supportPlacementGuideStore';
@@ -238,6 +240,7 @@ const PREPARE_MERGED_SUPPORTS = true;
 
 installPerfProfilerHandle();
 const EMPTY_STRING_LIST: readonly string[] = Object.freeze([]);
+const EMPTY_PROFILE_COLOR_BANDS: readonly ProfileLayerColorBand[] = Object.freeze([]);
 
 type GhostPreviewTransform = {
   position: THREE.Vector3;
@@ -509,6 +512,7 @@ export function SceneCanvas({
   meshColor, // Global fallback color? Each model has color.
   meshVisible,
   shaderType,
+  profileColorBands = EMPTY_PROFILE_COLOR_BANDS,
   matcapVariant,
   flatUseVertexColors,
   xrayOpacity,
@@ -644,6 +648,7 @@ export function SceneCanvas({
   meshColor?: string;
   meshVisible?: boolean;
   shaderType?: import('@/features/shaders/mesh').MeshShaderType;
+  profileColorBands?: readonly ProfileLayerColorBand[];
   matcapVariant?: import('@/features/shaders/mesh').MatcapVariant;
   flatUseVertexColors?: boolean;
   xrayOpacity?: number;
@@ -6759,6 +6764,7 @@ export function SceneCanvas({
             <SelectionManager enabled={cameraInteractionCycleEnabled && mode === 'prepare'} mode={mode} handleCanvasDeselect={false} />
 
             <React.Suspense fallback={null}>
+              <ProfileColorOverlayProvider bands={profileColorBands} enabled={shaderType === 'profile'}>
               {models.map((model) => {
                 const meshGroupRefCallback = meshGroupRefCallbacks.current[model.id]
                   ?? ((node: THREE.Group | null) => {
@@ -7046,6 +7052,7 @@ export function SceneCanvas({
                   </React.Fragment>
                 );
               })}
+              </ProfileColorOverlayProvider>
 
               {duplicatePreviewModel
                 && effectiveDuplicatePreviewTransforms.length > 0

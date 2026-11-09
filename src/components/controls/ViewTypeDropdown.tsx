@@ -7,6 +7,7 @@ import {
   Grid3X3,
   Layers3,
   Paintbrush,
+  Palette,
   Scan,
   Eye,
 } from 'lucide-react';
@@ -25,8 +26,14 @@ type ViewTypeDropdownProps = {
   title?: string;
 };
 
+function formatCameraViewTitle(translate: ReturnType<typeof useLingui>['_'], label: string): string {
+  return translate(msg`Camera view mode: ${label}`);
+}
+
 function getViewTypeIcon(type: MeshShaderType) {
   switch (type) {
+    case 'profile':
+      return <Palette className="h-3.5 w-3.5" />;
     case 'soft_clay':
       return <Paintbrush className="h-3.5 w-3.5" />;
     case 'normal_debug':
@@ -69,7 +76,7 @@ export function ViewTypeDropdown({
   );
 
   const resolvedTitle = title
-    ?? (iconOnly ? _(msg`Camera view mode: ${currentLabel}`) : _(msg`View type`));
+    ?? (iconOnly ? formatCameraViewTitle(_, currentLabel) : _(msg`View type`));
 
   // Icon-only triggers carry the camera, since the mode's name does not fit. With
   // room, the name and the chevron read as the dropdown on their own: the chevron

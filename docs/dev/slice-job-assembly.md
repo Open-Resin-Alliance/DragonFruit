@@ -291,6 +291,71 @@ override. MM endpoint fields use six decimal places and a 0.001 mm step. Empty
 or beyond-u32 mm coverage cannot be converted into a fabricated layer range;
 its physical data remains editable/savable as mm.
 
+### Profile model view
+
+Choose **Profile** in the camera/view selector to overlay the scene's PLS colors
+on model surfaces. `MESH_SHADER_TYPES`/`MESH_SHADER_OPTIONS` in
+`src/features/shaders/mesh/types.ts` also make the mode a valid persisted view.
+The Mesh settings preview has no scene schedule, so it shows the underlying
+Standard material rather than invented sample colors; Profile uses Standard's
+lighting, roughness and baked-occlusion controls.
+
+`buildLayerSettingsProfileBands` in `layerSettingsProfileBands.ts` reuses the
+canonical narrowest-range/later-tie resolver and the same scene color map as the
+slider. MM ranges resolve to printed layers before coloring: layer L occupies
+((L−1) × height, L × height], with the plate surface included in layer 1. The
+projection retains scheduled heights beyond the active plate's EOF so taller
+models on other plates are colored too. Uncovered surfaces and negative world
+heights keep ordinary shading; the slider's decorative pixel gaps are not mesh
+geometry or gaps in the model overlay.
+
+The page passes `profileColorBands` to `SceneCanvas`. Its model-only
+`ProfileColorOverlayProvider` shares one RGBA32F table across materials inside
+that Canvas. `ProfileMaterial` reuses `SoftClayMaterial`; the pure
+`applyProfileColorShader` decorator and uniform types live in
+`src/features/shaders/mesh/profileShader.ts`. The shader samples the final
+transformed world Z, including instance/batch transforms, and mixes 85% range
+color into the material before lighting. Existing clipping, hover/selection,
+roughness and baked AO remain active. Model geometry/vertex colors are not
+rewritten; grids, beds, supports and existing X-ray/diagnostic helper passes are
+not recolored.
+
+With loaded geometry, scene ranges/colors and existing clipping planes:
+
+```tsx
+import { Canvas } from '@react-three/fiber';
+import { buildLayerSettingsProfileBands } from '@/features/slicing/layerSettingsProfileBands';
+import { ProfileColorOverlayProvider, ProfileMaterial } from '@/features/shaders/mesh/profile';
+
+const bands = buildLayerSettingsProfileBands(ranges, rangeColors, layerHeightMm);
+
+<Canvas>
+  <ambientLight intensity={1} />
+  <ProfileColorOverlayProvider bands={bands} enabled>
+    <mesh geometry={geometry}>
+      <ProfileMaterial isSelected={false} isHovered={false}
+        useVertexColors={false} clippingPlanes={clippingPlanes} />
+    </mesh>
+  </ProfileColorOverlayProvider>
+</Canvas>
+```
+
+The provider uses two nearest-sampled float texels per interval: physical bounds
+and linear RGB. Integer texture addressing and a binary search avoid a fixed
+uniform-array range ceiling. Hardware/GLSL address capacity failures are explicit,
+not silent truncation. Uniform boxes stay stable through palette/count edits;
+replaced textures are disposed, and disabling the mode releases its table and
+invalidates the Canvas. No per-frame CPU vertex scan is needed. Imperative model
+materials (the inactive-model dim pass) obtain the shared GPU ref through
+`useProfileColorUniformsRef` in `profile.tsx` and pass its current boxes to the
+same decorator from their shader callback. Keep these mutable GPU values in
+refs, not React state. Their own Profile program-cache key preserves the
+existing dither and opacity recipe without a per-model texture.
+
+This is a view-only feature: it does not change scene ranges, encoded settings,
+preparation cache identities or an existing slice. See [Ambient Occlusion](ambient-occlusion.md)
+for the shared Standard shading recipe.
+
 ### Material settings modes
 
 Modes normalize the material baseline before sparse range patches are applied.

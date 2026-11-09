@@ -16,6 +16,11 @@ estimator.
 | the frontend side | `src/features/scene/bakedOcclusion.ts` |
 | the material | `src/features/shaders/mesh/softClay.tsx` |
 
+Standard and Profile views share this material recipe. Profile adds the scene
+PLS height colors before lighting; it retains the same baked and cavity
+occlusion instead of replacing model shading. Other diagnostic view modes do
+not apply the baked field. See [Profile model view](slice-job-assembly.md#profile-model-view).
+
 The bake returns one `f32` per soup corner, in the order the soup was sent, and
 the frontend attaches them as the `aBakedAo` attribute that `softClay` samples.
 The mesh travels **in the request body**, never through the shared staging

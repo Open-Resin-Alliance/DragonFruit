@@ -77,6 +77,7 @@ import { ExportManager } from '@/features/export/logic/ExportManager';
 import { buildSceneSaveContext } from '@/features/export/logic/sceneSaveContext';
 import { compileLayerSettingsRanges, fingerprintLayerSettingsRanges, parseLayerSettingsRanges, type LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
 import { LayerSettingsRangeEditor } from '@/features/slicing/components/LayerSettingsRangeEditor';
+import { buildLayerSettingsProfileBands } from '@/features/slicing/layerSettingsProfileBands';
 import { useLayerSettingsRangeColors } from '@/features/slicing/useLayerSettingsRangeColors';
 import { formatLayerSettingsRangeBounds } from '@/features/slicing/layerSettingsRangeMessages';
 import type { UnitFormat } from '@/utils/unitFormatting';
@@ -10317,6 +10318,9 @@ export default function Home() {
   const effectiveShaderType = (shouldForceHollowingXray || hollowPreview)
     ? 'xray'
     : scene.shaderType;
+  const profileColorBands = React.useMemo(() => effectiveShaderType === 'profile'
+    ? buildLayerSettingsProfileBands(scene.layerSettingsRanges, layerSettingsRangeColors, scene.mode === 'printing' ? crossSectionLayerHeightMm : slicing.layerHeightMm)
+    : undefined, [effectiveShaderType, scene.layerSettingsRanges, layerSettingsRangeColors, scene.mode, crossSectionLayerHeightMm, slicing.layerHeightMm]);
 
   // The Overhangs quick toggle remembers what it interrupted, so turning it off
   // puts the viewport back where it was rather than on an arbitrary mode.
@@ -11169,6 +11173,7 @@ export default function Home() {
             meshColor={scene.meshColor}
             meshVisible={scene.meshVisible}
             shaderType={effectiveShaderType}
+            profileColorBands={profileColorBands}
             matcapVariant={scene.matcapVariant}
             flatUseVertexColors={scene.flatUseVertexColors}
                 xrayOpacity={scene.xrayOpacity}

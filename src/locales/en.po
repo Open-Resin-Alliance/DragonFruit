@@ -88,11 +88,11 @@ msgid "{count, plural, one {# mesh} other {# meshes}} · {duration} · {repaired
 msgstr "{count, plural, one {# mesh} other {# meshes}} · {duration} · {repaired} clean · {residual} with issues"
 
 #. Warning badge over the viewport when models stick out of the printer build volume.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:256
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:259
 msgid "{count, plural, one {# model out of build volume} other {# models out of build volume}}"
 msgstr "{count, plural, one {# model out of build volume} other {# models out of build volume}}"
 
-#: src/app/page.tsx:505
+#: src/app/page.tsx:506
 #: src/components/controls/ArrangePanel.tsx:55
 msgid "{count, plural, one {# model} other {# models}}"
 msgstr "{count, plural, one {# model} other {# models}}"
@@ -225,7 +225,7 @@ msgstr "{feature} is Experimental"
 msgid "{field}: {value}"
 msgstr "{field}: {value}"
 
-#: src/app/page.tsx:597
+#: src/app/page.tsx:598
 #: src/components/controls/ModelStatsCard.tsx:214
 msgid "{hours} h {minutes} min"
 msgstr "{hours} h {minutes} min"
@@ -261,8 +261,8 @@ msgstr "{materialName} ({sourceName})"
 msgid "{minutes} min"
 msgstr "{minutes} min"
 
-#: src/app/page.tsx:536
-#: src/app/page.tsx:598
+#: src/app/page.tsx:537
+#: src/app/page.tsx:599
 #: src/components/controls/ModelStatsCard.tsx:215
 msgid "{minutes} min {seconds} s"
 msgstr "{minutes} min {seconds} s"
@@ -295,7 +295,7 @@ msgid "{name} ({version})"
 msgstr "{name} ({version})"
 
 #. One row of the per-model breakdown when a scene is too large to save.
-#: src/app/page.tsx:545
+#: src/app/page.tsx:546
 msgid "{name}: {megabytes} MB compressed"
 msgstr "{name}: {megabytes} MB compressed"
 
@@ -312,7 +312,7 @@ msgid "{pixels}px XY · {layers}L Z"
 msgstr "{pixels}px XY · {layers}L Z"
 
 #. {plateName} is the locked build plate, named as the Models panel names it: its own name, or "Plate 1".
-#: src/app/page.tsx:793
+#: src/app/page.tsx:794
 msgid "{plateName} is locked."
 msgstr "{plateName} is locked."
 
@@ -579,12 +579,12 @@ msgid "<0>Keep Hollow</0> builds the stored cavity into each model, so it prints
 msgstr "<0>Keep Hollow</0> builds the stored cavity into each model, so it prints hollow exactly as authored."
 
 #. Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.
-#: src/app/page.tsx:528
+#: src/app/page.tsx:529
 msgid "~{hours} h {mins} min"
 msgstr "~{hours} h {mins} min"
 
 #. Approximate estimated print time under an hour (the "~" marks it as a rough estimate).
-#: src/app/page.tsx:529
+#: src/app/page.tsx:530
 msgid "~{mins} min"
 msgstr "~{mins} min"
 
@@ -737,7 +737,7 @@ msgctxt "Undo history entry"
 msgid "Add hole"
 msgstr "Add hole"
 
-#: src/app/page.tsx:2853
+#: src/app/page.tsx:2854
 msgid "Add joint"
 msgstr "Add joint"
 
@@ -761,7 +761,7 @@ msgid "Add or switch printer anytime from the top bar."
 msgstr "Add or switch printer anytime from the top bar."
 
 #. Accessible name of the button beside the build plate that will add another plate. Inert for now, so it reads as unavailable to a screen reader too.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1822
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1827
 msgid "Add plate"
 msgstr "Add plate"
 
@@ -922,7 +922,7 @@ msgstr "Analysing supports"
 msgid "Analysis"
 msgstr "Analysis"
 
-#: src/app/page.tsx:11996
+#: src/app/page.tsx:12001
 msgid "Analyzing Model Islands & Minima"
 msgstr "Analyzing Model Islands & Minima"
 
@@ -973,7 +973,7 @@ msgctxt "Undo history entry"
 msgid "Apply orientation suggestion"
 msgstr "Apply orientation suggestion"
 
-#: src/app/page.tsx:8307
+#: src/app/page.tsx:8308
 msgid "Apply the holes to every visible model, or open the Hollow tool to review and apply them per model."
 msgstr "Apply the holes to every visible model, or open the Hollow tool to review and apply them per model."
 
@@ -981,7 +981,7 @@ msgstr "Apply the holes to every visible model, or open the Hollow tool to revie
 msgid "Apply this preset to the auto-support settings"
 msgstr "Apply this preset to the auto-support settings"
 
-#: src/app/page.tsx:8318
+#: src/app/page.tsx:8319
 msgid "Apply to All bakes the holes into every visible model when applicable. Or open the Hollow tool to review and apply holes individually."
 msgstr "Apply to All bakes the holes into every visible model when applicable. Or open the Hollow tool to review and apply holes individually."
 
@@ -989,19 +989,19 @@ msgstr "Apply to All bakes the holes into every visible model when applicable. O
 msgid "Applying Array Arrange…"
 msgstr "Applying Array Arrange…"
 
-#: src/app/page.tsx:2159
+#: src/app/page.tsx:2160
 msgid "Applying Hole Punches..."
 msgstr "Applying Hole Punches..."
 
-#: src/app/page.tsx:2137
+#: src/app/page.tsx:2138
 msgid "Applying Hollowing and Hole Punches..."
 msgstr "Applying Hollowing and Hole Punches..."
 
-#: src/app/page.tsx:2149
+#: src/app/page.tsx:2150
 msgid "Applying Hollowing..."
 msgstr "Applying Hollowing..."
 
-#: src/app/page.tsx:2178
+#: src/app/page.tsx:2179
 msgid "Applying Model Changes..."
 msgstr "Applying Model Changes..."
 
@@ -1009,11 +1009,11 @@ msgstr "Applying Model Changes..."
 msgid "Applying Solid Areas"
 msgstr "Applying Solid Areas"
 
-#: src/app/page.tsx:2169
+#: src/app/page.tsx:2170
 msgid "Applying Solid Areas..."
 msgstr "Applying Solid Areas..."
 
-#: src/app/page.tsx:541
+#: src/app/page.tsx:542
 msgid "Applying to model {current} of {total}"
 msgstr "Applying to model {current} of {total}"
 
@@ -1022,7 +1022,7 @@ msgstr "Applying to model {current} of {total}"
 msgid "Applying…"
 msgstr "Applying…"
 
-#: src/app/page.tsx:12137
+#: src/app/page.tsx:12142
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr "Are you sure you want to remove every model from the plate?"
 
@@ -1141,7 +1141,7 @@ msgid "Auto adapts by AA level, Off is fastest, On favors smaller PNG files"
 msgstr "Auto adapts by AA level, Off is fastest, On favors smaller PNG files"
 
 #. Tooltip on the arrange button beside the build plate. Runs the standard arrange across every model, 1mm apart, with Z-rotation allowed.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1916
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1921
 msgid "Auto arrange the plate"
 msgstr "Auto arrange the plate"
 
@@ -1219,7 +1219,7 @@ msgstr "Auto-Lift OFF"
 msgid "Auto-Lift ON"
 msgstr "Auto-Lift ON"
 
-#: src/app/page.tsx:2899
+#: src/app/page.tsx:2900
 #: src/components/settings/GeneralSettingsTab.tsx:500
 #: src/components/settings/GeneralSettingsTab.tsx:504
 #: src/components/ui/EditorContextMenu.tsx:129
@@ -1339,7 +1339,7 @@ msgstr "Autosave files are available in the DragonFruit desktop build."
 msgid "Autosave idle delay"
 msgstr "Autosave idle delay"
 
-#: src/app/page.tsx:1528
+#: src/app/page.tsx:1529
 msgid "Autosave is not working"
 msgstr "Autosave is not working"
 
@@ -1371,7 +1371,7 @@ msgstr "Avg island area"
 #: src/components/layout/FirstRunOnboarding.tsx:279
 #: src/components/layout/OnboardingPrinterLibrary.tsx:279
 #: src/components/modals/PrintingResliceModal.tsx:38
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1922
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1927
 msgid "Back"
 msgstr "Back"
 
@@ -1537,7 +1537,7 @@ msgid "Boolean operation requires a manifold mesh"
 msgstr "Boolean operation requires a manifold mesh"
 
 #. View cube face (seen from below), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1926
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1931
 msgid "Bottom"
 msgstr "Bottom"
 
@@ -1683,16 +1683,16 @@ msgstr "cached"
 msgid "Camera"
 msgstr "Camera"
 
-#: src/components/controls/ViewTypeDropdown.tsx:72
-msgid "Camera view mode: {currentLabel}"
-msgstr "Camera view mode: {currentLabel}"
+#: src/components/controls/ViewTypeDropdown.tsx:30
+msgid "Camera view mode: {label}"
+msgstr "Camera view mode: {label}"
 
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:35
 msgid "Can't open this scene"
 msgstr "Can't open this scene"
 
-#: src/app/page.tsx:12051
-#: src/app/page.tsx:12100
+#: src/app/page.tsx:12056
+#: src/app/page.tsx:12105
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:470
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:666
 #: src/components/controls/AutoSupportPanel.tsx:563
@@ -1765,8 +1765,8 @@ msgstr "Cancel restore"
 msgid "Cancel Slicing"
 msgstr "Cancel Slicing"
 
-#: src/app/page.tsx:5632
 #: src/app/page.tsx:5633
+#: src/app/page.tsx:5634
 msgid "Canceling upload…"
 msgstr "Canceling upload…"
 
@@ -2014,12 +2014,12 @@ msgstr "Clear All failed. Check console for details."
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/app/page.tsx:11208
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1913
+#: src/app/page.tsx:11213
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1918
 msgid "Clear build plate"
 msgstr "Clear build plate"
 
-#: src/app/page.tsx:12089
+#: src/app/page.tsx:12094
 msgid "Clear Build Plate?"
 msgstr "Clear Build Plate?"
 
@@ -2037,7 +2037,7 @@ msgstr "Clear hollowing"
 msgid "Clear Override"
 msgstr "Clear Override"
 
-#: src/app/page.tsx:12128
+#: src/app/page.tsx:12133
 msgid "Clear Plate"
 msgstr "Clear Plate"
 
@@ -2107,7 +2107,7 @@ msgstr "Client ID"
 msgid "Close"
 msgstr "Close"
 
-#: src/app/page.tsx:12095
+#: src/app/page.tsx:12100
 msgid "Close clear-plate confirmation"
 msgstr "Close clear-plate confirmation"
 
@@ -2349,7 +2349,7 @@ msgid "Colors"
 msgstr "Colors"
 
 #. Hover text on the add-plate button beside the build plate. The app has one plate for now, so the button says so instead of doing nothing.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1823
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1828
 msgid "Coming Soon!"
 msgstr "Coming Soon!"
 
@@ -2420,7 +2420,7 @@ msgstr "Confirm Cancel"
 msgid "Confirm cancel print"
 msgstr "Confirm cancel print"
 
-#: src/app/page.tsx:12088
+#: src/app/page.tsx:12093
 msgid "Confirm clearing the build plate"
 msgstr "Confirm clearing the build plate"
 
@@ -2440,7 +2440,7 @@ msgstr "Confirm delete recent file"
 msgid "Confirm delete snapshot"
 msgstr "Confirm delete snapshot"
 
-#: src/app/page.tsx:12087
+#: src/app/page.tsx:12092
 msgid "Confirm deleting the plate"
 msgstr "Confirm deleting the plate"
 
@@ -2553,7 +2553,7 @@ msgid "Contents"
 msgstr "Contents"
 
 #. Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).
-#: src/app/page.tsx:12063
+#: src/app/page.tsx:12068
 #: src/components/layout/FirstRunOnboarding.tsx:287
 #: src/components/layout/TopBar.tsx:1181
 #: src/components/organisms/modals/SceneFileModals.tsx:528
@@ -2578,12 +2578,12 @@ msgstr "Contoured regions"
 msgid "Contrast"
 msgstr "Contrast"
 
-#: src/app/page.tsx:8614
+#: src/app/page.tsx:8615
 msgid "Converting support data and model metadata"
 msgstr "Converting support data and model metadata"
 
 #. Matcap lighting preset with a cool (blueish) tint.
-#: src/features/shaders/mesh/types.ts:33
+#: src/features/shaders/mesh/types.ts:41
 msgid "Cool"
 msgstr "Cool"
 
@@ -2650,7 +2650,7 @@ msgstr "Could not reopen this file from cache."
 msgid "Could not restore the model."
 msgstr "Could not restore the model."
 
-#: src/app/page.tsx:4882
+#: src/app/page.tsx:4883
 msgid "Could not save the scene"
 msgstr "Could not save the scene"
 
@@ -2843,7 +2843,7 @@ msgstr "Cut Tool Colors"
 msgid "Cutter poly count — higher is a denser cut mesh. Contour cut only."
 msgstr "Cutter poly count — higher is a denser cut mesh. Contour cut only."
 
-#: src/app/page.tsx:2161
+#: src/app/page.tsx:2162
 msgid "Cutting hole punches into the current model geometry."
 msgstr "Cutting hole punches into the current model geometry."
 
@@ -3002,7 +3002,7 @@ msgctxt "Undo history entry"
 msgid "Delete models and plates"
 msgstr "Delete models and plates"
 
-#: src/app/page.tsx:12128
+#: src/app/page.tsx:12133
 #: src/components/controls/ModelManagerPanel.tsx:488
 #: src/components/controls/ModelManagerPanel.tsx:860
 #: src/components/controls/ModelManagerPanel.tsx:881
@@ -3072,11 +3072,11 @@ msgid "Delete this model's existing supports and place the new ones"
 msgstr "Delete this model's existing supports and place the new ones"
 
 #. Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.
-#: src/app/page.tsx:11207
+#: src/app/page.tsx:11212
 msgid "Delete this plate"
 msgstr "Delete this plate"
 
-#: src/app/page.tsx:12089
+#: src/app/page.tsx:12094
 #: src/components/controls/ModelManagerPanel.tsx:861
 msgid "Delete this plate?"
 msgstr "Delete this plate?"
@@ -3149,7 +3149,7 @@ msgstr "Detecting model…"
 msgid "Detection"
 msgstr "Detection"
 
-#: src/app/page.tsx:5554
+#: src/app/page.tsx:5555
 msgid "Device still processing"
 msgstr "Device still processing"
 
@@ -3226,7 +3226,7 @@ msgstr "Disconnected GitHub account."
 msgid "Discovered Printers"
 msgstr "Discovered Printers"
 
-#: src/app/page.tsx:12185
+#: src/app/page.tsx:12190
 #: src/components/modals/ManifoldWarningModal.tsx:38
 #: src/components/organisms/SystemNotificationStack.tsx:285
 #: src/components/scene/MeshRepairReportModal.tsx:347
@@ -3395,7 +3395,7 @@ msgctxt "Drop button"
 msgid "Drop"
 msgstr "Drop"
 
-#: src/app/page.tsx:11153
+#: src/app/page.tsx:11157
 msgid "Drop supported files to import"
 msgstr "Drop supported files to import"
 
@@ -3500,7 +3500,7 @@ msgstr "Edit trunk"
 msgid "Editing"
 msgstr "Editing"
 
-#: src/app/page.tsx:2859
+#: src/app/page.tsx:2860
 msgid "Editor"
 msgstr "Editor"
 
@@ -3517,7 +3517,7 @@ msgid "Elapsed {slicingElapsedLabel}"
 msgstr "Elapsed {slicingElapsedLabel}"
 
 #. Time a blocking task has been running, e.g. "Elapsed: 1 min 12 s".
-#: src/app/page.tsx:549
+#: src/app/page.tsx:550
 #: src/components/controls/AutoRotationPanel.tsx:63
 #: src/components/organisms/modals/SceneFileModals.tsx:80
 msgid "Elapsed: {elapsed}"
@@ -3786,7 +3786,7 @@ msgstr "Export selected curve"
 msgid "Export the selected preset as a JSON file"
 msgstr "Export the selected preset as a JSON file"
 
-#: src/app/page.tsx:12029
+#: src/app/page.tsx:12034
 #: src/features/export/components/ExportPanel.tsx:768
 msgid "Exporting…"
 msgstr "Exporting…"
@@ -4098,7 +4098,7 @@ msgid "From the community, for the community. Free to use, open to contribute, a
 msgstr "From the community, for the community. Free to use, open to contribute, and shaped by the people who print with it."
 
 #. Orientation label, rendered uppercase on the view cube and on the build plate's front edge. Keep it as short as possible — long words are auto-shrunk to fit and become hard to read.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1918
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1923
 msgid "Front"
 msgstr "Front"
 
@@ -4157,7 +4157,7 @@ msgstr "Generate supports automatically on scan"
 msgid "Generated file"
 msgstr "Generated file"
 
-#: src/app/page.tsx:12008
+#: src/app/page.tsx:12013
 msgid "Generating Supports"
 msgstr "Generating Supports"
 
@@ -4182,7 +4182,7 @@ msgid "GitHub OAuth popup opened."
 msgstr "GitHub OAuth popup opened."
 
 #. Tooltip on the build plate's name widget while it is still unnamed.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1821
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1826
 msgid "Give this build plate a name"
 msgstr "Give this build plate a name"
 
@@ -4190,7 +4190,7 @@ msgstr "Give this build plate a name"
 msgid "Go back to the settings dialog"
 msgstr "Go back to the settings dialog"
 
-#: src/app/page.tsx:12177
+#: src/app/page.tsx:12182
 msgid "Go to Settings → 3D Mouse to configure or block it."
 msgstr "Go to Settings → 3D Mouse to configure or block it."
 
@@ -4304,8 +4304,8 @@ msgstr "Height Factor Cap"
 msgid "Height Gradient"
 msgstr "Height Gradient"
 
-#: src/components/controls/LayerSlider.tsx:989
-#: src/components/controls/LayerSlider.tsx:1088
+#: src/components/controls/LayerSlider.tsx:1066
+#: src/components/controls/LayerSlider.tsx:1162
 msgid "Height mm"
 msgstr "Height mm"
 
@@ -4593,11 +4593,11 @@ msgid "Import a preset from a JSON file, and apply it"
 msgstr "Import a preset from a JSON file, and apply it"
 
 #. Plate here is the file slot on the printer.
-#: src/app/page.tsx:572
+#: src/app/page.tsx:573
 msgid "Import complete • Plate #{plateId}. Click Print Now when ready."
 msgstr "Import complete • Plate #{plateId}. Click Print Now when ready."
 
-#: src/app/page.tsx:573
+#: src/app/page.tsx:574
 msgid "Import complete. Click Print Now when ready."
 msgstr "Import complete. Click Print Now when ready."
 
@@ -4932,7 +4932,7 @@ msgstr "It's a trap! ...just kidding, drop your STL."
 msgid "Iterations"
 msgstr "Iterations"
 
-#: src/app/page.tsx:12070
+#: src/app/page.tsx:12075
 msgid "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene and its models are shown in their normal colour while this printer is selected."
 msgstr "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene and its models are shown in their normal colour while this printer is selected."
 
@@ -4940,7 +4940,7 @@ msgstr "Its materials are split across several tanks, which the printer selected
 msgid "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene, hidden while this printer is selected — switch to a multi-material printer to print them."
 msgstr "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene, hidden while this printer is selected — switch to a multi-material printer to print them."
 
-#: src/app/page.tsx:12040
+#: src/app/page.tsx:12045
 msgid "Its materials stay hidden until you switch back"
 msgstr "Its materials stay hidden until you switch back"
 
@@ -5030,7 +5030,7 @@ msgstr "Keep the existing supports and do nothing"
 msgid "Keep the existing supports and place the new ones around them"
 msgstr "Keep the existing supports and place the new ones around them"
 
-#: src/app/page.tsx:12043
+#: src/app/page.tsx:12048
 msgid "Keep the Multi-Tank printer"
 msgstr "Keep the Multi-Tank printer"
 
@@ -5097,7 +5097,7 @@ msgid "Last remote backup"
 msgstr "Last remote backup"
 
 #. {timestamp} is a locale-formatted date and time.
-#: src/app/page.tsx:780
+#: src/app/page.tsx:781
 msgid "Last successful autosave: {timestamp}. Save your project manually."
 msgstr "Last successful autosave: {timestamp}. Save your project manually."
 
@@ -5109,7 +5109,7 @@ msgstr "Lattice"
 msgid "Launching UVTools to inspect the sliced file…"
 msgstr "Launching UVTools to inspect the sliced file…"
 
-#: src/components/controls/LayerSlider.tsx:767
+#: src/components/controls/LayerSlider.tsx:816
 msgid "Layer"
 msgstr "Layer"
 
@@ -5145,10 +5145,10 @@ msgstr "Layer {layer} preview"
 msgid "Layer {layers}"
 msgstr "Layer {layers}"
 
-#: src/components/controls/LayerSlider.tsx:960
-#: src/components/controls/LayerSlider.tsx:989
-#: src/components/controls/LayerSlider.tsx:1059
-#: src/components/controls/LayerSlider.tsx:1088
+#: src/components/controls/LayerSlider.tsx:1037
+#: src/components/controls/LayerSlider.tsx:1066
+#: src/components/controls/LayerSlider.tsx:1133
+#: src/components/controls/LayerSlider.tsx:1162
 msgid "Layer #"
 msgstr "Layer #"
 
@@ -5207,11 +5207,11 @@ msgstr "Layers:"
 msgid "Layout Mode"
 msgstr "Layout Mode"
 
-#: src/app/page.tsx:12195
+#: src/app/page.tsx:12200
 msgid "Leaf Fanning Active: Click model to sprout leaf"
 msgstr "Leaf Fanning Active: Click model to sprout leaf"
 
-#: src/app/page.tsx:12196
+#: src/app/page.tsx:12201
 msgid "Leaf Fanning: Click a support shaft to lock anchor knot"
 msgstr "Leaf Fanning: Click a support shaft to lock anchor knot"
 
@@ -5228,7 +5228,7 @@ msgid "Leave the collection as it is"
 msgstr "Leave the collection as it is"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1924
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1929
 #: src/components/settings/GeneralSettingsTab.tsx:282
 msgid "Left"
 msgstr "Left"
@@ -5245,7 +5245,7 @@ msgstr "Length"
 msgid "Less"
 msgstr "Less"
 
-#: src/app/page.tsx:8654
+#: src/app/page.tsx:8655
 msgid "Letting DragonFruit finish its startup animation before loading your scene."
 msgstr "Letting DragonFruit finish its startup animation before loading your scene."
 
@@ -5409,7 +5409,7 @@ msgstr "Loading materials from selected printer…"
 msgid "Loading Mesh Files…"
 msgstr "Loading Mesh Files…"
 
-#: src/app/page.tsx:8604
+#: src/app/page.tsx:8605
 #: src/features/scene/sceneImportMessages.ts:23
 msgid "Loading Mesh…"
 msgstr "Loading Mesh…"
@@ -5422,9 +5422,9 @@ msgstr "Loading recent print files…"
 msgid "Loading remote material…"
 msgstr "Loading remote material…"
 
-#: src/app/page.tsx:4763
-#: src/app/page.tsx:8604
-#: src/app/page.tsx:8613
+#: src/app/page.tsx:4764
+#: src/app/page.tsx:8605
+#: src/app/page.tsx:8614
 msgid "Loading Scene…"
 msgstr "Loading Scene…"
 
@@ -5492,7 +5492,7 @@ msgid "LocalStorage Keys"
 msgstr "LocalStorage Keys"
 
 #. Tooltip on the lock button beside the build plate while it is unlocked. Locking refuses new meshes and moves of the models already on the plate.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1911
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1916
 msgid "Lock build plate"
 msgstr "Lock build plate"
 
@@ -5648,7 +5648,7 @@ msgstr "Master switch for the run-level size, load and height factors. Off pins 
 msgid "Matcap Style"
 msgstr "Matcap Style"
 
-#: src/app/page.tsx:2924
+#: src/app/page.tsx:2925
 #: src/features/slicing/components/SlicingPanel.tsx:2456
 msgid "Material"
 msgstr "Material"
@@ -5766,7 +5766,7 @@ msgstr "Merging Supports…"
 #. View mode: mesh edges drawn over a solid surface, so back edges stay hidden.
 #: src/components/layout/EmptySceneState.tsx:687
 #: src/components/settings/SettingsModal.tsx:1223
-#: src/features/shaders/mesh/types.ts:45
+#: src/features/shaders/mesh/types.ts:54
 msgid "Mesh"
 msgstr "Mesh"
 
@@ -6042,7 +6042,7 @@ msgstr "Move, rotate, and scale"
 msgid "Moved off centre"
 msgstr "Moved off centre"
 
-#: src/app/page.tsx:12038
+#: src/app/page.tsx:12043
 msgid "Multi-Material scene on a single-material printer"
 msgstr "Multi-Material scene on a single-material printer"
 
@@ -6054,7 +6054,7 @@ msgstr "Multi-Plate"
 #. Material value for a printer whose resin is split across tanks.
 #. Material value for a printer whose resin is split across tanks.
 #. Material value for a printer whose resin is split across tanks.
-#: src/app/page.tsx:4171
+#: src/app/page.tsx:4172
 #: src/components/controls/ModelStatsCard.tsx:136
 #: src/features/slicing/components/SlicingPanel.tsx:1720
 msgid "Multi-Tank"
@@ -6113,7 +6113,7 @@ msgid "Network unavailable."
 msgstr "Network unavailable."
 
 #. Matcap lighting preset: neither warm nor cool.
-#: src/features/shaders/mesh/types.ts:32
+#: src/features/shaders/mesh/types.ts:40
 msgid "Neutral"
 msgstr "Neutral"
 
@@ -6137,7 +6137,7 @@ msgstr "Never"
 msgid "New Curve"
 msgstr "New Curve"
 
-#: src/app/page.tsx:12176
+#: src/app/page.tsx:12181
 msgid "New input device detected."
 msgstr "New input device detected."
 
@@ -6203,7 +6203,7 @@ msgstr "No active print."
 msgid "No active printer"
 msgstr "No active printer"
 
-#: src/app/page.tsx:1532
+#: src/app/page.tsx:1533
 msgid "No autosave has succeeded this session. Save your project manually."
 msgstr "No autosave has succeeded this session. Save your project manually."
 
@@ -6219,8 +6219,8 @@ msgstr "No Brace"
 msgid "No braces to remove on this model."
 msgstr "No braces to remove on this model."
 
-#: src/app/page.tsx:5599
-#: src/app/page.tsx:5605
+#: src/app/page.tsx:5600
+#: src/app/page.tsx:5606
 msgid "No connected printer is available for upload."
 msgstr "No connected printer is available for upload."
 
@@ -6312,8 +6312,8 @@ msgstr "No models loaded"
 msgid "No networked printers with valid IP addresses were found in this fleet"
 msgstr "No networked printers with valid IP addresses were found in this fleet"
 
-#: src/app/page.tsx:4296
-#: src/app/page.tsx:4320
+#: src/app/page.tsx:4297
+#: src/app/page.tsx:4321
 msgid "No online printer is available for upload."
 msgstr "No online printer is available for upload."
 
@@ -6329,11 +6329,11 @@ msgstr "No preview available yet."
 msgid "No printer connected"
 msgstr "No printer connected"
 
-#: src/app/page.tsx:5657
+#: src/app/page.tsx:5658
 msgid "No printer IP address available for Print Now."
 msgstr "No printer IP address available for Print Now."
 
-#: src/app/page.tsx:5342
+#: src/app/page.tsx:5343
 msgid "No printer IP address available for send operation."
 msgstr "No printer IP address available for send operation."
 
@@ -6372,7 +6372,7 @@ msgstr "No recent files"
 msgid "No registered scene import handler for {extension}."
 msgstr "No registered scene import handler for {extension}."
 
-#: src/app/page.tsx:4193
+#: src/app/page.tsx:4194
 msgid "No resin selected"
 msgstr "No resin selected"
 
@@ -6432,7 +6432,7 @@ msgid "Normal"
 msgstr "Normal"
 
 #. View mode that colours the surface by its normal vector, for debugging. "Normal" is the geometry term, not the opposite of "unusual".
-#: src/features/shaders/mesh/types.ts:48
+#: src/features/shaders/mesh/types.ts:57
 msgid "Normals"
 msgstr "Normals"
 
@@ -6645,7 +6645,7 @@ msgstr "One file per model"
 msgid "One file per plate"
 msgstr "One file per plate"
 
-#: src/app/page.tsx:8317
+#: src/app/page.tsx:8318
 msgid "One or more models have hole punches that haven’t been applied. Hole punches must be baked into the geometry before slicing or they will not appear in the output."
 msgstr "One or more models have hole punches that haven’t been applied. Hole punches must be baked into the geometry before slicing or they will not appear in the output."
 
@@ -6767,7 +6767,7 @@ msgstr "Open saved file location"
 msgid "Open scene…"
 msgstr "Open scene…"
 
-#: src/app/page.tsx:8308
+#: src/app/page.tsx:8309
 msgid "Open the Hollow tool to apply the hollowing, or continue and supports will follow the current mesh."
 msgstr "Open the Hollow tool to apply the hollowing, or continue and supports will follow the current mesh."
 
@@ -6780,7 +6780,7 @@ msgstr "Opening"
 msgid "Opening in UVTools"
 msgstr "Opening in UVTools"
 
-#: src/app/page.tsx:8651
+#: src/app/page.tsx:8652
 msgid "Opening scene…"
 msgstr "Opening scene…"
 
@@ -6805,7 +6805,7 @@ msgstr "Orient flat against plate"
 msgid "Orient Model"
 msgstr "Orient Model"
 
-#: src/app/page.tsx:12019
+#: src/app/page.tsx:12024
 msgid "Orienting Model"
 msgstr "Orienting Model"
 
@@ -6847,7 +6847,7 @@ msgstr "Outside plate"
 
 #. View mode colouring surfaces by how steeply they overhang, which is where supports are needed.
 #: src/components/controls/IslandsPanel.tsx:260
-#: src/features/shaders/mesh/types.ts:44
+#: src/features/shaders/mesh/types.ts:53
 msgid "Overhangs"
 msgstr "Overhangs"
 
@@ -7083,7 +7083,7 @@ msgstr "Placement Anchor"
 msgid "Placement message."
 msgstr "Placement message."
 
-#: src/app/page.tsx:12009
+#: src/app/page.tsx:12014
 msgid "Placing and bracing supports…"
 msgstr "Placing and bracing supports…"
 
@@ -7101,7 +7101,7 @@ msgid "Plate {index}"
 msgstr "Plate {index}"
 
 #. What the build plate's name widget shows while the plate has no name of its own, including after the plate is cleared or a new scene is started. The number is the plate's, plural forms come later with multiple plates.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1819
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1824
 msgid "Plate 1"
 msgstr "Plate 1"
 
@@ -7138,7 +7138,7 @@ msgstr "Please be patient while we compute the densest valid fill."
 msgid "Please be patient while we process your models."
 msgstr "Please be patient while we process your models."
 
-#: src/app/page.tsx:2140
+#: src/app/page.tsx:2141
 msgid "Please be patient while we rebuild the model."
 msgstr "Please be patient while we rebuild the model."
 
@@ -7163,10 +7163,10 @@ msgstr "Please use: {extensions}"
 msgid "Please verify before continuing:"
 msgstr "Please verify before continuing:"
 
-#: src/app/page.tsx:2152
-#: src/app/page.tsx:2162
-#: src/app/page.tsx:2172
-#: src/app/page.tsx:2181
+#: src/app/page.tsx:2153
+#: src/app/page.tsx:2163
+#: src/app/page.tsx:2173
+#: src/app/page.tsx:2182
 #: src/features/scene/arrange/useArrangeManager.ts:176
 msgid "Please wait a moment."
 msgstr "Please wait a moment."
@@ -7336,21 +7336,21 @@ msgstr "Print Files"
 msgid "Print readiness confirmation"
 msgstr "Print readiness confirmation"
 
-#: src/app/page.tsx:589
+#: src/app/page.tsx:590
 msgid "Print start failed: {reason}"
 msgstr "Print start failed: {reason}"
 
-#: src/app/page.tsx:4364
-#: src/app/page.tsx:5677
+#: src/app/page.tsx:4365
+#: src/app/page.tsx:5678
 msgid "Print started"
 msgstr "Print started"
 
 #. Plate here is the file slot on the printer.
-#: src/app/page.tsx:584
+#: src/app/page.tsx:585
 msgid "Print started successfully • Plate #{plateId}."
 msgstr "Print started successfully • Plate #{plateId}."
 
-#: src/app/page.tsx:585
+#: src/app/page.tsx:586
 msgid "Print started successfully."
 msgstr "Print started successfully."
 
@@ -7482,7 +7482,7 @@ msgstr "Private GitHub Backups"
 msgid "Private repo ready"
 msgstr "Private repo ready"
 
-#: src/app/page.tsx:4366
+#: src/app/page.tsx:4367
 msgid "Processing"
 msgstr "Processing"
 
@@ -7490,9 +7490,9 @@ msgstr "Processing"
 msgid "Processing {count, plural, one {# model} other {# models}}"
 msgstr "Processing {count, plural, one {# model} other {# models}}"
 
-#: src/app/page.tsx:2131
-#: src/app/page.tsx:11999
-#: src/app/page.tsx:12011
+#: src/app/page.tsx:2132
+#: src/app/page.tsx:12004
+#: src/app/page.tsx:12016
 msgid "Processing 1 model"
 msgstr "Processing 1 model"
 
@@ -7504,14 +7504,16 @@ msgstr "Processing import…"
 msgid "Processing on {backend}… elapsed {elapsed}"
 msgstr "Processing on {backend}… elapsed {elapsed}"
 
-#: src/app/page.tsx:4361
+#: src/app/page.tsx:4362
 msgid "Processing on device"
 msgstr "Processing on device"
 
-#: src/app/page.tsx:5451
+#: src/app/page.tsx:5452
 msgid "Processing on device…"
 msgstr "Processing on device…"
 
+#. View mode overlaying scene per-layer print-setting colors on model surfaces.
+#: src/features/shaders/mesh/types.ts:52
 #: src/features/slicing/components/LutCurveEditor.tsx:1289
 msgid "Profile"
 msgstr "Profile"
@@ -7616,7 +7618,7 @@ msgstr "Re-Slice Now"
 msgid "Re-slice required after profile change"
 msgstr "Re-slice required after profile change"
 
-#: src/app/page.tsx:4764
+#: src/app/page.tsx:4765
 msgid "Reading autosaved scene…"
 msgstr "Reading autosaved scene…"
 
@@ -7629,8 +7631,8 @@ msgstr "Ready"
 msgid "Ready for your next adventure?"
 msgstr "Ready for your next adventure?"
 
-#: src/app/page.tsx:4362
-#: src/app/page.tsx:5546
+#: src/app/page.tsx:4363
+#: src/app/page.tsx:5547
 msgid "Ready to print"
 msgstr "Ready to print"
 
@@ -7643,7 +7645,7 @@ msgstr "Reassign materials"
 msgid "Reassign scene materials"
 msgstr "Reassign scene materials"
 
-#: src/app/page.tsx:2151
+#: src/app/page.tsx:2152
 msgid "Rebuilding the model geometry with the latest hollowing settings."
 msgstr "Rebuilding the model geometry with the latest hollowing settings."
 
@@ -7656,7 +7658,7 @@ msgstr "Rebuilding the surface"
 msgid "Rebuilding the surface into a solid"
 msgstr "Rebuilding the surface into a solid"
 
-#: src/app/page.tsx:11877
+#: src/app/page.tsx:11882
 msgid "Rebuilding the surface."
 msgstr "Rebuilding the surface."
 
@@ -7795,8 +7797,8 @@ msgstr "Remaining"
 msgid "Remember window positions"
 msgstr "Remember window positions"
 
-#: src/app/page.tsx:11876
-#: src/app/page.tsx:11878
+#: src/app/page.tsx:11881
+#: src/app/page.tsx:11883
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:49
 #: src/components/ui/EditorContextMenu.tsx:130
 msgid "Remesh"
@@ -7820,7 +7822,7 @@ msgstr "Remesh failed: {message}"
 msgid "Remesh needs the desktop app."
 msgstr "Remesh needs the desktop app."
 
-#: src/app/page.tsx:11879
+#: src/app/page.tsx:11884
 msgid "Remesh progress"
 msgstr "Remesh progress"
 
@@ -7988,7 +7990,7 @@ msgid "Rename {name}"
 msgstr "Rename {name}"
 
 #. Tooltip on the pencil beside the build plate's name.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1820
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1825
 msgid "Rename build plate"
 msgstr "Rename build plate"
 
@@ -8055,7 +8057,7 @@ msgctxt "Undo history entry"
 msgid "Repair {modelName}"
 msgstr "Repair {modelName}"
 
-#: src/app/page.tsx:2899
+#: src/app/page.tsx:2900
 msgid "Repair Again"
 msgstr "Repair Again"
 
@@ -8208,7 +8210,7 @@ msgstr "Reset hollowing"
 msgid "Reset Layout"
 msgstr "Reset Layout"
 
-#: src/app/page.tsx:9383
+#: src/app/page.tsx:9384
 #: src/components/controls/TransformControls.tsx:442
 msgid "Reset Rotation"
 msgstr "Reset Rotation"
@@ -8217,7 +8219,7 @@ msgstr "Reset Rotation"
 msgid "Reset saved window layout"
 msgstr "Reset saved window layout"
 
-#: src/app/page.tsx:9383
+#: src/app/page.tsx:9384
 #: src/components/controls/TransformControls.tsx:592
 msgid "Reset Scale"
 msgstr "Reset Scale"
@@ -8265,7 +8267,7 @@ msgstr "Resolution"
 msgid "Resolved {resolvedSelfIntersections, plural, one {# self-intersection} other {# self-intersections}}."
 msgstr "Resolved {resolvedSelfIntersections, plural, one {# self-intersection} other {# self-intersections}}."
 
-#: src/app/page.tsx:11935
+#: src/app/page.tsx:11940
 msgid "Resolving the surface into a solid."
 msgstr "Resolving the surface into a solid."
 
@@ -8301,8 +8303,8 @@ msgstr "Restore Defaults"
 msgid "Restore Factory Defaults?"
 msgstr "Restore Factory Defaults?"
 
-#: src/app/page.tsx:4795
-#: src/app/page.tsx:4806
+#: src/app/page.tsx:4796
+#: src/app/page.tsx:4807
 msgid "Restore Failed"
 msgstr "Restore Failed"
 
@@ -8366,7 +8368,7 @@ msgid "Reworks the surface into one solid"
 msgstr "Reworks the surface into one solid"
 
 #. View cube face, rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1923
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1928
 msgid "Right"
 msgstr "Right"
 
@@ -8665,7 +8667,7 @@ msgstr "Scanned {modelName}."
 msgid "Scanning for Supports…"
 msgstr "Scanning for Supports…"
 
-#: src/app/page.tsx:12009
+#: src/app/page.tsx:12014
 msgid "Scanning islands & minima…"
 msgstr "Scanning islands & minima…"
 
@@ -8730,7 +8732,7 @@ msgstr "Scene import hollowing decision"
 msgid "Scene import placement decision"
 msgstr "Scene import placement decision"
 
-#: src/app/page.tsx:4874
+#: src/app/page.tsx:4875
 msgid "Scene is too large to save"
 msgstr "Scene is too large to save"
 
@@ -8832,7 +8834,7 @@ msgstr "Select a LocalStorage key from the left to view its value."
 msgid "Select a matching material during import instead."
 msgstr "Select a matching material during import instead."
 
-#: src/app/page.tsx:5346
+#: src/app/page.tsx:5347
 msgid "Select a matching material profile before upload."
 msgstr "Select a matching material profile before upload."
 
@@ -8929,7 +8931,7 @@ msgstr "Selected directory"
 msgid "Selected material"
 msgstr "Selected material"
 
-#: src/app/page.tsx:559
+#: src/app/page.tsx:560
 msgid "Selected material on this printer does not match sliced layer height {layerHeight} mm."
 msgstr "Selected material on this printer does not match sliced layer height {layerHeight} mm."
 
@@ -8967,12 +8969,12 @@ msgid "Selection Color"
 msgstr "Selection Color"
 
 #. Shown while dragging a selection rectangle right to left, which takes every object the rectangle touches. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3513
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3518
 msgid "Selection Mode: Contact (Right to Left)"
 msgstr "Selection Mode: Contact (Right to Left)"
 
 #. Shown while dragging a selection rectangle left to right, which takes only the objects the rectangle fully encloses. Mirrors the CAD convention; keep it on one short line.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3517
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:3522
 msgid "Selection Mode: Enclosed (Left to Right)"
 msgstr "Selection Mode: Enclosed (Left to Right)"
 
@@ -8995,7 +8997,7 @@ msgstr "Self-intersections"
 msgid "Self-Support Angle"
 msgstr "Self-Support Angle"
 
-#: src/app/page.tsx:567
+#: src/app/page.tsx:568
 msgid "Send failed: {reason}"
 msgstr "Send failed: {reason}"
 
@@ -9011,7 +9013,7 @@ msgstr "Send generated print file to selected printer"
 msgid "Send sliced files to UVTools for analysis"
 msgstr "Send sliced files to UVTools for analysis"
 
-#: src/app/page.tsx:4206
+#: src/app/page.tsx:4207
 #: src/features/printing/components/PrintingPanel.tsx:66
 msgid "Send to Printer"
 msgstr "Send to Printer"
@@ -9233,7 +9235,7 @@ msgstr "Show print files from local storage"
 msgid "Show print files from USB storage"
 msgstr "Show print files from USB storage"
 
-#: src/app/page.tsx:2904
+#: src/app/page.tsx:2905
 msgid "Show Report"
 msgstr "Show Report"
 
@@ -9262,8 +9264,8 @@ msgstr "Shows \"Cannot Place Support\" and \"Stability Warning\" tooltips."
 msgid "Shows the Voxels, Minima, Coincident, and Overhangs layer toggles."
 msgstr "Shows the Voxels, Minima, Coincident, and Overhangs layer toggles."
 
-#: src/app/page.tsx:11934
-#: src/app/page.tsx:11936
+#: src/app/page.tsx:11939
+#: src/app/page.tsx:11941
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:49
 #: src/components/ui/EditorContextMenu.tsx:131
 msgid "Shrink-Wrap"
@@ -9286,7 +9288,7 @@ msgstr "Shrink-Wrap failed: {message}"
 msgid "Shrink-Wrap needs the desktop app."
 msgstr "Shrink-Wrap needs the desktop app."
 
-#: src/app/page.tsx:11937
+#: src/app/page.tsx:11942
 msgid "Shrink-Wrap progress"
 msgstr "Shrink-Wrap progress"
 
@@ -9407,7 +9409,7 @@ msgstr "Slicer encoder"
 msgid "Slicing"
 msgstr "Slicing"
 
-#: src/app/page.tsx:11997
+#: src/app/page.tsx:12002
 msgid "Slicing and analysis in progress..."
 msgstr "Slicing and analysis in progress..."
 
@@ -9515,16 +9517,16 @@ msgstr "Solid"
 msgid "Solid Areas"
 msgstr "Solid Areas"
 
-#: src/app/page.tsx:8295
-#: src/app/page.tsx:8315
+#: src/app/page.tsx:8296
+#: src/app/page.tsx:8316
 msgid "Some models have unapplied hole punches"
 msgstr "Some models have unapplied hole punches"
 
-#: src/app/page.tsx:8294
+#: src/app/page.tsx:8295
 msgid "Some models have unapplied hole punches and hollowing"
 msgstr "Some models have unapplied hole punches and hollowing"
 
-#: src/app/page.tsx:8295
+#: src/app/page.tsx:8296
 msgid "Some models have unapplied hollowing"
 msgstr "Some models have unapplied hollowing"
 
@@ -9639,7 +9641,7 @@ msgstr "Standalone trunks"
 
 #. View mode: matte surface lit by the scene lights. The default view.
 #: src/components/controls/ArrangePanel.tsx:224
-#: src/features/shaders/mesh/types.ts:43
+#: src/features/shaders/mesh/types.ts:51
 msgid "Standard"
 msgstr "Standard"
 
@@ -9671,8 +9673,8 @@ msgstr "Start plate #{plateId}"
 msgid "Start Print"
 msgstr "Start Print"
 
-#: src/app/page.tsx:5684
-#: src/app/page.tsx:5690
+#: src/app/page.tsx:5685
+#: src/app/page.tsx:5691
 msgid "Start print failed"
 msgstr "Start print failed"
 
@@ -9701,11 +9703,11 @@ msgstr "Start using DragonFruit"
 msgid "Starting"
 msgstr "Starting"
 
-#: src/app/page.tsx:4363
+#: src/app/page.tsx:4364
 msgid "Starting print"
 msgstr "Starting print"
 
-#: src/app/page.tsx:5662
+#: src/app/page.tsx:5663
 #: src/components/organisms/modals/PrintingModals.tsx:1113
 msgid "Starting print…"
 msgstr "Starting print…"
@@ -9837,20 +9839,20 @@ msgstr "Support would collide with the model geometry."
 msgid "Supported: {extensions}"
 msgstr "Supported: {extensions}"
 
-#: src/app/page.tsx:2859
+#: src/app/page.tsx:2860
 #: src/components/ui/EditorContextMenu.tsx:138
 msgid "Supports"
 msgstr "Supports"
 
-#: src/app/page.tsx:8297
+#: src/app/page.tsx:8298
 msgid "Supports are generated against the mesh as it stands. Hole punches are only baked in later, so a support generated now can land inside a hole that does not exist yet."
 msgstr "Supports are generated against the mesh as it stands. Hole punches are only baked in later, so a support generated now can land inside a hole that does not exist yet."
 
-#: src/app/page.tsx:8300
+#: src/app/page.tsx:8301
 msgid "Supports are generated against the mesh as it stands. Holes and hollowing are only baked in later, so a support generated now can land inside a hole or a cavity that does not exist yet."
 msgstr "Supports are generated against the mesh as it stands. Holes and hollowing are only baked in later, so a support generated now can land inside a hole or a cavity that does not exist yet."
 
-#: src/app/page.tsx:8299
+#: src/app/page.tsx:8300
 msgid "Supports are generated against the mesh as it stands. Hollowing is only baked in later, so a support generated now can land inside a cavity that does not exist yet."
 msgstr "Supports are generated against the mesh as it stands. Hollowing is only baked in later, so a support generated now can land inside a cavity that does not exist yet."
 
@@ -9882,7 +9884,7 @@ msgstr "Suspiciously empty in here."
 msgid "Swap which cut half receives the tenon and which receives the mortise."
 msgstr "Swap which cut half receives the tenon and which receives the mortise."
 
-#: src/app/page.tsx:12020
+#: src/app/page.tsx:12025
 msgid "Sweeping orientations…"
 msgstr "Sweeping orientations…"
 
@@ -9906,7 +9908,7 @@ msgstr "Switch to {recordedLabel}"
 msgid "Switch to <0>{recordedLabel}</0> before importing?"
 msgstr "Switch to <0>{recordedLabel}</0> before importing?"
 
-#: src/app/page.tsx:12077
+#: src/app/page.tsx:12082
 msgid "Switch to a multi-material printer later and the assignments come back."
 msgstr "Switch to a multi-material printer later and the assignments come back."
 
@@ -10033,16 +10035,16 @@ msgstr "Territory Voxels"
 msgid "The \"{pluginName}\" plugin is missing."
 msgstr "The \"{pluginName}\" plugin is missing."
 
-#: src/app/page.tsx:4808
+#: src/app/page.tsx:4809
 msgid "The autosave recovery file could not be found."
 msgstr "The autosave recovery file could not be found."
 
-#: src/app/page.tsx:4796
-#: src/app/page.tsx:4809
+#: src/app/page.tsx:4797
+#: src/app/page.tsx:4810
 msgid "The autosaved recovery file is corrupted or unreadable."
 msgstr "The autosaved recovery file is corrupted or unreadable."
 
-#: src/app/page.tsx:1529
+#: src/app/page.tsx:1530
 msgid "The background recovery save failed repeatedly."
 msgstr "The background recovery save failed repeatedly."
 
@@ -10082,7 +10084,7 @@ msgstr "The hole carved in the other half."
 msgid "The inputs and factors the last run sized the supports with"
 msgstr "The inputs and factors the last run sized the supports with"
 
-#: src/app/page.tsx:12136
+#: src/app/page.tsx:12141
 msgid "The models on this plate are deleted with it."
 msgstr "The models on this plate are deleted with it."
 
@@ -10181,8 +10183,8 @@ msgstr "The range collection is invalid. Correct its layer bounds and overrides 
 msgid "The rebuilt surface will replace this model in your current scene. A model that cannot be resolved is left untouched, and you can undo this afterwards."
 msgstr "The rebuilt surface will replace this model in your current scene. A model that cannot be resolved is left untouched, and you can undo this afterwards."
 
-#: src/app/page.tsx:11888
-#: src/app/page.tsx:11946
+#: src/app/page.tsx:11893
+#: src/app/page.tsx:11951
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:67
 msgid "The rebuilt surface will replace this model in your current scene. Large models take longer, and some models cannot be rebuilt at all and are left untouched. You can undo this afterwards."
 msgstr "The rebuilt surface will replace this model in your current scene. Large models take longer, and some models cannot be rebuilt at all and are left untouched. You can undo this afterwards."
@@ -10207,7 +10209,7 @@ msgstr "The resin is ready. Are you?"
 msgid "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 msgstr "The saved run policy the settings below are. Selecting one applies it immediately; the rest of the dialog stays staged until you save."
 
-#: src/app/page.tsx:4797
+#: src/app/page.tsx:4798
 msgid "The scene importer rejected or could not parse the autosave data."
 msgstr "The scene importer rejected or could not parse the autosave data."
 
@@ -10401,7 +10403,7 @@ msgstr "This scene is aggressively unoccupied."
 msgid "This scene is already saved."
 msgstr "This scene is already saved."
 
-#: src/app/page.tsx:12039
+#: src/app/page.tsx:12044
 #: src/components/modals/ScenePrinterMismatchModal.tsx:93
 msgid "This scene is made for a multi-material printer"
 msgstr "This scene is made for a multi-material printer"
@@ -10490,7 +10492,7 @@ msgstr "Tip Ø range"
 msgid "To recover it, open the scene in an older version of DragonFruit and save it again — the re-saved scene will open here."
 msgstr "To recover it, open the scene in an older version of DragonFruit and save it again — the re-saved scene will open here."
 
-#: src/app/page.tsx:2848
+#: src/app/page.tsx:2849
 msgid "Toggle curve"
 msgstr "Toggle curve"
 
@@ -10532,7 +10534,7 @@ msgid "Toolbar position"
 msgstr "Toolbar position"
 
 #. View cube face (seen from above), rendered uppercase inside a small 3D cube. Keep it as short as possible.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1925
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1930
 #: src/components/settings/GeneralSettingsTab.tsx:281
 msgid "Top"
 msgstr "Top"
@@ -10623,11 +10625,11 @@ msgstr "Turning faces outward"
 msgid "UI & Theme"
 msgstr "UI & Theme"
 
-#: src/app/page.tsx:8302
+#: src/app/page.tsx:8303
 msgid "Unapplied Changes"
 msgstr "Unapplied Changes"
 
-#: src/app/page.tsx:8314
+#: src/app/page.tsx:8315
 msgid "Unapplied Holes"
 msgstr "Unapplied Holes"
 
@@ -10641,11 +10643,11 @@ msgstr "Unavailable"
 msgid "Unavailable stored overrides"
 msgstr "Unavailable stored overrides"
 
-#: src/app/page.tsx:12092
+#: src/app/page.tsx:12097
 msgid "Undo brings the models back"
 msgstr "Undo brings the models back"
 
-#: src/app/page.tsx:2903
+#: src/app/page.tsx:2904
 msgid "Undo Repairs"
 msgstr "Undo Repairs"
 
@@ -10681,8 +10683,8 @@ msgstr "Unknown"
 msgid "Unknown brand"
 msgstr "Unknown brand"
 
-#: src/app/page.tsx:5565
-#: src/app/page.tsx:5689
+#: src/app/page.tsx:5566
+#: src/app/page.tsx:5690
 msgid "Unknown error"
 msgstr "Unknown error"
 
@@ -10714,21 +10716,21 @@ msgid "Unlink X and Y"
 msgstr "Unlink X and Y"
 
 #. Tooltip on the lock button beside the build plate while it is locked.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1912
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1917
 msgid "Unlock build plate"
 msgstr "Unlock build plate"
 
-#: src/app/page.tsx:12159
+#: src/app/page.tsx:12164
 msgid "Unlock it to add or move models."
 msgstr "Unlock it to add or move models."
 
 #. Tooltip on the arrange button beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1917
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1922
 msgid "Unlock the plate to arrange it"
 msgstr "Unlock the plate to arrange it"
 
 #. Tooltip on the bin beside the build plate while the plate is locked, which is why it is disabled.
-#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1915
+#: src/components/scene/SceneCanvas/SceneCanvas.tsx:1920
 msgid "Unlock the plate to clear it"
 msgstr "Unlock the plate to clear it"
 
@@ -10760,7 +10762,7 @@ msgstr "Unseal and install"
 msgid "Unspecified values inherit wider ranges or mode-adjusted material settings. Explicit overrides take precedence over the material mode."
 msgstr "Unspecified values inherit wider ranges or mode-adjusted material settings. Explicit overrides take precedence over the material mode."
 
-#: src/app/page.tsx:11153
+#: src/app/page.tsx:11157
 msgid "Unsupported file format"
 msgstr "Unsupported file format"
 
@@ -10834,42 +10836,42 @@ msgstr "Updates"
 msgid "Updating"
 msgstr "Updating"
 
-#: src/app/page.tsx:2180
+#: src/app/page.tsx:2181
 msgid "Updating model geometry."
 msgstr "Updating model geometry."
 
-#: src/app/page.tsx:2139
+#: src/app/page.tsx:2140
 msgid "Updating the hollowed mesh and preserving your hole punches afterward."
 msgstr "Updating the hollowed mesh and preserving your hole punches afterward."
 
-#: src/app/page.tsx:2171
+#: src/app/page.tsx:2172
 msgid "Updating the hollowing preview with your solid areas."
 msgstr "Updating the hollowing preview with your solid areas."
 
-#: src/app/page.tsx:5569
+#: src/app/page.tsx:5570
 msgid "Upload canceled"
 msgstr "Upload canceled"
 
-#: src/app/page.tsx:5568
+#: src/app/page.tsx:5569
 msgid "Upload canceled. You can retry when ready."
 msgstr "Upload canceled. You can retry when ready."
 
 #. Plate here is the file slot on the printer.
-#: src/app/page.tsx:578
+#: src/app/page.tsx:579
 msgid "Upload complete • Plate #{plateId}. Device is still processing metadata after waiting."
 msgstr "Upload complete • Plate #{plateId}. Device is still processing metadata after waiting."
 
-#: src/app/page.tsx:563
+#: src/app/page.tsx:564
 msgid "Upload complete. {printer} is processing file metadata…"
 msgstr "Upload complete. {printer} is processing file metadata…"
 
-#: src/app/page.tsx:579
+#: src/app/page.tsx:580
 msgid "Upload complete. Device is still processing metadata after waiting."
 msgstr "Upload complete. Device is still processing metadata after waiting."
 
-#: src/app/page.tsx:4365
-#: src/app/page.tsx:5462
-#: src/app/page.tsx:5572
+#: src/app/page.tsx:4366
+#: src/app/page.tsx:5463
+#: src/app/page.tsx:5573
 msgid "Upload failed"
 msgstr "Upload failed"
 
@@ -10879,7 +10881,7 @@ msgid "Upload to {0}"
 msgstr "Upload to {0}"
 
 #. Send button label; {printer} is the target printer name, shortened when long.
-#: src/app/page.tsx:555
+#: src/app/page.tsx:556
 msgid "Upload to {printer}"
 msgstr "Upload to {printer}"
 
@@ -10887,15 +10889,15 @@ msgstr "Upload to {printer}"
 msgid "Upload to Selected Printer"
 msgstr "Upload to Selected Printer"
 
-#: src/app/page.tsx:5385
+#: src/app/page.tsx:5386
 msgid "Uploading Print Job to Printer…"
 msgstr "Uploading Print Job to Printer…"
 
-#: src/app/page.tsx:5384
+#: src/app/page.tsx:5385
 msgid "Uploading Print Job…"
 msgstr "Uploading Print Job…"
 
-#: src/app/page.tsx:4360
+#: src/app/page.tsx:4361
 msgid "Uploading to printer"
 msgstr "Uploading to printer"
 
@@ -11063,7 +11065,7 @@ msgstr "View privacy commitments"
 msgid "View snapshot"
 msgstr "View snapshot"
 
-#: src/components/controls/ViewTypeDropdown.tsx:72
+#: src/components/controls/ViewTypeDropdown.tsx:79
 msgid "View type"
 msgstr "View type"
 
@@ -11183,7 +11185,7 @@ msgid "Wall Thickness"
 msgstr "Wall Thickness"
 
 #. Matcap lighting preset with a warm (orange) tint.
-#: src/features/shaders/mesh/types.ts:34
+#: src/features/shaders/mesh/types.ts:42
 msgid "Warm"
 msgstr "Warm"
 
@@ -11293,7 +11295,7 @@ msgid "Windows is rendering DragonFruit on an integrated or software GPU. If thi
 msgstr "Windows is rendering DragonFruit on an integrated or software GPU. If this computer also has a discrete graphics card, Windows may not be using it — the viewport can feel much slower than it should."
 
 #. View mode: only the mesh edges are drawn, so the surface between them shows through.
-#: src/features/shaders/mesh/types.ts:46
+#: src/features/shaders/mesh/types.ts:55
 msgid "Wireframe"
 msgstr "Wireframe"
 
@@ -11318,7 +11320,7 @@ msgstr "Write these settings to the auto-support settings"
 msgid "Write these settings, and overwrite the selected preset with them"
 msgstr "Write these settings, and overwrite the selected preset with them"
 
-#: src/app/page.tsx:12030
+#: src/app/page.tsx:12035
 msgid "Writing mesh geometry and support data to file…"
 msgstr "Writing mesh geometry and support data to file…"
 
@@ -11331,7 +11333,7 @@ msgid "X Min"
 msgstr "X Min"
 
 #. View mode: semi-transparent surface revealing the interior.
-#: src/features/shaders/mesh/types.ts:47
+#: src/features/shaders/mesh/types.ts:56
 msgid "X-Ray"
 msgstr "X-Ray"
 
