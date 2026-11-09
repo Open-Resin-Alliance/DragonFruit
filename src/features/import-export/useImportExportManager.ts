@@ -4,6 +4,7 @@ import { detectIsIOS } from '@/hooks/usePlatform';
 import { suppressSceneAutosave } from '@/hooks/useSceneAutosave';
 import { extractFilesFromZip, getFileExtensionLower } from '@/utils/zipImport';
 import { readNativeFileSize } from '@/utils/pluginNetworkBridge';
+import { resolveMeshPayload, type MeshReadbackRef } from '@/utils/tauriMeshBridge';
 import {
   pickOpenFilesWithNativeDialog,
   readPrintArtifactBytesFromPath,
@@ -485,8 +486,8 @@ export function useImportExportManager({
             // Metadata only: the STL path stays path-backed and never reads the mesh.
             files.push(createPathBackedMeshFile(sourcePath, name, await readNativeFileSize(sourcePath)));
           } else {
-            const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-            files.push(createPathBackedMeshFile(sourcePath, name, null, bytes));
+            const bytes = await resolveMeshPayload(await core.invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>('read_print_file_bytes', { sourcePath }));
+            files.push(createPathBackedMeshFile(sourcePath, name, null, bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes).buffer));
           }
         } catch (error) {
           console.warn(`[Picker] Failed reading picked file path: ${entry.path}`, error);
@@ -571,7 +572,7 @@ export function useImportExportManager({
             progress: null,
           });
 
-          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+          const bytes = await resolveMeshPayload(await core.invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>('read_print_file_bytes', { sourcePath }));
           const name = resolvedName;
 
           files.push({
@@ -687,7 +688,7 @@ export function useImportExportManager({
       const sourcePath = sceneEntry.path.trim();
       if (!sourcePath) continue;
 
-      const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+      const bytes = await resolveMeshPayload(await core.invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>('read_print_file_bytes', { sourcePath }));
       const name = sceneEntry.name || getFileNameFromPath(sourcePath);
       files.push(new File([new Uint8Array(bytes)], name, {
         type: getDroppedFileMimeType(name),
@@ -960,8 +961,8 @@ export function useImportExportManager({
             // Metadata only: the STL path stays path-backed and never reads the mesh.
             files.push(createPathBackedMeshFile(sourcePath, name, await readNativeFileSize(sourcePath)));
           } else {
-            const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-            files.push(createPathBackedMeshFile(sourcePath, name, null, bytes));
+            const bytes = await resolveMeshPayload(await core.invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>('read_print_file_bytes', { sourcePath }));
+            files.push(createPathBackedMeshFile(sourcePath, name, null, bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes).buffer));
           }
         } catch (error) {
           console.warn(`[DragDrop] Failed reading dropped file path: ${sourcePath}`, error);

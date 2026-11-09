@@ -19,10 +19,11 @@ use dragonfruit_mesh_core::refine::{
     MAX_PASSES,
 };
 use dragonfruit_mesh_repair::io::DEFAULT_MERGE_EPSILON;
-use tauri::ipc::{Request, Response};
+use tauri::ipc::Request;
+use crate::mesh_readback::{publish as publish_readback, ReadbackRef};
 
 #[tauri::command]
-pub async fn refine_mesh_soup(request: Request<'_>) -> Result<Response, String> {
+pub async fn refine_mesh_soup(request: Request<'_>) -> Result<ReadbackRef, String> {
     let bytes = crate::mesh_chunk_upload::take_request_body(&request)?;
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -84,7 +85,7 @@ pub async fn refine_mesh_soup(request: Request<'_>) -> Result<Response, String> 
             out.extend_from_slice(&normal.y.to_le_bytes());
             out.extend_from_slice(&normal.z.to_le_bytes());
         }
-        Ok(Response::new(out))
+        Ok(publish_readback(out))
     })
     .await
     .map_err(|e| format!("refine task panicked: {e}"))?

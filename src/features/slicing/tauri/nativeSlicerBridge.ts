@@ -1,6 +1,7 @@
 import { isTauriRuntime } from '@/utils/tauriRuntime';
+import { resolveMeshPayload, type MeshReadbackRef } from '@/utils/tauriMeshBridge';
 import { clampSliceJobNumber } from '../sliceJobLimits';
-import { prepareJobPayload, type JobPayloadMetrics } from './jobPayloadCache';
+import { prepareJobPayload, type PreparedJobPayload, type JobPayloadMetrics } from './jobPayloadCache';
 
 type TauriCoreModule = {
   invoke: <T>(cmd: string, args?: Record<string, unknown> | ArrayBuffer | Uint8Array, options?: { headers: HeadersInit }) => Promise<T>;
@@ -978,9 +979,10 @@ export async function readPrintArtifactBytesFromPath(sourcePath: string): Promis
     throw new Error('Native slicer is only available in DragonFruit Desktop (Tauri runtime).');
   }
 
-  const result = await core.invoke<ArrayBuffer>('read_print_file_bytes', {
-    sourcePath,
-  });
+  const result = await resolveMeshPayload(await core.invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>(
+    'read_print_file_bytes',
+    { sourcePath },
+  ));
 
   return new Uint8Array(result);
 }
@@ -996,11 +998,14 @@ export async function readPrintLayerPreviewPngFromPath(
   }
 
   const safeLayerNumber = Math.max(1, Math.floor(layerNumber));
-  const result = await core.invoke<ArrayBuffer>('read_print_layer_png', {
-    sourcePath,
-    layerNumber: safeLayerNumber,
-    formatHint,
-  });
+  const result = await resolveMeshPayload(await core.invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>(
+    'read_print_layer_png',
+    {
+      sourcePath,
+      layerNumber: safeLayerNumber,
+      formatHint,
+    },
+  ));
 
   return new Uint8Array(result);
 }
@@ -1024,11 +1029,13 @@ export async function readPrintLayerPreviewPngsFromPath(
     throw new Error('Native slicer is only available in DragonFruit Desktop (Tauri runtime).');
   }
 
-  const packed = new Uint8Array(await core.invoke<ArrayBuffer>('read_print_layer_pngs', {
-    sourcePath,
-    layerNumbers: safeLayerNumbers,
-    formatHint,
-  }));
+  const packed = new Uint8Array(await resolveMeshPayload(
+    await core.invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>('read_print_layer_pngs', {
+      sourcePath,
+      layerNumbers: safeLayerNumbers,
+      formatHint,
+    }),
+  ));
 
   const layers: Uint8Array[] = [];
   const view = new DataView(packed.buffer, packed.byteOffset, packed.byteLength);

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { invoke as sdkInvoke } from '@tauri-apps/api/core';
 import { isTauriRuntime } from './tauriRuntime';
+import { perfMark, perfMeasure } from './perfProbe';
 import { createMeshChunkUpload, invokeWithChunkedMesh } from './meshChunkUpload';
 
 export type TauriInvoke = typeof sdkInvoke;
@@ -132,19 +133,28 @@ export async function stageGeometryToStagedMesh(
 
 /**
  * Decode raw little-endian f32 bytes returned over IPC. `label` names the source
- * in the error message. The bytes are copied into an aligned buffer so the
- * result is self-contained.
+ * in the error message. An `ArrayBuffer` is already a fresh, aligned payload (a
+ * fetched readback or a channel body), so it is aliased; a view or number array
+ * is copied into an aligned buffer so the result is self-contained.
  */
 export function decodeF32(bytes: ArrayBuffer | Uint8Array | number[], label: string): Float32Array {
-  let u8: Uint8Array;
   if (bytes instanceof ArrayBuffer) {
-    u8 = new Uint8Array(bytes);
-  } else if (bytes instanceof Uint8Array) {
+    if (bytes.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
+      throw new Error(`${label} returned ${bytes.byteLength} bytes, not a whole f32 payload`);
+    }
+    return new Float32Array(bytes);
+  }
+
+  let u8: Uint8Array;
+  if (bytes instanceof Uint8Array) {
     u8 = bytes;
   } else if (Array.isArray(bytes)) {
     u8 = new Uint8Array(bytes);
   } else {
     throw new Error(`${label} returned unexpected type`);
+  }
+  if (u8.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
+    throw new Error(`${label} returned ${u8.byteLength} bytes, not a whole f32 payload`);
   }
 
   const copy = new Uint8Array(u8.byteLength);
@@ -166,13 +176,59 @@ export type MeshPositionReadCommand =
   | 'mesh_organic_cut_read_membrane'
   | 'mesh_organic_cut_read_tenon';
 
-/** Invoke a position-reading command and decode its f32 payload. */
+/** A published readback body: fetch it once from the `mesh` protocol. */
+export type MeshReadbackRef = { id: string; byteLength: number };
+
+/**
+ * The runtime registers custom protocols as `{scheme}.localhost` under the
+ * app's scheme, so a published id is fetched, not invoked. Follow the page's
+ * scheme so an `https` shell keeps working.
+ */
+const READBACK_ORIGIN = typeof window !== 'undefined' && window.location.protocol === 'https:'
+  ? 'https://mesh.localhost'
+  : 'http://mesh.localhost';
+
+export function isReadbackRef(value: unknown): value is MeshReadbackRef {
+  return typeof value === 'object' && value !== null
+    && 'id' in value && typeof value.id === 'string'
+    && 'byteLength' in value && typeof value.byteLength === 'number';
+}
+
+/** Fetch a published readback body. The id is consumed by this call. */
+export async function fetchMeshReadback(id: string): Promise<ArrayBuffer> {
+  const response = await fetch(`${READBACK_ORIGIN}/${encodeURIComponent(id)}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Mesh readback ${id} failed: HTTP ${response.status}`);
+  }
+  return response.arrayBuffer();
+}
+
+/** Resolve a command payload that may have been published instead of returned inline. */
+export async function resolveMeshPayload(
+  result: ArrayBuffer | Uint8Array | number[] | MeshReadbackRef,
+): Promise<ArrayBuffer | Uint8Array | number[]> {
+  return isReadbackRef(result) ? await fetchMeshReadback(result.id) : result;
+}
+
+/**
+ * Invoke a position-reading command and decode its f32 payload. A command that
+ * publishes a readback returns `{ id, byteLength }` and the body is fetched;
+ * the remaining commands still return their bytes inline.
+ */
 export async function readPositionsFromCommand(
   invoke: TauriInvoke,
   command: MeshPositionReadCommand,
 ): Promise<Float32Array> {
-  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
-  return decodeF32(bytes, command);
+  const invokeStart = perfMark();
+  const result = await invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>(command);
+  perfMeasure(`mesh readback invoke ${command}`, invokeStart);
+  if (isReadbackRef(result)) {
+    const fetchStart = perfMark();
+    const buffer = await fetchMeshReadback(result.id);
+    perfMeasure(`mesh readback fetch ${command} (${result.byteLength} B)`, fetchStart);
+    return decodeF32(buffer, command);
+  }
+  return decodeF32(result, command);
 }
 
 /**
@@ -436,8 +492,10 @@ export async function refineCoarseFaces(
 
   const soup = expandGeometryToTriangleSoup(geometry);
   const body = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-  const payload = await invokeWithChunkedMesh<ArrayBuffer | Uint8Array | number[]>(
-    core.invoke, 'refine_mesh_soup', body,
+  const payload = await resolveMeshPayload(
+    await invokeWithChunkedMesh<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>(
+      core.invoke, 'refine_mesh_soup', body,
+    ),
   );
 
   return parseRefinedMesh(payload);

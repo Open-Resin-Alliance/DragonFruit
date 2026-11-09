@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { invoke } from '@tauri-apps/api/core';
-import { expandGeometryToTriangleSoup } from '@/utils/tauriMeshBridge';
+import { expandGeometryToTriangleSoup, resolveMeshPayload, type MeshReadbackRef } from '@/utils/tauriMeshBridge';
 import { logToNativeFile } from '@/utils/nativeLog';
 import { invokeWithChunkedMesh } from '@/utils/meshChunkUpload';
 
@@ -99,11 +99,11 @@ export async function bakeOcclusionForGeometry(
   const token = meshTokenForGeometry(geometry);
   if (token) {
     try {
-      const byToken = await invoke<ArrayBuffer | Uint8Array | number[]>(
+      const byToken = await resolveMeshPayload(await invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>(
         'bake_vertex_occlusion',
         { meshToken: token.token, expectedCorners: cornerCount(geometry) },
         { headers: {} },
-      );
+      ));
       const fromLoader = toCornerValues(byToken);
       if (fromLoader) {
         // The values are in the loader's mesh triangle order, which is this
@@ -137,8 +137,10 @@ export async function bakeOcclusionForGeometry(
   console.log(soupTiming);
   void logToNativeFile('info', soupTiming);
 
-  const payload = await invokeWithChunkedMesh<ArrayBuffer | Uint8Array | number[]>(
-    invoke, 'bake_vertex_occlusion', body,
+  const payload = await resolveMeshPayload(
+    await invokeWithChunkedMesh<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>(
+      invoke, 'bake_vertex_occlusion', body,
+    ),
   );
 
   // One f32 per soup corner. An ArrayBuffer off the IPC channel is ours and

@@ -46,7 +46,7 @@ import {
 import type { DragonfruitImportFormat } from '@/supports/types';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import { base64ToBytes, bytesToBase64 } from '@/utils/base64';
-import { loadTauriCore } from '@/utils/tauriMeshBridge';
+import { loadTauriCore, resolveMeshPayload, type MeshReadbackRef } from '@/utils/tauriMeshBridge';
 import { sha256Hex } from './meshChunkStore';
 import type { VoxlChunkCache, CachedChunkPayload } from './voxlChunkCache';
 
@@ -1563,7 +1563,9 @@ export async function readSidecarFileBytes(filePath: string): Promise<Uint8Array
     const core = await loadTauriCore();
     if (core) {
       try {
-        const ab = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath: filePath });
+        const ab = await resolveMeshPayload(await core.invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>(
+          'read_print_file_bytes', { sourcePath: filePath },
+        ));
         if (ab) return new Uint8Array(ab);
       } catch {
         // Fall through

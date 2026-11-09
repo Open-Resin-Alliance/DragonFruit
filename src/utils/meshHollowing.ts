@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import {
+  type MeshReadbackRef,
   type TauriInvoke,
+  fetchMeshReadback,
+  isReadbackRef,
   loadTauriCore,
   readPositionsFromCommand,
   stageGeometryToStagedMesh,
@@ -92,11 +95,16 @@ async function readUint32FromCommand(
     | 'mesh_hollow_preview_read_removed_voxel_indices'
     | 'mesh_hollow_preview_read_blocked_voxel_indices',
 ): Promise<Uint32Array> {
-  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
-  let u8: Uint8Array;
+  const result = await invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>(command);
+  const bytes = isReadbackRef(result) ? await fetchMeshReadback(result.id) : result;
   if (bytes instanceof ArrayBuffer) {
-    u8 = new Uint8Array(bytes);
-  } else if (bytes instanceof Uint8Array) {
+    if (bytes.byteLength % Uint32Array.BYTES_PER_ELEMENT !== 0) {
+      throw new Error(`${command} returned ${bytes.byteLength} bytes, not a whole u32 payload`);
+    }
+    return new Uint32Array(bytes);
+  }
+  let u8: Uint8Array;
+  if (bytes instanceof Uint8Array) {
     u8 = bytes;
   } else if (Array.isArray(bytes)) {
     u8 = new Uint8Array(bytes);
@@ -123,13 +131,10 @@ export async function hollowFromGeometry(
     const optionsJson = JSON.stringify(options);
     const reportJson = await core.invoke<string>('mesh_hollow_staged', { optionsJson });
     const report = JSON.parse(reportJson) as HollowReport;
-    const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-    let cavityPositions: Float32Array | undefined;
-    try {
-      cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions');
-    } catch {
-      cavityPositions = undefined;
-    }
+    const [positions, cavityPositions] = await Promise.all([
+      readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions'),
+      readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions').catch(() => undefined),
+    ]);
     return { report, positions, cavityPositions };
   });
 }
@@ -163,45 +168,21 @@ export async function hollowPreviewFromCapturedSource(
     const optionsJson = JSON.stringify(options);
     const reportJson = await core.invoke<string>('mesh_hollow_preview_from_captured_source', { optionsJson });
     const report = JSON.parse(reportJson) as HollowReport;
-    const positions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_positions');
-    let cavityPositions: Float32Array | undefined;
-    try {
-      cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_cavity_positions');
-    } catch {
-      cavityPositions = undefined;
-    }
-    let infillPositions: Float32Array | undefined;
-    let removedVoxelCenters: Float32Array | undefined;
-    let removedVoxelIndices: Uint32Array | undefined;
-    if (options.mode === 'infill') {
-      try {
-        infillPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_infill_positions');
-      } catch {
-        infillPositions = undefined;
-      }
-    }
-    try {
-      removedVoxelCenters = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_removed_voxel_centers');
-    } catch {
-      removedVoxelCenters = undefined;
-    }
-    try {
-      removedVoxelIndices = await readUint32FromCommand(core.invoke, 'mesh_hollow_preview_read_removed_voxel_indices');
-    } catch {
-      removedVoxelIndices = undefined;
-    }
-    let blockedVoxelCenters: Float32Array | undefined;
-    try {
-      blockedVoxelCenters = await readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_blocked_voxel_centers');
-    } catch {
-      blockedVoxelCenters = undefined;
-    }
-    let blockedVoxelIndices: Uint32Array | undefined;
-    try {
-      blockedVoxelIndices = await readUint32FromCommand(core.invoke, 'mesh_hollow_preview_read_blocked_voxel_indices');
-    } catch {
-      blockedVoxelIndices = undefined;
-    }
+    // Independent readbacks: issue them together so their round trips overlap.
+    const [
+      positions, cavityPositions, infillPositions,
+      removedVoxelCenters, removedVoxelIndices, blockedVoxelCenters, blockedVoxelIndices,
+    ] = await Promise.all([
+      readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_positions'),
+      readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_cavity_positions').catch(() => undefined),
+      options.mode === 'infill'
+        ? readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_infill_positions').catch(() => undefined)
+        : undefined,
+      readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_removed_voxel_centers').catch(() => undefined),
+      readUint32FromCommand(core.invoke, 'mesh_hollow_preview_read_removed_voxel_indices').catch(() => undefined),
+      readPositionsFromCommand(core.invoke, 'mesh_hollow_preview_read_blocked_voxel_centers').catch(() => undefined),
+      readUint32FromCommand(core.invoke, 'mesh_hollow_preview_read_blocked_voxel_indices').catch(() => undefined),
+    ]);
     return { report, positions, cavityPositions, infillPositions, removedVoxelCenters, removedVoxelIndices, blockedVoxelCenters, blockedVoxelIndices };
   });
 }
@@ -216,13 +197,10 @@ export async function hollowApplyFromCapturedSource(
     const optionsJson = JSON.stringify(options);
     const reportJson = await core.invoke<string>('mesh_hollow_apply_from_captured_source', { optionsJson });
     const report = JSON.parse(reportJson) as HollowReport;
-    const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-    let cavityPositions: Float32Array | undefined;
-    try {
-      cavityPositions = await readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions');
-    } catch {
-      cavityPositions = undefined;
-    }
+    const [positions, cavityPositions] = await Promise.all([
+      readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions'),
+      readPositionsFromCommand(core.invoke, 'mesh_hollow_staged_read_cavity_positions').catch(() => undefined),
+    ]);
     return { report, positions, cavityPositions };
   });
 }

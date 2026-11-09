@@ -7,6 +7,7 @@ mod mesh_chunk_upload;
 mod mesh_slice_source;
 mod mesh_minima;
 mod mesh_repair;
+mod mesh_readback;
 mod mesh_refine;
 mod network;
 mod ao_vertex;
@@ -3537,7 +3538,7 @@ async fn reveal_main_window_command(app: DragonFruitAppHandle) -> Result<(), Str
 }
 
 #[tauri::command]
-async fn read_print_file_bytes(source_path: String) -> Result<Response, String> {
+async fn read_print_file_bytes(source_path: String) -> Result<crate::mesh_readback::ReadbackRef, String> {
     let bytes = tauri::async_runtime::spawn_blocking(move || {
         let source = std::path::PathBuf::from(source_path.trim());
         if !source.exists() {
@@ -3549,7 +3550,7 @@ async fn read_print_file_bytes(source_path: String) -> Result<Response, String> 
     .await
     .map_err(|err| format!("Read task failed to join: {err}"))??;
 
-    Ok(Response::new(bytes))
+    Ok(crate::mesh_readback::publish(bytes))
 }
 
 #[tauri::command]
@@ -3573,7 +3574,7 @@ async fn read_print_file_chunk(
     source_path: String,
     offset: u64,
     length: u64,
-) -> Result<Response, String> {
+) -> Result<crate::mesh_readback::ReadbackRef, String> {
     const MAX_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
     let bytes = tauri::async_runtime::spawn_blocking(move || {
@@ -3610,7 +3611,7 @@ async fn read_print_file_chunk(
     .await
     .map_err(|err| format!("Read-chunk task failed to join: {err}"))??;
 
-    Ok(Response::new(bytes))
+    Ok(crate::mesh_readback::publish(bytes))
 }
 
 #[tauri::command]
@@ -3618,7 +3619,7 @@ async fn read_print_layer_png(
     source_path: String,
     layer_number: u32,
     format_hint: String,
-) -> Result<Response, String> {
+) -> Result<crate::mesh_readback::ReadbackRef, String> {
     let bytes = tauri::async_runtime::spawn_blocking(move || {
         if layer_number == 0 {
             return Err("Layer number must be >= 1".to_string());
@@ -3639,7 +3640,7 @@ async fn read_print_layer_png(
     .await
     .map_err(|err| format!("Read layer task failed to join: {err}"))??;
 
-    Ok(Response::new(bytes))
+    Ok(crate::mesh_readback::publish(bytes))
 }
 
 /// Decode a run of layer preview PNGs in one round trip, in parallel.
@@ -3657,7 +3658,7 @@ async fn read_print_layer_pngs(
     source_path: String,
     layer_numbers: Vec<u32>,
     format_hint: String,
-) -> Result<Response, String> {
+) -> Result<crate::mesh_readback::ReadbackRef, String> {
     let packed = tauri::async_runtime::spawn_blocking(move || {
         if layer_numbers.is_empty() {
             return Ok(Vec::new());
@@ -3695,7 +3696,7 @@ async fn read_print_layer_pngs(
     .await
     .map_err(|err| format!("Read layers task failed to join: {err}"))??;
 
-    Ok(Response::new(packed))
+    Ok(crate::mesh_readback::publish(packed))
 }
 
 /// Which of these paths already exist on disk.
@@ -4331,6 +4332,11 @@ fn main() {
     };
 
     let builder = tauri::Builder::default();
+    // Bulk readbacks: commands publish bytes and return an id; the page fetches
+    // `http://mesh.localhost/<id>` once instead of the channel's eval + invoke.
+    let builder = builder.register_uri_scheme_protocol("mesh", |_context, request| {
+        mesh_readback::respond(&request)
+    });
     #[cfg(feature = "logging")]
     let builder = builder.plugin(log_plugin);
     let builder = builder.setup(|app| {

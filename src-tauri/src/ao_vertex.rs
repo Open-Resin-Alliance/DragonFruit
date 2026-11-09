@@ -17,7 +17,8 @@ use dragonfruit_mesh_core::mesh::IndexedMesh;
 use dragonfruit_mesh_core::vertex_occlusion::{
     bake_smoothed_occlusion_for_soup, REACH_RATIO, SMOOTHING_PASSES, SOUP_MERGE_EPSILON,
 };
-use tauri::ipc::{InvokeBody, Request, Response};
+use tauri::ipc::{InvokeBody, Request};
+use crate::mesh_readback::{publish as publish_readback, ReadbackRef};
 
 /// Rays per vertex for the shipped bake.
 ///
@@ -116,7 +117,7 @@ fn bake_on_gpu(soup: &[f32], rays: usize) -> Result<(Vec<f32>, usize), String> {
 /// buffer on the JS side.
 ///
 #[tauri::command]
-pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, String> {
+pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<ReadbackRef, String> {
     // Two ways in. A JSON body names a mesh the loader registered for this bake
     // (`meshToken`) — a VOXL model's own mesh — so the caller sends forty bytes instead
     // of 36 bytes a triangle, and the field is identical: measured, the loader's weld
@@ -150,7 +151,7 @@ pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, Str
             "[ao] baked {} corners from the loader's mesh (token {token}, {welded} welded vertices, {rays} rays)",
             occlusion.len(),
         );
-        return Ok(Response::new(out));
+        return Ok(publish_readback(out));
         }
     }
 
@@ -207,7 +208,7 @@ pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, Str
         for value in &occlusion {
             out.extend_from_slice(&value.to_le_bytes());
         }
-        Ok(Response::new(out))
+        Ok(publish_readback(out))
     })
     .await
     .map_err(|e| format!("vertex occlusion task panicked: {e}"))?

@@ -3,7 +3,7 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import * as THREE from 'three';
-import { loadTauriCore, refineCoarseFaces, shouldRefineCoarseFaces } from '@/utils/tauriMeshBridge';
+import { loadTauriCore, refineCoarseFaces, resolveMeshPayload, shouldRefineCoarseFaces, type MeshReadbackRef } from '@/utils/tauriMeshBridge';
 import { solidRemeshFromGeometry, tetSurfaceFromGeometry, type SolidRemeshProgressSink, type SolidRemeshOptions, type TetSurfaceProgressSink, type TetWrapOptions } from '@/utils/meshShrinkwrap';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import { loadMeshGeometry, loadMeshGeometryFromRange, load3mfGeometryMergedWithSplitData, processGeometry, skipsNativePassForModelOnly, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
@@ -7745,7 +7745,9 @@ export function useSceneCollectionManager(options?: {
     if (entry.kind === 'mesh' && entry.sourcePath) {
       const core = entry.name.toLowerCase().endsWith('.stl') ? null : await loadTauriCore();
       const bytes = core
-        ? await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath: entry.sourcePath })
+        ? await resolveMeshPayload(await core.invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>(
+          'read_print_file_bytes', { sourcePath: entry.sourcePath },
+        ))
         : null;
       const pathFile = new File(bytes ? [new Uint8Array(bytes)] : [], entry.name, {
         type: 'application/octet-stream',

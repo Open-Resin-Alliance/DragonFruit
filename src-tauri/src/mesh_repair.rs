@@ -44,6 +44,7 @@ use tauri::ipc::Response;
 use tauri::Emitter;
 
 use crate::{
+    mesh_readback::{publish as publish_readback, ReadbackRef},
     staged_mesh, staged_mesh_file_appender, staged_mesh_file_path, staged_mesh_stats,
     StageMeshStats,
 };
@@ -1055,7 +1056,7 @@ pub async fn mesh_hollow_apply_from_captured_source(
 /// Returns the most recent non-mutating hollow preview positions as raw
 /// little-endian bytes.
 #[tauri::command]
-pub async fn mesh_hollow_preview_read_positions() -> Result<Response, String> {
+pub async fn mesh_hollow_preview_read_positions() -> Result<ReadbackRef, String> {
     let bytes = hollow_preview_result_bytes()
         .lock()
         .map_err(|e| format!("hollow preview result lock poisoned: {e}"))?
@@ -1064,11 +1065,11 @@ pub async fn mesh_hollow_preview_read_positions() -> Result<Response, String> {
             "No hollow preview result — call mesh_hollow_preview_from_captured_source first"
                 .to_string()
         })?;
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 #[tauri::command]
-pub async fn mesh_hollow_preview_read_infill_positions() -> Result<Response, String> {
+pub async fn mesh_hollow_preview_read_infill_positions() -> Result<ReadbackRef, String> {
     let bytes = hollow_preview_infill_result_bytes()
         .lock()
         .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))?
@@ -1077,11 +1078,11 @@ pub async fn mesh_hollow_preview_read_infill_positions() -> Result<Response, Str
             "No hollow preview infill result — call mesh_hollow_preview_from_captured_source first"
                 .to_string()
         })?;
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 #[tauri::command]
-pub async fn mesh_hollow_preview_read_removed_voxel_centers() -> Result<Response, String> {
+pub async fn mesh_hollow_preview_read_removed_voxel_centers() -> Result<ReadbackRef, String> {
     let bytes = hollow_preview_removed_voxel_center_bytes()
         .lock()
         .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))?
@@ -1090,11 +1091,11 @@ pub async fn mesh_hollow_preview_read_removed_voxel_centers() -> Result<Response
             "No hollow preview removed voxel center result — call mesh_hollow_preview_from_captured_source first"
                 .to_string()
         })?;
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 #[tauri::command]
-pub async fn mesh_hollow_preview_read_removed_voxel_indices() -> Result<Response, String> {
+pub async fn mesh_hollow_preview_read_removed_voxel_indices() -> Result<ReadbackRef, String> {
     let bytes = hollow_preview_removed_voxel_index_bytes()
         .lock()
         .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))?
@@ -1103,11 +1104,11 @@ pub async fn mesh_hollow_preview_read_removed_voxel_indices() -> Result<Response
             "No hollow preview removed voxel index result — call mesh_hollow_preview_from_captured_source first"
                 .to_string()
         })?;
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 #[tauri::command]
-pub async fn mesh_hollow_preview_read_blocked_voxel_centers() -> Result<Response, String> {
+pub async fn mesh_hollow_preview_read_blocked_voxel_centers() -> Result<ReadbackRef, String> {
     let bytes = hollow_preview_blocked_voxel_center_bytes()
         .lock()
         .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))?
@@ -1116,11 +1117,11 @@ pub async fn mesh_hollow_preview_read_blocked_voxel_centers() -> Result<Response
             "No hollow preview blocked voxel center result — call mesh_hollow_preview_from_captured_source first"
                 .to_string()
         })?;
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 #[tauri::command]
-pub async fn mesh_hollow_preview_read_blocked_voxel_indices() -> Result<Response, String> {
+pub async fn mesh_hollow_preview_read_blocked_voxel_indices() -> Result<ReadbackRef, String> {
     let bytes = hollow_preview_blocked_voxel_index_bytes()
         .lock()
         .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))?
@@ -1129,7 +1130,7 @@ pub async fn mesh_hollow_preview_read_blocked_voxel_indices() -> Result<Response
             "No hollow preview blocked voxel index result — call mesh_hollow_preview_from_captured_source first"
                 .to_string()
         })?;
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 /// Request payload for `mesh_hollow_preview_select_removed_voxels_in_polygon`.
@@ -1200,7 +1201,7 @@ pub async fn mesh_hollow_preview_select_removed_voxels_in_polygon(
 
 /// Reads the cavity interior mesh positions from the last preview hollow operation.
 #[tauri::command]
-pub async fn mesh_hollow_preview_read_cavity_positions() -> Result<Response, String> {
+pub async fn mesh_hollow_preview_read_cavity_positions() -> Result<ReadbackRef, String> {
     let bytes = hollow_preview_cavity_result_bytes()
         .lock()
         .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))?
@@ -1209,12 +1210,12 @@ pub async fn mesh_hollow_preview_read_cavity_positions() -> Result<Response, Str
             "No hollow preview cavity result — call mesh_hollow_preview_from_captured_source first"
                 .to_string()
         })?;
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 /// Reads the cavity interior mesh positions from the last staged hollow operation.
 #[tauri::command]
-pub async fn mesh_hollow_staged_read_cavity_positions() -> Result<Response, String> {
+pub async fn mesh_hollow_staged_read_cavity_positions() -> Result<ReadbackRef, String> {
     let bytes = hollow_staged_cavity_result_bytes()
         .lock()
         .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))?
@@ -1222,7 +1223,7 @@ pub async fn mesh_hollow_staged_read_cavity_positions() -> Result<Response, Stri
         .ok_or_else(|| {
             "No hollow staged cavity result — call mesh_hollow_staged first".to_string()
         })?;
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 /// Applies manual cylindrical hole punches to the current staged mesh.
@@ -1289,7 +1290,7 @@ pub async fn mesh_punch_from_captured_source(options_json: String) -> Result<Str
 /// Returns the most recent non-mutating punch result positions as raw
 /// little-endian bytes.
 #[tauri::command]
-pub async fn mesh_punch_read_positions() -> Result<Response, String> {
+pub async fn mesh_punch_read_positions() -> Result<ReadbackRef, String> {
     let bytes = punch_result_bytes()
         .lock()
         .map_err(|e| format!("punch result lock poisoned: {e}"))?
@@ -1297,7 +1298,7 @@ pub async fn mesh_punch_read_positions() -> Result<Response, String> {
         .ok_or_else(|| {
             "No punch result — call mesh_punch_from_captured_source first".to_string()
         })?;
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 // --- organic cut ---------------------------------------------------------
@@ -1425,14 +1426,14 @@ pub async fn mesh_organic_cut_from_captured_source(options_json: String) -> Resu
 /// Indices run `0..report.partCount`; a multi-loop cut that frees several pieces
 /// exposes each as its own part. Out-of-range indices error.
 #[tauri::command]
-pub async fn mesh_organic_cut_read_part(index: usize) -> Result<Response, String> {
+pub async fn mesh_organic_cut_read_part(index: usize) -> Result<ReadbackRef, String> {
     let bytes = organic_cut_parts_bytes()
         .lock()
         .map_err(|e| format!("organic cut parts lock poisoned: {e}"))?
         .get(index)
         .cloned()
         .ok_or_else(|| format!("No organic cut part at index {index} — run a cut first"))?;
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 /// Computes a surface-following (Stage-1 edge-path) loop through the given
@@ -1540,13 +1541,13 @@ async fn compute_geodesic_loop_bytes(req: &GeodesicRequestDto) -> Result<(Vec<u8
 
 /// Returns the most recent geodesic loop polyline as raw LE f32 bytes.
 #[tauri::command]
-pub async fn mesh_organic_cut_read_geodesic() -> Result<Response, String> {
+pub async fn mesh_organic_cut_read_geodesic() -> Result<ReadbackRef, String> {
     let bytes = organic_cut_geodesic_bytes()
         .lock()
         .map_err(|e| format!("geodesic lock poisoned: {e}"))?
         .clone()
         .unwrap_or_default();
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 /// Builds the contour-cut MEMBRANE for the given loop and stashes it as a
@@ -1801,13 +1802,13 @@ const NO_TENON_PREVIEW_JSON: &str =
 /// Returns the most recent registration-tenon preview as raw LE f32 triangle-soup
 /// bytes (tenon followed by mortise). Empty when no tenon was previewed.
 #[tauri::command]
-pub async fn mesh_organic_cut_read_tenon() -> Result<Response, String> {
+pub async fn mesh_organic_cut_read_tenon() -> Result<ReadbackRef, String> {
     let bytes = organic_cut_tenon_bytes()
         .lock()
         .map_err(|e| format!("tenon lock poisoned: {e}"))?
         .clone()
         .unwrap_or_default();
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 /// Minimal JSON string-body escaper for the short ASCII status messages we embed
@@ -1818,21 +1819,22 @@ fn json_escape(s: &str) -> String {
 
 /// Returns the most recent membrane preview as raw LE f32 triangle-soup bytes.
 #[tauri::command]
-pub async fn mesh_organic_cut_read_membrane() -> Result<Response, String> {
+pub async fn mesh_organic_cut_read_membrane() -> Result<ReadbackRef, String> {
     let bytes = organic_cut_membrane_bytes()
         .lock()
         .map_err(|e| format!("membrane lock poisoned: {e}"))?
         .clone()
         .unwrap_or_default();
-    Ok(Response::new(bytes))
+    Ok(publish_readback(bytes))
 }
 
 /// Returns the current staged positions buffer as raw little-endian bytes.
 /// Used by the frontend to hydrate a `THREE.BufferGeometry` after a repair.
+/// The bytes are published to the readback arena; the frontend fetches the id.
 #[tauri::command]
-pub async fn mesh_repair_read_positions() -> Result<Response, String> {
+pub async fn mesh_repair_read_positions() -> Result<crate::mesh_readback::ReadbackRef, String> {
     let bytes = read_staging_bytes()?;
-    Ok(Response::new(bytes))
+    Ok(crate::mesh_readback::publish(bytes))
 }
 
 /// The STL-only step of a native load.

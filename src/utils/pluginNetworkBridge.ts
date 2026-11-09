@@ -1,4 +1,5 @@
 import { isTauriRuntime } from './tauriRuntime';
+import { resolveMeshPayload, type MeshReadbackRef } from './tauriMeshBridge';
 type TauriCoreModule = {
   invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 };
@@ -100,11 +101,14 @@ export async function readNativeFileChunk(
   if (!core) return null;
 
   try {
-    const result = await core.invoke<ArrayBuffer>('read_print_file_chunk', {
-      sourcePath,
-      offset,
-      length,
-    });
+    const result = await resolveMeshPayload(await core.invoke<ArrayBuffer | Uint8Array | number[] | MeshReadbackRef>(
+      'read_print_file_chunk',
+      {
+        sourcePath,
+        offset,
+        length,
+      },
+    ));
     return new Uint8Array(result);
   } catch {
     return null;
