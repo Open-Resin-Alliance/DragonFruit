@@ -1789,6 +1789,18 @@ round trip is fine, the buffer read-back is what blocks. A chunked read (yield
 between buffers, as `sceneSnapshotSpill` does) is the smallest change that would
 keep the frame moving.
 
+**Fixed.** The readback is now one parallel window of aliased fetches
+(`dev/tauri-ipc-bridge.md`), and the native passes are parallel: surface
+voxelization runs per triangle into an atomic bitmap; the cavity component pass
+and the non-surface parity classification use a parallel union-find (union by
+index keeps the largest-component tie-break identical to the old seed scan); the
+separator pass computes additions in parallel and applies them once; the
+removed-voxel collectors run one z-plane per task and concatenate in order. On a
+196k-triangle cube (`cargo test --release --test hollow_bench -- --ignored
+--nocapture`) `run` went 450 → 82 ms at 192³, 160 → 39 ms at 144³ and 45 → 13 ms
+at 96³; the session build went 822 → 335 ms at 192³. The remaining build cost is
+the two-pass chamfer distance transform, which is sequential by construction.
+
 ## Fixed: placing a support no longer rebuilds the whole support map
 
 The router never reads the support store, so hovering is unaffected by how full

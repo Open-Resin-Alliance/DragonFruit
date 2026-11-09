@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU8, Ordering};
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::core::bvh::Bvh;
@@ -483,81 +485,7 @@ pub fn hollow_voxel(mut mesh: IndexedMesh, options: &HollowOptions) -> HollowOut
     // The two-pass EDT approximates Euclidean distance (in voxel units) to
     // within ~2 % by propagating face (cost 1), edge (cost √2), and corner
     // (cost √3) steps.  Scan order: z-outer, y-middle, x-inner.
-    let mut dist = vec![f32::INFINITY; nx * ny * nz];
-
-    // Seed every mesh-surface voxel so thickness is preserved to both exterior
-    // walls and any pre-existing interior cavity walls.
-    for z in 0..nz {
-        for y in 0..ny {
-            for x in 0..nx {
-                let i = grid.idx(x, y, z);
-                if solid[i] && surface[i] {
-                    dist[i] = 0.0;
-                }
-            }
-        }
-    }
-
-    // Forward pass: relax each voxel via the 13 already-visited
-    // backward-offset neighbours.
-    for z in 0..nz {
-        for y in 0..ny {
-            for x in 0..nx {
-                let i = grid.idx(x, y, z);
-                if !solid[i] {
-                    continue;
-                }
-                let mut d = dist[i];
-                for &((dx, dy, dz), w) in &SHELL_DIST_FORWARD {
-                    let nx_i = x as isize + dx;
-                    let ny_i = y as isize + dy;
-                    let nz_i = z as isize + dz;
-                    if !grid.in_bounds(nx_i, ny_i, nz_i) {
-                        continue;
-                    }
-                    let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
-                    if !solid[ni] {
-                        continue;
-                    }
-                    let candidate = dist[ni] + w;
-                    if candidate < d {
-                        d = candidate;
-                    }
-                }
-                dist[i] = d;
-            }
-        }
-    }
-
-    // Backward pass: relax via the 13 complementary forward-offset neighbours.
-    for z in (0..nz).rev() {
-        for y in (0..ny).rev() {
-            for x in (0..nx).rev() {
-                let i = grid.idx(x, y, z);
-                if !solid[i] {
-                    continue;
-                }
-                let mut d = dist[i];
-                for &((dx, dy, dz), w) in &SHELL_DIST_BACKWARD {
-                    let nx_i = x as isize + dx;
-                    let ny_i = y as isize + dy;
-                    let nz_i = z as isize + dz;
-                    if !grid.in_bounds(nx_i, ny_i, nz_i) {
-                        continue;
-                    }
-                    let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
-                    if !solid[ni] {
-                        continue;
-                    }
-                    let candidate = dist[ni] + w;
-                    if candidate < d {
-                        d = candidate;
-                    }
-                }
-                dist[i] = d;
-            }
-        }
-    }
+    let dist = chamfer_distance_transform(&grid, &solid, &surface);
 
     // Shell-membership threshold in voxel units (exact float, not ceiling-rounded).
     let shell_voxels_f = options.shell_thickness_mm.max(0.2) / voxel_mm;
@@ -820,9 +748,11 @@ impl HollowSession {
             })
             .collect();
 
-        let mut surface = vec![false; nx * ny * nz];
+        let surface_bits: Vec<AtomicU8> = (0..nx * ny * nz).map(|_| AtomicU8::new(0)).collect();
         let voxel_diag_half = (3.0f32).sqrt() * voxel_mm * 0.5;
-        for tri in &tri_cache {
+        // Triangles are independent; the bitmap is an OR, so the result does
+        // not depend on scheduling.
+        tri_cache.par_iter().for_each(|tri| {
             let min_ix =
                 (((tri.min.x - grid.min.x) / voxel_mm).floor() as isize - 1).max(0) as usize;
             let max_ix = (((tri.max.x - grid.min.x) / voxel_mm).ceil() as isize + 1)
@@ -842,12 +772,16 @@ impl HollowSession {
                         let p = grid.center_world(x, y, z);
                         let d = point_triangle_distance(p, tri.a, tri.b, tri.c);
                         if d <= voxel_diag_half {
-                            surface[grid.idx(x, y, z)] = true;
+                            surface_bits[grid.idx(x, y, z)].store(1, Ordering::Relaxed);
                         }
                     }
                 }
             }
-        }
+        });
+        let surface: Vec<bool> = surface_bits
+            .iter()
+            .map(|bit| bit.load(Ordering::Relaxed) != 0)
+            .collect();
 
         let mut outside = vec![false; nx * ny * nz];
         let mut q = VecDeque::<(usize, usize, usize)>::new();
@@ -908,75 +842,7 @@ impl HollowSession {
         let source_void_components = label_void_components(&grid, &solid);
         let occupied_voxels = solid.iter().filter(|v| **v).count();
 
-        let mut dist = vec![f32::INFINITY; nx * ny * nz];
-        for z in 0..nz {
-            for y in 0..ny {
-                for x in 0..nx {
-                    let i = grid.idx(x, y, z);
-                    if solid[i] && surface[i] {
-                        dist[i] = 0.0;
-                    }
-                }
-            }
-        }
-
-        for z in 0..nz {
-            for y in 0..ny {
-                for x in 0..nx {
-                    let i = grid.idx(x, y, z);
-                    if !solid[i] {
-                        continue;
-                    }
-                    let mut d = dist[i];
-                    for &((dx, dy, dz), w) in &SHELL_DIST_FORWARD {
-                        let nx_i = x as isize + dx;
-                        let ny_i = y as isize + dy;
-                        let nz_i = z as isize + dz;
-                        if !grid.in_bounds(nx_i, ny_i, nz_i) {
-                            continue;
-                        }
-                        let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
-                        if !solid[ni] {
-                            continue;
-                        }
-                        let candidate = dist[ni] + w;
-                        if candidate < d {
-                            d = candidate;
-                        }
-                    }
-                    dist[i] = d;
-                }
-            }
-        }
-
-        for z in (0..nz).rev() {
-            for y in (0..ny).rev() {
-                for x in (0..nx).rev() {
-                    let i = grid.idx(x, y, z);
-                    if !solid[i] {
-                        continue;
-                    }
-                    let mut d = dist[i];
-                    for &((dx, dy, dz), w) in &SHELL_DIST_BACKWARD {
-                        let nx_i = x as isize + dx;
-                        let ny_i = y as isize + dy;
-                        let nz_i = z as isize + dz;
-                        if !grid.in_bounds(nx_i, ny_i, nz_i) {
-                            continue;
-                        }
-                        let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
-                        if !solid[ni] {
-                            continue;
-                        }
-                        let candidate = dist[ni] + w;
-                        if candidate < d {
-                            d = candidate;
-                        }
-                    }
-                    dist[i] = d;
-                }
-            }
-        }
+        let dist = chamfer_distance_transform(&grid, &solid, &surface);
 
         Self {
             source_mesh: mesh,
@@ -1307,47 +1173,63 @@ fn is_removed_voxel_boundary(
 }
 
 fn collect_removed_voxel_centers(grid: &GridSpec, solid: &[bool], keep: &[bool]) -> Vec<f32> {
-    let mut centers = Vec::new();
-
-    for z in 0..grid.nz {
-        for y in 0..grid.ny {
-            for x in 0..grid.nx {
-                let index = grid.idx(x, y, z);
-                if !solid[index] || keep[index] {
-                    continue;
+    // One z-plane per task; the planes are concatenated in z order, so the
+    // result is identical to the sequential scan.
+    let planes: Vec<Vec<f32>> = (0..grid.nz)
+        .into_par_iter()
+        .map(|z| {
+            let mut out = Vec::new();
+            for y in 0..grid.ny {
+                for x in 0..grid.nx {
+                    let index = grid.idx(x, y, z);
+                    if !solid[index] || keep[index] {
+                        continue;
+                    }
+                    if !is_removed_voxel_boundary(grid, solid, keep, x, y, z) {
+                        continue;
+                    }
+                    let center = grid.center_world(x, y, z);
+                    out.push(center.x);
+                    out.push(center.y);
+                    out.push(center.z);
                 }
-                if !is_removed_voxel_boundary(grid, solid, keep, x, y, z) {
-                    continue;
-                }
-                let center = grid.center_world(x, y, z);
-                centers.push(center.x);
-                centers.push(center.y);
-                centers.push(center.z);
             }
-        }
-    }
+            out
+        })
+        .collect();
 
+    let mut centers = Vec::with_capacity(planes.iter().map(Vec::len).sum());
+    for plane in planes {
+        centers.extend_from_slice(&plane);
+    }
     centers
 }
 
 fn collect_removed_voxel_indices(grid: &GridSpec, solid: &[bool], keep: &[bool]) -> Vec<u32> {
-    let mut indices = Vec::new();
-
-    for z in 0..grid.nz {
-        for y in 0..grid.ny {
-            for x in 0..grid.nx {
-                let index = grid.idx(x, y, z);
-                if !solid[index] || keep[index] {
-                    continue;
+    let planes: Vec<Vec<u32>> = (0..grid.nz)
+        .into_par_iter()
+        .map(|z| {
+            let mut out = Vec::new();
+            for y in 0..grid.ny {
+                for x in 0..grid.nx {
+                    let index = grid.idx(x, y, z);
+                    if !solid[index] || keep[index] {
+                        continue;
+                    }
+                    if !is_removed_voxel_boundary(grid, solid, keep, x, y, z) {
+                        continue;
+                    }
+                    out.push(index as u32);
                 }
-                if !is_removed_voxel_boundary(grid, solid, keep, x, y, z) {
-                    continue;
-                }
-                indices.push(index as u32);
             }
-        }
-    }
+            out
+        })
+        .collect();
 
+    let mut indices = Vec::with_capacity(planes.iter().map(Vec::len).sum());
+    for plane in planes {
+        indices.extend_from_slice(&plane);
+    }
     indices
 }
 
@@ -2802,72 +2684,233 @@ fn finalize_hollow_output_mesh_for_manifold(
     }
 }
 
-fn retain_largest_connected_cavity_component(grid: &GridSpec, solid: &[bool], keep: &mut [bool]) {
-    let mut component_ids = vec![-1i32; keep.len()];
-    let mut component_sizes = Vec::<usize>::new();
-    let mut queue = VecDeque::<(usize, usize, usize)>::new();
-
+/// Two-pass 26-neighbour chamfer distance (voxel units) from the surface.
+/// Interior voxels have every neighbour in range, so their pass uses
+/// precomputed linear offsets and skips the bounds checks; only the boundary
+/// shell takes the checked path.
+fn chamfer_distance_transform(grid: &GridSpec, solid: &[bool], surface: &[bool]) -> Vec<f32> {
+    let mut dist = vec![f32::INFINITY; solid.len()];
     for z in 0..grid.nz {
         for y in 0..grid.ny {
-            for x in 0..grid.nx {
-                let start_idx = grid.idx(x, y, z);
-                if !solid[start_idx] || keep[start_idx] || component_ids[start_idx] >= 0 {
-                    continue;
+            let mut i = grid.idx(0, y, z);
+            for _ in 0..grid.nx {
+                if solid[i] && surface[i] {
+                    dist[i] = 0.0;
                 }
-
-                let component_id = component_sizes.len() as i32;
-                component_ids[start_idx] = component_id;
-                queue.push_back((x, y, z));
-
-                let mut size = 0usize;
-                while let Some((cx, cy, cz)) = queue.pop_front() {
-                    size += 1;
-
-                    for (dx, dy, dz) in N6 {
-                        let nx_i = cx as isize + dx;
-                        let ny_i = cy as isize + dy;
-                        let nz_i = cz as isize + dz;
-                        if !grid.in_bounds(nx_i, ny_i, nz_i) {
-                            continue;
-                        }
-
-                        let ux = nx_i as usize;
-                        let uy = ny_i as usize;
-                        let uz = nz_i as usize;
-                        let ni = grid.idx(ux, uy, uz);
-
-                        if !solid[ni] || keep[ni] || component_ids[ni] >= 0 {
-                            continue;
-                        }
-
-                        component_ids[ni] = component_id;
-                        queue.push_back((ux, uy, uz));
-                    }
-                }
-
-                component_sizes.push(size);
+                i += 1;
             }
         }
     }
 
-    if component_sizes.len() <= 1 {
+    let stride_y = grid.nx as isize;
+    let stride_z = (grid.nx * grid.ny) as isize;
+    let forward_offsets: [isize; 13] = SHELL_DIST_FORWARD
+        .map(|((dx, dy, dz), _)| dx as isize + dy as isize * stride_y + dz as isize * stride_z);
+    let backward_offsets: [isize; 13] = SHELL_DIST_BACKWARD
+        .map(|((dx, dy, dz), _)| dx as isize + dy as isize * stride_y + dz as isize * stride_z);
+
+    chamfer_relax_forward(grid, solid, &mut dist, &forward_offsets, &SHELL_DIST_FORWARD);
+    chamfer_relax_backward(grid, solid, &mut dist, &backward_offsets, &SHELL_DIST_BACKWARD);
+    dist
+}
+
+fn chamfer_relax_forward(
+    grid: &GridSpec,
+    solid: &[bool],
+    dist: &mut [f32],
+    offsets: &[isize; 13],
+    weights: &[((isize, isize, isize), f32); 13],
+) {
+    let nx = grid.nx;
+    let ny = grid.ny;
+    let nz = grid.nz;
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                chamfer_relax_voxel(grid, solid, dist, offsets, weights, x, y, z);
+            }
+        }
+    }
+}
+
+fn chamfer_relax_backward(
+    grid: &GridSpec,
+    solid: &[bool],
+    dist: &mut [f32],
+    offsets: &[isize; 13],
+    weights: &[((isize, isize, isize), f32); 13],
+) {
+    let nx = grid.nx;
+    let ny = grid.ny;
+    let nz = grid.nz;
+    for z in (0..nz).rev() {
+        for y in (0..ny).rev() {
+            for x in (0..nx).rev() {
+                chamfer_relax_voxel(grid, solid, dist, offsets, weights, x, y, z);
+            }
+        }
+    }
+}
+
+#[inline]
+fn chamfer_relax_voxel(
+    grid: &GridSpec,
+    solid: &[bool],
+    dist: &mut [f32],
+    offsets: &[isize; 13],
+    weights: &[((isize, isize, isize), f32); 13],
+    x: usize,
+    y: usize,
+    z: usize,
+) {
+    let i = grid.idx(x, y, z);
+    if !solid[i] {
         return;
     }
-
-    let mut largest_component_id = 0i32;
-    let mut largest_size = 0usize;
-    for (idx, size) in component_sizes.iter().enumerate() {
-        if *size > largest_size {
-            largest_size = *size;
-            largest_component_id = idx as i32;
+    let interior = x > 0 && y > 0 && z > 0 && x + 1 < grid.nx && y + 1 < grid.ny && z + 1 < grid.nz;
+    let mut d = dist[i];
+    if interior {
+        for (&offset, &(_, weight)) in offsets.iter().zip(weights.iter()) {
+            let ni = (i as isize + offset) as usize;
+            if !solid[ni] {
+                continue;
+            }
+            let candidate = dist[ni] + weight;
+            if candidate < d {
+                d = candidate;
+            }
+        }
+    } else {
+        for &((dx, dy, dz), weight) in weights {
+            let nx_i = x as isize + dx;
+            let ny_i = y as isize + dy;
+            let nz_i = z as isize + dz;
+            if !grid.in_bounds(nx_i, ny_i, nz_i) {
+                continue;
+            }
+            let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
+            if !solid[ni] {
+                continue;
+            }
+            let candidate = dist[ni] + weight;
+            if candidate < d {
+                d = candidate;
+            }
         }
     }
+    dist[i] = d;
+}
 
-    for i in 0..keep.len() {
-        if solid[i] && !keep[i] && component_ids[i] != largest_component_id {
-            keep[i] = true;
+
+/// Union-by-index: the larger root always points at the smaller, so a
+/// component's root is its smallest linear index — the same component the
+/// sequential seed scan met first, which keeps the largest-component tie-break
+/// identical.
+fn union_find_root(parent: &[std::sync::atomic::AtomicU32], mut x: u32) -> u32 {
+    loop {
+        let p = parent[x as usize].load(Ordering::Relaxed);
+        if p == x {
+            return x;
+        }
+        let gp = parent[p as usize].load(Ordering::Relaxed);
+        if gp == p {
+            return p;
+        }
+        let _ = parent[x as usize].compare_exchange(p, gp, Ordering::Relaxed, Ordering::Relaxed);
+        x = gp;
+    }
+}
+
+fn union_find_join(parent: &[std::sync::atomic::AtomicU32], a: u32, b: u32) {
+    let mut ra = union_find_root(parent, a);
+    let mut rb = union_find_root(parent, b);
+    while ra != rb {
+        let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
+        match parent[hi as usize].compare_exchange(hi, lo, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(_) => {
+                ra = union_find_root(parent, lo);
+                rb = union_find_root(parent, hi);
+            }
         }
     }
+}
+
+fn retain_largest_connected_cavity_component(grid: &GridSpec, solid: &[bool], keep: &mut [bool]) {
+    let n = keep.len();
+    let stride_y = grid.nx;
+    let stride_z = grid.nx * grid.ny;
+    // cavity == solid && !keep; one combined mask halves the random reads.
+    let mut cavity = vec![false; n];
+    for i in 0..n {
+        cavity[i] = solid[i] && !keep[i];
+    }
+
+    // Parallel union-find over the cavity's 6-connected edges. Only the three
+    // positive directions are joined, which covers every edge once.
+    let parent: Vec<std::sync::atomic::AtomicU32> =
+        (0..n as u32).map(std::sync::atomic::AtomicU32::new).collect();
+    cavity.par_iter().enumerate().for_each(|(index, is_cavity)| {
+        if !*is_cavity {
+            return;
+        }
+        let x = index % stride_y;
+        let y = (index / stride_y) % grid.ny;
+        let z = index / stride_z;
+        for (dx, dy, dz) in [(1isize, 0isize, 0isize), (0, 1, 0), (0, 0, 1)] {
+            let nx_i = x as isize + dx;
+            let ny_i = y as isize + dy;
+            let nz_i = z as isize + dz;
+            if !grid.in_bounds(nx_i, ny_i, nz_i) {
+                continue;
+            }
+            let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
+            if !cavity[ni] {
+                continue;
+            }
+            union_find_join(&parent, index as u32, ni as u32);
+        }
+    });
+
+    // Group the cavity roots; the largest group wins, ties go to the smallest
+    // root (the component the sequential scan would have met first).
+    let mut roots: Vec<u32> = cavity
+        .par_iter()
+        .enumerate()
+        .filter_map(|(index, is_cavity)| {
+            if *is_cavity { Some(union_find_root(&parent, index as u32)) } else { None }
+        })
+        .collect();
+    if roots.is_empty() {
+        return;
+    }
+    roots.par_sort_unstable();
+
+    let mut best_root = u32::MAX;
+    let mut best_count = 0usize;
+    let mut start = 0usize;
+    while start < roots.len() {
+        let root = roots[start];
+        let mut end = start + 1;
+        while end < roots.len() && roots[end] == root {
+            end += 1;
+        }
+        let count = end - start;
+        if count > best_count || (count == best_count && root < best_root) {
+            best_count = count;
+            best_root = root;
+        }
+        start = end;
+    }
+
+    keep.par_iter_mut()
+        .zip(cavity.par_iter())
+        .enumerate()
+        .for_each(|(index, (slot, is_cavity))| {
+            if *is_cavity && union_find_root(&parent, index as u32) != best_root {
+                *slot = true;
+            }
+        });
 }
 
 #[cfg(not(feature = "manifold"))]
@@ -3844,57 +3887,81 @@ fn refine_non_surface_solid_components_with_parity(
     solid: &mut [bool],
     mesh: &IndexedMesh,
 ) {
-    let mut visited = vec![false; solid.len()];
+    let n = solid.len();
+    // interior == solid && !surface; one mask instead of two random reads per
+    // neighbour. Components are found with the same parallel union-find the
+    // cavity pass uses; union-by-index makes each root the component's smallest
+    // index, which is the seed the sequential scan sampled.
+    let mut interior = vec![false; n];
+    for i in 0..n {
+        interior[i] = solid[i] && !surface[i];
+    }
+
+    let parent: Vec<std::sync::atomic::AtomicU32> =
+        (0..n as u32).map(std::sync::atomic::AtomicU32::new).collect();
+    let stride_y = grid.nx;
+    let stride_z = grid.nx * grid.ny;
+    interior.par_iter().enumerate().for_each(|(index, is_interior)| {
+        if !*is_interior {
+            return;
+        }
+        let x = index % stride_y;
+        let y = (index / stride_y) % grid.ny;
+        let z = index / stride_z;
+        for (dx, dy, dz) in [(1isize, 0isize, 0isize), (0, 1, 0), (0, 0, 1)] {
+            let nx_i = x as isize + dx;
+            let ny_i = y as isize + dy;
+            let nz_i = z as isize + dz;
+            if !grid.in_bounds(nx_i, ny_i, nz_i) {
+                continue;
+            }
+            let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
+            if !interior[ni] {
+                continue;
+            }
+            union_find_join(&parent, index as u32, ni as u32);
+        }
+    });
+
+    let mut roots: Vec<u32> = interior
+        .par_iter()
+        .enumerate()
+        .filter_map(|(index, is_interior)| {
+            if *is_interior { Some(union_find_root(&parent, index as u32)) } else { None }
+        })
+        .collect();
+    roots.par_sort_unstable();
+    roots.dedup();
+
     let bvh = Bvh::build(mesh);
-    let mut component = Vec::<usize>::new();
-    let mut queue = VecDeque::<usize>::new();
-
-    for start in 0..solid.len() {
-        if visited[start] || !solid[start] || surface[start] {
-            continue;
-        }
-
-        visited[start] = true;
-        queue.push_back(start);
-        component.clear();
-
-        while let Some(i) = queue.pop_front() {
-            component.push(i);
-            let z = i / (grid.nx * grid.ny);
-            let rem = i - z * grid.nx * grid.ny;
-            let y = rem / grid.nx;
-            let x = rem - y * grid.nx;
-
-            for (dx, dy, dz) in N6 {
-                let nx_i = x as isize + dx;
-                let ny_i = y as isize + dy;
-                let nz_i = z as isize + dz;
-                if !grid.in_bounds(nx_i, ny_i, nz_i) {
-                    continue;
-                }
-
-                let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
-                if visited[ni] || !solid[ni] || surface[ni] {
-                    continue;
-                }
-
-                visited[ni] = true;
-                queue.push_back(ni);
-            }
-        }
-
-        let sample = component[0];
-        let z = sample / (grid.nx * grid.ny);
-        let rem = sample - z * grid.nx * grid.ny;
-        let y = rem / grid.nx;
-        let x = rem - y * grid.nx;
+    let mut outside_roots: Vec<u32> = Vec::new();
+    for &root in &roots {
+        let sample = root as usize;
+        let z = sample / stride_z;
+        let rem = sample - z * stride_z;
+        let y = rem / stride_y;
+        let x = rem - y * stride_y;
         let sample_p = grid.center_world(x, y, z);
-
         if !point_inside_mesh_parity(mesh, &bvh, sample_p, grid.voxel_mm) {
-            for &i in &component {
-                solid[i] = false;
-            }
+            outside_roots.push(root);
         }
+    }
+    outside_roots.sort_unstable();
+
+    if !outside_roots.is_empty() {
+        solid
+            .par_iter_mut()
+            .zip(interior.par_iter())
+            .enumerate()
+            .for_each(|(index, (slot, is_interior))| {
+                if !*is_interior {
+                    return;
+                }
+                let root = union_find_root(&parent, index as u32);
+                if outside_roots.binary_search(&root).is_ok() {
+                    *slot = false;
+                }
+            });
     }
 }
 
@@ -3947,47 +4014,60 @@ fn preserve_source_void_separators(
     void_components: &[i32],
     keep: &mut [bool],
 ) {
-    for z in 0..grid.nz {
-        for y in 0..grid.ny {
-            for x in 0..grid.nx {
-                let i = grid.idx(x, y, z);
-                if !solid[i] || keep[i] {
-                    continue;
-                }
-
-                let mut first_label = -1i32;
-                let mut separates_distinct_voids = false;
-
-                for (dx, dy, dz) in N6 {
-                    let nx_i = x as isize + dx;
-                    let ny_i = y as isize + dy;
-                    let nz_i = z as isize + dz;
-                    if !grid.in_bounds(nx_i, ny_i, nz_i) {
+    // The decision reads `solid`, `void_components` and the incoming `keep`
+    // only; it never consumes another voxel's update. Find the additions in
+    // parallel, then apply them in one pass.
+    let plane = grid.nx * grid.ny;
+    let mut additions = vec![false; grid.nz * plane];
+    additions
+        .par_chunks_mut(plane)
+        .enumerate()
+        .for_each(|(z, out)| {
+            for y in 0..grid.ny {
+                for x in 0..grid.nx {
+                    let i = grid.idx(x, y, z);
+                    if !solid[i] || keep[i] {
                         continue;
                     }
 
-                    let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
-                    if solid[ni] {
-                        continue;
+                    let mut first_label = -1i32;
+                    let mut separates_distinct_voids = false;
+
+                    for (dx, dy, dz) in N6 {
+                        let nx_i = x as isize + dx;
+                        let ny_i = y as isize + dy;
+                        let nz_i = z as isize + dz;
+                        if !grid.in_bounds(nx_i, ny_i, nz_i) {
+                            continue;
+                        }
+
+                        let ni = grid.idx(nx_i as usize, ny_i as usize, nz_i as usize);
+                        if solid[ni] {
+                            continue;
+                        }
+
+                        let label = void_components[ni];
+                        if label < 0 {
+                            continue;
+                        }
+
+                        if first_label < 0 {
+                            first_label = label;
+                        } else if label != first_label {
+                            separates_distinct_voids = true;
+                            break;
+                        }
                     }
 
-                    let label = void_components[ni];
-                    if label < 0 {
-                        continue;
+                    if separates_distinct_voids {
+                        out[y * grid.nx + x] = true;
                     }
-
-                    if first_label < 0 {
-                        first_label = label;
-                    } else if label != first_label {
-                        separates_distinct_voids = true;
-                        break;
-                    }
-                }
-
-                if separates_distinct_voids {
-                    keep[i] = true;
                 }
             }
+        });
+    for (i, add) in additions.iter().enumerate() {
+        if *add {
+            keep[i] = true;
         }
     }
 }
