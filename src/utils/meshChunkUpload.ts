@@ -2,8 +2,12 @@ import type { TauriInvoke } from './tauriMeshBridge';
 import type { AppendLoadedSliceMesh, AppendedLoadedSliceMesh } from './loadedSliceMesh';
 import {
   MESH_CHUNK_BYTES,
+  appendSourceArgs,
   deserializeMeshChunkError,
+  finalPlanArgs,
   serializeMeshChunkError,
+  type MeshChunkNativeCommand,
+  type MeshChunkPlanAck,
   type MeshChunkUploadAck,
   type MeshChunkWorkerCommand,
   type MeshChunkWorkerOutput,
@@ -22,6 +26,10 @@ export interface MeshChunkUploadResult extends MeshChunkUploadAck {
   ipcMs: number;
   /** Upload session wall time after acquiring its turn. */
   wallMs: number;
+  /** SHA-256 time inside the worker; the rest of `wallMs - ipcMs` is copying/startup. */
+  hashMs: number;
+  /** `ipcMs` split by native command, so a slow invoke can be attributed. */
+  commands: Record<string, { count: number; ms: number }>;
 }
 
 export interface MeshChunkUploadSession {
@@ -72,11 +80,15 @@ async function acquireUploadTurn(signal?: AbortSignal): Promise<() => void> {
 }
 
 class ChunkUploadSession implements MeshChunkUploadSession {
-  private worker: Worker | null;
+  /** Created on the first raw chunk; a retained-source session never hashes. */
+  private worker: Worker | null = null;
   private requestId = 0;
   private ipcMs = 0;
+  private readonly commandMs = new Map<string, { count: number; ms: number }>();
   private readonly startedAt = performance.now();
   private uploadId: string | undefined;
+  private reserveBytes = 0;
+  private retainForSlice = false;
   private phase: 'open' | 'finishing' | 'finished' | 'aborted' = 'open';
   private failure: Error | undefined;
   private operations = Promise.resolve();
@@ -90,13 +102,6 @@ class ChunkUploadSession implements MeshChunkUploadSession {
     private readonly release: () => void,
     private readonly signal?: AbortSignal,
   ) {
-    this.worker = new Worker(new URL('./meshChunkUpload.worker.ts', import.meta.url), { type: 'module' });
-    this.worker.onmessage = (event: MessageEvent<MeshChunkWorkerOutput>) => this.onMessage(event.data);
-    this.worker.onerror = (event) => {
-      event.preventDefault();
-      this.stop(new Error(event.message || 'Mesh upload worker failed'));
-    };
-    this.worker.onmessageerror = () => this.stop(new Error('Mesh upload worker response could not be deserialized'));
     signal?.addEventListener('abort', this.onAbort, { once: true });
   }
 
@@ -106,9 +111,64 @@ class ChunkUploadSession implements MeshChunkUploadSession {
     if (!this.worker) throw new Error('Mesh upload worker is closed');
   }
 
+  private ensureNotFailed(): void {
+    if (this.failure) throw this.failure;
+    throwIfAborted(this.signal);
+  }
+
+  /** A raw chunk needs hashing and reblocking off the main thread. */
+  private ensureWorker(): void {
+    if (this.worker) return;
+    const worker = new Worker(new URL('./meshChunkUpload.worker.ts', import.meta.url), { type: 'module' });
+    worker.onmessage = (event: MessageEvent<MeshChunkWorkerOutput>) => this.onMessage(event.data);
+    worker.onerror = (event) => {
+      event.preventDefault();
+      this.stop(new Error(event.message || 'Mesh upload worker failed'));
+    };
+    worker.onmessageerror = () => this.stop(new Error('Mesh upload worker response could not be deserialized'));
+    this.worker = worker;
+    // Adopt an upload a direct source append already created.
+    void this.request<void>({
+      type: 'begin', requestId: ++this.requestId,
+      reserveBytes: this.reserveBytes, retainForSlice: this.retainForSlice, uploadId: this.uploadId,
+    }).catch(() => undefined);
+  }
+
   async start(reserveBytes: number, retainForSlice: boolean): Promise<void> {
+    if (!Number.isSafeInteger(reserveBytes) || reserveBytes < 0) {
+      const error = new Error('Mesh upload reserveBytes must be a nonnegative safe integer');
+      this.stop(error);
+      throw error;
+    }
+    this.reserveBytes = reserveBytes;
+    this.retainForSlice = retainForSlice;
+  }
+
+  private recordCommand(command: string, elapsed: number): void {
+    this.ipcMs += elapsed;
+    const entry = this.commandMs.get(command) ?? { count: 0, ms: 0 };
+    entry.count += 1;
+    entry.ms += elapsed;
+    this.commandMs.set(command, entry);
+  }
+
+  private trackUploadId(command: string, value: unknown): void {
+    if (command === 'mesh_chunk_upload_plan'
+      && value !== null && typeof value === 'object'
+      && 'uploadId' in value && typeof value.uploadId === 'string') {
+      this.uploadId = value.uploadId;
+    }
+  }
+
+  /** A command that needs no hashing is invoked from the window directly. */
+  private async relayDirect<T>(command: MeshChunkNativeCommand, args: Record<string, unknown>): Promise<T> {
+    this.ensureNotFailed();
+    const started = performance.now();
     try {
-      await this.request<string>({ type: 'begin', requestId: ++this.requestId, reserveBytes, retainForSlice });
+      const value = await this.invoke(command, args);
+      this.recordCommand(command, performance.now() - started);
+      this.trackUploadId(command, value);
+      return value as T;
     } catch (error) {
       this.stop(error instanceof Error ? error : new Error(String(error)));
       throw error;
@@ -141,9 +201,9 @@ class ChunkUploadSession implements MeshChunkUploadSession {
             value = await this.invoke(message.command, message.args,
               message.headers ? { headers: message.headers } : undefined);
           } finally {
-            this.ipcMs += performance.now() - started;
+            this.recordCommand(message.command, performance.now() - started);
           }
-          if (message.command === 'mesh_chunk_upload_begin') this.uploadId = value as string;
+          this.trackUploadId(message.command, value);
           this.worker?.postMessage({ type: 'relay-result', relayId: message.relayId, ok: true, value });
         } catch (error) {
           this.worker?.postMessage({
@@ -181,7 +241,8 @@ class ChunkUploadSession implements MeshChunkUploadSession {
   append(bytes: Uint8Array): Promise<void> {
     if (this.phase !== 'open') return Promise.reject(this.failure ?? new Error('Mesh upload session is not open'));
     return this.enqueue(async () => {
-      this.ensureAlive();
+      this.ensureNotFailed();
+      this.ensureWorker();
       for (let offset = 0; offset < bytes.byteLength; offset += MESH_CHUNK_BYTES) {
         this.ensureAlive();
         // Transfer only a bounded fresh copy, never a renderer-owned buffer.
@@ -194,15 +255,36 @@ class ChunkUploadSession implements MeshChunkUploadSession {
 
   appendSource(source: AppendLoadedSliceMesh): Promise<AppendedLoadedSliceMesh | null> {
     if (this.phase !== 'open') return Promise.reject(this.failure ?? new Error('Mesh upload session is not open'));
-    return this.enqueue(() => this.request<AppendedLoadedSliceMesh | null>({ type: 'append-source', requestId: ++this.requestId, source }));
+    return this.enqueue(async () => {
+      this.ensureNotFailed();
+      if (this.worker) {
+        return this.request<AppendedLoadedSliceMesh | null>({ type: 'append-source', requestId: ++this.requestId, source });
+      }
+      const result = await this.relayDirect<AppendedLoadedSliceMesh | null>(
+        'mesh_chunk_upload_append_source',
+        appendSourceArgs(source, this.uploadId ?? null, this.reserveBytes, this.retainForSlice),
+      );
+      if (result) this.uploadId = result.uploadId;
+      return result;
+    });
   }
 
   finish(stage = true): Promise<MeshChunkUploadResult> {
     if (this.phase !== 'open') return Promise.reject(this.failure ?? new Error('Mesh upload session is not open'));
     this.phase = 'finishing';
     return this.enqueue(async () => {
-      const ack = await this.request<MeshChunkUploadAck>({ type: 'finish', requestId: ++this.requestId, stage });
-      this.ensureAlive();
+      let ack: MeshChunkUploadAck & { hashMs: number };
+      if (this.worker) {
+        ack = await this.request<MeshChunkUploadAck & { hashMs: number }>({ type: 'finish', requestId: ++this.requestId, stage });
+      } else {
+        const plan = await this.relayDirect<MeshChunkPlanAck>(
+          'mesh_chunk_upload_plan',
+          finalPlanArgs(this.uploadId ?? null, this.reserveBytes, this.retainForSlice, stage),
+        );
+        if (!plan.ack) throw new Error('Mesh upload plan did not finalize the upload');
+        ack = { ...plan.ack, hashMs: 0 };
+      }
+      this.ensureNotFailed();
       this.phase = 'finished';
       this.dropWorker();
       if (stage) {
@@ -210,7 +292,8 @@ class ChunkUploadSession implements MeshChunkUploadSession {
         this.uploadId = undefined;
         this.release();
       }
-      return { ...ack, ipcMs: this.ipcMs, wallMs: performance.now() - this.startedAt };
+      return { ...ack, ipcMs: this.ipcMs, wallMs: performance.now() - this.startedAt,
+        commands: Object.fromEntries(this.commandMs) };
     });
   }
 
@@ -315,22 +398,3 @@ export async function invokeWithChunkedMesh<T>(
   }
 }
 
-
-/** Restore native retained bytes without creating a worker or reading renderer geometry. */
-export async function restoreCachedSliceMesh(
-  invoke: TauriInvoke,
-  snapshotId: string,
-  signal?: AbortSignal,
-): Promise<MeshChunkUploadResult | null> {
-  const release = await acquireUploadTurn(signal);
-  const started = performance.now();
-  try {
-    throwIfAborted(signal);
-    const ack = await invoke<MeshChunkUploadAck | null>('restore_cached_slice_mesh', { snapshotId });
-    const elapsed = performance.now() - started;
-    throwIfAborted(signal);
-    return ack ? { ...ack, ipcMs: elapsed, wallMs: elapsed } : null;
-  } finally {
-    release();
-  }
-}

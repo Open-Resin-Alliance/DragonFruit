@@ -190,6 +190,8 @@ export type SliceExportResult = {
             meshBytesLen: number | null;
             stageMeshMs: number | null;
             stageMeshWallMs: number;
+            stageMeshHashMs: number;
+            stageMeshCommands: Record<string, { count: number; ms: number }>;
             stageMeshBytes: number | null;
             stageMeshUploadedBytes: number;
             stageMeshReusedBytes: number;
@@ -473,6 +475,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                     meshBytesLen: encodedArtifact.bridge?.meshBytesLen ?? null,
                     stageMeshMs: stageMeshIpcMs,
                     stageMeshWallMs: chunkAck.wallMs,
+                    stageMeshHashMs: chunkAck.hashMs,
+                    stageMeshCommands: chunkAck.commands,
                     stageMeshBytes: cumulativeBytesStage > 0 ? cumulativeBytesStage : null,
                     stageMeshUploadedBytes,
                     stageMeshReusedBytes,

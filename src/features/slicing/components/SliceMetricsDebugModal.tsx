@@ -282,6 +282,7 @@ export function SliceMetricsDebugModal({
                         <RuntimeStat label="CPU agg vs render wall" value={formatPercent(workerCpuVsRenderWallPct)} />
                         <RuntimeStat label="Transport overhead" value={formatMs(benchmark.nativePerf.transportOverheadMs, 2)} />
                         <RuntimeStat label="Stage mesh IPC" value={formatMs(benchmark.nativePerf.stageMeshMs, 2)} />
+                        <RuntimeStat label="Stage mesh hash" value={formatMs(benchmark.nativePerf.stageMeshHashMs, 2)} />
                         <RuntimeStat label="Stage throughput" value={formatMiBPerSec(benchmark.nativePerf.stageMeshThroughputMiBPerSec)} />
                       </div>
                     </div>

@@ -35,7 +35,7 @@ function fixture(onBegin?: () => Promise<void>) {
   const restoreWindow = installFakeWindow({
     document, localStorage, sessionStorage: localStorage,
     __TAURI_INTERNALS__: { invoke: async (...args: Parameters<typeof upload.invoke>) => {
-      if (args[0] === 'mesh_chunk_upload_begin') await onBegin?.();
+      if (args[0] === 'mesh_chunk_upload_plan') await onBegin?.();
       return upload.invoke(...args);
     } },
     addEventListener: events.addEventListener.bind(events),

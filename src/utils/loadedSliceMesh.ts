@@ -16,7 +16,7 @@ export type AppendLoadedSliceMesh = LoadedSliceMeshReference & {
   plateOffset: number[];
   flipWinding: boolean;
 };
-export type AppendedLoadedSliceMesh = { triangleCount: number; meshBounds: SliceMeshBounds };
+export type AppendedLoadedSliceMesh = { uploadId: string; triangleCount: number; meshBounds: SliceMeshBounds };
 
 type Attribute = BufferAttribute | InterleavedBufferAttribute;
 function version(attribute: Attribute): number {

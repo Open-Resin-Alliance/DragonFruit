@@ -26,6 +26,28 @@ fn uploads() -> &'static Mutex<MeshChunkCache> {
     &UPLOADS
 }
 
+/// Bounds one plan manifest; the worker batches well below this.
+const MAX_PLAN_CHUNKS: usize = 4096;
+
+/// Create the one pending upload, lazily, for whichever command needs it first.
+fn begin_upload(
+    app: &crate::DragonFruitAppHandle,
+    reserve_bytes: Option<u64>,
+    retain_for_slice: Option<bool>,
+) -> Result<String, String> {
+    let reserve_bytes = native_size(reserve_bytes.unwrap_or(0))?;
+    let mut uploads = uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?;
+    if retain_for_slice.unwrap_or(false) {
+        uploads.begin_for_slice(reserve_bytes, || {
+            let directory = app.path().app_cache_dir()
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            slice_backing::open(&directory)
+        })
+    } else {
+        uploads.begin(reserve_bytes)
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MeshChunkUploadAck {
@@ -108,35 +130,57 @@ fn header<'a>(request: &'a Request<'_>, name: &str) -> Result<&'a str, String> {
         .to_str().map_err(|e| format!("Invalid {name} header: {e}"))
 }
 
-#[tauri::command(rename_all = "camelCase")]
-pub async fn mesh_chunk_upload_begin(
-    app: crate::DragonFruitAppHandle,
-    reserve_bytes: u64,
-    retain_for_slice: Option<bool>,
-) -> Result<String, String> {
-    let reserve_bytes = native_size(reserve_bytes)?;
-    let mut uploads = uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?;
-    if retain_for_slice.unwrap_or(false) {
-        uploads.begin_for_slice(reserve_bytes, || {
-            let directory = app.path().app_cache_dir()
-                .map_err(|error| std::io::Error::other(error.to_string()))?;
-            slice_backing::open(&directory)
-        })
-    } else {
-        uploads.begin(reserve_bytes)
-    }
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn mesh_chunk_upload_append_cached(
-    upload_id: String,
+/// One chunk the caller intends to append, in upload order.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlanChunk {
     hash: String,
     byte_length: u64,
-) -> Result<bool, String> {
-    let hash = parse_chunk_hash(&hash)?;
-    let byte_length = native_size(byte_length)?;
-    uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?
-        .append_cached(&upload_id, &hash, byte_length)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeshChunkPlanAck {
+    upload_id: String,
+    /// Leading chunks that already existed and were appended from cache.
+    cached: usize,
+    /// Present only when this call also finalized the upload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ack: Option<MeshChunkUploadAck>,
+}
+
+/// One round trip for a whole batch of content-addressed chunks: create the
+/// upload when needed, append the cached leading run, and finalize when the
+/// caller has nothing left to send. A caller that must upload missing chunks
+/// sends them with `mesh_chunk_upload_append` and plans once more with none.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mesh_chunk_upload_plan(
+    app: crate::DragonFruitAppHandle,
+    upload_id: Option<String>,
+    reserve_bytes: Option<u64>,
+    retain_for_slice: Option<bool>,
+    chunks: Vec<PlanChunk>,
+    final_upload: Option<bool>,
+    stage: Option<bool>,
+) -> Result<MeshChunkPlanAck, String> {
+    if chunks.len() > MAX_PLAN_CHUNKS {
+        return Err(format!("A mesh upload plan holds at most {MAX_PLAN_CHUNKS} chunks"));
+    }
+    let specs = chunks.iter()
+        .map(|chunk| Ok((parse_chunk_hash(&chunk.hash)?, native_size(chunk.byte_length)?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    let upload_id = match upload_id {
+        Some(upload_id) => upload_id,
+        None => begin_upload(&app, reserve_bytes, retain_for_slice)?,
+    };
+    let mut uploads = uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?;
+    let cached = uploads.append_cached_batch(&upload_id, &specs)?;
+    let ack = if final_upload.unwrap_or(false) && cached == specs.len() {
+        Some(finish_upload(&mut uploads, &upload_id, stage.unwrap_or(true))?)
+    } else {
+        None
+    };
+    Ok(MeshChunkPlanAck { upload_id, cached, ack })
 }
 
 #[tauri::command]
@@ -244,6 +288,7 @@ struct RetainedSourcePartitions {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceAppendAck {
+    upload_id: String,
     triangle_count: usize,
     mesh_bounds: SourceMeshBounds,
 }
@@ -266,7 +311,10 @@ impl From<SourceBounds> for SourceMeshBounds {
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn mesh_chunk_upload_append_source(
-    upload_id: String,
+    app: crate::DragonFruitAppHandle,
+    upload_id: Option<String>,
+    reserve_bytes: Option<u64>,
+    retain_for_slice: Option<bool>,
     source_id: String,
     expected_corners: usize,
     triangle_start: usize,
@@ -291,7 +339,15 @@ pub async fn mesh_chunk_upload_append_source(
     {
         return Err("Retained source triangle range is invalid".into());
     }
-    tauri::async_runtime::spawn_blocking(move || {
+    // The first source of a session creates the upload itself, so a retained
+    // import costs one invoke instead of a separate begin round trip.
+    let created = upload_id.is_none();
+    let upload_id = match upload_id {
+        Some(upload_id) => upload_id,
+        None => begin_upload(&app, reserve_bytes, retain_for_slice)?,
+    };
+    let task_upload_id = upload_id.clone();
+    let ack: Result<Option<SourceAppendAck>, String> = tauri::async_runtime::spawn_blocking(move || {
         // Drop the source registry lock immediately. An active command pins only
         // its source; eviction never substitutes another mesh or changes its data.
         let source = SOURCES.lock().map_err(|e| format!("Retained source lock poisoned: {e}"))?
@@ -304,7 +360,7 @@ pub async fn mesh_chunk_upload_append_source(
         bytes.try_reserve_exact(chunk_length)
             .map_err(|e| format!("Cannot reserve source transform chunk: {e}"))?;
         uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?
-            .prepare_reused_append(&upload_id, byte_length)?;
+            .prepare_reused_append(&task_upload_id, byte_length)?;
         let mut bounds = SourceBounds::empty();
         let mut start = triangle_start;
         while start < triangle_end {
@@ -318,27 +374,35 @@ pub async fn mesh_chunk_upload_append_source(
             // Revalidate ownership on every chunk. Cancellation can remove only
             // this ID; stale work cannot append to a subsequently begun upload.
             uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?
-                .append_reused_verified(&upload_id, hash, &bytes)?;
+                .append_reused_verified(&task_upload_id, hash, &bytes)?;
             start = end;
         }
         Ok(Some(SourceAppendAck {
+            upload_id: task_upload_id,
             triangle_count: triangle_end - triangle_start,
             mesh_bounds: bounds.into(),
         }))
     })
     .await
-    .map_err(|e| format!("append source task panicked: {e}"))?
+    .map_err(|e| format!("append source task panicked: {e}"))?;
+    let ack = ack?;
+    if ack.is_none() && created {
+        // A miss falls back to live geometry; the upload this call created is
+        // empty, and leaving it pending would block the fallback's own upload.
+        uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?
+            .abort(&upload_id);
+    }
+    Ok(ack)
 }
 
-#[tauri::command(rename_all = "camelCase")]
-pub async fn mesh_chunk_upload_finish(
-    upload_id: String,
+fn finish_upload(
+    uploads: &mut MeshChunkCache,
+    upload_id: &str,
     stage: bool,
 ) -> Result<MeshChunkUploadAck, String> {
-    let mut uploads = uploads().lock().map_err(|e| format!("Mesh upload lock poisoned: {e}"))?;
     if !stage {
-        let finished = uploads.finish(&upload_id, false)?;
-        return Ok(MeshChunkUploadAck::new(upload_id, finished.stats, finished.slice_snapshot_id));
+        let finished = uploads.finish(upload_id, false)?;
+        return Ok(MeshChunkUploadAck::new(upload_id.to_string(), finished.stats, finished.slice_snapshot_id));
     }
 
     // Acquire every staging lock before consuming the upload or changing any
@@ -351,8 +415,8 @@ pub async fn mesh_chunk_upload_finish(
         .map_err(|e| format!("staged mesh file-path lock poisoned: {e}"))?;
     let mut appender = crate::staged_mesh_file_appender().lock()
         .map_err(|e| format!("staged mesh file appender lock poisoned: {e}"))?;
-    let finished = uploads.finish(&upload_id, true)?;
-    let ack = MeshChunkUploadAck::new(upload_id, finished.stats, finished.slice_snapshot_id);
+    let finished = uploads.finish(upload_id, true)?;
+    let ack = MeshChunkUploadAck::new(upload_id.to_string(), finished.stats, finished.slice_snapshot_id);
     *staged = finished.staged_bytes;
     *stats = crate::StageMeshStats {
         chunks_received: ack.chunks_received,

@@ -19,6 +19,14 @@ type NativeInvoke = (
   options?: { headers?: Record<string, string> },
 ) => Promise<unknown>;
 
+type PlanChunk = { hash: string; byteLength: number };
+
+export function isPlanChunk(value: unknown): value is PlanChunk {
+  return typeof value === 'object' && value !== null
+    && 'hash' in value && typeof value.hash === 'string'
+    && 'byteLength' in value && typeof value.byteLength === 'number';
+}
+
 /** Real chunk hashing behind a browser Worker façade; only native IPC is faked. */
 export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
   const stats = { workerStarts: 0, uploadBegins: 0, restoreCalls: 0 };
@@ -93,6 +101,31 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
     uploadedBytes: number; reusedBytes: number; retainForSlice: boolean;
   } | undefined;
 
+  const finalize = (stage: boolean): MeshChunkUploadAck => {
+    assert.ok(pending);
+    const totalBytes = pending.uploadedBytes + pending.reusedBytes;
+    const bytes = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of pending.chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    if (stage) staged = bytes;
+    else ready = { uploadId: pending.uploadId, bytes };
+    const ack = {
+      uploadId: pending.uploadId, totalBytes, capacityBytes: Math.max(totalBytes, pending.reserveBytes),
+      reserveGrew: totalBytes > pending.reserveBytes, chunksReceived: pending.chunks.length,
+      chunkBytes: pending.chunks[pending.chunks.length - 1]?.byteLength ?? 0, appendNs: 0, appendNsTotal: 0,
+      uploadedBytes: pending.uploadedBytes, reusedBytes: pending.reusedBytes,
+      ...(stage && pending.retainForSlice && retentionAvailable ? { sliceSnapshotId: pending.uploadId } : {}),
+    } satisfies MeshChunkUploadAck;
+    if (stage && pending.retainForSlice && retentionAvailable) {
+      retained = { snapshotId: pending.uploadId, bytes: bytes.slice(), ack };
+    }
+    pending = undefined;
+    return ack;
+  };
+
   const invoke: TauriInvoke = async <T>(
     command: string,
     args?: InvokeArgs,
@@ -102,26 +135,34 @@ export function installFakeMeshChunkUpload(nativeInvoke: NativeInvoke) {
     const headers = options ? Object.fromEntries(new Headers(options.headers)) : undefined;
     let result: unknown;
     switch (command) {
-      case 'mesh_chunk_upload_begin':
-        stats.uploadBegins += 1;
-        assert.equal(pending, undefined, 'an unfinished native upload was replaced');
-        assert.equal(ready, undefined, 'an unconsumed native snapshot was replaced');
-        pending = {
-          uploadId: `test-upload-${++nextId}`, chunks: [],
-          reserveBytes: fields?.reserveBytes as number, uploadedBytes: 0, reusedBytes: 0,
-          retainForSlice: fields?.retainForSlice === true,
-        };
-        result = pending.uploadId;
-        break;
-      case 'mesh_chunk_upload_append_cached': {
-        assert.ok(pending);
-        assert.equal(fields?.uploadId, pending.uploadId);
-        const bytes = cache.get(fields?.hash as string);
-        result = bytes !== undefined && bytes.byteLength === fields?.byteLength;
-        if (result) {
-          pending.chunks.push(bytes!);
-          pending.reusedBytes += bytes!.byteLength;
+      case 'mesh_chunk_upload_plan': {
+        const chunks = Array.isArray(fields?.chunks) ? fields.chunks.filter(isPlanChunk) : [];
+        if (fields?.uploadId == null) {
+          stats.uploadBegins += 1;
+          assert.equal(pending, undefined, 'an unfinished native upload was replaced');
+          assert.equal(ready, undefined, 'an unconsumed native snapshot was replaced');
+          pending = {
+            uploadId: `test-upload-${++nextId}`, chunks: [],
+            reserveBytes: typeof fields?.reserveBytes === 'number' ? fields.reserveBytes : 0,
+            uploadedBytes: 0, reusedBytes: 0,
+            retainForSlice: fields?.retainForSlice === true,
+          };
         }
+        assert.ok(pending);
+        assert.equal(fields?.uploadId ?? pending.uploadId, pending.uploadId);
+        let cached = 0;
+        while (cached < chunks.length) {
+          const bytes = cache.get(chunks[cached].hash);
+          if (bytes === undefined || bytes.byteLength !== chunks[cached].byteLength) break;
+          pending.chunks.push(bytes);
+          pending.reusedBytes += bytes.byteLength;
+          cached += 1;
+        }
+        const plan: { uploadId: string; cached: number; ack?: MeshChunkUploadAck } = {
+          uploadId: pending.uploadId, cached,
+        };
+        if (fields?.finalUpload === true && cached === chunks.length) plan.ack = finalize(fields.stage === true);
+        result = plan;
         break;
       }
       case 'mesh_chunk_upload_append': {

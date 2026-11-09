@@ -224,6 +224,7 @@ impl<M> RetainedSource<M> {
         let winding = if transform.flip_winding { [0, 2, 1] } else { [0, 1, 2] };
         for triangle in start..end {
             let mut points = [[0.0; 3]; 3];
+            let mut packed = [0u8; 36];
             for (output, corner) in winding.into_iter().enumerate() {
                 let mut index = triangle * 3 + corner;
                 if matches!(order, SourceOrder::Geometry) && !self.indices.is_empty() {
@@ -231,8 +232,13 @@ impl<M> RetainedSource<M> {
                 }
                 let point = transform.point(position(&self.mesh, index), self.position_offset);
                 points[output] = point;
-                for value in point { bytes.extend_from_slice(&(value as f32).to_le_bytes()); }
+                for (axis, value) in point.into_iter().enumerate() {
+                    let offset = output * 12 + axis * 4;
+                    packed[offset..offset + 4].copy_from_slice(&(value as f32).to_le_bytes());
+                }
             }
+            // One 36-byte append per triangle, not twelve 4-byte appends.
+            bytes.extend_from_slice(&packed);
             bounds.include_triangle(points);
         }
     }

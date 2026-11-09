@@ -4449,12 +4449,10 @@ fn main() {
     builder
         .invoke_handler(tauri::generate_handler![
             webview_watchdog::webview_heartbeat,
-            mesh_chunk_upload::mesh_chunk_upload_begin,
-            mesh_chunk_upload::mesh_chunk_upload_append_cached,
+            mesh_chunk_upload::mesh_chunk_upload_plan,
             mesh_chunk_upload::mesh_chunk_upload_append,
             mesh_chunk_upload::retain_loaded_slice_mesh,
             mesh_chunk_upload::mesh_chunk_upload_append_source,
-            mesh_chunk_upload::mesh_chunk_upload_finish,
             mesh_chunk_upload::mesh_chunk_upload_abort,
             mesh_chunk_upload::restore_cached_slice_mesh,
             job_payload_upload::job_payload_begin,

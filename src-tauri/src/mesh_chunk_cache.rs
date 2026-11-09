@@ -215,6 +215,25 @@ impl MeshChunkCache {
         Ok(true)
     }
 
+    /// Append the leading run of chunks that already exist, and stop at the
+    /// first miss. Returns how many were appended. One call replaces one IPC
+    /// round trip per chunk; the caller uploads the rest in order.
+    pub fn append_cached_batch(
+        &mut self,
+        upload_id: &str,
+        chunks: &[(ChunkHash, usize)],
+    ) -> Result<usize, String> {
+        self.pending.as_ref()
+            .filter(|upload| upload.id == upload_id)
+            .ok_or("Unknown or stale mesh upload ID")?;
+        for (index, (hash, byte_length)) in chunks.iter().enumerate() {
+            if !self.append_cached(upload_id, hash, *byte_length)? {
+                return Ok(index);
+            }
+        }
+        Ok(chunks.len())
+    }
+
     /// The caller MUST have verified that hash is the SHA-256 of bytes.
     /// Upload output owns its bytes independently of cache residency.
     pub fn append_verified(
@@ -574,6 +593,22 @@ mod tests {
         assert_eq!(done.stats.total_bytes, 72);
         assert_eq!(done.stats.chunk_bytes, 36);
         assert!(!done.stats.reserve_grew);
+    }
+
+    #[test]
+    fn batched_lookup_stops_at_the_first_miss_and_keeps_requested_order() {
+        let mut cache = MeshChunkCache::new(108);
+        stage(&mut cache, &[(1, triangle(1)), (2, triangle(2))]);
+        let id = cache.begin(108).unwrap();
+        // 1 and 2 are resident, 3 is not: only the leading run is appended.
+        assert_eq!(cache.append_cached_batch(&id, &[(hash(1), 36), (hash(2), 36), (hash(3), 36)]).unwrap(), 2);
+        assert_eq!(cache.append_cached_batch(&id, &[(hash(2), 36)]).unwrap(), 1);
+        cache.append_verified(&id, hash(3), &triangle(3)).unwrap();
+        let done = cache.finish(&id, true).unwrap();
+        assert_eq!(done.staged_bytes.unwrap(), [triangle(1), triangle(2), triangle(2), triangle(3)].concat());
+        assert_eq!(done.stats.reused_bytes, 108);
+        assert_eq!(done.stats.uploaded_bytes, 36);
+        assert_eq!(done.stats.chunks_received, 4);
     }
 
     #[test]
