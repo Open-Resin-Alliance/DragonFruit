@@ -6,13 +6,15 @@ import { wheelStepDirection } from '@/components/ui/wheelStepDirection';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import { clamp } from '@/utils/math';
 
-interface NumberInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value'> {
+type NumberInputProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value'> & {
   value: number;
-  onChange: (value: number) => void;
   showStepper?: boolean;
   /** Maximum editable/displayed fraction digits, bounded to 0..6. Defaults to 2. */
   decimalPlaces?: number;
-}
+} & (
+  | { onChange: (value: number) => void }
+  | { disabled: true; onChange?: undefined }
+);
 
 /**
  * What typing may leave in the field: a minus unless `minBound` rules one out, up to `decimalPlaces`
@@ -73,6 +75,7 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
   }, [formatValue, safeValue]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (props.disabled) return;
     const newVal = e.target.value;
 
     if (!inputPattern(fmt.decimalSeparator, minBound, precision).test(newVal)) {
@@ -83,7 +86,7 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
 
     const parsed = fmt.parse(newVal);
     if (Number.isFinite(parsed)) {
-      onChange(parsed);
+      onChange?.(parsed);
     }
   };
 
@@ -104,6 +107,7 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
   };
 
   const applyStepDelta = React.useCallback((direction: 1 | -1) => {
+    if (props.disabled) return;
     const parsedCurrent = fmt.parse(displayValue);
     const currentValue = Number.isFinite(parsedCurrent) ? parsedCurrent : safeValue;
     let next = currentValue + (stepSize * direction);
@@ -116,8 +120,8 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
 
     const normalized = Number(next.toFixed(stepPrecision));
     setDisplayValue(formatValue(normalized));
-    onChange(normalized);
-  }, [displayValue, fmt, formatValue, maxBound, minBound, onChange, safeValue, stepPrecision, stepSize]);
+    onChange?.(normalized);
+  }, [displayValue, fmt, formatValue, maxBound, minBound, onChange, props.disabled, safeValue, stepPrecision, stepSize]);
 
   const handleWheel = (e: React.WheelEvent<HTMLInputElement>) => {
     if (props.onWheel) props.onWheel(e);

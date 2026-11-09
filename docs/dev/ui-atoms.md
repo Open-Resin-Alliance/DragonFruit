@@ -65,6 +65,10 @@ also preserves fractional digits during blur/step/wheel edits:
   onChange={setHeightMm} />
 ```
 
+Editable `NumberInput` controls require `onChange`. A display with literal
+`disabled: true` may omit it; disabled controls reject input/wheel/step changes
+without needing a dummy callback. This preserves the editable-control type check.
+
 Only committed numeric edits call `onChange`; focus and intermediate empty or
 separator-only text are not a new numeric override. The paired increment/decrement
 buttons share the `ui-number-stepper` styling hook: at a bound or when disabled,

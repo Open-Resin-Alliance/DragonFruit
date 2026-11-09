@@ -153,3 +153,21 @@ test('NumberInput retains two-decimal default consumers and bounds the optional 
     }
   }
 });
+
+
+test('a disabled numeric display needs no editing callback and rejects edits and steps', async () => {
+  const field = await mountInSpanish(() => <NumberInput value={12.5} disabled />);
+  try {
+    assert.equal(field.input.value, '12,5');
+    assert.equal(field.input.disabled, true);
+    const buttons = [...field.input.parentElement!.querySelectorAll<HTMLButtonElement>('button')];
+    assert.ok(buttons.every((button) => button.disabled));
+    await type(field.input, '44');
+    assert.equal(field.input.value, '12,5');
+    await act(async () => {
+      field.input.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true, cancelable: true }));
+      buttons.forEach((button) => button.click());
+    });
+    assert.equal(field.input.value, '12,5');
+  } finally { await field.unmount(); }
+});

@@ -5,7 +5,7 @@ import { useEffect } from 'react';
 import { clearHistory, getUndoCount, peekUndo, redo, undo } from '@/history/historyStore';
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
 import { addPrinterProfile, getProfileStoreSnapshot, removePrinterProfile, setActivePrinterProfile, updatePrinterProfile } from '@/features/profiles/profileStore';
-import type { LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
+import type { LayerNumberSettingsRange, LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
 import { serializeVoxlDocumentV2, type BuildVoxlDocumentInput } from '../voxl';
 import { testInput } from '../voxl/__tests__/voxlTestSupport';
 import { addRoot, getSnapshot } from '@/supports/state';
@@ -217,7 +217,7 @@ test('moving a model carries its supports through undo and redo', async () => {
 });
 
 
-const LAYER_RANGES: LayerSettingsRange[] = [
+const LAYER_RANGES: LayerNumberSettingsRange[] = [
   { id: 'wide-range', startLayer: 3, endLayer: 10, settings: { exposureSec: 4, liftHeightMm: 8 } },
   { id: 'nested-range', startLayer: 5, endLayer: 6, settings: { exposureSec: 7 } },
   { id: 'later-range', startLayer: 6, endLayer: 7, settings: { exposureSec: 9 } },

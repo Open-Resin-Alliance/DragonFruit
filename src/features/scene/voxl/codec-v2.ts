@@ -1023,14 +1023,14 @@ function buildVoxlPreamble(prepared: PreparedDocument): Uint8Array {
  * @param meshBytes   - Map of model index → raw mesh binary (e.g. STL bytes)
  * @param sha256Map   - Optional map of model index → hex SHA-256 digest
  * @param options     - Additional serialization options (e.g. precompressed chunks)
- * @returns           - Complete VOXL V2 binary as Uint8Array
+ * @returns           - Complete VOXL V2 binary in a fresh ArrayBuffer-backed Uint8Array
  */
 export async function serializeVoxlDocumentV2(
   input: BuildVoxlDocumentInput,
   meshBytes: Map<number, Uint8Array>,
   sha256Map?: Map<number, string>,
   options?: VoxlSerializeOptions,
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   const prepared = await prepareVoxlDocumentV2(input, meshBytes, sha256Map, options);
 
   const out = new Uint8Array(prepared.totalSize);
