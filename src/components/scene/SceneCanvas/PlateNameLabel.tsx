@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { Html, useCursor } from '@react-three/drei';
 import { __iconNode as pencilIcon } from 'lucide-react/dist/esm/icons/pencil.js';
 import { fitFontToWidth } from '@/utils/canvasTextFit';
-import { rangeForClicks, type TextRange } from './textSelection';
+import { dragSelection, rangeForClicks, type TextRange } from './textSelection';
 import {
   PLATE_WIDGET_USER_DATA,
   drawPlateWidgetIcon,
@@ -55,9 +55,15 @@ type LabelTexture = {
   texture: THREE.Texture | null;
   widthCss: number;
   heightCss: number;
-  /** The caret position in the text nearest to `xCss` across the texture. */
-  indexAt: (xCss: number) => number;
+  /** Where a press at `xCss` across the texture falls in the text. */
+  hit: (xCss: number) => TextHit;
 };
+
+/** A press on the text: the caret position nearest to it, and the character under it,
+ * which is the one a double click takes the word of. */
+type TextHit = { caret: number; char: number };
+
+const NO_TEXT_HIT = () => ({ caret: 0, char: 0 });
 
 /**
  * The build plate's name, written on the plate itself and clicked to change it.
@@ -125,9 +131,12 @@ export function PlateNameLabel({
   const meshRef = React.useRef<THREE.Mesh | null>(null);
   /** The presses so far in the current run of clicks, for double and triple clicks. */
   const clicksRef = React.useRef({ time: 0, count: 0 });
-  /** Where the current selection was started, for a drag or a shift-click to extend. */
-  const anchorRef = React.useRef(0);
-  const draggingRef = React.useRef(false);
+  /** What the current selection was started from, for a drag or a shift-click to
+   * extend: the caret, or the word a double click took. */
+  const anchorRef = React.useRef<TextRange>({ start: 0, end: 0 });
+  /** Set while the button is held after a press on the field; a drag after a double
+   * click selects whole words. */
+  const dragRef = React.useRef<{ byWord: boolean } | null>(null);
   /** The selection a press asked for while the input was away from the focus: after a
    * click on the closed label, before the input has mounted, or after a press on the
    * open one, which blurs it. Taking the focus back puts back the selection the input
@@ -192,12 +201,6 @@ export function PlateNameLabel({
     selectInField(pending);
   };
 
-  /** The run from the anchor to `index`, which is how a drag and a shift-click select. */
-  const extendTo = (index: number): TextRange => {
-    const anchor = anchorRef.current;
-    return { start: Math.min(anchor, index), end: Math.max(anchor, index), backward: index < anchor };
-  };
-
   /** Where along the label the pointer is, in the texture's CSS pixels. Worked out
    * from the ray rather than the hit, so a drag that leaves the label still tracks. */
   const pointerCss = (ray: THREE.Ray): number | null => {
@@ -231,7 +234,7 @@ export function PlateNameLabel({
   const openEditor = (range: TextRange) => {
     tearingDownRef.current = false;
     pendingSelectionRef.current = range;
-    anchorRef.current = range.start;
+    anchorRef.current = range;
     // The texture is drawn before the input can report its selection, so it starts
     // from the one asked for, not from whatever the last edit left behind.
     setSelection(range);
@@ -277,29 +280,31 @@ export function PlateNameLabel({
             }, 0);
             const x = pointerCss(event.ray);
             if (x === null) return;
-            const index = label.indexAt(x);
+            const hit = label.hit(x);
             if (clicks === 1 && event.shiftKey) {
-              selectInField(extendTo(index));
+              selectInField(dragSelection(draft, anchorRef.current, hit.caret, false));
             } else {
-              const range = rangeForClicks(draft, index, clicks);
-              anchorRef.current = range.start;
+              const range = rangeForClicks(draft, clicks === 2 ? hit.char : hit.caret, clicks);
+              anchorRef.current = range;
               selectInField(range);
             }
-            if (clicks === 1) {
-              draggingRef.current = true;
+            if (clicks < 3) {
+              dragRef.current = { byWord: clicks === 2 };
               (event.target as unknown as Element).setPointerCapture(event.pointerId);
             }
           }}
           onPointerMove={(event) => {
-            if (!draggingRef.current || !isEditing) return;
+            const drag = dragRef.current;
+            if (!drag || draft === null) return;
             event.stopPropagation();
             const x = pointerCss(event.ray);
             if (x === null) return;
-            selectInField(extendTo(label.indexAt(x)));
+            const hit = label.hit(x);
+            selectInField(dragSelection(draft, anchorRef.current, drag.byWord ? hit.char : hit.caret, drag.byWord));
           }}
           onPointerUp={(event) => {
-            if (!draggingRef.current) return;
-            draggingRef.current = false;
+            if (!dragRef.current) return;
+            dragRef.current = null;
             (event.target as unknown as Element).releasePointerCapture(event.pointerId);
           }}
           onClick={(event) => {
@@ -307,9 +312,10 @@ export function PlateNameLabel({
             if (isEditing) return;
             // A double click on the closed label lands here twice before the editor
             // has rendered, so each press asks again with its own count.
+            const clicks = clicksRef.current.count;
             const x = pointerCss(event.ray);
-            const index = x === null ? name.length : label.indexAt(x);
-            openEditor(rangeForClicks(name, index, clicksRef.current.count));
+            const hit = x === null ? { caret: name.length, char: name.length } : label.hit(x);
+            openEditor(rangeForClicks(name, clicks === 2 ? hit.char : hit.caret, clicks));
           }}
         >
           <planeGeometry args={[label.widthCss * worldPerCssPixel, label.heightCss * worldPerCssPixel]} />
@@ -379,21 +385,24 @@ export function PlateNameLabel({
 }
 
 /**
- * Which caret position along `text`, drawn in `font` from `originCss`, is nearest to
- * `xCss`: what turns a press on the painted text into a place in the input.
+ * Where along `text`, drawn in `font` from `originCss`, a press at `xCss` falls: what
+ * turns a press on the painted text into a place in the input.
  */
-function caretIndexFinder(font: string, text: string, originCss: number): (xCss: number) => number {
-  if (!text || typeof document === 'undefined') return () => 0;
+function textHitTester(font: string, text: string, originCss: number): (xCss: number) => TextHit {
+  if (!text || typeof document === 'undefined') return NO_TEXT_HIT;
   const measure = document.createElement('canvas').getContext('2d');
-  if (!measure) return () => text.length;
+  if (!measure) return () => ({ caret: text.length, char: text.length });
   measure.font = font;
   const edges = Array.from({ length: text.length + 1 }, (_, index) => originCss + measure.measureText(text.slice(0, index)).width);
   return (xCss) => {
-    let nearest = 0;
+    let caret = 0;
     for (let index = 1; index < edges.length; index += 1) {
-      if (Math.abs(edges[index] - xCss) < Math.abs(edges[nearest] - xCss)) nearest = index;
+      if (Math.abs(edges[index] - xCss) < Math.abs(edges[caret] - xCss)) caret = index;
     }
-    return nearest;
+    // The last character whose left edge the press is past, kept inside the text.
+    let char = 0;
+    while (char < text.length - 1 && edges[char + 1] <= xCss) char += 1;
+    return { caret, char };
   };
 }
 
@@ -415,7 +424,7 @@ function buildLabelTexture({ name, placeholder, colors, hovered, editing, draft,
   caretOn: boolean;
 }): LabelTexture {
   const fallbackWidth = LABEL_PADDING_CSS * 2 + LABEL_GAP_CSS + PENCIL_BUTTON_CSS;
-  const fallback = { texture: null, widthCss: fallbackWidth, heightCss: LABEL_LINE_HEIGHT_CSS, indexAt: () => 0 };
+  const fallback = { texture: null, widthCss: fallbackWidth, heightCss: LABEL_LINE_HEIGHT_CSS, hit: NO_TEXT_HIT };
   if (typeof document === 'undefined') return fallback;
 
   const measure = document.createElement('canvas').getContext('2d');
@@ -493,7 +502,7 @@ function buildLabelTexture({ name, placeholder, colors, hovered, editing, draft,
     widthCss: canvas.width / TEXTURE_SCALE,
     heightCss: canvas.height / TEXTURE_SCALE,
     // The placeholder is not text the field holds, so a press on it opens an empty one.
-    indexAt: name ? caretIndexFinder(font, name, LABEL_PADDING_CSS) : () => 0,
+    hit: name ? textHitTester(font, name, LABEL_PADDING_CSS) : NO_TEXT_HIT,
   };
 }
 
@@ -525,7 +534,7 @@ function buildEditorTexture(
   canvas.width = Math.ceil(boxWidthCss * TEXTURE_SCALE);
   canvas.height = Math.ceil(boxHeightCss * TEXTURE_SCALE);
   const ctx = canvas.getContext('2d');
-  const size = { texture: null, widthCss: boxWidthCss, heightCss: boxHeightCss, indexAt: () => 0 };
+  const size = { texture: null, widthCss: boxWidthCss, heightCss: boxHeightCss, hit: NO_TEXT_HIT };
   if (!ctx) return size;
   ctx.scale(TEXTURE_SCALE, TEXTURE_SCALE);
 
@@ -600,6 +609,6 @@ function buildEditorTexture(
     // where the size was rounded up to a whole pixel.
     widthCss: canvas.width / TEXTURE_SCALE,
     heightCss: canvas.height / TEXTURE_SCALE,
-    indexAt: caretIndexFinder(font, draft, textXCss),
+    hit: textHitTester(font, draft, textXCss),
   };
 }

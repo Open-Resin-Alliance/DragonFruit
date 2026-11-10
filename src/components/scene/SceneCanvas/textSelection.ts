@@ -27,3 +27,15 @@ export function wordRangeAt(text: string, index: number): TextRange {
   while (end < text.length && isSpace(text[end]) === spaces) end += 1;
   return { start, end };
 }
+
+/**
+ * The selection a drag makes from `anchor` to the pointer: by character, or by
+ * whole words after a double click. `index` is the caret position under the pointer
+ * for the first, and the character under it for the second. Going back past the
+ * anchor flips the selection to run from the pointer to the anchor's end.
+ */
+export function dragSelection(text: string, anchor: TextRange, index: number, byWord: boolean): TextRange {
+  const reach = byWord ? wordRangeAt(text, index) : { start: index, end: index };
+  if (reach.start < anchor.start) return { start: reach.start, end: anchor.end, backward: true };
+  return { start: anchor.start, end: Math.max(anchor.end, reach.end) };
+}
