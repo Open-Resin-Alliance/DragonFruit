@@ -246,6 +246,11 @@ sets `target` plus `anchorNdc` to the press point's own pixel.
   pins: a pivot already on its pixel reproduces the pose, the pixel survives the
   whole orbit, the horizon stays level, and the along-up degenerate case is
   refused.
+- **The anchor is the pivot's own pixel, not the pointer's.** Both are the same
+  place for a surface hit, but off the model the pivot is the model centre or the
+  plate, which sit somewhere else on screen: anchoring those to the pointer would
+  swing the view to bring them under the cursor. The press projects the resolved
+  pivot and anchors there instead.
 - **The pick moves nothing.** `anchorNdc` is seeded from the pixel the pivot
   already occupies, so the solve reproduces the current pose for the new target —
   no re-aim, no rescale, no jump on press. From there the pivot keeps that pixel

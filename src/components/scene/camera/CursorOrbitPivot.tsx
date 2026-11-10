@@ -33,6 +33,7 @@ type CursorOrbitPivotProps = {
 const _target = new THREE.Vector3();
 const _forward = new THREE.Vector3();
 const _toPivot = new THREE.Vector3();
+const _projected = new THREE.Vector3();
 const TARGET_EPSILON_SQ = 1e-6;
 
 export function CursorOrbitPivot({
@@ -90,10 +91,22 @@ export function CursorOrbitPivot({
           camera.updateMatrixWorld();
         }
       }
-      controls.anchorNdc.set(
-        ((event.clientX - rect.left) / rect.width) * 2 - 1,
-        -((event.clientY - rect.top) / rect.height) * 2 + 1,
-      );
+      // Anchor the pivot where it already is, not where the pointer is. A
+      // surface hit puts the two in the same place, but the fallback pivots (the
+      // model centre, the plate) sit somewhere else on screen: anchoring those to
+      // the pointer would swing the view to bring them under the cursor.
+      const cameraForAnchor = cameraRef.current;
+      let anchorX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      let anchorY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      if (cameraForAnchor) {
+        cameraForAnchor.updateMatrixWorld();
+        const projected = _projected.copy(pivot).project(cameraForAnchor);
+        if (Number.isFinite(projected.x) && Number.isFinite(projected.y) && projected.z < 1) {
+          anchorX = projected.x;
+          anchorY = projected.y;
+        }
+      }
+      controls.anchorNdc.set(anchorX, anchorY);
       pickedRef.current.copy(pivot);
       pickedRefValid.current = true;
       setOrbitTargetFromPoint(pivot, { animate: false });
