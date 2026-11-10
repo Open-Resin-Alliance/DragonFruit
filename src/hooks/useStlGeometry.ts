@@ -15,6 +15,7 @@ import { logToNativeFile } from '@/utils/nativeLog';
 import { runWithConcurrency } from '@/utils/runWithConcurrency';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { refineCoarseFaces, shouldRefineCoarseFaces } from '@/utils/tauriMeshBridge';
+import { inflateZlib } from '@/utils/inflateZlib';
 import {
   analyzeFromGeometry,
   applyRepairedPositions,
@@ -1006,18 +1007,11 @@ export type DecodedMesh = {
  * unlike `fflate`'s pool, which waits on its workers through `SharedArrayBuffer` in
  * a `crossOriginIsolated` webview and blocks the thread it should free. Its output
  * is a fresh `ArrayBuffer`, so the geometry can view it directly rather than copying
- * the soup again.
+ * the soup again. `inflateZlib` falls back to a synchronous inflate on webviews
+ * older than Safari 16.4.
  */
 async function decodeBody(packed: Uint8Array, triangleCount: number): Promise<THREE.BufferGeometry> {
-  const source = new ReadableStream<BufferSource>({
-    start(controller) {
-      // `BufferSource` wants an `ArrayBuffer`-backed view; the bytes are the same.
-      controller.enqueue(packed as BufferSource);
-      controller.close();
-    },
-  });
-  const stream = source.pipeThrough<Uint8Array>(new DecompressionStream('deflate'));
-  const soup = new Uint8Array(await new Response(stream).arrayBuffer());
+  const soup = await inflateZlib(packed);
   const expected = triangleCount * SOUP_BYTES_PER_TRIANGLE;
   if (soup.byteLength !== expected) {
     throw new Error(
