@@ -4273,15 +4273,46 @@ fn log_startup_header() {
         .map(|n| n.get().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
 
+    #[cfg(target_os = "macos")]
+    let platform = macos_versions();
+    #[cfg(not(target_os = "macos"))]
+    let platform = String::new();
+
     log::info!(
-        "[header] DragonFruit {} (debug={}) os={} arch={} cores={} log_level={}",
+        "[header] DragonFruit {} (debug={}) os={} arch={} cores={} log_level={}{}",
         env!("CARGO_PKG_VERSION"),
         cfg!(debug_assertions),
         std::env::consts::OS,
         std::env::consts::ARCH,
         cores,
         log::max_level(),
+        platform,
     );
+}
+
+/// The macOS release and the WebKit the process actually loaded, with its path.
+///
+/// The webview's JavaScript engine is this WebKit, not whatever Safari the
+/// user reports: on macOS 12 a Safari 17.6 install came with a webview that
+/// could not parse ES2022 class static blocks. The path tells the system copy
+/// (`/System/Library/Frameworks`) apart from one staged by a Safari update.
+#[cfg(target_os = "macos")]
+fn macos_versions() -> String {
+    use objc2_foundation::{NSBundle, NSProcessInfo, NSString};
+
+    let os = NSProcessInfo::processInfo().operatingSystemVersionString();
+    let webkit = match NSBundle::bundleWithIdentifier(&NSString::from_str("com.apple.WebKit")) {
+        Some(bundle) => {
+            let version = bundle
+                .objectForInfoDictionaryKey(&NSString::from_str("CFBundleVersion"))
+                .and_then(|value| value.downcast::<NSString>().ok())
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            format!("{version} ({})", bundle.bundlePath())
+        }
+        None => "not loaded".to_string(),
+    };
+    format!(" macos=\"{os}\" webkit={webkit}")
 }
 
 fn read_log_level_pref() -> log::LevelFilter {
