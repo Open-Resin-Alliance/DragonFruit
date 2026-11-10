@@ -21,11 +21,23 @@ interface SegmentedControlProps<T extends string> {
   tone?: 'accent' | 'accent-secondary';
   className?: string;
   fullWidth?: boolean;
+  /**
+   * Replace the per-option box metrics (minimum width, padding, type) for this
+   * control only; the height still comes from `size`. Use it for a label wider
+   * than a default segment — the projection pickers' "Perspective" — so the
+   * segments keep the standard width instead of growing to fit the word.
+   */
+  optionClassName?: string;
 }
 
-const optionSizeClassMap: Record<SegmentedSize, string> = {
-  sm: 'h-7 px-2.5 text-xs',
-  md: 'h-10 min-w-[92px] px-3 text-[12px]',
+const optionHeightClassMap: Record<SegmentedSize, string> = {
+  sm: 'h-7',
+  md: 'h-10',
+};
+
+const optionMetricsClassMap: Record<SegmentedSize, string> = {
+  sm: 'px-2.5 text-xs',
+  md: 'min-w-[92px] px-3 text-[12px]',
 };
 
 /**
@@ -42,6 +54,7 @@ export function SegmentedControl<T extends string>({
   tone = 'accent',
   className,
   fullWidth = false,
+  optionClassName,
 }: SegmentedControlProps<T>) {
   return (
     <div
@@ -62,7 +75,8 @@ export function SegmentedControl<T extends string>({
             onClick={() => onChange(option.value)}
             className={cn(
               'ui-segmented-option inline-flex items-center justify-center rounded-sm border font-semibold uppercase tracking-wide transition-colors',
-              optionSizeClassMap[size],
+              optionHeightClassMap[size],
+              optionClassName ?? optionMetricsClassMap[size],
               fullWidth && 'flex-1'
             )}
             data-active={active ? 'true' : undefined}

@@ -138,6 +138,9 @@ export function CameraSettingsTab({
                 label="Projection mode"
                 value={cameraProjectionMode}
                 onChange={(next) => onCameraProjectionModeChange(next as CameraProjectionMode)}
+                // "Perspective" is wider than the standard segment; tighten the
+                // type so both segments keep the standard width.
+                optionClassName="min-w-[92px] px-2 text-[10px]"
                 options={[
                   { value: 'orthographic', label: 'Ortho' },
                   { value: 'perspective', label: 'Perspective' },
@@ -197,6 +200,7 @@ export function CameraSettingsTab({
                 label={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
                 value={workspaceCameraDefaults[activeWorkspace]}
                 onChange={(next) => onWorkspaceCameraModeChange(activeWorkspace, next as CameraProjectionMode)}
+                optionClassName="min-w-[92px] px-2 text-[10px]"
                 options={[
                   { value: 'orthographic', label: 'Ortho' },
                   { value: 'perspective', label: 'Perspective' },
