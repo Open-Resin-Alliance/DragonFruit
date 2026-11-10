@@ -183,29 +183,9 @@ jobs:
                 `the preview label does not auto-dispatch for forks.`);
             }
 
-            // Only a check that ran *with* the label builds the universal DMG and
-            // uploads it (see pr-check-build.yml). One that started before the label
-            // went on, which is what `/preview` on an open PR produces, is a thin
-            // arm64 check with nothing to hand over: dispatching with its run id
-            // fails the DMG download, and `/preview` has already dispatched a
-            // build of its own that this one would only cancel.
-            let hasDmg = false;
-            if (hasPreviewLabel && !isFork) {
-              const { data: artifacts } = await github.rest.actions.listWorkflowRunArtifacts({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: context.payload.workflow_run.id,
-                name: 'macos-dmg',
-              });
-              hasDmg = artifacts.artifacts.some((artifact) => !artifact.expired);
-              if (!hasDmg) {
-                core.notice(
-                  `PR #${pr.number} carries the preview label, but check run ` +
-                  `${context.payload.workflow_run.id} uploaded no macos-dmg artifact: not dispatching.`);
-              }
-            }
-
-            core.setOutput('should_dispatch', (hasPreviewLabel && !isFork && hasDmg) ? 'true' : 'false');
+            // The check only gates the dispatch: the preview builds and signs its
+            // own macOS bundle, since the check runs without secrets (#980).
+            core.setOutput('should_dispatch', (hasPreviewLabel && !isFork) ? 'true' : 'false');
             core.setOutput('number', String(pr.number));
             core.setOutput('head_ref', pr.head.ref);
             core.setOutput('base_ref', pr.base.ref);
@@ -216,7 +196,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_BRANCH: ${{ steps.pr.outputs.head_ref }}
           BASE_BRANCH: ${{ steps.pr.outputs.base_ref }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           # No pr_number: this path only fires for PRs whose branch lives in
           # this repository, so the branch name resolves on its own. The old
@@ -225,5 +204,4 @@ jobs:
           gh workflow run build-preview.yml \
             --repo "${{ github.repository }}" \
             --ref "$BASE_BRANCH" \
-            -f branch="$HEAD_BRANCH" \
-            -f pr_run_id="$RUN_ID"
+            -f branch="$HEAD_BRANCH"
