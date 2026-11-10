@@ -76,12 +76,6 @@ foreach ($entry in $nsisConstants.GetEnumerator()) {
     # Numeric file-version components are safe in NSIS preprocessor definitions.
     $nsis += '!define {0} "{1}"' -f $entry.Key, $entry.Value
 }
-$wix = @(
-    '<?xml version="1.0" encoding="utf-8"?>',
-    '<Include xmlns="http://schemas.microsoft.com/wix/2006/wi">',
-    ('  <?define DF_VC_VERSION="{0}" ?>' -f $version),
-    '</Include>'
-)
 $OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 [void](New-Item -ItemType Directory -Path $OutputDirectory -Force)
 $encoding = [System.Text.UTF8Encoding]::new($false)
@@ -129,11 +123,10 @@ if (-not $pluginValid) {
         Remove-Item -LiteralPath $work -Recurse -Force
     }
 }
-# WiX in the pinned Tauri bundler keeps the source basename for mapped resources.
+# Same basename as the destination: the NSIS hook embeds this file by name.
 [System.IO.File]::WriteAllText((Join-Path $pluginDirectory 'InetC.txt'), $license, $encoding)
 Write-Host "Prepared checksum-pinned InetC $($pluginPin.version) HTTPS plugin and license notice."
 
 [System.IO.File]::WriteAllText((Join-Path $OutputDirectory 'runtime-version.nsh'), (($nsis -join "`n") + "`n"), $encoding)
-[System.IO.File]::WriteAllText((Join-Path $OutputDirectory 'runtime-version.wxi'), (($wix -join "`n") + "`n"), $encoding)
 Write-Host "Generated x64 runtime prerequisite metadata for $version in $OutputDirectory (no Microsoft payload downloaded)."
 $version.ToString()

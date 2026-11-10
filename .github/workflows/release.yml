@@ -213,7 +213,7 @@ jobs:
             build_kind: tauri
             # The signing overlay is CI-only: it points `bundle.windows.signCommand`
             # at Azure Artifact Signing, which a local build has no credentials for.
-            args: --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.windows-signing.conf.json
+            args: --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.windows-signing.conf.json
             artifact_name: dragonfruit-windows-x64
           - platform: ubuntu-22.04
             build_kind: flatpak
@@ -432,7 +432,7 @@ jobs:
           # signed copy lives inside the installers. verify-windows-bundles.ps1
           # checks that one.
           $target = 'src-tauri/target/x86_64-pc-windows-msvc/release'
-          $files = @(Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe', '*.msi')
+          $files = @(Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe')
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
             if (-not $signature.SignerCertificate) {

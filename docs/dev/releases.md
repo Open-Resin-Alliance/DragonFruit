@@ -269,7 +269,7 @@ by the bundler itself, not bolted on afterwards. That ordering matters:
 - the application executable is signed **before** it is packed into the
   installers, so the installed `dragonfruit-desktop.exe` carries a signature
   too — signing only the outer installer would leave it unsigned;
-- the NSIS and MSI installers are signed when the bundler finishes them;
+- the NSIS installer is signed when the bundler finishes it;
 - the updater artifacts (`createUpdaterArtifacts`) are generated **after**
   bundling, so the `.exe.sig` covers the signed bytes. Signing a published
   installer by hand would invalidate that signature.
@@ -277,8 +277,8 @@ by the bundler itself, not bolted on afterwards. That ordering matters:
 The command lives in `src-tauri/tauri.windows-signing.conf.json`, a config
 overlay that only `release.yml` passes (`--config …`), so local
 `npm run tauri:bundle:windows` builds stay unsigned and need no Azure
-credentials. Preview builds (`build-preview.yml`) are unsigned for the same
-reason: they are not release artifacts.
+credentials. Preview builds (`build-preview.yml`) pass the same overlay and are
+signed too.
 
 `scripts/sign-windows.cmd` is the command Tauri runs, once per file, with the
 path as its only argument. It exists because the bundler spawns the command by
@@ -333,7 +333,7 @@ differ per deployment; the overlay stays the same for every fork.
 ### Pre-flight check
 
 `verify-windows-signing.yml` builds the Windows release exactly as the release
-pipeline does — same profile, same target, same `nsis,msi` bundles, same
+pipeline does — same profile, same target, same `nsis` bundle, same
 signing overlay — then asserts every binary is signed and timestamped and
 uploads the installers as the `dragonfruit-windows-x64-signed` artifact. It
 tags nothing and publishes no release.
@@ -412,14 +412,11 @@ Build-tool licensing remains the release owner's responsibility.
 `scripts/prepare-windows-runtime.ps1` pins the minimum to `14.51.36247.0` and checks
 it against the selected Visual Studio installation's newest x64 CRT using direct
 `vswhere` discovery. It never updates the pin automatically. It generates the
-NSIS/WiX includes and downloads only checksum-pinned
+NSIS include and downloads only checksum-pinned
 InetC, the free HTTPS plugin described in `scripts/windows-runtime-download-plugin.json`.
 Its zlib notice, `scripts/inetc-license.txt`, ships as `licenses/InetC.txt`.
-Preparation writes the generated notice as `windows-resources/nsis-plugins/InetC.txt`:
-the pinned Tauri WiX bundler preserves the source basename even when a resource
-mapping specifies a different destination filename. Keeping the source and
-destination basenames equal makes both MSI and NSIS ship the expected notice.
-The NSIS prerequisite hook reads that same generated file and embeds it as
+Preparation writes the generated notice as `windows-resources/nsis-plugins/InetC.txt`,
+with the same basename as its destination. The NSIS prerequisite hook reads that same generated file and embeds it as
 `$PLUGINSDIR\InetC.txt`; changing the notice basename must update both consumers.
 The native-resource build step and Windows pre-bundle hook run preparation.
 
@@ -431,13 +428,8 @@ and a VC14 version at least as new as the build requires, then setup runs
 **`/q /norestart`** and rechecks the runtime. Failure or cancellation stops setup;
 exit `3010` requests a manual restart and rerun, never an automatic reboot/launch.
 Silent `/S` and passive `/P` installations must have the prerequisite provisioned
-first. `src-tauri/wix/runtime-prerequisite.wxs` blocks an inadequate runtime with
-a Microsoft download link; it never nests an installer and allows uninstall.
-Tauri links that fragment through its supported `componentGroupRefs` option; the
-empty group anchors the searches and blocking action without installing a dummy component.
-The MSI search specifies the official CRT's resource language `1033`, not the
-Windows UI locale. MSI also compares language when the installed version equals
-the minimum; leaving it unspecified would reject the tagged Microsoft DLL.
+first. Only NSIS installers are built (`bundle.targets` in
+`src-tauri/tauri.windows.conf.json`); there is no MSI (#979).
 
 There is no Microsoft installer checksum pin or update bot: Microsoft may update
 its signed download independently. The shipped InetC plugin remains pinned.
