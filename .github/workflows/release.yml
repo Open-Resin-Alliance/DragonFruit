@@ -365,12 +365,23 @@ jobs:
             Out-File -FilePath $source -Encoding ascii
           & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
             /nologo /target:exe "/out:$probe" $source | Out-Null
-          $overlay = Get-Content src-tauri/tauri.windows-signing.conf.json -Raw | ConvertFrom-Json
+          # The bundler chdirs to src-tauri before it runs this command, so the
+          # overlay's `..\scripts\sign-windows.cmd` only resolves from there. Run
+          # it the same way (as verify-windows-signing.yml does); from the
+          # repository root the probe fails on a path the real build never sees.
+          $tauriDir = Join-Path (Get-Location).Path 'src-tauri'
+          $overlay = Get-Content (Join-Path $tauriDir 'tauri.windows-signing.conf.json') -Raw | ConvertFrom-Json
           $signCommand = $overlay.bundle.windows.signCommand
           $arguments = @($signCommand.args | ForEach-Object { if ($_ -eq '%1') { $probe } else { $_ } })
-          & $signCommand.cmd @arguments
-          if ($LASTEXITCODE -ne 0) {
-            throw "The signing command exited $LASTEXITCODE."
+          Push-Location $tauriDir
+          try {
+            & $signCommand.cmd @arguments
+            $exit = $LASTEXITCODE
+          } finally {
+            Pop-Location
+          }
+          if ($exit -ne 0) {
+            throw "The signing command exited $exit."
           }
           $signature = Get-AuthenticodeSignature -LiteralPath $probe
           if (-not $signature.SignerCertificate) {
