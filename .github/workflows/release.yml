@@ -389,7 +389,6 @@ jobs:
         if: matrix.build_kind == 'tauri'
         uses: tauri-apps/tauri-action@v0
         env:
-          APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
           CMAKE_OSX_ARCHITECTURES: ${{ matrix.cmake_archs || '' }}
           DF_BUILD_TARGET_TRIPLE: ${{ matrix.df_build_triple || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
