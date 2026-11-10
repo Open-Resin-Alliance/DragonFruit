@@ -124,6 +124,7 @@ import {
   deleteModelLabel,
   deleteModelsLabel,
   deletePlateLabel,
+  renamePlateLabel,
   deleteSupportsForModelLabel,
   deleteSupportsForModelsLabel,
   duplicateModelLabel,
@@ -1892,9 +1893,10 @@ export function useSceneCollectionManager(options?: {
    * save records as the single-plate shorthand.
    */
   const plateName = activePlate?.name ?? '';
+  // `renamePlate` is defined further down, beside the other plate edits, and pushes the history.
+  const renamePlateRef = useRef<(plateId: string, name: string) => void>(() => {});
   const setPlateName = useCallback((name: string) => {
-    const target = activePlateIdRef.current;
-    setPlates((prev) => prev.map((plate) => (plate.id === target ? { ...plate, name } : plate)));
+    renamePlateRef.current(activePlateIdRef.current, name);
   }, []);
   /**
    * Which plates refuse edits. A lock, not a document field: it is about the
@@ -8832,9 +8834,26 @@ export function useSceneCollectionManager(options?: {
     return plateFrames.find((frame) => frame.id === plateId) ?? plateFrames[0];
   }, [plateFrames, resolveModelPlateId]);
 
+  /** Rename a plate, as its own history step; renaming it to the name it has is not one. */
   const renamePlate = useCallback((plateId: string, name: string) => {
-    setPlates((prev) => prev.map((plate) => (plate.id === plateId ? { ...plate, name } : plate)));
-  }, []);
+    const current = platesRef.current;
+    const index = current.findIndex((plate) => plate.id === plateId);
+    if (index < 0 || current[index].name === name) return;
+
+    const next = current.map((plate) => (plate.id === plateId ? { ...plate, name } : plate));
+    const snapshot = (plates: ScenePlate[]) => captureSceneSnapshot(
+      modelsRef.current,
+      activeModelIdRef.current,
+      selectedModelIdsRef.current,
+      { plates, activePlateId: activePlateIdRef.current },
+    );
+    const before = snapshot(current);
+    // The ref too, so a second rename in the same tick starts from this one.
+    platesRef.current = next;
+    setPlates(next);
+    pushSceneSnapshotHistory(before, snapshot(next), renamePlateLabel(index + 1));
+  }, [pushSceneSnapshotHistory]);
+  renamePlateRef.current = renamePlate;
 
   /**
    * Delete a plate and the models standing on it. Any plate can go, the first one

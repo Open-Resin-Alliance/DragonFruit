@@ -3,7 +3,7 @@ import { resolveObjectURL } from 'node:buffer';
 import test from 'node:test';
 import { useEffect } from 'react';
 import { getMultiPlateSettingsSnapshot, saveMultiPlateSettings } from '@/components/settings/multiPlatePreferences';
-import { clearHistory, undo } from '@/history/historyStore';
+import { clearHistory, getUndoCount, redo, undo } from '@/history/historyStore';
 import { getSnapshot as getSupportSnapshot, loadFromImportFormat, resetStore as resetSupportStore } from '@/supports/state';
 import { SUPPORT_COLLECTION_KEYS } from '@/supports/supportTypeRegistry';
 import type { DragonfruitImportFormat } from '@/supports/types';
@@ -252,6 +252,38 @@ test('deleting the first plate takes its models and moves the other beds up a sl
     assert.equal(plateOf(a), plate1, 'undo brings the model back onto the first plate');
     for (const [id, plateId] of Object.entries(kept)) assert.equal(plateOf(id), plateId, 'and the others back onto theirs');
     for (const id of [a, c, d]) assert.deepEqual(rootOf(id), rootsBefore[id], 'supports included');
+  } finally {
+    await unmount();
+  }
+});
+
+test('renaming a plate is a step undo takes back and redo puts back', async () => {
+  const { scene, loadCube, unmount } = await mountScene();
+  const plateNames = () => scene().plates.map((plate) => plate.name);
+
+  try {
+    const a = await loadCube('a.stl');
+    const plate2 = scene().addPlate();
+    await settle(20);
+    clearHistory();
+
+    scene().renamePlate(plate2, 'Azalea Berro');
+    await waitFor(() => plateNames()[1] === 'Azalea Berro', 'the rename');
+    scene().setPlateName('Calabaza');
+    await waitFor(() => plateNames()[0] === 'Calabaza', 'the active plate rename');
+    scene().renamePlate(plate2, 'Azalea Berro');
+    await settle(20);
+    assert.equal(getUndoCount(), 2, 'one step per rename, none for a name that did not change');
+
+    undo();
+    await waitFor(() => plateNames()[0] === '', 'undo to take back the active plate rename');
+    assert.deepEqual(plateNames(), ['', 'Azalea Berro']);
+    undo();
+    await waitFor(() => plateNames()[1] === '', 'undo to take back the first rename');
+    assert.deepEqual(scene().models.map((model) => model.id), [a], 'the models are left as they were');
+
+    redo();
+    await waitFor(() => plateNames()[1] === 'Azalea Berro', 'redo to put the rename back');
   } finally {
     await unmount();
   }
