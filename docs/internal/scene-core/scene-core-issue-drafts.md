@@ -12,12 +12,12 @@ function, parity test as done.
 
 ### Scope
 
-Test-only change. Add a full round-trip test for the CLI save: every field and chunk, not just plates. Where the test meets a known defect (B1, B2, tracked in their own issues), mark that case as an expected failure linked to its issue rather than fixing it here. No production code changes.
+Test-only change. Add a full round-trip test for the CLI save: every field and chunk, not just plates. Where the test meets a known defect (B1 issue #923, B2 issue #924), mark that case as an expected failure linked to its issue rather than fixing it here. No production code changes.
 
 ### Work items
 
 - One test: an app-written scene → CLI load → a no-op CLI command → CLI save → reload → compare every field and every mesh chunk.
-- Known gaps it will hit (B1 meshless duplicates, B2 dropped ORIG chunks and sha map) are marked as expected failures that link to their issues. No production code changes.
+- Known gaps it will hit (B1 meshless duplicates, issue #923; B2 dropped ORIG chunks and sha map, issue #924) are marked as expected failures that link to those issues. No production code changes.
 
 ### Test fixture
 
@@ -25,7 +25,7 @@ Test-only change. Add a full round-trip test for the CLI save: every field and c
 
 ### Out of scope
 
-Fixing B1 or B2 (their own issues), moving the snapshot registry, and pinning the other suspected bugs: each is a later, separate PR.
+Fixing B1 or B2 (issues #923, #924), moving the snapshot registry, and pinning the other suspected bugs: each is a later, separate PR.
 
 ## 2. scene-core: plates phase 2 — frames everywhere, relaidPlateShifts, plate plans
 
@@ -167,7 +167,7 @@ One pure builder used by autosave, Ctrl+S, export panel and CLI toBuildInput, wi
 
 - D4 (open): Is selection part of the core?
 - D8 (open): Should opening a VOXL change it, and does open merge or replace?
-- D9 (open): Is the saved model set 'all' or 'visible'?
+- D9 (decided): All models. Settled by PR #942 (issue #925): Ctrl/Cmd+S now writes hidden models too, like autosave and the CLI.
 
 ### Out of scope
 

@@ -73,7 +73,7 @@ These came out of the mapping and are not in the ADR or the kickoff brief.
  change both re-lay the plates from inside effects; only the first pushes history. Any CLI
  command that changes the printer or the plates needs the same rule.
 5. **The save path is four savers, not one.** Autosave, Ctrl+S, the export panel and the CLI
- build the writer's input separately and disagree: Ctrl+S saves only visible models, the export
+ build the writer's input separately and disagree: Ctrl+S saved only visible models (since fixed by PR #942), the export
  panel leaves out the printer and the ordering, per-plate exports keep plate-N positions. A
  shared buildVoxlSaveInput (proposed) is ADR rule 6 at its source.
 6. **THREE is already inside the "pure" helpers.** `selectionTransform.ts`,
@@ -291,7 +291,7 @@ Each user-level GUI operation against the TypeScript CLI. **Full** = same rule, 
 | --- | --- | --- | --- | --- |
 | Scene | New scene | scene create | **Partial** | CLI makes an empty doc; app keeps extra plates (B12) and resets UI state. |
 | Scene | Open scene (VOXL) | scene load | **Partial** | CLI parses and prints only; app normalises names, applies prefs, remaps ids, re-lays plates, prompts. load counts 6 support collections. |
-| Scene | Save / autosave | (every saving command) toBuildInput | **Partial** | Plates/printer now kept. Drops ORIG chunks and sha map (B2); Ctrl+S drops hidden models (B3). |
+| Scene | Save / autosave | (every saving command) toBuildInput | **Partial** | Plates/printer now kept. Drops ORIG chunks and sha map (B2, issue #924). Ctrl+S dropped hidden models (B3), fixed by PR #942. |
 | Scene | Import mesh (STL/OBJ/3MF) | scene add-model | **Partial** | CLI: origin placement, no plate, no free spot, no seat Z, fixed colour, polygonCount 0, no repair. |
 | Scene | Import plugin scene / support JSON | — | **Missing** | |
 | Scene | List models | scene list-models | **Full** | Read-only. |
@@ -301,14 +301,14 @@ Each user-level GUI operation against the TypeScript CLI. **Full** = same rule, 
 | Models | Model colour | — | **Missing** | |
 | Models | Mark as support (designation) | — | **Missing** | Affects slicing. |
 | Models | Link / unlink models | — | **Missing** | |
-| Transform | Move / rotate / scale | scene transform-model | **Partial** | CLI overwrites the vector: no supports, no link peers, no plateId restamp, no lock. |
+| Transform | Move / rotate / scale | scene transform-model | **Partial** | CLI overwrites the vector: no supports (issue #936), no link peers, no plateId restamp, no lock. |
 | Transform | Center on plate | scene center-xy | **Partial** | CLI sets 0,0; app uses plate centre/origin mode and keeps multi-select layout. |
 | Transform | Drop / lift to plate | scene place-on-platform | **Partial** | CLI uses raw mesh min Z, ignores rotation/scale/lift (B8). |
 | Transform | Auto orient / place on face / mirror | — | **Missing** | |
 | Grouping | Group / ungroup | scene group / ungroup | **Partial** | Different storage; neither sees the other's groups (B6). |
 | Grouping | List groups | scene list-groups | **Partial** | Always 0 on an app-saved scene. |
 | Grouping | Rename group | — | **Missing** | |
-| Duplicate/arrange | Duplicate with layout | scene duplicate | **Partial** | CLI: fixed offset, different names, no group, no supports; copies may be meshless (B1). |
+| Duplicate/arrange | Duplicate with layout | scene duplicate | **Partial** | CLI: fixed offset, different names, no group, no supports (issue #937); copies may be meshless (B1). |
 | Duplicate/arrange | Arrange | scene arrange | **Partial** | Same algorithm, but CLI packs all onto plate 1: no offsets, locks, new beds, support footprints. |
 | Clipboard | Copy / cut / paste | — | **Missing** | Clipboard is UI; paste placement is a rule (placement group). |
 | Plates | Add / remove / rename plate | — | **Missing** | CLI can keep plates through a save but not change them. |
@@ -329,7 +329,7 @@ restates by hand.
 ## Decisions
 
 Where the core/UI line is unclear. Each is a question with options, not a recommendation.
-Decided so far: D1, D21 (Ender, in the review of PR #872). The rest stay open until
+Decided so far: D1, D9, D21 (D1 and D21 in Ender's review of PR #872, D9 by PR #942). The rest stay open until
 the group they affect comes up.
 
 **D1. Does THREE count as impure for maths-only use?** — decided
@@ -380,10 +380,10 @@ the group they affect comes up.
 - Why: Open strips dotted name suffixes, applies import-default support/raft prefs, remaps colliding ids, re-lays plates, ignores the saved plate ordering, and pushes no undo.
 - Affects: import, save
 
-**D9. Is the saved model set 'all' or 'visible'?**
+**D9. Is the saved model set 'all' or 'visible'?** — decided
 
-- Options: (a) All, always — fix Ctrl+S to match autosave and CLI. (b) Visible only, everywhere. (c) Explicit scope parameter on buildVoxlSaveInput.
-- Why: Ctrl+S saves visible models only (performTopBarSaveScene in page.tsx; confirmed by maintainer); autosave and CLI save all.
+- **Decision:** All models. Settled by PR #942 (issue #925): Ctrl/Cmd+S now writes hidden models too, like autosave and the CLI.
+- Options that were considered: (a) All, always — fix Ctrl+S to match autosave and CLI. (b) Visible only, everywhere. (c) Explicit scope parameter on buildVoxlSaveInput.
 - Affects: save
 
 **D10. Who owns plate ordering and origin mode?**
@@ -523,17 +523,17 @@ the group they affect comes up.
 ## Suspected bugs found while mapping
 
 To pin with tests, not to fix inside an extraction PR. *Status* says whether a maintainer has
-confirmed the bug (B1, B2, B3, B5 and B6, each now its own issue), the code was re-checked by
-hand, or it is a mapping pass's reading.
+confirmed the bug and where it is tracked (B1, B2, B3, B5, B6; B3 and B5 are already fixed on
+`dev`), whether the code was re-checked by hand, or whether it is a mapping pass's reading.
 
 | ID | Suspected bug | Where | Status | Impact |
 | --- | --- | --- | --- | --- |
-| B1 | CLI `scene duplicate` saves copies with no mesh | sceneDuplicate and toBuildInput in dragonfruit-ts-cli.ts | Confirmed by maintainer on dev (Nov 2026); tracked in its own issue, linked from PR #872. Reproduced by running it. | High |
-| B2 | CLI save drops ORIG (full-res original) chunks and the sha map | toBuildInput in dragonfruit-ts-cli.ts | Confirmed by maintainer on dev (Nov 2026); tracked in its own issue, linked from PR #872. | High |
-| B3 | Ctrl+S saves only visible models (and their supports) | performTopBarSaveScene in page.tsx | Confirmed by maintainer on dev (Nov 2026); tracked in its own issue, linked from PR #872. | Med |
+| B1 | CLI `scene duplicate` saves copies with no mesh | sceneDuplicate and toBuildInput in dragonfruit-ts-cli.ts | Confirmed by maintainer (ran it). Open: issue #923. | High |
+| B2 | CLI save drops ORIG (full-res original) chunks and the sha map | toBuildInput in dragonfruit-ts-cli.ts | Confirmed by maintainer. Open: issue #924. | High |
+| B3 | Ctrl+S saves only visible models (and their supports) | performTopBarSaveScene in page.tsx | Confirmed by maintainer. Fixed on dev by PR #942 (issue #925; 0.2.x backport PR #944). | Med |
 | B4 | splitModelIntoParts uses a different Euler order from the renderer | splitModelIntoParts in useSceneCollectionManager.ts vs quaternionFromGlobalEuler use in SceneCanvas/StlMesh.tsx | Code checked: new THREE.Euler(x,y,z) vs quaternionFromGlobalEuler. Agent computed 4.1 mm offset at (0.5,0.7,0.3). | High |
-| B5 | addPlates shifts models but not their supports | addPlates in useSceneCollectionManager.ts | Confirmed by maintainer on dev (Nov 2026); tracked in its own issue, linked from PR #872. | High |
-| B6 | App groups are never saved; CLI groups are invisible to the app | VoxlModelEntry / extensions.groups | Confirmed by maintainer on dev (Nov 2026); tracked in its own issue, linked from PR #872. | Med |
+| B5 | addPlates shifts models but not their supports | addPlates in useSceneCollectionManager.ts | Confirmed by maintainer. Fixed on dev by PR #943 (issue #926; 0.2.x backport PR #945). | High |
+| B6 | App groups are never saved; CLI groups are invisible to the app | VoxlModelEntry / extensions.groups | Confirmed by maintainer. Open: issue #927. | Med |
 | B7 | CLI remove-model orphans knots, twigs, sticks, stumps, kickstands | sceneRemoveModel in dragonfruit-ts-cli.ts | Code checked: filters roots, trunks, branches, leaves, braces only. | High |
 | B8 | CLI place-on-platform ignores rotation and scale; CLI transform maths subtracts bbox centre only when rotated/scaled | scenePlace and applyVoxlTransform in dragonfruit-ts-cli.ts | Code checked for center-xy (sets x=y=0); place-on-platform agent-reported with line refs. | High |
 | B9 | Blocker reset always empties the list (`resolutionChanged ? [] : []`) | handleConfirmBlockerReset in page.tsx | Code checked. | Low |
