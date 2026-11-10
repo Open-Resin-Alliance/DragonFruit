@@ -3602,13 +3602,13 @@ export default function Home() {
   
   
   /** Making a single function that will produce this for both the material list card (bottom left) and the post-slice card.  **/
-  function estimatePrintTime(activeMaterialProfile): number {
+  function estimatePrintTime(activeMaterialProfile, totalLayerCount): number {
     
-    if (!activeMaterialProfile || printingPreviewTotalLayers <= 0) return '—';
+    if (!activeMaterialProfile || totalLayerCount <= 0) return '—';
     //It looks like tsmc settings will be undefined if its not included in the printer settings/profile.
     
     const matProf = activeMaterialProfile;
-    const totalLayers = printingPreviewTotalLayers;
+    const totalLayers = totalLayerCount;
     const tsmc = matProf.liftDistance2Mm !== undefined;
     const hasTransitionLayers = matProf.transitionLayerCount !== undefined && matProf.transitionLayerCount > 0;
     const hasBottomLiftDistance = matProf.bottomLiftDistanceMm !== undefined;
@@ -3616,13 +3616,13 @@ export default function Home() {
     //These fields are all given by TSMC, if its disabled they will come through as undefined.
     //Null operator will catch and convert to whatever is needed to correct the calculation. (either 0 or just the regular layer speeds/distances)
     
-    const firstStepMoveTime = (matProf.liftDistanceMm / matProf.liftSpeedMmMin + matProf.liftDistanceMm / matProf.retractSpeedMmMin) * 60;
-    const secondStepMoveTime = typeof(matProf.liftDistance2Mm) === "undefined" ? 0 : (matProf.liftDistance2Mm / matProf.liftSpeed2MmMin + matProf.liftDistance2Mm / matProf.retractSpeed2MmMin) * 60;
+    const firstStepMoveTime = (matProf.liftDistanceMm / matProf.liftSpeedMmMin + matProf.liftDistance2Mm / matProf.retractSpeedMmMin) * 60;
+    const secondStepMoveTime = typeof(matProf.liftDistance2Mm) === "undefined" ? 0 : (matProf.liftDistance2Mm / matProf.liftSpeed2MmMin + matProf.liftDistanceMm / matProf.retractSpeed2MmMin) * 60;
     
     const regularLayerTime = firstStepMoveTime + secondStepMoveTime + matProf.normalExposureSec;
     
-    const firstStepBotMoveTime = typeof(matProf.bottomLiftDistanceMm) === "undefined" ? firstStepMoveTime : (matProf.bottomLiftDistanceMm / matProf.bottomLiftSpeedMmMin + matProf.bottomLiftDistanceMm / matProf.bottomRetractSpeedMmMin) * 60;
-    const secondStepBotMoveTime = typeof(matProf.bottomLiftDistance2Mm) === "undefined" ? 0 : (matProf.bottomLiftDistance2Mm / matProf.bottomLiftSpeed2MmMin + matProf.bottomLiftDistance2Mm / matProf.bottomRetractSpeed2MmMin) * 60;
+    const firstStepBotMoveTime = typeof(matProf.bottomLiftDistanceMm) === "undefined" ? firstStepMoveTime : (matProf.bottomLiftDistanceMm / matProf.bottomLiftSpeedMmMin + matProf.bottomLiftDistance2Mm / matProf.bottomRetractSpeedMmMin) * 60;
+    const secondStepBotMoveTime = typeof(matProf.bottomLiftDistance2Mm) === "undefined" ? 0 : (matProf.bottomLiftDistance2Mm / matProf.bottomLiftSpeed2MmMin + matProf.bottomLiftDistanceMm / matProf.bottomRetractSpeed2MmMin) * 60;
 
     const bottomLayerTime = firstStepBotMoveTime + secondStepBotMoveTime + matProf.bottomExposureSec;
 
@@ -3649,12 +3649,23 @@ export default function Home() {
       }
     }
 
-    return totalBottomLayerEstimate + totalRegularLayerEstimate + totalTransitionLayerEstimate;
+    const waitBeforeCure = matProf.waitTimeBeforeCureSec ?? 0;
+    const waitAfterCure = matProf.waitTimeAfterCureSec ?? 0;
+    const waitAfterLift = matProf.waitTimeAfterLiftSec ?? 0;
+    
+    const waitTimePerLayer = waitBeforeCure + waitAfterCure + waitAfterLift;
+    const waitTimePerPrint = waitTimePerLayer * totalLayers;
+
+    console.log("Bottom Layer Time: ", bottomLayerTime, "Regular Layer Time: ", regularLayerTime, "Wait Time Per Layer: ", waitTimePerLayer);
+    console.log("Bottom Estimate: ", totalBottomLayerEstimate, "Regular Estimate: ", totalRegularLayerEstimate, "Transition Estimate: ", totalTransitionLayerEstimate, "Wait Times: ", waitTimePerPrint);
+    console.log(matProf);
+    
+    return totalBottomLayerEstimate + totalRegularLayerEstimate + totalTransitionLayerEstimate + waitTimePerPrint;
   }
 
   
   const estimatedPrintTimeLabel = React.useMemo(() => {
-    return formatApproxPrintTimeLabel(_, estimatePrintTime(activeMaterialProfile));
+    return formatApproxPrintTimeLabel(_, estimatePrintTime(activeMaterialProfile, printingPreviewTotalLayers));
   }, [_, activeMaterialProfile, printingPreviewTotalLayers]);
 
   const canDownloadPrintArtifact = Boolean(printingArtifact);
@@ -7117,26 +7128,9 @@ export default function Home() {
 
     if (slicingModels.length === 0) return '—';
 
-    const totalLayers = estimatedSlicerLayerCount;
-    if (totalLayers <= 0) return '—';
-
-    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
-    const normalLayers = Math.max(0, totalLayers - bottomLayers);
-
-    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
-      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
-      : 0;
-    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
-      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
-      : 0;
-    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
-
-    const totalSec = (
-      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
-      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
-    );
+    if (estimatedSlicerLayerCount <= 0) return '—';
 //return totalSec
-    return formatEstimatedPrintTimeLabel(_, 1000.0);
+    return formatEstimatedPrintTimeLabel(_, estimatePrintTime(activeMaterialProfile, estimatedSlicerLayerCount));
   }, [_, activeMaterialProfile, estimatedSlicerLayerCount, slicingModels.length]);
 
   const printingCurrentHeightMm = React.useMemo(() => {
