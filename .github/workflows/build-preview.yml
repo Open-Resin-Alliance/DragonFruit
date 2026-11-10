@@ -888,7 +888,7 @@ jobs:
           tag_name: ${{ needs.derive.outputs.release_tag }}
           name: ${{ needs.derive.outputs.release_name }}
           body: |
-            🌙 **Branch preview build** from branch \`${{ needs.derive.outputs.branch }}\`
+            👀 **Branch preview build** from branch \`${{ needs.derive.outputs.branch }}\`
 
             | Attribute | Value |
             |---|---|
