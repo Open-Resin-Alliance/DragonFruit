@@ -227,6 +227,10 @@ export function deletePlateLabel(plateNumber: number): MessageDescriptor {
   return msg({ message: `Delete plate ${plateNumber}`, context: 'Undo history entry' });
 }
 
+export function renamePlateLabel(plateNumber: number): MessageDescriptor {
+  return msg({ message: `Rename plate ${plateNumber}`, context: 'Undo history entry' });
+}
+
 export function groupModelLabel(modelName: string): MessageDescriptor {
   return msg({ message: `Group ${modelName}`, context: 'Undo history entry' });
 }
