@@ -134,7 +134,6 @@
     "minimatch": "^11.0.1",
     "postcss": "^8.5.26",
     "sharp": "^0.35.5",
-    "postcss-selector-parser": "^6.1.5",
-    "eslint-plugin-react-hooks": "7.0.1"
+    "postcss-selector-parser": "^6.1.5"
   }
 }
