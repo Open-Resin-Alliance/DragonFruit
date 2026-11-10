@@ -2,10 +2,10 @@
 
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
-import { ThreeEvent, useThree } from '@react-three/fiber';
-import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
+import { ThreeEvent, useFrame, useThree } from '@react-three/fiber';
+import { GIZMO_COLORS, GIZMO_SIZES } from '../constants';
 import type { GizmoAxis } from '../types';
-import { getCachedBoxGeometry, getCachedScaleCubeEdgeGeometry } from '../gizmoGeometryCache';
+import { getCachedBoxGeometry, getCachedScaleCubeVisibleEdgeGeometry } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
 
@@ -134,7 +134,34 @@ export function GizmoScale({
     [],
   );
   const handleBoxGeometry = useMemo(() => getCachedBoxGeometry(1, 1, 1), []);
-  const cubeEdgeGeometry = useMemo(() => getCachedScaleCubeEdgeGeometry(), []);
+
+  // A wireframe cube would draw its three far edges through the solid faces,
+  // because gizmo lines render with depth testing off so the model cannot hide
+  // them. Swap in the edge set the current view can actually see instead.
+  const cubeGroupRef = useRef<THREE.Group>(null);
+  const cubeEdgesRef = useRef<THREE.LineSegments>(null);
+  const cubeEdgeMaskRef = useRef<number | null>(null);
+  const cubeViewDirRef = useRef(new THREE.Vector3());
+  const cubeWorldQuatRef = useRef(new THREE.Quaternion());
+
+  // The cube sits where a translate shaft runs past, so it has to draw after
+  // that shaft instead of sharing its depth-free draw order.
+  const cubeBodyUserData = useMemo(() => ({ gizmoRenderOrderOffset: 1 }), []);
+  const cubeEdgeUserData = useMemo(() => ({ gizmoRenderOrderOffset: 1 }), []);
+
+  useFrame(() => {
+    const cube = cubeGroupRef.current;
+    const edges = cubeEdgesRef.current;
+    if (!cube || !edges) return;
+    cube.getWorldPosition(cubeViewDirRef.current).negate().add(camera.position);
+    cube.getWorldQuaternion(cubeWorldQuatRef.current).invert();
+    cubeViewDirRef.current.applyQuaternion(cubeWorldQuatRef.current);
+    const viewDir = cubeViewDirRef.current;
+    const mask = (viewDir.x > 0 ? 1 : 0) | (viewDir.y > 0 ? 2 : 0) | (viewDir.z > 0 ? 4 : 0);
+    if (cubeEdgeMaskRef.current === mask) return;
+    cubeEdgeMaskRef.current = mask;
+    edges.geometry = getCachedScaleCubeVisibleEdgeGeometry(mask);
+  });
 
   const handlePointerEnter = (e: ThreeEvent<PointerEvent>) => {
     if (!interactionsEnabled) return;
@@ -261,20 +288,6 @@ export function GizmoScale({
     return '#' + threeColor.getHexString();
   }, [handleColor]);
 
-  // Emissive intensity based on state (uses effectiveHovered for GPU picking support)
-  const emissiveIntensity = isActive
-    ? GIZMO_LIGHTING.emissiveIntensity.active
-    : effectiveHovered
-    ? GIZMO_LIGHTING.emissiveIntensity.hovered
-    : GIZMO_LIGHTING.emissiveIntensity.idle;
-
-  // Point light intensity based on state (uses effectiveHovered for GPU picking support)
-  const lightIntensity = isActive
-    ? GIZMO_LIGHTING.pointLightIntensity.active
-    : effectiveHovered
-    ? GIZMO_LIGHTING.pointLightIntensity.hovered
-    : GIZMO_LIGHTING.pointLightIntensity.idle;
-
   return (
     <group>
       {/* Pickable mesh for GPU picking - invisible but rendered in pick pass.
@@ -307,8 +320,8 @@ export function GizmoScale({
       </group> */}
 
       {/* Cube handle */}
-      <group position={position}>
-        <mesh scale={GIZMO_SIZES.scaleHexagonRadius * highlightScale}>
+      <group ref={cubeGroupRef} position={position}>
+        <mesh scale={GIZMO_SIZES.scaleHexagonRadius * highlightScale} userData={cubeBodyUserData}>
           <primitive object={handleBoxGeometry} attach="geometry" />
           <meshBasicMaterial
             color={handleColor}
@@ -317,8 +330,7 @@ export function GizmoScale({
             depthTest={false}
           />
         </mesh>
-        <lineSegments scale={GIZMO_SIZES.scaleHexagonRadius * highlightScale}>
-          <primitive object={cubeEdgeGeometry} attach="geometry" />
+        <lineSegments ref={cubeEdgesRef} scale={GIZMO_SIZES.scaleHexagonRadius * highlightScale} userData={cubeEdgeUserData}>
           <lineBasicMaterial
             color={edgeColor}
             transparent
@@ -327,17 +339,6 @@ export function GizmoScale({
           />
         </lineSegments>
       </group>
-
-      {/* Point light at hexagon to cast colored light on model */}
-      {!isDimmed && (
-        <pointLight
-          position={position}
-          color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : axisColors.end}
-          intensity={lightIntensity}
-          distance={GIZMO_LIGHTING.pointLightDistance}
-          decay={GIZMO_LIGHTING.pointLightDecay}
-        />
-      )}
     </group>
   );
 }

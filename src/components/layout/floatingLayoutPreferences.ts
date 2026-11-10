@@ -1,6 +1,8 @@
-// v6: the layout is a placement per panel (left dock, right dock, or float) plus
-// the dock widths. v5 stored absolute positions for moved panels only; it is read
-// once to migrate those moves into the new model.
+// v6: the layout is a placement per panel (left dock, right dock, or float).
+// Docks are a fixed width, so a saved layout no longer carries dock widths;
+// older v6 payloads still have one and it is ignored when read. v5 stored
+// absolute positions for moved panels only; it is read once to migrate those
+// moves into the new model.
 export const FLOATING_LAYOUT_STORAGE_KEY = 'lumenslicer:floating-panel-layout:v6';
 export const LEGACY_FLOATING_LAYOUT_STORAGE_KEY = 'lumenslicer:floating-panel-layout:v5';
 export const FLOATING_LAYOUT_PERSISTENCE_STORAGE_KEY = 'app-floating-layout-persistence';
@@ -35,7 +37,6 @@ export type FloatingLayoutDebugSnapshot = {
     order: number;
     float?: FloatingPanelPosition;
   }>;
-  docks: { leftWidth?: number; rightWidth?: number };
 };
 
 export type FloatingLayoutDebugRequestDetail = {

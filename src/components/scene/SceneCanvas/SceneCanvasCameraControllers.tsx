@@ -14,6 +14,10 @@ import {
   trackpadPoseBlendFactor,
   type TrackpadGesturePose,
 } from '@/components/scene/camera/trackpadGesturePose';
+import {
+  WHEEL_ZOOM_POSE_RELEASE_MS,
+  type WheelZoomPose,
+} from '@/components/scene/camera/wheelZoomPose';
 
 /**
  * Teach R3F's pointer picking the orthographic depth range.
@@ -693,5 +697,101 @@ export function TrackpadGesturePoseApplier({
     blendCameraTowardTrackpadPose(pose, camera, target, trackpadPoseBlendFactor(delta * 1000, tauMs), true);
   });
 
+  return null;
+}
+
+/**
+ * Eases the camera onto the pose a wheel zoom is asking for.
+ *
+ * The wheel folds its dolly into a pose (`wheelZoomPose.ts`) instead of moving
+ * the camera, so this is the only writer on that path and zoom arrives at frame
+ * cadence rather than one step per wheel event. `tauMs` 0 applies the pose the
+ * frame it is read, which is the `raw` camera-feel preset.
+ *
+ * Same lifetime and the same "someone else owns the camera" guard as
+ * `TrackpadGesturePoseApplier`. For an orthographic camera the frustum is
+ * re-derived here rather than left to `OrthoFrustumSync`: the zoom *is* the
+ * radius, and a frame of frustum lag would make the view scale trail the eased
+ * position.
+ */
+export function WheelZoomPoseApplier({
+  poseRef,
+  lastEventAtRef,
+  tauMs,
+  fovDeg,
+  sceneRadius,
+}: {
+  poseRef: React.RefObject<WheelZoomPose | null>;
+  lastEventAtRef: React.RefObject<number>;
+  tauMs: number;
+  fovDeg: number;
+  sceneRadius?: number;
+}) {
+  const { camera, controls, size } = useThree();
+
+  useFrame((_state, delta) => {
+    const pose = poseRef.current;
+    if (!pose) return;
+
+    if (controlsAreDisabled(controls)) {
+      poseRef.current = null;
+      return;
+    }
+
+    const target = orbitTargetOf(controls);
+    if (!target) return;
+
+    const applyPose = (alpha: number) => {
+      camera.position.lerp(pose.position, alpha);
+      target.lerp(pose.target, alpha);
+      camera.lookAt(target);
+      camera.updateMatrixWorld();
+
+      if (camera instanceof THREE.OrthographicCamera) {
+        syncOrthoFrustum(camera, target, size.width / Math.max(1, size.height), { sceneRadius, fovDeg });
+      }
+    };
+
+    if (performance.now() - lastEventAtRef.current > WHEEL_ZOOM_POSE_RELEASE_MS) {
+      // Arrive exactly. Unlike the trackpad pose, whose residual after the
+      // release window is a sub-pixel translation, a zoom residual is a visible
+      // change of scale — the user asked for this step and should get all of it.
+      applyPose(1);
+      poseRef.current = null;
+      return;
+    }
+
+    applyPose(trackpadPoseBlendFactor(delta * 1000, tauMs));
+  });
+
+  return null;
+}
+
+/**
+ * Slides the camera and its orbit target together onto a new orbit pivot.
+ *
+ * Both move by the same vector every frame, so the view direction and the
+ * camera-to-target radius are untouched: the image translates onto the pivot
+ * rather than swinging or rescaling. That matters in orthographic, where the
+ * radius *is* the zoom — moving the target alone would silently zoom the scene.
+ *
+ * Used by the cursor orbit mode: `handleOrbitStart` resolves the point under the
+ * cursor and drops it here; the gesture itself stays OrbitControls' business.
+ */
+
+
+/** Temporary measurement hook: logs the camera pose each frame while enabled. */
+export function CameraPoseRecorder() {
+  const { camera } = useThree();
+  useFrame(() => {
+    const host = window as unknown as {
+      __recPose?: boolean;
+      __poseLog?: Array<{ t: number; q: number[]; p: number[] }>;
+    };
+    if (!host.__recPose) return;
+    if (!host.__poseLog) host.__poseLog = [];
+    if (host.__poseLog.length > 4000) return;
+    host.__poseLog.push({ t: performance.now(), q: camera.quaternion.toArray(), p: camera.position.toArray() });
+  });
   return null;
 }

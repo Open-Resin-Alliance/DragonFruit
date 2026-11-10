@@ -110,19 +110,28 @@ import { PrepareMergedSupportMesh } from '@/supports/prepare/PrepareMergedSuppor
 import { SupportShaderWarmup } from '@/supports/instanced/SupportShaderWarmup';
 import {
   CameraModeEntryFramingController,
+  CameraPoseRecorder,
   CameraProjectionController,
   HorizonLock,
   OrthoFrustumSync,
   OrthoPickRayAlignment,
   OrbitPivotIndicator,
   TrackpadGesturePoseApplier,
+  WheelZoomPoseApplier,
 } from './SceneCanvasCameraControllers';
 import {
   ORTHO_MAX_RADIUS,
   ORTHO_MIN_RADIUS,
-  dollyOrthoToCursor,
   orthoWheelRadiusScale,
 } from '@/components/scene/camera/orthoDolly';
+import {
+  WHEEL_ZOOM_POSE_RELEASE_MS,
+  applyWheelZoomToPose,
+  createWheelZoomPose,
+  perspectiveWheelRadiusScale,
+  seedWheelZoomPose,
+  type WheelZoomPose,
+} from '@/components/scene/camera/wheelZoomPose';
 import { useMarqueeSelectionHandlers } from './useMarqueeSelectionHandlers';
 import { getOptimisticSelectedModelId, setOptimisticSelectedModelId } from './optimisticModelSelection';
 import { FootprintOutlineGroup, type FootprintOutlineTarget } from './FootprintOutlineGroup';
@@ -169,6 +178,14 @@ import {
   subscribeToCameraFeelSettings,
   type CameraFeelPreset,
 } from '@/components/settings/cameraFeelPreferences';
+import {
+  DEFAULT_CAMERA_ORBIT_PIVOT_SETTINGS,
+  getSavedCameraOrbitPivotSettings,
+  subscribeToCameraOrbitPivotSettings,
+} from '@/components/settings/cameraOrbitPivotPreferences';
+import { platePivotFromRay, type PlatePivotBounds } from '@/components/scene/camera/orbitPivot';
+import { PivotOrbitController } from '@/components/scene/camera/PivotOrbitController';
+
 import {
   DEFAULT_CAMERA_TRACKPAD_SETTINGS,
   getSavedCameraTrackpadSettings,
@@ -973,6 +990,11 @@ export function SceneCanvas({
     () => getSavedCameraFeelSettings().preset,
     () => DEFAULT_CAMERA_FEEL_SETTINGS.preset,
   );
+  const cameraOrbitPivot = React.useSyncExternalStore(
+    subscribeToCameraOrbitPivotSettings,
+    () => getSavedCameraOrbitPivotSettings().pivot,
+    () => DEFAULT_CAMERA_ORBIT_PIVOT_SETTINGS.pivot,
+  );
   const cameraTrackpadSettings = React.useSyncExternalStore(
     subscribeToCameraTrackpadSettings,
     () => getSavedCameraTrackpadSettings().primaryAction,
@@ -1398,6 +1420,8 @@ export function SceneCanvas({
     rotateSpeed: number;
     panSpeed: number;
     zoomSpeed: number;
+    minDistance?: number;
+    maxDistance?: number;
     update: () => void;
     enabled?: boolean;
   } | null>(null);
@@ -1416,6 +1440,11 @@ export function SceneCanvas({
   // interaction, which can end in the middle of a gesture.
   const trackpadPoseRef = React.useRef<TrackpadGesturePose | null>(null);
   const trackpadPoseLastEventAtRef = React.useRef(0);
+  // Where a wheel zoom wants the camera, and when it last asked. Same contract as
+  // the trackpad pose: `WheelZoomPoseApplier` owns the lifetime, and the wheel
+  // handler only ever folds events into the pose instead of moving the camera.
+  const wheelZoomPoseRef = React.useRef<WheelZoomPose | null>(null);
+  const wheelZoomPoseLastEventAtRef = React.useRef(0);
   // One classifier for both wheel handlers: they see the same events, and its
   // verdict is only stable if it watches the whole stream.
   const wheelDeviceClassifierRef = React.useRef(createWheelDeviceClassifier());
@@ -1456,6 +1485,16 @@ export function SceneCanvas({
     getNativeSpaceMouseActive,
   );
   const activeBuildVolumeSettings = view3dSettings ?? DEFAULT_VIEW3D_SETTINGS;
+
+  // The plate's footprint, for cursor-orbit pivots that land on empty space.
+  const platePivotBounds = React.useMemo<PlatePivotBounds>(() => {
+    const width = activeBuildVolumeSettings.widthMm;
+    const depth = activeBuildVolumeSettings.depthMm;
+    const frontLeft = activeBuildVolumeSettings.originMode === 'front_left';
+    const minX = frontLeft ? 0 : -width * 0.5;
+    const minY = frontLeft ? 0 : -depth * 0.5;
+    return { minX, maxX: minX + width, minY, maxY: minY + depth };
+  }, [activeBuildVolumeSettings.depthMm, activeBuildVolumeSettings.originMode, activeBuildVolumeSettings.widthMm]);
 
   /** Where the active plate is in the world. No frames means one plate at the origin. */
   const activePlateFrame = React.useMemo(
@@ -2788,6 +2827,57 @@ export function SceneCanvas({
 
     return null;
   }, [activeActualMeshRef, clipLower, clipUpper]);
+
+  /** Scratch raycaster for cursor-orbit pivots; never retained. */
+  const orbitPivotRaycasterRef = React.useRef<THREE.Raycaster>(new THREE.Raycaster());
+  const orbitPivotNdcRef = React.useRef<THREE.Vector2>(new THREE.Vector2());
+
+  /**
+   * The world point under the pointer, for a cursor orbit: the model surface if
+   * the ray hits it, else the build plate clamped to its footprint.
+   */
+  const resolveOrbitPivotAt = React.useCallback((clientX: number, clientY: number): THREE.Vector3 | null => {
+    const camera = cameraRef.current;
+    const container = containerRef.current;
+    if (!camera || !container) return null;
+
+    const rect = container.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0)) return null;
+
+    const ndc = orbitPivotNdcRef.current.set(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const raycaster = orbitPivotRaycasterRef.current;
+    setPickRayFromCamera(raycaster, ndc, camera);
+
+    // Every visible model, not just the active one: the point the user pointed
+    // at is the pivot whether or not that model happens to be selected.
+    const groups = Object.values(meshRefs.current).filter(
+      (group): group is THREE.Group => !!group && group.visible !== false,
+    );
+    if (groups.length > 0) {
+      const hits = raycaster.intersectObjects(groups, true);
+      const hit = hits.find((candidate) => (
+        !(clipUpper != null && candidate.point.z > clipUpper)
+        && !(clipLower != null && candidate.point.z < clipLower)
+      ));
+      if (hit) {
+        return hit.point.clone();
+      }
+    }
+
+    // Off the model: turn around the selected model's centre, which is what the
+    // user is looking at even when the pointer is over empty space.
+    const activeGroup = activeModelId ? meshRefs.current[activeModelId] : null;
+    if (activeGroup) {
+      activeGroup.updateWorldMatrix(true, false);
+      const box = new THREE.Box3().setFromObject(activeGroup);
+      if (!box.isEmpty()) return box.getCenter(new THREE.Vector3());
+    }
+
+    return platePivotFromRay(raycaster.ray, platePivotBounds);
+  }, [activeModelId, clipLower, clipUpper, platePivotBounds]);
 
   // A drag that only moves models: the gizmo's move arrows, or a Select-mode drag, which
   // has no gizmo descriptor. Footprint outlines follow these instead of hiding.
@@ -5182,14 +5272,14 @@ export function SceneCanvas({
     return 220;
   }, [cameraFeelPreset]);
 
-  // How long the camera takes to cover most of the distance to the trackpad
-  // gesture's pose. Zero for `raw`, which applies the pose the frame it is read
-  // — the same discrete motion the trackpad had before the pose existed. The
-  // other presets mirror the damping OrbitControls applies to a mouse drag, so
-  // both input devices land on the same feel. Well inside
-  // `TRACKPAD_POSE_RELEASE_MS`, so the residual is sub-pixel by the time the
-  // pose is released and no travel is truncated.
-  const cameraTrackpadPoseTauMs = React.useMemo(() => {
+  // How long the camera takes to cover most of the distance to its target pose,
+  // for both the trackpad gesture and the wheel zoom. Zero for `raw`, which
+  // applies the pose the frame it is read — the discrete motion each had before
+  // smoothing existed. The other presets mirror the damping OrbitControls
+  // applies to a mouse drag, so every input device lands on the same feel. Well
+  // inside both pose release windows, so the residual is sub-pixel by the time a
+  // pose is dropped and no travel is truncated.
+  const cameraPoseTauMs = React.useMemo(() => {
     if (cameraFeelPreset === 'raw') return 0;
     if (cameraFeelPreset === 'precise') return 70;
     if (cameraFeelPreset === 'fast') return 40;
@@ -5216,6 +5306,26 @@ export function SceneCanvas({
       detail: { resumeAfterMs: navigationResumeDelayMs },
     }));
   }, [navigationResumeDelayMs]);
+
+  const beginWheelZoomInteraction = React.useCallback(() => {
+    if (wheelZoomInteractionActiveRef.current) return;
+    wheelZoomInteractionActiveRef.current = true;
+    setIsWheelZoomInteracting(true);
+    window.dispatchEvent(new Event('picking-zoom-start'));
+  }, []);
+
+  // The interaction outlives the last wheel event: the camera is still easing
+  // onto the zoom pose, and picking must not resume under a moving camera.
+  const scheduleWheelZoomInteractionEnd = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (wheelZoomEndTimeoutRef.current !== null) {
+      window.clearTimeout(wheelZoomEndTimeoutRef.current);
+    }
+    wheelZoomEndTimeoutRef.current = window.setTimeout(() => {
+      wheelZoomEndTimeoutRef.current = null;
+      forceEndWheelZoomInteraction();
+    }, Math.max(120, cameraPoseTauMs * 3));
+  }, [cameraPoseTauMs, forceEndWheelZoomInteraction]);
 
   const clearPendingTrackpadGestureEnd = React.useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -5258,73 +5368,16 @@ export function SceneCanvas({
     return true;
   }, [cameraTrackpadOrbitAcceleration, cameraTrackpadPanAcceleration]);
 
+  // Every wheel inside the canvas is handled in the capture-phase listener that
+  // owns gestures and zoom, and it stops propagation, so this effect only needs
+  // the ways a zoom interaction can be cut short.
   React.useEffect(() => {
-    const container = containerRef.current;
-    if (!container || typeof window === 'undefined') return;
-
-    const clearPendingZoomEnd = () => {
-      if (wheelZoomEndTimeoutRef.current === null) return;
-      window.clearTimeout(wheelZoomEndTimeoutRef.current);
-      wheelZoomEndTimeoutRef.current = null;
-    };
-
-    const endZoomInteraction = () => {
-      clearPendingZoomEnd();
-      if (!wheelZoomInteractionActiveRef.current) return;
-
-      wheelZoomInteractionActiveRef.current = false;
-      setIsWheelZoomInteracting(false);
-      window.dispatchEvent(new CustomEvent('picking-zoom-end', {
-        detail: { resumeAfterMs: navigationResumeDelayRef.current },
-      }));
-    };
-
-    const beginZoomInteraction = () => {
-      if (wheelZoomInteractionActiveRef.current) return;
-      wheelZoomInteractionActiveRef.current = true;
-      setIsWheelZoomInteracting(true);
-      window.dispatchEvent(new Event('picking-zoom-start'));
-    };
-
-    const scheduleZoomInteractionEnd = () => {
-      clearPendingZoomEnd();
-      wheelZoomEndTimeoutRef.current = window.setTimeout(() => {
-        wheelZoomEndTimeoutRef.current = null;
-        endZoomInteraction();
-      }, 120);
-    };
-
-    const onWheel = (event: WheelEvent) => {
-      if (!container.contains(event.target as Node | null)) return;
-      const controls = orbitControlsRef.current;
-      if (!controls || controls.enabled === false) return;
-      const device = wheelDeviceClassifierRef.current.classify(event, event.timeStamp);
-      // Trackpad: allow zoom only for pinch gestures (ctrlKey).
-      // Regular two-finger scroll should never trigger zoom.
-      // An 'unknown' verdict zooms: a wheel must always zoom, and that is the
-      // reading a bare wheel event gets everywhere else.
-      if (device === 'trackpad' && !event.ctrlKey) {
-        return;
-      }
-      try {
-        if (resolveTrackpadGestureAction(event, device, cameraTrackpadSettings, cameraTrackpadModifierKey) !== null) {
-          return;
-        }
-      } catch (error) {
-        console.error('[SceneCanvas] Trackpad gesture resolution failed; falling back to wheel zoom.', error);
-      }
-
-      beginZoomInteraction();
-
-      window.dispatchEvent(new Event('picking-zoom-change'));
-      scheduleZoomInteractionEnd();
-    };
+    if (typeof window === 'undefined') return;
 
     const forceZoomInteractionEnd = () => {
-      endZoomInteraction();
+      forceEndWheelZoomInteraction();
     };
 
-    window.addEventListener('wheel', onWheel, { passive: true });
     window.addEventListener('pointerup', forceZoomInteractionEnd, true);
     window.addEventListener('pointercancel', forceZoomInteractionEnd, true);
     window.addEventListener('mouseup', forceZoomInteractionEnd, true);
@@ -5333,16 +5386,15 @@ export function SceneCanvas({
     document.addEventListener('visibilitychange', forceZoomInteractionEnd);
 
     return () => {
-      window.removeEventListener('wheel', onWheel);
       window.removeEventListener('pointerup', forceZoomInteractionEnd, true);
       window.removeEventListener('pointercancel', forceZoomInteractionEnd, true);
       window.removeEventListener('mouseup', forceZoomInteractionEnd, true);
       window.removeEventListener('contextmenu', forceZoomInteractionEnd, true);
       window.removeEventListener('blur', forceZoomInteractionEnd);
       document.removeEventListener('visibilitychange', forceZoomInteractionEnd);
-      endZoomInteraction();
+      forceEndWheelZoomInteraction();
     };
-  }, [cameraTrackpadModifierKey, cameraTrackpadSettings]);
+  }, [forceEndWheelZoomInteraction]);
 
   React.useEffect(() => {
     return () => {
@@ -5783,6 +5835,7 @@ export function SceneCanvas({
     if (!isRotateInteraction) {
       window.dispatchEvent(new Event('picking-pan-start'));
     }
+
   }, [isOrbitInRotateState, useReactOrbitInteractionState]);
 
   const handleOrbitEnd = React.useCallback(() => {
@@ -5808,6 +5861,8 @@ export function SceneCanvas({
       detail: { resumeAfterMs: wasTrackpadGesture ? 0 : navigationResumeDelayMs },
     }));
   }, [clearPendingTrackpadGestureEnd, mode, navigationResumeDelayMs, onCameraEnd, updateCameraBelowBuildPlate, useReactOrbitInteractionState]);
+
+
 
   React.useEffect(() => {
     if (cameraInteractionCycleEnabled) return;
@@ -5852,6 +5907,9 @@ export function SceneCanvas({
 
     const onTrackpadWheel = (event: WheelEvent) => {
       if (!container.contains(event.target as Node | null)) return;
+      // Cursor mode owns the camera through `PivotOrbitController`, wheel
+      // included; the trackpad/zoom appliers are unmounted in that mode.
+      if (cameraOrbitPivot === 'cursor') return;
 
       try {
         const action = resolveTrackpadGestureAction(
@@ -5861,39 +5919,69 @@ export function SceneCanvas({
           cameraTrackpadModifierKey,
         );
         if (action === null) {
-          // Orthographic wheel is a real dolly: move the camera along its view
-          // axis and let OrthoFrustumSync derive the frustum from the new
-          // radius. OrbitControls' zoom is disabled in ortho, so we own it — and
-          // that is exactly why this path must check the idle signal itself.
+          // Wheel zoom folds into a pose too; `WheelZoomPoseApplier` eases the
+          // camera onto it once per frame. Moving the camera here instead was one
+          // whole wheel step per event, which is the stutter this replaces.
+          //
           // OrbitControls being disabled is how every other owner of the camera
-          // announces itself: a live SpaceMouse gesture, the Home / focus /
-          // mode-framing animations. Without the check the wheel dollies against
-          // them, fighting the SpaceMouse over the same dolly radius.
+          // announces itself — a live SpaceMouse gesture, the Home / focus /
+          // mode-framing animations — so this path reads that signal itself.
           const camera = cameraRef.current;
           const zoomControls = orbitControlsRef.current;
-          if (zoomControls && zoomControls.enabled === false) return;
-          if (camera instanceof THREE.OrthographicCamera && zoomControls) {
-            const rect = container.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) {
-              event.preventDefault();
-              const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-              const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-              const aspect = (camera.right - camera.left) / Math.max(1e-6, camera.top - camera.bottom);
-              const nextTarget = dollyOrthoToCursor({
-                camera,
-                target: zoomControls.target,
-                ndcX,
-                ndcY,
-                radiusScale: orthoWheelRadiusScale(event.deltaY, zoomControls.zoomSpeed),
-                minRadius: ORTHO_MIN_RADIUS,
-                maxRadius: ORTHO_MAX_RADIUS,
-                aspect,
-                options: { sceneRadius: orthoSceneRadiusMm, fovDeg: perspectiveFov },
-              });
-              zoomControls.target.copy(nextTarget);
-              zoomControls.update();
-            }
+          if (!camera || !zoomControls || zoomControls.enabled === false) return;
+
+          const rect = container.getBoundingClientRect();
+          if (!(rect.width > 0 && rect.height > 0)) return;
+          const orthographic = camera instanceof THREE.OrthographicCamera;
+          if (!orthographic && !(camera instanceof THREE.PerspectiveCamera)) return;
+
+          // The wheel is ours for both projections now, so OrbitControls must not
+          // also dolly. Stopping the event in the capture phase is what keeps it
+          // away from its own wheel listener.
+          event.preventDefault();
+          event.stopPropagation();
+
+          const now = performance.now();
+          let pose = wheelZoomPoseRef.current;
+          if (!pose || now - wheelZoomPoseLastEventAtRef.current > WHEEL_ZOOM_POSE_RELEASE_MS) {
+            pose = createWheelZoomPose();
+            seedWheelZoomPose(pose, camera, zoomControls.target);
+            wheelZoomPoseRef.current = pose;
           }
+          wheelZoomPoseLastEventAtRef.current = now;
+
+          const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+          const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+          const aspect = rect.width / rect.height;
+
+          if (camera instanceof THREE.OrthographicCamera) {
+            applyWheelZoomToPose(pose, {
+              projection: 'orthographic',
+              ndcX,
+              ndcY,
+              radiusScale: orthoWheelRadiusScale(event.deltaY, zoomControls.zoomSpeed),
+              minRadius: ORTHO_MIN_RADIUS,
+              maxRadius: ORTHO_MAX_RADIUS,
+              aspect,
+              fovDeg: perspectiveFov,
+              sceneRadius: orthoSceneRadiusMm,
+            });
+          } else {
+            applyWheelZoomToPose(pose, {
+              projection: 'perspective',
+              ndcX,
+              ndcY,
+              radiusScale: perspectiveWheelRadiusScale(event.deltaY, zoomControls.zoomSpeed),
+              minRadius: zoomControls.minDistance ?? 0,
+              maxRadius: zoomControls.maxDistance ?? Infinity,
+              aspect,
+              fovDeg: camera.fov,
+            });
+          }
+
+          beginWheelZoomInteraction();
+          window.dispatchEvent(new Event('picking-zoom-change'));
+          scheduleWheelZoomInteractionEnd();
           return;
         }
 
@@ -5951,6 +6039,8 @@ export function SceneCanvas({
     };
   }, [
     applyTrackpadGesture,
+    beginWheelZoomInteraction,
+    cameraOrbitPivot,
     cameraTrackpadModifierKey,
     cameraTrackpadSettings,
     clearPendingTrackpadGestureEnd,
@@ -5960,6 +6050,7 @@ export function SceneCanvas({
     orthoSceneRadiusMm,
     perspectiveFov,
     scheduleTrackpadGestureEnd,
+    scheduleWheelZoomInteractionEnd,
   ]);
 
   React.useEffect(() => {
@@ -6734,7 +6825,7 @@ export function SceneCanvas({
         <CameraProjectionController mode={cameraProjectionMode} perspectiveFov={perspectiveFov} sceneRadius={orthoSceneRadiusMm} />
         <OrthoFrustumSync
           mode={cameraProjectionMode}
-          suspended={spaceMouseNavigationActive}
+          suspended={spaceMouseNavigationActive || cameraOrbitPivot === 'cursor'}
           sceneRadius={orthoSceneRadiusMm}
           fovDeg={perspectiveFov}
         />
@@ -7530,7 +7621,6 @@ export function SceneCanvas({
                   enableRotate
                   enableScale
                   uniformScaling={uniformScaling}
-                  enableLighting
                   onDragStateChange={setIsGizmoDragging}
                   onRetargetingChange={setIsGizmoRetargeting}
                   onMove={(delta) => {
@@ -8178,6 +8268,7 @@ export function SceneCanvas({
           elevation={60}
           radius={60}
         />
+        {cameraOrbitPivot !== 'cursor' && (
         <OrbitControls
           ref={orbitControlsRef as React.RefObject<any>}
           makeDefault
@@ -8199,6 +8290,7 @@ export function SceneCanvas({
           target={orbitTarget}
           mouseButtons={{ LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }}
         />
+        )}
         {!thumbnailCaptureActive && cameraInteractionCycleEnabled && (
           <ZUpGizmoHelper
             alignment="bottom-right"
@@ -8283,10 +8375,39 @@ export function SceneCanvas({
           perspectiveFov={perspectiveFov}
         />
         <HorizonLock enabled={cameraInteractionCycleEnabled} />
+        {cameraOrbitPivot !== 'cursor' && (
         <TrackpadGesturePoseApplier
           poseRef={trackpadPoseRef}
           lastEventAtRef={trackpadPoseLastEventAtRef}
-          tauMs={cameraTrackpadPoseTauMs}
+          tauMs={cameraPoseTauMs}
+        />
+        )}
+        {cameraOrbitPivot !== 'cursor' && (
+        <WheelZoomPoseApplier
+          poseRef={wheelZoomPoseRef}
+          lastEventAtRef={wheelZoomPoseLastEventAtRef}
+          tauMs={cameraPoseTauMs}
+          fovDeg={perspectiveFov}
+          sceneRadius={orthoSceneRadiusMm}
+        />
+        )}
+        <CameraPoseRecorder />
+        <PivotOrbitController
+          active={cameraOrbitPivot === 'cursor'}
+          containerRef={containerRef}
+          cameraRef={cameraRef}
+          controlsRef={orbitControlsRef}
+          enabled={cameraInteractionEnabled}
+          resolvePivot={resolveOrbitPivotAt}
+          damping={cameraFeelPreset === 'raw' ? 0 : cameraFeelPreset === 'precise' ? 0.15 : cameraFeelPreset === 'fast' ? 0.085 : 0.12}
+          tauMs={cameraPoseTauMs}
+          fovDeg={perspectiveFov}
+          sceneRadius={orthoSceneRadiusMm}
+          minRadius={cameraProjectionMode === 'perspective' ? 0.01 : ORTHO_MIN_RADIUS}
+          maxRadius={cameraProjectionMode === 'perspective' ? 1e6 : ORTHO_MAX_RADIUS}
+          onStart={handleOrbitStart}
+          onEnd={handleOrbitEnd}
+          onChange={handleOrbitChange}
         />
         <CameraControlsRecovery interactionEnabled={cameraInteractionEnabled} />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} onClearSelection={onClearSelection} />

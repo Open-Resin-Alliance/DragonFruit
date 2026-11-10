@@ -6,6 +6,7 @@ import type { SupportMode } from '@/supports/types';
 import { Camera as CameraIcon, Hand as HandIcon } from 'lucide-react';
 import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
 import type { CameraFeelPreset } from '@/components/settings/cameraFeelPreferences';
+import type { CameraOrbitPivot } from '@/components/settings/cameraOrbitPivotPreferences';
 import type { CameraTrackpadModifierKey, CameraTrackpadPrimaryAction } from '@/components/settings/cameraTrackpadPreferences';
 import type { CameraScopeMode, WorkspaceCameraDefaults } from '@/components/settings/workspaceCameraPreferences';
 import { FOV_MIN, FOV_MAX } from '@/components/settings/cameraFovPreferences';
@@ -23,6 +24,8 @@ interface CameraSettingsTabProps {
   onPerspectiveFovChange: (fov: number) => void;
   cameraFeelPreset: CameraFeelPreset;
   onCameraFeelPresetChange: (preset: CameraFeelPreset) => void;
+  cameraOrbitPivot: CameraOrbitPivot;
+  onCameraOrbitPivotChange: (pivot: CameraOrbitPivot) => void;
   cameraTrackpadPrimaryAction: CameraTrackpadPrimaryAction;
   onCameraTrackpadPrimaryActionChange: (action: CameraTrackpadPrimaryAction) => void;
   cameraTrackpadModifierKey: CameraTrackpadModifierKey;
@@ -55,6 +58,8 @@ export function CameraSettingsTab({
   onPerspectiveFovChange,
   cameraFeelPreset,
   onCameraFeelPresetChange,
+  cameraOrbitPivot,
+  onCameraOrbitPivotChange,
   cameraTrackpadPrimaryAction,
   onCameraTrackpadPrimaryActionChange,
   cameraTrackpadModifierKey,
@@ -220,6 +225,23 @@ export function CameraSettingsTab({
             title="Camera feel"
             className="w-36"
             menuAlign="right"
+          />
+        </SettingRow>
+
+        <SettingRow
+          bordered
+          className="mt-2"
+          label="Orbit pivot"
+          description="What a right-drag orbit turns around. The cursor takes the point under the pointer — the model surface, or the build plate — instead of the view centre."
+        >
+          <SegmentedControl
+            label="Orbit pivot"
+            value={cameraOrbitPivot}
+            onChange={(next) => onCameraOrbitPivotChange(next as CameraOrbitPivot)}
+            options={[
+              { value: 'view-center', label: 'View centre' },
+              { value: 'cursor', label: 'Cursor' },
+            ]}
           />
         </SettingRow>
       </section>

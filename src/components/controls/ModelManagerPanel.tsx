@@ -31,7 +31,7 @@ import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import type { ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
-import { useFloatingPanelCollapse, useFloatingPanelDockResize } from '@/components/layout/FloatingPanelStack';
+import { useFloatingPanelCollapse, useFloatingPanelResize } from '@/components/layout/FloatingPanelStack';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import type { UnitFormat } from '@/utils/unitFormatting';
@@ -256,21 +256,18 @@ export function ModelManagerPanel({
   const [renamingModelSuffix, setRenamingModelSuffix] = useState('');
   const [contextMenu, setContextMenu] = useState<PanelContextMenuState | null>(null);
 
-  const beginDockResize = useFloatingPanelDockResize();
+  const beginPanelResize = useFloatingPanelResize();
 
-  // The panel's edge handle resizes the dock it sits in; the dock owns the
-  // width, so writing the panel's own style here would be undone by the next
-  // render.
+  // The panel owns its width: dragging the edge widens it, docked or floating,
+  // and it may grow past the dock it sits in.
   const handleResizePointerDown = React.useCallback((e: React.PointerEvent) => {
-    const dock = (e.currentTarget as HTMLElement).closest('[data-dock]');
-    const side = dock?.getAttribute('data-dock');
-    if (!beginDockResize || (side !== 'left' && side !== 'right')) return;
+    if (!beginPanelResize) return;
     e.preventDefault();
     e.stopPropagation();
-    beginDockResize(side, e.clientX);
-  }, [beginDockResize]);
+    beginPanelResize(e.clientX);
+  }, [beginPanelResize]);
 
-  const selectedSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
+  const selectedSet = useMemo(() => new Set(selectedModelIds), []);
   const selectedBodySet = useMemo(() => new Set(selectedBodyKeys), [selectedBodyKeys]);
 
   const grouped = useMemo<GroupedEntry[]>(() => {
@@ -1120,21 +1117,20 @@ export function ModelManagerPanel({
         title={<Trans comment="Section heading of the models context menu. Rendered uppercase.">Models</Trans>}
         ariaLabel={_(msg`Models context menu`)}
       />
-      {/* Horizontal resize handle on the right edge */}
-      <div
-        className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:opacity-100 opacity-0 transition-opacity"
-        style={{
-          background: 'transparent',
-        }}
-        onPointerDown={handleResizePointerDown}
-      >
+
+      {/* Width handle on the panel's own edge. Hidden until hovered so it does
+          not read as a permanent pink line beside the list. */}
+      {beginPanelResize && (
         <div
-          className="absolute right-0 top-0 bottom-0 w-[3px] rounded-full transition-colors"
-          style={{
-            background: 'color-mix(in srgb, var(--accent), transparent 60%)',
-          }}
-        />
-      </div>
+          className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize opacity-0 hover:opacity-100 transition-opacity"
+          onPointerDown={handleResizePointerDown}
+        >
+          <div
+            className="absolute right-0 top-0 bottom-0 w-[3px] rounded-full"
+            style={{ background: 'color-mix(in srgb, var(--accent), transparent 60%)' }}
+          />
+        </div>
+      )}
     </Card>
   );
 }

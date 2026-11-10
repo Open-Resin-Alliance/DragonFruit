@@ -179,6 +179,103 @@ See `src/components/scene/camera/__tests__/trackpadGesturePose.test.ts` for the
 radius, polar-clamp, screen-scale and blend properties, replayed over the
 recorded captures in `src/components/scene/__tests__/wheelCaptures.fixture.ts`.
 
+## Wheel zoom
+
+The wheel used to dolly on the spot: OrbitControls applied its scale inside
+`update()` for perspective, and `dollyOrthoToCursor` ran directly inside the
+wheel handler for orthographic. Both are one discrete step per event, so a mouse
+wheel — whole-number deltas — read as a jump while a damped drag glided.
+
+The wheel now folds into the same kind of pose the trackpad gesture uses
+(`src/components/scene/camera/wheelZoomPose.ts`) and `WheelZoomPoseApplier` eases
+the camera onto it once per frame with the shared camera-feel time constant
+(`cameraPoseTauMs`: 0 for `raw`, 40–70 ms otherwise). Cursor anchoring is kept in
+both projections: perspective reproduces OrbitControls' `zoomToCursor` step (the
+camera slides down the pointer ray) and orthographic reuses `dollyOrthoToCursor`
+against a scratch camera posed like the pose.
+
+Things worth knowing before touching it:
+
+- **Never move the camera inside the wheel handler.** The capture-phase handler
+  in `SceneCanvas.onTrackpadWheel` raises `picking-zoom-start` / `-change` itself
+  and stops propagation, because it now owns the wheel for both projections —
+  OrbitControls must not also dolly. (Its `enableZoom` stays on for touch
+  pinch, which arrives as pointer events, not wheel.)
+- **Each event does its maths against the pose, not the live camera.** The camera
+  lags by design; computing the next step from it would shrink every step taken
+  while the camera was catching up.
+- **The applier snaps to the pose when it releases.** A translation residual
+  after `WHEEL_ZOOM_POSE_RELEASE_MS` is sub-pixel, which is why the trackpad pose
+  can simply be dropped; a zoom residual is a visible change of scale, so the
+  last pose is applied in full before it is cleared.
+- **Orthographic re-derives the frustum in the applier.** The zoom *is* the
+  radius, so leaving it to `OrthoFrustumSync` would scale the view a frame behind
+  the eased position.
+- The wheel-zoom interaction (picking suspension) outlives the last event by
+  `max(120 ms, 3 × tau)`, since the camera is still moving after the wheel stops.
+
+`src/components/scene/camera/__tests__/wheelZoomPose.test.ts` pins the radius
+scaling, the cursor anchoring in both projections, step composition, and the
+OrbitControls-derived radius scale.
+
+## Orbit pivot
+
+Camera → Orbit pivot chooses what a rotate turns around: the view centre
+(default) or the point under the cursor. This is the CAD-style pivot (Navisworks'
+steering-wheel Orbit: "the model rotates around a pivot point while the view
+remains fixed", pivot picked on the surface; Blender's turntable orbit with pivot
+modes is the same shape).
+
+- **In cursor mode the scene camera is `PivotOrbitController`**
+  (`src/components/scene/camera/PivotOrbitController.tsx`) and OrbitControls is
+  not mounted. OrbitControls cannot express this mode: it orbits its `target` and
+  re-aims at it on every `update()`, so an off-centre pivot is impossible to keep.
+  The controller owns orbit (right-drag), truck (middle-drag) and dolly (wheel),
+  easing at the shared camera-feel constant.
+- **The pivot is the nearest visible model surface under the pointer**; off any
+  model it is the selected model's bounding-box centre, and with nothing selected
+  the build plate (z = 0) clamped to the plate footprint
+  (`src/components/scene/camera/orbitPivot.ts`). It is resolved on the press —
+  beginning an orbit puts the models' CPU raycasting to sleep, so resolving on
+  the orbit's start event found nothing.
+- **`pivotOrbit.ts` is a rigid rotation about the pivot, with the world up left
+  alone.** Picking the pivot seeds the state from the current pose, so it changes
+  nothing on screen — no re-aim, no rescale. Orbiting turns the eye about the
+  pivot and carries the look point with it: azimuth (about the world up) keeps
+  the pivot on its pixel exactly, elevation pitches with a level horizon and lets
+  the pivot drift vertically, and the camera never rolls. `__tests__/pivotOrbit`
+  pins those four properties.
+  - The alternative — aiming at the pivot and compensating with a focal offset,
+    the way the `camera-controls` package's orbit-point call does — holds the
+    pivot's pixel through elevation too, but it visibly re-aims and rescales the
+    view at the moment the pivot is picked. That reads as "the camera
+    turns/zooms when I click the mesh", which is why it was dropped.
+- **The shim keeps the rest of the scene working.** The controller exposes an
+  OrbitControls-shaped object through `orbitControlsRef` and registers it as the
+  R3F default controls (`set({ controls })`), so the intro/home/focus framing,
+  the ortho frustum and SpaceMouse keep finding a camera controller. The shim
+  carries OrbitControls' flags (`enableRotate`/`enablePan`/`enableZoom`), not just
+  `target`/`update`: the home reset refuses to run without them and leaves
+  `cameraInteractionEnabled` off forever. `update()` means "adopt the camera pose
+  as a new state", which is how a focus/home move or a SpaceMouse gesture hands
+  the camera back.
+- **While the camera is owned elsewhere the controller stands down** (`enabled`
+  false, or the shim disabled by a SpaceMouse gesture) and does not apply its
+  state — applying a stale pose would fight the animation and keep
+  `cameraInteractionEnabled` false.
+- **Truck deltas are absolute from the gesture's pivot**, like the orbit angles.
+  Re-basing the pan on the (eased) current pivot re-applied the whole travel on
+  every sample and shot the camera off after a small drag.
+- The ortho frustum is derived from a zoom radius kept separately from the orbit
+  radius inside the controller (picking a pivot changes the pivot's distance,
+  which must not rescale an orthographic view); `OrthoFrustumSync` is suspended
+  in this mode. The trackpad gesture path and the
+  wheel-zoom pose applier are also suspended: the controller's wheel dolly is the
+  zoom in this mode.
+- Known limits of the mode: mouse only (a touch has no cursor, and touch rotation
+  is gone while OrbitControls is unmounted), and the trackpad two-finger
+  pan/orbit gestures are not wired into the controller.
+
 ## SpaceMouse
 
 Both SpaceMouse controllers (`NativeSpaceMouseController`,

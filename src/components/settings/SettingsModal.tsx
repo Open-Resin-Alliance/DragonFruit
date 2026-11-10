@@ -8,6 +8,12 @@ import { useLocale } from '@/components/I18nClientProvider';
 import contributors from '@/components/settings/contributors.json';
 import { SponsorsCarousel } from '@/components/settings/SponsorsCarousel';
 import { CameraSettingsTab } from '@/components/settings/CameraSettingsTab';
+import {
+  DEFAULT_CAMERA_ORBIT_PIVOT_SETTINGS,
+  getSavedCameraOrbitPivotSettings,
+  saveCameraOrbitPivotSettings,
+  type CameraOrbitPivot,
+} from '@/components/settings/cameraOrbitPivotPreferences';
 import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
 import { DEFAULT_BAKED_OCCLUSION_INTENSITY } from '@/features/scene/bakedOcclusion';
@@ -454,6 +460,7 @@ export function SettingsModal({
   const [draftSelectedTintStrength, setDraftSelectedTintStrength] = useState(selectedTintStrength);
   const [draftCameraProjectionMode, setDraftCameraProjectionMode] = useState<CameraProjectionMode>(() => getSavedCameraProjectionSettings().mode);
   const [draftCameraFeelPreset, setDraftCameraFeelPreset] = useState<CameraFeelPreset>(() => getSavedCameraFeelSettings().preset);
+  const [draftCameraOrbitPivot, setDraftCameraOrbitPivot] = useState<CameraOrbitPivot>(() => getSavedCameraOrbitPivotSettings().pivot);
   const [draftCameraTrackpadPrimaryAction, setDraftCameraTrackpadPrimaryAction] = useState<CameraTrackpadPrimaryAction>(() => getSavedCameraTrackpadSettings().primaryAction);
   const [draftCameraTrackpadModifierKey, setDraftCameraTrackpadModifierKey] = useState<CameraTrackpadModifierKey>(() => getSavedCameraTrackpadSettings().modifierKey);
   const [draftCameraTrackpadPanAcceleration, setDraftCameraTrackpadPanAcceleration] = useState<number>(() => getSavedCameraTrackpadSettings().panAcceleration);
@@ -563,6 +570,7 @@ export function SettingsModal({
     setDraftSelectedTintStrength(selectedTintStrength);
     setDraftCameraProjectionMode(getSavedCameraProjectionSettings().mode);
     setDraftCameraFeelPreset(getSavedCameraFeelSettings().preset);
+    setDraftCameraOrbitPivot(getSavedCameraOrbitPivotSettings().pivot);
     setDraftCameraTrackpadPrimaryAction(getSavedCameraTrackpadSettings().primaryAction);
     setDraftCameraTrackpadModifierKey(getSavedCameraTrackpadSettings().modifierKey);
     setDraftCameraTrackpadPanAcceleration(getSavedCameraTrackpadSettings().panAcceleration);
@@ -903,6 +911,7 @@ export function SettingsModal({
     setDraftSelectedTintStrength(DEFAULT_SELECTED_TINT_STRENGTH);
     setDraftCameraProjectionMode(DEFAULT_CAMERA_PROJECTION_SETTINGS.mode);
     setDraftCameraFeelPreset(DEFAULT_CAMERA_FEEL_SETTINGS.preset);
+    setDraftCameraOrbitPivot(DEFAULT_CAMERA_ORBIT_PIVOT_SETTINGS.pivot);
     setDraftCameraTrackpadPrimaryAction(DEFAULT_CAMERA_TRACKPAD_SETTINGS.primaryAction);
     setDraftCameraTrackpadModifierKey(DEFAULT_CAMERA_TRACKPAD_SETTINGS.modifierKey);
     setDraftCameraTrackpadPanAcceleration(DEFAULT_CAMERA_TRACKPAD_SETTINGS.panAcceleration);
@@ -990,6 +999,7 @@ export function SettingsModal({
     saveCameraProjectionSettings({ mode: draftCameraProjectionMode });
     saveCameraFovSettings({ fov: draftPerspectiveFov });
     saveCameraFeelSettings({ preset: draftCameraFeelPreset });
+    saveCameraOrbitPivotSettings({ pivot: draftCameraOrbitPivot });
     saveCameraTrackpadSettings({
       primaryAction: draftCameraTrackpadPrimaryAction,
       modifierKey: draftCameraTrackpadModifierKey,
@@ -1049,6 +1059,7 @@ export function SettingsModal({
     draftCameraProjectionMode,
     draftPerspectiveFov,
     draftCameraFeelPreset,
+    draftCameraOrbitPivot,
     draftCameraTrackpadPrimaryAction,
     draftCameraTrackpadModifierKey,
     draftCameraTrackpadPanAcceleration,
@@ -1453,6 +1464,8 @@ export function SettingsModal({
                   onPerspectiveFovChange={setDraftPerspectiveFov}
                   cameraFeelPreset={draftCameraFeelPreset}
                   onCameraFeelPresetChange={setDraftCameraFeelPreset}
+                  cameraOrbitPivot={draftCameraOrbitPivot}
+                  onCameraOrbitPivotChange={setDraftCameraOrbitPivot}
                   cameraTrackpadPrimaryAction={draftCameraTrackpadPrimaryAction}
                   onCameraTrackpadPrimaryActionChange={setDraftCameraTrackpadPrimaryAction}
                   cameraTrackpadModifierKey={draftCameraTrackpadModifierKey}

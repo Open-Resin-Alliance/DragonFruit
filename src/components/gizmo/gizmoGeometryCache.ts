@@ -12,7 +12,7 @@ const ringGeometryCache = new Map<string, THREE.RingGeometry>();
 const moveShaftGeometryCache = new Map<string, THREE.CylinderGeometry>();
 const rotationArcGeometryCache = new Map<GizmoAxis, THREE.TubeGeometry>();
 const rotationArcPointsCache = new Map<'front' | 'back', THREE.Vector3[]>();
-let scaleCubeEdgeGeometry: THREE.EdgesGeometry | null = null;
+const scaleCubeVisibleEdgeGeometryCache = new Map<number, THREE.BufferGeometry>();
 
 function geometryKey(...values: Array<string | number>): string {
   return values.join(':');
@@ -114,8 +114,12 @@ export function getCachedRotationArcPoints(kind: 'front' | 'back'): THREE.Vector
         ));
       }
     } else {
+      // The far side of the ring: every angle the camera-facing 90 degree arc
+      // does not cover, so the two together always read as a complete circle -
+      // bright where the camera is, faint around the remaining 270 degrees.
+      const arcAngle = (3 * Math.PI) / 2;
       for (let i = 0; i <= segments; i += 1) {
-        const angle = (i / segments) * Math.PI + Math.PI / 2;
+        const angle = Math.PI / 4 + (i / segments) * arcAngle;
         points.push(new THREE.Vector3(
           Math.cos(angle) * GIZMO_SIZES.ringMajorRadius,
           Math.sin(angle) * GIZMO_SIZES.ringMajorRadius,
@@ -174,11 +178,46 @@ export function getCachedRotationArcGeometry(axis: GizmoAxis): THREE.TubeGeometr
   return geometry;
 }
 
-export function getCachedScaleCubeEdgeGeometry(): THREE.EdgesGeometry {
-  if (!scaleCubeEdgeGeometry) {
-    scaleCubeEdgeGeometry = new THREE.EdgesGeometry(getCachedBoxGeometry(1, 1, 1));
+/**
+ * Edges of the scale handle's unit cube that a camera in the given octant can
+ * actually see. A cube hides exactly the three edges between its three
+ * back-facing faces; everything else - the front face outlines plus the three
+ * silhouette edges - stays visible. Line handles are drawn with depth testing
+ * off (they overlay the model), so the faces cannot hide the back edges in the
+ * depth buffer and the culling has to happen in the geometry instead.
+ *
+ * `mask` bit 0/1/2 is set when the camera direction, expressed in the cube's
+ * local frame, has a positive x/y/z component. The cube is axis-aligned in its
+ * parent, so eight variants cover every orientation.
+ */
+export function getCachedScaleCubeVisibleEdgeGeometry(mask: number): THREE.BufferGeometry {
+  let geometry = scaleCubeVisibleEdgeGeometryCache.get(mask);
+  if (!geometry) {
+    const positions: number[] = [];
+    for (let a = 0; a < 8; a += 1) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        const b = a | (1 << axis);
+        if (b === a) continue;
+        // The two faces meeting at this edge are the ones normal to the axes
+        // the edge does not run along. A face is front-facing when its corner
+        // sign matches the view direction's sign on that axis.
+        const visible = [0, 1, 2].some((otherAxis) =>
+          otherAxis !== axis
+          && ((a >> otherAxis) & 1) === ((mask >> otherAxis) & 1));
+        if (!visible) continue;
+        // Corner index bits are the sign of x, y, z (set bit = +half extent).
+        positions.push(
+          a & 1 ? 0.5 : -0.5, a & 2 ? 0.5 : -0.5, a & 4 ? 0.5 : -0.5,
+          b & 1 ? 0.5 : -0.5, b & 2 ? 0.5 : -0.5, b & 4 ? 0.5 : -0.5,
+        );
+      }
+    }
+
+    geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    scaleCubeVisibleEdgeGeometryCache.set(mask, geometry);
   }
-  return scaleCubeEdgeGeometry;
+  return geometry;
 }
 
 export function warmTransformGizmoGeometryCache(): void {
@@ -205,5 +244,7 @@ export function warmTransformGizmoGeometryCache(): void {
   getCachedConeGeometry(GIZMO_SIZES.ringDiamondRadius * 0.36, GIZMO_SIZES.ringDiamondRadius, 16);
   getCachedBoxGeometry(GIZMO_SIZES.scaleHexagonRadius * 2.3, GIZMO_SIZES.scaleHexagonRadius * 2.3, GIZMO_SIZES.scaleHexagonRadius * 2.3);
   getCachedBoxGeometry(1, 1, 1);
-  getCachedScaleCubeEdgeGeometry();
+  for (let mask = 0; mask < 8; mask += 1) {
+    getCachedScaleCubeVisibleEdgeGeometry(mask);
+  }
 }
