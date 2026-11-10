@@ -1,0 +1,39 @@
+name: Verify signed Windows installers
+description: >-
+  Check that the NSIS installers and the executable inside them are signed and
+  timestamped. A build that silently ships unsigned installers is worse than a
+  failed one: SmartScreen would warn on every download and nothing in the
+  pipeline would say why.
+
+runs:
+  using: composite
+  steps:
+    # -RequireSignature checks the executable inside each installer. `-Formats
+    # nsis` is the default now, but a preview branch from before #979 defaults
+    # to MSI as well, which is no longer built.
+    - name: Verify Windows installer runtime payloads
+      shell: pwsh
+      run: ./scripts/verify-windows-bundles.ps1 -Formats nsis -RequireSignature
+
+    - name: Verify the Windows installers are signed
+      shell: pwsh
+      run: |
+        # Not the executable in target/release: the bundler restores the
+        # unsigned original there after building each package type, and the
+        # signed copy lives inside the installers (checked above).
+        $bundle = 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle'
+        $files = @(Get-ChildItem $bundle -Recurse -File -Include '*-setup.exe')
+        if ($files.Count -eq 0) { throw "No NSIS installer was built under $bundle." }
+        foreach ($file in $files) {
+          $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+          if (-not $signature.SignerCertificate) {
+            throw "$($file.Name) is not signed."
+          }
+          if ($signature.Status -eq 'HashMismatch') {
+            throw "$($file.Name) has a signature that does not match its contents."
+          }
+          if (-not $signature.TimeStamperCertificate) {
+            throw "$($file.Name) is signed but not timestamped; the signature dies with the certificate."
+          }
+          Write-Host "$($file.Name): status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
+        }

@@ -323,83 +323,19 @@ jobs:
           git config --system core.longpaths true
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
 
-      # Windows installers are signed with Azure Artifact Signing. The login is
-      # OIDC: no client secret is stored, the federated credential on the app
-      # registration trusts this repository and ref. `scripts/sign-windows.ps1`
-      # then picks the login up through DefaultAzureCredential's CLI credential.
-      - name: Azure login (Artifact Signing)
+      # Azure login, the Artifact Signing module, the signing environment for
+      # the bundler, and a probe signature that fails fast with a reason. Shared
+      # with the other signing workflows; see the action for the details.
+      - name: Windows signing setup
         if: matrix.platform == 'windows-latest'
-        uses: azure/login@v3
+        uses: ./.github/actions/windows-signing-setup
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      # The same PowerShell module `azure/artifact-signing-action` installs;
-      # it is invoked per file from the Tauri bundler instead of once over a
-      # folder, so the signature lands before the updater artifacts are made.
-      - name: Install the Artifact Signing module
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
-
-      # The bundler discards the signer's stderr: any non-zero exit becomes
-      # "failed to run pwsh", with no reason attached. Signing a throwaway
-      # binary first turns a broken signer into a two-minute failure that
-      # prints its own error, instead of a nine-minute build that says nothing.
-      - name: Sign a probe executable
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        env:
-          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
-        run: |
-          # csc, not Add-Type: PowerShell 7 cannot emit an assembly ("Both the
-          # assembly types 'ConsoleApplication' and 'WindowsApplication' are not
-          # currently supported"), and this step runs on 7.
-          $probe = Join-Path $env:RUNNER_TEMP 'signing-probe.exe'
-          $source = Join-Path $env:RUNNER_TEMP 'signing-probe.cs'
-          'public static class Probe { public static void Main() {} }' |
-            Out-File -FilePath $source -Encoding ascii
-          & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
-            /nologo /target:exe "/out:$probe" $source | Out-Null
-          # The bundler chdirs to src-tauri before it runs this command, so the
-          # overlay's `..\scripts\sign-windows.cmd` only resolves from there. Run
-          # it the same way (as verify-windows-signing.yml does); from the
-          # repository root the probe fails on a path the real build never sees.
-          $tauriDir = Join-Path (Get-Location).Path 'src-tauri'
-          $overlay = Get-Content (Join-Path $tauriDir 'tauri.windows-signing.conf.json') -Raw | ConvertFrom-Json
-          $signCommand = $overlay.bundle.windows.signCommand
-          $arguments = @($signCommand.args | ForEach-Object { if ($_ -eq '%1') { $probe } else { $_ } })
-          Push-Location $tauriDir
-          try {
-            & $signCommand.cmd @arguments
-            $exit = $LASTEXITCODE
-          } finally {
-            Pop-Location
-          }
-          if ($exit -ne 0) {
-            throw "The signing command exited $exit."
-          }
-          $signature = Get-AuthenticodeSignature -LiteralPath $probe
-          if (-not $signature.SignerCertificate) {
-            throw "The probe came back unsigned: $($signature.StatusMessage)"
-          }
-          if ($signature.Status -eq 'HashMismatch') {
-            throw 'The probe signature does not match its contents.'
-          }
-          if (-not $signature.TimeStamperCertificate) {
-            throw 'The probe is signed but not timestamped.'
-          }
-          # The subject carries the certificate holder's name and locality, and
-          # these logs are public. The thumbprint identifies the certificate
-          # without naming anyone; the full subject is on the artifact itself.
-          Write-Host "Probe signed: status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
+          signing-endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
 
       - name: Build Tauri bundle
         if: matrix.build_kind == 'tauri'
@@ -412,59 +348,17 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: MHNF3GA2MM
-          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
-          # sign-windows.ps1 mints a fresh federated token before signing (the
-          # one azure/login exchanged expires in ~5 min) and logs in as this app.
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
         with:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
 
-      # Tauri discards the signer's stderr, so a failed signing call says only
-      # "failed to run pwsh". The script writes what happened to this file; an
-      # absent or empty one means it never started.
       - name: Show the signing log
         if: always() && matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          $log = Join-Path $env:RUNNER_TEMP 'dragonfruit-sign.log'
-          if (Test-Path $log) { Get-Content $log } else { Write-Host 'the signing script never ran' }
+        uses: ./.github/actions/windows-signing-log
 
-      - name: Verify Windows installer runtime payloads
+      - name: Verify the signed Windows installers
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/verify-windows-bundles.ps1 -RequireSignature
-
-      # A release that silently ships unsigned installers is worse than a
-      # failed one: SmartScreen would warn on every download and nothing in the
-      # pipeline would say why.
-      - name: Verify Windows binaries are signed
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # Not the executable in target/release: the bundler restores the
-          # unsigned original there after building each package type, and the
-          # signed copy lives inside the installers. verify-windows-bundles.ps1
-          # checks that one.
-          $target = 'src-tauri/target/x86_64-pc-windows-msvc/release'
-          $files = @(Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe')
-          foreach ($file in $files) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-            if (-not $signature.SignerCertificate) {
-              throw "$($file.Name) is not signed."
-            }
-            if ($signature.Status -eq 'HashMismatch') {
-              throw "$($file.Name) has a signature that does not match its contents."
-            }
-            if (-not $signature.TimeStamperCertificate) {
-              throw "$($file.Name) is signed but not timestamped; the signature dies with the certificate."
-            }
-            Write-Host "$($file.Name): status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
-          }
+        uses: ./.github/actions/windows-signing-verify
 
       - name: Embed QuickLook extension + verify universal bundle
         if: matrix.platform == 'macos-latest'
