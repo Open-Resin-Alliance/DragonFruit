@@ -124,6 +124,7 @@ import {
   deleteModelLabel,
   deleteModelsLabel,
   deletePlateLabel,
+  renamePlateLabel,
   deleteSupportsForModelLabel,
   deleteSupportsForModelsLabel,
   duplicateModelLabel,
@@ -233,6 +234,26 @@ type PersistedMeshAppearance = {
   hoverTintStrength: number;
   selectedTintStrength: number;
 };
+
+/**
+ * Run `cb` once the browser is idle, or on a short timer in a runtime without an idle
+ * callback (Safari, Node).
+ */
+function scheduleWhenIdle(cb: () => void, timeoutMs: number): void {
+  const idleWindow: { requestIdleCallback?: Window['requestIdleCallback'] } | undefined =
+    typeof window === 'undefined' ? undefined : window;
+  if (typeof idleWindow?.requestIdleCallback === 'function') {
+    idleWindow.requestIdleCallback(cb, { timeout: timeoutMs });
+  } else {
+    setTimeout(cb, 16);
+  }
+}
+
+/** The parts of a support that widen its footprint, read off any support type. */
+type FootprintPoint = { x: number; y: number; z: number };
+type FootprintJoint = { pos?: FootprintPoint; diameter?: number };
+type FootprintSegment = { diameter: number; topJoint?: FootprintJoint; bottomJoint?: FootprintJoint };
+type FootprintContact = { pos?: FootprintPoint; contactDiameterMm?: number; profile?: { contactDiameterMm?: number } };
 
 /**
  * Ambient-occlusion bakes in flight at once (see the scheduling comment in the
@@ -1892,9 +1913,10 @@ export function useSceneCollectionManager(options?: {
    * save records as the single-plate shorthand.
    */
   const plateName = activePlate?.name ?? '';
+  // `renamePlate` is defined further down, beside the other plate edits, and pushes the history.
+  const renamePlateRef = useRef<(plateId: string, name: string) => void>(() => {});
   const setPlateName = useCallback((name: string) => {
-    const target = activePlateIdRef.current;
-    setPlates((prev) => prev.map((plate) => (plate.id === target ? { ...plate, name } : plate)));
+    renamePlateRef.current(activePlateIdRef.current, name);
   }, []);
   /**
    * Which plates refuse edits. A lock, not a document field: it is about the
@@ -2995,13 +3017,7 @@ export function useSceneCollectionManager(options?: {
 
     deferredAccelerationProcessingRef.current = true;
 
-    const scheduleNext = (cb: () => void) => {
-      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-        (window as any).requestIdleCallback(cb, { timeout: 120 });
-      } else {
-        setTimeout(cb, 16);
-      }
-    };
+    const scheduleNext = (cb: () => void) => scheduleWhenIdle(cb, 120);
 
     const step = () => {
       if (deferredAccelerationPauseReasonsRef.current.size > 0) {
@@ -3068,13 +3084,7 @@ export function useSceneCollectionManager(options?: {
 
     deferredDisposalProcessingRef.current = true;
 
-    const scheduleNext = (cb: () => void) => {
-      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-        (window as any).requestIdleCallback(cb, { timeout: 120 });
-      } else {
-        setTimeout(cb, 16);
-      }
-    };
+    const scheduleNext = (cb: () => void) => scheduleWhenIdle(cb, 120);
 
     const step = () => {
       const geometry = deferredDisposalQueueRef.current.shift();
@@ -4237,13 +4247,7 @@ export function useSceneCollectionManager(options?: {
     if (!options?.deferPostProcessing) {
       deferAccelerateGeometry([nextGeometry]);
 
-      const scheduleIdle = (cb: () => void) => {
-        if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-          (window as any).requestIdleCallback(cb, { timeout: 250 });
-        } else {
-          setTimeout(cb, 16);
-        }
-      };
+      const scheduleIdle = (cb: () => void) => scheduleWhenIdle(cb, 250);
       pendingFlatteningPlanesRef.current += 1;
       scheduleIdle(() => {
         try {
@@ -4384,13 +4388,7 @@ export function useSceneCollectionManager(options?: {
     setModels(nextModels);
 
     // Defer post-processing (flattening planes) like replaceModelGeometry does.
-    const scheduleIdle = (cb: () => void) => {
-      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-        (window as any).requestIdleCallback(cb, { timeout: 250 });
-      } else {
-        setTimeout(cb, 16);
-      }
-    };
+    const scheduleIdle = (cb: () => void) => scheduleWhenIdle(cb, 250);
     scheduleIdle(() => {
       const planes = computeFlatteningPlanes(bufferGeometry);
       setModels((prev) => prev.map((m) => (
@@ -4522,13 +4520,7 @@ export function useSceneCollectionManager(options?: {
     setModels(nextModels);
 
     // Defer flattening-plane computation for every new geometry.
-    const scheduleIdle = (cb: () => void) => {
-      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-        (window as any).requestIdleCallback(cb, { timeout: 250 });
-      } else {
-        setTimeout(cb, 16);
-      }
-    };
+    const scheduleIdle = (cb: () => void) => scheduleWhenIdle(cb, 250);
     scheduleIdle(() => {
       const planes = built.map((b) => computeFlatteningPlanes(b.geometry));
       setModels((prev) => prev.map((m) => {
@@ -4723,13 +4715,7 @@ export function useSceneCollectionManager(options?: {
 
     deferAccelerateGeometry([target.geometry]);
 
-    const scheduleIdle = (cb: () => void) => {
-      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-        (window as any).requestIdleCallback(cb, { timeout: 250 });
-      } else {
-        setTimeout(cb, 16);
-      }
-    };
+    const scheduleIdle = (cb: () => void) => scheduleWhenIdle(cb, 250);
     pendingFlatteningPlanesRef.current += 1;
     scheduleIdle(() => {
       try {
@@ -5831,7 +5817,7 @@ export function useSceneCollectionManager(options?: {
       payload.knots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
       payload.kickstandKnots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
 
-      const expandSegments = (segments: Array<any>) => {
+      const expandSegments = (segments: FootprintSegment[]) => {
         segments.forEach((segment) => {
           expand(segment.topJoint?.pos, Math.max(0.001, (segment.topJoint?.diameter ?? segment.diameter) / 2));
           expand(segment.bottomJoint?.pos, Math.max(0.001, (segment.bottomJoint?.diameter ?? segment.diameter) / 2));
@@ -5843,12 +5829,12 @@ export function useSceneCollectionManager(options?: {
       // differs by contact kind -- a cone's is in its profile, a disk's is on
       // the contact.
       for (const descriptor of SUPPORT_TYPES) {
-        const entities = payload[descriptor.location.key] as unknown as Array<Record<string, any>> | undefined;
+        const entities = payload[descriptor.location.key] as unknown as Array<Record<string, unknown>> | undefined;
         if (!entities) continue;
         for (const entity of entities) {
-          if (descriptor.hasSegments) expandSegments(entity.segments as any[]);
+          if (descriptor.hasSegments) expandSegments(entity.segments as FootprintSegment[]);
           for (const { kind, field } of contactEndpointsFor(descriptor.id)) {
-            const contact = entity[field];
+            const contact = entity[field] as FootprintContact | undefined;
             if (!contact?.pos) continue;
             const diameter = kind === 'cone'
               ? contact.profile?.contactDiameterMm
@@ -8839,9 +8825,26 @@ export function useSceneCollectionManager(options?: {
     return plateFrames.find((frame) => frame.id === plateId) ?? plateFrames[0];
   }, [plateFrames, resolveModelPlateId]);
 
+  /** Rename a plate, as its own history step; renaming it to the name it has is not one. */
   const renamePlate = useCallback((plateId: string, name: string) => {
-    setPlates((prev) => prev.map((plate) => (plate.id === plateId ? { ...plate, name } : plate)));
-  }, []);
+    const current = platesRef.current;
+    const index = current.findIndex((plate) => plate.id === plateId);
+    if (index < 0 || current[index].name === name) return;
+
+    const next = current.map((plate) => (plate.id === plateId ? { ...plate, name } : plate));
+    const snapshot = (plates: ScenePlate[]) => captureSceneSnapshot(
+      modelsRef.current,
+      activeModelIdRef.current,
+      selectedModelIdsRef.current,
+      { plates, activePlateId: activePlateIdRef.current },
+    );
+    const before = snapshot(current);
+    // The ref too, so a second rename in the same tick starts from this one.
+    platesRef.current = next;
+    setPlates(next);
+    pushSceneSnapshotHistory(before, snapshot(next), renamePlateLabel(index + 1));
+  }, [pushSceneSnapshotHistory]);
+  renamePlateRef.current = renamePlate;
 
   /**
    * Delete a plate and the models standing on it. Any plate can go, the first one

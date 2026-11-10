@@ -366,6 +366,7 @@ dependencies = [
 name = "dragonfruit-slicing-engine"
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 version = "3.3.2"
 =======
 version = "3.3.1"
@@ -373,6 +374,9 @@ version = "3.3.1"
 =======
 version = "3.4.0"
 >>>>>>> 0bc5af67 (feat(slicing): SIMD-batch RAW triangle/layer intersections)
+=======
+version = "3.3.3"
+>>>>>>> origin/dev
 dependencies = [
  "aes",
  "base64",

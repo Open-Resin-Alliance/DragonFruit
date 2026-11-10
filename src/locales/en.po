@@ -33,7 +33,7 @@ msgid "{0, plural, one {# plugin in this profile.} other {# plugins in this prof
 msgstr "{0, plural, one {# plugin in this profile.} other {# plugins in this profile.}}"
 
 #. placeholder {0}: model.polygonCount
-#: src/components/controls/ModelManagerPanel.tsx:52
+#: src/components/controls/ModelManagerPanel.tsx:53
 msgid "{0, plural, one {# polygon} other {# polygons}}"
 msgstr "{0, plural, one {# polygon} other {# polygons}}"
 
@@ -58,7 +58,7 @@ msgstr "{0} of {1, plural, one {# model carries an interior cavity.} other {# mo
 msgid "{count, plural, one {(# layer)} other {(# layers)}}"
 msgstr "{count, plural, one {(# layer)} other {(# layers)}}"
 
-#: src/components/controls/ModelManagerPanel.tsx:67
+#: src/components/controls/ModelManagerPanel.tsx:68
 msgid "{count, plural, one {# body} other {# bodies}}"
 msgstr "{count, plural, one {# body} other {# bodies}}"
 
@@ -127,7 +127,7 @@ msgctxt "Undo history entry"
 msgid "{count, plural, one {Duplicate # model} other {Duplicate # models}}"
 msgstr "{count, plural, one {Duplicate # model} other {Duplicate # models}}"
 
-#: src/features/scene/sceneHistoryLabels.ts:235
+#: src/features/scene/sceneHistoryLabels.ts:239
 msgctxt "Undo history entry"
 msgid "{count, plural, one {Group # model} other {Group # models}}"
 msgstr "{count, plural, one {Group # model} other {Group # models}}"
@@ -187,7 +187,7 @@ msgctxt "Undo history entry"
 msgid "{count, plural, one {Transform # model} other {Transform # models}}"
 msgstr "{count, plural, one {Transform # model} other {Transform # models}}"
 
-#: src/features/scene/sceneHistoryLabels.ts:246
+#: src/features/scene/sceneHistoryLabels.ts:250
 msgctxt "Undo history entry"
 msgid "{count, plural, one {Ungroup # model} other {Ungroup # models}}"
 msgstr "{count, plural, one {Ungroup # model} other {Ungroup # models}}"
@@ -334,7 +334,7 @@ msgstr "{saved, plural, one {# saved} other {# saved}} • {online, plural, one 
 msgid "{seconds} s"
 msgstr "{seconds} s"
 
-#: src/components/controls/ModelManagerPanel.tsx:54
+#: src/components/controls/ModelManagerPanel.tsx:55
 msgid "{size} · {polygons}"
 msgstr "{size} · {polygons}"
 
@@ -735,7 +735,7 @@ msgid "Add leaf"
 msgstr "Add leaf"
 
 #. Tooltip on the plus in the Models panel header, which opens the mesh picker.
-#: src/components/controls/ModelManagerPanel.tsx:850
+#: src/components/controls/ModelManagerPanel.tsx:851
 msgid "Add models to the plate"
 msgstr "Add models to the plate"
 
@@ -900,7 +900,11 @@ msgstr "Analysing supports"
 msgid "Analysis"
 msgstr "Analysis"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11916
+=======
+#: src/app/page.tsx:11915
+>>>>>>> origin/dev
 msgid "Analyzing Model Islands & Minima"
 msgstr "Analyzing Model Islands & Minima"
 
@@ -999,7 +1003,11 @@ msgstr "Applying to model {current} of {total}"
 msgid "Applying…"
 msgstr "Applying…"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12057
+=======
+#: src/app/page.tsx:12056
+>>>>>>> origin/dev
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr "Are you sure you want to remove every model from the plate?"
 
@@ -1505,7 +1513,7 @@ msgid "Body"
 msgstr "Body"
 
 #. placeholder {0}: index + 1
-#: src/components/controls/ModelManagerPanel.tsx:62
+#: src/components/controls/ModelManagerPanel.tsx:63
 msgid "Body {0}"
 msgstr "Body {0}"
 
@@ -1668,14 +1676,19 @@ msgstr "Camera view mode: {currentLabel}"
 msgid "Can't open this scene"
 msgstr "Can't open this scene"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11971
 #: src/app/page.tsx:12020
+=======
+#: src/app/page.tsx:11970
+#: src/app/page.tsx:12019
+>>>>>>> origin/dev
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:470
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:666
 #: src/components/controls/AutoSupportPanel.tsx:563
 #: src/components/controls/IslandScanCard.tsx:184
 #: src/components/controls/IslandsPanel.tsx:304
-#: src/components/controls/ModelManagerPanel.tsx:872
+#: src/components/controls/ModelManagerPanel.tsx:873
 #: src/components/modals/DestructiveTransformModal.tsx:44
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:41
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:41
@@ -1991,7 +2004,11 @@ msgstr "Clear All failed. Check console for details."
 msgid "Clear build plate"
 msgstr "Clear build plate"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12009
+=======
+#: src/app/page.tsx:12008
+>>>>>>> origin/dev
 msgid "Clear Build Plate?"
 msgstr "Clear Build Plate?"
 
@@ -2009,7 +2026,11 @@ msgstr "Clear hollowing"
 msgid "Clear Override"
 msgstr "Clear Override"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12048
+=======
+#: src/app/page.tsx:12047
+>>>>>>> origin/dev
 msgid "Clear Plate"
 msgstr "Clear Plate"
 
@@ -2078,7 +2099,11 @@ msgstr "Client ID"
 msgid "Close"
 msgstr "Close"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12015
+=======
+#: src/app/page.tsx:12014
+>>>>>>> origin/dev
 msgid "Close clear-plate confirmation"
 msgstr "Close clear-plate confirmation"
 
@@ -2110,7 +2135,7 @@ msgstr "Close material anti-aliasing settings"
 msgid "Close material reassignment"
 msgstr "Close material reassignment"
 
-#: src/components/controls/ModelManagerPanel.tsx:866
+#: src/components/controls/ModelManagerPanel.tsx:867
 #: src/components/modals/ObsoleteVoxlVersionModal.tsx:40
 #: src/components/modals/PrintingResliceModal.tsx:32
 #: src/components/modals/ScenePluginMissingModal.tsx:38
@@ -2287,8 +2312,8 @@ msgstr "Coincident"
 msgid "Collapse card"
 msgstr "Collapse card"
 
-#: src/components/controls/ModelManagerPanel.tsx:973
-#: src/components/controls/ModelManagerPanel.tsx:1079
+#: src/components/controls/ModelManagerPanel.tsx:974
+#: src/components/controls/ModelManagerPanel.tsx:1080
 msgid "Collapse folder"
 msgstr "Collapse folder"
 
@@ -2390,7 +2415,11 @@ msgstr "Confirm Cancel"
 msgid "Confirm cancel print"
 msgstr "Confirm cancel print"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12008
+=======
+#: src/app/page.tsx:12007
+>>>>>>> origin/dev
 msgid "Confirm clearing the build plate"
 msgstr "Confirm clearing the build plate"
 
@@ -2410,7 +2439,11 @@ msgstr "Confirm delete recent file"
 msgid "Confirm delete snapshot"
 msgstr "Confirm delete snapshot"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12007
+=======
+#: src/app/page.tsx:12006
+>>>>>>> origin/dev
 msgid "Confirm deleting the plate"
 msgstr "Confirm deleting the plate"
 
@@ -2523,7 +2556,11 @@ msgid "Contents"
 msgstr "Contents"
 
 #. Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).
+<<<<<<< HEAD
 #: src/app/page.tsx:11983
+=======
+#: src/app/page.tsx:11982
+>>>>>>> origin/dev
 #: src/components/layout/FirstRunOnboarding.tsx:287
 #: src/components/layout/TopBar.tsx:1181
 #: src/components/organisms/modals/SceneFileModals.tsx:528
@@ -2616,7 +2653,11 @@ msgstr "Could not read printer data."
 msgid "Could not reopen this file from cache."
 msgstr "Could not reopen this file from cache."
 
+<<<<<<< HEAD
 #: src/features/scene/useSceneCollectionManager.ts:8163
+=======
+#: src/features/scene/useSceneCollectionManager.ts:8174
+>>>>>>> origin/dev
 msgid "Could not restore the model."
 msgstr "Could not restore the model."
 
@@ -2961,7 +3002,7 @@ msgid "Delete hole"
 msgstr "Delete hole"
 
 #. Tooltip on the trash button on a model row in the Models panel. Deleting is undoable, so it asks nothing first.
-#: src/components/controls/ModelManagerPanel.tsx:752
+#: src/components/controls/ModelManagerPanel.tsx:753
 msgid "Delete model"
 msgstr "Delete model"
 
@@ -2970,10 +3011,17 @@ msgctxt "Undo history entry"
 msgid "Delete models and plates"
 msgstr "Delete models and plates"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12048
 #: src/components/controls/ModelManagerPanel.tsx:488
 #: src/components/controls/ModelManagerPanel.tsx:860
 #: src/components/controls/ModelManagerPanel.tsx:881
+=======
+#: src/app/page.tsx:12047
+#: src/components/controls/ModelManagerPanel.tsx:489
+#: src/components/controls/ModelManagerPanel.tsx:861
+#: src/components/controls/ModelManagerPanel.tsx:882
+>>>>>>> origin/dev
 msgid "Delete plate"
 msgstr "Delete plate"
 
@@ -3044,8 +3092,13 @@ msgstr "Delete this model's existing supports and place the new ones"
 msgid "Delete this plate"
 msgstr "Delete this plate"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12009
 #: src/components/controls/ModelManagerPanel.tsx:861
+=======
+#: src/app/page.tsx:12008
+#: src/components/controls/ModelManagerPanel.tsx:862
+>>>>>>> origin/dev
 msgid "Delete this plate?"
 msgstr "Delete this plate?"
 
@@ -3194,7 +3247,11 @@ msgstr "Disconnected GitHub account."
 msgid "Discovered Printers"
 msgstr "Discovered Printers"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12105
+=======
+#: src/app/page.tsx:12104
+>>>>>>> origin/dev
 #: src/components/modals/ManifoldWarningModal.tsx:38
 #: src/components/organisms/SystemNotificationStack.tsx:285
 #: src/components/scene/MeshRepairReportModal.tsx:347
@@ -3639,8 +3696,8 @@ msgstr "Existing Supports Detected"
 msgid "Expand card"
 msgstr "Expand card"
 
-#: src/components/controls/ModelManagerPanel.tsx:973
-#: src/components/controls/ModelManagerPanel.tsx:1079
+#: src/components/controls/ModelManagerPanel.tsx:974
+#: src/components/controls/ModelManagerPanel.tsx:1080
 msgid "Expand folder"
 msgstr "Expand folder"
 
@@ -3732,7 +3789,11 @@ msgstr "Export selected curve"
 msgid "Export the selected preset as a JSON file"
 msgstr "Export the selected preset as a JSON file"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11949
+=======
+#: src/app/page.tsx:11948
+>>>>>>> origin/dev
 #: src/features/export/components/ExportPanel.tsx:761
 msgid "Exporting…"
 msgstr "Exporting…"
@@ -4099,7 +4160,11 @@ msgstr "Generate supports automatically on scan"
 msgid "Generated file"
 msgstr "Generated file"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11928
+=======
+#: src/app/page.tsx:11927
+>>>>>>> origin/dev
 msgid "Generating Supports"
 msgstr "Generating Supports"
 
@@ -4132,7 +4197,11 @@ msgstr "Give this build plate a name"
 msgid "Go back to the settings dialog"
 msgstr "Go back to the settings dialog"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12097
+=======
+#: src/app/page.tsx:12096
+>>>>>>> origin/dev
 msgid "Go to Settings → 3D Mouse to configure or block it."
 msgstr "Go to Settings → 3D Mouse to configure or block it."
 
@@ -4182,12 +4251,12 @@ msgctxt "Group rotation toggle"
 msgid "Group"
 msgstr "Group"
 
-#: src/features/scene/sceneHistoryLabels.ts:231
+#: src/features/scene/sceneHistoryLabels.ts:235
 msgctxt "Undo history entry"
 msgid "Group {modelName}"
 msgstr "Group {modelName}"
 
-#: src/components/controls/ModelManagerPanel.tsx:471
+#: src/components/controls/ModelManagerPanel.tsx:472
 msgid "Group selected"
 msgstr "Group selected"
 
@@ -4251,7 +4320,7 @@ msgstr "Height:"
 msgid "Held against toppling and peel"
 msgstr "Held against toppling and peel"
 
-#: src/components/controls/ModelManagerPanel.tsx:741
+#: src/components/controls/ModelManagerPanel.tsx:742
 msgid "Hide"
 msgstr "Hide"
 
@@ -4862,7 +4931,11 @@ msgstr "It's a trap! ...just kidding, drop your STL."
 msgid "Iterations"
 msgstr "Iterations"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11990
+=======
+#: src/app/page.tsx:11989
+>>>>>>> origin/dev
 msgid "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene and its models are shown in their normal colour while this printer is selected."
 msgstr "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene and its models are shown in their normal colour while this printer is selected."
 
@@ -4870,7 +4943,11 @@ msgstr "Its materials are split across several tanks, which the printer selected
 msgid "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene, hidden while this printer is selected — switch to a multi-material printer to print them."
 msgstr "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene, hidden while this printer is selected — switch to a multi-material printer to print them."
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11960
+=======
+#: src/app/page.tsx:11959
+>>>>>>> origin/dev
 msgid "Its materials stay hidden until you switch back"
 msgstr "Its materials stay hidden until you switch back"
 
@@ -4960,7 +5037,11 @@ msgstr "Keep the existing supports and do nothing"
 msgid "Keep the existing supports and place the new ones around them"
 msgstr "Keep the existing supports and place the new ones around them"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11963
+=======
+#: src/app/page.tsx:11962
+>>>>>>> origin/dev
 msgid "Keep the Multi-Tank printer"
 msgstr "Keep the Multi-Tank printer"
 
@@ -5124,11 +5205,19 @@ msgstr "Layers:"
 msgid "Layout Mode"
 msgstr "Layout Mode"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12115
 msgid "Leaf Fanning Active: Click model to sprout leaf"
 msgstr "Leaf Fanning Active: Click model to sprout leaf"
 
 #: src/app/page.tsx:12116
+=======
+#: src/app/page.tsx:12114
+msgid "Leaf Fanning Active: Click model to sprout leaf"
+msgstr "Leaf Fanning Active: Click model to sprout leaf"
+
+#: src/app/page.tsx:12115
+>>>>>>> origin/dev
 msgid "Leaf Fanning: Click a support shaft to lock anchor knot"
 msgstr "Leaf Fanning: Click a support shaft to lock anchor knot"
 
@@ -5779,7 +5868,7 @@ msgid "Mode"
 msgstr "Mode"
 
 #. Prefilled name when renaming a model whose file name is only an extension, e.g. ".stl".
-#: src/components/controls/ModelManagerPanel.tsx:419
+#: src/components/controls/ModelManagerPanel.tsx:420
 msgctxt "Default model name"
 msgid "Model"
 msgstr "Model"
@@ -5798,12 +5887,12 @@ msgstr "Model {index}/{total}: {modelName}"
 msgid "Model {position} of {count}: {modelName}"
 msgstr "Model {position} of {count}: {modelName}"
 
-#: src/components/controls/ModelManagerPanel.tsx:518
+#: src/components/controls/ModelManagerPanel.tsx:519
 msgid "Model actions…"
 msgstr "Model actions…"
 
 #. Accessible name of the info button on a model row. The tooltip beside it lists the mesh size and polygon count.
-#: src/components/controls/ModelManagerPanel.tsx:728
+#: src/components/controls/ModelManagerPanel.tsx:729
 msgid "Model details"
 msgstr "Model details"
 
@@ -5838,8 +5927,8 @@ msgstr "Model-Scale Sizing"
 
 #. Section heading of the models context menu. Rendered uppercase.
 #. Title of the panel listing every model loaded into the scene.
-#: src/components/controls/ModelManagerPanel.tsx:839
-#: src/components/controls/ModelManagerPanel.tsx:1119
+#: src/components/controls/ModelManagerPanel.tsx:840
+#: src/components/controls/ModelManagerPanel.tsx:1120
 #: src/components/controls/toolRailEntries.ts:71
 #: src/components/controls/toolRailEntries.ts:196
 msgid "Models"
@@ -5850,7 +5939,7 @@ msgctxt "Dialog field"
 msgid "Models"
 msgstr "Models"
 
-#: src/components/controls/ModelManagerPanel.tsx:1120
+#: src/components/controls/ModelManagerPanel.tsx:1121
 msgid "Models context menu"
 msgstr "Models context menu"
 
@@ -5930,7 +6019,11 @@ msgstr "Move, rotate, and scale"
 msgid "Moved off centre"
 msgstr "Moved off centre"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11958
+=======
+#: src/app/page.tsx:11957
+>>>>>>> origin/dev
 msgid "Multi-Material scene on a single-material printer"
 msgstr "Multi-Material scene on a single-material printer"
 
@@ -6025,7 +6118,11 @@ msgstr "Never"
 msgid "New Curve"
 msgstr "New Curve"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12096
+=======
+#: src/app/page.tsx:12095
+>>>>>>> origin/dev
 msgid "New input device detected."
 msgstr "New input device detected."
 
@@ -6188,7 +6285,7 @@ msgstr "No meshes loaded yet. Import a model first, then return to Slicing."
 msgid "No model selected"
 msgstr "No model selected"
 
-#: src/components/controls/ModelManagerPanel.tsx:899
+#: src/components/controls/ModelManagerPanel.tsx:900
 msgid "No models loaded"
 msgstr "No models loaded"
 
@@ -6264,7 +6361,11 @@ msgstr "No resin selected"
 msgid "No snapshots yet. Run \"Backup Now\" to create your first local snapshot."
 msgstr "No snapshots yet. Run \"Backup Now\" to create your first local snapshot."
 
+<<<<<<< HEAD
 #: src/features/scene/useSceneCollectionManager.ts:8136
+=======
+#: src/features/scene/useSceneCollectionManager.ts:8147
+>>>>>>> origin/dev
 msgid "No source file to restore this model from."
 msgstr "No source file to restore this model from."
 
@@ -6685,7 +6786,11 @@ msgstr "Orient flat against plate"
 msgid "Orient Model"
 msgstr "Orient Model"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11939
+=======
+#: src/app/page.tsx:11938
+>>>>>>> origin/dev
 msgid "Orienting Model"
 msgstr "Orienting Model"
 
@@ -6720,8 +6825,8 @@ msgstr "Output formats"
 
 #. Name of the automatic folder collecting models that sit outside the build plate.
 #. Name of the automatic folder collecting models that sit outside the build plate.
-#: src/components/controls/ModelManagerPanel.tsx:311
-#: src/components/controls/ModelManagerPanel.tsx:327
+#: src/components/controls/ModelManagerPanel.tsx:312
+#: src/components/controls/ModelManagerPanel.tsx:328
 msgid "Outside plate"
 msgstr "Outside plate"
 
@@ -6955,7 +7060,11 @@ msgstr "Placement Anchor"
 msgid "Placement message."
 msgstr "Placement message."
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11929
+=======
+#: src/app/page.tsx:11928
+>>>>>>> origin/dev
 msgid "Placing and bracing supports…"
 msgstr "Placing and bracing supports…"
 
@@ -6985,7 +7094,7 @@ msgstr "Plate behaviour across several beds"
 msgid "Plate Mode"
 msgstr "Plate Mode"
 
-#: src/components/controls/ModelManagerPanel.tsx:1017
+#: src/components/controls/ModelManagerPanel.tsx:1018
 msgid "Plate name"
 msgstr "Plate name"
 
@@ -7363,8 +7472,13 @@ msgid "Processing {count, plural, one {# model} other {# models}}"
 msgstr "Processing {count, plural, one {# model} other {# models}}"
 
 #: src/app/page.tsx:2086
+<<<<<<< HEAD
 #: src/app/page.tsx:11919
 #: src/app/page.tsx:11931
+=======
+#: src/app/page.tsx:11918
+#: src/app/page.tsx:11930
+>>>>>>> origin/dev
 msgid "Processing 1 model"
 msgstr "Processing 1 model"
 
@@ -7515,7 +7629,11 @@ msgstr "Rebuilding the surface"
 msgid "Rebuilding the surface into a solid"
 msgstr "Rebuilding the surface into a solid"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11797
+=======
+#: src/app/page.tsx:11796
+>>>>>>> origin/dev
 msgid "Rebuilding the surface."
 msgstr "Rebuilding the surface."
 
@@ -7654,8 +7772,13 @@ msgstr "Remaining"
 msgid "Remember window positions"
 msgstr "Remember window positions"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11796
 #: src/app/page.tsx:11798
+=======
+#: src/app/page.tsx:11795
+#: src/app/page.tsx:11797
+>>>>>>> origin/dev
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:49
 #: src/components/ui/EditorContextMenu.tsx:130
 msgid "Remesh"
@@ -7671,6 +7794,7 @@ msgstr "Remesh {modelName}"
 msgid "Remesh confirmation"
 msgstr "Remesh confirmation"
 
+<<<<<<< HEAD
 #: src/features/scene/useSceneCollectionManager.ts:8327
 msgid "Remesh failed: {message}"
 msgstr "Remesh failed: {message}"
@@ -7680,6 +7804,17 @@ msgid "Remesh needs the desktop app."
 msgstr "Remesh needs the desktop app."
 
 #: src/app/page.tsx:11799
+=======
+#: src/features/scene/useSceneCollectionManager.ts:8338
+msgid "Remesh failed: {message}"
+msgstr "Remesh failed: {message}"
+
+#: src/features/scene/useSceneCollectionManager.ts:8311
+msgid "Remesh needs the desktop app."
+msgstr "Remesh needs the desktop app."
+
+#: src/app/page.tsx:11798
+>>>>>>> origin/dev
 msgid "Remesh progress"
 msgstr "Remesh progress"
 
@@ -7855,8 +7990,8 @@ msgstr "Rename build plate"
 msgid "Rename Curve Profile"
 msgstr "Rename Curve Profile"
 
-#: src/components/controls/ModelManagerPanel.tsx:498
-#: src/components/controls/ModelManagerPanel.tsx:1042
+#: src/components/controls/ModelManagerPanel.tsx:499
+#: src/components/controls/ModelManagerPanel.tsx:1043
 msgid "Rename folder"
 msgstr "Rename folder"
 
@@ -7864,17 +7999,22 @@ msgstr "Rename folder"
 msgid "Rename LUT curve profile"
 msgstr "Rename LUT curve profile"
 
-#: src/components/controls/ModelManagerPanel.tsx:504
+#: src/components/controls/ModelManagerPanel.tsx:505
 msgid "Rename model"
 msgstr "Rename model"
 
-#: src/components/controls/ModelManagerPanel.tsx:701
+#: src/components/controls/ModelManagerPanel.tsx:702
 msgid "Rename model base name"
 msgstr "Rename model base name"
 
-#: src/components/controls/ModelManagerPanel.tsx:485
+#: src/components/controls/ModelManagerPanel.tsx:486
 msgid "Rename plate"
 msgstr "Rename plate"
+
+#: src/features/scene/sceneHistoryLabels.ts:231
+msgctxt "Undo history entry"
+msgid "Rename plate {plateNumber}"
+msgstr "Rename plate {plateNumber}"
 
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:453
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:454
@@ -7945,7 +8085,7 @@ msgstr "Repair Incomplete"
 msgid "Repair Mesh"
 msgstr "Repair Mesh"
 
-#: src/components/controls/ModelManagerPanel.tsx:507
+#: src/components/controls/ModelManagerPanel.tsx:508
 msgid "Repair mesh…"
 msgstr "Repair mesh…"
 
@@ -8124,7 +8264,11 @@ msgstr "Resolution"
 msgid "Resolved {resolvedSelfIntersections, plural, one {# self-intersection} other {# self-intersections}}."
 msgstr "Resolved {resolvedSelfIntersections, plural, one {# self-intersection} other {# self-intersections}}."
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11855
+=======
+#: src/app/page.tsx:11854
+>>>>>>> origin/dev
 msgid "Resolving the surface into a solid."
 msgstr "Resolving the surface into a solid."
 
@@ -8507,7 +8651,11 @@ msgstr "Scanned {modelName}."
 msgid "Scanning for Supports…"
 msgstr "Scanning for Supports…"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11929
+=======
+#: src/app/page.tsx:11928
+>>>>>>> origin/dev
 msgid "Scanning islands & minima…"
 msgstr "Scanning islands & minima…"
 
@@ -8707,7 +8855,7 @@ msgstr "Select a printer to detect its model."
 msgid "Select curve profile to edit"
 msgstr "Select curve profile to edit"
 
-#: src/components/controls/ModelManagerPanel.tsx:497
+#: src/components/controls/ModelManagerPanel.tsx:498
 msgid "Select folder"
 msgstr "Select folder"
 
@@ -9000,7 +9148,7 @@ msgstr "Shells:"
 msgid "Shortest Print Time"
 msgstr "Shortest Print Time"
 
-#: src/components/controls/ModelManagerPanel.tsx:741
+#: src/components/controls/ModelManagerPanel.tsx:742
 msgid "Show"
 msgstr "Show"
 
@@ -9102,8 +9250,13 @@ msgstr "Shows \"Cannot Place Support\" and \"Stability Warning\" tooltips."
 msgid "Shows the Voxels, Minima, Coincident, and Overhangs layer toggles."
 msgstr "Shows the Voxels, Minima, Coincident, and Overhangs layer toggles."
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11854
 #: src/app/page.tsx:11856
+=======
+#: src/app/page.tsx:11853
+#: src/app/page.tsx:11855
+>>>>>>> origin/dev
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:49
 #: src/components/ui/EditorContextMenu.tsx:131
 msgid "Shrink-Wrap"
@@ -9118,6 +9271,7 @@ msgstr "Shrink-Wrap {modelName}"
 msgid "Shrink-Wrap confirmation"
 msgstr "Shrink-Wrap confirmation"
 
+<<<<<<< HEAD
 #: src/features/scene/useSceneCollectionManager.ts:8381
 msgid "Shrink-Wrap failed: {message}"
 msgstr "Shrink-Wrap failed: {message}"
@@ -9127,6 +9281,17 @@ msgid "Shrink-Wrap needs the desktop app."
 msgstr "Shrink-Wrap needs the desktop app."
 
 #: src/app/page.tsx:11857
+=======
+#: src/features/scene/useSceneCollectionManager.ts:8392
+msgid "Shrink-Wrap failed: {message}"
+msgstr "Shrink-Wrap failed: {message}"
+
+#: src/features/scene/useSceneCollectionManager.ts:8365
+msgid "Shrink-Wrap needs the desktop app."
+msgstr "Shrink-Wrap needs the desktop app."
+
+#: src/app/page.tsx:11856
+>>>>>>> origin/dev
 msgid "Shrink-Wrap progress"
 msgstr "Shrink-Wrap progress"
 
@@ -9247,7 +9412,11 @@ msgstr "Slicer encoder"
 msgid "Slicing"
 msgstr "Slicing"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11917
+=======
+#: src/app/page.tsx:11916
+>>>>>>> origin/dev
 msgid "Slicing and analysis in progress..."
 msgstr "Slicing and analysis in progress..."
 
@@ -9416,7 +9585,7 @@ msgid "Split the model along a drawn seam"
 msgstr "Split the model along a drawn seam"
 
 #. Context menu action: split a multi-body 3MF import into independent models.
-#: src/components/controls/ModelManagerPanel.tsx:512
+#: src/components/controls/ModelManagerPanel.tsx:513
 msgid "Split to bodies"
 msgstr "Split to bodies"
 
@@ -9694,7 +9863,11 @@ msgstr "Suspiciously empty in here."
 msgid "Swap which cut half receives the tenon and which receives the mortise."
 msgstr "Swap which cut half receives the tenon and which receives the mortise."
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11940
+=======
+#: src/app/page.tsx:11939
+>>>>>>> origin/dev
 msgid "Sweeping orientations…"
 msgstr "Sweeping orientations…"
 
@@ -9718,7 +9891,11 @@ msgstr "Switch to {recordedLabel}"
 msgid "Switch to <0>{recordedLabel}</0> before importing?"
 msgstr "Switch to <0>{recordedLabel}</0> before importing?"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11997
+=======
+#: src/app/page.tsx:11996
+>>>>>>> origin/dev
 msgid "Switch to a multi-material printer later and the assignments come back."
 msgstr "Switch to a multi-material printer later and the assignments come back."
 
@@ -9894,12 +10071,16 @@ msgstr "The hole carved in the other half."
 msgid "The inputs and factors the last run sized the supports with"
 msgstr "The inputs and factors the last run sized the supports with"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12056
+=======
+#: src/app/page.tsx:12055
+>>>>>>> origin/dev
 msgid "The models on this plate are deleted with it."
 msgstr "The models on this plate are deleted with it."
 
 #. The count is how many models stand on the plate being deleted.
-#: src/components/controls/ModelManagerPanel.tsx:887
+#: src/components/controls/ModelManagerPanel.tsx:888
 msgid "The models on this plate are deleted with it. Undo brings them back."
 msgstr "The models on this plate are deleted with it. Undo brings them back."
 
@@ -9989,8 +10170,13 @@ msgstr "the printer this scene was built for"
 msgid "The rebuilt surface will replace this model in your current scene. A model that cannot be resolved is left untouched, and you can undo this afterwards."
 msgstr "The rebuilt surface will replace this model in your current scene. A model that cannot be resolved is left untouched, and you can undo this afterwards."
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11808
 #: src/app/page.tsx:11866
+=======
+#: src/app/page.tsx:11807
+#: src/app/page.tsx:11865
+>>>>>>> origin/dev
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:67
 msgid "The rebuilt surface will replace this model in your current scene. Large models take longer, and some models cannot be rebuilt at all and are left untouched. You can undo this afterwards."
 msgstr "The rebuilt surface will replace this model in your current scene. Large models take longer, and some models cannot be rebuilt at all and are left untouched. You can undo this afterwards."
@@ -10189,7 +10375,11 @@ msgstr "This scene is aggressively unoccupied."
 msgid "This scene is already saved."
 msgstr "This scene is already saved."
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11959
+=======
+#: src/app/page.tsx:11958
+>>>>>>> origin/dev
 #: src/components/modals/ScenePrinterMismatchModal.tsx:93
 msgid "This scene is made for a multi-material printer"
 msgstr "This scene is made for a multi-material printer"
@@ -10412,7 +10602,11 @@ msgstr "Unapplied Holes"
 msgid "Unavailable"
 msgstr "Unavailable"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12012
+=======
+#: src/app/page.tsx:12011
+>>>>>>> origin/dev
 msgid "Undo brings the models back"
 msgstr "Undo brings the models back"
 
@@ -10420,16 +10614,16 @@ msgstr "Undo brings the models back"
 msgid "Undo Repairs"
 msgstr "Undo Repairs"
 
-#: src/features/scene/sceneHistoryLabels.ts:242
+#: src/features/scene/sceneHistoryLabels.ts:246
 msgctxt "Undo history entry"
 msgid "Ungroup {name}"
 msgstr "Ungroup {name}"
 
-#: src/components/controls/ModelManagerPanel.tsx:499
+#: src/components/controls/ModelManagerPanel.tsx:500
 msgid "Ungroup folder"
 msgstr "Ungroup folder"
 
-#: src/components/controls/ModelManagerPanel.tsx:477
+#: src/components/controls/ModelManagerPanel.tsx:478
 msgid "Ungroup selected"
 msgstr "Ungroup selected"
 
@@ -10489,7 +10683,11 @@ msgstr "Unlink X and Y"
 msgid "Unlock build plate"
 msgstr "Unlock build plate"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:12079
+=======
+#: src/app/page.tsx:12078
+>>>>>>> origin/dev
 msgid "Unlock it to add or move models."
 msgstr "Unlock it to add or move models."
 
@@ -11069,7 +11267,11 @@ msgstr "Write these settings to the auto-support settings"
 msgid "Write these settings, and overwrite the selected preset with them"
 msgstr "Write these settings, and overwrite the selected preset with them"
 
+<<<<<<< HEAD
 #: src/app/page.tsx:11950
+=======
+#: src/app/page.tsx:11949
+>>>>>>> origin/dev
 msgid "Writing mesh geometry and support data to file…"
 msgstr "Writing mesh geometry and support data to file…"
 
