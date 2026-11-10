@@ -22,6 +22,7 @@ export type Translate = (descriptor: MessageDescriptor) => string;
 
 const UNIT_MESSAGES = {
   mm: msg({ message: '{value} mm', comment: 'Length in millimetres. {value} is an already formatted number.' }),
+  mmPerMin: msg({ message: '{value} mm/min', comment: 'Motion speed in millimetres per minute. {value} is an already formatted number.' }),
   mm2: msg({ message: '{value} mm²', comment: 'Area in square millimetres. {value} is an already formatted number.' }),
   mm3: msg({ message: '{value} mm³', comment: 'Volume in cubic millimetres. {value} is an already formatted number.' }),
   cm3: msg({ message: '{value} cm³', comment: 'Volume in cubic centimetres. {value} is an already formatted number.' }),

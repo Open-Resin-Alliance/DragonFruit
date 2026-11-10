@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import type { SliceExportArtifact } from '@/features/slicing/sliceExportOrchestrator';
+import { fingerprintLayerSettingsRanges, parseLayerSettingsRanges } from '@/features/slicing/layerSettingsRanges';
 import {
   createSlicedPlates,
   isSlicedPlateStale,
@@ -269,6 +270,38 @@ describe('slicedPlates', () => {
     assert.equal(isSlicedPlateStale(slice, sliceProfileFingerprint('saturn-2', 'tough')), true);
     assert.equal(isSlicedPlateStale(slice, FINGERPRINT), false);
     assert.equal(isSlicedPlateStale(undefined, FINGERPRINT), false, 'no slice is not a stale one');
+  });
+
+  it('keeps late and repeated batch artifacts bound to the captured range content', () => {
+    const { plates } = setup();
+    const capturedRanges = parseLayerSettingsRanges([
+      { id: 'A', startLayer: 3, endLayer: 10, settings: { exposureSec: 4, liftHeightMm: 8 } },
+      { id: 'B', startLayer: 5, endLayer: 6, settings: { exposureSec: 7 } },
+      { id: 'C', startLayer: 6, endLayer: 7, settings: { exposureSec: 9 } },
+    ]);
+    const captured = `${FINGERPRINT}::layer-settings:${fingerprintLayerSettingsRanges(capturedRanges)}`;
+    const liveRanges = capturedRanges.map((range) => range.id === 'C'
+      ? { ...range, settings: { exposureSec: 11 } }
+      : range);
+    const live = `${FINGERPRINT}::layer-settings:${fingerprintLayerSettingsRanges(liveRanges)}`;
+    const first = artifact('captured-first');
+    const second = artifact('captured-second');
+    plates.record('plate-1', first, { totalLayers: 12, profileFingerprint: captured });
+    plates.record('plate-2', second, { totalLayers: 12, profileFingerprint: captured });
+    assert.equal(isSlicedPlateStale(plates.getSnapshot().plates['plate-1'], live), true);
+    assert.equal(isSlicedPlateStale(plates.getSnapshot().plates['plate-2'], live), true);
+
+    // A batch hands over the same files again after a later edit. That cannot
+    // relabel their already-encoded content with the current live fingerprint.
+    plates.record('plate-1', first, { totalLayers: 12, profileFingerprint: live });
+    plates.record('plate-2', second, { totalLayers: 12, profileFingerprint: live });
+    assert.equal(plates.getSnapshot().plates['plate-1'].profileFingerprint, captured);
+    assert.equal(plates.getSnapshot().plates['plate-2'].profileFingerprint, captured);
+    assert.equal(isSlicedPlateStale(plates.getSnapshot().plates['plate-1'], live), true);
+
+    plates.record('plate-1', artifact('next-settings'), { totalLayers: 12, profileFingerprint: live });
+    assert.equal(isSlicedPlateStale(plates.getSnapshot().plates['plate-1'], live), false);
+    assert.equal(isSlicedPlateStale(plates.getSnapshot().plates['plate-2'], live), true);
   });
 
   it('clear revokes every preview and drops reads still under way', async () => {

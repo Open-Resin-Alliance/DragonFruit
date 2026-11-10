@@ -38,6 +38,8 @@ pub enum SlicerV3Error {
     Cancelled,
     #[error("unsupported output format: {0}")]
     UnsupportedOutput(String),
+    #[error("invalid layer settings ranges: {0}")]
+    InvalidLayerSettingsRanges(String),
     #[error("invalid dimensions {width}x{height}")]
     InvalidDimensions { width: u32, height: u32 },
     #[error(
@@ -3531,6 +3533,7 @@ pub fn slice_with_progress_v3(
             supported_output_formats().join(", ")
         )));
     };
+    crate::layer_settings::ensure_layer_settings_supported(encoder, job)?;
     let requires_area_stats = encoder.requires_area_stats();
     let requires_png_layers = encoder.requires_png_layers();
     let requires_raw_mask_layers = encoder.requires_raw_mask_layers();
@@ -5603,6 +5606,7 @@ pub fn dispatch_encode_by_format(
             supported_output_formats().join(", ")
         )));
     };
+    crate::layer_settings::ensure_layer_settings_supported(encoder, job)?;
     encoder.encode_container_from_rendered_layers_with_progress(
         job,
         rendered_layers,
@@ -5626,6 +5630,7 @@ pub fn dispatch_encode_by_format_to_path(
             supported_output_formats().join(", ")
         )));
     };
+    crate::layer_settings::ensure_layer_settings_supported(encoder, job)?;
     encoder.encode_container_to_path_with_progress(
         job,
         rendered_layers,
@@ -5652,6 +5657,7 @@ pub fn slice_with_progress_v3_to_path(
             supported_output_formats().join(", ")
         )));
     };
+    crate::layer_settings::ensure_layer_settings_supported(encoder, job)?;
     let requires_area_stats = encoder.requires_area_stats();
     let requires_png_layers = encoder.requires_png_layers();
     let requires_raw_mask_layers = encoder.requires_raw_mask_layers();

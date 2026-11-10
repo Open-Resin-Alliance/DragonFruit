@@ -14,9 +14,17 @@ export const MESH_SHADER_TYPES = [
   'opaque_wire_mesh',
   'xray',
   'overhang_heatmap',
+  'profile',
 ] as const;
 
 export type MeshShaderType = (typeof MESH_SHADER_TYPES)[number];
+
+/** Print-height bounds: lower exclusive, upper inclusive; lower=0 also includes the plate surface. */
+export type ProfileLayerColorBand = {
+  lowerMm: number;
+  upperMm: number;
+  color: string;
+};
 
 export type MatcapVariant = 'neutral' | 'cool' | 'warm';
 
@@ -41,6 +49,7 @@ export type MeshShaderOption = {
 
 export const MESH_SHADER_OPTIONS: MeshShaderOption[] = [
   { value: 'soft_clay', label: msg({ message: 'Standard', comment: 'View mode: matte surface lit by the scene lights. The default view.' }) },
+  { value: 'profile', label: msg({ message: 'Profile', comment: 'View mode overlaying scene per-layer print-setting colors on model surfaces.' }) },
   { value: 'overhang_heatmap', label: msg({ message: 'Overhangs', comment: 'View mode colouring surfaces by how steeply they overhang, which is where supports are needed.' }) },
   { value: 'opaque_wire_mesh', label: msg({ message: 'Mesh', comment: 'View mode: mesh edges drawn over a solid surface, so back edges stay hidden.' }) },
   { value: 'wireframe', label: msg({ message: 'Wireframe', comment: 'View mode: only the mesh edges are drawn, so the surface between them shows through.' }) },

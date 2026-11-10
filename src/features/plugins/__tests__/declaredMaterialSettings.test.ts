@@ -71,6 +71,66 @@ test('a contract with no usable fields is refused', () => {
   assert.equal(sanitizeDeclaredMaterialSettings('.exf', null), null);
 });
 
+test('per-layer metadata keeps explicit booleans without coercing opt-in', () => {
+  const adapter = sanitizeDeclaredMaterialSettings('.exf', {
+    fields: [true, false, undefined, 'true', 1, null].map((perLayerEditable, index) => ({
+      key: `field-${index}`,
+      kind: 'number',
+      defaultValue: 1,
+      perLayerEditable,
+    })),
+  });
+
+  assert.ok(adapter);
+  assert.deepEqual(adapter.fields.map((field) => field.perLayerEditable), [
+    true, false, undefined, undefined, undefined, undefined,
+  ]);
+  assert.equal('perLayerEditable' in adapter.fields[2], false);
+});
+
+test('per-layer bindings are trimmed, bounded and omitted when unusable', () => {
+  const adapter = sanitizeDeclaredMaterialSettings('.exf', {
+    fields: [' exposureSec ', 'x'.repeat(100), '   ', 42, undefined].map((perLayerField, index) => ({
+      key: `field-${index}`,
+      kind: 'integer',
+      defaultValue: 1,
+      perLayerEditable: true,
+      perLayerField,
+    })),
+  });
+
+  assert.ok(adapter);
+  assert.deepEqual(adapter.fields.map((field) => field.perLayerField), [
+    'exposureSec', 'x'.repeat(64), undefined, undefined, undefined,
+  ]);
+  assert.equal('perLayerField' in adapter.fields[2], false);
+});
+
+test('mode resolution preserves inherited per-layer bindings and explicit opt-out', () => {
+  const modes = {
+    simple: {
+      fields: [
+        { key: 'normalExposureSec', kind: 'number', defaultValue: 2, perLayerEditable: true, perLayerField: 'exposureSec' },
+        { key: 'liftDistanceMm', kind: 'number', defaultValue: 6, perLayerEditable: true, perLayerField: 'liftHeightMm' },
+        { key: 'liftSpeedMmMin', kind: 'number', defaultValue: 60, perLayerEditable: true },
+      ],
+    },
+    tilting: {
+      $inherit: 'simple',
+      $remove: { fields: ['liftDistanceMm'] },
+      fields: [{ key: 'liftSpeedMmMin', perLayerEditable: false }],
+    },
+  };
+
+  const adapter = sanitizeDeclaredMaterialSettings('.exf', modes.tilting, modes);
+  assert.ok(adapter);
+  assert.deepEqual(adapter.fields.map((field) => [field.key, field.perLayerEditable, field.perLayerField]), [
+    ['normalExposureSec', true, 'exposureSec'],
+    ['liftSpeedMmMin', false, undefined],
+  ]);
+  assert.equal(modes.simple.fields[2].perLayerEditable, true);
+});
+
 test('a differential contract inherits, removes and adds', () => {
   const modes = {
     simple: {

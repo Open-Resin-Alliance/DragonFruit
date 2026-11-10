@@ -25,6 +25,92 @@ Rafts improve adhesion and support stability, especially in resin workflows.
 2. Export scene/model assets.
 3. Re-open output in downstream workflow for final validation.
 
+## Per-layer print settings
+
+Select a supported GOO, CTB or Anycubic printer/material profile, then right-click
+**the layer slider track**, not a handle, and choose **Add range**. Right-clicking
+a handle still opens its exact-value editor. The keyboard Context Menu key or
+Shift+F10 also opens range commands at the current layer.
+
+1. Choose **Layers** or **mm**. Layers use inclusive printed numbers (first is 1).
+   MM uses inclusive printed-layer end heights above the build plate and saves
+   those physical bounds, not converted layer numbers. For example, 0.075–0.15 mm
+   affects layers 3–6 at 0.025 mm/layer, or layers 2–3 at 0.05 mm/layer.
+2. Type into a supported setting box to enable its override automatically, or
+   enable its toggle first. Focusing alone changes nothing. A new range starts
+   with no overrides; unchecked fields inherit rather than copy defaults.
+3. Optionally enable **Blur start**, **Blur end**, or both and enter a distance in the
+   selected range units. Zero disables that edge.
+4. Apply once. Cancel leaves the scene unchanged; undo/redo also applies to ranges.
+5. Use **Manage ranges** to reach every saved range, including fully shadowed or
+   beyond-print ranges. Right-click a layer to edit/delete any range matching it.
+6. Choose **Profile** in the view selector to tint model surfaces with those same
+   range colors at their printed heights. Uncovered areas keep ordinary shading;
+   model transforms and cross-section clipping are respected. This is only a
+   visualization and does not modify geometry or encoded settings.
+
+Ranges have distinct colors shared by bands, menu swatches and Manage. The bands
+overlay the slider track above the cross-section fill and below its handles.
+Tiny transparent cuts separate each segment from the rest of the rail, revealing
+the actual background behind it. Adjacent PLS ranges share one 1px separator,
+not two gaps. Both the colored segments and exposed rail ends are rounded; the
+track and handles have no glow. Colors and cutouts now follow both clip handles:
+ranges outside the visible interval are hidden and partly visible ranges are
+clipped. Moving the handles back restores them. This changes only the display,
+not saved range bounds or encoded settings.
+When blur is enabled, the colored core stays solid and its sharp separator stays visible.
+Only the color outside that separation feathers into neighboring slider regions. Moving
+the clip handles crops the feather without stretching its fade; labels and handles stay sharp.
+The model Profile view continues to mark the nominal saved core rather than this slider feather.
+
+Editable settings follow the selected printer's material-mode definitions,
+intersected with its encoder/version support. Only fields opted into per-layer
+editing appear. Material-declared motion pairs use one toggle per row; missing
+companions are not displayed. Rest/wait fields, other single values, bounds and
+PWM align with the far value column.
+Travel is **Total / Stage 2** (not first-stage / second-stage distance); speeds
+are **Stage 1 / Stage 2**. Typing one value leaves its companion inherited;
+turning the shared toggle on explicitly seeds both supported values, and turning
+it off clears both overrides.
+The narrowest original resolved layer span wins each supplied field before
+clipping to this print; equal spans prefer the later-created range, including
+mixed units. Editing does not reorder priority. A
+narrow exposure-only range can inherit lift/wait values from a wider range.
+
+Blur extends **past** the saved bounds: before the start and after the end. Every layer in
+the saved core keeps the full override. Outside it, the override fades linearly into the
+lower-priority settings at that same layer, including any feathers on those lower ranges;
+with no lower supplier it blends into the actual material settings for that printed layer.
+For example, an 8-second range starting at layer 10 over a 4-second wider range, with start
+blur 2, gives 4 seconds at layer 8, 6 at layer 9, then the full 8 at layer 10 and throughout
+the core. End blur works outward in the same way. Discrete printed layers sample the ramp,
+so a one-layer distance can have no intermediate layer. Neither the core bounds nor their
+priority grow with the feather. Unspecified fields continue to inherit normally.
+Changing layer height preserves mm blur distances; converting mm to Layers rounds to the
+nearest whole layer, with a minimum of one layer for an enabled blur.
+
+
+Travel heights are totals: stage 2 is a part of that total, not extra travel.
+Speeds are mm/min and durations seconds; PLS Light PWM is a byte value (0–255),
+not a material-menu percentage. Simple/Two-stage/Tilting choose the editable
+fields through their existing definitions. Previously stored overrides hidden by
+a printer/mode switch appear separately as read-only values that can be removed;
+they are never silently dropped. Format-incompatible overrides also block slicing
+before save/file picking/preparation. Modes supply the inherited baseline, and
+retained explicit overrides apply afterward. LUMEN/NanoDLP ranges are not
+implemented here.
+
+Ranges belong to the scene and travel in manual saves, autosave/recovery and
+VOXL exports, not material presets. They apply at the same printed numbers on
+each plate. Layer-number ranges keep their printed numbers; mm ranges keep
+their physical heights and affect different layers when layer height changes.
+Changing geometry does not erase either form.
+Deleting the last model clears them atomically with that undoable deletion.
+They affect the next encoded slice only, not layer height, anti-aliasing,
+dithering, raster geometry or an existing file. Legacy time estimates may not
+reflect overrides. See [Printing Preview and Send](./printing-preview-and-send.md)
+and the [range contract](../dev/slice-job-assembly.md#layer-settings-range-resolution).
+
 ## Export quality checks
 
 - Model/support alignment preserved.

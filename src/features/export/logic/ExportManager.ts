@@ -3,6 +3,7 @@ import { STLExporter } from 'three-stdlib';
 import type { LoadedModel, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import type { MeshHealthReport } from '@/utils/meshRepair';
+import { parseLayerSettingsRanges, type LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
 import { reportAddressesTriangleSoup } from '@/features/scene/voxl/classification';
 import { resolveModelMeshModifiers } from '@/features/mesh-modifiers/meshModifierStore';
 import { KNOWN_SOURCE_EXTENSION_STRIP_RE } from '@/features/plugins/pluginFileTypeExtensions';
@@ -39,6 +40,8 @@ export interface ExportSceneContext {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  /** Scene-wide printed-layer settings, including an explicit cleared schedule. */
+  layerSettingsRanges?: LayerSettingsRange[];
   /** The scene's plates. With them, a save carries a plate list; without them, none. */
   plates?: ScenePlate[];
   /** Which plate was active, written as the file's cursor. */
@@ -1145,6 +1148,9 @@ export class ExportManager {
       previousFingerprint,
       onFingerprint,
     } = voxlOptions;
+    const layerSettingsRanges = sceneContext?.layerSettingsRanges === undefined
+      ? undefined
+      : parseLayerSettingsRanges(sceneContext.layerSettingsRanges);
     // Yield before the (synchronous) support snapshot so the render loop stays
     // alive on scenes with many support nodes.
     await this.yieldToBrowserFrame();
@@ -1405,6 +1411,7 @@ export class ExportManager {
       models,
       activeModelId: sceneContext?.activeModelId ?? null,
       selectedModelIds: sceneContext?.selectedModelIds ?? [],
+      ...(layerSettingsRanges !== undefined ? { layerSettingsRanges } : {}),
       ...(sceneContext?.plates && sceneContext.plates.length > 0
         ? {
             plates: sceneContext.plates.map((plate) => ({

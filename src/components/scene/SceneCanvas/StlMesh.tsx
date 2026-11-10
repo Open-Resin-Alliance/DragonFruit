@@ -7,6 +7,8 @@ import { MODEL_EDGE_OVERLAY_ENABLED } from '@/hooks/useStlGeometry';
 import { useFrame, useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
 import { MeshShaderMaterial, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
+import { useProfileColorUniformsRef } from '@/features/shaders/mesh/profile';
+import { applyProfileColorShader } from '@/features/shaders/mesh/profileShader';
 import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
 import { OpaqueWireOverlayMaterial } from '@/features/shaders/mesh/opaqueWireMesh';
 import {
@@ -929,9 +931,11 @@ function StlMeshComponent({
   const dimmedBaseOpacity = isSupportDimmed
     ? Math.min(0.95, Math.max(0.04, supportNonSelectedOpacity))
     : null;
+  const profileColorUniformsRef = useProfileColorUniformsRef();
+  const supportDimProfileUniformsRef = shaderType === 'profile' ? profileColorUniformsRef : null;
 
   // Imperative material with Bayer 4×4 dither injected via onBeforeCompile.
-  // Created once (stable across re-renders) so the shader is compiled exactly once.
+  // Shared Profile uniform boxes keep live band edits from recreating this material.
   const supportDimMaterialObj = React.useMemo(() => {
     if (!isSupportDimmed) return null;
     const mat = new THREE.MeshStandardMaterial({
@@ -944,8 +948,11 @@ function StlMeshComponent({
       depthWrite: true,
     });
     // Custom cache key ensures this program is never shared with other MeshStandardMaterials.
-    mat.customProgramCacheKey = () => 'df-support-dim-dither';
+    mat.customProgramCacheKey = () => supportDimProfileUniformsRef
+      ? 'df-support-dim-dither-profile'
+      : 'df-support-dim-dither';
     mat.onBeforeCompile = (shader) => {
+      if (supportDimProfileUniformsRef?.current) applyProfileColorShader(shader, supportDimProfileUniformsRef.current);
       shader.uniforms['uDitherAmount'] = { value: 0.0 };
       supportDimShaderUniformsRef.current = shader.uniforms as unknown as { uDitherAmount: THREE.IUniform<number> };
       shader.fragmentShader = 'uniform float uDitherAmount;\n' + shader.fragmentShader;
@@ -971,7 +978,7 @@ if (uDitherAmount > 0.0) {
     };
     return mat;
   // dimmedBaseOpacity is always 0.5 at runtime but included for correctness.
-  }, [isSupportDimmed, meshColor, dimmedBaseOpacity]);
+  }, [isSupportDimmed, meshColor, dimmedBaseOpacity, supportDimProfileUniformsRef]);
 
   // Keep supportDimMaterialRef in sync (used by useFrame) and update clipping planes.
   React.useLayoutEffect(() => {

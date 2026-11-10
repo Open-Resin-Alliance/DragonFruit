@@ -75,6 +75,12 @@ import { useLeafPlacementState } from '@/supports/SupportTypes/Leaf/leafPlacemen
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { ExportManager } from '@/features/export/logic/ExportManager';
 import { buildSceneSaveContext } from '@/features/export/logic/sceneSaveContext';
+import { fingerprintLayerSettingsRanges, parseLayerSettingsRanges, type LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
+import { LayerSettingsRangeEditor } from '@/features/slicing/components/LayerSettingsRangeEditor';
+import { buildLayerSettingsProfileBands } from '@/features/slicing/layerSettingsProfileBands';
+import { useLayerSettingsRangeColors } from '@/features/slicing/useLayerSettingsRangeColors';
+import { formatLayerSettingsRangeBounds } from '@/features/slicing/layerSettingsRangeMessages';
+import { buildLayerSettingsRangeBands } from '@/features/slicing/layerSettingsSliderBands';
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { joinSliceOutputPath, sliceFileBaseName } from '@/features/slicing/plateSliceNaming';
@@ -316,6 +322,7 @@ import {
 import { openProfileSettingsModal, PROFILE_SETTINGS_MODAL_OPEN_CHANGE_EVENT } from '@/components/settings/profileModalEvents';
 import { FirstRunOnboarding } from '@/components/layout/FirstRunOnboarding';
 import {
+  getProfileLocalMaterialSettingsAdapter,
   getProfileMonitoringUiAdapter,
   getProfileNetworkUiAdapter,
   type PrinterMonitoringSnapshot,
@@ -345,7 +352,7 @@ import { matchSceneMaterialsToTanks, resolveTankMaterialProfiles } from '@/featu
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import { sliceProfileFingerprint } from '@/features/printing/slicedPlates';
 import { useSlicedPlatePreviewLoading, useSlicedPlates } from '@/features/printing/useSlicedPlates';
-import { resolveOutputFileExtension } from '@/features/slicing/formats/registry';
+import { resolveOutputFileExtension, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import {
   cleanupStalePrintTempArtifacts,
   deletePrintTempArtifactPath,
@@ -790,6 +797,7 @@ function formatPlateLockedNotice(
   }), { plateName });
 }
 
+
 export default function Home() {
   const { _, i18n } = useLingui();
   const fmt = useLocaleFormat();
@@ -814,6 +822,8 @@ export default function Home() {
   const plateLockedNoticeTimerRef = React.useRef<number | null>(null);
   const notifyPlateLockedRef = React.useRef<(plateId?: string) => void>(() => {});
   const scene = useSceneCollectionManager({ onBlockedByLock: (plateId) => notifyPlateLockedRef.current(plateId) });
+  const [layerSettingsMenuRequest, setLayerSettingsMenuRequest] = React.useState<React.ComponentProps<typeof LayerSettingsRangeEditor>['menuRequest']>(null);
+  const layerSettingsRangeColors = useLayerSettingsRangeColors(scene.layerSettingsRanges);
 
   /**
    * The build volume of every plate, in world coordinates. Every plate is a valid
@@ -926,6 +936,9 @@ export default function Home() {
   );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
+  const layerSettingsFormat = React.useMemo(() => activePrinterProfile && activeMaterialProfile
+    ? resolveSlicingFormatDefinition({ printerProfile: activePrinterProfile, materialProfile: activeMaterialProfile })
+    : null, [activePrinterProfile, activeMaterialProfile]);
   /**
    * A scene authored for a Multi-Tank printer cannot print on a single-material
    * one: its bodies carry tank assignments that a single film has nowhere to put.
@@ -1414,6 +1427,7 @@ export default function Home() {
     models: scene.models,
     activeModelId: scene.activeModelId,
     selectedModelIds: scene.selectedModelIds,
+    layerSettingsRanges: scene.layerSettingsRanges,
     plates: scene.plates,
     activePlateId: scene.activePlateId,
     plateName: scene.plateName,
@@ -1648,7 +1662,7 @@ export default function Home() {
     point: null,
   });
 
-  const activeSliceProfileFingerprint = sliceProfileFingerprint(activePrinterProfile?.id, activeMaterialProfile?.id);
+  const activeSliceProfileFingerprint = `${sliceProfileFingerprint(activePrinterProfile?.id, activeMaterialProfile?.id)}::layer-settings:${fingerprintLayerSettingsRanges(scene.layerSettingsRanges)}`;
   const slicedPlatesView = useSlicedPlates({
     activePlateId: scene.activePlateId,
     models: scene.models,
@@ -2989,13 +3003,13 @@ export default function Home() {
   /** Records one bed's slice, which is what the workspace and its read-ahead are built from. */
   const recordPrintingSlice = React.useCallback((
     artifact: SliceExportArtifact,
-    context?: { plateId?: string; totalLayers?: number },
+    context: { plateId?: string; totalLayers?: number; profileFingerprint: string },
   ) => {
-    slicedPlates.record(context?.plateId ?? scene.activePlateId, artifact, {
-      totalLayers: context?.totalLayers,
-      profileFingerprint: activeSliceProfileFingerprint,
+    slicedPlates.record(context.plateId ?? scene.activePlateId, artifact, {
+      totalLayers: context.totalLayers,
+      profileFingerprint: context.profileFingerprint,
     });
-  }, [activeSliceProfileFingerprint, scene.activePlateId, slicedPlates]);
+  }, [scene.activePlateId, slicedPlates]);
 
   /**
    * A batch's plate, recorded as soon as it is sliced.
@@ -3006,16 +3020,16 @@ export default function Home() {
    */
   const handleSlicePlateSliced = React.useCallback((
     artifact: SliceExportArtifact,
-    context: { plateId?: string; totalLayers: number; savedPath?: string },
+    context: { plateId?: string; totalLayers: number; savedPath?: string; profileFingerprint: string },
   ) => {
     recordPrintingSlice(artifact, context);
   }, [recordPrintingSlice]);
 
   const handleSliceArtifactReady = React.useCallback((
     artifact: SliceExportArtifact,
-    context?: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string },
+    context: { plateId?: string; totalLayers?: number; savedPath?: string; savedDirectory?: string; profileFingerprint: string },
   ) => {
-    const plateId = context?.plateId ?? scene.activePlateId;
+    const plateId = context.plateId ?? scene.activePlateId;
     recordPrintingSlice(artifact, context);
     setShowPrintingResliceModal(false);
     setPrintingSendStatusText(null);
@@ -3059,7 +3073,7 @@ export default function Home() {
     setCompletedSaveDestinationPath(null);
     // A batch writes several files into one folder, so the finished dialog names the folder
     // rather than whichever plate's file happened to be last.
-    setCompletedSaveDirectory(context?.savedDirectory?.trim() || null);
+    setCompletedSaveDirectory(context.savedDirectory?.trim() || null);
     if (intent === 'upload' || intent === 'print') {
       pendingPostSliceActionRef.current = intent;
       setShouldAutoSliceOnExportEntry(false);
@@ -3073,7 +3087,7 @@ export default function Home() {
       // The run writes to the path the pre-slice step chose, so a batch hands that path back
       // with its artifact: the pre-slice ref holds one path and is spent by the first plate,
       // and a later plate with no path would be saved again through a dialog.
-      const destinationPath = context?.savedPath?.trim()
+      const destinationPath = context.savedPath?.trim()
         || preSliceFileDestinationPathRef.current?.trim()
         || '';
       preSliceFileDestinationPathRef.current = null;
@@ -4593,6 +4607,7 @@ export default function Home() {
   }, [printingArtifact]);
 
   const performTopBarSaveScene = React.useCallback(async (options?: { nativePathOverride?: string | null }) => {
+    const capturedRanges = parseLayerSettingsRanges(scene.layerSettingsRanges);
     // Captured before the save so a Save As can clean up the sidecar beside the
     // project the user just moved away from.
     const previousScenePath = activeSceneFilePath;
@@ -4636,6 +4651,7 @@ export default function Home() {
           models: scene.models,
           activeModelId: scene.activeModelId,
           selectedModelIds: scene.selectedModelIds,
+          layerSettingsRanges: capturedRanges,
           plates: scene.plates,
           activePlateId: scene.activePlateId,
           plateName: scene.plateName,
@@ -4695,6 +4711,7 @@ export default function Home() {
     exportSuccessToastFadeTimeoutRef,
     exportThumbnailCaptureRunnerRef,
     markSceneSaveBaseline,
+    scene.layerSettingsRanges,
     scene.activeModelId,
     scene.activePlateId,
     scene.models,
@@ -7164,6 +7181,23 @@ export default function Home() {
 
     return Math.max(0, Math.ceil(slicerHeightMm / layerHeightMm));
   }, [activePrinterProfile?.buildVolumeMm.height, crossSectionLayerHeightMm, sceneZRange.max, slicingModels.length]);
+
+  const sceneLayerSettingsBands = React.useMemo(() => buildLayerSettingsRangeBands(
+    scene.layerSettingsRanges, layerSettingsRangeColors, slicing.numLayers, false, slicing.layerHeightMm,
+    (range) => formatLayerSettingsRangeBounds(_, fmt, range),
+  ), [scene.layerSettingsRanges, layerSettingsRangeColors, slicing.numLayers, slicing.layerHeightMm, _, fmt]);
+  const printingLayerSettingsBands = React.useMemo(() => buildLayerSettingsRangeBands(
+    scene.layerSettingsRanges, layerSettingsRangeColors, printingPreviewTotalLayers, true, crossSectionLayerHeightMm,
+    (range) => formatLayerSettingsRangeBounds(_, fmt, range),
+  ), [scene.layerSettingsRanges, layerSettingsRangeColors, printingPreviewTotalLayers, crossSectionLayerHeightMm, _, fmt]);
+  const handleSceneRangeContextMenu = React.useCallback((value: number, position: { x: number; y: number }) => {
+    const total = slicing.numLayers;
+    setLayerSettingsMenuRequest({ layerNumber: total > 0 ? Math.max(1, Math.min(total, Math.ceil(value))) : null, position });
+  }, [slicing.numLayers]);
+  const handlePrintingRangeContextMenu = React.useCallback((value: number, position: { x: number; y: number }) => {
+    const total = printingPreviewTotalLayers;
+    setLayerSettingsMenuRequest({ layerNumber: total > 0 ? Math.max(1, Math.min(total, Math.round(value))) : null, position });
+  }, [printingPreviewTotalLayers]);
 
   const modelStatsEstimatedPrintTimeLabel = React.useMemo(() => {
     if (!activeMaterialProfile) return '—';
@@ -10254,6 +10288,9 @@ export default function Home() {
   const effectiveShaderType = (shouldForceHollowingXray || hollowPreview)
     ? 'xray'
     : scene.shaderType;
+  const profileColorBands = React.useMemo(() => effectiveShaderType === 'profile'
+    ? buildLayerSettingsProfileBands(scene.layerSettingsRanges, layerSettingsRangeColors, scene.mode === 'printing' ? crossSectionLayerHeightMm : slicing.layerHeightMm)
+    : undefined, [effectiveShaderType, scene.layerSettingsRanges, layerSettingsRangeColors, scene.mode, crossSectionLayerHeightMm, slicing.layerHeightMm]);
 
   // The Overhangs quick toggle remembers what it interrupted, so turning it off
   // puts the viewport back where it was rather than on an arbitrary mode.
@@ -10649,6 +10686,19 @@ export default function Home() {
 
   return (
     <EditorLayout>
+      <LayerSettingsRangeEditor
+        ranges={scene.layerSettingsRanges}
+        rangeColors={layerSettingsRangeColors}
+        totalLayers={scene.mode === 'printing' ? printingPreviewTotalLayers : slicing.numLayers}
+        layerHeightMm={scene.mode === 'printing' ? crossSectionLayerHeightMm : slicing.layerHeightMm}
+        format={layerSettingsFormat}
+        formatVersion={activePrinterProfile?.display.formatVersion}
+        materialSettings={activePrinterProfile ? getProfileLocalMaterialSettingsAdapter(activePrinterProfile.display.outputFormat, resolveOutputSettingsMode(activePrinterProfile.display.outputFormat, activePrinterProfile.display.settingsMode)) : null}
+        normalExposureSec={activeMaterialProfile?.normalExposureSec ?? 0}
+        menuRequest={layerSettingsMenuRequest}
+        onCloseMenu={() => setLayerSettingsMenuRequest(null)}
+        onApply={scene.updateLayerSettingsRanges}
+      />
       <TopBar
         meshColor={scene.meshColor}
         onMeshColorChange={scene.setMeshColor}
@@ -10995,6 +11045,8 @@ export default function Home() {
           style={{ top: 'calc(var(--topbar-height) + 6px)', bottom: 6, width: 48 }}
         >
           <CrossSliderPanel
+            rangeBands={sceneLayerSettingsBands}
+            onRangeContextMenu={handleSceneRangeContextMenu}
             layerIndex={slicing.layerIndex}
             maxLayers={slicing.numLayers}
             onLayerIndexChange={slicing.setLayerIndex}
@@ -11091,6 +11143,7 @@ export default function Home() {
             meshColor={scene.meshColor}
             meshVisible={scene.meshVisible}
             shaderType={effectiveShaderType}
+            profileColorBands={profileColorBands}
             matcapVariant={scene.matcapVariant}
             flatUseVertexColors={scene.flatUseVertexColors}
                 xrayOpacity={scene.xrayOpacity}
@@ -11405,6 +11458,8 @@ export default function Home() {
 
         {scene.mode === 'printing' && (
           <PrintingPreviewPane
+            rangeBands={printingLayerSettingsBands}
+            onRangeContextMenu={handlePrintingRangeContextMenu}
             printingPreviewTotalLayers={printingPreviewTotalLayers}
             printingSelectedLayer={printingSelectedLayer}
             handlePrintingLayerChange={handlePrintingLayerChange}

@@ -5,10 +5,16 @@ import {
   resolveOutputSettingsMode,
   resolveSlicingFormatDefinition,
 } from '@/features/slicing/formats/registry';
+import { resolveLayerSettingsFields } from '@/features/slicing/formats/layerSettingsFields';
 import type { PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import { resolveEffectiveDitherPolicy, type DitherPolicyInput } from '@/features/slicing/resolveEffectiveDitherPolicy';
 import type { SlicingFormatDefinition } from '@/features/slicing/formats/types';
 import type { AntiAliasingLevel } from '@/features/slicing/tauri/nativeSlicerBridge';
+import {
+  findUnsupportedLayerSetting,
+  parseLayerSettingsRanges,
+  type LayerSettingsRange,
+} from '@/features/slicing/layerSettingsRanges';
 import {
   resolveSliceJobAntiAliasing,
   type SliceJobAntiAliasing,
@@ -329,6 +335,7 @@ export type SliceJobScene = {
   totalLayers: number;
   tallestObjectHeightMm: number;
   models: SliceJobManifestModel[];
+  layerSettingsRanges?: readonly LayerSettingsRange[];
 };
 
 /** The printer, material and scene nodes every slice-job manifest carries. */
@@ -406,6 +413,25 @@ export type AssembledSliceJob = {
   metadataJson: string;
 };
 
+/** Reject incompatible fields in every saved range, including shadowed and beyond-EOF ranges. */
+export function assertSliceLayerSettingsSupported(
+  ranges: readonly LayerSettingsRange[],
+  format: SlicingFormatDefinition,
+  formatVersion?: string,
+): void {
+  const unsupported = findUnsupportedLayerSetting(ranges, resolveLayerSettingsFields(format, formatVersion));
+  if (!unsupported) return;
+  const range = ranges.find((entry) => entry.id === unsupported.rangeId)!;
+  const bounds = range.unit === 'mm'
+    ? `height ${range.startMm}..${range.endMm} mm`
+    : `layers ${range.startLayer}..${range.endLayer}`;
+  throw new Error(
+    `${format.displayName} (${format.outputFormat}, version ${formatVersion ?? 'default'}) cannot encode layer setting `
+    + `"${unsupported.field}" in layer settings range "${range.id}" (${bounds}). `
+    + 'Remove the override or select a supported printer.',
+  );
+}
+
 /**
  * Builds the profile-driven part of a native slice job.
  *
@@ -429,6 +455,9 @@ export function assembleSliceJob(options: {
     throw new Error(`No encoder is installed for "${printerProfile.display.outputFormat}".`);
   }
 
+  const formatVersion = resolveOutputFormatVersion(format.outputFormat, printerProfile.display.formatVersion, format.pluginId);
+  const layerSettingsRanges = parseLayerSettingsRanges(scene.layerSettingsRanges);
+  assertSliceLayerSettingsSupported(layerSettingsRanges, format, formatVersion);
   const settings = resolveSliceRasterSettings({ printerProfile, materialProfile });
   const settingsMode = resolveOutputSettingsMode(format.outputFormat, printerProfile.display.settingsMode);
   const manifest = {
@@ -442,10 +471,23 @@ export function assembleSliceJob(options: {
     ...buildSliceJobManifestNodes({ printerProfile, materialProfile, settings, scene }),
   };
   const dither = resolveEffectiveDitherPolicy({ printerProfile, materialProfile, ...options.dither });
+  const metadata = JSON.parse(mergeMetadataOverridesIntoMetadata(
+    JSON.stringify(manifest),
+    format.outputFormat,
+    materialProfile,
+    settingsMode,
+    printerProfile.display.outputFormat,
+  )) as Record<string, unknown>;
+  // The scene owns this root key, never a material or plugin default.
+  if (layerSettingsRanges.length > 0) {
+    metadata.layerSettingsRanges = layerSettingsRanges;
+  } else {
+    delete metadata.layerSettingsRanges;
+  }
 
   return {
     outputFormat: format.outputFormat,
-    formatVersion: resolveOutputFormatVersion(format.outputFormat, printerProfile.display.formatVersion),
+    formatVersion,
     settingsMode,
     sourceWidthPx: settings.sourceResolutionX,
     sourceHeightPx: settings.sourceResolutionY,
@@ -468,13 +510,7 @@ export function assembleSliceJob(options: {
       request: options.antiAliasing,
     }),
     layerDataKind: format.layerDataKind,
-    metadataJson: mergeMetadataOverridesIntoMetadata(
-      JSON.stringify(manifest),
-      format.outputFormat,
-      materialProfile,
-      settingsMode,
-      printerProfile.display.outputFormat,
-    ),
+    metadataJson: JSON.stringify(metadata),
   };
 }
 

@@ -35,6 +35,7 @@ import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { peekUndo } from '@/history/historyStore';
 import { createTypedHistory } from '@/history/typedHistory';
 import type { ModelTransform } from '@/hooks/useModelTransform';
+import { parseLayerSettingsRanges, type LayerSettingsRange } from '@/features/slicing/layerSettingsRanges';
 import { forgetCenteredPositions } from '@/utils/modelBounds';
 import { releasePrepareMergedSupportsFor } from '@/supports/prepare/mergedSupportCache';
 import { releaseGeometryStorage as releaseGeometryStorageBase } from '@/utils/releaseGeometry';
@@ -296,6 +297,8 @@ const RECENT_FILES_DB_NAME = 'dragonfruit-recent-files';
 const RECENT_FILES_DB_VERSION = 1;
 const RECENT_FILES_STORE_NAME = 'files';
 export const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply' as const;
+export const SCENE_LAYER_SETTINGS_RANGES_APPLY = 'scene:layer-settings-ranges-apply' as const;
+const CHANGE_LAYER_SETTINGS_RANGES_LABEL = msg`Change layer settings ranges`;
 const SCENE_HISTORY_MAX_SNAPSHOTS = 200;
 // Belt-and-suspenders alongside the count cap above: a handful of
 // full-resolution geometry swaps (e.g. repeated hollowing on a large model)
@@ -315,9 +318,11 @@ type SceneSnapshotPayload = { key: string; modelId?: string };
 /** Action→payload map for the scene history domain. */
 type SceneHistoryPayloadMap = {
   [SCENE_MODELS_SNAPSHOT_APPLY]: SceneSnapshotPayload;
+  [SCENE_LAYER_SETTINGS_RANGES_APPLY]: { before: LayerSettingsRange[]; after: LayerSettingsRange[] };
 };
 const sceneHistory = createTypedHistory<SceneHistoryPayloadMap>({
   [SCENE_MODELS_SNAPSHOT_APPLY]: SCENE_CHANGE_LABEL,
+  [SCENE_LAYER_SETTINGS_RANGES_APPLY]: CHANGE_LAYER_SETTINGS_RANGES_LABEL,
 });
 
 export type SceneSnapshot = {
@@ -325,6 +330,8 @@ export type SceneSnapshot = {
   activeModelId: string | null;
   selectedModelIds: string[];
   supportState?: SupportState;
+  /** Absent on model-only edits, which must leave the current schedule alone. */
+  layerSettingsRanges?: LayerSettingsRange[];
   modifierRecord?: { modelId: string; modifiers: ModelMeshModifiers | undefined };
   /**
    * The beds, on the entries that add or remove one. Optional: a snapshot without
@@ -344,6 +351,7 @@ export type SceneSnapshot = {
 };
 
 type SceneSnapshotCaptureOptions = {
+  layerSettingsRanges?: LayerSettingsRange[];
   includeSupportState?: boolean;
   supportStateOverride?: SupportState;
   /** The override is already an owned snapshot and must not be cloned again. */
@@ -495,6 +503,9 @@ function captureSceneSnapshot(
     activeModelId,
     selectedModelIds: [...selectedModelIds],
     printerProfileId,
+    ...(options?.layerSettingsRanges !== undefined
+      ? { layerSettingsRanges: parseLayerSettingsRanges(options.layerSettingsRanges) }
+      : {}),
     ...(includeSupportState
       ? {
           supportState: options?.supportStateOwned && supportStateOverride
@@ -1859,6 +1870,19 @@ export function useSceneCollectionManager(options?: {
   );
 
   const [models, setModels] = useState<LoadedModel[]>([]);
+  const [layerSettingsRanges, setLayerSettingsRanges] = useState<LayerSettingsRange[]>([]);
+  const layerSettingsRangesRef = useRef(layerSettingsRanges);
+  const applyOwnedLayerSettingsRanges = useCallback((owned: LayerSettingsRange[]) => {
+    layerSettingsRangesRef.current = owned;
+    setLayerSettingsRanges(owned);
+  }, []);
+  const updateLayerSettingsRanges = useCallback((next: readonly LayerSettingsRange[]): void => {
+    const after = parseLayerSettingsRanges(next);
+    const before = layerSettingsRangesRef.current;
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    applyOwnedLayerSettingsRanges(after);
+    sceneHistory.push({ type: SCENE_LAYER_SETTINGS_RANGES_APPLY, payload: { before, after } });
+  }, [applyOwnedLayerSettingsRanges]);
   useEffect(() => {
     installLiveModelsProvider(() => modelsRef.current);
     return () => installLiveModelsProvider(null);
@@ -2823,6 +2847,9 @@ export function useSceneCollectionManager(options?: {
     setModels(snapshot.models.map(cloneLoadedModel));
     setActiveModelId(snapshot.activeModelId);
     setSelectedModelIds([...snapshot.selectedModelIds]);
+    if (snapshot.layerSettingsRanges !== undefined) {
+      applyOwnedLayerSettingsRanges(parseLayerSettingsRanges(snapshot.layerSettingsRanges));
+    }
 
     // The printer is part of the scene: the beds are spaced by its build volume, so an entry
     // taken under one printer and undone under another would put every model back against
@@ -2868,7 +2895,7 @@ export function useSceneCollectionManager(options?: {
       // `roots` and `knots`.
       setSupportSnapshot(clonePlainData(snapshot.supportState));
     }
-  }, []);
+  }, [applyOwnedLayerSettingsRanges]);
 
   useEffect(() => {
     const unregisterSceneModelsHistory = sceneHistory.register(
@@ -2908,10 +2935,18 @@ export function useSceneCollectionManager(options?: {
       },
     );
 
+    const unregisterLayerSettingsHistory = sceneHistory.register(
+      SCENE_LAYER_SETTINGS_RANGES_APPLY,
+      (payload, direction) => {
+        applyOwnedLayerSettingsRanges(parseLayerSettingsRanges(direction === 'undo' ? payload.before : payload.after));
+        return true;
+      },
+    );
     return () => {
       unregisterSceneModelsHistory();
+      unregisterLayerSettingsHistory();
     };
-  }, [applySceneSnapshot]);
+  }, [applyOwnedLayerSettingsRanges, applySceneSnapshot]);
 
   const pushSceneSnapshotHistory = useCallback((before: SceneSnapshot, after: SceneSnapshot, description?: MessageDescriptor, modelId?: string, supportMoves?: SupportTransformMove[]): string => {
     const key = storeSceneSnapshotPair({
@@ -5475,11 +5510,14 @@ export function useSceneCollectionManager(options?: {
     // The beds are named in both snapshots: the delete that empties the scene takes the
     // spare beds with it, and undo has to bring them back with the models.
     const currentPlates = platesRef.current;
+    const rangesBeforeDelete = layerSettingsRangesRef.current;
+    const clearsLayerSettingsRanges = rangesBeforeDelete.length > 0 && currentModels.every((model) => ids.has(model.id));
     const before = shouldPushHistory
       ? captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, {
           plates: currentPlates,
           activePlateId: activePlateIdRef.current,
           includeSupportState: includeSupportHistory,
+          ...(clearsLayerSettingsRanges ? { layerSettingsRanges: rangesBeforeDelete } : {}),
         })
       : null;
 
@@ -5527,6 +5565,7 @@ export function useSceneCollectionManager(options?: {
     setModels(nextModels);
     setActiveModelId(nextActiveModelId);
     setSelectedModelIds(nextSelectedModelIds);
+    if (clearsLayerSettingsRanges) applyOwnedLayerSettingsRanges([]);
 
     // Clean up external mesh modifier store
     ids.forEach((id) => deleteStoredMeshModifiers(id));
@@ -5549,6 +5588,7 @@ export function useSceneCollectionManager(options?: {
         plates: nextPlates,
         activePlateId: nextActivePlateId,
         includeSupportState: includeSupportHistory,
+        ...(clearsLayerSettingsRanges ? { layerSettingsRanges: [] } : {}),
       });
       const deletedLabel = existing.length === 1
         ? deleteModelLabel(existing[0].name)
@@ -5562,7 +5602,7 @@ export function useSceneCollectionManager(options?: {
     }
 
     console.log(`[SceneCollection] Deleted ${ids.size} model(s) and ${totalRemovedSupports} associated supports.`);
-  }, [pushSceneSnapshotHistory, tryRevokeObjectUrl, waitForUiYield]);
+  }, [applyOwnedLayerSettingsRanges, pushSceneSnapshotHistory, tryRevokeObjectUrl, waitForUiYield]);
 
   const deleteModel = useCallback((id: string) => {
     void deleteModels([id]);
@@ -7615,6 +7655,10 @@ export function useSceneCollectionManager(options?: {
         }
         return false;
       }
+      // Adopt global ranges only after every model/support/material step succeeds.
+      if (document.scene.layerSettingsRanges !== undefined) {
+        applyOwnedLayerSettingsRanges(document.scene.layerSettingsRanges);
+      }
       return true;
     } catch (error) {
       console.error('[SceneCollection] VOXL import failed:', error);
@@ -7647,7 +7691,7 @@ export function useSceneCollectionManager(options?: {
         });
       }
     }
-  }, [_, cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, applyOwnedLayerSettingsRanges, cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
 
   const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
@@ -8847,6 +8891,7 @@ export function useSceneCollectionManager(options?: {
     const remaining = current.filter((plate) => plate.id !== plateId);
 
     const doomed = modelsOnPlate(modelsRef.current, plateId, plateFramesRef.current);
+    const rangesBeforeDelete = layerSettingsRangesRef.current;
     const nextActivePlateId = activePlateIdRef.current === plateId ? remaining[0].id : activePlateIdRef.current;
     // The supports too: the delete takes the doomed models' supports, and the shift moves the
     // others', so an undo without them would leave both where the delete put them.
@@ -8880,6 +8925,10 @@ export function useSceneCollectionManager(options?: {
         activePlateId: nextActivePlateId,
         includeSupportState: true,
       });
+      if (rangesBeforeDelete !== layerSettingsRangesRef.current) {
+        before.layerSettingsRanges = parseLayerSettingsRanges(rangesBeforeDelete);
+        after.layerSettingsRanges = parseLayerSettingsRanges(layerSettingsRangesRef.current);
+      }
       pushSceneSnapshotHistory(before, after, deletePlateLabel(current.findIndex((plate) => plate.id === plateId) + 1));
     });
 
@@ -8916,6 +8965,7 @@ export function useSceneCollectionManager(options?: {
     }
 
     const remaining = current.slice(0, 1);
+    const rangesBeforeDelete = layerSettingsRangesRef.current;
     const before = captureSceneSnapshot(modelsRef.current, activeModelIdRef.current, selectedModelIdsRef.current, {
       plates: current,
       activePlateId: activePlateIdRef.current,
@@ -8938,6 +8988,10 @@ export function useSceneCollectionManager(options?: {
       activePlateId: firstPlateId,
       includeSupportState: true,
     });
+    if (rangesBeforeDelete !== layerSettingsRangesRef.current) {
+      before.layerSettingsRanges = parseLayerSettingsRanges(rangesBeforeDelete);
+      after.layerSettingsRanges = parseLayerSettingsRanges(layerSettingsRangesRef.current);
+    }
     const historyKey = pushSceneSnapshotHistory(before, after, DELETE_MODELS_AND_PLATES_LABEL);
     void spillSceneSnapshotKey(historyKey, modelsRef.current);
   }, [deleteModels, modelPlateId, pushSceneSnapshotHistory, waitForUiYield]);
@@ -8980,6 +9034,8 @@ export function useSceneCollectionManager(options?: {
 
   return {
     models,
+    layerSettingsRanges,
+    updateLayerSettingsRanges,
     activeModelId,
     setActiveModelId,
     plateName,

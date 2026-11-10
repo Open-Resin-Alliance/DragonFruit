@@ -148,10 +148,10 @@ export function MeshSettingsTab({
   const previewSelectedTintColor = meshSelectionColor;
   const previewSelectedTintStrength = selectedTintStrength;
 
-  const showLighting = configuredShaderType === 'soft_clay' || configuredShaderType === 'xray';
-  const showRoughness = configuredShaderType === 'soft_clay' || configuredShaderType === 'xray';
-  // The baked occlusion only reaches the model through the Standard material.
-  const showBakedAo = configuredShaderType === 'soft_clay';
+  const showLighting = configuredShaderType === 'soft_clay' || configuredShaderType === 'profile' || configuredShaderType === 'xray';
+  const showRoughness = configuredShaderType === 'soft_clay' || configuredShaderType === 'profile' || configuredShaderType === 'xray';
+  // Standard and Profile share the same baked-occlusion material.
+  const showBakedAo = configuredShaderType === 'soft_clay' || configuredShaderType === 'profile';
   const hasRenderingOptions =
     configuredShaderType === 'matcap' ||
     configuredShaderType === 'flat_unlit' ||

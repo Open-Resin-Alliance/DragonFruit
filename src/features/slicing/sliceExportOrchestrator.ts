@@ -5,7 +5,7 @@ import { computeApproxModelWorldBounds, computePreciseModelWorldBounds, isBounds
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { attachJobMetadataPayloads, getJobMetadataPayloadDeclarations } from './jobMetadataPayloads';
 import { prepareLoadedModelsForOutput } from '@/features/mesh-modifiers/prepareModelGeometry';
-import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from './formats/registry';
+import { resolveOutputFileExtension, resolveOutputFormatVersion, resolveSlicingFormatDefinition } from './formats/registry';
 import { asciiFileBaseName } from './plateSliceNaming';
 import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import {
@@ -17,7 +17,8 @@ import {
     type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
 import { invoke } from '@tauri-apps/api/core';
-import { assembleSliceJob, buildNativeSliceJob, resolveSliceRasterSettings } from './sliceJobAssembly';
+import { assembleSliceJob, assertSliceLayerSettingsSupported, buildNativeSliceJob, resolveSliceRasterSettings } from './sliceJobAssembly';
+import { parseLayerSettingsRanges, type LayerSettingsRange } from './layerSettingsRanges';
 import { resolveSliceJobAntiAliasing, type SliceJobAntiAliasingRequest } from './sliceAntiAliasing';
 
 const DEBUG_PREFIX = '[SlicingDebug]';
@@ -95,6 +96,7 @@ export type SliceExportOrchestratorOptions = {
     plateOffsetMm?: { dxMm: number; dyMm: number };
     printerProfile: PrinterProfile;
     materialProfile: MaterialProfile;
+    layerSettingsRanges?: readonly LayerSettingsRange[];
     filenameBase: string;
     outputPath?: string | null;
     /** The user's anti-aliasing choice; without one the job slices with anti-aliasing off. */
@@ -297,6 +299,10 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             + 'Install the plugin that provides that output format, or pick another one for this printer profile.',
         );
     }
+
+    const layerSettingsRanges = parseLayerSettingsRanges(options.layerSettingsRanges);
+    const formatVersion = resolveOutputFormatVersion(format.outputFormat, options.printerProfile.display.formatVersion, format.pluginId);
+    assertSliceLayerSettingsSupported(layerSettingsRanges, format, formatVersion);
 
     logDebug('Export orchestrator start', {
         format: format.outputFormat,
@@ -558,6 +564,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
             totalLayers: solidMesh.totalLayers,
             tallestObjectHeightMm: solidMesh.tallestObjectHeightMm,
             models: solidMesh.models,
+            layerSettingsRanges,
         },
         dither: options,
         antiAliasing: options.antiAliasing,

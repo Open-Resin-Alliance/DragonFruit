@@ -11,6 +11,7 @@ import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 
 /** min-width 136px + 10px offset + margin. */
 const THUMB_EDIT_POPOVER_WIDTH = 156;
+const RANGE_TRACK_HINT = msg`Right-click the track for layer settings ranges`;
 
 type Translate = (descriptor: MessageDescriptor) => string;
 
@@ -27,6 +28,18 @@ function formatMinimalRailTitle(translate: Translate, layer: number, height: str
   }
   return translate(msg`Layer ${layer} • ${height} • Right-click a handle to type an exact value`);
 }
+
+export type LayerSliderRangeBand = {
+  id: string;
+  bottomPercent: number;
+  topPercent: number;
+  color: string;
+  label: string;
+  /** A paint-only outward ramp; endpoints retain their alpha after print clipping. */
+  feather?: { bottomOpacity: number; topOpacity: number };
+  /** Low-to-high original range priority, independent of clipped coverage. */
+  paintOrder?: number;
+};
 
 type LayerSliderProps = {
   min: number;
@@ -52,9 +65,36 @@ type LayerSliderProps = {
   layerHeightMm?: number;
   compactMinimalRail?: boolean;
   allowTrackClickJump?: boolean;
+  rangeBands?: readonly LayerSliderRangeBand[];
+  onRangeContextMenu?: (value: number, position: { x: number; y: number }) => void;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, currentHeightMm, maxHeightMm, className, showValue = false, docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm, compactMinimalRail = false, allowTrackClickJump = false }: LayerSliderProps) {
+// SVG geometry properties are supported by browsers but absent from CSSProperties.
+type RailClipRectStyle = React.CSSProperties & Pick<React.SVGProps<SVGRectElement>, 'x' | 'y' | 'rx' | 'ry'>;
+
+function rangeBandGapRectStyle(band: LayerSliderRangeBand, outer: boolean): RailClipRectStyle {
+  const span = band.topPercent - band.bottomPercent;
+  const halfHeight = outer
+    ? `max(2px, calc(${span / 2}% + 0.5px))`
+    : `max(1px, calc(${span / 2}% - 0.5px))`;
+  return {
+    x: 'calc(50% - var(--spacing) * 0.75)',
+    y: `calc(${100 - (band.bottomPercent + band.topPercent) / 2}% - ${halfHeight})`,
+    width: 'calc(var(--spacing) * 1.5)',
+    height: outer ? `max(4px, calc(${span}% + 1px))` : `max(2px, calc(${span}% - 1px))`,
+    rx: 'calc(var(--spacing) * 0.75)',
+    ry: 'calc(var(--spacing) * 0.75)',
+  };
+}
+
+function rangeBandIntersectsWindow(band: LayerSliderRangeBand, bottom: number, top: number): boolean {
+  if (top <= bottom) return false;
+  return band.topPercent === band.bottomPercent
+    ? band.bottomPercent >= bottom && band.topPercent <= top
+    : band.topPercent > bottom && band.bottomPercent < top;
+}
+
+export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, currentHeightMm, maxHeightMm, className, showValue = false, docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm, compactMinimalRail = false, allowTrackClickJump = false, rangeBands, onRangeContextMenu }: LayerSliderProps) {
   const { _ } = useLingui();
   const fmt = useLocaleFormat();
   const isMinimalRail = embedded && docked;
@@ -89,6 +129,8 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const editInputRef = React.useRef<HTMLInputElement>(null);
   const editPopoverRef = React.useRef<HTMLDivElement>(null);
   const openThumbEditRef = React.useRef<((thumb: 'upper' | 'lower') => void) | null>(null);
+  const thumbContextMenuHandledRef = React.useRef(false);
+  const [hoveredBand, setHoveredBand] = React.useState<{ id: string; bottom: number; top: number } | null>(null);
 
   const formatMm = React.useCallback((mm: number) => {
     if (!Number.isFinite(mm)) return fmt.unit('mm', '0');
@@ -312,6 +354,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const onPointerDown = React.useCallback((e: React.MouseEvent) => {
     // Right-click: open the thumb popover if near a thumb, then let onContextMenu handle the rest
     if (e.button === 2) {
+      thumbContextMenuHandledRef.current = false;
       const el = containerRef.current;
       if (el) {
         const rect = el.getBoundingClientRect();
@@ -324,15 +367,25 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           const lowerDistance = Math.abs(clickInv - lowerPos);
           const upperDistance = Math.abs(clickInv - upperPos);
           if (lowerDistance <= thumbGrabThreshold || upperDistance <= thumbGrabThreshold) {
-            openThumbEditRef.current?.(lowerDistance < upperDistance ? 'lower' : 'upper');
+            if (openThumbEditRef.current) {
+              openThumbEditRef.current(lowerDistance < upperDistance ? 'lower' : 'upper');
+              thumbContextMenuHandledRef.current = true;
+            }
             e.preventDefault();
             e.stopPropagation();
           }
         } else if (Math.abs(clickInv - upperPos) <= thumbGrabThreshold) {
-          openThumbEditRef.current?.('upper');
+          if (openThumbEditRef.current) {
+            openThumbEditRef.current('upper');
+            thumbContextMenuHandledRef.current = true;
+          }
           e.preventDefault();
           e.stopPropagation();
         }
+      }
+      if (onRangeContextMenu) {
+        e.preventDefault();
+        e.stopPropagation();
       }
       return;
     }
@@ -530,7 +583,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     window.addEventListener('blur', settleDrag);
-  }, [allowTrackClickJump, dragBatchMode, emitWindowChange, getThumbHitThresholds, lowerValue, max, min, onLowerChange, onScrubEnd, onScrubStart, setByClientY, setLowerByClientY]);
+  }, [allowTrackClickJump, dragBatchMode, emitWindowChange, getThumbHitThresholds, lowerValue, max, min, onLowerChange, onRangeContextMenu, onScrubEnd, onScrubStart, setByClientY, setLowerByClientY]);
 
   const nudge = React.useCallback((dir: 1 | -1) => {
     const s = step || 1;
@@ -560,15 +613,41 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     return () => container.removeEventListener('wheel', handleWheel);
   }, [emitChange, nudge, step]);
 
+  const onContextMenu = React.useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Contextmenu may precede or follow mouseup; only consume here or reset on
+    // the next right mousedown, never on mouseup.
+    const handledByThumb = thumbContextMenuHandledRef.current;
+    thumbContextMenuHandledRef.current = false;
+    if (handledByThumb || !onRangeContextMenu) return;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const inverted = 1 - (e.clientY - rect.top) / Math.max(1, rect.height);
+    const next = clamp(min + inverted * (max - min));
+    setEditingThumb(null);
+    onRangeContextMenu(next, { x: e.clientX, y: e.clientY });
+  }, [clamp, max, min, onRangeContextMenu]);
+
   const onKeyDown = React.useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
+    if (onRangeContextMenu && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) {
+      e.preventDefault();
+      e.stopPropagation();
+      thumbContextMenuHandledRef.current = false;
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const current = clamp(valueRef.current);
+      const position = (current - min) / Math.max(1, max - min);
+      setEditingThumb(null);
+      onRangeContextMenu(current, { x: rect.right, y: rect.bottom - position * rect.height });
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
       e.preventDefault();
       nudge(1);
     } else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
       e.preventDefault();
       nudge(-1);
     }
-  }, [nudge]);
+  }, [clamp, max, min, nudge, onRangeContextMenu]);
 
   const handleInputChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value;
@@ -683,7 +762,57 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     const crossSection = onToggleCrossSection ? (crossSectionEnabled ? 'on' : 'off') : 'none';
     return formatMinimalRailTitle(_, Math.round(displayValue), mmLabel, crossSection);
   }, [_, crossSectionEnabled, displayHeightMm, displayValue, formatMm, onToggleCrossSection]);
+  const singletonLayer = min === max && max > 0;
+  const bandWindowBottom = singletonLayer ? 0 : lowerPercent ?? 0;
+  const bandWindowTop = singletonLayer ? 100 : percent;
+  const coreRangeBands = React.useMemo(() => (rangeBands ?? []).filter((band) => !band.feather), [rangeBands]);
+  const orderedRangeBands = React.useMemo(() => [...coreRangeBands].sort((a, b) => a.bottomPercent - b.bottomPercent), [coreRangeBands]);
+  const visibleRangeBands = React.useMemo(() => coreRangeBands.filter((band) => rangeBandIntersectsWindow(band, bandWindowBottom, bandWindowTop)), [coreRangeBands, bandWindowBottom, bandWindowTop]);
+  const visiblePaintBands = React.useMemo(() => {
+    const bands = (rangeBands ?? []).filter((band) => rangeBandIntersectsWindow(band, bandWindowBottom, bandWindowTop));
+    return bands.some((band) => band.feather)
+      ? bands.sort((a, b) => (a.paintOrder ?? 0) - (b.paintOrder ?? 0))
+      : bands;
+  }, [rangeBands, bandWindowBottom, bandWindowTop]);
+  const hasVisibleFeathers = visiblePaintBands.some((band) => band.feather);
+  const hoveredBandLabel = hoveredBand && hoveredBand.bottom === bandWindowBottom && hoveredBand.top === bandWindowTop
+    ? visibleRangeBands.find((band) => band.id === hoveredBand.id)?.label
+    : undefined;
+  const rangeTrackHint = onRangeContextMenu ? _(RANGE_TRACK_HINT) : null;
   const railClassName = `relative mx-auto ${embedded ? (expandToContainer ? 'flex-1 h-full min-h-[300px]' : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`;
+  const railClipId = `layer-slider-rail-${React.useId()}`;
+  const bandGapMaskId = `layer-slider-gaps-${React.useId()}`;
+  const visibleRailSpans = React.useMemo(() => {
+    if (!visibleRangeBands.length) return null;
+    const holes: { topPercent: number; starts: string[]; ends: string[] }[] = [];
+    for (const band of orderedRangeBands) {
+      if (!rangeBandIntersectsWindow(band, bandWindowBottom, bandWindowTop)) continue;
+      const bottomPercent = Math.max(band.bottomPercent, bandWindowBottom);
+      const topPercent = Math.min(band.topPercent, bandWindowTop);
+      const center = (band.bottomPercent + band.topPercent) / 2;
+      // Half a pixel per colored edge makes one shared seam; rail edges supply the other half.
+      const halfHeight = `max(2px, calc(${(band.topPercent - band.bottomPercent) / 2}% + 0.5px))`;
+      const start = `max(${bandWindowBottom}%, calc(${center}% - ${halfHeight}))`;
+      const end = `min(${bandWindowTop}%, calc(${center}% + ${halfHeight}))`;
+      const previous = holes.at(-1);
+      if (previous && bottomPercent <= previous.topPercent) {
+        previous.topPercent = Math.max(previous.topPercent, topPercent);
+        previous.starts.push(start);
+        previous.ends.push(end);
+      } else {
+        holes.push({ topPercent, starts: [start], ends: [end] });
+      }
+    }
+    const spans: { bottom: string; top: string }[] = [];
+    let bottom = '0%';
+    for (const hole of holes) {
+      const top = hole.starts.length === 1 ? hole.starts[0] : `min(${hole.starts.join(', ')})`;
+      spans.push({ bottom, top });
+      bottom = hole.ends.length === 1 ? hole.ends[0] : `max(${hole.ends.join(', ')})`;
+    }
+    spans.push({ bottom, top: '100%' });
+    return spans;
+  }, [orderedRangeBands, visibleRangeBands.length, bandWindowBottom, bandWindowTop]);
 
   return (
     <div
@@ -745,7 +874,13 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
         )}
 
         <Tooltip
-          content={isMinimalRail ? <span className="whitespace-pre-line">{minimalRailTitle}</span> : undefined}
+          content={isMinimalRail || rangeTrackHint || hoveredBandLabel ? (
+            <span className="whitespace-pre-line">
+              {(isMinimalRail || rangeTrackHint) && minimalRailTitle}
+              {rangeTrackHint && <span className="block">{rangeTrackHint}</span>}
+              {hoveredBandLabel && <span className="block">{hoveredBandLabel}</span>}
+            </span>
+          ) : undefined}
           wrapperClassName={railClassName}
         >
         <div
@@ -753,15 +888,27 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           className={railClassName}
           onMouseDown={onPointerDown}
           onDoubleClick={(e) => {
-            if (!onToggleCrossSection) return;
+            if (e.button !== 0 || !onToggleCrossSection) return;
             e.preventDefault();
             e.stopPropagation();
             onToggleCrossSection();
           }}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
+          onContextMenu={onContextMenu}
+          onMouseMove={(e) => {
+            if (!visibleRangeBands.length) return;
+            const rect = containerRef.current?.getBoundingClientRect();
+            if (!rect) return;
+            const pointerPercent = 100 * (1 - (e.clientY - rect.top) / Math.max(1, rect.height));
+            const band = pointerPercent >= bandWindowBottom && pointerPercent <= bandWindowTop
+              ? visibleRangeBands.find((candidate) => pointerPercent >= candidate.bottomPercent && pointerPercent <= candidate.topPercent)
+              : undefined;
+            setHoveredBand((previous) => {
+              if (!band) return null;
+              if (previous?.id === band.id && previous.bottom === bandWindowBottom && previous.top === bandWindowTop) return previous;
+              return { id: band.id, bottom: bandWindowBottom, top: bandWindowTop };
+            });
           }}
+          onMouseLeave={() => setHoveredBand(null)}
           tabIndex={0}
           onKeyDown={onKeyDown}
         >
@@ -782,34 +929,115 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               : 'absolute left-0 right-0 top-0 bottom-0'}
           >
 
-            {/* Track */}
+            {/* Clip remaining rail spans to rounded caps; handles remain outside. */}
+            {visibleRailSpans && (
+              <svg className="absolute inset-0 h-full w-full pointer-events-none" aria-hidden="true" focusable="false">
+                <defs>
+                  <clipPath id={railClipId} clipPathUnits="userSpaceOnUse">
+                    {visibleRailSpans.map((span, index) => {
+                      const style: RailClipRectStyle = {
+                        x: 'calc(50% - var(--spacing) * 0.75)',
+                        y: `calc(100% - ${span.top})`,
+                        width: 'calc(var(--spacing) * 1.5)',
+                        height: `max(0px, calc(${span.top} - ${span.bottom}))`,
+                        rx: 'calc(var(--spacing) * 0.75)',
+                        ry: 'calc(var(--spacing) * 0.75)',
+                      };
+                      return <rect key={index} style={style} />;
+                    })}
+                  </clipPath>
+                </defs>
+              </svg>
+            )}
             <div
-              className="absolute left-1/2 top-0 h-full w-1.5 -translate-x-1/2 rounded-full"
-              style={{
-                background: 'color-mix(in srgb, var(--surface-2), black 8%)',
-                border: '1px solid color-mix(in srgb, var(--border-subtle), transparent 40%)',
-              }}
-            />
+              className="absolute inset-0 pointer-events-none"
+              style={{ clipPath: visibleRailSpans ? `url(#${railClipId})` : undefined }}
+            >
+              {/* Track */}
+              <div
+                className="absolute left-1/2 top-0 h-full w-1.5 -translate-x-1/2 rounded-full"
+                style={{
+                  background: 'color-mix(in srgb, var(--surface-2), black 8%)',
+                  border: '1px solid color-mix(in srgb, var(--border-subtle), transparent 40%)',
+                }}
+              />
 
-            {/* Progress fill */}
+              {/* Progress fill */}
+              <div
+                className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full"
+                style={{
+                  bottom: `${lowerPercent ?? 0}%`,
+                  height: `${percent - (lowerPercent ?? 0)}%`,
+                  // Glides with the thumbs, or it reaches a jump's end while they are still on the way.
+                  transition: easesPosition
+                    ? 'bottom 170ms cubic-bezier(0.22, 1, 0.36, 1), height 170ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms'
+                    : 'background 200ms',
+                  background: crossSectionEnabled
+                    ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))'
+                    : 'linear-gradient(180deg, color-mix(in srgb, var(--text-muted), white 10%), var(--text-muted))',
+                  opacity: crossSectionEnabled ? 1 : 0.45,
+                }}
+              />
+            </div>
+
+            {/* Subtract exact outer-minus-inner core rings from every color, never the thumbs. */}
+            {hasVisibleFeathers && visibleRangeBands.length > 0 && (
+              <svg className="absolute inset-0 h-full w-full pointer-events-none" aria-hidden="true" focusable="false">
+                <defs>
+                  {visibleRangeBands.map((band, index) => (
+                    <mask key={band.id} id={`${bandGapMaskId}-${index}`} maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%" style={{ maskType: 'luminance' }}>
+                      <rect width="100%" height="100%" fill="white" />
+                      <rect style={rangeBandGapRectStyle(band, false)} fill="black" />
+                    </mask>
+                  ))}
+                  <mask id={bandGapMaskId} maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%" style={{ maskType: 'luminance' }}>
+                    <rect width="100%" height="100%" fill="white" />
+                    {visibleRangeBands.map((band, index) => (
+                      <rect key={band.id} style={rangeBandGapRectStyle(band, true)} fill="black" mask={`url(#${bandGapMaskId}-${index})`} />
+                    ))}
+                  </mask>
+                </defs>
+              </svg>
+            )}
+
+            {/* Clip colors to the same interval as the fill; saved ranges remain unchanged. */}
             <div
-              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full"
+              className="absolute inset-0 pointer-events-none"
               style={{
-                bottom: `${lowerPercent ?? 0}%`,
-                height: `${percent - (lowerPercent ?? 0)}%`,
-                // Glides with the thumbs, or it reaches a jump's end while they are still on the way.
-                transition: easesPosition
-                  ? 'bottom 170ms cubic-bezier(0.22, 1, 0.36, 1), height 170ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms, box-shadow 200ms'
-                  : 'background 200ms, box-shadow 200ms',
-                background: crossSectionEnabled
-                  ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))'
-                  : 'linear-gradient(180deg, color-mix(in srgb, var(--text-muted), white 10%), var(--text-muted))',
-                boxShadow: crossSectionEnabled
-                  ? '0 0 10px color-mix(in srgb, var(--accent), transparent 65%)'
-                  : 'none',
-                opacity: crossSectionEnabled ? 1 : 0.45,
+                clipPath: `inset(${100 - bandWindowTop}% 0 ${bandWindowBottom}% 0)`,
+                mask: hasVisibleFeathers && visibleRangeBands.length > 0 ? `url(#${bandGapMaskId})` : undefined,
               }}
-            />
+            >
+              {visiblePaintBands.map((band) => band.feather ? (
+                <div
+                  key={band.id}
+                  data-layer-range-feather={band.id}
+                  aria-hidden="true"
+                  className="absolute left-1/2 w-1.5 -translate-x-1/2 pointer-events-none"
+                  style={{
+                    bottom: `${band.bottomPercent}%`,
+                    height: `${band.topPercent - band.bottomPercent}%`,
+                    background: `linear-gradient(to top, color-mix(in srgb, ${band.color} ${band.feather.bottomOpacity * 100}%, transparent), color-mix(in srgb, ${band.color} ${band.feather.topOpacity * 100}%, transparent))`,
+                  }}
+                />
+              ) : (
+                <div
+                  key={band.id}
+                  data-layer-range-band={band.id}
+                  role="img"
+                  aria-label={band.label}
+                  title={band.label}
+                  className="absolute left-1/2 w-1.5 -translate-x-1/2 rounded-full pointer-events-none"
+                  style={{
+                    bottom: `${(band.bottomPercent + band.topPercent) / 2}%`,
+                    height: `max(2px, calc(${band.topPercent - band.bottomPercent}% - 1px))`,
+                    transform: 'translateY(50%)',
+                    background: band.color,
+                    pointerEvents: 'none',
+                  }}
+                />
+              ))}
+            </div>
 
             {/* Lower thumb */}
             {lowerPercent != null && (
@@ -838,13 +1066,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                     </div>
                   )}
                   <div
-                    className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
+                    className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background] duration-150`}
                     style={{
                       borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
                       background: `linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 20%), ${thumbColor}, color-mix(in srgb, ${thumbColor}, white 20%))`,
-                      boxShadow: isDraggingThumb
-                        ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
-                        : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
                       opacity: 0.75,
                     }}
                   />
@@ -937,13 +1162,10 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                   </div>
                 )}
             <div
-              className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
+              className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background] duration-150`}
               style={{
                 borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
                 background: `linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 20%), ${thumbColor}, color-mix(in srgb, ${thumbColor}, white 20%))`,
-                boxShadow: isDraggingThumb
-                  ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
-                  : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
               }}
             />
 
@@ -1008,7 +1230,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
             {/* Shift indicator - wifi-style precision arcs centered on thumb */}
             {isShiftHeld && (
               <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-                <svg width="52" height="52" viewBox="0 0 52 52" className="drop-shadow-lg">
+                <svg width="52" height="52" viewBox="0 0 52 52">
                   {/* Outer arc - radius 24px with 7px gap (10 + 7 + 7 spacing) */}
                   <path
                     d="M 9.5 14.5 A 24 24 0 0 0 2 26"

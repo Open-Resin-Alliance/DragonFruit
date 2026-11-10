@@ -55,6 +55,27 @@ private copy at the call site.
   `scrollableNumberField`) own stepping, wheel handling and clamping; a call site
   that re-clamps with `Math.min`/`Math.max` is doing the atom's job.
 
+`NumberInput.decimalPlaces` optionally selects editable/display precision in
+0..6 (default 2). Use it for physical mm endpoints rather than forking the
+numeric control; it is not forwarded as a DOM attribute. Explicit precision
+also preserves fractional digits during blur/step/wheel edits:
+
+```tsx
+<NumberInput value={heightMm} decimalPlaces={6} step={0.001} min={0}
+  onChange={setHeightMm} />
+```
+
+Editable `NumberInput` controls require `onChange`. A display with literal
+`disabled: true` may omit it; disabled controls reject input/wheel/step changes
+without needing a dummy callback. This preserves the editable-control type check.
+
+Only committed numeric edits call `onChange`; focus and intermediate empty or
+separator-only text are not a new numeric override. The paired increment/decrement
+buttons share the `ui-number-stepper` styling hook: at a bound or when disabled,
+they retain transparent backgrounds and inherited icon color, with opacity alone
+indicating unavailability. Do not apply the generic disabled action-button fill
+to either arrow.
+
 ### Feedback
 
 - `ProgressBar` — the accent bar for long operations. `value` in 0 to 100, `null`

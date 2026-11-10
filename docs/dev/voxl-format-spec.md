@@ -167,6 +167,34 @@ build plate, shown on the plate itself. Both plate fields are optional: a file
 written before plates existed has neither, and readers must treat a missing one
 as a single unnamed plate.
 
+`SCNE.layerSettingsRanges` is an optional scene-wide encoded-print schedule.
+Its ranges use either inclusive printed layer numbers or persisted physical
+height bounds (`unit: "mm"`, `startMm`, `endMm`), plus stable ids and sparse settings;
+see [Slice Job Assembly](slice-job-assembly.md#layer-settings-range-resolution)
+for validation, units and overlap precedence. This additive field does not
+raise the binary container floor. A present key is validated before model/mesh
+processing: malformed ranges fail rather than being silently sanitized.
+Each range may also carry `blendStart` and `blendEnd`: nonnegative distances in its own
+unit, with whole layer steps required for layer-number ranges. Zero/absent disables an
+edge and canonical serialization omits zero. The distances persist with SCNE, participate
+in scene/encoded fingerprints, and survive save/load/undo without altering material presets.
+No additional binary chunk or container version is introduced.
+The saved bounds describe the full-strength core. Distances extend before/after it; neither
+save/load nor resolution rewrites those bounds to include the outward support. The encoded
+fingerprint's outward-mode discriminator is derived identity data, not a persisted range key.
+
+The writer retains present `[]` as an explicit cleared schedule. On successful
+scene import a present schedule replaces the current one, including `[]`;
+an absent key preserves the live schedule when appending/merging an older file.
+Failed/cancelled imports and non-native mesh imports leave ranges unchanged.
+Printed numbers and mm heights are not rebased by model transforms,
+scope-specific exports, plates or Z offsets. Layer-number ranges stay fixed
+when layer height changes; mm ranges retain their raw heights and resolve
+against the new grid. No converted layer endpoints are written into an mm range. Manual save, autosave/recovery
+and both bundled/grouped Export panel VOXL paths carry the same scene array.
+SCNE content participates in the existing cached content fingerprint, so a
+range-only edit or clear cannot authorize skipping a changed disk write.
+
 For embedded model meshes, `MODL[i]` maps to `MESH(index = i)` unless the entry
 carries a `chunkIndex` (V3.0 dedup), which names the owning MESH chunk.
 

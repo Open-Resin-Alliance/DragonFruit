@@ -44,6 +44,115 @@ Common operations:
 - find encoder by extension
 - list supported extensions
 
+## Scene-owned layer settings ranges
+
+Formats opt in through `FormatEncoder::supports_layer_settings`; its default is
+false. The engine calls `ensure_layer_settings_supported` before initializing
+raster/stream output and at direct encode dispatch. Unsupported encoders reject
+a nonempty root `layerSettingsRanges` array rather than silently ignore it.
+Malformed collections are errors even when no stored layer would match.
+
+The frontend declares the same contract with `layerSettingsFields` on
+`SlicingFormatDefinition` and optionally `SlicingFormatVersionOption`.
+`resolveLayerSettingsFields` first resolves the normalized/default version;
+an explicit version list replaces the format list. Missing capabilities mean
+no range support. The pure `findUnsupportedLayerSetting` check rejects the
+first supplied incompatible field, including shadowed and beyond-EOF ranges.
+
+| Format/version | Supported range overrides |
+| --- | --- |
+| GOO V1.2 and V5.1 | All 14 canonical fields |
+| CTB V2 | Exposure and light-off delay only |
+| CTB V3/V4/V5, ordinary and encrypted | All canonical fields except independent total retract height |
+| Anycubic AFF/AZF, all declared printer variants | Exposure, total lift height, lift speed |
+| LUMEN/NanoDLP and unopted-in runtime encoders | None in this feature |
+
+Each outer finalizer constructs `LayerSettingsSchedule::from_job` once before
+creating a destination. Nested record/container writers borrow the schedule.
+Legacy layer bounds remain valid; `{ unit: 'mm', startMm, endMm }` is resolved
+against nominal printed-layer end heights without rewriting saved mm values.
+The existing `effective.layerHeightMm` metadata retains nominal f64 precision;
+when supplied it must cast to the job's f32 layer height. Raw jobs without it
+use that f32 height's shortest display-decimal. Bounds and computed end heights
+are compared after a single final binary32 rounding, avoiding unit-switch loss
+at heights such as 0.03 mm. This changes neither geometry nor raster settings.
+`LayerSettingsSchedule::resolve_at(layer_index, baseline)` uses the actual
+zero-based physical layer index, independent of layer arrival order. The record
+writer first selects its existing bottom, transition or normal baseline. Its
+callback returns the canonical value for a requested `LayerSettingField` from
+that physical record, not a global material default or zero for an absent patch:
+
+```rust
+// For an exposure-only encoder, after computing its legacy layer exposure:
+let schedule = LayerSettingsSchedule::from_job(job, &[LayerSettingField::ExposureSec])?;
+let patch = schedule.resolve_at(layer_index, |_| f64::from(exposure));
+```
+
+The returned `Option<LayerPrintSettingsPatch>` is owned, stack-resident and sparse;
+apply only its supplied fields. Writers with additional capabilities match each
+field to its existing record member. Constant schedules
+retain the compact compiled-interval lookup. Blurred schedules retain original
+ranges sorted low-to-high by original resolved core span and array order, and
+interpolate at lookup time without per-record parsing or heap allocation. A
+smaller core span wins; equal spans prefer the later array entry. A millimeter
+core without a matching grid plane has span zero and can still supply an outward
+feather. Neither feather expansion nor EOF clipping changes priority.
+`segments()` describes compact native support coverage and constant targets,
+not evaluated blur values. Frontend slider core intervals remain nominal so
+their existing sharp separators and model-profile coloring do not move.
+
+Optional `blendStart` and `blendEnd` use the range's units: integer layer steps
+through `u32::MAX`, or finite nonnegative millimeters through `f32::MAX`. Zero is
+disabled and serializes as omitted. The saved inclusive core always has weight
+1. Before the start, an enabled edge has weight
+`clamp(1 - (start - position) / blendStart, 0, 1)`; after the end the corresponding
+weight is `clamp(1 - (position - end) / blendEnd, 0, 1)`. A disabled edge has no
+influence outside the core. There are no inward ramps, even when the feather
+distances exceed the core width. For core layers 10–20, exposure 8 over lower
+exposure 4, and both distances 2, layers 8, 9, 10, 20, 21, 22 resolve to
+4, 6, 8, 8, 6, 4.
+
+Millimeter positions and core bounds use the same final f32 rounding described
+above; blend distances retain their f64 values. Expanded support endpoints stay
+f64, even outside the finite f32 range, and are compared directly against the
+rounded printed-layer grid without an epsilon. Support is clipped to actual
+printed records only after preserving the original core priority. A core beyond
+EOF can therefore affect preceding records through its start feather.
+
+Each explicit field blends into its already resolved lower-priority value at
+the same layer, including lower suppliers' ramps. Missing fields inherit without
+attenuation. Falling through all suppliers uses the callback's physical-record
+baseline. Intermediate results remain f64, including PWM; the writer rounds PWM
+to the nearest integer only after the final blend. Zero-influence fields stay
+omitted so legacy stage values and speed conversions remain bit-for-bit intact.
+Image compression and raster data do not change. See
+[Slice Job Assembly](../slice-job-assembly.md) for the whitelist, units,
+inheritance, endpoint and priority contracts.
+
+GOO height overrides are total travel plus a stage-2 part; stage 1 is their
+difference. Untouched stage pairs keep their original f32 values. CTB stores
+total lift directly and derives total retract from it. Both reject an effective
+stage-2 height above its total before opening output. `validate_heights` checks
+constant interval starts and crossed bottom/nonbottom boundaries; when height
+ramps exist it visits every covered physical record, including outward feather
+layers and tails whose cores lie beyond EOF, without allocating a per-layer
+schedule, so an invalid tail or interior combination cannot escape preflight.
+Explicit exposure remains a final constant when blur is disabled; when enabled
+its lower endpoint is that version's existing physical-layer exposure formula.
+
+AFF/AZF convert explicitly supplied speeds from mm/min to mm/s. AFF writes
+parameters in LAYERDEF; SUBIMGS has image references and padding, not duplicate
+print settings. AZF keeps its legacy first-stage controller height unless the
+patch explicitly supplies total lift height. Originally nonempty schedules
+activate the relevant per-layer flags even when all ranges are beyond EOF;
+absent/empty schedules preserve the previous flag policy. CTB schedules force
+per-layer activation even when metadata explicitly disables it.
+
+Legacy print-time, volume, weight and cost estimates are unchanged and may not
+reflect these overrides. Decoded-container checks establish serialized values,
+not firmware acceptance of activation flags; desktop/printer acceptance remains
+a separate verification step.
+
 ## Generated wiring
 
 `rust/dragonfruit-slicing-engine/src/encoders/generated_plugin_encoders.rs` is generated. Do not manually edit it.

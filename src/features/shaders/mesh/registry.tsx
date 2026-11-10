@@ -1,6 +1,7 @@
 import type * as THREE from 'three';
 import type { MatcapVariant, MeshShaderType } from './types';
 import { SoftClayMaterial } from './softClay';
+import { ProfileMaterial } from './profile';
 import { FlatUnlitMaterial } from './flatUnlit';
 import { MatcapMaterial } from './matcap';
 import { NormalDebugMaterial } from './normalDebug';
@@ -45,8 +46,8 @@ export function MeshShaderMaterial({
   heatmapColors?: string[];
   matcapVariant?: MatcapVariant;
   flatUseVertexColors?: boolean;
-  /** Forwarded to `soft_clay` only: how much of the geometry's baked per-vertex
-   *  occlusion to apply. Other view modes are diagnostics and ignore it. */
+  /** Forwarded to Standard and Profile: how much of the geometry's baked
+   *  per-vertex occlusion to apply. Other view modes ignore it. */
   bakedAoStrength?: number;
 }) {
   switch (shaderType) {
@@ -131,6 +132,23 @@ export function MeshShaderMaterial({
           heatmapMinAngle={heatmapMinAngle}
           heatmapMaxAngle={heatmapMaxAngle}
           heatmapColors={heatmapColors}
+        />
+      );
+
+    case 'profile':
+      return (
+        <ProfileMaterial
+          isSelected={isSelected}
+          isHovered={isHovered}
+          hoverTintColor={hoverTintColor}
+          selectedTintColor={selectedTintColor}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
+          useVertexColors={useVertexColors}
+          meshColor={meshColor}
+          materialRoughness={materialRoughness}
+          clippingPlanes={clippingPlanes}
+          bakedAoStrength={bakedAoStrength}
         />
       );
 

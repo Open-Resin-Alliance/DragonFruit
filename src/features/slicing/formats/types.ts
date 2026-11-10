@@ -1,4 +1,5 @@
 import type { MaterialProfile, PrinterOutputFormat, PrinterProfile } from '@/features/profiles/profileStore';
+import type { LayerSettingField } from '../layerSettingsRanges';
 
 export type SlicingFormatOwnership = 'core' | 'plugin';
 
@@ -6,6 +7,7 @@ export type SlicingFormatVersionOption = {
   value: string;
   label: string;
   isDefault?: boolean;
+  layerSettingsFields?: readonly LayerSettingField[];
 };
 
 export type SlicingSettingsModeOption = {
@@ -22,6 +24,7 @@ export type SlicingFormatDefinition = {
   displayName: string;
   ownership: SlicingFormatOwnership;
   layerDataKind: 'png' | 'raw-mask';
+  layerSettingsFields?: readonly LayerSettingField[];
   pluginId?: string;
   xPackingStrategy?: SlicingXPackingStrategy;
   formatVersions?: SlicingFormatVersionOption[];

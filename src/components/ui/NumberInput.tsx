@@ -6,22 +6,26 @@ import { wheelStepDirection } from '@/components/ui/wheelStepDirection';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import { clamp } from '@/utils/math';
 
-interface NumberInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value'> {
+type NumberInputProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value'> & {
   value: number;
-  onChange: (value: number) => void;
   showStepper?: boolean;
-}
+  /** Maximum editable/displayed fraction digits, bounded to 0..6. Defaults to 2. */
+  decimalPlaces?: number;
+} & (
+  | { onChange: (value: number) => void }
+  | { disabled: true; onChange?: undefined }
+);
 
 /**
- * What typing may leave in the field: a minus unless `minBound` rules one out, up to two
+ * What typing may leave in the field: a minus unless `minBound` rules one out, up to `decimalPlaces`
  * decimals after the locale's separator or a ".", and the steps on the way there ('-', ',', '-,').
  */
-function inputPattern(decimalSeparator: string, minBound: number | null): RegExp {
+function inputPattern(decimalSeparator: string, minBound: number | null, decimalPlaces: number): RegExp {
   const separators = decimalSeparator === '.' ? '\\.' : `\\.${decimalSeparator}`;
   // A field whose minimum is 0 or more has no legal negative state, so the minus key never
   // starts one there (the store clamps too, for non-typed writes).
   const sign = minBound != null && minBound >= 0 ? '' : '-?';
-  return new RegExp(`^${sign}(?:\\d+)?(?:[${separators}]\\d{0,2})?$`);
+  return new RegExp(`^${sign}(?:\\d+)?(?:[${separators}]\\d{0,${decimalPlaces}})?$`);
 }
 
 function parseNumericBound(bound: string | number | undefined): number | null {
@@ -44,18 +48,19 @@ function countStepDecimals(step: number): number {
   return decimal ? decimal.length : 0;
 }
 
-export function NumberInput({ value, onChange, className, onBlur, showStepper = true, ...props }: NumberInputProps) {
+export function NumberInput({ value, onChange, className, onBlur, showStepper = true, decimalPlaces, ...props }: NumberInputProps) {
   const { _ } = useLingui();
   const fmt = useLocaleFormat();
   const safeValue = typeof value === 'number' && Number.isFinite(value) ? value : 0;
-  const formatValue = React.useCallback((n: number) => fmt.field(n, 2), [fmt]);
+  const precision = decimalPlaces === undefined || !Number.isFinite(decimalPlaces) ? 2 : clamp(Math.trunc(decimalPlaces), 0, 6);
+  const formatValue = React.useCallback((n: number) => fmt.field(n, precision), [fmt, precision]);
   const minBound = parseNumericBound(props.min);
   const maxBound = parseNumericBound(props.max);
   const stepSize = (() => {
     const raw = typeof props.step === 'number' ? props.step : Number(props.step);
     return Number.isFinite(raw) && raw > 0 ? raw : 1;
   })();
-  const stepPrecision = Math.min(6, countStepDecimals(stepSize));
+  const stepPrecision = Math.min(6, Math.max(countStepDecimals(stepSize), decimalPlaces === undefined ? 0 : precision));
 
   // Current string in the input
   const [displayValue, setDisplayValue] = useState(formatValue(safeValue));
@@ -70,9 +75,10 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
   }, [formatValue, safeValue]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (props.disabled) return;
     const newVal = e.target.value;
 
-    if (!inputPattern(fmt.decimalSeparator, minBound).test(newVal)) {
+    if (!inputPattern(fmt.decimalSeparator, minBound, precision).test(newVal)) {
       return;
     }
 
@@ -80,7 +86,7 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
 
     const parsed = fmt.parse(newVal);
     if (Number.isFinite(parsed)) {
-      onChange(parsed);
+      onChange?.(parsed);
     }
   };
 
@@ -101,6 +107,7 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
   };
 
   const applyStepDelta = React.useCallback((direction: 1 | -1) => {
+    if (props.disabled) return;
     const parsedCurrent = fmt.parse(displayValue);
     const currentValue = Number.isFinite(parsedCurrent) ? parsedCurrent : safeValue;
     let next = currentValue + (stepSize * direction);
@@ -113,8 +120,8 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
 
     const normalized = Number(next.toFixed(stepPrecision));
     setDisplayValue(formatValue(normalized));
-    onChange(normalized);
-  }, [displayValue, fmt, formatValue, maxBound, minBound, onChange, safeValue, stepPrecision, stepSize]);
+    onChange?.(normalized);
+  }, [displayValue, fmt, formatValue, maxBound, minBound, onChange, props.disabled, safeValue, stepPrecision, stepSize]);
 
   const handleWheel = (e: React.WheelEvent<HTMLInputElement>) => {
     if (props.onWheel) props.onWheel(e);
@@ -169,7 +176,7 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
         <div className="absolute inset-y-0 right-0.5 flex w-4 flex-col items-center justify-center gap-0.5">
           <button
             type="button"
-            className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10 disabled:opacity-50"
+            className="ui-number-stepper inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10"
             onClick={() => applyStepDelta(1)}
             disabled={Boolean(disableIncrement)}
             tabIndex={-1}
@@ -179,7 +186,7 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
           </button>
           <button
             type="button"
-            className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10 disabled:opacity-50"
+            className="ui-number-stepper inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10"
             onClick={() => applyStepDelta(-1)}
             disabled={Boolean(disableDecrement)}
             tabIndex={-1}

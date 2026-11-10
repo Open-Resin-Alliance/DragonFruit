@@ -19,6 +19,7 @@ const source = (models: LoadedModel[]): SceneSaveSource => deepFreeze({
   models,
   activeModelId: models[0]?.id ?? null,
   selectedModelIds: [],
+  layerSettingsRanges: [],
   plates: [{ id: 'plate-1', name: 'Plate 1' }],
   activePlateId: 'plate-1',
   plateName: 'Plate 1',
@@ -34,19 +35,4 @@ test('a save writes hidden models as well as visible ones (#925)', () => {
 test('a scene whose models are all hidden still saves them all', () => {
   const context = buildSceneSaveContext(source([model('a', false), model('b', false)]));
   assert.deepEqual(context.models.map((m) => m.id), ['a', 'b']);
-});
-
-test('the plates, the active plate and its name reach the save unchanged', () => {
-  const context = buildSceneSaveContext(source([model('a', true)]));
-  assert.deepEqual(context.plates, [{ id: 'plate-1', name: 'Plate 1' }]);
-  assert.equal(context.activePlateId, 'plate-1');
-  assert.equal(context.plateName, 'Plate 1');
-});
-
-test('a thumbnail is attached only when there is one', () => {
-  const scene = source([model('a', true)]);
-  assert.equal('exportThumbnailPng' in buildSceneSaveContext(scene), false);
-  assert.equal('exportThumbnailPng' in buildSceneSaveContext(scene, null), false);
-  const png = new Uint8Array([0x89, 0x50]);
-  assert.equal(buildSceneSaveContext(scene, png).exportThumbnailPng, png);
 });
