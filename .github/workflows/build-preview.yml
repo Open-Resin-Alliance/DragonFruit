@@ -447,8 +447,10 @@ jobs:
           - platform: windows-latest
             build_kind: tauri
             # The signing overlay is the same one release.yml uses: previews are
-            # signed (#980).
-            args: --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.windows-signing.conf.json
+            # signed (#980). `--features devtools`: previews ship the web
+            # inspector so a tester can read the console; release.yml never
+            # enables it.
+            args: --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.windows-signing.conf.json --features devtools
             artifact_name: dragonfruit-windows-x64
           - platform: ubuntu-22.04
             build_kind: flatpak
@@ -692,7 +694,7 @@ jobs:
 
       - name: Build Tauri app for Flatpak
         if: matrix.build_kind == 'flatpak'
-        run: node scripts/tauri-build.mjs --target x86_64-unknown-linux-gnu --no-bundle
+        run: node scripts/tauri-build.mjs --target x86_64-unknown-linux-gnu --no-bundle --features devtools
 
       - name: Rename Windows installer
         if: matrix.build_kind == 'tauri'
@@ -860,7 +862,7 @@ jobs:
           APPLE_TEAM_ID: MHNF3GA2MM
         with:
           tauriScript: npx tauri
-          args: --target universal-apple-darwin --bundles app,dmg
+          args: --target universal-apple-darwin --bundles app,dmg --features devtools
 
       - name: Embed QuickLook extension + verify universal bundle
         env:

@@ -292,7 +292,7 @@ jobs:
           DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
         with:
           tauriScript: npx tauri
-          args: --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.windows-signing.conf.json
+          args: --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.windows-signing.conf.json
 
       # Tauri discards the signer's stderr, so a failed signing call says only
       # "failed to run pwsh". The script writes what happened to this file; an
@@ -320,7 +320,7 @@ jobs:
           # signed copy lives inside the installers. verify-windows-bundles.ps1
           # checks that one.
           $target = 'src-tauri/target/x86_64-pc-windows-msvc/release'
-          $files = @(Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe', '*.msi')
+          $files = @(Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe')
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
             if (-not $signature.SignerCertificate) {
@@ -339,7 +339,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: dragonfruit-windows-x64-signed
-          path: |
-            src-tauri/target/*/release/bundle/nsis/*
-            src-tauri/target/*/release/bundle/msi/*
+          path: src-tauri/target/*/release/bundle/nsis/*
           if-no-files-found: error
