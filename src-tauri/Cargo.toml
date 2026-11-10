@@ -95,6 +95,10 @@ tauri-wry = ["tauri/wry", "logging", "dep:tauri-plugin-single-instance"]
 tauri-cef = ["tauri/cef", "logging"]
 # File/stdout/webview logging via tauri-plugin-log. Backend-agnostic.
 logging = ["dep:tauri-plugin-log"]
+# Web inspector in release builds (right-click → Inspect Element). Preview
+# builds only, enabled by build-preview.yml; releases never ship it. On macOS
+# it sets a private WKPreferences key, which also covers macOS < 13.3.
+devtools = ["tauri/devtools"]
 
 # Redirect all transitive tauri crate deps to the feat/cef branch so Cargo
 # resolves a single tauri version tree. Safe for macOS/Windows since wry
