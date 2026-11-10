@@ -1,18 +1,18 @@
 {
   "$comment": "Deliberate holds for scripts/check-versions.mjs. Anything newer than a hold is reported as 'held', not as an upgrade to do. Remove an entry when the reason stops applying.",
   "node": {
-    "maxMajor": 22,
-    "reason": "Stay on 22 LTS until after 0.2.x; 24 (V8 13.6) deferred on purpose"
+    "maxMajor": 24,
+    "reason": "Node 24 LTS since #900 (.nvmrc); move to the next LTS on purpose, not because a newer major exists"
   },
   "tauriCef": {
     "ceiling": "3.0.0-alpha.26",
-    "reason": "alpha.27 decouples the runtime; deferred until after 0.2.x. macos-fps stays vendored"
+    "reason": "alpha.27 decouples the runtime; moving past alpha.26 is still undecided. macos-fps stays vendored"
   },
   "npm": {
     "$comment": "Per-package holds: { \"<name>\": { \"maxMajor\": N, \"reason\": \"...\" } }",
     "@types/node": {
-      "maxMajor": 22,
-      "reason": "Types must follow the Node major we run (22)"
+      "maxMajor": 24,
+      "reason": "Types must follow the Node major we run (24)"
     }
   },
   "runners": {
