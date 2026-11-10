@@ -103,17 +103,19 @@ jobs:
             release_label="Dev build ${tag_name}"
           fi
 
-          echo "has_prerelease_suffix=${has_prerelease_suffix}" >> "$GITHUB_OUTPUT"
-          echo "is_prerelease=${is_prerelease}" >> "$GITHUB_OUTPUT"
-          echo "updater_json=${updater_json}" >> "$GITHUB_OUTPUT"
-          echo "publish_updater_json=${publish_updater_json}" >> "$GITHUB_OUTPUT"
+          {
+            echo "has_prerelease_suffix=${has_prerelease_suffix}"
+            echo "is_prerelease=${is_prerelease}"
+            echo "updater_json=${updater_json}"
+            echo "publish_updater_json=${publish_updater_json}"
+          } >> "$GITHUB_OUTPUT"
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-            echo "version=${current_version}" >> "$GITHUB_OUTPUT"
-            echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
-            echo "release_name=${release_label}" >> "$GITHUB_OUTPUT"
             {
+              echo "should_release=true"
+              echo "version=${current_version}"
+              echo "tag_name=${tag_name}"
+              echo "release_name=${release_label}"
               echo "release_body<<EOF"
               echo "Manually triggered release for version ${current_version} from the ${branch} branch."
               echo "EOF"
@@ -142,11 +144,11 @@ jobs:
             exit 0
           fi
 
-          echo "should_release=true" >> "$GITHUB_OUTPUT"
-          echo "version=${current_version}" >> "$GITHUB_OUTPUT"
-          echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
-          echo "release_name=${release_label}" >> "$GITHUB_OUTPUT"
           {
+            echo "should_release=true"
+            echo "version=${current_version}"
+            echo "tag_name=${tag_name}"
+            echo "release_name=${release_label}"
             echo "release_body<<EOF"
             echo "Automated release for version ${current_version} from the ${branch} branch."
             echo "EOF"
