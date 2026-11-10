@@ -120,6 +120,7 @@ export function CameraSettingsTab({
             label="Camera scope"
             value={cameraScope}
             onChange={(next) => onCameraScopeChange(next as CameraScopeMode)}
+            optionClassName="min-w-[92px] px-2 text-[10px]"
             options={[
               { value: 'global', label: 'Global' },
               { value: 'workspace', label: 'Workspace' },
