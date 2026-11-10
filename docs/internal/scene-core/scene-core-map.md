@@ -186,7 +186,7 @@ deleteModels holds three pure rules (link-group dissolve, selection cleanup, emp
 - `planDeleteModels({ models, plates, modelIds }) → { models, plates, dissolvedLinkGroups }`
 - `supportsCascadeForModels({ supports, modelIds }) → { removeIds by collection } (pure compute half of deleteSupportsForModel)`
 
-**Why here:** Clearest drift case found: CLI leaves knots, twigs, sticks, stumps and kickstands orphaned.
+**Why here:** Clearest drift case found: CLI leaves twigs, sticks, stumps and kickstands orphaned, plus knots on removed shafts (issue #935). The app is safe because deleteModels goes through MODEL_ID_COLLECTION_KEYS in the support type registry.
 
 ### 6. Volume bounds and seating
 
@@ -454,7 +454,7 @@ the group they affect comes up.
 
 **D21. Bring plateLayout.ts fully in line with ADR rule 4?** — decided
 
-- **Decision:** Yes. plateLayout.ts moves to a single parameters object before it gains more callers.
+- **Decision:** Yes. plateLayout.ts moves to a single parameters object before it gains more callers (issue #938).
 - Options that were considered: (a) Change resolveModelPlateId(model, frames) to resolveModelPlateId({ model, frames }) now, while it has few callers. (b) Leave it.
 - Affects: plates
 
@@ -534,7 +534,7 @@ confirmed the bug and where it is tracked (B1, B2, B3, B5, B6; B3 and B5 are alr
 | B4 | splitModelIntoParts uses a different Euler order from the renderer | splitModelIntoParts in useSceneCollectionManager.ts vs quaternionFromGlobalEuler use in SceneCanvas/StlMesh.tsx | Code checked: new THREE.Euler(x,y,z) vs quaternionFromGlobalEuler. Agent computed 4.1 mm offset at (0.5,0.7,0.3). | High |
 | B5 | addPlates shifts models but not their supports | addPlates in useSceneCollectionManager.ts | Confirmed by maintainer. Fixed on dev by PR #943 (issue #926; 0.2.x backport PR #945). | High |
 | B6 | App groups are never saved; CLI groups are invisible to the app | VoxlModelEntry / extensions.groups | Confirmed by maintainer. Open: issue #927. | Med |
-| B7 | CLI remove-model orphans knots, twigs, sticks, stumps, kickstands | sceneRemoveModel in dragonfruit-ts-cli.ts | Code checked: filters roots, trunks, branches, leaves, braces only. | High |
+| B7 | CLI remove-model leaves twigs, sticks, stumps and kickstands behind (they carry a modelId); knots on removed shafts are not cascaded either | sceneRemoveModel in dragonfruit-ts-cli.ts | Code checked: filters roots, trunks, branches, leaves, braces only. Open: issue #935. | High |
 | B8 | CLI place-on-platform ignores rotation and scale; CLI transform maths subtracts bbox centre only when rotated/scaled | scenePlace and applyVoxlTransform in dragonfruit-ts-cli.ts | Code checked for center-xy (sets x=y=0); place-on-platform agent-reported with line refs. | High |
 | B9 | Blocker reset always empties the list (`resolutionChanged ? [] : []`) | handleConfirmBlockerReset in page.tsx | Code checked. | Low |
 | B10 | Center sends a model on plate 2 to plate 1's centre | handleCenterSelectedModels in page.tsx | Agent-reported, Med confidence. | Med |

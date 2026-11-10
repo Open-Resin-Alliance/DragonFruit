@@ -1,12 +1,12 @@
 # Scene core: draft issues
 
-One draft per command group, from the scene core map (dev @ 5d31502c (2026-10-21), symbols re-checked on dev @ 45195593 (2026-11-10)). Only draft 1 (the CLI save
-round trip, test-only) is opened now; the others stay here as the plan until their turn. Each follows ADR-0045: pin behaviour first, move the rule, manager and CLI call the same
+One draft per command group, from the scene core map (dev @ 5d31502c (2026-10-21), symbols re-checked on dev @ 45195593 (2026-11-10)). Draft 1 (the CLI save
+round trip, test-only) is open as issue #928, and parts of draft 2 as #938–#940; the others stay here as the plan until their turn. Each follows ADR-0045: pin behaviour first, move the rule, manager and CLI call the same
 function, parity test as done.
 
 ## 1. scene-core: test that a CLI save keeps every field (round trip)
 
-**Status:** open now (test-only).
+**Status:** opened as issue #928 (test-only).
 
 **Labels (suggested):** `scene-core` · **Effort:** S · **Risk:** Low · **Depends on:** —
 
@@ -29,7 +29,7 @@ Fixing B1 or B2 (issues #923, #924), moving the snapshot registry, and pinning t
 
 ## 2. scene-core: plates phase 2 — frames everywhere, relaidPlateShifts, plate plans
 
-**Status:** plan; opened when its turn comes.
+**Status:** plan. Parts already opened: #938 (plateLayout.ts to one parameters object), #939 (one plate relayout step), #940 (plate logic in one place); the support-move bug B5 was fixed by PR #943.
 
 **Labels (suggested):** `scene-core` · **Effort:** M · **Risk:** Med · **Depends on:** foundation; D10 for origin/ordering
 
@@ -61,7 +61,7 @@ Replace the ~9 hand-computed plate rects with computePlateFrames. Extract models
 - D3 (open): Are plate locks core or UI?
 - D4 (open): Is selection part of the core?
 - D10 (open): Who owns plate ordering and origin mode?
-- D21 (decided): Yes. plateLayout.ts moves to a single parameters object before it gains more callers.
+- D21 (decided): Yes. plateLayout.ts moves to a single parameters object before it gains more callers (issue #938).
 
 ### Out of scope
 
@@ -175,7 +175,7 @@ Behaviour changes, unless a pinning test proves a data loss and the fix is agree
 
 ## 6. scene-core: planDeleteModels and the support cascade
 
-**Status:** plan; opened when its turn comes.
+**Status:** plan. The CLI half is already open as issue #935 (remove-model leaves supports behind; part of H1 in #929), whose fix is this draft's pure cascade over the support type registry.
 
 **Labels (suggested):** `scene-core` · **Effort:** M · **Risk:** High · **Depends on:** plates; D13
 
