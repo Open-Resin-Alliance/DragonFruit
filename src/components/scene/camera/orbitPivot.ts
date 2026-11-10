@@ -9,9 +9,9 @@ import * as THREE from 'three';
  * otherwise (clamped to the plate's footprint, so a ray that skims the horizon
  * cannot park the pivot thousands of millimetres away).
  *
- * The pivot is the orbit centre the cursor-mode camera (`PivotOrbitController`)
- * turns around: the camera keeps its distance to it, the pivot keeps its screen
- * position, and the horizon stays level.
+ * The pivot becomes the OrbitControls target, and a lens shift keeps it on the
+ * pixel it was picked on, so the camera is the ordinary one and only the orbit
+ * centre moves (`CursorOrbitOffset`).
  */
 
 export type PlatePivotBounds = {

@@ -226,55 +226,51 @@ steering-wheel Orbit: "the model rotates around a pivot point while the view
 remains fixed", pivot picked on the surface; Blender's turntable orbit with pivot
 modes is the same shape).
 
-- **In cursor mode the scene camera is `PivotOrbitController`**
-  (`src/components/scene/camera/PivotOrbitController.tsx`) and OrbitControls is
-  not mounted. OrbitControls cannot express this mode: it orbits its `target` and
-  re-aims at it on every `update()`, so an off-centre pivot is impossible to keep.
-  The controller owns orbit (right-drag), truck (middle-drag) and dolly (wheel),
-  easing at the shared camera-feel constant.
+**There is one camera controller and one projection of it, in both modes.**
+Cursor mode is a setting on the ordinary `OrbitControls`, not a second camera
+system: `PivotOrbitControls` (`src/components/scene/camera/orbitControlsPivot.ts`)
+is a subclass of three's `OrbitControls` with a single addition — `anchorNdc`, the
+pixel its `target` must project onto — and `PivotOrbitControls.tsx` is the R3F
+binding (`makeDefault`, the store handshake, `start`/`change`/`end`). Everything
+else is upstream: damping, speeds, pan, dolly, touch, the feel presets and the
+`enabled`-means-someone-else-has-the-camera contract. `CursorOrbitPivot.tsx` is
+the whole of the mode's own code: on a rotate press it resolves the pivot and
+sets `target` plus `anchorNdc` to the press point's own pixel.
+
+- **`anchoredAim.ts` solves the aim instead of iterating it.** Upstream aims at
+  `target` on every `update()`, which can only put it in the middle of the screen
+  — so an off-centre orbit centre slides away as the camera pitches. The solve
+  carries the direction to the pivot onto the direction the anchor requires, and
+  picks the roll (two closed-form roots) that levels the horizon. Iterating that
+  aim instead oscillates as the view approaches the poles. `__tests__/anchoredAim`
+  pins: a pivot already on its pixel reproduces the pose, the pixel survives the
+  whole orbit, the horizon stays level, and the along-up degenerate case is
+  refused.
+- **The pick moves nothing.** `anchorNdc` is seeded from the pixel the pivot
+  already occupies, so the solve reproduces the current pose for the new target —
+  no re-aim, no rescale, no jump on press. From there the pivot keeps that pixel
+  through elevation, pan and zoom because the anchor is the orbit's invariant, not
+  a pose difference computed per frame.
+- **`anchorNdc` at (0, 0) is exactly upstream.** View-centre mode leaves it at the
+  origin and the subclass returns straight after `super.update()`, so the default
+  mode is stock OrbitControls behaviour.
 - **The pivot is the nearest visible model surface under the pointer**; off any
   model it is the selected model's bounding-box centre, and with nothing selected
   the build plate (z = 0) clamped to the plate footprint
   (`src/components/scene/camera/orbitPivot.ts`). It is resolved on the press —
   beginning an orbit puts the models' CPU raycasting to sleep, so resolving on
   the orbit's start event found nothing.
-- **`pivotOrbit.ts` is a rigid rotation about the pivot, with the world up left
-  alone.** Picking the pivot seeds the state from the current pose, so it changes
-  nothing on screen — no re-aim, no rescale. Orbiting turns the eye about the
-  pivot and carries the look point with it: azimuth (about the world up) keeps
-  the pivot on its pixel exactly, elevation pitches with a level horizon and lets
-  the pivot drift vertically, and the camera never rolls. `__tests__/pivotOrbit`
-  pins those four properties.
-  - The alternative — aiming at the pivot and compensating with a focal offset,
-    the way the `camera-controls` package's orbit-point call does — holds the
-    pivot's pixel through elevation too, but it visibly re-aims and rescales the
-    view at the moment the pivot is picked. That reads as "the camera
-    turns/zooms when I click the mesh", which is why it was dropped.
-- **The shim keeps the rest of the scene working.** The controller exposes an
-  OrbitControls-shaped object through `orbitControlsRef` and registers it as the
-  R3F default controls (`set({ controls })`), so the intro/home/focus framing,
-  the ortho frustum and SpaceMouse keep finding a camera controller. The shim
-  carries OrbitControls' flags (`enableRotate`/`enablePan`/`enableZoom`), not just
-  `target`/`update`: the home reset refuses to run without them and leaves
-  `cameraInteractionEnabled` off forever. `update()` means "adopt the camera pose
-  as a new state", which is how a focus/home move or a SpaceMouse gesture hands
-  the camera back.
-- **While the camera is owned elsewhere the controller stands down** (`enabled`
-  false, or the shim disabled by a SpaceMouse gesture) and does not apply its
-  state — applying a stale pose would fight the animation and keep
-  `cameraInteractionEnabled` false.
-- **Truck deltas are absolute from the gesture's pivot**, like the orbit angles.
-  Re-basing the pan on the (eased) current pivot re-applied the whole travel on
-  every sample and shot the camera off after a small drag.
-- The ortho frustum is derived from a zoom radius kept separately from the orbit
-  radius inside the controller (picking a pivot changes the pivot's distance,
-  which must not rescale an orthographic view); `OrthoFrustumSync` is suspended
-  in this mode. The trackpad gesture path and the
-  wheel-zoom pose applier are also suspended: the controller's wheel dolly is the
-  zoom in this mode.
-- Known limits of the mode: mouse only (a touch has no cursor, and touch rotation
-  is gone while OrbitControls is unmounted), and the trackpad two-finger
-  pan/orbit gestures are not wired into the controller.
+- **Orthographic picks slide the camera along its view axis.** In ortho the zoom
+  *is* the camera→target distance (`orthoDolly.ts`), so adopting a pivot at a
+  different depth would rescale the view. A parallel projection ignores where the
+  camera sits along its own axis, so the pick moves the camera there until the
+  dolly distance is restored: the pivot stays on the surface point that was
+  clicked, and neither the image nor the frustum changes.
+- **Framing by the app drops the anchor.** Home, the intro, focus and a plate
+  switch set the target themselves; a target that is not the one this mode picked
+  means a centred framing, so the anchor resets to the origin. Panning keeps it —
+  that is the same target sliding, and the anchor is meant to slide with it.
+- Known limits of the mode: mouse only (a touch has no cursor).
 
 ## SpaceMouse
 

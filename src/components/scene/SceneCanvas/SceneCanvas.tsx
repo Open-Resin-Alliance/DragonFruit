@@ -8,7 +8,7 @@ import { hotkeyStore, useActionActive } from '@/hotkeys/hotkeyStore';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { AlertTriangle } from 'lucide-react';
-import { OrbitControls } from '@react-three/drei';
+import { PivotOrbitControls, type PivotOrbitControlsHandle } from '@/components/scene/camera/PivotOrbitControls';
 import { ZUpGizmoViewcube } from './ZUpGizmoViewcube';
 import { ZUpGizmoHelper } from './ZUpGizmoHelper';
 import {
@@ -184,7 +184,7 @@ import {
   subscribeToCameraOrbitPivotSettings,
 } from '@/components/settings/cameraOrbitPivotPreferences';
 import { platePivotFromRay, type PlatePivotBounds } from '@/components/scene/camera/orbitPivot';
-import { PivotOrbitController } from '@/components/scene/camera/PivotOrbitController';
+import { CursorOrbitPivot } from '@/components/scene/camera/CursorOrbitPivot';
 
 import {
   DEFAULT_CAMERA_TRACKPAD_SETTINGS,
@@ -1415,16 +1415,7 @@ export function SceneCanvas({
   const rendererRef = React.useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = React.useRef<THREE.Scene | null>(null);
   const buildVolumeBoundsOverlayRef = React.useRef<THREE.Group | null>(null);
-  const orbitControlsRef = React.useRef<{
-    target: THREE.Vector3;
-    rotateSpeed: number;
-    panSpeed: number;
-    zoomSpeed: number;
-    minDistance?: number;
-    maxDistance?: number;
-    update: () => void;
-    enabled?: boolean;
-  } | null>(null);
+  const orbitControlsRef = React.useRef<PivotOrbitControlsHandle | null>(null);
   const suppressNextCanvasClickRef = React.useRef(false);
   const orbitChangeRafRef = React.useRef<number | null>(null);
   const orbitChangeQueuedRef = React.useRef(false);
@@ -5907,10 +5898,6 @@ export function SceneCanvas({
 
     const onTrackpadWheel = (event: WheelEvent) => {
       if (!container.contains(event.target as Node | null)) return;
-      // Cursor mode owns the camera through `PivotOrbitController`, wheel
-      // included; the trackpad/zoom appliers are unmounted in that mode.
-      if (cameraOrbitPivot === 'cursor') return;
-
       try {
         const action = resolveTrackpadGestureAction(
           event,
@@ -6825,7 +6812,7 @@ export function SceneCanvas({
         <CameraProjectionController mode={cameraProjectionMode} perspectiveFov={perspectiveFov} sceneRadius={orthoSceneRadiusMm} />
         <OrthoFrustumSync
           mode={cameraProjectionMode}
-          suspended={spaceMouseNavigationActive || cameraOrbitPivot === 'cursor'}
+          suspended={spaceMouseNavigationActive}
           sceneRadius={orthoSceneRadiusMm}
           fovDeg={perspectiveFov}
         />
@@ -8268,9 +8255,8 @@ export function SceneCanvas({
           elevation={60}
           radius={60}
         />
-        {cameraOrbitPivot !== 'cursor' && (
-        <OrbitControls
-          ref={orbitControlsRef as React.RefObject<any>}
+        <PivotOrbitControls
+          ref={orbitControlsRef}
           makeDefault
           enableDamping={cameraFeelPreset !== 'raw'}
           dampingFactor={cameraFeelPreset === 'raw' ? 0 : cameraFeelPreset === 'precise' ? 0.15 : cameraFeelPreset === 'fast' ? 0.085 : 0.12}
@@ -8290,7 +8276,6 @@ export function SceneCanvas({
           target={orbitTarget}
           mouseButtons={{ LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }}
         />
-        )}
         {!thumbnailCaptureActive && cameraInteractionCycleEnabled && (
           <ZUpGizmoHelper
             alignment="bottom-right"
@@ -8375,14 +8360,11 @@ export function SceneCanvas({
           perspectiveFov={perspectiveFov}
         />
         <HorizonLock enabled={cameraInteractionCycleEnabled} />
-        {cameraOrbitPivot !== 'cursor' && (
         <TrackpadGesturePoseApplier
           poseRef={trackpadPoseRef}
           lastEventAtRef={trackpadPoseLastEventAtRef}
           tauMs={cameraPoseTauMs}
         />
-        )}
-        {cameraOrbitPivot !== 'cursor' && (
         <WheelZoomPoseApplier
           poseRef={wheelZoomPoseRef}
           lastEventAtRef={wheelZoomPoseLastEventAtRef}
@@ -8390,24 +8372,16 @@ export function SceneCanvas({
           fovDeg={perspectiveFov}
           sceneRadius={orthoSceneRadiusMm}
         />
-        )}
         <CameraPoseRecorder />
-        <PivotOrbitController
+        <CursorOrbitPivot
           active={cameraOrbitPivot === 'cursor'}
           containerRef={containerRef}
           cameraRef={cameraRef}
           controlsRef={orbitControlsRef}
-          enabled={cameraInteractionEnabled}
+          orbitTarget={orbitTarget}
+          setOrbitTargetFromPoint={setOrbitTargetFromPoint}
           resolvePivot={resolveOrbitPivotAt}
-          damping={cameraFeelPreset === 'raw' ? 0 : cameraFeelPreset === 'precise' ? 0.15 : cameraFeelPreset === 'fast' ? 0.085 : 0.12}
-          tauMs={cameraPoseTauMs}
-          fovDeg={perspectiveFov}
-          sceneRadius={orthoSceneRadiusMm}
-          minRadius={cameraProjectionMode === 'perspective' ? 0.01 : ORTHO_MIN_RADIUS}
-          maxRadius={cameraProjectionMode === 'perspective' ? 1e6 : ORTHO_MAX_RADIUS}
-          onStart={handleOrbitStart}
-          onEnd={handleOrbitEnd}
-          onChange={handleOrbitChange}
+          enabled={cameraInteractionEnabled}
         />
         <CameraControlsRecovery interactionEnabled={cameraInteractionEnabled} />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} onClearSelection={onClearSelection} />
