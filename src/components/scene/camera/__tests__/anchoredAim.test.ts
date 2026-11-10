@@ -93,6 +93,34 @@ describe('anchored aim', () => {
     });
   }
 
+  it('stays upright as the orbit approaches and circles the pole', () => {
+    const pivot = new THREE.Vector3(8, -6, 20);
+    const camera = makePerspective(new THREE.Vector3(40, -70, 55), new THREE.Vector3(0, 0, 10));
+    const projected = pivot.clone().project(camera);
+    const anchor = new THREE.Vector2(projected.x, projected.y);
+    const radius = camera.position.distanceTo(pivot);
+    const screenUp = new THREE.Vector3();
+
+    // Both roots of the level condition are level poses; one of them is the view
+    // upside down. Keeping the upright one is the whole point.
+    // The clamp in `PivotOrbitControls` keeps the orbit outside the zone where
+    // the level roll's sign is decided by noise; this pins what holds inside it.
+    for (let phi = 0.6; phi > 0.24; phi -= 0.02) {
+      for (const azimuth of [-2.1, 0.4, 1.7]) {
+        placeOnOrbit(camera, pivot, azimuth, phi, radius);
+        assert.equal(solveAnchoredAim(camera, pivot, anchor, aim), true, `phi ${phi}`);
+        camera.quaternion.copy(aim);
+        camera.updateMatrixWorld();
+
+        screenUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
+        assert.ok(screenUp.dot(UP) > 0, `upside down at phi ${phi}, azimuth ${azimuth}`);
+
+        const now = pivot.clone().project(camera);
+        assert.ok(Math.abs(now.x - anchor.x) < 1e-4 && Math.abs(now.y - anchor.y) < 1e-4, `pixel at ${phi}`);
+      }
+    }
+  });
+
   it('refuses the degenerate case: the pivot straight along the up axis', () => {
     const pivot = new THREE.Vector3(0, 0, 0);
     const camera = makePerspective(new THREE.Vector3(0, 0, 60), new THREE.Vector3(0, 0, 0));

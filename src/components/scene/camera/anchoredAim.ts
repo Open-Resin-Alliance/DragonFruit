@@ -19,6 +19,7 @@ import * as THREE from 'three';
 
 const EPSILON = 1e-6;
 
+
 const _pivotDirection = new THREE.Vector3();
 const _viewDirection = new THREE.Vector3();
 const _scratchA = new THREE.Vector3();
@@ -59,9 +60,15 @@ function pivotViewDirection(
 /**
  * Solve the camera orientation for a pivot held at `anchorNdc`.
  *
- * Writes the level solution into `out` and returns true. Returns false when the
+ * The rotation is unique only up to a roll about the pivot direction. Both rolls
+ * that satisfy the level condition are valid poses — one of them is the other
+ * seen upside down — so the solve keeps the one with the camera's up on the
+ * world-up side. That is what makes the horizon readable; picking by continuity
+ * instead lets the inverted root win and flips the image.
+ *
+ * Writes the solution into `out` and returns true. Returns false when the
  * geometry is degenerate — the pivot straight along the up axis, where "level"
- * has no meaning — and the caller should fall back to looking at the pivot.
+ * has no meaning — and the caller should keep its previous orientation.
  */
 export function solveAnchoredAim(
   camera: THREE.Camera,
@@ -94,15 +101,16 @@ export function solveAnchoredAim(
   const offset = Math.acos(THREE.MathUtils.clamp(target / amplitude, -1, 1));
 
   let best = -Infinity;
+  let chosenRoll = phase + offset;
   for (const roll of [phase + offset, phase - offset]) {
     _qCandidate.setFromAxisAngle(_pivotDirection, roll).multiply(_qAlign);
-    _candidateUp.set(0, 1, 0).applyQuaternion(_qCandidate);
-    const alignment = _candidateUp.dot(camera.up);
-    if (alignment > best) {
-      best = alignment;
-      out.copy(_qCandidate);
+    const score = _candidateUp.set(0, 1, 0).applyQuaternion(_qCandidate).dot(camera.up);
+    if (score > best) {
+      best = score;
+      chosenRoll = roll;
     }
   }
 
+  out.setFromAxisAngle(_pivotDirection, chosenRoll).multiply(_qAlign);
   return true;
 }

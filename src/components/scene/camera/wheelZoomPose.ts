@@ -83,6 +83,12 @@ export type WheelZoomPoseParams = {
   fovDeg: number;
   /** Ortho only: the scene radius tightens the symmetric depth range. */
   sceneRadius?: number;
+  /**
+   * Whether the dolly slides the camera along the pointer ray (OrbitControls'
+   * `zoomToCursor`) or straight in on the orbit target. A cursor-mode pivot owns
+   * the target, so it must not be dragged toward the pointer.
+   */
+  zoomToCursor?: boolean;
 };
 
 /**
@@ -102,11 +108,22 @@ export function applyWheelZoomToPose(pose: WheelZoomPose, params: WheelZoomPoseP
     aspect,
     fovDeg,
     sceneRadius,
+    zoomToCursor = true,
   } = params;
 
   if (!Number.isFinite(radiusScale) || radiusScale <= 0 || radiusScale === 1) return;
 
   const radius = Math.max(EPSILON, pose.position.distanceTo(pose.target));
+  const nextRadius = THREE.MathUtils.clamp(radius * radiusScale, minRadius, maxRadius);
+
+  if (!zoomToCursor) {
+    // Straight in on the target: the camera slides along its own view axis, so
+    // the orbit centre stays where it is. In ortho that is the whole dolly — the
+    // frustum follows the radius — and in perspective it is the usual dolly.
+    _dollyDirection.subVectors(pose.position, pose.target).normalize();
+    pose.position.copy(pose.target).addScaledVector(_dollyDirection, nextRadius);
+    return;
+  }
 
   if (projection === 'orthographic') {
     _scratchOrtho.position.copy(pose.position);
@@ -150,6 +167,5 @@ export function applyWheelZoomToPose(pose: WheelZoomPose, params: WheelZoomPoseP
     .sub(pose.position)
     .normalize();
 
-  const nextRadius = THREE.MathUtils.clamp(radius * radiusScale, minRadius, maxRadius);
   pose.position.addScaledVector(_dollyDirection, radius - nextRadius);
 }

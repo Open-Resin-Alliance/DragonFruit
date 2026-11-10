@@ -260,6 +260,20 @@ sets `target` plus `anchorNdc` to the press point's own pixel.
   (`src/components/scene/camera/orbitPivot.ts`). It is resolved on the press —
   beginning an orbit puts the models' CPU raycasting to sleep, so resolving on
   the orbit's start event found nothing.
+- **A cursor pivot holds the orbit off the poles.** The level-horizon solve is
+  exact everywhere except within a few degrees of vertical: there the world up is
+  perpendicular to the screen up, so the sign of "which way is up" is decided by
+  numerical noise and the frame flips as the orbit circles the pole. The control
+  tightens `minPolarAngle`/`maxPolarAngle` to 0.2 rad while an anchor is set
+  (restoring the app's own limits when it is not), so the orbit stops just short
+  and the frame stays stable. `__tests__/anchoredAim` pins the uprightness outside
+  that band.
+- **The wheel dollies straight in while a pivot is anchored.** OrbitControls'
+  `zoomToCursor`, and the app's wheel pose that reproduces it, slide the camera
+  down the pointer ray — which drags the orbit *target* toward the pointer, and
+  the target is the picked pivot here. `applyWheelZoomToPose` takes
+  `zoomToCursor: false` in that case: the camera slides along its own view axis,
+  so the pivot stays where it was picked while the scale changes.
 - **Orthographic picks slide the camera along its view axis.** In ortho the zoom
   *is* the camera→target distance (`orthoDolly.ts`), so adopting a pivot at a
   different depth would rescale the view. A parallel projection ignores where the

@@ -5940,10 +5940,14 @@ export function SceneCanvas({
           const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
           const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
           const aspect = rect.width / rect.height;
+          // A cursor-mode pivot owns the orbit target: zooming to the pointer
+          // would drag it out from under the anchor.
+          const zoomToCursor = (zoomControls.anchorNdc?.lengthSq() ?? 0) < 1e-12;
 
           if (camera instanceof THREE.OrthographicCamera) {
             applyWheelZoomToPose(pose, {
               projection: 'orthographic',
+              zoomToCursor,
               ndcX,
               ndcY,
               radiusScale: orthoWheelRadiusScale(event.deltaY, zoomControls.zoomSpeed),
@@ -5956,6 +5960,7 @@ export function SceneCanvas({
           } else {
             applyWheelZoomToPose(pose, {
               projection: 'perspective',
+              zoomToCursor,
               ndcX,
               ndcY,
               radiusScale: perspectiveWheelRadiusScale(event.deltaY, zoomControls.zoomSpeed),

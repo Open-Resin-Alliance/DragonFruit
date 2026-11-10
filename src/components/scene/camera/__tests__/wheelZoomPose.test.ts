@@ -67,6 +67,34 @@ describe('wheel zoom pose', () => {
     assert.ok(Math.abs(travel.length() - (radiusBefore - radiusBefore * 0.8)) < 1e-6);
   });
 
+  it('dollies straight in on the target when cursor zooming is off', () => {
+    // A cursor-mode pivot owns the target, so the wheel must not drag it toward
+    // the pointer: the camera slides along its own view axis instead.
+    for (const projection of ['perspective', 'orthographic'] as const) {
+      const { pose, target } = poseFor([12, -6, 9], [1, 2, 3]);
+      const before = pose.position.clone();
+      const radiusBefore = before.distanceTo(target);
+
+      applyWheelZoomToPose(pose, {
+        projection,
+        ndcX: 0.5,
+        ndcY: -0.4,
+        radiusScale: 0.75,
+        minRadius: 0.5,
+        maxRadius: 200000,
+        aspect: 1.3,
+        fovDeg: 50,
+        zoomToCursor: false,
+      });
+
+      assert.deepEqual(pose.target.toArray(), target.toArray(), `${projection} moved the target`);
+      assert.ok(Math.abs(pose.position.distanceTo(target) - radiusBefore * 0.75) < 1e-6, `${projection} radius`);
+      const travel = pose.position.clone().sub(before).normalize();
+      const view = target.clone().sub(before).normalize();
+      assert.ok(travel.dot(view) > 0.999, `${projection} travel should follow the view axis, got ${travel.dot(view)}`);
+    }
+  });
+
   it('keeps the cursor point fixed in orthographic', () => {
     const { pose } = poseFor([0, 0, 10], [0, 0, 0]);
     const fovDeg = 50;
