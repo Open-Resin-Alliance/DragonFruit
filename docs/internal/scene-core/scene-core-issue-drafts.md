@@ -1,51 +1,41 @@
 # Scene core: draft issues
 
-Drafts only, one per command group, from the scene core map (dev @ 5d31502c (2026-10-21)). Nothing here has been
-opened. Each follows ADR-0045: pin behaviour first, move the rule, manager and CLI call the same
+One draft per command group, from the scene core map (dev @ 5d31502c (2026-10-21), symbols re-checked on dev @ 45195593 (2026-11-10)). Only draft 1 (the CLI save
+round trip, test-only) is opened now; the others stay here as the plan until their turn. Each follows ADR-0045: pin behaviour first, move the rule, manager and CLI call the same
 function, parity test as done.
 
-## 1. scene-core: pin the CLI save round trip and the suspected bugs before extracting
+## 1. scene-core: test that a CLI save keeps every field (round trip)
 
-**Labels (suggested):** `scene-core` · **Effort:** S–M · **Risk:** Med · **Depends on:** —
+**Status:** open now (test-only).
+
+**Labels (suggested):** `scene-core` · **Effort:** S · **Risk:** Low · **Depends on:** —
 
 ### Scope
 
-Add a full round-trip test for the CLI save (every field and chunk, not just plates). Add pinning tests for B1–B5, B7, B8. Move the snapshot registry into scene/history/. No behaviour change except where a test proves a CLI data loss and a fix is agreed.
+Test-only change. Add a full round-trip test for the CLI save: every field and chunk, not just plates. Where the test meets a known defect (B1, B2, tracked in their own issues), mark that case as an expected failure linked to its issue rather than fixing it here. No production code changes.
 
-### Pure functions and work items (draft)
+### Work items
 
-- (test) voxlRoundTrip: app-written scene → CLI load → CLI save → compare every field and mesh chunk
-- `move sceneSnapshotRegistry + storeSceneSnapshotPair to scene/history/sceneSnapshotRegistry.ts (already React-free)`
-- (tests) one failing-or-passing test per suspected bug in the Bugs sheet, marked as 'pins current behaviour'
+- One test: an app-written scene → CLI load → a no-op CLI command → CLI save → reload → compare every field and every mesh chunk.
+- Known gaps it will hit (B1 meshless duplicates, B2 dropped ORIG chunks and sha map) are marked as expected failures that link to their issues. No production code changes.
 
-### Tests (land first)
+### Test fixture
 
 - App-written multi-plate scene with duplicate meshes, originals, every support type, link groups → CLI load → transform-model no-op → save → deep compare (fields + chunks).
-- Snapshot registry: eviction at 200 pairs / ~300 MB, evicted key → entry discarded (characterise as-is).
-- Parity test: same input scene through the manager path and the CLI path gives the same result.
-
-### Operations in scope (from the map)
-
-`scene-snapshot-registry` (281-300, 345-351, 508-578), `capture-scene-snapshot` (302-348, 353-359, 370-377, 441-470), `clone-mesh-modifiers` (389-418), `store-scene-snapshot-pair` (508-577 (outside range; called by pushSceneSnapshotHistory)), `get-scene-snapshot-registry-bytes` (553-555), `scene-data-types` (1063-1102, 1125-1131, 1307-1319), `core-scene-state` (1472-1474, 1580-1592), `apply-scene-snapshot` (2281-2341), `scene-snapshot-history-handler` (2343-2360), `push-scene-snapshot-history` (2362-2369), `return-object-surface` (8113-8288), `history-jump` (page.tsx:6461-6499)
-
-### Decisions needed
-
-- D4: Is selection part of the core?
-- D15: Should transform history become a pure 'edit session'?
-- D16: Which undo gaps are bugs vs by design?
-- D18: Delete dead API before extracting?
 
 ### Out of scope
 
-Behaviour changes, unless a pinning test proves a data loss and the fix is agreed separately.
+Fixing B1 or B2 (their own issues), moving the snapshot registry, and pinning the other suspected bugs: each is a later, separate PR.
 
 ## 2. scene-core: plates phase 2 — frames everywhere, relaidPlateShifts, plate plans
+
+**Status:** plan; opened when its turn comes.
 
 **Labels (suggested):** `scene-core` · **Effort:** M · **Risk:** Med · **Depends on:** foundation; D10 for origin/ordering
 
 ### Scope
 
-Replace the ~9 hand-computed plate rects with computePlateFrames. Extract modelsShiftedForRelaidPlates as relaidPlateShifts. Add planAddPlates / planRemovePlate / planEmptyScenePlates. Convert resolveModelPlateId to one params object (D21). Optional CLI: scene add-plate / remove-plate / rename-plate / move-to-plate; scene slice reads meta.printer.
+Replace the ~9 hand-computed plate rects with computePlateFrames. Extract modelsShiftedForRelaidPlates as relaidPlateShifts. Add planAddPlates / planRemovePlate / planEmptyScenePlates. Convert resolveModelPlateId to one params object (D21, decided). Optional CLI: scene add-plate / remove-plate / rename-plate / move-to-plate; scene slice reads meta.printer.
 
 ### Pure functions and work items (draft)
 
@@ -53,7 +43,7 @@ Replace the ~9 hand-computed plate rects with computePlateFrames. Extract models
 - `planAddPlates({ plates, count, footprint, ordering, models }) → { plates, shifts }`
 - `planRemovePlate({ plates, plateId, models }) → { plates, removeModelIds, nextActivePlateId } | { refused }`
 - `planEmptyScenePlates({ plates }) → plates (the 'scene became empty' rule now inside deleteModels)`
-- `resolveModelPlateId({ model, frames }) — convert to one params object (ADR rule 4)`
+- `resolveModelPlateId({ model, frames }) — convert to one params object (D21, decided)`
 
 ### Tests (land first)
 
@@ -64,20 +54,22 @@ Replace the ~9 hand-computed plate rects with computePlateFrames. Extract models
 
 ### Operations in scope (from the map)
 
-`shift-supports-with-models` (493-500), `plates-state` (1475-1493, 1522-1523), `plate-name` (1494-1502), `plate-lock` (1503-1520), `model-plate-id` (1524-1538), `plate-lock-guards` (1539-1554), `locked-plate-notice` (1555-1570, 1589), `clear-empty-plate-name` (1571-1579), `printer-profile-subscription` (1869-1870), `multi-plate-ordering` (1871-1888), `voxl-printer-bundle` (1912-1923), `active-plate-rect` (2030-2046), `voxl-load-printer-relayout` (6646-6668), `plate-offset-for` (7580-7587), `plate-forward-refs` (7596-7602 (+ assignment 7917)), `models-shifted-for-relaid-plates` (7622-7678), `relay-on-printer-switch` (7688-7762), `relay-on-ordering-change` (7774-7793), `add-plate` (7795-7832), `drop-plates` (7847-7870), `add-plates` (7886-7917), `activate-plate` (7919-7932), `plate-frames` (7940-7945), `resolve-model-plate-id` (7948-7951), `model-plate-frame` (7954-7957), `rename-plate` (7959-7961), `remove-plate` (7968-8020), `delete-models-and-extra-plates` (8034-8075), `move-models-to-plate` (8082-8111), `active-plate-name-and-lock` (8117-8118, 8138-8141 (defined 1497-1545)), `plate-state-passthrough` (8119-8131 (state declared 1480-1490, 1883-1888)), `active-plate-model-ids (page.tsx:828-834), sc-plate-scenery (SceneCanvas.tsx:1094-1109, SceneCanvas.tsx:1710-1736), slice-run-plate-scope (page.tsx:2667-2887), printing-scrub-preview-models (page.tsx:2920-2934), sc-next-plate-frame-ghost-drop (SceneCanvas.tsx:1741-1757, SceneCanvas.tsx:6102-6214), plate-widget-passthroughs` (page.tsx:10827-10851)
+`shift-supports-with-models` (`shiftSupportsWithModels`), `plates-state` (`setPlates`, `activePlateId`, `setActivePlateId`), `plate-name` (`plateName`, `setPlateName`), `plate-lock` (`lockedPlateIds`, `lockedPlateIdsRef`, `plateLocked`), `model-plate-id` (`modelPlateId`, `plateFramesRef`), `plate-lock-guards` (`isModelPlateLocked`, `isActivePlateLocked`, `isPlateLocked`), `locked-plate-notice` (`onBlockedByLockRef`, `lockedPlateIdFor`, `onBlockedByLock`), `clear-empty-plate-name` (effect/inline: useEffect (empty single plate clears name) in useSceneCollectionManager.ts), `printer-profile-subscription` (`profileState`, `activePrinterProfile`), `multi-plate-ordering` (`multiPlateSettings`, `followLandedPlateRef`, `plateOrdering`), `voxl-printer-bundle` (`voxlPrinterBundle`), `active-plate-rect` (`activePlateRect`), `voxl-load-printer-relayout` (`handleImportVoxlFile`), `plate-offset-for` (`plateOffsetFor`, `plateOffsetForRef`), `plate-forward-refs` (`addPlatesRef`, `plateOffsetForRef`), `models-shifted-for-relaid-plates` (`modelsShiftedForRelaidPlates`), `relay-on-printer-switch` (`laidOutFootprintRef`), `relay-on-ordering-change` (`appliedPlateOrderingRef`), `add-plate` (`addPlate`), `drop-plates` (`dropPlates`), `add-plates` (`addPlates`), `activate-plate` (`activatePlate`), `plate-frames` (`plateFrames`, `plateFramesRef`), `resolve-model-plate-id` (`resolveModelPlateId`), `model-plate-frame` (`modelPlateFrame`), `rename-plate` (`renamePlate`), `remove-plate` (`removePlate`), `delete-models-and-extra-plates` (`deleteModelsAndExtraPlates`), `move-models-to-plate` (`moveModelsToPlate`), `active-plate-name-and-lock` (`plateName`, `setPlateName`, `plateLocked`), `plate-state-passthrough` (`activePlateId`, `plateViewRunId`, `plateOrdering`), `active-plate-model-ids` (`activePlateModelIds` in page.tsx), `sc-plate-scenery` (`plateSceneryModelIds`, `modelPlateStates`, `isModelFocusable` in SceneCanvas.tsx), `slice-run-plate-scope` (`handleSliceRunStartedForPrinting`, `recordPrintingSlice`, `handleSlicePlateSliced` in page.tsx), `printing-scrub-preview-models` (`printingScrubPreviewModels` in page.tsx), `sc-next-plate-frame-ghost-drop` (`nextPlateFrame`, `applySelectDragMove`, `finishSelectDrag` in SceneCanvas.tsx), `plate-widget-passthroughs` (`onAddPlate`, `onTogglePlateLock`, `onActivatePlate` in page.tsx)
 
-### Decisions needed
+### Decisions
 
-- D3: Are plate locks core or UI?
-- D4: Is selection part of the core?
-- D10: Who owns plate ordering and origin mode?
-- D21: Bring plateLayout.ts fully in line with ADR rule 4?
+- D3 (open): Are plate locks core or UI?
+- D4 (open): Is selection part of the core?
+- D10 (open): Who owns plate ordering and origin mode?
+- D21 (decided): Yes. plateLayout.ts moves to a single parameters object before it gains more callers.
 
 ### Out of scope
 
 Behaviour changes, unless a pinning test proves a data loss and the fix is agreed separately.
 
 ## 3. scene-core: model field rules (rename, visibility, colour, designation, link)
+
+**Status:** plan; opened when its turn comes.
 
 **Labels (suggested):** `scene-core` · **Effort:** S each · **Risk:** Low/Med · **Depends on:** foundation
 
@@ -90,7 +82,7 @@ Pure renameModels, setModelsVisible, setModelsColor, setSupportDesignation, link
 - `renameModels({ models, modelId, name }) → models`
 - `setModelsVisible({ models, modelIds, visible }) → models`
 - `setModelsColor({ models, modelIds, color }) → models (split from the viewer preference)`
-- `setSupportDesignation({ models, modelIds, isSupport }) → models  (changes slicing → check:scene-slice case)`
+- `setSupportDesignation({ models, modelIds, isSupport }) → models (changes slicing → check:scene-slice case)`
 - `linkModels({ models, modelIds }) / unlinkModels({ models, modelIds }) → models`
 
 ### Tests (land first)
@@ -102,17 +94,19 @@ Pure renameModels, setModelsVisible, setModelsColor, setSupportDesignation, link
 
 ### Operations in scope (from the map)
 
-`set-model-visibility` (4082-4094), `rename-model` (4166-4178), `set-mesh-color` (7088-7104), `set-mesh-visible` (7106-7110), `toggle-support-designation` (7112-7135), `link-models` (7137-7161), `unlink-models` (7163-7199), `grouping-rename-passthrough` (page.tsx:5657-5679)
+`set-model-visibility` (`setModelVisibility`), `rename-model` (`renameModel`), `set-mesh-color` (`setMeshColor`), `set-mesh-visible` (`setMeshVisible`), `toggle-support-designation` (`toggleSupportDesignation`), `link-models` (`linkModels`), `unlink-models` (`unlinkModels`), `grouping-rename-passthrough` (`handleGroupSelectedModels`, `handleUngroupSelectedModels`, `handleUngroupFolder` in page.tsx)
 
-### Decisions needed
+### Decisions
 
-- D4: Is selection part of the core?
+- D4 (open): Is selection part of the core?
 
 ### Out of scope
 
 Behaviour changes, unless a pinning test proves a data loss and the fix is agreed separately.
 
 ## 4. scene-core: one grouping model for app and CLI
+
+**Status:** plan; opened when its turn comes.
 
 **Labels (suggested):** `scene-core` · **Effort:** S · **Risk:** Med · **Depends on:** D5
 
@@ -124,7 +118,7 @@ After D5, store groups in one place, make CLI group/ungroup/list-groups call mod
 
 - `applyModelGrouping (exists) — make CLI group/ungroup call it`
 - `renameGroup({ models, groupId, name }) → models`
-- `modelIdsInGroup({ models, groupId }) → ids  (today selectGroup does this inline)`
+- `modelIdsInGroup({ models, groupId }) → ids (today selectGroup does this inline)`
 
 ### Tests (land first)
 
@@ -134,18 +128,20 @@ After D5, store groups in one place, make CLI group/ungroup/list-groups call mod
 
 ### Operations in scope (from the map)
 
-`group-models` (4180-4203), `list-groups` (4180-4241), `ungroup-models` (4205-4222), `ungroup-group` (4224-4241), `rename-group` (4712-4729)
+`group-models` (`groupModels`), `list-groups` (`groupId`), `ungroup-models` (`ungroupModels`), `ungroup-group` (`ungroupGroup`), `rename-group` (`renameGroup`)
 
-### Decisions needed
+### Decisions
 
-- D4: Is selection part of the core?
-- D5: Where do groups live in the file?
+- D4 (open): Is selection part of the core?
+- D5 (open): Where do groups live in the file?
 
 ### Out of scope
 
 Behaviour changes, unless a pinning test proves a data loss and the fix is agreed separately.
 
 ## 5. scene-core: buildVoxlSaveInput shared by every saver
+
+**Status:** plan; opened when its turn comes.
 
 **Labels (suggested):** `scene-core` · **Effort:** M · **Risk:** High · **Depends on:** foundation; D9
 
@@ -165,19 +161,21 @@ One pure builder used by autosave, Ctrl+S, export panel and CLI toBuildInput, wi
 
 ### Operations in scope (from the map)
 
-`chunk-store-bake` (1331-1398), `voxl-format-chunked-ref` (1584-1588), `chunk-store-sweep-effect` (1594-1601), `save-cli-tobuildinput (dragonfruit-ts-cli.ts:85-114), save-export-panel (ExportPanel.tsx:335-490 (VOXL context at 380-395 and 458-463)), save-autosave (useSceneAutosave.ts:501-712), save-export-scene-dispatch (ExportManager.ts:893-1082), save-export-voxl (ExportManager.ts:1120-1454), scene-autosave-wiring (page.tsx:1194-1221), save-baseline-dirty (page.tsx:1770-1801), slice-thumbnail-per-plate (page.tsx:2944-2950), before-slice-start (page.tsx:4135-4269), save-topbar-ctrl-s (page.tsx:4557-4654), top-bar-save-scene (page.tsx:4557-4654), save-path-resolution (page.tsx:4726-4889), empty-scene-reset (page.tsx:4891-4910), autosave-recovery-discovery` (page.tsx:4925-4980)
+`chunk-store-bake` (`exportManager`, `scheduleIdleTask`, `scheduleModelChunkBake`), `voxl-format-chunked-ref` (`lastLoadedVoxlFormatChunkedRef`), `chunk-store-sweep-effect` (`scheduleChunkStoreSweep`), `save-cli-tobuildinput` (`toBuildInput`, `saveVoxl` in dragonfruit-ts-cli.ts), `save-export-panel` (`ExportPanel`, `handleExport`, `exportGroupsToDirectory` in ExportPanel.tsx), `save-autosave` (`useSceneAutosave`, `performAutosave` in useSceneAutosave.ts), `save-export-scene-dispatch` (`ExportManager`, `exportScene` in ExportManager.ts), `save-export-voxl` (`ExportManager`, `exportVoxl` in ExportManager.ts), `scene-autosave-wiring` (`useSceneAutosave` in page.tsx), `save-baseline-dirty` (`markSceneSaveBaseline`, `recomputeUnsavedSceneChanges`, `subscribeHistory` in page.tsx), `slice-thumbnail-per-plate` (`captureSliceThumbnailPng` in page.tsx), `before-slice-start` (`handleBeforeSliceStart`, `handlePreSliceSceneSave`, `suggestedSliceOutputFilename` in page.tsx), `save-topbar-ctrl-s` (`performTopBarSaveScene` in page.tsx), `top-bar-save-scene` (`performTopBarSaveScene` in page.tsx), `save-path-resolution` (`resolveSceneSaveNativePath`, `saveCurrentSceneNow`, `handleTopBarSaveScene` in page.tsx), `empty-scene-reset` (effect/inline: useEffect (scene.models.length === 0) in page.tsx), `autosave-recovery-discovery` (`resolveAutosaveRecovery` in page.tsx)
 
-### Decisions needed
+### Decisions
 
-- D4: Is selection part of the core?
-- D8: Should opening a VOXL change it, and does open merge or replace?
-- D9: Is the saved model set 'all' or 'visible'?
+- D4 (open): Is selection part of the core?
+- D8 (open): Should opening a VOXL change it, and does open merge or replace?
+- D9 (open): Is the saved model set 'all' or 'visible'?
 
 ### Out of scope
 
 Behaviour changes, unless a pinning test proves a data loss and the fix is agreed separately.
 
 ## 6. scene-core: planDeleteModels and the support cascade
+
+**Status:** plan; opened when its turn comes.
 
 **Labels (suggested):** `scene-core` · **Effort:** M · **Risk:** High · **Depends on:** plates; D13
 
@@ -188,7 +186,7 @@ Extract link-dissolve, empty-scene plates and the support cascade compute; CLI r
 ### Pure functions and work items (draft)
 
 - `planDeleteModels({ models, plates, modelIds }) → { models, plates, dissolvedLinkGroups }`
-- `supportsCascadeForModels({ supports, modelIds }) → { removeIds by collection }  (pure compute half of deleteSupportsForModel)`
+- `supportsCascadeForModels({ supports, modelIds }) → { removeIds by collection } (pure compute half of deleteSupportsForModel)`
 
 ### Tests (land first)
 
@@ -198,18 +196,20 @@ Extract link-dissolve, empty-scene plates and the support cascade compute; CLI r
 
 ### Operations in scope (from the map)
 
-`delete-models` (4744-4894), `delete-models-link-dissolve` (4819-4834), `delete-models-empty-scene-plates` (4838-4853), `delete-models-support-cascade` (4861-4879), `delete-model` (4896-4898), `delete-supports-for-models` (4900-4936), `delete-active-model-handler` (7069-7081), `new-scene (page.tsx:5067-5105), select-all-and-delete (page.tsx:9435-9484, page.tsx:9898-9936), clear-or-delete-plate` (page.tsx:10855-10866, page.tsx:11683-11701)
+`delete-models` (`deleteModels`), `delete-models-link-dissolve` (`deleteModels`), `delete-models-empty-scene-plates` (`deleteModels`), `delete-models-support-cascade` (`deleteModels`), `delete-model` (`deleteModel`), `delete-supports-for-models` (`deleteSupportsForModels`), `delete-active-model-handler` (`registerDeleteHandler`), `new-scene` (`startNewScene`, `handleRequestNewScene`, `handleDiscardAndNewScene` in page.tsx), `select-all-and-delete` (`registerDeleteHandler` in page.tsx), `clear-or-delete-plate` (`onClearPlate` in page.tsx)
 
-### Decisions needed
+### Decisions
 
-- D4: Is selection part of the core?
-- D13: Who owns support removal for a model?
+- D4 (open): Is selection part of the core?
+- D13 (open): Who owns support removal for a model?
 
 ### Out of scope
 
 Behaviour changes, unless a pinning test proves a data loss and the fix is agreed separately.
 
 ## 7. scene-core: one out-of-bounds rule and one seat-Z rule
+
+**Status:** plan; opened when its turn comes.
 
 **Labels (suggested):** `scene-core` · **Effort:** M · **Risk:** High · **Depends on:** plates; D11, D12
 
@@ -220,7 +220,7 @@ Unify the four out-of-bounds copies and four seat-Z copies; CLI place-on-platfor
 ### Pure functions and work items (draft)
 
 - `modelsOutsideVolume({ models, frames, volume, mode: 'overlap'|'contain', margins?, supportBounds? }) → ids`
-- `seatZ({ model, geometryBounds, autoLift, liftDistance }) → z  (wraps selectionLiftDrop.getModelLowestWorldZ)`
+- `seatZ({ model, geometryBounds, autoLift, liftDistance }) → z (wraps selectionLiftDrop.getModelLowestWorldZ)`
 
 ### Tests (land first)
 
@@ -230,20 +230,22 @@ Unify the four out-of-bounds copies and four seat-Z copies; CLI place-on-platfor
 
 ### Operations in scope (from the map)
 
-`set-model-manual-z-move-override` (4154-4164), `scene-bounds` (7536-7572), `plate-volume-bounds (page.tsx:806-813), volume-bounds-for-model (page.tsx:819-822), sc-align-live-transform-to-lift (SceneCanvas.tsx:1054-1088), sc-volume-boxes-and-oob (SceneCanvas.tsx:2022-2210), resin-in-bounds-models (page.tsx:3073-3168), scene-z-range (page.tsx:6835-7023), sliceable-models (page.tsx:3128-3157, page.tsx:6840-6851), out-of-bounds-models-page (page.tsx:7406-7482), lift-drop-selection (page.tsx:9191-9224), auto-lift-toggle` (page.tsx:9226-9247)
+`set-model-manual-z-move-override` (effect/inline: setModelManualZMoveOverride in useSceneCollectionManager.ts), `scene-bounds` (`sceneBounds`), `plate-volume-bounds` (`plateVolumeBounds` in page.tsx), `volume-bounds-for-model` (`volumeBoundsForModel` in page.tsx), `sc-align-live-transform-to-lift` (`alignLiveTransformToLift` in SceneCanvas.tsx), `sc-volume-boxes-and-oob` (`buildVolumeBounds`, `plateVolumeBoxes`, `volumeBoxForModel` in SceneCanvas.tsx), `resin-in-bounds-models` (`resinBuildVolumeBounds`, `resinInBoundsModelIdSet`, `visibleResinModels` in page.tsx), `scene-z-range` (`accurateMaxZ`, `fallbackZRange`, `normalizeToSlicerZRange` in page.tsx), `sliceable-models` (`sliceableModelIdSet`, `slicingModels`, `excludedSliceModelIds` in page.tsx), `out-of-bounds-models-page` (`computeModelWorldBounds`, `buildVolumeBounds`, `outsidePlateModelIds` in page.tsx), `lift-drop-selection` (`placeSelectedModelsAtWorldZ`, `handleLiftSelectedModels`, `handleDropSelectedModels` in page.tsx), `auto-lift-toggle` (`handleAutoLiftChange` in page.tsx)
 
-### Decisions needed
+### Decisions
 
-- D4: Is selection part of the core?
-- D10: Who owns plate ordering and origin mode?
-- D11: One out-of-bounds rule, and should `scene slice` drop models outside the volume?
-- D12: Seat Z, Auto Lift and manualZMoveOverride as inputs?
+- D4 (open): Is selection part of the core?
+- D10 (open): Who owns plate ordering and origin mode?
+- D11 (open): One out-of-bounds rule, and should `scene slice` drop models outside the volume?
+- D12 (open): Seat Z, Auto Lift and manualZMoveOverride as inputs?
 
 ### Out of scope
 
 Behaviour changes, unless a pinning test proves a data loss and the fix is agreed separately.
 
 ## 8. scene-core: free-spot placement and duplicate layout
+
+**Status:** plan; opened when its turn comes.
 
 **Labels (suggested):** `scene-core` · **Effort:** L (split into 3 PRs) · **Risk:** Med · **Depends on:** plates, bounds-seat; D6, D14
 
@@ -254,8 +256,8 @@ Extract findFreeSpots (import + paste), layoutDuplicates (page.tsx), deriveModel
 ### Pure functions and work items (draft)
 
 - `findFreeSpots({ footprints, frames, blockers, startPlateId, allowNewPlates }) → { positions, newPlateCount }`
-- `layoutDuplicates({ source, count, spacing, frames, blockers }) → { transforms, newPlateCount }  (from page.tsx 9500–9790)`
-- `deriveModelFrom({ source, id, name, transform }) → model  (one rule for which fields copies keep)`
+- `layoutDuplicates({ source, count, spacing, frames, blockers }) → { transforms, newPlateCount } (from the duplicate-preview effect in page.tsx that sets setDuplicatePreviewTransforms)`
+- `deriveModelFrom({ source, id, name, transform }) → model (one rule for which fields copies keep)`
 - `arrange: make computeHighPrecisionArrangeUpdates callers plate-aware (CLI packs everything onto plate 1)`
 
 ### Tests (land first)
@@ -267,21 +269,23 @@ Extract findFreeSpots (import + paste), layoutDuplicates (page.tsx), deriveModel
 
 ### Operations in scope (from the map)
 
-`default-import-center` (2001-2022), `intersects-rect` (2024-2028), `is-rect-inside-plate` (2048-2055), `footprint-for-transform` (2057-2062), `build-mesh-placement-offsets` (2064-2085), `model-footprint-rect` (2087-2103), `is-model-footprint-inside-plate` (2105-2107), `find-free-spot-centers` (2109-2279), `seat-model-on-new-bed` (2762-2793), `import-free-spot-placement` (2936-2940, 2979-2983 (search itself at 2109-2279)), `copy-model` (4938-4965), `clipboard-entry-build` (4944-4962, 4974-4993), `copy-selected-models` (4967-4996), `cut-selected-models` (4998-5000), `cut-model` (5002-5004), `paste-model` (5006-5067), `paste-auto-arrange` (5069-5586), `paste-support-rect` (5091-5179), `paste-place-into-bed` (5181-5365), `duplicate-with-transforms` (5588-5719), `plugin-import-arrange` (6032-6220), `voxl-load-offbed-placement` (6670-6719), `support-aware-arrange-bounds (page.tsx:7496-7797), prepare-hotkeys-arrange-all (page.tsx:7997-8010), duplicate-preview-layout (page.tsx:9500-9790), copy-paste-hotkeys (page.tsx:9938-10004), arrange-plate-button` (page.tsx:10841-10847)
+`default-import-center` (`defaultImportCenterXY`), `intersects-rect` (`intersectsRect`, `Rect2D`), `is-rect-inside-plate` (`isRectInsidePlate`), `footprint-for-transform` (`footprintForTransform`), `build-mesh-placement-offsets` (`buildMeshPlacementOffsets`), `model-footprint-rect` (`modelFootprintRect`), `is-model-footprint-inside-plate` (`isModelFootprintInsidePlate`), `find-free-spot-centers` (`findFreeSpotCentersForModels`), `seat-model-on-new-bed` (`seatModelOnNewBedIfNeeded`, `loadFiles`), `import-free-spot-placement` (`loadFiles`, `findFreeSpotCentersForModels`), `copy-model` (`copyModel`), `clipboard-entry-build` (`copyModel`, `copySelectedModels`, `ModelClipboardEntry`), `copy-selected-models` (`copySelectedModels`), `cut-selected-models` (`cutSelectedModels`), `cut-model` (`cutModel`), `paste-model` (`pasteModel`), `paste-auto-arrange` (`pasteCopiedModelsAutoArrange`), `paste-support-rect` (`supportRectForPayload`, `pasteCopiedModelsAutoArrange`), `paste-place-into-bed` (`placeIntoBed`, `buildPlacementOffsets`, `intersectsRect`), `duplicate-with-transforms` (`duplicateModelWithTransforms`), `plugin-import-arrange` (`handleImportPluginSceneFile`, `arrangeImportedModels`), `voxl-load-offbed-placement` (`handleImportVoxlFile`), `support-aware-arrange-bounds` (`supportBoundsByModelId`, `getArrangeTransform`, `getModelSupportAwareDimensionsMm` in page.tsx), `prepare-hotkeys-arrange-all` (`usePrepareTransformHotkeys`, `onArrangeAll` in page.tsx), `duplicate-preview-layout` (effect/inline: useEffect duplicate preview in page.tsx), `copy-paste-hotkeys` (effect/inline: Ctrl+C / Ctrl+V / Ctrl+S branches of hotkey effect in page.tsx), `arrange-plate-button` (`onArrangePlate` in page.tsx)
 
-### Decisions needed
+### Decisions
 
-- D1: Does THREE count as impure for maths-only use?
-- D3: Are plate locks core or UI?
-- D4: Is selection part of the core?
-- D6: One placement engine or several?
-- D14: Which fields does a derived model keep?
+- D1 (decided): THREE is allowed inside a pure function, as long as only its maths is used and not its scene graph, THREE types stay out of signatures, and inputs are never mutated. Ender will amend ADR-0045 to say so.
+- D3 (open): Are plate locks core or UI?
+- D4 (open): Is selection part of the core?
+- D6 (open): One placement engine or several?
+- D14 (open): Which fields does a derived model keep?
 
 ### Out of scope
 
 Behaviour changes, unless a pinning test proves a data loss and the fix is agreed separately.
 
 ## 9. scene-core: planModelTransforms
+
+**Status:** plan; opened when its turn comes.
 
 **Labels (suggested):** `scene-core` · **Effort:** L · **Risk:** High · **Depends on:** plates, model-fields; D1, D2, D3, D20
 
@@ -304,23 +308,25 @@ One transform planner returning model updates, support deltas, link-peer updates
 
 ### Operations in scope (from the map)
 
-`transforms-equal` (361-368), `supports-for-models` (483-486, 503-506), `set-model-transform-raw` (3073-3089), `update-model-transform` (3091-3231), `transform-plate-lock-guard` (3111-3122, 3374-3392 (helpers 1540-1572)), `transform-link-peer-propagation` (3164-3193, 3408-3438, 3256-3281), `commit-model-transform-history` (3233-3316), `commit-model-transforms-history` (3318-3358), `update-model-transforms` (3360-3525), `destructive-transform-guard (page.tsx:2384-2503), apply-orientation (page.tsx:2456-2479), sc-multi-selection-transform (SceneCanvas.tsx:2878-2949), history-transform-resync (page.tsx:6031-6087), sc-move-z-lock (SceneCanvas.tsx:7211-7272), mirror-finalize-on-tool-change (page.tsx:7903-7909), history-origin-restore (page.tsx:5948-5993, page.tsx:7915-7932), transform-end (page.tsx:8474-8760), gizmo-group-commit (page.tsx:8833-8919), selection-panel-edits (page.tsx:8921-9027), selection-rotate (page.tsx:9056-9081), selection-transform-commit (page.tsx:9084-9104), selection-scale (page.tsx:9029-9042, page.tsx:9106-9134), selection-reset (page.tsx:9136-9159), selection-move (page.tsx:9044-9054, page.tsx:9161-9169), center-selection (page.tsx:9171-9189), transform-start (page.tsx:9259-9330), pending-transform-history (page.tsx:5774-5939, page.tsx:9332-9366), gizmo-commit (page.tsx:8762-8826, page.tsx:9385-9405), place-on-face` (page.tsx:9792-9804, page.tsx:10349-10356)
+`transforms-equal` (`transformsEqual`), `supports-for-models` (`hasSupportsForModel`, `supportStateFor`), `set-model-transform-raw` (`setModelTransformRaw`), `update-model-transform` (`updateModelTransform`), `transform-plate-lock-guard` (`isModelPlateLocked`, `lockedPlateIdFor`, `updateModelTransform`), `transform-link-peer-propagation` (`updateModelTransform`, `updateModelTransforms`, `commitModelTransformHistory`), `commit-model-transform-history` (`commitModelTransformHistory`), `commit-model-transforms-history` (`commitModelTransformsHistory`), `update-model-transforms` (`updateModelTransforms`), `destructive-transform-guard` (`requestDestructiveTransformSupportDeletion`, `requestOrientSupportDeletionWithContinuation` in page.tsx), `apply-orientation` (`handleApplyOrientation` in page.tsx), `sc-multi-selection-transform` (`buildMultiSelectionTransformsFromActive` in SceneCanvas.tsx), `history-transform-resync` (effect/inline: useEffect in page.tsx), `sc-move-z-lock` (`onMoveStart`, `onMove` in SceneCanvas.tsx), `mirror-finalize-on-tool-change` (`setTransformModeWithMirrorFinalize` in page.tsx), `history-origin-restore` (`historyOriginRef`, `setHistoryOriginProvider`, `subscribeHistoryOperations` in page.tsx), `transform-end` (`handleTransformEnd`, `applyPostRotateLift` in page.tsx), `gizmo-group-commit` (`handleGizmoTransformGroupCommit` in page.tsx), `selection-panel-edits` (`ensurePendingSelectionHistory`, `commitPendingSelectionPositionHistory`, `applySelectionPositionUpdates` in page.tsx), `selection-rotate` (`handleRotateSelectedModels` in page.tsx), `selection-transform-commit` (`handleSelectionTransformCommit` in page.tsx), `selection-scale` (`handleScaleSelectedModels` in page.tsx), `selection-reset` (`handleResetSelectedModels` in page.tsx), `selection-move` (`handlePositionSelectedModels`, `selectionPositionOrigin` in page.tsx), `center-selection` (`handleCenterSelectedModels` in page.tsx), `transform-start` (`handleTransformStart` in page.tsx), `pending-transform-history` (`invalidatePendingTransformHistory`, `commitPendingTransformHistory`, `scheduleCommitPendingTransformHistory` in page.tsx), `gizmo-commit` (`handleGizmoTransformCommit`, `handleRotationComplete` in page.tsx), `place-on-face` (`handlePlaceOnFaceAnimationStart`, `handlePlaceOnFace`, `handlePlaceOnFaceBeforeApply` in page.tsx)
 
-### Decisions needed
+### Decisions
 
-- D1: Does THREE count as impure for maths-only use?
-- D2: What does a transform carry with it?
-- D3: Are plate locks core or UI?
-- D4: Is selection part of the core?
-- D12: Seat Z, Auto Lift and manualZMoveOverride as inputs?
-- D15: Should transform history become a pure 'edit session'?
-- D20: What does 'center' mean on plate 2?
+- D1 (decided): THREE is allowed inside a pure function, as long as only its maths is used and not its scene graph, THREE types stay out of signatures, and inputs are never mutated. Ender will amend ADR-0045 to say so.
+- D2 (open): What does a transform carry with it?
+- D3 (open): Are plate locks core or UI?
+- D4 (open): Is selection part of the core?
+- D12 (open): Seat Z, Auto Lift and manualZMoveOverride as inputs?
+- D15 (open): Should transform history become a pure 'edit session'?
+- D20 (open): What does 'center' mean on plate 2?
 
 ### Out of scope
 
 Behaviour changes, unless a pinning test proves a data loss and the fix is agreed separately.
 
 ## 10. scene-core: planVoxlOpen and planMeshImport
+
+**Status:** plan; opened when its turn comes.
 
 **Labels (suggested):** `scene-core` · **Effort:** L · **Risk:** High · **Depends on:** plates, placement, save; D7, D8
 
@@ -342,20 +348,22 @@ Plan/apply split for VOXL open and mesh import; CLI scene load (and add-model) u
 
 ### Operations in scope (from the map)
 
-`sanitize-imported-model-name` (845-858), `helper-name-sanitize` (845-858), `sha256-hex` (860-874), `remap-model-ids-in-payload` (876-898), `helper-support-payload` (876-923), `support-payload-counts` (901-914), `apply-import-defaults-to-raft` (916-923), `normalize-plugin-scene-payload` (925-1057), `helper-normalize-plugin-payload` (1006-1057), `scene-import-placement-prompt` (1168-1175, 1612, 1625, 1745-1750, 1784-1802), `scene-import-hollowing-prompt` (1177-1184, 1615, 1626, 1752-1757, 1804-1823), `merge-cavity-into-shell` (1197-1260), `helper-cavity` (1197-1240), `mesh-repair-confirm-prompt` (1262-1272, 1305, 1616, 1627, 1759-1782), `printer-mismatch` (1287-1303, 1614, 1711-1718 (raised at 6766-6785)), `mesh-scene-extension` (1418-1437), `scene-plugin-import-handlers` (1439-1463), `load-files` (2693-3058), `import-lock-and-extension-filter` (2697-2705 (getMeshExtension at 1418-1424)), `import-progress-and-recent-paths` (2707-2734, 2804-2817, 2997-3017, 3049-3057), `import-prefs-read` (2736-2750), `import-native-repair-options` (2820-2896), `import-build-model-entry` (2898-2996), `import-post-selection` (3020-3032), `import-repair-report` (3034-3047 (rule at 1156-1166)), `on-file-change` (3060-3066), `scene-import-run-options` (5723-5736), `should-auto-repair-scene-imports` (5733-5736), `import-plugin-scene-file` (5738-6286), `plugin-import-hollow-bake` (5794-5849), `plugin-import-apply-supports` (6222-6250), `import-voxl-file` (6288-6868), `voxl-load-header-check` (6307-6319), `voxl-load-mesh-build-dedup` (6359-6462), `voxl-load-model-mapping` (6465-6630), `voxl-load-commit` (6721-6760), `voxl-load-printer-mismatch` (6762-6786), `voxl-load-supports` (6789-6800), `import-scene-file` (6870-6881), `import-scene-files` (6883-6948) …
+`sanitize-imported-model-name` (`sanitizeImportedModelDisplayName`), `helper-name-sanitize` (`sanitizeImportedModelDisplayName`), `sha256-hex` (`sha256Hex`), `remap-model-ids-in-payload` (`remapModelIdsInPayload`), `helper-support-payload` (`remapModelIdsInPayload`, `voxlSupportsContainData`, `countSupportEntries`), `support-payload-counts` (`voxlSupportsContainData`, `payloadCollections`, `countSupportEntries`), `apply-import-defaults-to-raft` (`applyImportDefaultsToRaftState`), `normalize-plugin-scene-payload` (`PluginSceneImportPayload`, `toFiniteNumber`, `toVector3`), `helper-normalize-plugin-payload` (`normalizePluginSceneImportPayload`), `scene-import-placement-prompt` (`sceneImportPlacementPrompt`, `requestSceneImportPlacementChoice`, `resolveSceneImportPlacementPrompt`), `scene-import-hollowing-prompt` (`sceneImportHollowingPrompt`, `requestSceneImportHollowingChoice`, `resolveSceneImportHollowingPrompt`), `merge-cavity-into-shell` (`mergeCavityIntoShell`, `readPayloadCavity`, `geometryPositionsAsSoup`), `helper-cavity` (`readPayloadCavity`, `mergeCavityIntoShell`), `mesh-repair-confirm-prompt` (`meshRepairConfirmPrompt`, `requestMeshRepairConfirmation`, `resolveMeshRepairConfirmPrompt`), `printer-mismatch` (`printerMismatch`, `setPrinterMismatch`, `resolvePrinterMismatch`), `mesh-scene-extension` (`getMeshExtension`, `getSceneExtension`), `scene-plugin-import-handlers` (`scenePluginImportHandlersByExtension`), `load-files` (`loadFiles`), `import-lock-and-extension-filter` (`loadFiles`, `getMeshExtension`), `import-progress-and-recent-paths` (`loadFiles`), `import-prefs-read` (`loadFiles`), `import-native-repair-options` (`loadFiles`, `loadOptions`, `onNativeProcessingStage`), `import-build-model-entry` (`loadFiles`), `import-post-selection` (`loadFiles`), `import-repair-report` (`loadFiles`, `repairReportNeedsAttention`), `on-file-change` (`onFileChange`), `scene-import-run-options` (`SceneImportRunOptions`, `shouldAutoRepairSceneImports`), `should-auto-repair-scene-imports` (`shouldAutoRepairSceneImports`), `import-plugin-scene-file` (`handleImportPluginSceneFile`, `importPluginSceneFile`), `plugin-import-hollow-bake` (`handleImportPluginSceneFile`), `plugin-import-apply-supports` (`handleImportPluginSceneFile`, `applySupports`), `import-voxl-file` (`handleImportVoxlFile`), `voxl-load-header-check` (`handleImportVoxlFile`), `voxl-load-mesh-build-dedup` (`handleImportVoxlFile`), `voxl-load-model-mapping` (`handleImportVoxlFile`, `LoadedModel`), `voxl-load-commit` (`handleImportVoxlFile`), `voxl-load-printer-mismatch` (`handleImportVoxlFile`), `voxl-load-supports` (`handleImportVoxlFile`), `import-scene-file` (`importSceneFile`), `import-scene-files` (`importSceneFiles`) …
 
-### Decisions needed
+### Decisions
 
-- D4: Is selection part of the core?
-- D7: How do imports handle user prompts when headless?
-- D8: Should opening a VOXL change it, and does open merge or replace?
-- D10: Who owns plate ordering and origin mode?
+- D4 (open): Is selection part of the core?
+- D7 (open): How do imports handle user prompts when headless?
+- D8 (open): Should opening a VOXL change it, and does open merge or replace?
+- D10 (open): Who owns plate ordering and origin mode?
 
 ### Out of scope
 
 Behaviour changes, unless a pinning test proves a data loss and the fix is agreed separately.
 
 ## 11. scene-core: split and merge as data
+
+**Status:** plan; opened when its turn comes.
 
 **Labels (suggested):** `scene-core` · **Effort:** L · **Risk:** High · **Depends on:** transform; D1, D14
 
@@ -366,7 +374,7 @@ Triangle-soup split/merge rules without THREE geometry; fix Euler order if B4 co
 ### Pure functions and work items (draft)
 
 - `splitByClassification({ positions: Float32Array, classification, transform }) → parts (data only)`
-- `partTransforms({ source, partCentres }) → transforms  (fix the Euler-order suspect first)`
+- `partTransforms({ source, partCentres }) → transforms (fix the Euler-order suspect first)`
 
 ### Tests (land first)
 
@@ -376,13 +384,13 @@ Triangle-soup split/merge rules without THREE geometry; fix Euler order if B4 co
 
 ### Operations in scope (from the map)
 
-`split-model-into-parts` (3744-3883), `split-import-group` (4243-4284), `split-supports` (4286-4451), `split-supports-synthetic-report` (4324-4370, 4547-4596), `merge-supports` (4453-4654), `organic-cut-commit` (page.tsx:10365-10382)
+`split-model-into-parts` (`splitModelIntoParts`), `split-import-group` (`splitImportGroup`), `split-supports` (`splitSupports`), `split-supports-synthetic-report` (`splitSupports`, `mergeSupports`, `nativeRepairReport`), `merge-supports` (`mergeSupports`), `organic-cut-commit` (`useOrganicCutSession`, `commitParts` in page.tsx)
 
-### Decisions needed
+### Decisions
 
-- D1: Does THREE count as impure for maths-only use?
-- D4: Is selection part of the core?
-- D14: Which fields does a derived model keep?
+- D1 (decided): THREE is allowed inside a pure function, as long as only its maths is used and not its scene graph, THREE types stay out of signatures, and inputs are never mutated. Ender will amend ADR-0045 to say so.
+- D4 (open): Is selection part of the core?
+- D14 (open): Which fields does a derived model keep?
 
 ### Out of scope
 
