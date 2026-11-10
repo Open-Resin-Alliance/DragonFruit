@@ -138,9 +138,11 @@ export function ZipFilePickerModal({
     }));
   }, [files, isLightTheme]);
 
-  React.useEffect(() => {
+  const [selectionDefaults, setSelectionDefaults] = React.useState(defaultSelectedIndices);
+  if (selectionDefaults !== defaultSelectedIndices) {
+    setSelectionDefaults(defaultSelectedIndices);
     setSelectedIndices(defaultSelectedIndices);
-  }, [defaultSelectedIndices]);
+  }
 
   useEscapeToClose(true, onCancel);
 

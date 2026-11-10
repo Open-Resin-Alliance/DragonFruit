@@ -65,10 +65,12 @@ export function SceneMaterialReassignModal({
     Object.fromEntries(rows.map((row) => [row.id, options[0]?.id ?? '']))
   ));
 
-  React.useEffect(() => {
-    if (!open) return;
-    setMapping(Object.fromEntries(rows.map((row) => [row.id, options[0]?.id ?? ''])));
-  }, [open, options, rows]);
+  // Reset the mapping whenever the modal is open and its inputs change.
+  const [mappingInputs, setMappingInputs] = React.useState({ open, options, rows });
+  if (mappingInputs.open !== open || mappingInputs.options !== options || mappingInputs.rows !== rows) {
+    setMappingInputs({ open, options, rows });
+    if (open) setMapping(Object.fromEntries(rows.map((row) => [row.id, options[0]?.id ?? ''])));
+  }
 
   const handleApply = React.useCallback(() => {
     const next = new Map<string, SceneMaterialReassignOption>();

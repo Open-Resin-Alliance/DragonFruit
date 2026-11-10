@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useIsClient } from '@/hooks/useIsClient';
 import { useSyncExternalStore } from 'react';
 import { X } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/atoms';
@@ -290,7 +291,7 @@ export function RenderProfilerOverlay() {
     getRenderProfilerSnapshot,
   );
   const [copyState, setCopyState] = React.useState<'idle' | 'copied' | 'failed'>('idle');
-  const [mounted, setMounted] = React.useState(false);
+  const mounted = useIsClient();
   const [position, setPosition] = React.useState<WindowPosition>(() => readStoredPosition() ?? defaultPosition());
   const [dragging, setDragging] = React.useState(false);
   const dragRef = React.useRef<{
@@ -302,10 +303,6 @@ export function RenderProfilerOverlay() {
   } | null>(null);
   const windowRef = React.useRef<HTMLDivElement | null>(null);
   const positionRef = React.useRef(position);
-
-  React.useEffect(() => {
-    setMounted(true);
-  }, []);
 
   React.useEffect(() => {
     positionRef.current = position;

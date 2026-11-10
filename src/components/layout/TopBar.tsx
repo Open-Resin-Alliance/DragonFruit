@@ -182,7 +182,8 @@ export function TopBar({
     if (attr === 'dark') return false;
     return window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false;
   });
-  const [printerThumbnailFailed, setPrinterThumbnailFailed] = useState(false);
+  // Key of the thumbnail that failed to load; a new profile or image retries.
+  const [failedPrinterThumbnailKey, setFailedPrinterThumbnailKey] = useState<string | null>(null);
   const topbarActionsDisabled = isSlicingBusy;
   const [isAppMenuOpen, setIsAppMenuOpen] = useState(false);
   const [appMenuPosition, setAppMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -461,10 +462,9 @@ export function TopBar({
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
 
 
-  React.useEffect(() => {
-    setPrinterThumbnailFailed(false);
-  }, [activePrinterProfile?.id, activePrinterProfile?.imageDataUrl]);
-
+  const printerThumbnailKey = `${activePrinterProfile?.id ?? ''}|${activePrinterProfile?.imageDataUrl ?? ''}`;
+  const printerThumbnailFailed = failedPrinterThumbnailKey === printerThumbnailKey;
+  const markPrinterThumbnailFailed = () => setFailedPrinterThumbnailKey(printerThumbnailKey);
   const activePrinterThumbnailSrc = printerThumbnailFailed ? undefined : activePrinterProfile?.imageDataUrl;
   const topbarFleetPrinterName = React.useMemo(() => {
     const fleet = activePrinterProfile?.networkFleet ?? [];
@@ -544,11 +544,12 @@ export function TopBar({
     requestOpenProfileSettings('printer');
   }, [closePrinterQuickMenu, requestOpenProfileSettings]);
 
+  const activePrinterProfileId = activePrinterProfile?.id;
   const handleSelectFleetUnitFromQuickMenu = React.useCallback((deviceId: string) => {
-    if (!activePrinterProfile?.id) return;
-    selectPrinterNetworkDevice(activePrinterProfile.id, deviceId);
+    if (!activePrinterProfileId) return;
+    selectPrinterNetworkDevice(activePrinterProfileId, deviceId);
     closePrinterQuickMenu();
-  }, [activePrinterProfile?.id, closePrinterQuickMenu]);
+  }, [activePrinterProfileId, closePrinterQuickMenu]);
 
   const stepsContainerRef = React.useRef<HTMLDivElement>(null);
   const [hideBadges, setHideBadges] = React.useState(() => {
@@ -779,7 +780,7 @@ export function TopBar({
                 alt={activePrinterProfile?.name ?? _(msg`Selected printer`)}
                 className="h-full w-full object-contain"
                 draggable={false}
-                onError={() => setPrinterThumbnailFailed(true)}
+                onError={markPrinterThumbnailFailed}
               />
             ) : (
               <Printer className="h-4 w-4" style={{ color: 'var(--text-muted)' }} />
@@ -920,7 +921,7 @@ export function TopBar({
                         alt={activePrinterProfile?.name ?? deviceName}
                         className="h-full w-full object-contain"
                         draggable={false}
-                        onError={() => setPrinterThumbnailFailed(true)}
+                        onError={markPrinterThumbnailFailed}
                       />
                     ) : (
                       <Printer className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />

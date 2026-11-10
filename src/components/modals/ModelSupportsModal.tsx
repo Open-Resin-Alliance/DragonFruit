@@ -80,10 +80,15 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
     return grouped;
   }, [model?.id, supportSnapshot]);
 
-  React.useEffect(() => {
-    if (!isOpen) return;
-    setCollapsedGroups(Object.fromEntries(SUPPORT_COLLECTION_KEYS.map((key) => [key, true])));
-  }, [isOpen, model?.id]);
+  // Collapse every group each time the modal opens or switches model.
+  const collapseKey = isOpen ? model?.id ?? '' : null;
+  const [appliedCollapseKey, setAppliedCollapseKey] = React.useState<string | null | undefined>(undefined);
+  if (collapseKey !== appliedCollapseKey) {
+    setAppliedCollapseKey(collapseKey);
+    if (collapseKey !== null) {
+      setCollapsedGroups(Object.fromEntries(SUPPORT_COLLECTION_KEYS.map((key) => [key, true])));
+    }
+  }
 
   const summaryStats = React.useMemo(() => {
     const stats = {} as Record<SupportCollectionKey, number>;

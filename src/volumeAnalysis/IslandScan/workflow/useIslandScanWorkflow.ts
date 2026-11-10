@@ -17,11 +17,12 @@ export function useIslandScanWorkflow(islands: ReturnType<typeof useIslandManage
   const [step1Scan, setStep1Scan] = React.useState<IslandScanWorkflowStepStatus>('pending');
   const [step2Visuals, setStep2Visuals] = React.useState<IslandScanWorkflowStepStatus>('pending');
 
-  React.useEffect(() => {
-    if (islands.scanData) {
-      setStep1Scan('complete');
-    }
-  }, [islands.scanData]);
+  // Each new scan result completes step 1; adjusted during render, not in an effect.
+  const [seenScanData, setSeenScanData] = React.useState<typeof islands.scanData | undefined>(undefined);
+  if (seenScanData !== islands.scanData) {
+    setSeenScanData(islands.scanData);
+    if (islands.scanData) setStep1Scan('complete');
+  }
 
   const runStep1Scanline = React.useCallback(async () => {
     setStep1Scan('running');

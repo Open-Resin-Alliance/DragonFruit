@@ -58,16 +58,17 @@ export function Select({ className, children, value, defaultValue, onChange, onF
     return options.find((option) => !option.disabled)?.value ?? '';
   });
 
-  React.useEffect(() => {
-    if (isControlled) return;
-    if (defaultValue != null) {
-      setInternalValue(String(defaultValue));
-      return;
-    }
-    if (!options.some((option) => option.value === internalValue)) {
-      setInternalValue(options.find((option) => !option.disabled)?.value ?? '');
-    }
-  }, [defaultValue, internalValue, isControlled, options]);
+  // Uncontrolled: follow `defaultValue`, else fall back when the current value
+  // left the option list. Adjusted during render instead of in an effect so the
+  // stale value never paints.
+  if (!isControlled) {
+    const nextInternal = defaultValue != null
+      ? String(defaultValue)
+      : options.some((option) => option.value === internalValue)
+        ? internalValue
+        : options.find((option) => !option.disabled)?.value ?? '';
+    if (nextInternal !== internalValue) setInternalValue(nextInternal);
+  }
 
   const resolvedValue = isControlled
     ? String(value ?? '')
