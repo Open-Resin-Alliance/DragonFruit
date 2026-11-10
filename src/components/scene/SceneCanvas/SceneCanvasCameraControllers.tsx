@@ -657,6 +657,16 @@ export function CameraModeEntryFramingController({
  * has called `controls.update()`, so the round-trip in `update()` has already
  * happened and this step is the last word on the pose for the frame.
  */
+/**
+ * The pose appliers write the camera *and* orient it at the orbit target, which
+ * is the stock OrbitControls aim. `PivotOrbitControls` runs at priority -1 and
+ * has the last word on the orientation, so these must come first — otherwise a
+ * cursor pivot would be aimed at the middle of the screen for the duration of
+ * every eased gesture, then snap back.
+ */
+const TRACKPAD_APPLIER_PRIORITY = -2;
+const WHEEL_ZOOM_APPLIER_PRIORITY = -2;
+
 export function TrackpadGesturePoseApplier({
   poseRef,
   lastEventAtRef,
@@ -695,7 +705,7 @@ export function TrackpadGesturePoseApplier({
     // orbit basis exactly, and an orbit has recomputed `pose.quaternion` from
     // its own basis.
     blendCameraTowardTrackpadPose(pose, camera, target, trackpadPoseBlendFactor(delta * 1000, tauMs), true);
-  });
+  }, TRACKPAD_APPLIER_PRIORITY);
 
   return null;
 }
@@ -762,7 +772,7 @@ export function WheelZoomPoseApplier({
     }
 
     applyPose(trackpadPoseBlendFactor(delta * 1000, tauMs));
-  });
+  }, WHEEL_ZOOM_APPLIER_PRIORITY);
 
   return null;
 }

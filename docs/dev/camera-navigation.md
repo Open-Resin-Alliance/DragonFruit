@@ -268,6 +268,7 @@ sets `target` plus `anchorNdc` to the press point's own pixel.
   (restoring the app's own limits when it is not), so the orbit stops just short
   and the frame stays stable. `__tests__/anchoredAim` pins the uprightness outside
   that band.
+- **The pose appliers run before the controls, not after.** `WheelZoomPoseApplier` and `TrackpadGesturePoseApplier` write the camera pose *and* orient it at the orbit target — the stock aim, which puts the target in the middle of the screen. `PivotOrbitControls` runs at frame priority -1 and has the last word on the orientation, so both appliers run at -2: without that ordering a cursor pivot is centred for the duration of every eased gesture and snaps back afterwards.
 - **The wheel dollies straight in while a pivot is anchored.** OrbitControls'
   `zoomToCursor`, and the app's wheel pose that reproduces it, slide the camera
   down the pointer ray — which drags the orbit *target* toward the pointer, and
