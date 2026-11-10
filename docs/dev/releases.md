@@ -318,6 +318,29 @@ subjects cover them. The app registration
 needs the **Artifact Signing Certificate Profile Signer** role on the signing
 account.
 
+### Shared CI steps
+
+The signing steps live once, in three composite actions under
+`.github/actions/`, and `release.yml`, `build-preview.yml` and
+`verify-windows-signing.yml` all call them:
+
+| Action | Does |
+|---|---|
+| `windows-signing-setup` | Exports the signing environment to the job, logs in to Azure, installs the module, signs a probe executable through the overlay |
+| `windows-signing-log` | Prints `DF_SIGN_LOG` and its `.out`; called with `if: always()` after the build |
+| `windows-signing-verify` | Checks the payload inside each installer and the installer itself are signed and timestamped |
+
+Before this, each workflow carried its own copy, and only the one in
+`verify-windows-signing.yml` got the fixes its runs turned up (#1001, #1002).
+The setup action writes `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, the three
+`AZURE_SIGNING_*` values and `DF_SIGN_LOG` to `GITHUB_ENV`, so the bundler step
+that signs for real inherits them and lists none of them itself. Change signing
+behaviour in the action, not in a workflow.
+
+`build-preview.yml` builds a branch other than its own, so it checks the actions
+out from `github.workflow_sha` into `.ci-actions/` rather than using the built
+branch's copy, which may predate them.
+
 ### Required repository secrets
 
 | Secret | Value |

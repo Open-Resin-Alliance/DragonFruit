@@ -1,0 +1,133 @@
+name: Windows signing setup
+description: >-
+  Log in to Azure, install the Artifact Signing module, export the signing
+  environment for the rest of the job, and sign a throwaway probe through the
+  same overlay the Tauri bundler uses. Shared by release.yml, build-preview.yml
+  and verify-windows-signing.yml so the three cannot drift apart again.
+
+# Composite actions cannot read `secrets`; the caller passes each one in.
+inputs:
+  client-id:
+    description: Azure app registration (AZURE_CLIENT_ID).
+    required: true
+  tenant-id:
+    description: Azure tenant (AZURE_TENANT_ID).
+    required: true
+  subscription-id:
+    description: Azure subscription (AZURE_SUBSCRIPTION_ID).
+    required: true
+  signing-endpoint:
+    description: Artifact Signing endpoint (AZURE_SIGNING_ENDPOINT).
+    required: true
+  signing-account:
+    description: Artifact Signing account (AZURE_SIGNING_ACCOUNT).
+    required: true
+  certificate-profile:
+    description: Artifact Signing certificate profile (AZURE_SIGNING_CERTIFICATE_PROFILE).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Everything `scripts/sign-windows.cmd` and `sign-windows.ps1` read, written
+    # once to the job environment. The bundler step that signs for real gets it
+    # from here instead of from its own `env:` list, which is how the client and
+    # tenant ids went missing from two of three copies (#1002).
+    # sign-windows.ps1 mints a fresh federated token before signing (the one
+    # azure/login exchanges expires in ~5 min) and logs in as this app, hence
+    # the client and tenant ids.
+    - name: Export the signing environment
+      shell: pwsh
+      env:
+        CLIENT_ID: ${{ inputs.client-id }}
+        TENANT_ID: ${{ inputs.tenant-id }}
+        SIGNING_ENDPOINT: ${{ inputs.signing-endpoint }}
+        SIGNING_ACCOUNT: ${{ inputs.signing-account }}
+        CERTIFICATE_PROFILE: ${{ inputs.certificate-profile }}
+      run: |
+        foreach ($pair in @(
+          @('AZURE_CLIENT_ID', $env:CLIENT_ID),
+          @('AZURE_TENANT_ID', $env:TENANT_ID),
+          @('AZURE_SIGNING_ENDPOINT', $env:SIGNING_ENDPOINT),
+          @('AZURE_SIGNING_ACCOUNT', $env:SIGNING_ACCOUNT),
+          @('AZURE_SIGNING_CERTIFICATE_PROFILE', $env:CERTIFICATE_PROFILE)
+        )) {
+          if ([string]::IsNullOrWhiteSpace($pair[1])) { throw "$($pair[0]) is empty: the secret is missing or not passed to this action." }
+          "$($pair[0])=$($pair[1])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        }
+        # Tauri discards the signer's stderr; the scripts write what happened here.
+        "DF_SIGN_LOG=$(Join-Path $env:RUNNER_TEMP 'dragonfruit-sign.log')" |
+          Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+    # OIDC: no client secret is stored, the federated credential on the app
+    # registration trusts this repository and ref (dev and main). The scripts
+    # then pick the login up through DefaultAzureCredential's CLI credential.
+    - name: Azure login (Artifact Signing)
+      uses: azure/login@v3
+      with:
+        client-id: ${{ inputs.client-id }}
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+
+    # The same PowerShell module `azure/artifact-signing-action` installs; it is
+    # invoked per file from the Tauri bundler instead of once over a folder, so
+    # the signature lands before the updater artifacts are made.
+    - name: Install the Artifact Signing module
+      shell: pwsh
+      run: Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
+
+    # The bundler discards the signer's stderr: any non-zero exit becomes
+    # "failed to run pwsh", with no reason attached. Signing a throwaway binary
+    # first turns a broken signer into a two-minute failure that prints its own
+    # error, instead of a long build that says nothing.
+    - name: Sign a probe executable
+      shell: pwsh
+      run: |
+        # csc, not Add-Type: PowerShell 7 cannot emit an assembly ("Both the
+        # assembly types 'ConsoleApplication' and 'WindowsApplication' are not
+        # currently supported"), and this step runs on 7.
+        $probe = Join-Path $env:RUNNER_TEMP 'signing-probe.exe'
+        $source = Join-Path $env:RUNNER_TEMP 'signing-probe.cs'
+        'public static class Probe { public static void Main() {} }' |
+          Out-File -FilePath $source -Encoding ascii
+        & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
+          /nologo /target:exe "/out:$probe" $source | Out-Null
+        # The bundler chdirs to src-tauri before it runs this command, and only
+        # absolutizes an argument that exists from there. Run it the same way, or
+        # the probe fails on a path the real build never sees (#1001), or passes
+        # over a failure the real build would hit.
+        $tauriDir = Join-Path $env:GITHUB_WORKSPACE 'src-tauri'
+        $overlay = Get-Content (Join-Path $tauriDir 'tauri.windows-signing.conf.json') -Raw | ConvertFrom-Json
+        $signCommand = $overlay.bundle.windows.signCommand
+        $arguments = @($signCommand.args | ForEach-Object {
+          if ($_ -eq '%1') { $probe }
+          else {
+            $candidate = Join-Path $tauriDir $_
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { (Resolve-Path -LiteralPath $candidate).Path }
+            else { $_ }
+          }
+        })
+        Push-Location $tauriDir
+        try {
+          & $signCommand.cmd @arguments
+          $exit = $LASTEXITCODE
+        } finally {
+          Pop-Location
+        }
+        if ($exit -ne 0) {
+          throw "The signing command exited $exit."
+        }
+        $signature = Get-AuthenticodeSignature -LiteralPath $probe
+        if (-not $signature.SignerCertificate) {
+          throw "The probe came back unsigned: $($signature.StatusMessage)"
+        }
+        if ($signature.Status -eq 'HashMismatch') {
+          throw 'The probe signature does not match its contents.'
+        }
+        if (-not $signature.TimeStamperCertificate) {
+          throw 'The probe is signed but not timestamped.'
+        }
+        # The subject carries the certificate holder's name and locality, and
+        # these logs are public. The thumbprint identifies the certificate
+        # without naming anyone; the full subject is on the artifact itself.
+        Write-Host "Probe signed: status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"

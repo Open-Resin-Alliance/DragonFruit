@@ -561,80 +561,34 @@ jobs:
             fi
           done
 
-      # Windows installers are signed with Azure Artifact Signing. The login is
-      # OIDC: no client secret is stored, the federated credential on the app
-      # registration trusts this repository and ref. `scripts/sign-windows.ps1`
-      # then picks the login up through DefaultAzureCredential's CLI credential.
-      - name: Azure login (Artifact Signing)
+      # The actions come from this workflow's own commit, not from the branch
+      # being built: that branch may predate them, and a local action would then
+      # be missing before anything compiled. Only `.github/actions` is fetched.
+      - name: Check out the shared CI actions
         if: matrix.build_kind == 'tauri'
-        uses: azure/login@v3
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-actions
+          # Non-cone: cone mode also brings every file at the repository root
+          # (tsconfig.json, next.config.ts…), which the build would then see.
+          sparse-checkout: .github/actions/
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # Azure login, the Artifact Signing module, the signing environment for
+      # the bundler, and a probe signature that fails fast with a reason. Shared
+      # with the other signing workflows; see the action for the details.
+      - name: Windows signing setup
+        if: matrix.build_kind == 'tauri'
+        uses: ./.ci-actions/.github/actions/windows-signing-setup
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      # The same PowerShell module `azure/artifact-signing-action` installs;
-      # it is invoked per file from the Tauri bundler instead of once over a
-      # folder, so the signature lands before the updater artifacts are made.
-      - name: Install the Artifact Signing module
-        if: matrix.build_kind == 'tauri'
-        shell: pwsh
-        run: |
-          Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Force -Repository PSGallery
-
-      # The bundler discards the signer's stderr: any non-zero exit becomes
-      # "failed to run pwsh", with no reason attached. Signing a throwaway
-      # binary first turns a broken signer into a two-minute failure that
-      # prints its own error, instead of a nine-minute build that says nothing.
-      - name: Sign a probe executable
-        if: matrix.build_kind == 'tauri'
-        shell: pwsh
-        env:
-          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
-        run: |
-          # csc, not Add-Type: PowerShell 7 cannot emit an assembly ("Both the
-          # assembly types 'ConsoleApplication' and 'WindowsApplication' are not
-          # currently supported"), and this step runs on 7.
-          $probe = Join-Path $env:RUNNER_TEMP 'signing-probe.exe'
-          $source = Join-Path $env:RUNNER_TEMP 'signing-probe.cs'
-          'public static class Probe { public static void Main() {} }' |
-            Out-File -FilePath $source -Encoding ascii
-          & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
-            /nologo /target:exe "/out:$probe" $source | Out-Null
-          # The bundler chdirs to src-tauri before it runs this command, so the
-          # overlay's `..\scripts\sign-windows.cmd` only resolves from there. Run
-          # it the same way (as verify-windows-signing.yml does); from the
-          # repository root the probe fails on a path the real build never sees.
-          $tauriDir = Join-Path (Get-Location).Path 'src-tauri'
-          $overlay = Get-Content (Join-Path $tauriDir 'tauri.windows-signing.conf.json') -Raw | ConvertFrom-Json
-          $signCommand = $overlay.bundle.windows.signCommand
-          $arguments = @($signCommand.args | ForEach-Object { if ($_ -eq '%1') { $probe } else { $_ } })
-          Push-Location $tauriDir
-          try {
-            & $signCommand.cmd @arguments
-            $exit = $LASTEXITCODE
-          } finally {
-            Pop-Location
-          }
-          if ($exit -ne 0) {
-            throw "The signing command exited $exit."
-          }
-          $signature = Get-AuthenticodeSignature -LiteralPath $probe
-          if (-not $signature.SignerCertificate) {
-            throw "The probe came back unsigned: $($signature.StatusMessage)"
-          }
-          if ($signature.Status -eq 'HashMismatch') {
-            throw 'The probe signature does not match its contents.'
-          }
-          if (-not $signature.TimeStamperCertificate) {
-            throw 'The probe is signed but not timestamped.'
-          }
-          # The subject carries the certificate holder's name and locality, and
-          # these logs are public. The thumbprint identifies the certificate
-          # without naming anyone; the full subject is on the artifact itself.
-          Write-Host "Probe signed: status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
+          signing-endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
 
       - name: Build Tauri bundle (Windows)
         if: matrix.build_kind == 'tauri'
@@ -642,42 +596,17 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
-          DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
         with:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
 
-      # Tauri discards the signer's stderr; the script writes what happened here.
       - name: Show the signing log
         if: always() && matrix.build_kind == 'tauri'
-        shell: pwsh
-        run: |
-          $log = Join-Path $env:RUNNER_TEMP 'dragonfruit-sign.log'
-          if (Test-Path $log) { Get-Content $log } else { Write-Host 'the signing script never ran' }
+        uses: ./.ci-actions/.github/actions/windows-signing-log
 
-      # -RequireSignature checks the executable inside the installer; the next
-      # step checks the installer itself.
-      - name: Verify Windows installer runtime payload
+      - name: Verify the signed Windows installers
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/verify-windows-bundles.ps1 -Formats nsis -RequireSignature
-
-      - name: Verify the Windows installer is signed
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $files = @(Get-ChildItem 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis' -File -Filter '*-setup.exe')
-          if ($files.Count -eq 0) { throw 'No NSIS installer was built.' }
-          foreach ($file in $files) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-            if (-not $signature.SignerCertificate) { throw "$($file.Name) is not signed." }
-            if ($signature.Status -eq 'HashMismatch') { throw "$($file.Name) has a signature that does not match its contents." }
-            if (-not $signature.TimeStamperCertificate) { throw "$($file.Name) is signed but not timestamped." }
-            Write-Host "$($file.Name): status=$($signature.Status) thumbprint=$($signature.SignerCertificate.Thumbprint)"
-          }
+        uses: ./.ci-actions/.github/actions/windows-signing-verify
 
       - name: Install Flatpak build tooling
         if: matrix.build_kind == 'flatpak'
