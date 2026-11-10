@@ -1361,7 +1361,7 @@ fn cmd_slice_run(
         .unwrap_or_default();
     let perf = slice_result.map_err(|e| format!("Slice failed: {e}"))?;
 
-    let result = serde_json::json!({
+    let mut result = serde_json::json!({
         "output": output.display().to_string(),
         "format": job.output_format,
         "layers": job.total_layers,
@@ -1380,11 +1380,15 @@ fn cmd_slice_run(
         "total_s": perf.total_s(),
         "wall_s": wall_s,
         "layers_per_second": perf.layers_per_second(),
-        "perf": {
+        "resources": capture_resources(wall_s, samples_vec, sample_interval_ms),
+    });
+    result["perf"] = serde_json::json!({
             "total_ns": perf.total_ns,
             "index_build_ns": perf.index_build_ns,
             "render_wall_ns": perf.render_wall_ns,
             "render_ns": perf.render_ns,
+            "raw_geometry_ns": perf.raw_geometry_ns,
+            "raw_scanline_ns": perf.raw_scanline_ns,
             "png_encode_ns": perf.png_encode_ns,
             "encode_ssaa_downsample_ns": perf.encode_ssaa_downsample_ns,
             "encode_blur_ns": perf.encode_blur_ns,
@@ -1405,8 +1409,6 @@ fn cmd_slice_run(
             "daa_post_threads": perf.daa_post_threads,
             "daa_post_buffer_depth": perf.daa_post_buffer_depth,
             "layers": perf.layers,
-        },
-        "resources": capture_resources(wall_s, samples_vec, sample_interval_ms),
     });
 
     if json_output {

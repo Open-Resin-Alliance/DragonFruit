@@ -4137,6 +4137,8 @@ pub fn slice_and_rasterize_rle_multi_tank_v3(
         perf.index_build_ns = perf.index_build_ns.saturating_add(tank_perf.index_build_ns);
         perf.render_wall_ns = perf.render_wall_ns.saturating_add(tank_perf.render_wall_ns);
         perf.render_ns = perf.render_ns.saturating_add(tank_perf.render_ns);
+        perf.raw_geometry_ns = perf.raw_geometry_ns.saturating_add(tank_perf.raw_geometry_ns);
+        perf.raw_scanline_ns = perf.raw_scanline_ns.saturating_add(tank_perf.raw_scanline_ns);
         perf.z_blend_backward_ns = perf
             .z_blend_backward_ns
             .saturating_add(tank_perf.z_blend_backward_ns);
@@ -4289,7 +4291,7 @@ pub fn slice_and_rasterize_rle_blocks_v3(
     let encode_block_fn_ref = encode_block_fn.as_ref();
 
     let produce_layer = |layer: u32, prepared: Option<crate::raw_simd::LayerSegments>| -> Result<
-        (Vec<crate::pipeline::RleBlockPayload>, LayerAreaStatsV3),
+        (Vec<crate::pipeline::RleBlockPayload>, LayerAreaStatsV3, u64),
         SlicerV3Error,
     > {
         use crate::pipeline::RleBlockPayload;
@@ -4337,6 +4339,7 @@ pub fn slice_and_rasterize_rle_blocks_v3(
 
         let mut payloads = Vec::with_capacity(blocks.len());
         let mut layer_stats = LayerAreaStatsV3::default();
+        let mut raw_scanline_ns = 0u64;
 
         for (block_index, block) in blocks.iter().enumerate() {
             if cancel_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
@@ -4368,6 +4371,7 @@ pub fn slice_and_rasterize_rle_blocks_v3(
                 (wid_w * ssaa_factor) as u32,
             );
 
+            let scanline_start = prepared.as_ref().map(|_| std::time::Instant::now());
             let (raster_runs, _) = if let Some(prepared) = prepared.as_ref() {
                 crate::raster::rasterize_binary_layer_rle_block_from_segments(
                     raster_job_ref, &prepared.model, false, raster_block,
@@ -4417,6 +4421,10 @@ pub fn slice_and_rasterize_rle_blocks_v3(
                     stats.max_x += (out_start * ssaa_factor) as i32;
                 }
                 accumulate_block_stats(&mut layer_stats, &stats);
+            }
+            if let Some(start) = scanline_start {
+                raw_scanline_ns = raw_scanline_ns
+                    .saturating_add(start.elapsed().as_nanos() as u64);
             }
 
             // Post-process at the widened width (mirrors `wrapped_on_rle`).
@@ -4474,7 +4482,7 @@ pub fn slice_and_rasterize_rle_blocks_v3(
             });
         }
 
-        Ok((payloads, layer_stats))
+        Ok((payloads, layer_stats, raw_scanline_ns))
     };
 
     let (layer_area_stats, mut perf) = crate::pipeline::render_layers_rle_blocks(

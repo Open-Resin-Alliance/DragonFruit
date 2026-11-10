@@ -373,6 +373,7 @@ fn for_each_geometry_layer(
     job: &SliceJobV3, triangles: &[Triangle], layer_index: &LayerIndex,
     start: u32, end: u32, support_split: Option<usize>, backend: Backend,
     cancel_flag: Option<&AtomicBool>, raster_ns: &AtomicU64,
+    raw_geometry_ns: &AtomicU64,
     mut emit: impl FnMut(u32, Option<LayerSegments>) -> Result<(), SlicerV3Error>,
 ) -> Result<(), SlicerV3Error> {
     if !crate::raster::raw_binary_geometry_eligible(job, triangles.len()) {
@@ -399,13 +400,17 @@ fn for_each_geometry_layer(
     let result = crate::raw_simd::for_each_layer_segments(
         job, triangles, &requests[..count], support_split, backend, cancel_flag,
         |segments| {
-            raster_ns.fetch_add(geometry_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            let elapsed_ns = geometry_start.elapsed().as_nanos() as u64;
+            raster_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+            raw_geometry_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
             let result = emit(segments.layer_index, Some(segments));
             geometry_start = std::time::Instant::now();
             result
         },
     );
-    raster_ns.fetch_add(geometry_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    let elapsed_ns = geometry_start.elapsed().as_nanos() as u64;
+    raster_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+    raw_geometry_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
     result
 }
 
@@ -579,6 +584,8 @@ pub fn render_layers_bounded(
 
     let progress = AtomicU32::new(0);
     let raster_ns = AtomicU64::new(0);
+    let raw_geometry_ns = AtomicU64::new(0);
+    let raw_scanline_ns = AtomicU64::new(0);
     let png_ns = AtomicU64::new(0);
     let layer_pixels_len =
         (job.effective_render_width_px() as usize) * (job.source_height_px as usize);
@@ -609,7 +616,8 @@ pub fn render_layers_bounded(
                     let start = batch * grain;
                     let result = for_each_geometry_layer(
                         job, triangles, layer_index, start, (start + grain).min(total_layers),
-                        None, Backend::detected(), cancel_flag, &raster_ns, |layer, segments| {
+                        None, Backend::detected(), cancel_flag, &raster_ns, &raw_geometry_ns,
+                        |layer, segments| {
                         let result = (|| -> Result<
                             (u32, Option<Vec<u8>>, Option<Vec<u8>>, LayerAreaStatsV3),
                             SlicerV3Error,
@@ -671,10 +679,11 @@ pub fn render_layers_bounded(
                                 } else {
                                     rasterize_layer_rle(job, triangles, layer_candidates, layer, compute_area_stats)
                                 };
-                                raster_ns.fetch_add(
-                                    raster_start.elapsed().as_nanos() as u64,
-                                    Ordering::Relaxed,
-                                );
+                                let elapsed_ns = raster_start.elapsed().as_nanos() as u64;
+                                raster_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+                                if segments.is_some() {
+                                    raw_scanline_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+                                }
                                 let png_start = std::time::Instant::now();
                                 let png = crate::encode::encode_grayscale_png_from_rle(
                                     job.effective_render_width_px(),
@@ -698,10 +707,11 @@ pub fn render_layers_bounded(
                             } else {
                                 rasterize_layer_with_stats(job, triangles, layer_candidates, layer, compute_area_stats)
                             };
-                            raster_ns.fetch_add(
-                                raster_start.elapsed().as_nanos() as u64,
-                                Ordering::Relaxed,
-                            );
+                            let elapsed_ns = raster_start.elapsed().as_nanos() as u64;
+                            raster_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+                            if segments.is_some() {
+                                raw_scanline_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+                            }
 
                             let png = if emit_png_layers {
                                 let png_start = std::time::Instant::now();
@@ -854,6 +864,8 @@ pub fn render_layers_bounded(
     let perf = SlicingPerfV3 {
         render_wall_ns: render_wall_start.elapsed().as_nanos() as u64,
         render_ns: raster_ns.load(Ordering::Relaxed),
+        raw_geometry_ns: raw_geometry_ns.load(Ordering::Relaxed),
+        raw_scanline_ns: raw_scanline_ns.load(Ordering::Relaxed),
         png_encode_ns: png_ns.load(Ordering::Relaxed),
         layers: total_layers,
         ..Default::default()
@@ -905,6 +917,8 @@ fn render_layers_rle_with_execution(
     let buffer = (max_concurrent * 4).clamp(4, 64);
 
     let raster_ns = AtomicU64::new(0);
+    let raw_geometry_ns = AtomicU64::new(0);
+    let raw_scanline_ns = AtomicU64::new(0);
     let progress = AtomicU32::new(0);
     let support_split_model_triangle_count =
         support_split_model_triangle_count.filter(|&count| count > 0 && count < triangles.len());
@@ -931,7 +945,7 @@ fn render_layers_rle_with_execution(
                     let result = for_each_geometry_layer(
                         job, triangles, layer_index, start, (start + grain).min(total_layers),
                         support_split_model_triangle_count, backend, cancel_flag,
-                        &raster_ns, |layer, segments| {
+                        &raster_ns, &raw_geometry_ns, |layer, segments| {
                         let result =
                             (|| -> Result<
                                 (u32, Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3),
@@ -969,10 +983,11 @@ fn render_layers_rle_with_execution(
                                         );
                                         (runs, None, stats)
                                     };
-                                raster_ns.fetch_add(
-                                    raster_start.elapsed().as_nanos() as u64,
-                                    Ordering::Relaxed,
-                                );
+                                let elapsed_ns = raster_start.elapsed().as_nanos() as u64;
+                                raster_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+                                if segments.is_some() {
+                                    raw_scanline_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+                                }
 
                                 Ok((layer, runs, support_runs, stats))
                             })();
@@ -1042,6 +1057,8 @@ fn render_layers_rle_with_execution(
     let perf = SlicingPerfV3 {
         render_wall_ns: render_wall_start.elapsed().as_nanos() as u64,
         render_ns: raster_ns.load(Ordering::Relaxed),
+        raw_geometry_ns: raw_geometry_ns.load(Ordering::Relaxed),
+        raw_scanline_ns: raw_scanline_ns.load(Ordering::Relaxed),
         layers: total_layers,
         ..Default::default()
     };
@@ -1078,6 +1095,8 @@ pub fn render_layers_rle_encoded(
     let buffer = (max_concurrent * 4).clamp(4, 64);
 
     let raster_ns = AtomicU64::new(0);
+    let raw_geometry_ns = AtomicU64::new(0);
+    let raw_scanline_ns = AtomicU64::new(0);
     let encode_ns = AtomicU64::new(0);
     let progress = AtomicU32::new(0);
     let support_split_model_triangle_count =
@@ -1106,7 +1125,7 @@ pub fn render_layers_rle_encoded(
                     let result = for_each_geometry_layer(
                         job, triangles, layer_index, start, (start + grain).min(total_layers),
                         support_split_model_triangle_count, Backend::detected(), cancel_flag,
-                        &raster_ns, |layer, segments| {
+                        &raster_ns, &raw_geometry_ns, |layer, segments| {
                         let result =
                             (|| -> Result<(u32, Vec<u8>, LayerAreaStatsV3), SlicerV3Error> {
                                 if cancel_flag
@@ -1141,10 +1160,11 @@ pub fn render_layers_rle_encoded(
                                         );
                                         (runs, None, stats)
                                     };
-                                raster_ns.fetch_add(
-                                    raster_start.elapsed().as_nanos() as u64,
-                                    Ordering::Relaxed,
-                                );
+                                let elapsed_ns = raster_start.elapsed().as_nanos() as u64;
+                                raster_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+                                if segments.is_some() {
+                                    raw_scanline_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+                                }
 
                                 let encode_start = std::time::Instant::now();
                                 let bytes = encode_fn(layer, &runs, support_runs.as_deref())?;
@@ -1221,6 +1241,8 @@ pub fn render_layers_rle_encoded(
     let perf = SlicingPerfV3 {
         render_wall_ns: render_wall_start.elapsed().as_nanos() as u64,
         render_ns: raster_ns.load(Ordering::Relaxed),
+        raw_geometry_ns: raw_geometry_ns.load(Ordering::Relaxed),
+        raw_scanline_ns: raw_scanline_ns.load(Ordering::Relaxed),
         png_encode_ns: encode_ns.load(Ordering::Relaxed),
         layers: total_layers,
         ..Default::default()
@@ -1247,13 +1269,15 @@ pub enum RleBlockPayload {
 /// Parallel block producer with streamed, shared RAW geometry per layer.
 /// Each prepared layer is consumed before building the next layer; block
 /// payloads retain the existing ordered per-layer drain.
+/// The producer returns payloads, stats and eligible binary raster/stat elapsed
+/// nanoseconds, measured before postprocessing and block encoding.
 pub(crate) fn render_layers_rle_blocks(
     job: &SliceJobV3,
     triangles: &[Triangle],
     layer_index: &LayerIndex,
     support_split: Option<usize>,
     produce_layer: impl Fn(u32, Option<LayerSegments>)
-        -> Result<(Vec<RleBlockPayload>, LayerAreaStatsV3), SlicerV3Error> + Sync,
+        -> Result<(Vec<RleBlockPayload>, LayerAreaStatsV3, u64), SlicerV3Error> + Sync,
     mut on_block: impl FnMut(u32, u32, RleBlockPayload) -> Result<(), SlicerV3Error>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
@@ -1264,6 +1288,8 @@ pub(crate) fn render_layers_rle_blocks(
     let buffer = (max_concurrent * 4).clamp(4, 64);
 
     let raster_ns = AtomicU64::new(0);
+    let raw_geometry_ns = AtomicU64::new(0);
+    let raw_scanline_ns = AtomicU64::new(0);
     let progress = AtomicU32::new(0);
 
     let (tx, rx) = std::sync::mpsc::sync_channel::<
@@ -1286,6 +1312,7 @@ pub(crate) fn render_layers_rle_blocks(
                     let result = for_each_geometry_layer(
                         job, triangles, layer_index, start, (start + grain).min(total_layers),
                         support_split, Backend::detected(), cancel_flag, &raster_ns,
+                        &raw_geometry_ns,
                         |layer, segments| {
                         let result = (|| {
                             if cancel_flag
@@ -1295,11 +1322,12 @@ pub(crate) fn render_layers_rle_blocks(
                                 return Err(SlicerV3Error::Cancelled);
                             }
                             let raster_start = std::time::Instant::now();
-                            let (payloads, stats) = produce_layer(layer, segments)?;
+                            let (payloads, stats, scanline_ns) = produce_layer(layer, segments)?;
                             raster_ns.fetch_add(
                                 raster_start.elapsed().as_nanos() as u64,
                                 Ordering::Relaxed,
                             );
+                            raw_scanline_ns.fetch_add(scanline_ns, Ordering::Relaxed);
                             Ok((layer, payloads, stats))
                         })();
                         let output = result?;
@@ -1370,6 +1398,8 @@ pub(crate) fn render_layers_rle_blocks(
     let perf = SlicingPerfV3 {
         render_wall_ns: render_wall_start.elapsed().as_nanos() as u64,
         render_ns: raster_ns.load(Ordering::Relaxed),
+        raw_geometry_ns: raw_geometry_ns.load(Ordering::Relaxed),
+        raw_scanline_ns: raw_scanline_ns.load(Ordering::Relaxed),
         layers: total_layers,
         ..Default::default()
     };
@@ -1562,10 +1592,11 @@ mod raw_consumer_tests {
         for backend in Backend::supported_for_tests() {
             for split in [None, Some(split)] {
                 let timer = AtomicU64::new(0);
+                let raw_geometry_timer = AtomicU64::new(0);
                 let mut seen = 0;
                 for start in [0,8] {
                     for_each_geometry_layer(&job, &triangles, &index, start,
-                        (start + 8).min(job.total_layers), split, backend, None, &timer,
+                        (start + 8).min(job.total_layers), split, backend, None, &timer, &raw_geometry_timer,
                         |layer, segments| {
                             assert_eq!(layer, seen);
                             let segments = segments.unwrap();

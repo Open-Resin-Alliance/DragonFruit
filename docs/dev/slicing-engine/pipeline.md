@@ -85,8 +85,10 @@ job, triangles, layer index and optional support split, then calls
 `produce_layer(layer, prepared_segments)`. Binary-eligible layers supply
 `Some(LayerSegments)` for reuse across all block windows; noneligible layers
 supply `None` and use the existing AA raster path. The producer returns one
-layer's block payloads and statistics. Its sole engine caller consumes the
-prepared geometry without cloning it or re-running intersection per block.
+layer's `(payloads, statistics, raw_scanline_ns)`. The timing covers eligible
+binary raster/stat work only and stops before postprocessing and format
+encoding; ineligible paths contribute zero. Its sole engine caller consumes
+the prepared geometry without cloning it or re-running intersection per block.
 The old total-layer-count-only producer API has been removed.
 
 ## 8) O(num_runs) PNG encode details

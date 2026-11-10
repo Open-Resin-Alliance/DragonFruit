@@ -290,6 +290,8 @@ export type NativeSlicerPerfMetrics = {
   indexBuildNs: number;
   renderWallNs: number;
   renderNs: number;
+  rawGeometryNs: number;
+  rawScanlineNs: number;
   pngEncodeNs: number;
   archiveEncodeNs: number;
   zBlendBackwardNs: number;

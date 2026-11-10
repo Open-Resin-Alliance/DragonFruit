@@ -21,6 +21,26 @@
 - `png_s`
 - `archive_s`
 
+### RAW binary-core phase counters
+
+Native perf and CLI JSON expose `raw_geometry_ns` and `raw_scanline_ns`.
+The app's copied metrics expose the corresponding `rawGeometryNs` and
+`rawScanlineNs`, plus `rawGeometryWorkerMs` and `rawScanlineWorkerMs`.
+
+Compare geometry preparation/intersections against scanline/span/RLE work to
+locate the native bottleneck before changing the kernel. These are elapsed
+times summed across workers: do not add them to `render_wall_ns` or interpret
+them as sequential portions of the job's wall time. They are subsets of the
+existing render accounting, not additional work. Block rendering excludes
+postprocessing and format encoding from the scanline counter even where the
+older aggregate render counter includes the whole block producer.
+
+Zero on an ineligible AA path means the RAW split was not measured, not that
+rasterization was free. Shared parse/projection, index construction, encoding,
+container output and app transport remain separate. See [API Reference](api.md)
+for exact boundaries. Capturing these counters does not require a separate
+benchmark or a per-triangle profiler.
+
 ## CLI usage
 
 Benchmark binary: `rust/dragonfruit-slicing-engine/src/bin/benchmark.rs`

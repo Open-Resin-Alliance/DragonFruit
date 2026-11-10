@@ -8,6 +8,12 @@ pub struct SlicingPerfV3 {
     pub index_build_ns: u64,
     pub render_wall_ns: u64,
     pub render_ns: u64,
+    /// RAW candidate traversal, intersections and segment emission elapsed time,
+    /// summed across workers; excludes rasterization and downstream callbacks.
+    pub raw_geometry_ns: u64,
+    /// Eligible prebuilt-segment binary raster/stat elapsed time summed across
+    /// workers; excludes postprocessing, format encoding and sink waits.
+    pub raw_scanline_ns: u64,
     pub png_encode_ns: u64,
     pub archive_encode_ns: u64,
     /// CPU time spent in backward inter-layer z-blend compensation (3DAA path).

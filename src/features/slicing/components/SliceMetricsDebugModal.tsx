@@ -321,6 +321,8 @@ export function SliceMetricsDebugModal({
                   <RuntimeStat label="indexBuildNs" value={formatNs(perf?.indexBuildNs)} />
                   <RuntimeStat label="renderWallNs" value={formatNs(perf?.renderWallNs)} />
                   <RuntimeStat label="renderNs" value={formatNs(perf?.renderNs)} />
+                  <RuntimeStat label="rawGeometryNs" value={formatNs(perf?.rawGeometryNs)} />
+                  <RuntimeStat label="rawScanlineNs" value={formatNs(perf?.rawScanlineNs)} />
                   <RuntimeStat label="pngEncodeNs" value={formatNs(perf?.pngEncodeNs)} />
                   <RuntimeStat label="archiveEncodeNs" value={formatNs(perf?.archiveEncodeNs)} />
                   <RuntimeStat label="zBlendBackwardNs" value={formatNs(perf?.zBlendBackwardNs)} />

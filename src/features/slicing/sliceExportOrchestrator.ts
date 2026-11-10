@@ -204,6 +204,8 @@ export type SliceExportResult = {
             transportOverheadMs: number | null;
             renderWallMs: number | null;
             renderCpuMs: number | null;
+            rawGeometryWorkerMs: number | null;
+            rawScanlineWorkerMs: number | null;
             indexBuildMs: number | null;
             pngEncodeCpuMs: number | null;
             archiveEncodeMs: number | null;
@@ -492,6 +494,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                         : null,
                     renderWallMs: encodedArtifact.perf ? (encodedArtifact.perf.renderWallNs / 1_000_000) : null,
                     renderCpuMs: encodedArtifact.perf ? (encodedArtifact.perf.renderNs / 1_000_000) : null,
+                    rawGeometryWorkerMs: encodedArtifact.perf ? (encodedArtifact.perf.rawGeometryNs / 1_000_000) : null,
+                    rawScanlineWorkerMs: encodedArtifact.perf ? (encodedArtifact.perf.rawScanlineNs / 1_000_000) : null,
                     indexBuildMs: encodedArtifact.perf ? (encodedArtifact.perf.indexBuildNs / 1_000_000) : null,
                     pngEncodeCpuMs: encodedArtifact.perf ? (encodedArtifact.perf.pngEncodeNs / 1_000_000) : null,
                     archiveEncodeMs: encodedArtifact.perf ? (encodedArtifact.perf.archiveEncodeNs / 1_000_000) : null,
