@@ -384,11 +384,13 @@ export function PlateNameLabel({
   );
 }
 
+type TextHitTester = (xCss: number) => TextHit;
+
 /**
  * Where along `text`, drawn in `font` from `originCss`, a press at `xCss` falls: what
  * turns a press on the painted text into a place in the input.
  */
-function textHitTester(font: string, text: string, originCss: number): (xCss: number) => TextHit {
+function textHitTester(font: string, text: string, originCss: number): TextHitTester {
   if (!text || typeof document === 'undefined') return NO_TEXT_HIT;
   const measure = document.createElement('canvas').getContext('2d');
   if (!measure) return () => ({ caret: text.length, char: text.length });
