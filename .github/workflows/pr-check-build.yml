@@ -15,22 +15,22 @@ jobs:
   macos-build:
     name: macOS compile check (Universal)
     runs-on: macos-latest
-    # The check links thin unless the artifact ships (see the build step). These sit
-    # on the job rather than only on the build because `swatinem/rust-cache` keys on
-    # them through `env-vars` below: a profile change alters every crate's
-    # fingerprint, so without this the job restores a cache it cannot use and then
-    # declines to save the one it just built, which is what happened the first time
-    # this landed (399 crates recompiled on every run).
+    # The check links thin: nothing it builds ships. Previews build and sign
+    # their own bundle (build-preview.yml, #980). These sit on the job rather than
+    # only on the build because `swatinem/rust-cache` keys on them through
+    # `env-vars` below: a profile change alters every crate's fingerprint, so
+    # without this the job restores a cache it cannot use and then declines to
+    # save the one it just built, which is what happened the first time this
+    # landed (399 crates recompiled on every run).
     env:
-      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.event.pull_request.labels.*.name, 'preview-build') && 'fat' || 'thin' }}
-      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ contains(github.event.pull_request.labels.*.name, 'preview-build') && '1' || '16' }}
+      CARGO_PROFILE_RELEASE_LTO: thin
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
       # One arch is enough to check that the app compiles and bundles, and it halves
       # the two compiles and the two links, which is the bulk of this job. The
-      # shipped path stays universal: a `preview-build` run (whose DMG the preview
-      # release downloads) and the release itself both build both arches, so an
-      # x86_64-only break is still caught there.
-      DF_BUILD_TARGET_TRIPLE: ${{ contains(github.event.pull_request.labels.*.name, 'preview-build') && 'universal-apple-darwin' || 'aarch64-apple-darwin' }}
-      CMAKE_OSX_ARCHITECTURES: ${{ contains(github.event.pull_request.labels.*.name, 'preview-build') && 'arm64;x86_64' || 'arm64' }}
+      # shipped path stays universal: previews and releases both build both
+      # arches, so an x86_64-only break is still caught there.
+      DF_BUILD_TARGET_TRIPLE: aarch64-apple-darwin
+      CMAKE_OSX_ARCHITECTURES: arm64
     permissions:
       actions: write
       contents: write
@@ -47,7 +47,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
       # `rust-toolchain.toml` pins the toolchain and its Apple targets, and rustup
@@ -197,45 +197,12 @@ jobs:
             fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
           "
 
-      - name: Build Tauri universal macOS bundle
+      - name: Build Tauri macOS bundle
         uses: tauri-apps/tauri-action@v0
         # The profile and the target live in the job's `env` (above) because the
         # rust-cache step has to see them. The links are the job: thin cut them from
         # 6m06s + 5m48s to 3m18s + 3m07s, and one arch instead of two removes the
-        # second one entirely. A `preview-build` PR pays both, because
-        # `pr-build-followup.yml` hands its DMG to the preview release and that
-        # artifact ships.
+        # second one entirely.
         with:
           tauriScript: npx tauri
           args: --target ${{ env.DF_BUILD_TARGET_TRIPLE }} --bundles app,dmg
-
-      - name: Embed QuickLook extension + verify universal bundle
-        run: |
-          if [ "${{ env.DF_BUILD_TARGET_TRIPLE }}" = "universal-apple-darwin" ]; then
-            node scripts/macos-embed-appex.mjs --target universal-apple-darwin
-            node scripts/verify-universal-bundle.mjs
-          else
-            echo "arm64-only check: the QuickLook extension and the universal verification belong to the artifact that ships, and this run's does not"
-          fi
-
-      - name: Rename DMG for preview handoff
-        shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          COMMIT_HASH: ${{ steps.version.outputs.commit_hash }}
-        run: |
-          preview_tag="pr-${COMMIT_HASH}_${VERSION}_DragonFruit_preview"
-
-          for f in src-tauri/target/*/release/bundle/dmg/*.dmg; do
-            [ -e "$f" ] && mv -v "$f" "$(dirname "$f")/${preview_tag}.dmg"
-          done
-
-      - name: Upload DMG artifact
-        # Only a `preview-build` run's DMG is handed to the preview release; an
-        # arm64-only check has nothing to hand over.
-        if: contains(github.event.pull_request.labels.*.name, 'preview-build')
-        uses: actions/upload-artifact@v7
-        with:
-          name: macos-dmg
-          path: src-tauri/target/*/release/bundle/dmg/*_DragonFruit_preview.dmg
-          if-no-files-found: error

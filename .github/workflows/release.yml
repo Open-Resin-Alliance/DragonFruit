@@ -103,17 +103,19 @@ jobs:
             release_label="Dev build ${tag_name}"
           fi
 
-          echo "has_prerelease_suffix=${has_prerelease_suffix}" >> "$GITHUB_OUTPUT"
-          echo "is_prerelease=${is_prerelease}" >> "$GITHUB_OUTPUT"
-          echo "updater_json=${updater_json}" >> "$GITHUB_OUTPUT"
-          echo "publish_updater_json=${publish_updater_json}" >> "$GITHUB_OUTPUT"
+          {
+            echo "has_prerelease_suffix=${has_prerelease_suffix}"
+            echo "is_prerelease=${is_prerelease}"
+            echo "updater_json=${updater_json}"
+            echo "publish_updater_json=${publish_updater_json}"
+          } >> "$GITHUB_OUTPUT"
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-            echo "version=${current_version}" >> "$GITHUB_OUTPUT"
-            echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
-            echo "release_name=${release_label}" >> "$GITHUB_OUTPUT"
             {
+              echo "should_release=true"
+              echo "version=${current_version}"
+              echo "tag_name=${tag_name}"
+              echo "release_name=${release_label}"
               echo "release_body<<EOF"
               echo "Manually triggered release for version ${current_version} from the ${branch} branch."
               echo "EOF"
@@ -142,11 +144,11 @@ jobs:
             exit 0
           fi
 
-          echo "should_release=true" >> "$GITHUB_OUTPUT"
-          echo "version=${current_version}" >> "$GITHUB_OUTPUT"
-          echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
-          echo "release_name=${release_label}" >> "$GITHUB_OUTPUT"
           {
+            echo "should_release=true"
+            echo "version=${current_version}"
+            echo "tag_name=${tag_name}"
+            echo "release_name=${release_label}"
             echo "release_body<<EOF"
             echo "Automated release for version ${current_version} from the ${branch} branch."
             echo "EOF"
@@ -213,7 +215,7 @@ jobs:
             build_kind: tauri
             # The signing overlay is CI-only: it points `bundle.windows.signCommand`
             # at Azure Artifact Signing, which a local build has no credentials for.
-            args: --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.windows-signing.conf.json
+            args: --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.windows-signing.conf.json
             artifact_name: dragonfruit-windows-x64
           - platform: ubuntu-22.04
             build_kind: flatpak
@@ -240,7 +242,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.23.2"
+          node-version-file: .nvmrc
           cache: npm
 
       # Pinned, not `@stable`: the floating channel is what churns the Rust cache
@@ -363,12 +365,23 @@ jobs:
             Out-File -FilePath $source -Encoding ascii
           & (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe') `
             /nologo /target:exe "/out:$probe" $source | Out-Null
-          $overlay = Get-Content src-tauri/tauri.windows-signing.conf.json -Raw | ConvertFrom-Json
+          # The bundler chdirs to src-tauri before it runs this command, so the
+          # overlay's `..\scripts\sign-windows.cmd` only resolves from there. Run
+          # it the same way (as verify-windows-signing.yml does); from the
+          # repository root the probe fails on a path the real build never sees.
+          $tauriDir = Join-Path (Get-Location).Path 'src-tauri'
+          $overlay = Get-Content (Join-Path $tauriDir 'tauri.windows-signing.conf.json') -Raw | ConvertFrom-Json
           $signCommand = $overlay.bundle.windows.signCommand
           $arguments = @($signCommand.args | ForEach-Object { if ($_ -eq '%1') { $probe } else { $_ } })
-          & $signCommand.cmd @arguments
-          if ($LASTEXITCODE -ne 0) {
-            throw "The signing command exited $LASTEXITCODE."
+          Push-Location $tauriDir
+          try {
+            & $signCommand.cmd @arguments
+            $exit = $LASTEXITCODE
+          } finally {
+            Pop-Location
+          }
+          if ($exit -ne 0) {
+            throw "The signing command exited $exit."
           }
           $signature = Get-AuthenticodeSignature -LiteralPath $probe
           if (-not $signature.SignerCertificate) {
@@ -389,7 +402,6 @@ jobs:
         if: matrix.build_kind == 'tauri'
         uses: tauri-apps/tauri-action@v0
         env:
-          APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}
           CMAKE_OSX_ARCHITECTURES: ${{ matrix.cmake_archs || '' }}
           DF_BUILD_TARGET_TRIPLE: ${{ matrix.df_build_triple || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -432,7 +444,7 @@ jobs:
           # signed copy lives inside the installers. verify-windows-bundles.ps1
           # checks that one.
           $target = 'src-tauri/target/x86_64-pc-windows-msvc/release'
-          $files = @(Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe', '*.msi')
+          $files = @(Get-ChildItem "$target/bundle" -Recurse -File -Include '*-setup.exe')
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
             if (-not $signature.SignerCertificate) {
