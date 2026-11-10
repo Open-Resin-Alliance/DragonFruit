@@ -355,6 +355,9 @@ jobs:
           AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
         run: |
           # csc, not Add-Type: PowerShell 7 cannot emit an assembly ("Both the
           # assembly types 'ConsoleApplication' and 'WindowsApplication' are not
@@ -412,6 +415,10 @@ jobs:
           AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          # sign-windows.ps1 mints a fresh federated token before signing (the
+          # one azure/login exchanged expires in ~5 min) and logs in as this app.
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           DF_SIGN_LOG: ${{ runner.temp }}/dragonfruit-sign.log
         with:
           tauriScript: npx tauri
