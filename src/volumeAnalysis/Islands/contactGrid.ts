@@ -1,7 +1,19 @@
+import { CONSERVATIVE_P_SIGMA } from '@/supports/autoSupport/poseStability';
 import { annotateFilterFlags } from './filtering';
 import { SpatialHashGrid2D } from './spatialHashGrid2D';
-import { type DetectedIsland, type TipInfo } from './types';
+import { type DetectedIsland, type PoseStabilityWire, type TipInfo } from './types';
 import { footprintX, footprintY, footprintZ } from './voxelFootprint';
+
+/** Does this scan's pose need anti-topple contact? The same rule the placement
+ *  asks (`needsToppleCoverage`), reduced to the wire shape the scan returns, so
+ *  the overlay can show what will actually be covered rather than everything
+ *  that was classified. */
+export function scanNeedsCoverage(stability: PoseStabilityWire | null | undefined): boolean {
+  if (!stability) return true;
+  if (stability.bearingEdges === 0) return stability.dragMomentMm3 > 1e-9;
+  if (stability.adhesionRatio == null || Number.isNaN(stability.adhesionRatio)) return false;
+  return stability.adhesionRatio < CONSERVATIVE_P_SIGMA;
+}
 
 export interface IslandGridEntry {
   islandIndex: number;

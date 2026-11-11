@@ -5,6 +5,7 @@ import { getPresetById } from '../Settings/presets';
 import { AUTO_SUPPORT_CONSTRAINTS, MIN_CONTACT_TIP_DIAMETER_MM, SIZING_BANDS } from './settings';
 import type { AutoSupportSettings, SizingBand, SizingPreset } from './settings';
 import type { SupportSettings } from '../Settings/types';
+import { GRIDLESS_MERGE_RADIUS_MM } from './constants';
 
 // ---------------------------------------------------------------------------
 // Empirical sizing (locked: no physics pretense)
@@ -21,7 +22,7 @@ import type { SupportSettings } from '../Settings/types';
 // light end is untouched.
 //
 // Tip contact: band × underside angle (flat ceilings get the full contact,
-// steeper slopes less), floored at 30% of the shaft so a thick shaft keeps a
+// steeper slopes less), floored at 20% of the shaft so a thick shaft keeps a
 // proportional tip. Roots ride with the shaft; tip length and penetration are
 // the band, flat.
 //
@@ -184,7 +185,7 @@ export const HEIGHT_REFERENCE_MM = 20;
 export const HEIGHT_EXPONENT = 0.35;
 
 /** Contact tip never narrower than this fraction of the shaft it sits on. */
-export const TIP_CONTACT_MIN_SHAFT_RATIO = 0.3;
+export const TIP_CONTACT_MIN_SHAFT_RATIO = 0.2;
 
 // The three caps are no longer constants: they are the `autoSupport`
 // `modelSizeFactorCap` / `modelLoadFactorCap` / `heightFactorCap` settings, so a
@@ -197,6 +198,25 @@ export const RESIN_DENSITY_G_PER_MM3 = 0.0011;
 function powerFactor(ratio: number, exponent: number, maxFactor: number): number {
     if (!(ratio > 1)) return 1;
     return Math.min(maxFactor, Math.pow(ratio, exponent));
+}
+
+/**
+ * Deterministic order-invariant estimate of standalone host count from candidate XY positions.
+ * Uses active grid spacing when grid mode is enabled, or `GRIDLESS_MERGE_RADIUS_MM` otherwise.
+ */
+export function estimateHostCount(
+    candidates: readonly Pick<CandidatePoint, 'tipPos'>[],
+    grid?: { enabled?: boolean; spacingMm?: number },
+): number {
+    if (candidates.length === 0) return 0;
+    const cellMm = grid?.enabled && grid.spacingMm && grid.spacingMm > 0
+        ? grid.spacingMm
+        : GRIDLESS_MERGE_RADIUS_MM;
+    const cells = new Set<string>();
+    for (const c of candidates) {
+        cells.add(`${Math.floor(c.tipPos.x / cellMm)},${Math.floor(c.tipPos.y / cellMm)}`);
+    }
+    return clamp(cells.size, 1, candidates.length);
 }
 
 /** The run-level terms the sizing reads, and what they resolved to. */
@@ -318,7 +338,7 @@ export interface ModelSizingContext {
  * - Tip contact: band × angle factor — a flat ceiling (normal
  *   straight down, |z| ≈ 1) gets the full band contact; a steep slope is
  *   closer to self-supporting and gets a smaller one (down to 60%). Floored
- *   at 30% of the shaft — unless the candidate carries a per-point
+ *   at 20% of the shaft — unless the candidate carries a per-point
  *   tipDiameterMm (small-island shrunk tip), which bypasses band and floor.
  * - Roots: the band, scaled with the trunk. The pad keeps its ratio to the
  *   shaft it carries; a 2 mm shaft on a 2 mm pad has no flare and no grip.
@@ -370,7 +390,7 @@ export function sizeParameters(
     const nz = Math.abs(candidate.tipNormal?.z ?? -1);
     const angleFactor = clamp(0.6 + 0.4 * nz, 0.6, 1.0);
     // Per-point override (small-island shrunk tip) bypasses the band and
-    // its 30%-of-shaft floor — explicit means explicit.
+    // its 20%-of-shaft floor — explicit means explicit.
     const tipContactDiameterMm = round(
         Math.max(
             MIN_CONTACT_TIP_DIAMETER_MM,
@@ -389,4 +409,5 @@ export function sizeParameters(
         rootsConeHeightMm: band.rootConeHeightMm,
     };
 }
+
 

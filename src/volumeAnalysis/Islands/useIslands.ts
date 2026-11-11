@@ -1,7 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
-import { CONSERVATIVE_P_SIGMA } from '@/supports/autoSupport/poseStability';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { detectVoxelIslands, type VoxelDetectParams } from './detect';
 import { contactEndpointsFor, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
@@ -10,7 +9,7 @@ import {
   DEFAULT_FILTER_TOGGLES,
   type IslandFilterToggles,
 } from './filtering';
-import { annotateAndCountSupports, buildIslandContactGrid } from './contactGrid';
+import { annotateAndCountSupports, buildIslandContactGrid, scanNeedsCoverage } from './contactGrid';
 import { clusterWalkOrder } from './ordering';
 import { buildIslandPucks, markerIdFor } from './islandPuckMarkers';
 import { buildIslandInstances, VOXEL_DISC_RADIUS_FACTOR, type IslandVisual } from './islandInstances';
@@ -30,6 +29,8 @@ import {
   isEmptyFootprint,
 } from './voxelFootprint';
 
+export { scanNeedsCoverage };
+
 /** Self-support angle for mesh-normal overhang detection (surfaces flatter
  *  than this from horizontal get supports). Tunable per resin later. */
 const OVERHANG_SELF_SUPPORT_ANGLE_DEG = 45;
@@ -44,15 +45,6 @@ const OVERHANG_FOOTPRINT_PX_MM = 0.25;
  * favor of the surface-accurate region. Overhang regions without a voxel
  * counterpart (e.g. lettering ledges below the growth buffer) are appended.
  */
-/** Does this scan's pose need anti-topple contact? The same rule the placement
- *  asks (`needsToppleCoverage`), reduced to the wire shape the scan returns, so
- *  the overlay can show what will actually be covered rather than everything
- *  that was classified. */
-export function scanNeedsCoverage(stability: PoseStabilityWire | null | undefined): boolean {
-  if (!stability) return true;
-  return stability.adhesionRatio < CONSERVATIVE_P_SIGMA;
-}
-
 export function mergeOverhangRegions(
   classified: DetectedIsland[],
   overhang: DetectedIsland[],

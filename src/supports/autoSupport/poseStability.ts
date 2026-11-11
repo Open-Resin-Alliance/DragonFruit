@@ -59,6 +59,8 @@ export interface PoseStability {
     contactDepthMm: number;
     /** Driving moment about the worst edge (mm³); 0 when nothing leans. */
     dragMomentMm3: number;
+    /** Unprojected scalar peel-drag moment `Σ A·|n_xy|·z` across all down-facing faces (mm³); matches Rust `StabilityReport.drag_moment_mm3`. */
+    totalDragMomentMm3: number;
     /** `V·d_e/M_e` (mm) — the gravity verdict's geometry. `Infinity` when the
      *  pose carries no lateral drag. */
     marginMm: number;
@@ -157,14 +159,13 @@ export function isSlenderPart(s: {
  * not the pose needs rescuing today.
  *
  * A SIZE and not a share of the drag, because anchoring value is about room.
- * The floor is where a flat stops having room for contacts at all: a tip covers
- * about 3mm of surface, so a handful of them want on the order of a hundred mm²
- * before spreading anything across it means anything. Above that it is a
- * judgement about the part, which the band and the spacing already make: a
- * 465mm² face on a 42mm figurine gets a low band, and so does a 400mm² face on
- * a 22mm cube, which is the pair that killed an earlier 1000mm² floor.
+ * Rust classifies steep flats starting at 150mm² so moderate `[150, 400)` mm²
+ * faces are available when `verdictNeedsCoverage` fires, while unconditional
+ * anchoring starts at 400mm²: a 465mm² face on a 42mm figurine gets a low band,
+ * and so does a 400mm² face on a 20mm cube, which is the pair that killed an
+ * earlier 1000mm² floor.
  */
-export const STEEP_FLAT_ANCHOR_MIN_AREA_MM2 = 150;
+export const STEEP_FLAT_ANCHOR_MIN_AREA_MM2 = 400;
 
 /**
  * Should this steep flat be covered, given the pose's verdict?
@@ -323,6 +324,7 @@ export function measurePoseStability(
             centroidDepthMm: 0,
             contactDepthMm: 0,
             dragMomentMm3: 0,
+            totalDragMomentMm3: 0,
             marginMm: 0,
             adhesionRatio: 0,
             pushDirDeg: 0,
@@ -414,6 +416,11 @@ export function measurePoseStability(
     let worstDirDeg = 0;
     let haveWorst = false;
     let dragTopMm = 0;
+    let totalDragMomentMm3 = 0;
+    let dragVecX = 0;
+    let dragVecY = 0;
+    let dragQuadX = 0;
+    let dragQuadY = 0;
     const resting: RestingContact = { ...EMPTY_RESTING };
     for (let t = 0; t < triCount; t++) {
         if (load(t)) continue;
@@ -455,6 +462,11 @@ export function measurePoseStability(
         if (faceTop > dragTopMm) dragTopMm = faceTop;
         const nhx = nx / twiceArea;
         const nhy = ny / twiceArea;
+        totalDragMomentMm3 += area * sinTheta * height;
+        dragVecX += area * nhx * height;
+        dragVecY += area * nhy * height;
+        dragQuadX += area * height * (nhx * nhx - nhy * nhy);
+        dragQuadY += area * height * (2 * nhx * nhy);
         for (let e = 0; e < edgeSum.length; e++) {
             const proj = nhx * edgeNx[e] + nhy * edgeNy[e];
             if (proj > 0) edgeSum[e] += area * proj * height;
@@ -483,6 +495,13 @@ export function measurePoseStability(
         worstDepth = 0;
         worstContactDepth = 0;
         worstSum = 0;
+        if (totalDragMomentMm3 > 1e-9) {
+            if (Math.hypot(dragVecX, dragVecY) > 1e-6 * totalDragMomentMm3) {
+                worstDirDeg = (Math.atan2(dragVecY, dragVecX) * 180) / Math.PI;
+            } else if (Math.hypot(dragQuadX, dragQuadY) > 1e-9) {
+                worstDirDeg = (0.5 * Math.atan2(dragQuadY, dragQuadX) * 180) / Math.PI;
+            }
+        }
     }
     return {
         plateZMm: zMin,
@@ -492,10 +511,15 @@ export function measurePoseStability(
         centroidDepthMm: worstDepth,
         contactDepthMm: worstContactDepth,
         dragMomentMm3: worstSum,
+        totalDragMomentMm3,
         marginMm: worstMargin,
         adhesionRatio:
-            worstSum > 1e-9 ? (bearingAreaMm2 * worstContactDepth) / worstSum : Infinity,
-        pushDirDeg: (worstDirDeg + 360) % 360,
+            worstSum > 1e-9
+                ? (bearingAreaMm2 * worstContactDepth) / worstSum
+                : edgeSum.length === 0 && totalDragMomentMm3 > 1e-9
+                  ? 0
+                  : Infinity,
+        pushDirDeg: (((worstDirDeg % 360) + 360) % 360) || 0,
         heightMm: Number.isFinite(zMax) ? zMax - zMin : 0,
         thicknessMm: bearingAreaMm2 > 0 ? volumeMm3 / bearingAreaMm2 : 0,
         slenderness:

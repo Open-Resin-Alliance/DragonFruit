@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 
-import { annotateAndCountSupports, buildIslandContactGrid } from '../contactGrid';
-import type { DetectedIsland, TipInfo } from '../types';
+import { annotateAndCountSupports, buildIslandContactGrid, scanNeedsCoverage } from '../contactGrid';
+import type { DetectedIsland, PoseStabilityWire, TipInfo } from '../types';
 import { footprintFromPoints } from '../voxelFootprint';
 import { dispatchScanlineWorkerMessage } from '@/volumeAnalysis/IslandScan/scanlineScan.worker';
 
@@ -159,4 +159,62 @@ test('MED-07b: scanlineScan.worker honours candidatesOnly for detect.ts and full
   assert.ok(fullResult.islandLabelsRle, 'islandLabelsRle is populated for ScanOrchestrator');
   assert.equal(fullResult.islandCount, 1, 'bottom box layer forms 1 unsupported component');
   assert.ok(Array.isArray(fullResult.components) && fullResult.components.length === 1, 'components array matches islandCount');
+});
+
+test('HIGH-06: scanNeedsCoverage handles point/edge drag and serde_json null adhesionRatio on flat-base poses', () => {
+  const baseWire: PoseStabilityWire = {
+    bearingAreaMm2: 100,
+    bearingEdges: 4,
+    centroidDepthMm: 5,
+    contactDepthMm: 5,
+    dragMomentMm3: 0,
+    marginMm: 0,
+    adhesionRatio: 1.0,
+    pushDirDeg: 0,
+    dragTopMm: 0,
+    bearingIsRaft: false,
+  };
+
+  assert.equal(scanNeedsCoverage(null), true);
+  assert.equal(scanNeedsCoverage(undefined), true);
+
+  // Point / 1D knife-edge with positive peel drag (even if wire adhesionRatio serialized as null): needs coverage!
+  assert.equal(
+    scanNeedsCoverage({
+      ...baseWire,
+      bearingAreaMm2: 0,
+      bearingEdges: 0,
+      dragMomentMm3: 500,
+      adhesionRatio: null as unknown as number,
+    }),
+    true,
+  );
+
+  // Zero-drag degenerate point/edge: no drag to topple it.
+  assert.equal(
+    scanNeedsCoverage({
+      ...baseWire,
+      bearingAreaMm2: 0,
+      bearingEdges: 0,
+      dragMomentMm3: 0,
+      adhesionRatio: null as unknown as number,
+    }),
+    false,
+  );
+
+  // Stable flat-base part where Rust f64::INFINITY serialized across Tauri JSON as `null`:
+  // previously `null < 0.05` evaluated to `true` in JS! Must return `false`.
+  assert.equal(
+    scanNeedsCoverage({
+      ...baseWire,
+      bearingEdges: 4,
+      dragMomentMm3: 0,
+      adhesionRatio: null as unknown as number,
+    }),
+    false,
+  );
+
+  // Polygon stance with marginal adhesion ratio (< 0.05) -> true; comfortable (>= 0.05) -> false.
+  assert.equal(scanNeedsCoverage({ ...baseWire, bearingEdges: 4, dragMomentMm3: 500, adhesionRatio: 0.02 }), true);
+  assert.equal(scanNeedsCoverage({ ...baseWire, bearingEdges: 4, dragMomentMm3: 500, adhesionRatio: 0.2 }), false);
 });

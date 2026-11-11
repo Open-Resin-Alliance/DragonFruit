@@ -34,6 +34,12 @@ export interface ContactSphereProfile {
  */
 export type SupportTipProfile = {
     contactDiameterMm: number;  // The actual contact footprint size
+    /**
+     * Explicit per-point contact ceiling (mm), populated strictly when a
+     * small-island or SDF `localFreeWidthMm` cap applies so post-placement
+     * shaft thickening (`syncContactConeDiameters`) never blows out narrow features.
+     */
+    maxContactDiameterMm?: number;
     bodyDiameterMm: number;     // Larger end (socket side)
     lengthMm: number;           // Total head length (excluding primitive offset)
     penetrationMm: number;      // Embed depth (legacy use, mostly for sphere now)

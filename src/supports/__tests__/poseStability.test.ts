@@ -97,6 +97,7 @@ test('a part standing comfortably needs no anti-topple coverage', () => {
         centroidDepthMm: 23.63,
         contactDepthMm: 23.63,
         dragMomentMm3: 52524,
+        totalDragMomentMm3: 52524,
         marginMm: 43.72,
         adhesionRatio: 0.79,
         pushDirDeg: 211,
@@ -149,6 +150,7 @@ test('a flat anchors if it has room for contacts, and the band keeps it low', ()
     // The cam seal tool's 2752mm² face is worth anchoring: planar, room to
     // spread, facing the way the part would move.
     assert.equal(steepFlatNeedsCoverage(2752, false), true, 'the tool anchors on its big face');
+    assert.equal(STEEP_FLAT_ANCHOR_MIN_AREA_MM2, 400, 'unconditional anchor floor sits above Rust 150mm² classifier floor');
     assert.equal(
         steepFlatNeedsCoverage(STEEP_FLAT_ANCHOR_MIN_AREA_MM2, false),
         true,
@@ -160,11 +162,75 @@ test('a flat anchors if it has room for contacts, and the band keeps it low', ()
     // A 20mm cube's 400mm² face likewise: covering it low is fine, and the
     // complaint about it was the height, not the contact.
     assert.equal(steepFlatNeedsCoverage(400, false), true, 'and so does a small cube face');
+    // Moderate [150, 400) mm² steep flats classified by Rust are gated by the pose verdict.
+    assert.equal(steepFlatNeedsCoverage(250, false), false, 'moderate steep flat stays uncovered on stable pose');
+    assert.equal(steepFlatNeedsCoverage(250, true), true, 'moderate steep flat is covered when pose needs rescue');
     // Below the floor there is no room to spread anything across.
     assert.equal(steepFlatNeedsCoverage(120, false), false, 'a speck gets nothing');
     assert.equal(steepFlatNeedsCoverage(undefined, false), false, 'no area, no claim');
     // A pose that needs rescuing covers every steep flat, big or small.
     assert.equal(steepFlatNeedsCoverage(400, true), true, 'a rescue covers everything');
+});
+
+test('HIGH-06: point and 1D knife-edge contacts with drag report adhesionRatio 0, needsToppleCoverage true, and true pushDirDeg', () => {
+    // 1. Inverted pyramid balanced on single apex (0, 0, 0) leaning toward +Y:
+    //    top rectangle [-5, 5] × [0, 20] at z = 20.
+    const pyramidPositions = [
+        0, 0, 0,
+        -5, 0, 20,
+        5, 0, 20,
+        5, 20, 20,
+        -5, 20, 20,
+    ];
+    const pyramidIndex = [
+        0, 2, 1, // -Y vertical wall (ny = -200, nz = 0)
+        0, 4, 3, // +Y 45° overhang face (ny = +200, nz = -200)
+        0, 1, 4, // -X overhang face (nx = -400, nz = -100)
+        0, 3, 2, // +X overhang face (nx = +400, nz = -100)
+        1, 2, 3, // +Z top cap
+        1, 3, 4,
+    ];
+    const p = measurePoseStability(pyramidPositions, pyramidIndex, 0, 0);
+    assert.equal(p.bearingEdges, 0);
+    assert.ok(p.totalDragMomentMm3 > 0, `expected positive totalDragMomentMm3, got ${p.totalDragMomentMm3}`);
+    assert.equal(p.adhesionRatio, 0, 'point stance with peel drag has zero adhesion ratio');
+    assert.equal(needsToppleCoverage(p), true, 'point stance with peel drag requires topple coverage');
+    assert.ok(Math.abs(p.pushDirDeg - 90) < 5, `point stance pushDirDeg should point +Y (~90°), got ${p.pushDirDeg}`);
+
+    // 2. 10mm cube tilted ±30° about X onto an X-aligned 1D knife-edge:
+    //    matches Rust `edge_down_pose_has_no_bearing_polygon` (~500 mm³ unprojected drag).
+    const m = cube();
+    const edgePos30 = measurePoseStability(m.positions, m.index, 30 * DEG, 0);
+    assert.equal(edgePos30.bearingEdges, 0);
+    assert.ok(Math.abs(edgePos30.totalDragMomentMm3 - 500) < 2, `total drag ${edgePos30.totalDragMomentMm3}`);
+    assert.equal(edgePos30.adhesionRatio, 0);
+    assert.equal(needsToppleCoverage(edgePos30), true);
+    assert.ok(Math.abs(edgePos30.pushDirDeg - 270) < 5, `+30° Rx tilt pulls toward -Y (270°), got ${edgePos30.pushDirDeg}`);
+
+    const edgeNeg30 = measurePoseStability(m.positions, m.index, -30 * DEG, 0);
+    assert.equal(edgeNeg30.bearingEdges, 0);
+    assert.equal(edgeNeg30.adhesionRatio, 0);
+    assert.equal(needsToppleCoverage(edgeNeg30), true);
+    assert.ok(Math.abs(edgeNeg30.pushDirDeg - 90) < 5, `-30° Rx tilt pulls toward +Y (90°), got ${edgeNeg30.pushDirDeg}`);
+
+    // 3. Mirror-symmetric 45° X-edge stance: opposing ±Y flanks cancel first-moment vector,
+    //    structure tensor resolves normal to the X-blade (90° or 270°), never along +X (0°).
+    const edgeSym45 = measurePoseStability(m.positions, m.index, 45 * DEG, 0);
+    assert.equal(edgeSym45.bearingEdges, 0);
+    assert.equal(edgeSym45.adhesionRatio, 0);
+    assert.equal(needsToppleCoverage(edgeSym45), true);
+    assert.ok(
+        Math.abs(edgeSym45.pushDirDeg - 90) < 5 || Math.abs(edgeSym45.pushDirDeg - 270) < 5,
+        `symmetric X-blade pushDirDeg must be perpendicular to X-edge (90°/270°), got ${edgeSym45.pushDirDeg}`,
+    );
+
+    // 4. Zero-drag degenerate upward-facing triangle (bearingEdges === 0, totalDragMomentMm3 === 0)
+    //    keeps adhesionRatio === Infinity and needsToppleCoverage === false.
+    const upSheet = measurePoseStability([0, 0, 0, 4, 0, 0, 2, 2, 5], [0, 1, 2], 0, 0);
+    assert.equal(upSheet.bearingEdges, 0);
+    assert.equal(upSheet.totalDragMomentMm3, 0);
+    assert.equal(upSheet.adhesionRatio, Infinity);
+    assert.equal(needsToppleCoverage(upSheet), false);
 });
 
 test('a wall counts as slender, a cube does not', () => {

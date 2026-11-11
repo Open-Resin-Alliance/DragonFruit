@@ -3,6 +3,8 @@ import { getJointDiameter } from '../../../constants';
 import { splitSupportShaft } from '../../../SupportPrimitives/Joint/jointUtils';
 import { resolveSegmentEndpoints } from '../../../SupportPrimitives/Knot/segmentEndpoints';
 import { getSettings } from '../../../Settings/state';
+import { decodeSupportSettingsHex, encodeSupportSettingsHex } from '../../../Settings/supportSettingsCodec';
+import { applySizingOverridesToSettings } from '../../../autoSupport/parameterSizing';
 import { coneKnotHostType, getSupportTypeDescriptor, knotHostId, SUPPORT_TYPES, type SupportTypeDescriptor, type SupportTypeId } from '../../../supportTypeRegistry';
 
 function maxNum(a: number, b: number) {
@@ -548,9 +550,22 @@ export function computeAndApplySupportDiameterProfile(
         if (after) knotUpdates.push({ before, after });
     }
 
+    const segmentsChanged = nextSegments.length !== trunk.segments.length
+        || nextSegments.some((seg, idx) => Math.abs(seg.diameter - (trunk.segments[idx]?.diameter ?? 0)) > 1e-6);
+    let nextSettingsCodeHex = nextTrunk.settingsCodeHex;
+    if (segmentsChanged && typeof nextSettingsCodeHex === 'string' && nextSettingsCodeHex.length > 0) {
+        const baseSettings = getSettings();
+        const decoded = decodeSupportSettingsHex(nextSettingsCodeHex, baseSettings) ?? baseSettings;
+        nextSettingsCodeHex = encodeSupportSettingsHex(applySizingOverridesToSettings(decoded, {
+            shaftDiameterMm: nextSegments[0]?.diameter,
+            tipBodyDiameterMm: nextSegments[nextSegments.length - 1]?.diameter,
+        }));
+    }
+
     return {
         trunk: {
             ...nextTrunk,
+            ...(nextSettingsCodeHex !== nextTrunk.settingsCodeHex ? { settingsCodeHex: nextSettingsCodeHex } : {}),
             segments: nextSegments,
         },
         knotUpdates,

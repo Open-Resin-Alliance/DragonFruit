@@ -54,6 +54,8 @@ export interface PlacedContact {
     tip: Vec3;
     /** The tier the support's island falls in, for capacity. */
     preset: SizingPreset;
+    /** Actual placed shaft diameter (mm), when known; overrides tier-preset diameter for capacity scaling. */
+    shaftDiameterMm?: number;
 }
 
 export interface LoadBudgetInput {
@@ -63,6 +65,8 @@ export interface LoadBudgetInput {
     areaPerSupportMm2: number;
     /** The pose's total drag moment (mm³), when the scan reported one. */
     poseDragMomentMm3?: number;
+    /** The pose's unprojected total drag moment (mm³), matching island.dragMomentMm3's unprojected sum. */
+    poseTotalDragMomentMm3?: number;
     /** Whether the pose's verdict asked for anti-topple coverage at all. */
     toppleCoverageNeeded: boolean;
 }
@@ -84,23 +88,15 @@ function cellOf(x: number, y: number): number {
     return (Math.round(x / FOOTPRINT_CELL_MM) + 32768) * 65536 + (Math.round(y / FOOTPRINT_CELL_MM) + 32768);
 }
 
-/** How many of `cells` fall inside `other`, as a fraction of `cells`. */
-function overlapFraction(cells: Set<number>, other: Set<number>): number {
-    if (cells.size === 0) return 0;
-    let shared = 0;
-    for (const cell of cells) if (other.has(cell)) shared++;
-    return shared / cells.size;
-}
-
 /** A support's capacity: the area one support is expected to cover, credited by
- *  the cross-section of the tier its island falls in. This is a RELATIVE weight
- *  for the report, not the band the run sized with — that one is resolved from
- *  the Support Studio preset the settings name, the same for every support of a
- *  run. Both bands resolve through the same path, so an edited manual preset
- *  moves the weighting with the sizing. */
-function capacityFor(tier: SizingPreset, areaPerSupportMm2: number): number {
+ *  the cross-section of its actual placed shaft (when known) or the tier its
+ *  island falls in relative to the structure band. */
+function capacityFor(tier: SizingPreset, areaPerSupportMm2: number, shaftDiameterMm?: number): number {
     const baseline = resolveSizingBand('structure').shaftDiameterMm;
-    const band = resolveSizingBand(tier).shaftDiameterMm;
+    const band =
+        shaftDiameterMm !== undefined && shaftDiameterMm > 0
+            ? shaftDiameterMm
+            : resolveSizingBand(tier).shaftDiameterMm;
     return areaPerSupportMm2 * (band / baseline) ** 2;
 }
 
@@ -117,8 +113,9 @@ export function computeLoadBudget(input: LoadBudgetInput): LoadBudgetReport {
     const forestDemandMm2 = withArea.reduce((sum, island) => sum + (island.areaMm2 ?? 0), 0);
 
     // Demand, top down: an island's own area plus the share of what sits above it
-    // that lands on its footprint. Height-descending order makes this one pass,
-    // since nothing can be charged by something lower than itself.
+    // that lands directly on its footprint without an intermediate shelf occluding
+    // the load path. Iterating lower shelves in descending baseZ order ensures the
+    // highest shelf below intercepts first and carries the accumulated load down.
     const demandById = new Map<string, number>();
     for (const island of withArea) demandById.set(island.id, island.areaMm2 ?? 0);
 
@@ -129,23 +126,36 @@ export function computeLoadBudget(input: LoadBudgetInput): LoadBudgetReport {
     for (const upper of descending) {
         if (upper.baseZ <= LEVEL_EPSILON_MM) continue;
         const upperCells = cellsById.get(upper.id)!;
+        if (upperCells.size === 0) continue;
         const carried = demandById.get(upper.id) ?? 0;
-        for (const lower of withCells) {
+        const unoccluded = new Set(upperCells);
+        for (const lower of descending) {
             if (lower.id === upper.id) continue;
             if (lower.baseZ >= upper.baseZ - LEVEL_EPSILON_MM) continue;
-            const fraction = overlapFraction(upperCells, cellsById.get(lower.id)!);
-            if (fraction <= 0) continue;
-            demandById.set(lower.id, (demandById.get(lower.id) ?? 0) + carried * fraction);
+            const lowerCells = cellsById.get(lower.id)!;
+            let intercepted = 0;
+            for (const cell of unoccluded) {
+                if (lowerCells.has(cell)) {
+                    intercepted++;
+                    unoccluded.delete(cell);
+                }
+            }
+            const fraction = intercepted / upperCells.size;
+            if (fraction > 0) {
+                demandById.set(lower.id, (demandById.get(lower.id) ?? 0) + carried * fraction);
+            }
+            if (unoccluded.size === 0) break;
         }
     }
 
     // Topple channel: a patch that carries drag is charged a share of the forest's
     // demand, and only when the pose's verdict asked for coverage at all.
-    if (toppleCoverageNeeded && poseDragMomentMm3 && poseDragMomentMm3 > 0) {
+    const totalPoseDrag = input.poseTotalDragMomentMm3 ?? poseDragMomentMm3;
+    if (toppleCoverageNeeded && totalPoseDrag && totalPoseDrag > 0) {
         for (const island of withArea) {
             const drag = island.dragMomentMm3 ?? 0;
             if (drag <= 0) continue;
-            const share = Math.min(1, drag / poseDragMomentMm3);
+            const share = Math.min(1, drag / totalPoseDrag);
             demandById.set(island.id, (demandById.get(island.id) ?? 0) + forestDemandMm2 * share);
         }
     }
@@ -173,7 +183,10 @@ export function computeLoadBudget(input: LoadBudgetInput): LoadBudgetReport {
             }
         }
         if (!owner) continue;
-        capacityById.set(owner.id, (capacityById.get(owner.id) ?? 0) + capacityFor(contact.preset, areaPerSupportMm2));
+        capacityById.set(
+            owner.id,
+            (capacityById.get(owner.id) ?? 0) + capacityFor(contact.preset, areaPerSupportMm2, contact.shaftDiameterMm),
+        );
     }
 
     const structureCapacity = capacityFor('structure', areaPerSupportMm2);
@@ -203,17 +216,29 @@ export function computeLoadBudget(input: LoadBudgetInput): LoadBudgetReport {
     };
 }
 
-/** Chebyshev distance in mm from a cell to the nearest cell of a set, capped early. */
+/** O(1) outward-expanding Chebyshev ring probe up to `CONTACT_ASSIGNMENT_MM`. */
 function nearestCellDistanceMm(cells: Set<number>, cell: number): number {
+    if (cells.has(cell)) return 0;
     const x = Math.floor(cell / 65536) - 32768;
     const y = (cell % 65536) - 32768;
-    let best = Infinity;
-    for (const other of cells) {
-        const ox = Math.floor(other / 65536) - 32768;
-        const oy = (other % 65536) - 32768;
-        const distance = Math.max(Math.abs(ox - x), Math.abs(oy - y)) * FOOTPRINT_CELL_MM;
-        if (distance < best) best = distance;
-        if (best === 0) break;
+    const maxRadius = Math.ceil(CONTACT_ASSIGNMENT_MM / FOOTPRINT_CELL_MM);
+    for (let r = 1; r <= maxRadius; r++) {
+        const yLo = y - r + 32768;
+        const yHi = y + r + 32768;
+        for (let dx = -r; dx <= r; dx++) {
+            const shiftedX = (x + dx + 32768) * 65536;
+            if (cells.has(shiftedX + yLo) || cells.has(shiftedX + yHi)) {
+                return r * FOOTPRINT_CELL_MM;
+            }
+        }
+        const xLo = (x - r + 32768) * 65536;
+        const xHi = (x + r + 32768) * 65536;
+        for (let dy = -r + 1; dy <= r - 1; dy++) {
+            const shiftedY = y + dy + 32768;
+            if (cells.has(xLo + shiftedY) || cells.has(xHi + shiftedY)) {
+                return r * FOOTPRINT_CELL_MM;
+            }
+        }
     }
-    return best;
+    return Infinity;
 }

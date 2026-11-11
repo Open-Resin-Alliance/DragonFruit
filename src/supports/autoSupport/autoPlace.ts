@@ -27,11 +27,12 @@ import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
 import type { AttachmentKind, CandidatePoint, AutoPlaceResult, AutoPlaceStatus, AutoPlaceAnalytics, RejectReason, AutoSupportPlan, PlacementDiagnostics, FanLeafRefusal, ForestLedgerEntry, ForestReport, ForestTree, OrphanInfo, PlacementOutcomeKind } from './types';
 import { isLedgerKind } from './types';
 import type { Branch, Segment, SupportState, SupportOrigin, Vec3 } from '../types';
-import type { AutoSupportSettings } from './settings';
+import type { AutoSupportSettings, SizingPreset } from './settings';
 import type { AutoPlaceTimings } from './types';
 import { normalizeAutoSupportSettings, AUTO_SUPPORT_CONSTRAINTS, MIN_CONTACT_TIP_DIAMETER_MM } from './settings';
-import { activeSizingBand, TIP_CONTACT_MIN_SHAFT_RATIO } from './parameterSizing';
-import { generateCandidates, deduplicateCandidates } from './candidateGeneration';
+import { activeSizingBand, applySizingOverridesToSettings, estimateHostCount, TIP_CONTACT_MIN_SHAFT_RATIO } from './parameterSizing';
+import { candidateFromIsland, generateCandidates, deduplicateCandidates } from './candidateGeneration';
+import { applyContactTipCap, applyContactTipCaps } from './contactTipCap';
 import { generateGridCandidates, shouldUseDensityGrid } from './gridPlacement';
 import { computeStabilizationAnchors } from './stabilization';
 import { computeMinimaReinforcementPoints } from './minimaReinforcement';
@@ -58,6 +59,7 @@ import { sizeParameters, presetForArea, modelSizingFactors, RESIN_DENSITY_G_PER_
 import { computeLoadBudget, type PlacedContact } from './loadBudget';
 import type { ModelSizingContext } from './parameterSizing';
 import { getSettings } from '../Settings/state';
+import { decodeSupportSettingsHex, encodeSupportSettingsHex } from '../Settings/supportSettingsCodec';
 import { memberDepartureAngleFromVerticalDeg } from '../PlacementLogic/smartPlacementSearchUtils';
 
 /**
@@ -183,6 +185,7 @@ function computeMeshVolumeMm3(mesh: THREE.Mesh): number {
     const geo = mesh.geometry;
     const pos = geo.getAttribute('position') as THREE.BufferAttribute | undefined;
     if (!pos) return 0;
+    mesh.updateMatrixWorld();
     const index = geo.index;
     let vol = 0;
     const addTri = (i0: number, i1: number, i2: number) => {
@@ -196,12 +199,34 @@ function computeMeshVolumeMm3(mesh: THREE.Mesh): number {
     } else {
         for (let i = 0; i < pos.count; i += 3) addTri(i, i + 1, i + 2);
     }
-    return Math.abs(vol);
+    return Math.abs(vol) * Math.abs(mesh.matrixWorld.determinant());
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Stamp an explicit per-point tip diameter ceiling (`maxContactDiameterMm`) onto a
+ * contact cone ONLY when `tipDiameterMm !== undefined`. Uncapped cones leave
+ * `maxContactDiameterMm` undefined so `syncContactConeDiameters` may raise them
+ * to the 20%-of-shaft floor.
+ */
+function applyExplicitTipCapToCone(
+    cone: ContactCone | undefined,
+    tipDiameterMm: number | undefined,
+): ContactCone | undefined {
+    if (!cone || tipDiameterMm === undefined) return cone;
+    const capped = Math.max(MIN_CONTACT_TIP_DIAMETER_MM, tipDiameterMm);
+    return {
+        ...cone,
+        profile: {
+            ...cone.profile,
+            contactDiameterMm: Math.min(cone.profile.contactDiameterMm ?? capped, capped),
+            maxContactDiameterMm: capped,
+        },
+    };
+}
 
 /** The registry's walk entry per shaft-hosted member type. */
 const SHAFT_HOSTED_MEMBER_TYPE_BY_ID: ReadonlyMap<SupportTypeId, ShaftHostedMemberType> = new Map(
@@ -236,7 +261,7 @@ interface HostEntity {
     /** Set for a type that owns a plate root; hostSegmentSpan reads it. */
     rootId?: string;
     segments: Segment[];
-    contactCone?: { pos: Vec3; normal?: Vec3 };
+    contactCone?: { pos: Vec3; normal?: Vec3; profile?: { maxContactDiameterMm?: number } };
 }
 
 /** One host entity in the draft, with the type that owns it. */
@@ -755,8 +780,9 @@ export function buildConsolidationBranch(args: {
      *  `leafPathCrossesSupports`. */
     excludeHostIds?: ReadonlySet<string>;
     autoSettings?: Partial<AutoSupportSettings>;
+    tipDiameterMm?: number;
 }): { draft: SupportState; branchId: string; kind: AttachmentKind } | null {
-    const { tip, tipNormal, modelId, pool, pruned, mesh, radiusMm, maxAttachments, knotId, excludeHostIds, autoSettings } = args;
+    const { tip, tipNormal, modelId, pool, pruned, mesh, radiusMm, maxAttachments, knotId, excludeHostIds, autoSettings, tipDiameterMm } = args;
 
     // Steepest eligible host sample (≤ the branch-angle rule from vertical —
     // the leaf fan's cap is looser). Steepest, not nearest: the contact cone
@@ -804,6 +830,9 @@ export function buildConsolidationBranch(args: {
 
     try {
         const band = activeSizingBand(autoSettings);
+        const cappedTip = tipDiameterMm !== undefined
+            ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, tipDiameterMm)
+            : undefined;
         const built = buildHostedBranch(
             {
                 tipPos: tip,
@@ -811,7 +840,7 @@ export function buildConsolidationBranch(args: {
                 modelId,
                 parentKnot,
                 mesh,
-                tipContactDiameterMm: band.tipContactDiameterMm,
+                tipContactDiameterMm: cappedTip ?? band.tipContactDiameterMm,
                 rootsDiameterMm: band.rootDiameterMm,
             },
             band.shaftDiameterMm,
@@ -824,6 +853,9 @@ export function buildConsolidationBranch(args: {
         if (branchDepartureAngleDeg(built.branch, parentKnot.pos) > memberMaxAngleFromVerticalDeg()) return null;
         if (leafPathCrossesSupports(parentKnot.pos, built.branch.contactCone?.pos ?? tip, 0.25, pruned, best.hostId, excludeHostIds)) return null;
 
+        if (cappedTip !== undefined && built.branch.contactCone) {
+            built.branch.contactCone = applyExplicitTipCapToCone(built.branch.contactCone, cappedTip);
+        }
         let d = draftAddPrimitive(pruned, 'knots', parentKnot);
         built.branch.origin = 'overhang';
         const memberTypeId = builtMemberTypeId(built.branch);
@@ -997,6 +1029,7 @@ function placeOneCandidate(
      * whether other candidates are node placements.
      */
     ignoreGrid = false,
+    preResolvedCandidates?: WeakSet<CandidatePoint>,
 ): { kind: PlacementOutcomeKind; draft: SupportState; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number; fanRefusal?: FanLeafRefusal; mergeRefusal?: 'noHost' | 'rejected'; cavityFanRefusal?: string; gridFallback?: boolean } {
     const supportSettings = getSettings();
     const auto: Partial<AutoSupportSettings> = autoSettings ?? supportSettings.autoSupport ?? {};
@@ -1008,7 +1041,8 @@ function placeOneCandidate(
     // the classifier's own triangles, world space). Re-resolving via a
     // whole-mesh raycast hits the wrong face on sloped geometry (side walls
     // below the region face at the same XY), so trust the region data.
-    const resolved = candidate.gridPoint && candidate.tipNormal && candidate.tipNormal.z < 0
+    const resolved = (preResolvedCandidates?.has(candidate)
+        || (candidate.gridPoint && candidate.tipNormal && candidate.tipNormal.z < 0))
         ? { point: candidate.tipPos, normal: candidate.tipNormal }
         : resolveSurfaceNormal(candidate.tipPos, mesh);
     const tipPos = resolved.point;
@@ -1074,6 +1108,7 @@ function placeOneCandidate(
                     undefined,
                     undefined,
                     auto,
+                    candidate.tipDiameterMm,
                 );
                 if (fan.ok) {
                     logPlacement(
@@ -1121,6 +1156,7 @@ function placeOneCandidate(
                 undefined,
                 undefined,
                 auto,
+                candidate.tipDiameterMm,
             );
             if (fan.ok) {
                 logPlacement(
@@ -1258,6 +1294,9 @@ function placeOneCandidate(
                             `Leaf (merge) ${candidate.id}: too shallow (vDist=${vDist.toFixed(1)}mm), trying branch...`);
                     } else {
                         try {
+                            const cappedTip = candidate.tipDiameterMm !== undefined
+                                ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, candidate.tipDiameterMm)
+                                : undefined;
                             const { leaf, supportData: sd } = buildLeafData({
                                 tipPos,
                                 surfaceNormal: tipNormal,
@@ -1267,9 +1306,12 @@ function placeOneCandidate(
                                 // otherwise the cone's wide base swallows the
                                 // junction ball and the knot stays invisible.
                                 hostDiameterMm: knotDiameter,
-                                tipContactDiameterMm: activeSizingBand(auto).tipContactDiameterMm,
+                                tipContactDiameterMm: cappedTip ?? activeSizingBand(auto).tipContactDiameterMm,
                                 mesh,
                             });
+                            if (cappedTip !== undefined) {
+                                leaf.contactCone = applyExplicitTipCapToCone(leaf.contactCone, cappedTip)!;
+                            }
                             if (sd.error) {
                                 logPlacement(
                                     `Leaf (merge) ${candidate.id}: sd.error, trying branch...`);
@@ -1314,10 +1356,13 @@ function placeOneCandidate(
                             `Merge skip ${candidate.id}: angle too shallow (${mergeAngleDeg.toFixed(0)}° from vertical > 50°) span=${leafSpanMm.toFixed(1)}mm`);
                     } else try {
                         const band = activeSizingBand(auto);
+                        const cappedTip = candidate.tipDiameterMm !== undefined
+                            ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, candidate.tipDiameterMm)
+                            : undefined;
                         const built = buildHostedBranch(
                             {
                                 tipPos, tipNormal, modelId: candidate.modelId, parentKnot, mesh,
-                                tipContactDiameterMm: band.tipContactDiameterMm,
+                                tipContactDiameterMm: cappedTip ?? band.tipContactDiameterMm,
                                 rootsDiameterMm: band.rootDiameterMm,
                             },
                             band.shaftDiameterMm,
@@ -1339,6 +1384,9 @@ function placeOneCandidate(
                                     `Merge skip ${candidate.id}: host ${host.hostId} at capacity (${cap} attachments)`);
                                 // fall through to standalone trunk
                             } else {
+                                if (cappedTip !== undefined && built.branch.contactCone) {
+                                    built.branch.contactCone = applyExplicitTipCapToCone(built.branch.contactCone, cappedTip);
+                                }
                                 d = draftAddPrimitive(d, 'knots', parentKnot);
                                 built.branch.origin = candidate.source === 'overhang' ? 'overhang' : 'island';
                                 const memberTypeId = builtMemberTypeId(built.branch);
@@ -1380,6 +1428,12 @@ function placeOneCandidate(
         isSmallIsland,
         ignoreGrid,
     });
+    if (candidate.tipDiameterMm !== undefined && trunkResult.trunk.contactCone) {
+        trunkResult.trunk = {
+            ...trunkResult.trunk,
+            contactCone: applyExplicitTipCapToCone(trunkResult.trunk.contactCone, candidate.tipDiameterMm),
+        };
+    }
     // A near-plate type builds different geometry. Its own validation, not an
     // unused out-of-bounds trunk, decides whether that contact can be served.
     const claimedType = trunkResult.error === 'OUT_OF_BOUNDS'
@@ -1420,6 +1474,7 @@ function placeOneCandidate(
                     Number.POSITIVE_INFINITY,
                     undefined,
                     auto,
+                    candidate.tipDiameterMm,
                 );
                 if (fan.ok) {
                     const fanKind = typeWord(fan.kind);
@@ -1529,9 +1584,23 @@ function placeOneCandidate(
             }
 
             // Whether this type records an origin is declared.
-            const entity = { ...placed.entity } as typeof placed.entity & { origin?: SupportOrigin };
+            const entity = { ...placed.entity } as typeof placed.entity & {
+                origin?: SupportOrigin;
+                contactCone?: ContactCone;
+                settingsCodeHex?: string;
+            };
             if (getSupportTypeDescriptor(typeId).hasOrigin) {
                 entity.origin = candidate.gridPoint ? 'overhang' : ORIGIN_BY_SOURCE[candidate.source];
+            }
+            if (candidate.tipDiameterMm !== undefined && entity.contactCone) {
+                const capped = Math.max(MIN_CONTACT_TIP_DIAMETER_MM, candidate.tipDiameterMm);
+                entity.contactCone = applyExplicitTipCapToCone(entity.contactCone, capped);
+                if (typeof entity.settingsCodeHex === 'string' && entity.settingsCodeHex.length > 0) {
+                    const decoded = decodeSupportSettingsHex(entity.settingsCodeHex, supportSettings) ?? supportSettings;
+                    entity.settingsCodeHex = encodeSupportSettingsHex(
+                        applySizingOverridesToSettings(decoded, { tipContactDiameterMm: capped }),
+                    );
+                }
             }
             d = draftCommitSupport(d, typeId, entity, supplied);
             logPlacement(
@@ -1564,7 +1633,7 @@ function placeOneCandidate(
                 // counts as rejected. That retry cannot recurse: it passes
                 // `ignoreGrid`, which leaves `gridEnabled` false inside.
                 const fallback = placeOneCandidate(
-                    candidate, draft, autoSettings, gridHostIds, mesh, sizingCtx, true,
+                    candidate, draft, autoSettings, gridHostIds, mesh, sizingCtx, true, preResolvedCandidates,
                 );
                 logPlacement(fallback.kind === 'reject'
                     ? `Grid fallback failed ${candidate.id}: ${fallback.rejectedReason}`
@@ -1959,10 +2028,11 @@ export function rehostLegacyKnots(draft: SupportState, modelId?: string): Suppor
  * (thickened) shaft and renders as a visible step; conversely a leaf fanned
  * while its host was temporarily thicker, a transplanted replacement profile,
  * or a re-run over a resized forest can leave a cone wider than its shaft.
- * The contact diameter moves only upward, to the same 30%-of-shaft floor the
- * sizing applies: the forest resize can thicken a trunk long after its cone
- * was built, and a fat trunk under a needle-thin contact is the visible
- * mismatch this pass exists to stop. An explicit larger contact is kept.
+ * The contact diameter moves only upward, to the same 20%-of-shaft floor the
+ * sizing applies (clamped by `maxContactDiameterMm` when explicitly capped):
+ * the forest resize can thicken a trunk long after its cone was built, and a
+ * fat trunk under a needle-thin contact is the visible mismatch this pass
+ * exists to stop. An explicit larger contact is kept.
  */
 export function syncContactConeDiameters(draft: SupportState, modelId?: string): SupportState {
     // Which types contribute their segment diameters, from each type's declared
@@ -1990,8 +2060,12 @@ export function syncContactConeDiameters(draft: SupportState, modelId?: string):
         const body = cone?.profile?.bodyDiameterMm;
         if (!cone || body === undefined || hostDia === undefined) return cone;
         const contact = cone.profile.contactDiameterMm ?? 0;
+        const cap = cone.profile.maxContactDiameterMm;
         const minContact = Math.max(hostDia * TIP_CONTACT_MIN_SHAFT_RATIO, MIN_CONTACT_TIP_DIAMETER_MM);
-        const nextContact = Math.max(contact, minContact);
+        const uncapped = Math.max(contact, minContact);
+        const nextContact = cap !== undefined
+            ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, Math.min(cap, uncapped))
+            : uncapped;
         if (Math.abs(body - hostDia) > 1e-6 || Math.abs(contact - nextContact) > 1e-6) {
             changed = true;
             return { ...cone, profile: { ...cone.profile, bodyDiameterMm: hostDia, contactDiameterMm: nextContact } };
@@ -1999,12 +2073,39 @@ export function syncContactConeDiameters(draft: SupportState, modelId?: string):
         return cone;
     };
 
+    const reencodeConeSettingsHex = (
+        hex: string | undefined,
+        cone: ContactCone,
+        shaftDiameterMm: number | undefined,
+    ): string | undefined => {
+        if (typeof hex !== 'string' || hex.length === 0) return hex;
+        const fallback = getSettings();
+        const decoded = decodeSupportSettingsHex(hex, fallback) ?? fallback;
+        return encodeSupportSettingsHex(
+            applySizingOverridesToSettings(decoded, {
+                tipContactDiameterMm: cone.profile.contactDiameterMm,
+                tipBodyDiameterMm: cone.profile.bodyDiameterMm,
+                ...(shaftDiameterMm !== undefined ? { shaftDiameterMm } : {}),
+            }),
+        );
+    };
+
     const nextTrunks: SupportState['trunks'] = { ...draft.trunks };
     for (const [tid, t] of Object.entries(draft.trunks)) {
         if (modelId !== undefined && t.modelId !== modelId) continue;
         const topSeg = t.segments[t.segments.length - 1];
         const cone = syncCone(t.contactCone, topSeg?.diameter);
-        if (cone !== t.contactCone) nextTrunks[tid] = { ...t, contactCone: cone };
+        if (cone && cone !== t.contactCone) {
+            nextTrunks[tid] = {
+                ...t,
+                contactCone: cone,
+                settingsCodeHex: reencodeConeSettingsHex(
+                    t.settingsCodeHex,
+                    cone,
+                    t.segments[0]?.diameter ?? topSeg?.diameter,
+                ),
+            };
+        }
     }
     const nextLeaves: SupportState['leaves'] = { ...draft.leaves };
     for (const [lid, l] of Object.entries(draft.leaves)) {
@@ -2014,7 +2115,17 @@ export function syncContactConeDiameters(draft: SupportState, modelId?: string):
         const hostDia = diameterBySegmentId.get(knot.parentShaftId);
         if (hostDia === undefined) continue;
         const cone = syncCone(l.contactCone, hostDia);
-        if (cone && cone !== l.contactCone) nextLeaves[lid] = { ...l, contactCone: cone };
+        if (cone && cone !== l.contactCone) {
+            nextLeaves[lid] = {
+                ...l,
+                contactCone: cone,
+                settingsCodeHex: reencodeConeSettingsHex(
+                    l.settingsCodeHex,
+                    cone,
+                    cone.profile.bodyDiameterMm,
+                ),
+            };
+        }
     }
 
     const nextBranches: SupportState['branches'] = { ...draft.branches };
@@ -2022,7 +2133,17 @@ export function syncContactConeDiameters(draft: SupportState, modelId?: string):
         if (modelId !== undefined && b.modelId !== modelId) continue;
         const firstSeg = b.segments[0];
         const cone = syncCone(b.contactCone, firstSeg?.diameter);
-        if (cone !== b.contactCone) nextBranches[bid] = { ...b, contactCone: cone };
+        if (cone && cone !== b.contactCone) {
+            nextBranches[bid] = {
+                ...b,
+                contactCone: cone,
+                settingsCodeHex: reencodeConeSettingsHex(
+                    b.settingsCodeHex,
+                    cone,
+                    firstSeg?.diameter,
+                ),
+            };
+        }
     }
 
     if (!changed) return draft;
@@ -2363,6 +2484,7 @@ export function fanLeafToHost(
      *  chunk consolidation converts a pillar into the link it is testing for. */
     excludeHostIds?: ReadonlySet<string>,
     autoSettings?: Partial<AutoSupportSettings>,
+    tipDiameterMm?: number,
 ): FanLeafResult {
     // Single pass over the shaft pool: the ELIGIBLE sample (grid hosts accept
     // only up close) that is geometrically VALID (not same-Z, within the max
@@ -2527,6 +2649,9 @@ export function fanLeafToHost(
         // supporting it — does not care which surface the tip touches. Failed
         // branch attempts fall through to the next candidate (a shorter span may
         // still leaf).
+        const cappedTip = tipDiameterMm !== undefined
+            ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, tipDiameterMm)
+            : undefined;
         if (Math.sqrt(dist2) > MAX_LEAF_SPAN_BEFORE_BRANCH_MM) {
             try {
                 const band = activeSizingBand(autoSettings);
@@ -2537,7 +2662,7 @@ export function fanLeafToHost(
                         modelId,
                         parentKnot,
                         mesh: mesh ?? undefined,
-                        tipContactDiameterMm: band.tipContactDiameterMm,
+                        tipContactDiameterMm: cappedTip ?? band.tipContactDiameterMm,
                         rootsDiameterMm: band.rootDiameterMm,
                     },
                     band.shaftDiameterMm,
@@ -2558,6 +2683,9 @@ export function fanLeafToHost(
                     if (maxAttachments > 0 && isHostAtAttachmentCapacity(sp.hostTypeId, sp.hostId, maxAttachments, draft)) {
                         lastBlockedReason = 'capacity';
                         continue;
+                    }
+                    if (cappedTip !== undefined && built.branch.contactCone) {
+                        built.branch.contactCone = applyExplicitTipCapToCone(built.branch.contactCone, cappedTip);
                     }
                     const next = draftAddPrimitive(draft, 'knots', parentKnot);
                     built.branch.origin = origin === 'overhang' ? 'overhang' : 'island';
@@ -2588,7 +2716,7 @@ export function fanLeafToHost(
                 modelId,
                 parentKnot,
                 hostDiameterMm: sp.diameter,
-                tipContactDiameterMm: activeSizingBand(autoSettings).tipContactDiameterMm,
+                tipContactDiameterMm: cappedTip ?? activeSizingBand(autoSettings).tipContactDiameterMm,
                 mesh: mesh ?? undefined,
             });
             if (built.supportData.error) {
@@ -2596,6 +2724,9 @@ export function fanLeafToHost(
                 continue;
             }
             leaf = built.leaf;
+            if (cappedTip !== undefined) {
+                leaf.contactCone = applyExplicitTipCapToCone(leaf.contactCone, cappedTip)!;
+            }
         } catch {
             lastBlockedReason = 'build';
             continue;
@@ -3229,6 +3360,22 @@ export function computeAutoSupportPlan(
         return noopPlan(makeResult(emptyPlacedCounts(), 0, false, 'already-supported'));
     }
 
+    const preResolvedCandidates = new WeakSet<CandidatePoint>();
+    if (resolvedMesh) {
+        for (const c of candidates) {
+            if (!(c.gridPoint && c.tipNormal && c.tipNormal.z < 0)) {
+                const resolved = resolveSurfaceNormal(c.tipPos, resolvedMesh);
+                c.tipNormal = resolved.normal;
+                if (resolved.hit) {
+                    c.tipPos = resolved.point;
+                    c.zHeight = resolved.point.z;
+                }
+            }
+            preResolvedCandidates.add(c);
+        }
+        applyContactTipCaps(candidates, resolvedMesh, autoSettings.tipContactMarginScale, autoSettings);
+    }
+
     // ------------------------------------------------------------------
     // 3. Place candidates through the standard pipeline
     // ------------------------------------------------------------------
@@ -3250,10 +3397,13 @@ export function computeAutoSupportPlan(
         const bbox = new THREE.Box3().setFromObject(resolvedMesh);
         const size = new THREE.Vector3();
         bbox.getSize(size);
+        const outerVolMm3 = resolvedMesh ? computeMeshVolumeMm3(resolvedMesh) : 0;
+        const cavityVolMm3 = cavityMesh ? computeMeshVolumeMm3(cavityMesh) : 0;
+        const modelVolumeMm3 = Math.max(0, outerVolMm3 - cavityVolMm3);
         modelCtx = {
-            modelVolumeMm3: computeMeshVolumeMm3(resolvedMesh),
+            modelVolumeMm3,
             modelZMaxMm: bbox.max.z,
-            totalCandidates: candidates.length,
+            totalCandidates: estimateHostCount(candidates, getSettings().grid),
             // The print's own geometric scale, as oriented: a part rotated to
             // stand taller is the part the supports have to hold.
             modelSizeMm: size.length(),
@@ -3299,11 +3449,6 @@ export function computeAutoSupportPlan(
     const hostOriginById = new Map<string, 'gridInfill' | 'coverageFill'>();
     // Per-placed-entity ledger for the Forest Report (display id, sizing inputs).
     const forestLedger: ForestLedgerEntry[] = [];
-    /**
-     * Where the placement put its contacts and which band sized them, for the load
-     * budget at the end of the run. Report only: nothing downstream reads it.
-     */
-    const placedContacts: PlacedContact[] = [];
 
     // Analytics accumulators
     const presets = { detail: 0, structure: 0, anchor: 0 };
@@ -3324,7 +3469,7 @@ export function computeAutoSupportPlan(
 
     const placeOne = (candidate: CandidatePoint): string => {
         try {
-            const result = placeOneCandidate(candidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx);
+            const result = placeOneCandidate(candidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx, false, preResolvedCandidates);
             draft = result.draft;
             // A fan host is a type whose shaft the pool offers, which is what
             // `canBeGridHost` declares. Recorded so later candidates fan to a
@@ -3356,12 +3501,6 @@ export function computeAutoSupportPlan(
                 }
             }
             if (result.preset) presets[result.preset]++;
-            if (result.kind !== 'reject') {
-                placedContacts.push({
-                    tip: candidate.tipPos,
-                    preset: result.preset ?? presetForArea(candidate.islandAreaMm2),
-                });
-            }
 
             // Placement-path diagnostics: where each candidate ended up.
             diagnostics.candidatesBySource[candidate.source] =
@@ -3487,6 +3626,7 @@ export function computeAutoSupportPlan(
             // roots map for every host was the single largest cost here.
             excludeHostId.clear();
             excludeHostId.add(hostId);
+            const explicitTipCapMm = entity.contactCone?.profile?.maxContactDiameterMm;
             const fan = fanLeafToHost(
                 tip,
                 modelId,
@@ -3504,6 +3644,7 @@ export function computeAutoSupportPlan(
                 undefined,
                 excludeHostId,
                 autoSettings,
+                explicitTipCapMm,
             );
             if (!fan.ok) {
                 // Routed-branch fallback, HEIGHT-GATED: a straight leaf can be
@@ -3528,6 +3669,7 @@ export function computeAutoSupportPlan(
                         knotId: `auto-con-branch-${hostId}`,
                         excludeHostIds: excludeHostId,
                         autoSettings,
+                        tipDiameterMm: explicitTipCapMm,
                     })
                     : null;
                 if (branchResult) {
@@ -3607,6 +3749,7 @@ export function computeAutoSupportPlan(
         const gapCandidates = buildGapFillCandidates(overhangIslands, autoSettings, tips)
             .map((c): CandidatePoint => ({ ...c, modelId }));
         if (gapCandidates.length === 0) break;
+        applyContactTipCaps(gapCandidates, resolvedMesh, autoSettings.tipContactMarginScale, autoSettings);
         let placedThisPass = 0;
         for (const c of gapCandidates) {
             const kind = placeOne(c) as PlacementOutcomeKind;
@@ -3772,6 +3915,17 @@ export function computeAutoSupportPlan(
             // An internal contact may not fan to an exterior host; its only
             // legal support is the cavity bridge tried at placement time.
             if (island.interior) continue;
+            const fanCandidate = candidateFromIsland(island);
+            fanCandidate.modelId = modelId;
+            if (resolvedMesh) {
+                const resolvedFan = resolveSurfaceNormal(fanCandidate.tipPos, resolvedMesh);
+                fanCandidate.tipNormal = resolvedFan.normal;
+                if (resolvedFan.hit) {
+                    fanCandidate.tipPos = resolvedFan.point;
+                    fanCandidate.zHeight = resolvedFan.point.z;
+                }
+                applyContactTipCaps([fanCandidate], resolvedMesh, autoSettings.tipContactMarginScale, autoSettings);
+            }
             const fan = fanLeafToHost(
                 { x: island.contact.x, y: island.contact.y, z: island.contact.z },
                 modelId,
@@ -3789,6 +3943,7 @@ export function computeAutoSupportPlan(
                 undefined,
                 undefined,
                 autoSettings,
+                fanCandidate.tipDiameterMm,
             );
             if (!fan.ok) {
                 if (fan.reason === 'noHost') skippedDist++;
@@ -3940,7 +4095,8 @@ export function computeAutoSupportPlan(
                 if (isHostAtAttachmentCapacity(host.hostTypeId, host.hostId, autoSettings.maxAttachmentsPerTrunk, draft)) continue;
 
                 try {
-                    const resolved = resolveSurfaceNormal({ x: gx, y: gy, z: cellZ }, mesh);
+                    const bm: THREE.Mesh | undefined = resolvedMesh ?? undefined;
+                    const resolved = resolveSurfaceNormal({ x: gx, y: gy, z: cellZ }, bm);
                     // The id carries the host: without it two writers share a
                     // knot id and the earlier branch re-parents onto the later
                     // host (the "dozens of branches on one host" report).
@@ -3950,8 +4106,24 @@ export function computeAutoSupportPlan(
                         pos: host.pos,
                         diameter: host.diameter + 0.1,
                     };
-                    const bm: THREE.Mesh | undefined = resolvedMesh ?? undefined;
                     const band = activeSizingBand(autoSettings);
+                    let stubTipMm: number | undefined;
+                    if (bm) {
+                        const probe: CandidatePoint = {
+                            id: `stub-${island.id}-${r}-${c}`,
+                            tipPos: resolved.point,
+                            tipNormal: resolved.normal,
+                            modelId,
+                            source: 'voxel',
+                            islandAreaMm2: area,
+                            zHeight: resolved.point.z,
+                            priority: 0,
+                        };
+                        applyContactTipCaps([probe], bm, autoSettings.tipContactMarginScale, autoSettings);
+                        stubTipMm = probe.tipDiameterMm !== undefined
+                            ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, probe.tipDiameterMm)
+                            : undefined;
+                    }
                     const built = buildHostedBranch(
                         {
                             tipPos: resolved.point,
@@ -3959,7 +4131,7 @@ export function computeAutoSupportPlan(
                             modelId,
                             parentKnot,
                             mesh: bm,
-                            tipContactDiameterMm: band.tipContactDiameterMm,
+                            tipContactDiameterMm: stubTipMm ?? band.tipContactDiameterMm,
                             rootsDiameterMm: band.rootDiameterMm,
                         },
                         band.shaftDiameterMm,
@@ -3969,6 +4141,9 @@ export function computeAutoSupportPlan(
                         autoSettings,
                     );
                     if (!built) continue;
+                    if (stubTipMm !== undefined && built.branch.contactCone) {
+                        built.branch.contactCone = applyExplicitTipCapToCone(built.branch.contactCone, stubTipMm);
+                    }
                     // The tips are voxel-island footprints — island origin.
                     built.branch.origin = 'island';
                     const memberTypeId = builtMemberTypeId(built.branch);
@@ -4056,19 +4231,15 @@ export function computeAutoSupportPlan(
                                 islandAreaMm2: 0.05,
                                 zHeight: cone.pos.z,
                                 priority: 0,
+                                tipDiameterMm: cone.profile?.maxContactDiameterMm,
                             };
+                            preResolvedCandidates.add(recandidate);
                             try {
-                                const result = placeOneCandidate(recandidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx);
+                                const result = placeOneCandidate(recandidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx, false, preResolvedCandidates);
                                 draft = result.draft;
                                 if (result.kind === 'reject') rejectedCount++;
                                 else placed[result.kind]++;
                                 if (result.preset) presets[result.preset]++;
-                                if (result.kind !== 'reject') {
-                                    placedContacts.push({
-                                        tip: recandidate.tipPos,
-                                        preset: result.preset ?? presetForArea(recandidate.islandAreaMm2),
-                                    });
-                                }
                                 if (result.entityId && isLedgerKind(result.kind)) {
                                     forestLedger.push({
                                         displayId: recandidate.id,
@@ -4162,11 +4333,69 @@ export function computeAutoSupportPlan(
             };
             // Report only: what a deficit budget would add and cull, in mm² of
             // unsupported surface. Nothing here changes the forest.
+            const presetByEntityId = new Map<string, SizingPreset>();
+            for (const entry of forestLedger) {
+                presetByEntityId.set(entry.entityId, entry.preset);
+            }
+            const postCullContacts: PlacedContact[] = [];
+            for (const t of Object.values(draft.trunks ?? {})) {
+                if (t.modelId !== modelId || !t.contactCone?.pos) continue;
+                postCullContacts.push({
+                    tip: t.contactCone.pos,
+                    preset: presetByEntityId.get(t.id) ?? 'structure',
+                    shaftDiameterMm: t.segments[t.segments.length - 1]?.diameter ?? t.contactCone.profile.bodyDiameterMm,
+                });
+            }
+            for (const s of Object.values(draft.stumps ?? {})) {
+                if (s.modelId !== modelId || !s.contactCone?.pos) continue;
+                postCullContacts.push({
+                    tip: s.contactCone.pos,
+                    preset: presetByEntityId.get(s.id) ?? 'structure',
+                    shaftDiameterMm: s.segments[s.segments.length - 1]?.diameter ?? s.contactCone.profile.bodyDiameterMm,
+                });
+            }
+            for (const b of Object.values(draft.branches ?? {})) {
+                if (b.modelId !== modelId || !b.contactCone?.pos) continue;
+                postCullContacts.push({
+                    tip: b.contactCone.pos,
+                    preset: presetByEntityId.get(b.id) ?? 'structure',
+                    shaftDiameterMm: b.segments[b.segments.length - 1]?.diameter ?? b.contactCone.profile.bodyDiameterMm,
+                });
+            }
+            for (const l of Object.values(draft.leaves ?? {})) {
+                if (l.modelId !== modelId || !l.contactCone?.pos) continue;
+                postCullContacts.push({
+                    tip: l.contactCone.pos,
+                    preset: presetByEntityId.get(l.id) ?? 'structure',
+                    shaftDiameterMm: l.contactCone.profile.bodyDiameterMm,
+                });
+            }
+            for (const st of Object.values(draft.sticks ?? {})) {
+                if (st.modelId !== modelId) continue;
+                const cone = st.contactConeA.pos.z >= st.contactConeB.pos.z ? st.contactConeA : st.contactConeB;
+                if (!cone?.pos) continue;
+                postCullContacts.push({
+                    tip: cone.pos,
+                    preset: presetByEntityId.get(st.id) ?? 'structure',
+                    shaftDiameterMm: st.segments[st.segments.length - 1]?.diameter ?? cone.profile.bodyDiameterMm,
+                });
+            }
+            for (const tw of Object.values(draft.twigs ?? {})) {
+                if (tw.modelId !== modelId) continue;
+                const disk = tw.contactDiskA.pos.z >= tw.contactDiskB.pos.z ? tw.contactDiskA : tw.contactDiskB;
+                if (!disk?.pos) continue;
+                postCullContacts.push({
+                    tip: disk.pos,
+                    preset: presetByEntityId.get(tw.id) ?? 'structure',
+                    shaftDiameterMm: tw.segments[tw.segments.length - 1]?.diameter,
+                });
+            }
             forestReport.loadBudget = computeLoadBudget({
                 islands,
-                contacts: placedContacts,
+                contacts: postCullContacts,
                 areaPerSupportMm2: autoSettings.areaPerSupportMm2,
                 poseDragMomentMm3: poseStability?.dragMomentMm3,
+                poseTotalDragMomentMm3: poseStability?.totalDragMomentMm3,
                 toppleCoverageNeeded,
             });
             const budget = forestReport.loadBudget;

@@ -5,7 +5,6 @@ import { SMALL_ISLAND_TIP_AREA_MM2, SUPPORT_RESTSTACK_DELTA_MM, influenceRadiusM
 import { footprintX, footprintY } from '../../volumeAnalysis/Islands/voxelFootprint';
 import { smallIslandTipDiameterMm } from './parameterSizing';
 import { TIP_COVERAGE_RADIUS_MM } from './coverage';
-import { applyContactTipCaps } from './contactTipCap';
 import type * as THREE from 'three';
 import { isSupportBlockedContact } from './supportBlockers';
 
@@ -13,6 +12,8 @@ import { isSupportBlockedContact } from './supportBlockers';
  * Convert detected islands into auto-support candidate points.
  * Filters out already-supported, grounded, and too-small islands.
  * Scores candidates by priority and sorts descending.
+ * Note: SDF local free-width tip capping runs in `computeAutoSupportPlan`
+ * after true surface normals have been resolved.
  */
 export interface CandidatePruneContext {
     /** World-frame mesh for contact-face resolution. */
@@ -55,10 +56,8 @@ export function generateCandidates(
             (c) => !isSupportBlockedContact(modelId, mesh, c.tipPos.x, c.tipPos.y, c.tipPos.z),
         );
     }
-    // Cap the tip contact by the local free width at each contact: a tip must
-    // fit the feature it lands on. Same pass the lattice runs, so both
-    // producers size their tips the same way (see contactTipCap.ts).
-    applyContactTipCaps(candidates, prune?.mesh, settings.tipContactMarginScale, settings);
+    // Note: SDF free-width tip capping runs in `computeAutoSupportPlan` once
+    // non-gridPoint candidates have resolved their true surface normals.
     // Score and sort
     if (candidates.length === 0) return [];
     const maxZ = Math.max(...candidates.map(c => c.zHeight), 1);
@@ -99,7 +98,7 @@ export function candidateFromIsland(island: DetectedIsland): CandidatePoint {
         priority: 0, // computed later
         // Fine detail keeps a shrunk (detail-band) tip; grid/overhang points
         // and larger islands take the active band default (undefined) — until
-        // `generateCandidates` runs the free-width cap over the batch.
+        // `computeAutoSupportPlan` runs the free-width cap after normal resolution.
         tipDiameterMm: area < SMALL_ISLAND_TIP_AREA_MM2 ? smallIslandTipDiameterMm() : undefined,
         interior: island.interior,
     };

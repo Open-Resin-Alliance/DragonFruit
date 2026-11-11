@@ -1351,6 +1351,8 @@ pub fn compute_stability_report(
         };
     let adhesion_ratio = if worst_edge_drag_mm3 > 1e-9 {
         (bearing_area_mm2 as f64 * contact_depth_mm as f64) / worst_edge_drag_mm3
+    } else if edges.is_empty() && drag_total > 1e-9 {
+        0.0
     } else {
         f64::INFINITY
     };
@@ -2144,6 +2146,7 @@ mod tests {
         // zero and the log must not read as "no drag".
         assert!((r.drag_moment_mm3 - 500.0).abs() < 2.0, "total {}", r.drag_moment_mm3);
         assert_eq!(r.worst_edge_drag_mm3, 0.0);
+        assert_eq!(r.adhesion_ratio, 0.0);
         let line = r.to_log_line();
         assert!(line.contains("no bearing polygon"), "{line}");
         assert!(line.contains("drag 500mm³ over 4 faces"), "{line}");
