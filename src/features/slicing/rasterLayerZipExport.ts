@@ -18,7 +18,7 @@ import { inflateModelPlateClearance, raftBandTopMm } from '@/supports/Rafts/Cren
 import { filterLineRaftEdges, generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
 import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBeam';
 import { buildLineRaftEdgePairs } from '@/supports/Rafts/Crenelated/geometry/buildLineRaftEdgePairs';
-import type { ContactDisk, Segment, SupportState, Vec3 } from '@/supports/types';
+import type { ContactDisk, Segment, Vec3 } from '@/supports/types';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
@@ -629,27 +629,27 @@ type SupportSliceTessellation = {
 /** Exported for `local-only/slice-goldens/`; not part of the public surface. */
 export function resolveSupportSliceTessellation(
   supportState: ReturnType<typeof getSupportSnapshot>,
-  kickstandState: SupportState,
+  visibleModelIds: ReadonlySet<string>,
+  visibleRootIds: ReadonlySet<string>,
 ): SupportSliceTessellation {
-  // How much geometry the scene will emit, which decides the detail level.
+  // Only geometry in this export may influence its detail level.
   let segmentCount = 0;
   let shaftlessCount = 0;
 
   for (const descriptor of SUPPORT_TYPES) {
-    const collection = supportState[descriptor.location.key] as unknown as Record<string, { segments?: unknown[] }>;
-    const entities = Object.values(collection ?? {});
-
-    if (!descriptor.hasSegments) {
-      // A leaf or brace is one primitive rather than a chain of them.
-      shaftlessCount += entities.length;
-      continue;
+    const collection = supportState[descriptor.location.key] as unknown as Record<string, { modelId?: string; segments?: unknown[] }>;
+    for (const entity of Object.values(collection ?? {})) {
+      if (!entity.modelId || !visibleModelIds.has(entity.modelId)) continue;
+      if (descriptor.hasSegments) segmentCount += entity.segments?.length ?? 0;
+      else shaftlessCount += 1;
     }
-    for (const entity of entities) segmentCount += entity.segments?.length ?? 0;
   }
 
-  const primitiveCount = segmentCount
-    + Object.keys(supportState.roots).length
-    + shaftlessCount;
+  let rootCount = 0;
+  for (const root of Object.values(supportState.roots)) {
+    if (visibleModelIds.has(root.modelId) || visibleRootIds.has(root.id)) rootCount += 1;
+  }
+  const primitiveCount = segmentCount + rootCount + shaftlessCount;
 
   if (segmentCount >= 20_000 || primitiveCount >= 24_000) {
     return {
@@ -821,12 +821,6 @@ export function buildSupportAndRaftWorldTriangles(
   const raftSettings = getRaftSettings();
   const hasSolidBottom = raftSettings.bottomMode === 'solid';
   const raftThickness = raftSettings.thickness;
-  const tessellation = resolveSupportSliceTessellation(supportState, supportState);
-  const segmentTessellation = {
-    shaftRadialSegments: tessellation.shaftRadialSegments,
-    bezierRadialSegments: tessellation.bezierRadialSegments,
-    bezierSteps: tessellation.bezierSteps,
-  };
   const seenJointIds = new Set<string>();
   const JOINT_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
   const visibleRootIds = new Set<string>();
@@ -857,6 +851,13 @@ export function buildSupportAndRaftWorldTriangles(
       rootModelKeyById.set(kickstand.rootId, kickstand.modelId);
     }
   }
+
+  const tessellation = resolveSupportSliceTessellation(supportState, visibleModelIds, visibleRootIds);
+  const segmentTessellation = {
+    shaftRadialSegments: tessellation.shaftRadialSegments,
+    bezierRadialSegments: tessellation.bezierRadialSegments,
+    bezierSteps: tessellation.bezierSteps,
+  };
 
   const rootTopRadiusByRootId = new Map<string, number>();
   for (const trunk of Object.values(supportState.trunks)) {

@@ -61,6 +61,28 @@ the same function and input. `aaOnSupports` is undefined without a request, and 
 orchestrator falls back to the performance setting there, because that one is read from browser
 storage.
 
+## Support mesh preparation scope
+
+Separately from pure job assembly, `src/features/slicing/rasterLayerZipExport.ts`
+bakes support geometry for the exported models. `buildSupportAndRaftWorldTriangles`
+resolves retained root IDs before choosing its tessellation tier:
+
+```ts
+const tessellation = resolveSupportSliceTessellation(supportState, visibleModelIds, visibleRootIds);
+```
+
+The model-ID set is the job's exported scope, not every model in the scene. The
+root-ID set comes from support ownership links. Shafts and shaftless supports
+count toward the detail budget only when their model is exported; a root counts
+when its model is exported **or** a visible support retains it through a root
+link. This matches the baker's visibility rules, including roots with stale
+model IDs. Other plates and non-exported models must not change the mesh detail
+of the selected job.
+
+The existing tessellation thresholds and radial-segment tiers are unchanged.
+This isolates the budget; it does not prevent a genuinely dense exported job
+from selecting the existing coarsest tier.
+
 ## Example
 
 ```ts
