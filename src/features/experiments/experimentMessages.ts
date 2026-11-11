@@ -18,11 +18,13 @@ const NAMES: Record<string, MessageDescriptor> = {
   'chitubox-import': msg`Chitubox File Import`,
   'auto-supports': msg`Auto Supports`,
   'auto-rotation': msg`Auto Orientation`,
+  'support-halo': msg`Support Halo`,
 };
 
 const DESCRIPTIONS: Record<string, MessageDescriptor> = {
   'chitubox-import': msg`Enable importing .chitubox project files. Lacks comprehensive testing and may not work with all files.`,
   'auto-supports': msg`Automatic support generation from model analysis. Early access.`,
+  'support-halo': msg`Adds a greyscale glow around support tips as they narrow to reduce small cross section oxygen inhibition and increase strength.`,
 };
 
 export function translateExperimentName(definition: ExperimentDefinition, translate: Translate): string {

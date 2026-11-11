@@ -96,6 +96,14 @@ function completeEnvelope(): NativeSolidSliceJobEnvelope {
     zaaPattern: 'base2',
     zaaDuplicateZ: false,
     modelTriangleCount: 10_000_000,
+    supportHaloEnabled: true,
+    supportHaloRadiusPx: 4,
+    supportHaloRadiusMm: 0.22,
+    supportHaloInverseScalePercent: 80,
+    supportHaloMaxIntensityPercent: 60,
+    supportHaloProfile: 'gaussian',
+    supportHaloScope: 'tips_only',
+    supportHaloMaxTipDiameterMm: 0.85,
     containerCompressionLevel: 2,
     buildWidthMm: 218.88,
     buildDepthMm: 122.88,
@@ -141,6 +149,38 @@ test('every Rust field without a serde default is one the mapper sends', () => {
     `SliceJobMetadata requires ${missing.length} field(s) the mapper never sends — `
       + 'deserialization fails at slice time',
   );
+});
+
+test('maps and clamps support halo fields with safe defaults', () => {
+  const full = toNativeMetadataPayload(completeEnvelope());
+  assert.equal(full.support_halo_enabled, true);
+  assert.equal(full.support_halo_radius_px, 4);
+  assert.equal(full.support_halo_radius_mm, 0.22);
+  assert.equal(full.support_halo_inverse_scale_percent, 80);
+  assert.equal(full.support_halo_max_intensity_percent, 60);
+  assert.equal(full.support_halo_profile, 'gaussian');
+  assert.equal(full.support_halo_scope, 'tips_only');
+  assert.equal(full.support_halo_max_tip_diameter_mm, 0.85);
+
+  const defaulted = toNativeMetadataPayload({
+    ...completeEnvelope(),
+    supportHaloEnabled: undefined,
+    supportHaloRadiusPx: undefined,
+    supportHaloRadiusMm: undefined,
+    supportHaloInverseScalePercent: undefined,
+    supportHaloMaxIntensityPercent: undefined,
+    supportHaloProfile: undefined,
+    supportHaloScope: undefined,
+    supportHaloMaxTipDiameterMm: undefined,
+  });
+  assert.equal(defaulted.support_halo_enabled, false);
+  assert.equal(defaulted.support_halo_radius_px, 0);
+  assert.equal(defaulted.support_halo_radius_mm, 0.15);
+  assert.equal(defaulted.support_halo_inverse_scale_percent, 100);
+  assert.equal(defaulted.support_halo_max_intensity_percent, 25);
+  assert.equal(defaulted.support_halo_profile, 'donut');
+  assert.equal(defaulted.support_halo_scope, 'tips_only');
+  assert.equal(defaulted.support_halo_max_tip_diameter_mm, 0.8);
 });
 
 test('the struct parser actually found the crossing', () => {
