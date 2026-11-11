@@ -12,6 +12,7 @@ import {
   subscribeToExperiments,
 } from '@/features/experiments/experimentsRegistry';
 import { translateExperimentDescription, translateExperimentName } from '@/features/experiments/experimentMessages';
+import { applySupportHaloExperimentState } from '@/features/profiles/profileStore';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import { Trans } from '@lingui/react/macro';
@@ -112,13 +113,20 @@ function ExperimentsDisclaimer({ onAcknowledge, onExit }: ExperimentsDisclaimerP
 // Take me back keeps it for next entry, so it can reappear within the same launch.
 let disclaimerSeenThisLaunch = false;
 
+export function toggleExperimentWithSideEffects(id: string, enabled: boolean): void {
+  if (id === 'support-halo') {
+    applySupportHaloExperimentState(enabled);
+  }
+  setExperimentEnabled(id, enabled);
+}
+
 export function ExperimentsSettingsTab({ onExit }: { onExit: () => void }) {
   const { _ } = useLingui();
   const [enabledState, setEnabledState] = React.useState<Record<string, boolean>>(() => getInitialEnabledState());
   const [showDisclaimer, setShowDisclaimer] = React.useState(false);
 
   const handleToggle = React.useCallback((id: string, enabled: boolean) => {
-    setExperimentEnabled(id, enabled);
+    toggleExperimentWithSideEffects(id, enabled);
   }, []);
 
   React.useEffect(() => {

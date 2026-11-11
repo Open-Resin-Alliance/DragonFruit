@@ -137,7 +137,23 @@ count. It cannot be combined with the job flags. `scene slice` uses it.
 - `--source-width-px 11400` — raster resolution X
 - `--source-height-px 6400` — raster resolution Y
 - `--png-compression balanced` — fastest / balanced / smallest / optimal
-- `--anti-aliasing Off` — Off / 2x / 4x / 8x
+- `--anti-aliasing Off` — `Off` / `2x` / `4x` / `8x` / `16x`
+- `--anti-aliasing-mode Blur` — `Coverage` / `Blur` (or `2DAA`) / `3daa` (or `Vertical` / `Vertical2`)
+- `--blur-brush-radius-px 1` — 2D XY blur brush radius in pixels (`0..4`)
+- `--blur-brush-kernel gaussian` — `gaussian` / `box`
+- `--z-blur-radius-layers 0` — 3DAA Z blur radius in layers (`0..4`)
+- `--z-blur-kernel box` — `box` / `gaussian`
+- `--z-blend-look-back 2` — 3DAA Z-blend look-back depth in layers (`1..16`)
+- `--aa-on-supports` — apply model AA to support geometry
+- `--support-halo` / `--no-support-halo` — enable or disable Support Contact Halo (calibrated default: `Auto = true`, `0.15 mm` radius, `100%` inverse scaling, `25%` max intensity, `donut` profile, `tips_only` scope, `0.80 mm` max tip diameter)
+- `--support-halo-auto` / `--no-support-halo-auto` — enable or disable Support Halo Automatic calibrated defaults
+- `--support-halo-radius-mm 0.15` — reference halo width from the `255` blob edge at a `0.40 mm` tip (`0.02..0.50 mm`)
+- `--support-halo-inverse-scale-percent 100` (alias `--support-halo-inverse-scale`) — inverse blob-diameter radius scaling strength (`0..200%`; `0%` = fixed radius, `100%` = default inverse scaling)
+- `--support-halo-max-intensity 25` (alias `--support-halo-intensity`) — peak halo cure intensity (`0..100%`; default `25%` for `donut`, `50%` for monotonic curves)
+- `--support-halo-profile donut` — radial falloff profile: `donut` / `linear` / `exponential` (alias `exp_decay`) / `gaussian`
+- `--support-halo-scope tips_only` — target scope: `tips_only` / `full_supports`
+- `--support-halo-max-tip-diameter-mm 0.80` — maximum 2D equivalent blob diameter (mm) gated as a support tip in `tips_only` scope (`0.10..5.00 mm`)
+- `--support-halo-radius-px 0` — legacy pixel radius fallback (`0..16 px`; overridden when `support_halo_radius_mm > 0`)
 - `--mirror-x`, `--mirror-y` — mirror axes
 - `--metadata-json '{}'` — opaque metadata passthrough
 
@@ -192,7 +208,7 @@ and prints `[command] Xms` to stderr.
 | `scene transform-model <voxl> --id <id> [--position x,y,z] [--rotate x,y,z] [--scale x,y,z]` | Set transform | VOXL mutation |
 | `scene duplicate <voxl> --id <id> [--count N] [--offset x,y,z]` | Duplicate model | VOXL mutation |
 | `scene arrange <voxl> --mesh-dir <dir> [--spacing 2] [--build-width-mm 218] [--build-depth-mm 122] [--anchor center]` | Auto-arrange on plate | `highPrecisionArrange` (SAT nesting) |
-| `scene slice <voxl> --o <out> --mesh-dir <dir> [--plate <id or n>] [--printer <profile.json>] [--material <material.json>] [--aa-preset P] [--aa-settings <aa.json>] [--lut-curves <curves.json>]` | Merge + slice via Rust, with the job the app would build | Loads STLs → applies transforms → `assembleSliceJob` → `dragonfruit-cli slice run` |
+| `scene slice <voxl> --o <out> [--mesh-dir <dir>] [--plate <id or n>] [--printer <profile.json>] [--material <material.json>] [--aa-preset P] [--aa-settings <aa.json>] [--support-halo] [--no-support-halo] [--support-halo-*] [--lut-curves <curves.json>]` | Merge + slice via Rust, with the job the app would build | Loads STLs → applies transforms → `assembleSliceJob` → `dragonfruit-cli slice run` |
 | `scene load <voxl> [--json]` | Dump full scene | `voxl/codec::parseVoxlAuto` |
 
 **`scene slice` builds the same job as the app.** With `--printer` (an official
@@ -222,10 +238,33 @@ Anti-aliasing is resolved by the same code as the slicing panel. Without flags
 the job gets what the panel does by default: the `balanced` auto preset and
 whatever the material's own anti-aliasing settings say.
 
-- `--aa-preset sharp|balanced|smooth|raw` picks the auto preset.
+- `--aa-preset sharp|balanced|smooth|raw` picks the auto preset (`raw` = No AA, `sharp` = Auto 2DAA, `balanced` = Auto 3DAA, `smooth` = Auto 3DAA Heavy).
+- `--support-halo` (or `--support-halo on|true`) enables Support Contact Halo with calibrated defaults (`Auto = true`, `radius = 0.15 mm`, `inverseScale = 100%`, `maxIntensity = 25%`, `profile = donut`, `scope = tips_only`, `maxTipDiameter = 0.80 mm`) completely orthogonally to `--aa-preset` (including `--aa-preset raw`).
+- `--no-support-halo` (or `--support-halo off|false`) explicitly disables Support Halo even if enabled in the material profile or `--aa-settings`.
+- `--support-halo-auto [on|off]` / `--no-support-halo-auto` toggles Support Halo Automatic vs. Manual mode. Passing any granular `--support-halo-*` parameter below implicitly enables Support Halo (`supportHaloEnabled: true`, `supportHaloAuto: false` unless `--support-halo-auto` is explicitly passed):
+
+| Switch (`scene slice` & `dragonfruit-cli slice run`) | Alias(es) | Accepted Inputs / Range | Default (`--support-halo`) | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `--support-halo` | `--support-halo on\|off` | Flag or `on\|off\|true\|false\|1\|0` | `false` (`true` when flag passed) | Enable Support Contact Halo with automatic calibrated settings |
+| `--no-support-halo` | `--support-halo off` | Flag (no value) | — | Explicitly disable Support Contact Halo |
+| `--support-halo-auto` | `--support-halo-auto on\|off` | Flag or `on\|off\|true\|false\|1\|0` | `true` | Use automatic calibrated profile/radius/intensity defaults |
+| `--no-support-halo-auto` | `--support-halo-auto off` | Flag (no value) | — | Use manual Support Halo parameters |
+| `--support-halo-radius-mm <mm>` | — | Float `0.00..0.50` (mm) | `0.15` | Reference halo width from `255` blob edge at a `0.40 mm` tip |
+| `--support-halo-inverse-scale-percent <pct>` | `--support-halo-inverse-scale <pct>` | Float `0..200` (`%`) | `100` | Inverse blob-diameter radius scaling strength (`0` = fixed radius, `100` = default inverse scaling) |
+| `--support-halo-max-intensity <pct>` | `--support-halo-intensity <pct>` | Float `0..100` (`%`) | `25` (`donut`) / `50` (`linear`/`exp`) | Peak halo grayscale intensity (`%` of optical energy, gamma-corrected) |
+| `--support-halo-profile <profile>` | — | `donut` \| `linear` \| `exponential` (`exp_decay`) \| `gaussian` | `donut` | Radial falloff curve around the `255` support core |
+| `--support-halo-scope <scope>` | — | `tips_only` \| `full_supports` | `tips_only` | Apply halo only to thin 2D tip blobs or all support cross-sections |
+| `--support-halo-max-tip-diameter-mm <mm>` | `--support-halo-max-tip-diameter <mm>` *(TS CLI)* | Float `0.10..5.00` (mm) | `0.80` | Max 2D area-equivalent blob diameter gated as a support tip in `tips_only` scope |
+| `--support-halo-radius-px <px>` | — | Integer `0..16` (px) | `0` | Legacy pixel radius fallback (overridden when `support_halo_radius_mm > 0`) |
+| `--aa-mode <mode>` | `--anti-aliasing-mode` *(Rust CLI)* | `Off` \| `Coverage` \| `Blur` (`2DAA`) \| `3DAA` (`Vertical2`) | Preset-driven | Inline anti-aliasing mode override (implies `enableOverride: true`) |
+| `--aa-level <level>` | `--anti-aliasing` *(Rust CLI)* | `Off` \| `2x` \| `4x` \| `8x` \| `16x` | Preset-driven | Inline anti-aliasing level override |
+| `--blur-radius <px>` | `--blur-radius-px`, `--blur-brush-radius-px` *(Rust CLI)* | Integer `0..4` (px) | Preset-driven | Inline 2D XY blur brush radius override |
+| `--z-blur-radius <layers>` | `--z-blur-radius-layers` | Integer `0..4` (layers) | Preset-driven | Inline 3DAA Z blur radius override |
+| `--z-lookback <layers>` | `--z-blend-lookback`, `--z-blend-look-back` *(Rust CLI)* | Integer `1..16` (layers) | Preset-driven | Inline 3DAA Z-blend look-back depth override |
+| `--aa-on-supports [on\|off]` | — | Flag or `on\|off\|true\|false\|1\|0` | `false` | Apply model anti-aliasing to support geometry |
 - `--aa-settings <aa.json>` applies anti-aliasing settings on top of the
   material's, as the panel's session override does. The file has the shape a
-  material stores them in; `enableOverride` is implied:
+  material stores them in; `enableOverride` is implied when overriding AA mode/level/blur:
 
   ```json
   {

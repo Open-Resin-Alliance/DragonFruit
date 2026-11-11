@@ -21,6 +21,8 @@
 #   --mesh-dir <dir>     STL mesh dir for the voxls    (default: <fixtures>)
 #   --layer-heights CSV  e.g. 0.05,0.03               (default: 0.05)
 #   --aa-presets CSV     sharp,balanced,smooth,raw    (default: sharp,balanced,smooth,raw)
+#   --support-halo       enable calibrated Support Halo across benchmark runs
+#   --no-support-halo    explicitly disable Support Halo across benchmark runs
 #   --out <file>         JSONL output                 (default: bench-results.jsonl)
 #   --repeats N          runs per case, averaged      (default: 1)
 #   --no-build           skip cargo build
@@ -96,6 +98,7 @@ OVERLAY=0
 VALIDATE_DIR=""
 REQUIRE_GOLDEN=0
 HW_CONFIGS=""
+SUPPORT_HALO_FLAG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -104,6 +107,8 @@ while [[ $# -gt 0 ]]; do
     --mesh-dir) MESH_DIR="$2"; shift 2;;
     --layer-heights) LAYER_HEIGHTS="$2"; shift 2;;
     --aa-presets) AA_PRESETS="$2"; shift 2;;
+    --support-halo) SUPPORT_HALO_FLAG="--support-halo"; shift;;
+    --no-support-halo) SUPPORT_HALO_FLAG="--no-support-halo"; shift;;
     --out) OUT="$2"; shift 2;;
     --repeats) REPEATS="$2"; shift 2;;
     --no-build) DO_BUILD=0; shift;;
@@ -664,7 +669,7 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-m
         # so the series survives an OOM SIGKILL that never reaches the final --json emit; the
         # failure branch below folds it into the error row for post-mortem debugging.
         if DF_RESOURCE_LOG="$reslog" $DETERMINISTIC_STAMP $HWPRE $TS scene slice "$voxl" --o "$tmp" --mesh-dir "$MESH_DIR" \
-                   --printer "$printer" --layer-height "$lh" --aa-preset "$aa" \
+                   --printer "$printer" --layer-height "$lh" --aa-preset "$aa" $SUPPORT_HALO_FLAG \
                    --json >"$resf" 2>"$errf"; then
           # print inspect is zip-only; on binary formats (.ctb/.goo/…) it fails and
           # we fall back to a non-empty-file gate. fsize is always available via stat.
@@ -686,7 +691,7 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-m
             numeric_layer_count:($nlc // null),
             gate:(if $nlc != null then "numeric-layer-count" else "file-nonempty" end),
             ok:(if $nlc != null then ($nlc == $s.layers) else ($fsize > 0) end),
-            x_packing_mode:$s.x_packing_mode, anti_aliasing:$s.anti_aliasing, dither:$s.dither,
+            x_packing_mode:$s.x_packing_mode, anti_aliasing:$s.anti_aliasing, support_halo:$s.support_halo, dither:$s.dither,
             total_s:$s.total_s, wall_s:$s.wall_s, layers_per_second:$s.layers_per_second,
             perf:$s.perf,
             cpu_total_s:$s.resources.cpu_total_s, cpu_percent:$s.resources.cpu_percent,
