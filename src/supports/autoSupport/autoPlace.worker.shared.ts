@@ -21,7 +21,13 @@ import { setSettings } from '../Settings/state';
 import type { AutoPlaceProgressCallback } from './autoPlace';
 import type { SupportSettings } from '../Settings/types';
 import type { SupportState } from '../types';
-import { registerMeshForAutoBrace } from '../autoBracing/meshGeometryStore';
+import { DEFAULT_RAFT_SETTINGS } from '../Rafts/Crenelated/RaftDefaults';
+import { seedRaftStateSnapshot, type RaftStateSnapshot } from '../Rafts/Crenelated/RaftState';
+import {
+    getRegisteredMeshesForAutoBrace,
+    registerMeshForAutoBrace,
+    unregisterMeshForAutoBrace,
+} from '../autoBracing/meshGeometryStore';
 import { computeAutoSupportPlan } from './autoPlace';
 import { setResolvedSizingBands } from './parameterSizing';
 import type { SizingBand } from './settings';
@@ -58,6 +64,12 @@ export type SerializedIsland = Omit<DetectedIsland, 'contact'> & {
     contact: { x: number; y: number; z: number };
 };
 
+export type AutoPlaceWorkerSiblingMesh = {
+    modelId: string;
+    meshKey: string;
+    mesh?: SerializedModelMesh;
+};
+
 export type AutoPlaceWorkerPayload = {
     /**
      * The sizing bands this run may resolve, by Support Studio preset id, resolved
@@ -70,6 +82,8 @@ export type AutoPlaceWorkerPayload = {
     settingsOverride?: Partial<AutoSupportSettings>;
     /** The app's full settings, which the plan reads through `getSettings()`. */
     appSettings: SupportSettings;
+    /** Global and per-model raft settings snapshot from the main thread. */
+    raftState?: RaftStateSnapshot;
     /** The pre-run snapshot: seeds the worker's store and is passed as `baseState`. */
     baseState: SupportState;
     mesh?: SerializedModelMesh;
@@ -78,8 +92,10 @@ export type AutoPlaceWorkerPayload = {
     /** The cavity (void boundary) in the model's pose, for interior-contact
      *  classification. Absent when the model is not hollowed. */
     cavityMesh?: SerializedModelMesh;
-    /** {@link modelMeshKey} of `cavityMesh`. */
-    cavityMeshKey?: string;
+    /** {@link modelMeshKey} of `cavityMesh`, or `null` when cleared. */
+    cavityMeshKey?: string | null;
+    /** Active sibling model meshes on the plate for cross-model brace clearance. */
+    siblingMeshes?: AutoPlaceWorkerSiblingMesh[];
 };
 
 export type AutoPlaceWorkerRequest = {
@@ -101,15 +117,32 @@ export function serializeIsland(island: DetectedIsland): SerializedIsland {
     };
 }
 
+const bufferArrayIdentityIds = new WeakMap<object, number>();
+let nextBufferArrayIdentityId = 1;
+
+function bufferArrayIdentity(array: ArrayLike<number> | null | undefined): number {
+    if (!array || typeof array !== 'object') return 0;
+    let id = bufferArrayIdentityIds.get(array);
+    if (id === undefined) {
+        id = nextBufferArrayIdentityId++;
+        bufferArrayIdentityIds.set(array, id);
+    }
+    return id;
+}
+
 /** The identity a serialized mesh is valid for: geometry contents plus pose. */
 export function modelMeshKey(mesh: THREE.Mesh): string {
     const geometry = mesh.geometry as THREE.BufferGeometry;
     const position = geometry.getAttribute('position');
     const index = geometry.getIndex();
+    const posArrayId = bufferArrayIdentity(position?.array);
+    const idxArrayId = bufferArrayIdentity(index?.array);
     return [
         geometry.uuid,
         attributeVersion(position),
+        `${posArrayId}:${position?.count ?? 0}`,
         attributeVersion(index),
+        `${idxArrayId}:${index?.count ?? 0}`,
         ...mesh.matrixWorld.elements,
     ].join(',');
 }
@@ -175,12 +208,49 @@ export function deserializeModelMesh(serialized: SerializedModelMesh): THREE.Mes
 }
 
 /**
- * The mesh this thread last rebuilt. Building a mesh costs a BVH over the
- * whole model (measured ~210 ms at 500k triangles), and a model's geometry
- * only changes when the user edits it, so an unchanged key reuses the mesh.
+ * Meshes this thread has rebuilt, keyed by `modelId`. Building a mesh costs a
+ * BVH over the whole model (measured ~210 ms at 500k triangles), and a model's
+ * geometry/pose only changes when the user edits it, so an unchanged `meshKey`
+ * reuses the warm `THREE.Mesh` even when `mesh` is omitted on the wire.
  */
-let cachedMesh: { modelId: string; key: string; mesh: THREE.Mesh } | null = null;
-let cachedCavityMesh: { modelId: string; key: string; mesh: THREE.Mesh } | null = null;
+const cachedModelMeshes = new Map<string, { meshKey: string; mesh: THREE.Mesh }>();
+const cachedCavityMeshes = new Map<string, { meshKey: string; mesh: THREE.Mesh }>();
+
+export function resetAutoPlaceWorkerCache(): void {
+    cachedModelMeshes.clear();
+    cachedCavityMeshes.clear();
+}
+
+function resolveModelMeshEntry(
+    cache: Map<string, { meshKey: string; mesh: THREE.Mesh }>,
+    modelId: string,
+    serialized: SerializedModelMesh | null | undefined,
+    meshKey: string | null | undefined,
+): THREE.Mesh | undefined {
+    if (serialized === null || meshKey === null || (!serialized && !meshKey)) {
+        cache.delete(modelId);
+        return undefined;
+    }
+    const existing = cache.get(modelId);
+    if (serialized) {
+        if (meshKey && existing && existing.meshKey === meshKey) {
+            existing.mesh.updateMatrixWorld(true);
+            return existing.mesh;
+        }
+        const mesh = deserializeModelMesh(serialized);
+        if (meshKey) {
+            cache.set(modelId, { meshKey, mesh });
+        } else {
+            cache.delete(modelId);
+        }
+        return mesh;
+    }
+    if (meshKey && existing && existing.meshKey === meshKey) {
+        existing.mesh.updateMatrixWorld(true);
+        return existing.mesh;
+    }
+    throw new Error(`Auto-place worker mesh cache miss for model "${modelId}" (key "${meshKey}")`);
+}
 
 /**
  * Point this thread's module state at the run's inputs. Returns the mesh the
@@ -195,34 +265,63 @@ export function seedAutoPlaceEnvironment(payload: AutoPlaceWorkerPayload): {
     initializeBVH();
     setSettings(payload.appSettings);
     setSnapshot(payload.baseState);
+    seedRaftStateSnapshot(
+        payload.raftState ?? {
+            global: { ...DEFAULT_RAFT_SETTINGS },
+            perModel: {},
+        },
+    );
     // This thread has no storage, so it cannot resolve a Support Studio preset the
     // user made: the main thread resolves every band the run can name and the
     // worker sizes with those numbers verbatim.
     setResolvedSizingBands(payload.sizingBands ?? null);
 
-    let cavityMesh: THREE.Mesh | undefined;
-    if (payload.cavityMesh) {
-        if (cachedCavityMesh && cachedCavityMesh.modelId === payload.modelId
-            && cachedCavityMesh.key === (payload.cavityMeshKey ?? '')) {
-            cavityMesh = cachedCavityMesh.mesh;
-        } else {
-            cavityMesh = deserializeModelMesh(payload.cavityMesh);
-            cachedCavityMesh = { modelId: payload.modelId, key: payload.cavityMeshKey ?? '', mesh: cavityMesh };
+    const cavityMesh = resolveModelMeshEntry(
+        cachedCavityMeshes,
+        payload.modelId,
+        payload.cavityMesh,
+        payload.cavityMeshKey,
+    );
+
+    const activeMeshModelIds = new Set<string>();
+    const mesh = resolveModelMeshEntry(
+        cachedModelMeshes,
+        payload.modelId,
+        payload.mesh,
+        payload.meshKey,
+    );
+    if (mesh) {
+        setModelMesh(payload.modelId, mesh);
+        registerMeshForAutoBrace(payload.modelId, mesh.geometry as THREE.BufferGeometry, mesh.matrixWorld);
+        activeMeshModelIds.add(payload.modelId);
+    } else {
+        setModelMesh(payload.modelId, null);
+    }
+
+    for (const sibling of payload.siblingMeshes ?? []) {
+        if (!sibling.modelId || sibling.modelId === payload.modelId) continue;
+        const siblingMesh = resolveModelMeshEntry(
+            cachedModelMeshes,
+            sibling.modelId,
+            sibling.mesh,
+            sibling.meshKey,
+        );
+        if (siblingMesh) {
+            registerMeshForAutoBrace(
+                sibling.modelId,
+                siblingMesh.geometry as THREE.BufferGeometry,
+                siblingMesh.matrixWorld,
+            );
+            activeMeshModelIds.add(sibling.modelId);
         }
     }
 
-    if (!payload.mesh) return { cavityMesh };
-
-    let mesh: THREE.Mesh;
-    if (cachedMesh && cachedMesh.modelId === payload.modelId && cachedMesh.key === (payload.meshKey ?? '')) {
-        mesh = cachedMesh.mesh;
-    } else {
-        mesh = deserializeModelMesh(payload.mesh);
-        cachedMesh = { modelId: payload.modelId, key: payload.meshKey ?? '', mesh };
+    for (const registeredModelId of [...getRegisteredMeshesForAutoBrace().keys()]) {
+        if (!activeMeshModelIds.has(registeredModelId)) {
+            unregisterMeshForAutoBrace(registeredModelId);
+        }
     }
 
-    setModelMesh(payload.modelId, mesh);
-    registerMeshForAutoBrace(payload.modelId, mesh.geometry as THREE.BufferGeometry, mesh.matrixWorld);
     return { mesh, cavityMesh };
 }
 

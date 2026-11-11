@@ -3,7 +3,7 @@ import type { CandidatePoint } from './types';
 import { getSettings } from '../Settings/state';
 import { getPresetById } from '../Settings/presets';
 import { AUTO_SUPPORT_CONSTRAINTS, MIN_CONTACT_TIP_DIAMETER_MM, SIZING_BANDS } from './settings';
-import type { SizingBand, SizingPreset } from './settings';
+import type { AutoSupportSettings, SizingBand, SizingPreset } from './settings';
 import type { SupportSettings } from '../Settings/types';
 
 // ---------------------------------------------------------------------------
@@ -120,9 +120,9 @@ export function resolveSizingBand(id: string | null | undefined): SizingBand {
         : { ...band, tipContactDiameterMm: MIN_CONTACT_TIP_DIAMETER_MM };
 }
 
-/** The band the run sizes with: the Support Studio preset the live settings name. */
-export function activeSizingBand(): SizingBand {
-    return resolveSizingBand(getSettings().autoSupport?.sizingPreset);
+/** The band the run sizes with: the Support Studio preset the run or live settings name. */
+export function activeSizingBand(autoSettings?: Partial<AutoSupportSettings>): SizingBand {
+    return resolveSizingBand((autoSettings ?? getSettings().autoSupport)?.sizingPreset ?? getSettings().autoSupport?.sizingPreset);
 }
 
 /** Tip contact for small-island candidates: the factory `detail` tier's tip,
@@ -213,14 +213,15 @@ export interface ModelSizingFactors {
     trunkScale: number;
 }
 
-/** The live model-scale calibrations, read from the `autoSupport` settings. */
-function modelSizingConfig(): { enabled: boolean; sizeCap: number; loadCap: number; heightCap: number } {
-    const auto = getSettings().autoSupport;
+/** The live model-scale calibrations, read from the run's or store's `autoSupport` settings. */
+function modelSizingConfig(autoSettings?: Partial<AutoSupportSettings>): { enabled: boolean; sizeCap: number; loadCap: number; heightCap: number } {
+    const auto = autoSettings ?? getSettings().autoSupport;
+    const live = getSettings().autoSupport;
     return {
-        enabled: auto?.modelScaleEnabled ?? true,
-        sizeCap: auto?.modelSizeFactorCap ?? AUTO_SUPPORT_CONSTRAINTS.modelSizeFactorCap.defaultValue,
-        loadCap: auto?.modelLoadFactorCap ?? AUTO_SUPPORT_CONSTRAINTS.modelLoadFactorCap.defaultValue,
-        heightCap: auto?.heightFactorCap ?? AUTO_SUPPORT_CONSTRAINTS.heightFactorCap.defaultValue,
+        enabled: auto?.modelScaleEnabled ?? live?.modelScaleEnabled ?? true,
+        sizeCap: auto?.modelSizeFactorCap ?? live?.modelSizeFactorCap ?? AUTO_SUPPORT_CONSTRAINTS.modelSizeFactorCap.defaultValue,
+        loadCap: auto?.modelLoadFactorCap ?? live?.modelLoadFactorCap ?? AUTO_SUPPORT_CONSTRAINTS.modelLoadFactorCap.defaultValue,
+        heightCap: auto?.heightFactorCap ?? live?.heightFactorCap ?? AUTO_SUPPORT_CONSTRAINTS.heightFactorCap.defaultValue,
     };
 }
 
@@ -230,8 +231,8 @@ function modelSizingConfig(): { enabled: boolean; sizeCap: number; loadCap: numb
  * ones, so sizing is exactly the band. `autoSupport.modelScaleEnabled === false`
  * pins every factor to ×1 the same way.
  */
-export function modelSizingFactors(ctx?: ModelSizingContext): ModelSizingFactors {
-    const { enabled, sizeCap, loadCap } = modelSizingConfig();
+export function modelSizingFactors(ctx?: ModelSizingContext, autoSettings?: Partial<AutoSupportSettings>): ModelSizingFactors {
+    const { enabled, sizeCap, loadCap } = modelSizingConfig(autoSettings);
     const sizeMm = ctx?.modelSizeMm ?? 0;
     const shareG = ctx && ctx.totalCandidates > 0
         ? (ctx.modelVolumeMm3 * RESIN_DENSITY_G_PER_MM3) / ctx.totalCandidates
@@ -335,8 +336,9 @@ export function sizeParameters(
     candidate: CandidatePoint,
     sizeScale = 1,
     ctx?: ModelSizingContext,
+    autoSettings?: Partial<AutoSupportSettings>,
 ): SizeOverrides {
-    const band = activeSizingBand();
+    const band = activeSizingBand(autoSettings);
 
     // The area that drives thickness: the candidate's own supported island.
     // No merge-radius cluster summing — dense regions would double-count
@@ -349,11 +351,11 @@ export function sizeParameters(
     // needs a thicker column the further it is from the plate. Monotone from
     // the band at HEIGHT_REFERENCE_MM up to the configured `heightFactorCap` —
     // a support shorter than the reference is at band, never below it.
-    const { enabled: modelScaleEnabled, heightCap } = modelSizingConfig();
+    const { enabled: modelScaleEnabled, heightCap } = modelSizingConfig(autoSettings);
     const heightFactor = modelScaleEnabled
         ? powerFactor(zHeight / HEIGHT_REFERENCE_MM, HEIGHT_EXPONENT, heightCap)
         : 1;
-    const trunkScale = modelSizingFactors(ctx).trunkScale;
+    const trunkScale = modelSizingFactors(ctx, autoSettings).trunkScale;
     const modelScale = Math.min(MAX_MODEL_SCALE_FACTOR, heightFactor * trunkScale);
     const shaftDiameterMm = round(
         clamp(

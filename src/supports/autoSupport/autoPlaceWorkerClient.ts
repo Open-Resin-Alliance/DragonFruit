@@ -13,6 +13,10 @@
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
 import { getSettings } from '../Settings/state';
 import { getSnapshot } from '../state';
+import { getRaftStateSnapshot } from '../Rafts/Crenelated/RaftState';
+import { getRegisteredMeshesForAutoBrace } from '../autoBracing/meshGeometryStore';
+import { SUPPORT_TYPES, type SupportCollectionKey } from '../supportTypeRegistry';
+import type { SupportState } from '../types';
 import { commitAutoPlacePlan, logAutoPlaceTimings, runAutoPlace } from './autoPlace';
 import * as THREE from 'three';
 import { getModelMesh } from './meshStore';
@@ -25,6 +29,7 @@ import {
     serializeModelMesh,
     type AutoPlaceWorkerPayload,
     type AutoPlaceWorkerResponse,
+    type AutoPlaceWorkerSiblingMesh,
     type SerializedModelMesh,
 } from './autoPlace.worker.shared';
 
@@ -48,8 +53,17 @@ const pending = new Map<number, {
  */
 export const AUTO_PLACE_WORKER_STARTUP_TIMEOUT_MS = 10_000;
 
-/** Last mesh sent, so a repeat run does not re-copy megabytes of geometry. */
-let meshCache: { key: string; mesh: SerializedModelMesh } | null = null;
+/**
+ * Per-worker-session mesh keys already delivered to the active worker, so
+ * consecutive runs omit unchanged geometry arrays from `postMessage`.
+ */
+const confirmedMeshKeys = new Map<string, string>();
+const confirmedCavityMeshKeys = new Map<string, string>();
+
+const clearWorkerSessionCaches = (): void => {
+    confirmedMeshKeys.clear();
+    confirmedCavityMeshKeys.clear();
+};
 
 /**
  * Set once the worker has failed in a way that is not about the plan itself
@@ -65,7 +79,10 @@ const dropWorker = (target: Worker) => {
     } catch {
         // Already gone.
     }
-    if (worker === target) worker = null;
+    if (worker === target) {
+        worker = null;
+        clearWorkerSessionCaches();
+    }
 };
 
 const failAll = (error: Error) => {
@@ -80,6 +97,7 @@ const ensureWorker = (): Worker | null => {
     if (typeof Worker === 'undefined' || workerUnusable) return null;
     if (worker) return worker;
 
+    clearWorkerSessionCaches();
     try {
         const target = new Worker(new URL('./autoPlace.worker.ts', import.meta.url), { type: 'module' });
         target.onmessage = (event: MessageEvent<AutoPlaceWorkerResponse>) => {
@@ -116,6 +134,7 @@ const ensureWorker = (): Worker | null => {
     } catch (error) {
         console.warn('[AutoSupport] worker unavailable, running in-process:', error);
         worker = null;
+        clearWorkerSessionCaches();
     }
 
     return worker;
@@ -127,45 +146,148 @@ const ensureWorker = (): Worker | null => {
  */
 export function resetAutoPlaceWorker(): void {
     workerUnusable = false;
+    clearWorkerSessionCaches();
     if (worker) dropWorker(worker);
 }
 
-let cavityCache: { key: string; mesh: SerializedModelMesh } | null = null;
-
 /** Pose the cavity geometry exactly like the model mesh the run uses: the
  *  cavity surface is in model-local space, contacts are world-space. */
-const serializeCavityForModel = (
-    modelId: string,
-    cavityGeometry: THREE.BufferGeometry | null | undefined,
-): { cavityMesh?: SerializedModelMesh; cavityMeshKey?: string } => {
-    if (!cavityGeometry) return {};
-    const pose = getModelMesh(modelId);
-    if (!pose) return {};
-
+const poseCavityMesh = (
+    pose: THREE.Mesh,
+    cavityGeometry: THREE.BufferGeometry,
+): THREE.Mesh => {
     const mesh = new THREE.Mesh(cavityGeometry);
     mesh.matrixAutoUpdate = false;
     mesh.matrix.copy(pose.matrixWorld);
     mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
     mesh.updateMatrixWorld(true);
-
-    const key = modelMeshKey(mesh);
-    if (cavityCache?.key === key) return { cavityMesh: cavityCache.mesh, cavityMeshKey: key };
-    const serialized = serializeModelMesh(mesh);
-    cavityCache = { key, mesh: serialized };
-    return { cavityMesh: serialized, cavityMeshKey: key };
+    return mesh;
 };
 
-const serializeMeshForModel = (modelId: string): { mesh?: SerializedModelMesh; meshKey?: string } => {
-    const mesh = getModelMesh(modelId);
-    if (!mesh) return {};
-
-    const key = modelMeshKey(mesh);
-    if (meshCache?.key === key) return { mesh: meshCache.mesh, meshKey: key };
-
+const encodeMeshForWorker = (
+    targetModelId: string,
+    mesh: THREE.Mesh | null | undefined,
+): { mesh?: SerializedModelMesh; meshKey?: string } => {
+    if (!mesh) {
+        confirmedMeshKeys.delete(targetModelId);
+        return {};
+    }
+    const meshKey = modelMeshKey(mesh);
+    if (confirmedMeshKeys.get(targetModelId) === meshKey) {
+        return { mesh: undefined, meshKey };
+    }
     const serialized = serializeModelMesh(mesh);
-    meshCache = { key, mesh: serialized };
-    return { mesh: serialized, meshKey: key };
+    confirmedMeshKeys.set(targetModelId, meshKey);
+    return { mesh: serialized, meshKey };
 };
+
+const encodeCavityForWorker = (
+    targetModelId: string,
+    primaryMesh: THREE.Mesh | null | undefined,
+    cavityGeometry: THREE.BufferGeometry | null | undefined,
+): { cavityMesh?: SerializedModelMesh; cavityMeshKey?: string | null } => {
+    if (!cavityGeometry || !primaryMesh) {
+        const hadConfirmed = confirmedCavityMeshKeys.delete(targetModelId);
+        return hadConfirmed ? { cavityMeshKey: null } : {};
+    }
+    const posedCavity = poseCavityMesh(primaryMesh, cavityGeometry);
+    const cavityMeshKey = modelMeshKey(posedCavity);
+    if (confirmedCavityMeshKeys.get(targetModelId) === cavityMeshKey) {
+        return { cavityMesh: undefined, cavityMeshKey };
+    }
+    const serialized = serializeModelMesh(posedCavity);
+    confirmedCavityMeshKeys.set(targetModelId, cavityMeshKey);
+    return { cavityMesh: serialized, cavityMeshKey };
+};
+
+const collectActiveSiblingModelIds = (
+    baseState: SupportState,
+    primaryModelId: string,
+): string[] => {
+    const siblingIds = new Set<string>();
+    for (const root of Object.values(baseState.roots ?? {})) {
+        if (root.modelId && root.modelId !== primaryModelId) {
+            siblingIds.add(root.modelId);
+        }
+    }
+    for (const descriptor of SUPPORT_TYPES) {
+        const collection = baseState[descriptor.location.key as SupportCollectionKey] as unknown as Record<string, {
+            modelId?: string;
+            rootId?: string;
+        }>;
+        for (const entity of Object.values(collection ?? {})) {
+            const entityModelId = entity.modelId
+                ?? (typeof entity.rootId === 'string' ? baseState.roots?.[entity.rootId]?.modelId : undefined);
+            if (entityModelId && entityModelId !== primaryModelId) {
+                siblingIds.add(entityModelId);
+            }
+        }
+    }
+    for (const entity of Object.values(baseState.supports ?? {})) {
+        if (entity.modelId && entity.modelId !== primaryModelId) {
+            siblingIds.add(entity.modelId);
+        }
+    }
+    for (const knot of Object.values(baseState.knots ?? {})) {
+        const knotModelId = (knot as { modelId?: string }).modelId;
+        if (knotModelId && knotModelId !== primaryModelId) {
+            siblingIds.add(knotModelId);
+        }
+    }
+    return [...siblingIds].sort();
+};
+
+export function buildAutoPlaceWorkerPayload(
+    islands: DetectedIsland[],
+    modelId: string,
+    settingsOverride?: Partial<AutoSupportSettings>,
+    cavityGeometry?: THREE.BufferGeometry | null,
+): AutoPlaceWorkerPayload {
+    const appSettings = getSettings();
+    const baseState = getSnapshot();
+    const raftState = getRaftStateSnapshot();
+    const primaryMesh = getModelMesh(modelId);
+    const encodedPrimary = encodeMeshForWorker(modelId, primaryMesh);
+    const encodedCavity = encodeCavityForWorker(modelId, primaryMesh, cavityGeometry);
+
+    const registeredAutoBraceMeshes = getRegisteredMeshesForAutoBrace();
+    const siblingMeshes: AutoPlaceWorkerSiblingMesh[] = [];
+    for (const sibModelId of collectActiveSiblingModelIds(baseState, modelId)) {
+        const sibMesh = getModelMesh(sibModelId) ?? registeredAutoBraceMeshes.get(sibModelId) ?? null;
+        if (!sibMesh) {
+            confirmedMeshKeys.delete(sibModelId);
+            continue;
+        }
+        const encodedSibling = encodeMeshForWorker(sibModelId, sibMesh);
+        if (encodedSibling.meshKey) {
+            siblingMeshes.push({
+                modelId: sibModelId,
+                meshKey: encodedSibling.meshKey,
+                ...(encodedSibling.mesh ? { mesh: encodedSibling.mesh } : {}),
+            });
+        }
+    }
+
+    return {
+        modelId,
+        islands: islands.map(serializeIsland),
+        settingsOverride,
+        // The worker has no storage, so it cannot resolve a Support Studio preset
+        // the user made: every band the run can name is resolved here, where the
+        // preset table is, and handed over with the request.
+        sizingBands: resolvedSizingBandsForRun(
+            settingsOverride?.sizingPreset ?? appSettings.autoSupport.sizingPreset,
+        ),
+        appSettings,
+        raftState,
+        baseState,
+        ...(encodedPrimary.mesh ? { mesh: encodedPrimary.mesh } : {}),
+        ...(encodedPrimary.meshKey ? { meshKey: encodedPrimary.meshKey } : {}),
+        ...(encodedCavity.cavityMesh ? { cavityMesh: encodedCavity.cavityMesh } : {}),
+        ...(encodedCavity.cavityMeshKey !== undefined ? { cavityMeshKey: encodedCavity.cavityMeshKey } : {}),
+        siblingMeshes,
+    };
+}
 
 const requestPlan = (
     target: Worker,
@@ -189,7 +311,14 @@ const requestPlan = (
         // Serialising the mesh and structured-cloning the payload happen
         // before the worker can report anything. Put the bar up now.
         onProgress?.({ phase: 'Preparing model', done: 0, total: 1 });
-        target.postMessage({ type: 'run', requestId, payload });
+        try {
+            target.postMessage({ type: 'run', requestId, payload });
+        } catch (err) {
+            clearTimeout(startupTimer);
+            pending.delete(requestId);
+            clearWorkerSessionCaches();
+            reject(err instanceof Error ? err : new Error(String(err)));
+        }
     });
 };
 
@@ -213,14 +342,7 @@ export async function runAutoPlaceInWorker(
     const target = ensureWorker();
     const cavityPose = cavityGeometry ? getModelMesh(modelId) : null;
     const cavityMesh = cavityGeometry && cavityPose
-        ? (() => {
-            const mesh = new THREE.Mesh(cavityGeometry);
-            mesh.matrixAutoUpdate = false;
-            mesh.matrix.copy(cavityPose.matrixWorld);
-            mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
-            mesh.updateMatrixWorld(true);
-            return mesh;
-        })()
+        ? poseCavityMesh(cavityPose, cavityGeometry)
         : undefined;
     if (!target) {
         // No worker in this environment (tests, plain browser), or one that has
@@ -230,22 +352,15 @@ export async function runAutoPlaceInWorker(
 
     let plan: AutoSupportPlan | null;
     try {
-        plan = await requestPlan(target, {
+        const payload = buildAutoPlaceWorkerPayload(
+            islands,
             modelId,
-            islands: islands.map(serializeIsland),
             settingsOverride,
-            // The worker has no storage, so it cannot resolve a Support Studio preset
-            // the user made: every band the run can name is resolved here, where the
-            // preset table is, and handed over with the request.
-            sizingBands: resolvedSizingBandsForRun(
-                settingsOverride?.sizingPreset ?? getSettings().autoSupport.sizingPreset,
-            ),
-            appSettings: getSettings(),
-            baseState: getSnapshot(),
-            ...serializeMeshForModel(modelId),
-            ...serializeCavityForModel(modelId, cavityGeometry),
-        }, onProgress);
+            cavityGeometry,
+        );
+        plan = await requestPlan(target, payload, onProgress);
     } catch (error) {
+        clearWorkerSessionCaches();
         console.error(
             '[AutoSupport] worker run failed, falling back to the in-process run. ' +
             'Later runs this session go straight to in-process.',

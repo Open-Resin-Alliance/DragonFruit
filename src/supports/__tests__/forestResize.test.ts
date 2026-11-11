@@ -265,3 +265,36 @@ test('syncContactConeDiameters is a no-op when bodies already match', () => {
 
     assert.equal(syncContactConeDiameters(s), s, 'matching forest returned untouched');
 });
+
+test('computeForestDiameterProfile scoped to model-b resizes model-b while leaving model-a untouched', () => {
+    const s = createEmptySnapshot();
+    // Model A: loaded trunk with 4 fat branches
+    s.roots['ra'] = createRoot('ra', 'model-a', -10);
+    s.trunks['ta'] = createTrunk('ta', 'model-a', 'ra', 'seg-a', -10, 0, 10, 0.8);
+    s.knots['ka'] = { id: 'ka', parentShaftId: 'seg-a', t: 0.5, pos: { x: -10, y: 0, z: 5.5 }, diameter: 1.0 };
+    for (let i = 0; i < 4; i++) {
+        s.branches[`ba-${i}`] = createBranch(`ba-${i}`, 'model-a', 'ka', 1.2);
+    }
+
+    // Model B: loaded trunk with 4 fat branches
+    s.roots['rb'] = createRoot('rb', 'model-b', 10);
+    s.trunks['tb'] = createTrunk('tb', 'model-b', 'rb', 'seg-b', 10, 0, 10, 0.8);
+    s.knots['kb'] = { id: 'kb', parentShaftId: 'seg-b', t: 0.5, pos: { x: 10, y: 0, z: 5.5 }, diameter: 1.0 };
+    for (let i = 0; i < 4; i++) {
+        s.branches[`bb-${i}`] = createBranch(`bb-${i}`, 'model-b', 'kb', 1.2);
+    }
+
+    const beforeTrunkA = JSON.stringify(s.trunks['ta']);
+    const beforeKnotA = JSON.stringify(s.knots['ka']);
+
+    const resized = computeForestDiameterProfile(s, 'model-b');
+
+    // Model B was split and thickened
+    assert.ok(resized.trunks['tb'].segments.length >= 2, 'model-b trunk split at branch knot');
+    assert.equal(resized.trunks['tb'].segments[0].diameter, 1.2, 'model-b lower segment thickened to 1.2mm');
+    assert.equal(resized.knots['kb'].t, 1, 'model-b knot rehosted to split segment boundary');
+
+    // Model A is byte-for-byte untouched
+    assert.equal(JSON.stringify(resized.trunks['ta']), beforeTrunkA, 'model-a trunk untouched');
+    assert.equal(JSON.stringify(resized.knots['ka']), beforeKnotA, 'model-a knot untouched');
+});

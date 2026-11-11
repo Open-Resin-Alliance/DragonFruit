@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import * as THREE from 'three';
+
 import {
     createDefaultAutoSupportSettings,
     normalizeAutoSupportSettings,
@@ -9,6 +11,10 @@ import {
     AUTO_SUPPORT_CONSTRAINTS,
     SIZING_BANDS,
 } from '../autoSupport/settings';
+import { computeAutoSupportPlan, forestReportToText } from '../autoSupport/autoPlace';
+import { getSettings, updateAutoSupportSettings } from '../Settings/state';
+import { accelerateGeometry, initializeBVH } from '../../utils/bvh';
+import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 
 test('defaults match constraints', () => {
     const defaults = createDefaultAutoSupportSettings();
@@ -213,4 +219,164 @@ test('patch merges partially', () => {
     assert.equal(patched.tipInfluenceRadiusMm, base.tipInfluenceRadiusMm);
     assert.equal(patched.prioritizeIntersection, base.prioritizeIntersection);
     assert.equal(patched.debugSkipAutoBracing, base.debugSkipAutoBracing);
+});
+
+test('computeAutoSupportPlan merges settingsOverride undefined-safely over live store and threads overrides without store mutation', () => {
+    initializeBVH();
+    // Large (300mm long) narrow (0.52mm wide) rib at z=30:
+    // - If modelScaleEnabled were true (live store), 300mm extent & z=30 would scale shaft > 0.8mm.
+    // - If sizingPreset were 'anchor' (live store), shaft would be >= 1.4mm instead of 'detail' (0.8mm).
+    // - On a 0.52mm rib: default margin 0.9 -> 0.468mm (uncapped vs detail 0.25mm, or on structure 0.28mm),
+    //   whereas tipContactMarginScale: 0.5 -> 0.52 * 0.5 = 0.26mm (< structure 0.28mm & < detail 30%-floor 0.24mm? Wait: on detail band tip is 0.25mm, on 0.46mm rib 0.46 * 0.5 = 0.23mm < 0.25mm!).
+    const ribGeo = new THREE.BoxGeometry(300, 0.46, 2).translate(0, 0, 31).toNonIndexed();
+    ribGeo.computeVertexNormals();
+    accelerateGeometry(ribGeo);
+    const ribMesh = new THREE.Mesh(ribGeo, new THREE.MeshBasicMaterial());
+    ribMesh.updateMatrixWorld(true);
+
+    const prevAuto = getSettings().autoSupport;
+    updateAutoSupportSettings({
+        areaPerSupportMm2: 20,
+        leafFanMaxAngleDeg: 20,
+        memberHostShaftRatio: 0.65,
+        sizingPreset: 'anchor',
+        modelScaleEnabled: true,
+        tipContactMarginScale: 0.95,
+    });
+
+    try {
+        const islands: DetectedIsland[] = [
+            {
+                id: 'rib-v0',
+                source: 'voxel',
+                contact: new THREE.Vector3(0, 0, 30),
+                baseZ: 30,
+                areaMm2: 4,
+                surfaceNormal: { x: 0, y: 0, z: -1 },
+                contactVoxels: { xy: new Float32Array([0, 0]), z: new Float32Array([30]), count: 1 },
+            },
+            {
+                id: 'rib-o1',
+                source: 'overhang',
+                contact: new THREE.Vector3(20, 0, 30),
+                baseZ: 30,
+                areaMm2: 4,
+                surfaceNormal: { x: 0, y: 0, z: -1 },
+                contactVoxels: { xy: new Float32Array([20, 0]), z: new Float32Array([30]), count: 1 },
+            },
+        ];
+
+        const plan = computeAutoSupportPlan(
+            islands,
+            'model-override',
+            {
+                modelScaleEnabled: false,
+                sizingPreset: 'detail',
+                tipContactMarginScale: 0.5,
+                leafFanMaxAngleDeg: undefined,
+                debugSkipAutoBracing: true,
+                stabilizationEnabled: false,
+                minimaReinforcementEnabled: false,
+            },
+            undefined,
+            ribMesh,
+        );
+
+        assert.ok(plan, 'plan computed');
+        // Global store was NOT mutated by overrides
+        assert.equal(getSettings().autoSupport.sizingPreset, 'anchor');
+        assert.equal(getSettings().autoSupport.modelScaleEnabled, true);
+        assert.equal(getSettings().autoSupport.tipContactMarginScale, 0.95);
+        assert.equal(getSettings().autoSupport.leafFanMaxAngleDeg, 20);
+
+        // (1) Live-store areaPerSupportMm2 = 20 survived into loadBudget with concrete non-zero capacity (2x areaPerSupportMm2: 10)
+        const planDefaultArea = computeAutoSupportPlan(
+            islands,
+            'model-override',
+            {
+                areaPerSupportMm2: 10,
+                modelScaleEnabled: false,
+                sizingPreset: 'detail',
+                tipContactMarginScale: 0.5,
+                leafFanMaxAngleDeg: undefined,
+                debugSkipAutoBracing: true,
+                stabilizationEnabled: false,
+                minimaReinforcementEnabled: false,
+            },
+            undefined,
+            ribMesh,
+        );
+        assert.ok(plan.analytics.forestReport?.loadBudget, 'loadBudget present');
+        assert.ok(planDefaultArea?.analytics.forestReport?.loadBudget, 'reference loadBudget present');
+        assert.ok(plan.analytics.forestReport!.loadBudget!.totalCapacityMm2 > 0, 'non-zero loadBudget capacity');
+        assert.notEqual(
+            plan.analytics.forestReport!.loadBudget!.totalCapacityMm2,
+            planDefaultArea!.analytics.forestReport!.loadBudget!.totalCapacityMm2,
+            'live-store areaPerSupportMm2=20 survived partial settingsOverride merge into loadBudget',
+        );
+
+        // (2) undefined leafFanMaxAngleDeg override did NOT clobber live-store 20 back to default 45 (capped at 30° by grid branch angle)
+        const reportWithFanDiag = {
+            ...plan.analytics.forestReport!,
+            diagnostics: {
+                ...plan.analytics.forestReport!.diagnostics!,
+                fanRefusals: { angle: 1 },
+            },
+        };
+        const text = forestReportToText(reportWithFanDiag);
+        assert.match(text, /angle=>20°/, 'live-store leafFanMaxAngleDeg=20 survived undefined override');
+        const textOverride = forestReportToText(reportWithFanDiag, { leafFanMaxAngleDeg: 25 });
+        assert.match(textOverride, /angle=>25°/, 'forestReportToText honors explicit autoSettings override');
+
+        // (3) sizingPreset: 'detail' (0.8mm), modelScaleEnabled: false (factors=1), and tipContactMarginScale: 0.5 (0.46 * 0.5 = 0.23mm) took effect
+        assert.equal(plan.analytics.sizingDebug?.sizeFactor, 1, 'modelScaleEnabled: false pinned sizeFactor to 1');
+        assert.equal(plan.analytics.sizingDebug?.loadFactor, 1, 'modelScaleEnabled: false pinned loadFactor to 1');
+        const placedTrunks = Object.values(plan.support.trunks).filter((t) => t.modelId === 'model-override');
+        assert.ok(placedTrunks.length > 0, 'placed at least one trunk');
+        for (const trunk of placedTrunks) {
+            assert.equal(trunk.segments[0].diameter, SIZING_BANDS.detail.shaftDiameterMm,
+                'trunk shaft uses overridden detail band (0.8mm) with modelScaleEnabled=false');
+            const tipDia = trunk.contactCone?.profile?.contactDiameterMm ?? 0;
+            // Note: syncContactConeDiameters raises contact to 30% of shaft (0.8 * 0.3 = 0.24mm), whereas uncapped anchor/structure would be >= 0.30-0.42mm.
+            // Wait: let's also check candidate tip cap before sync on a 0.50mm rib with structure preset (0.50 * 0.5 = 0.25mm < 0.30mm) or check sizingDebug!
+            assert.ok(tipDia <= 0.25, `tip contact reflects detail band + 0.5 margin cap (got ${tipDia})`);
+        }
+
+        // Direct check that tipContactMarginScale: 0.5 caps candidate tips below 0.95 margin scale on a 0.56mm rib under structure band:
+        // On a 0.56mm rib with anchor band (shaft 1.4mm, tipContact 0.40mm -> 30% floor 0.42mm):
+        // With margin 0.95 -> 0.56 * 0.95 = 0.532 >= 0.40 (uncapped -> synced to 0.42mm);
+        // With margin 0.5 -> 0.56 * 0.5 = 0.28mm (< 0.40mm, capped!). And sizingDebugSample / candidate pre-sync uses capped tip!
+        const rib60Geo = new THREE.BoxGeometry(30, 0.60, 2).translate(0, 0, 16).toNonIndexed();
+        rib60Geo.computeVertexNormals();
+        accelerateGeometry(rib60Geo);
+        const rib60Mesh = new THREE.Mesh(rib60Geo, new THREE.MeshBasicMaterial());
+        rib60Mesh.updateMatrixWorld(true);
+        const island60: DetectedIsland = {
+            id: 'rib60',
+            source: 'voxel',
+            contact: new THREE.Vector3(0, 0, 15),
+            baseZ: 15,
+            areaMm2: 4,
+            surfaceNormal: { x: 0, y: 0, z: -1 },
+        };
+        const planTightScaled = computeAutoSupportPlan(
+            [island60],
+            'm-tight-s',
+            { sizingPreset: 'structure', sizeScale: 0.75, modelScaleEnabled: false, tipContactMarginScale: 0.4, debugSkipAutoBracing: true, stabilizationEnabled: false, minimaReinforcementEnabled: false },
+            undefined,
+            rib60Mesh,
+        );
+        const planWideScaled = computeAutoSupportPlan(
+            [island60],
+            'm-wide-s',
+            { sizingPreset: 'structure', sizeScale: 0.75, modelScaleEnabled: false, tipContactMarginScale: 0.95, debugSkipAutoBracing: true, stabilizationEnabled: false, minimaReinforcementEnabled: false },
+            undefined,
+            rib60Mesh,
+        );
+        const tightTip = Object.values(planTightScaled!.support.trunks)[0]?.contactCone?.profile?.contactDiameterMm ?? 0;
+        const wideTip = Object.values(planWideScaled!.support.trunks)[0]?.contactCone?.profile?.contactDiameterMm ?? 0;
+        assert.ok(tightTip < wideTip, `overridden tipContactMarginScale=0.4 (${tightTip}) caps tighter than 0.95 (${wideTip})`);
+    } finally {
+        updateAutoSupportSettings({ ...prevAuto });
+    }
 });

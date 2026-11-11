@@ -58,7 +58,7 @@ export function generateCandidates(
     // Cap the tip contact by the local free width at each contact: a tip must
     // fit the feature it lands on. Same pass the lattice runs, so both
     // producers size their tips the same way (see contactTipCap.ts).
-    applyContactTipCaps(candidates, prune?.mesh);
+    applyContactTipCaps(candidates, prune?.mesh, settings.tipContactMarginScale, settings);
     // Score and sort
     if (candidates.length === 0) return [];
     const maxZ = Math.max(...candidates.map(c => c.zHeight), 1);

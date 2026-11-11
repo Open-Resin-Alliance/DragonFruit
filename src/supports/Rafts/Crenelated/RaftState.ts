@@ -149,3 +149,56 @@ export function clearRaftSettingsForModel(modelId: string): void {
 export function getAllPerModelRaftSettings(): Map<string, RaftSettings> {
   return new Map(perModelRaftSettings);
 }
+
+export type RaftStateSnapshot = {
+  global: RaftSettings;
+  perModel: Record<string, RaftSettings>;
+};
+
+/**
+ * Snapshot both global and per-model raft settings with cloned values so
+ * worker payload construction and in-memory mutations cannot alias store state.
+ */
+export function getRaftStateSnapshot(): RaftStateSnapshot {
+  const perModel: Record<string, RaftSettings> = {};
+  for (const [modelId, settings] of perModelRaftSettings.entries()) {
+    perModel[modelId] = { ...settings };
+  }
+  return {
+    global: { ...currentRaftSettings },
+    perModel,
+  };
+}
+
+/**
+ * Hydrate global and per-model raft settings without firing store listeners.
+ * Used by the auto-support worker and tests; clears any stale per-model entries.
+ */
+export function seedRaftStateSnapshot(snapshot: RaftStateSnapshot): void {
+  const normalizedGlobal = normalizeRaftSettings({
+    ...DEFAULT_RAFT_SETTINGS,
+    ...snapshot.global,
+  });
+  const globalWallEnabled = normalizedGlobal.bottomMode === 'solid'
+    ? normalizedGlobal.wallEnabled
+    : false;
+  currentRaftSettings = {
+    ...normalizedGlobal,
+    wallEnabled: globalWallEnabled,
+  };
+  if (normalizedGlobal.bottomMode === 'solid') {
+    rememberedSolidWallEnabled = globalWallEnabled;
+  }
+
+  perModelRaftSettings.clear();
+  for (const [modelId, settings] of Object.entries(snapshot.perModel ?? {})) {
+    const normalized = normalizeRaftSettings({
+      ...DEFAULT_RAFT_SETTINGS,
+      ...settings,
+    });
+    perModelRaftSettings.set(modelId, {
+      ...normalized,
+      wallEnabled: normalized.bottomMode === 'solid' ? normalized.wallEnabled : false,
+    });
+  }
+}

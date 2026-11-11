@@ -5,6 +5,7 @@ import {
     sizeParameters,
     presetForArea,
     activeSizingBand,
+    modelSizingFactors,
     resolvedSizingBandsForRun,
     setResolvedSizingBands,
     HEIGHT_REFERENCE_MM,
@@ -14,7 +15,7 @@ import { setSettings, getSettings, updateAutoSupportSettings } from '../Settings
 import { createPreset, deletePreset, getPresetById } from '../Settings/presets';
 import { createDefaultSettings } from '../Settings/types';
 import type { CandidatePoint } from '../autoSupport/types';
-import { AUTO_SUPPORT_CONSTRAINTS, SIZING_BANDS } from '../autoSupport/settings';
+import { AUTO_SUPPORT_CONSTRAINTS, createDefaultAutoSupportSettings, SIZING_BANDS } from '../autoSupport/settings';
 import type { AutoSupportSettings, SizingBand } from '../autoSupport/settings';
 
 function makeCandidate(over: Partial<CandidatePoint> = {}): CandidatePoint {
@@ -404,4 +405,25 @@ test('the three model factors together are capped at the documented 1.85', () =>
     assert.ok(sized.shaftDiameterMm! <= band * 1.85 + 1e-9,
         `combined factor caps at 1.85 (got ${sized.shaftDiameterMm})`);
     assert.ok(sized.shaftDiameterMm! > band * 1.5, 'and the scaled end still grows');
+});
+
+test('sizeParameters honors sizeScale in slot 2 and customAutoSettings in slot 4 without mutating global store', () => {
+    const storeBefore = structuredClone(getSettings().autoSupport);
+    const ctx: ModelSizingContext = { modelVolumeMm3: 400000, totalCandidates: 20, modelSizeMm: 400 };
+    const candidate = makeCandidate({ islandAreaMm2: 8, zHeight: 100 });
+
+    const customDetailOff: AutoSupportSettings = {
+        ...createDefaultAutoSupportSettings(),
+        sizingPreset: 'detail',
+        modelScaleEnabled: false,
+    };
+
+    const sized = sizeParameters(candidate, 1.25, ctx, customDetailOff);
+    // Detail shaft is 0.8mm; modelScaleEnabled=false pins model/height factors to 1; sizeScale=1.25 -> 1.0mm
+    assert.equal(sized.shaftDiameterMm, 1.0, '0.8mm detail band × 1.25 sizeScale with modelScaleEnabled=false');
+    assert.equal(sized.rootsDiameterMm, SIZING_BANDS.detail.rootDiameterMm * 1.25, 'detail roots × 1.25 sizeScale');
+    assert.equal(activeSizingBand(customDetailOff).shaftDiameterMm, SIZING_BANDS.detail.shaftDiameterMm);
+    assert.equal(modelSizingFactors(ctx, customDetailOff).trunkScale, 1);
+
+    assert.deepEqual(getSettings().autoSupport, storeBefore, 'global store untouched');
 });
