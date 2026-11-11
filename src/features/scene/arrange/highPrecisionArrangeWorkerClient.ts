@@ -117,6 +117,7 @@ const serializeInput = (input: HighPrecisionArrangeInput): HighPrecisionArrangeW
   arrangeSpacingMm: input.arrangeSpacingMm,
   arrangeAllowRotateOnZ: input.arrangeAllowRotateOnZ,
   arrangeAnchorMode: input.arrangeAnchorMode,
+  printHeightByModelId: input.printHeightByModelId,
   safetyMarginMm: input.safetyMarginMm,
 });
 

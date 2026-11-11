@@ -43,6 +43,7 @@ export type HighPrecisionArrangeWorkerInput = {
   arrangeSpacingMm: number;
   arrangeAllowRotateOnZ: boolean;
   arrangeAnchorMode: 'center' | 'front_left' | 'front_right' | 'back_left' | 'back_right';
+  printHeightByModelId?: Readonly<Record<string, number>>;
   safetyMarginMm?: { front: number; back: number; left: number; right: number };
 };
 

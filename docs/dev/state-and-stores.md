@@ -148,51 +148,70 @@ colors to the canvas. Both are theme entries (`meshSelectionColor`,
 and from the Mesh tab's Selection & Hover section, which mirrors them rather
 than holding an override.
 
-## Auto-arrange height grouping
+## Auto-arrange print-height priority
 
 `src/features/scene/arrange/useArrangeManager.ts` keeps the Arrange panel's
-settings in component-local state, not in a preferences module. Height grouping
-is opt-in through `arrangeGroupByHeight`; `arrangeHeightToleranceMm` starts at
-10 mm. Neither setting is persisted. `ArrangePanel` exposes Compact / By Height
-for Auto layout; Manual arrays and Duplicate retain their existing layouts.
+settings in component-local state, not in a preferences module. By Height is
+opt-in through `arrangeGroupByHeight` and is not persisted. Compact remains the
+default. Manual arrays and Duplicate retain their existing layouts.
 
-Both Standard and High-Precision arrange partition the run into tallest-first
-height buckets before using their existing XY packers. Print height is the
-highest world Z above the plate, including transformed supports, rather than
-the mesh's untransformed height or its bounding-box extent. Rotation, scale and
-lift therefore affect the grouping; arranging does not change Z.
-High-Precision support hull points are localized with the model's stored world
-transform, not its target plate-local transform: changing the active plate must
-not inflate the support footprint.
+The objective is **the sum of each printing plate's tallest Z**, not uniform
+height ranges. Short parts can fill spare space on tall plates; there are no
+height buckets, tolerance cutoff or dedicated plate per height group.
 
-The React-free helpers in `src/features/scene/arrange/heightBuckets.ts` are:
+Both Standard and High-Precision compute the ordinary Compact plan first, then
+a height-prioritized candidate with the same XY packing and collision rules.
+The candidate packs tallest-first, trying existing tall plates first. It is
+rejected if it needs more plates or leaves more models unplaced than Compact.
+For equal fit rates, the lower sum of plate maxima wins; a tie prefers fewer
+plates and otherwise keeps Compact. This is a bounded heuristic comparison,
+not an exhaustive search for the globally optimal packing.
 
-- `bucketModelsByHeight`: takes models, a print-height callback and a maximum
-  height difference in millimetres. Heights and tolerance must be finite and
-  nonnegative. It measures each model once, preserves the input array and
-  same-height order, and returns buckets with models and minimum/maximum heights.
-- `heightRangesFit`: checks whether an occupied plate's height range and an
-  incoming bucket's combined range fit the tolerance. A null occupied range
-  means an empty plate.
+Print height uses world Z above the plate, including transformed supports,
+rotation, scale and lift. Arrange does not change Z. Fixed objects contribute
+to the maximum of their plate and remain collision blockers. Multiple free
+rectangle passes on one plate contribute only one maximum. Selected-only runs
+leave unselected models in place; locked plates/models are excluded from By
+Height. This Plate keeps its existing scope. The bed cap and oversized-object
+fallback still apply.
+
+`src/features/scene/arrange/printTimeArrange.ts` exports `PrintTimePlan` and
+`improvesPrintTimePlan`. A plan records its final plate count, unplaced count,
+and passes containing model IDs. An existing plate ID coalesces passes; each
+null plate ID represents a distinct new plate. Supply finite nonnegative print
+heights for every model and the maximum fixed-object height of each occupied
+plate. For example, among two-plate layouts with the same fit rate:
 
 ```ts
-const groups = bucketModelsByHeight([19, 21, 45], height => height, 10);
-// groups.map(group => group.models) is [[45], [21, 19]].
+const heights = new Map([['tallA', 100], ['tallB', 90], ['shortA', 10], ['shortB', 5]]);
+const candidate = {
+  plateCount: 2, unplacedCount: 0,
+  passes: [
+    { plateId: null, modelIds: ['tallA', 'tallB'] },
+    { plateId: null, modelIds: ['shortA', 'shortB'] },
+  ],
+};
+const baseline = {
+  plateCount: 2, unplacedCount: 0,
+  passes: [
+    { plateId: null, modelIds: ['tallA', 'shortA'] },
+    { plateId: null, modelIds: ['tallB', 'shortB'] },
+  ],
+};
+improvesPrintTimePlan(candidate, baseline, heights, new Map()); // true: 110 < 190
 ```
 
-Each bucket is anchored to its tallest model; neighbouring heights cannot chain
-into a bucket wider than the tolerance, and close heights across a multiple of
-the tolerance are not artificially split. The boundary is inclusive; zero
-tolerance groups only identical heights.
+`HighPrecisionArrangeInput.printHeightByModelId` carries the optional height
+metadata through the worker input/client. When present, height is the primary
+model ordering key; reverse, interleaved and spill-first retries do not erase
+that order. Same-order aggressive rescue remains available. Without metadata,
+the packer's original ordering and retries remain unchanged. High-Precision
+support hull points are localized with the model's stored world transform, not
+its target plate-local transform: changing the active plate must not inflate
+the support footprint.
 
-A run gives each plate to at most one bucket. Compatible occupied plates are
-tried before empty plates; fixed objects remain blockers and contribute their
-height range. Selected-only runs do not move unselected objects, and locked
-plates/models are excluded. This Plate retains its existing scope and adds new
-plates for overflow rather than touching other existing plates. Height grouping
-may use more plates than Compact. The existing bed cap and oversized-object
-fallback still apply. Plate creation/removal and placements use the same scene
-snapshot history step, so undo/redo restore them together; see
+Only the selected plan is committed. Plate creation/removal and placements use
+the same scene snapshot history step, so undo/redo restore them together; see
 [History and Undo/Redo](history-and-undo-redo.md).
 
 ## Which pattern to use

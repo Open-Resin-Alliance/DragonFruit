@@ -24,8 +24,6 @@ interface ArrangePanelProps {
   onLayoutModeChange: (value: ArrangeLayoutMode) => void;
   groupByHeight: boolean;
   onGroupByHeightChange: (value: boolean) => void;
-  heightToleranceMm: number;
-  onHeightToleranceMmChange: (value: number) => void;
   spacingMm: number;
   onSpacingMmChange: (value: number) => void;
   allowRotateOnZ: boolean;
@@ -68,8 +66,6 @@ export function ArrangePanel({
   onLayoutModeChange,
   groupByHeight,
   onGroupByHeightChange,
-  heightToleranceMm,
-  onHeightToleranceMmChange,
   spacingMm,
   onSpacingMmChange,
   allowRotateOnZ,
@@ -273,31 +269,15 @@ export function ArrangePanel({
                   disabled={isApplying}
                   aria-pressed={groupByHeight}
                   style={isApplying ? disabledModeStyle : (groupByHeight ? activeModeStyle : undefined)}
-                  title={_(msg`Keep models with similar print heights on the same plate`)}
+                  title={_(msg`Reduce the sum of each plate's tallest print height without adding plates`)}
                 >
                   <Trans>By Height</Trans>
                 </Button>
               </div>
               {groupByHeight && (
-                <div className="mt-2">
-                  <label className="ui-meta" style={{ color: 'var(--text-muted)' }}><Trans>Maximum Height Difference</Trans></label>
-                  <ScrollableNumberField
-                    className="mt-1"
-                    value={heightToleranceMm}
-                    onChange={onHeightToleranceMmChange}
-                    min={0}
-                    max={Number.MAX_VALUE}
-                    step={1}
-                    unit={_(msg`mm`)}
-                    disabled={isApplying}
-                    ariaLabel={_(msg`Maximum Height Difference`)}
-                    decreaseTitle={_(msg`Decrease maximum height difference`)}
-                    increaseTitle={_(msg`Increase maximum height difference`)}
-                  />
-                  <p className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                    <Trans>Print height includes supports and is measured from the plate. Separate height groups may need more plates.</Trans>
-                  </p>
-                </div>
+                <p className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  <Trans>Minimize the sum of maximum print heights across plates, including supports. Keep the normal plate count and fill spare space even when heights differ.</Trans>
+                </p>
               )}
             </div>
           )}

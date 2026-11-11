@@ -75,6 +75,8 @@ export type HighPrecisionArrangeInput = {
   arrangeSpacingMm: number;
   arrangeAllowRotateOnZ: boolean;
   arrangeAnchorMode: ArrangeAnchorMode;
+  /** Complete print heights in millimetres; when present, pack tallest first without reordering retries. */
+  printHeightByModelId?: Readonly<Record<string, number>>;
   getArrangeTransform: (model: ArrangeModel) => ArrangeTransform;
   hullCache: Map<string, HullCacheEntry>;
   safetyMarginMm?: { front: number; back: number; left: number; right: number };
@@ -101,6 +103,7 @@ export function computeHighPrecisionArrangeResult(input: HighPrecisionArrangeInp
     arrangeSpacingMm,
     arrangeAllowRotateOnZ,
     arrangeAnchorMode,
+    printHeightByModelId,
     getArrangeTransform,
     hullCache,
   } = input;
@@ -614,7 +617,7 @@ export function computeHighPrecisionArrangeResult(input: HighPrecisionArrangeInp
     && visibleModels.every((m) => m.geometry.geometry.uuid === visibleModels[0].geometry.geometry.uuid);
   const SAME_GEOMETRY_FAST_PATH = allShareSameGeometry && visibleModels.length >= 18;
   const USE_CONTACT_CANDIDATES = !(SAME_GEOMETRY_FAST_PATH && PERF_COMPLEX_SCENE);
-  const ENABLE_MULTI_ORDERING_RETRY = visibleModels.length <= 32;
+  const ENABLE_MULTI_ORDERING_RETRY = printHeightByModelId === undefined && visibleModels.length <= 32;
 
   // Fast simulation pass used to pick a strong shared rotation in homogeneous batches.
   const simPackAtAngle = (angle: number): number => {
@@ -690,7 +693,16 @@ export function computeHighPrecisionArrangeResult(input: HighPrecisionArrangeInp
     const h = getHullAtRotation(model, angle);
     return Math.max(1, (h.localMaxX - h.localMinX) * (h.localMaxY - h.localMinY));
   };
-  const modelOrder = [...visibleModels].sort((a, b) => areaAtBestAngle(b) - areaAtBestAngle(a));
+  const perimeterAtBestAngle = (model: ArrangeModel) => {
+    const angle = sharedBestRotation ?? (modelTransformById.get(model.id) ?? model.transform).rotation.z;
+    const h = getHullAtRotation(model, angle);
+    return 2 * ((h.localMaxX - h.localMinX) + (h.localMaxY - h.localMinY));
+  };
+  const modelOrder = [...visibleModels].sort(printHeightByModelId === undefined
+    ? (a, b) => areaAtBestAngle(b) - areaAtBestAngle(a)
+    : (a, b) => printHeightByModelId[b.id] - printHeightByModelId[a.id]
+      || areaAtBestAngle(b) - areaAtBestAngle(a)
+      || perimeterAtBestAngle(b) - perimeterAtBestAngle(a));
 
   // Core constructive placer (standard or aggressive mode).
   // - standard: bounded candidate budget for interactivity
@@ -932,9 +944,9 @@ export function computeHighPrecisionArrangeResult(input: HighPrecisionArrangeInp
   }
 
   // Fit-rate rescue pass: if standard searches still spill, run a denser,
-  // more exhaustive placement search over the same orderings.
+  // more exhaustive placement search. Height priority must keep the same primary order.
   if (bestResult.spills.length > 0) {
-    const aggressiveOrders: ArrangeModel[][] = [
+    const aggressiveOrders: ArrangeModel[][] = printHeightByModelId === undefined ? [
       modelOrder,
       [...modelOrder].reverse(),
       (() => {
@@ -946,7 +958,7 @@ export function computeHighPrecisionArrangeResult(input: HighPrecisionArrangeInp
         }
         return interleaved;
       })(),
-    ];
+    ] : [modelOrder];
 
     for (const order of aggressiveOrders) {
       const attempt = attemptPlacement(order, true);

@@ -169,3 +169,70 @@ test('high-precision arrange packs an offset plate inside that plate, and leaves
     assert.ok(x >= -30 && x <= 30, `expected ${update.id}.x on plate 1, got ${x}`);
   }
 });
+
+test('high-precision height priority keeps tall parts ahead of denser short-part retries', () => {
+  // Three larger-footprint short parts fit, but only two tall parts fit. A
+  // spill-first or reverse rescue would replace the tall parts to pack more IDs.
+  const models = [
+    buildModel('short-a', 12, 3, buildTransform(0, 0)),
+    buildModel('short-b', 12, 3, buildTransform(0, 0)),
+    buildModel('short-c', 12, 3, buildTransform(0, 0)),
+    buildModel('tall-low', 7, 4, buildTransform(0, 0)),
+    buildModel('tall-high', 7, 4, buildTransform(0, 0)),
+  ];
+  const input = {
+    visibleModels: models,
+    sceneModels: models,
+    widthMm: 12,
+    depthMm: 10.5,
+    originMode: 'front_left' as const,
+    arrangeSpacingMm: 0.5,
+    arrangeAllowRotateOnZ: false,
+    arrangeAnchorMode: 'center' as const,
+    getArrangeTransform: (model: ArrangeModel) => model.transform,
+    hullCache: new Map<string, HullCacheEntry>(),
+  };
+
+  const compact = computeHighPrecisionArrangeResult(input);
+  const byHeight = computeHighPrecisionArrangeResult({
+    ...input,
+    printHeightByModelId: {
+      'short-a': 10,
+      'short-b': 10,
+      'short-c': 10,
+      'tall-low': 80,
+      'tall-high': 100,
+    },
+  });
+  assert.deepEqual(compact.packedIds, ['short-a', 'short-b', 'short-c']);
+  assert.deepEqual(byHeight.packedIds, ['tall-high', 'tall-low']);
+  assert.deepEqual(byHeight.spilledIds, ['short-a', 'short-b', 'short-c']);
+
+  for (const result of [compact, byHeight]) {
+    const packed = new Set(result.packedIds);
+    const boxes = result.updates.filter(update => packed.has(update.id)).map(update => {
+      const source = models.find(model => model.id === update.id)!;
+      source.geometry.geometry.computeBoundingBox();
+      const matrix = new THREE.Matrix4().compose(
+        update.transform.position,
+        new THREE.Quaternion().setFromEuler(update.transform.rotation),
+        update.transform.scale,
+      );
+      return source.geometry.geometry.boundingBox!.clone().applyMatrix4(matrix);
+    });
+    assert.equal(boxes.length, packed.size, 'every packed model reports a placement');
+    for (const box of boxes) {
+      assert.ok(box.min.x >= -1e-6 && box.max.x <= input.widthMm + 1e-6);
+      assert.ok(box.min.y >= -1e-6 && box.max.y <= input.depthMm + 1e-6);
+    }
+    for (let i = 0; i < boxes.length; i += 1) {
+      for (let j = i + 1; j < boxes.length; j += 1) {
+        const a = boxes[i];
+        const b = boxes[j];
+        const overlaps = a.min.x < b.max.x - 1e-6 && a.max.x > b.min.x + 1e-6
+          && a.min.y < b.max.y - 1e-6 && a.max.y > b.min.y + 1e-6;
+        assert.ok(!overlaps, 'packed footprints must not overlap');
+      }
+    }
+  }
+});
