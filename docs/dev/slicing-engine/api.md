@@ -87,8 +87,8 @@ Timing counters (ns):
 Helpers: `total_s()`, `layers_per_second()`.
 
 The RAW phase counters are summed worker elapsed time, not pipeline wall time
-or sampled process CPU time. `raw_geometry_ns` covers candidate traversal,
-packet preparation, triangle/plane intersections and segment collection.
+or sampled process CPU time. `raw_geometry_ns` covers scalar candidate traversal,
+triangle/plane intersections and segment collection.
 `raw_scanline_ns` covers scanline-index construction, active edges, winding,
 spans, RLE/binary-mask emission and required raster statistics. Neither includes
 format encoding, postprocessing or sink/channel waits. Shared mesh parsing and
@@ -96,8 +96,8 @@ projection occur before these phases and are not geometry-phase time.
 
 Only eligible single-plane binary cores are timed, including binary cores
 prepared internally for SSAA/blur jobs; ineligible paths report zero rather
-than an estimate. Both scalar and SIMD backends are measured. Timers are coarse
-per layer/block, never per triangle, pixel, scanline or SIMD packet.
+than an estimate. Scalar geometry and scalar/SIMD scanline rendering are measured.
+Timers are coarse per layer/block/batch, never per triangle, pixel, scanline or SIMD packet.
 
 The Tauri response exposes `rawGeometryNs` and `rawScanlineNs` under
 `nativePerf.perf`; copied app metrics also include `rawGeometryWorkerMs` and

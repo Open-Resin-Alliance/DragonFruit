@@ -60,6 +60,18 @@ impl Backend {
         }
     }
 
+    /// Scanline lanes are independent layers, bounded to four native f32 lanes.
+    #[inline]
+    pub(crate) fn for_layer_scanline(self) -> Self {
+        match self {
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            Self::V3(simd) => Self::V2(*simd),
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            Self::V4(simd) => Self::V2(**simd),
+            backend => backend,
+        }
+    }
+
     /// Enter this gate on the thread that executes the operation, including Rayon workers.
     #[inline(always)]
     pub(crate) fn dispatch<Op: WithSimd>(self, op: Op) -> Op::Output {

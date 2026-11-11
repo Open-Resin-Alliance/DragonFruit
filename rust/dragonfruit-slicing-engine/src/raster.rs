@@ -61,7 +61,7 @@ fn merge_active_edges_sorted(
 }
 
 #[inline]
-fn restore_active_edges_sorted(active_edges: &mut [ActiveEdge]) {
+pub(crate) fn restore_active_edges_sorted(active_edges: &mut [ActiveEdge]) {
     if active_edges.len() < 2 {
         return;
     }
@@ -89,19 +89,19 @@ pub(crate) struct Segment {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ActiveEdge {
-    x: f32,
-    dx_dy: f32,
-    wind: i32,
-    end_exclusive: usize,
+pub(crate) struct ActiveEdge {
+    pub(crate) x: f32,
+    pub(crate) dx_dy: f32,
+    pub(crate) wind: i32,
+    pub(crate) end_exclusive: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct RowSpan {
-    a: f32,
-    b: f32,
-    start: usize,
-    end: usize,
+pub(crate) struct RowSpan {
+    pub(crate) a: f32,
+    pub(crate) b: f32,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 /// Emit the union of sorted inclusive spans, clipped to a column window.
@@ -323,7 +323,7 @@ fn edge_plane_intersection_t(az: f32, bz: f32, z: f32) -> Option<f32> {
 }
 
 #[inline]
-pub(crate) fn distinct_points_push(points: &mut [(f32, f32); 3], count: &mut usize, candidate: (f32, f32)) {
+fn distinct_points_push(points: &mut [(f32, f32); 3], count: &mut usize, candidate: (f32, f32)) {
     let eps = 1e-5;
     for i in 0..*count {
         let p = points[i];
@@ -630,18 +630,6 @@ fn build_segments_for_layer(
     segments
 }
 
-fn build_single_plane_segments(
-    job: &SliceJobV3, triangles: &[Triangle], candidates: &[usize], z_mm: f32,
-) -> Vec<Segment> {
-    if !raw_binary_geometry_eligible(job, triangles.len()) {
-        return build_segments_for_layer(job, triangles, candidates, z_mm);
-    }
-    let mut segments = Vec::new();
-    crate::raw_simd::build_segments_into(
-        job, triangles, candidates, z_mm, &mut segments, Backend::detected(),
-    );
-    segments
-}
 
 fn build_z_perturbed_segments_list(
     job: &SliceJobV3,
@@ -2553,7 +2541,7 @@ fn rasterize_layer_with_stats_impl(
         segments
     } else {
         let z_mm = (layer_index as f32 + 0.5) * job.layer_height_mm;
-        owned_segments = build_single_plane_segments(job, triangles, layer_indices, z_mm);
+        owned_segments = build_segments_for_layer(job, triangles, layer_indices, z_mm);
         &owned_segments
     };
 
@@ -2933,6 +2921,7 @@ fn rasterize_layer_with_stats_impl(
     (mask, stats)
 }
 
+#[cfg(test)]
 pub(crate) fn rasterize_layer_with_stats_from_segments(
     job: &SliceJobV3, segments: &[Segment], compute_area_stats: bool,
 ) -> (Vec<u8>, LayerAreaStatsV3) {
@@ -3322,159 +3311,180 @@ pub fn rasterize_layer_rle(
     }
 
     let z_mm = (layer_index as f32 + 0.5) * job.layer_height_mm;
-    let segments = build_single_plane_segments(job, triangles, layer_indices, z_mm);
+    let segments = build_segments_for_layer(job, triangles, layer_indices, z_mm);
     rasterize_binary_layer_rle_from_segments(job, &segments, compute_area_stats)
 }
 
-/// Full-frame binary rasterization retains previous-row winding coherence.
-#[allow(unused_assignments)]
-pub(crate) fn rasterize_binary_layer_rle_from_segments(
-    job: &SliceJobV3,
-    segments: &[Segment],
+enum BinaryScanlineOutput {
+    Rle(crate::rle::RleAccum),
+    Mask(Vec<u8>),
+}
+
+/// One independent binary stream; the SIMD kernel owns only row arithmetic.
+pub(crate) struct BinaryScanlineRaster {
+    pub(crate) active_edges: Vec<ActiveEdge>,
+    pub(crate) spans: Vec<RowSpan>,
+    pub(crate) width: usize,
+    height: usize,
+    index: Option<ScanlineSegmentIndex>,
+    merge_scratch: Vec<ActiveEdge>,
+    previous_spans: Vec<RowSpan>,
+    coherent: bool,
+    row: usize,
+    end_row: usize,
+    window_start: usize,
+    window_width: usize,
+    output: BinaryScanlineOutput,
+    pixel_area_mm2: f64,
     compute_area_stats: bool,
-) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
-    use crate::rle::{emit_zero_rows, RleAccum};
+}
+
+impl BinaryScanlineRaster {
+    pub(crate) fn new_rle(
+        job: &SliceJobV3, segments: &[Segment], compute_area_stats: bool,
+        block: Option<crate::rle::RleBlockSpec>,
+    ) -> Self {
+        Self::new(job, segments, compute_area_stats, block, false)
+    }
+
+    pub(crate) fn new_mask(job: &SliceJobV3, segments: &[Segment], compute_area_stats: bool) -> Self {
+        Self::new(job, segments, compute_area_stats, None, true)
+    }
+
+    fn new(job: &SliceJobV3, segments: &[Segment], compute_area_stats: bool,
+        block: Option<crate::rle::RleBlockSpec>, mask: bool) -> Self {
+        let width = job.effective_render_width_px() as usize;
+        let height = job.source_height_px as usize;
+        let window_start = block.map_or(0, |b| (b.start_col as usize).min(width));
+        let window_width = block.map_or(width, |b| (b.width as usize).min(width - window_start));
+        let index = if window_width == 0 || height == 0 || segments.is_empty() { None } else {
+            build_scanline_segment_index(segments, height, 1, 0.5)
+        };
+        let row = index.as_ref().map_or(height, |index| index.y_start);
+        let end_row = index.as_ref().map_or(height, |index| index.y_end_exclusive);
+        let output = if mask {
+            BinaryScanlineOutput::Mask(crate::pipeline::get_recycled_mask(width * height))
+        } else {
+            let mut rle = crate::rle::RleAccum::new();
+            crate::rle::emit_zero_rows(&mut rle, row, window_width);
+            BinaryScanlineOutput::Rle(rle)
+        };
+        let pixel_width = if mask { job.source_width_px } else { job.effective_render_width_px() };
+        Self {
+            active_edges: Vec::with_capacity(segments.len().min(256)), spans: Vec::new(),
+            width, height, index, merge_scratch: Vec::with_capacity(segments.len().min(256)),
+            previous_spans: Vec::new(), coherent: block.is_none(), row, end_row,
+            window_start, window_width, output, compute_area_stats,
+            pixel_area_mm2: (job.build_width_mm as f64 / pixel_width.max(1) as f64)
+                * (job.build_depth_mm as f64 / job.source_height_px.max(1) as f64),
+        }
+    }
+
+    pub(crate) fn prepare_row(&mut self) -> bool {
+        self.spans.clear();
+        if self.row >= self.end_row {
+            if self.row < self.height {
+                if let BinaryScanlineOutput::Rle(rle) = &mut self.output {
+                    crate::rle::emit_zero_rows(rle, self.height - self.row, self.window_width);
+                }
+                self.row = self.height;
+            }
+            return false;
+        }
+        self.active_edges.retain(|edge| edge.end_exclusive > self.row);
+        let index = self.index.as_ref().expect("live binary scanline index");
+        let start = index.row_offsets[self.row];
+        let end = index.row_offsets[self.row + 1];
+        if start != end {
+            merge_active_edges_sorted(&mut self.active_edges, &index.starts[start..end],
+                &mut self.merge_scratch);
+        }
+        true
+    }
+
+    pub(crate) fn repair_row_spans(&mut self, closure_winding: i32, min_winding: i32, max_winding: i32) {
+        if closure_winding != 0 || (min_winding < 0 && max_winding > 0) {
+            let previous = self.coherent.then_some(self.previous_spans.as_slice());
+            self.spans = build_row_spans_nonzero_ctx(&self.active_edges, self.width, true, previous);
+        }
+    }
+
+    pub(crate) fn commit_row(&mut self) {
+        match &mut self.output {
+            BinaryScanlineOutput::Rle(rle) => {
+                emit_binary_row_spans(rle, &self.spans, self.window_start, self.window_width);
+            }
+            BinaryScanlineOutput::Mask(mask) => {
+                let row = &mut mask[self.row * self.width..(self.row + 1) * self.width];
+                for span in &self.spans { row[span.start..=span.end].fill(255); }
+            }
+        }
+        if self.coherent { std::mem::swap(&mut self.spans, &mut self.previous_spans); }
+        self.row += 1;
+    }
+
+    pub(crate) fn render_scalar(
+        &mut self, cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<(), crate::engine::SlicerV3Error> {
+        while self.prepare_row() {
+            if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(crate::engine::SlicerV3Error::Cancelled);
+            }
+            let previous = self.coherent.then_some(self.previous_spans.as_slice());
+            self.spans = build_row_spans_nonzero_ctx(&self.active_edges, self.width, true, previous);
+            self.commit_row();
+            for edge in &mut self.active_edges { edge.x += edge.dx_dy; }
+            restore_active_edges_sorted(&mut self.active_edges);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish_rle(self) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
+        let BinaryScanlineOutput::Rle(rle) = self.output else { panic!("expected RLE raster"); };
+        let runs = rle.finish();
+        let stats = window_stats_from_runs(&runs, self.window_width, self.height,
+            self.window_start, self.pixel_area_mm2, self.compute_area_stats);
+        (runs, stats)
+    }
+
+    pub(crate) fn finish_mask(self) -> (Vec<u8>, LayerAreaStatsV3) {
+        let BinaryScanlineOutput::Mask(mask) = self.output else { panic!("expected mask raster"); };
+        let stats = recompute_layer_stats_from_mask(&mask, self.width, self.height,
+            self.pixel_area_mm2, self.compute_area_stats);
+        (mask, stats)
+    }
+}
+
+/// Preserve mask blur/LUT after binary scan conversion, outside the RAW timer.
+pub(crate) fn postprocess_binary_mask(
+    job: &SliceJobV3, mask: &mut [u8], stats: LayerAreaStatsV3, compute_area_stats: bool,
+) -> LayerAreaStatsV3 {
+    let radius = if job.anti_aliasing_mode_is_blur() { blur_radius_px(job.blur_brush_radius_px) } else { 0 };
+    if radius == 0 || stats.total_solid_pixels == 0 { return stats; }
     let width = job.effective_render_width_px() as usize;
     let height = job.source_height_px as usize;
-    let mut rle = RleAccum::new();
-    let mut stats = LayerAreaStatsV3::default();
-    if segments.is_empty() || width == 0 || height == 0 {
-        emit_zero_rows(&mut rle, height, width);
-        return (rle.finish(), stats);
+    let r = radius as i32;
+    let min_x = stats.min_x.saturating_sub(r).max(0) as usize;
+    let max_x = stats.max_x.saturating_add(r).min(width as i32 - 1) as usize;
+    let min_y = stats.min_y.saturating_sub(r).max(0) as usize;
+    let max_y = stats.max_y.saturating_add(r).min(height as i32 - 1) as usize;
+    apply_edge_box_blur_to_mask_in_roi(mask, width, height, radius, 0, min_x, max_x, min_y, max_y);
+    if let Some(lut) = job.normalized_tail_cure_lut() {
+        apply_lut_to_mask_in_bounds(mask, width, min_x, max_x, min_y, max_y, &lut);
     }
+    let pixel_area = (job.build_width_mm as f64 / job.source_width_px.max(1) as f64)
+        * (job.build_depth_mm as f64 / job.source_height_px.max(1) as f64);
+    let blurred = recompute_layer_stats_from_mask(mask, width, height, pixel_area, compute_area_stats);
+    if blurred.total_solid_pixels == 0 { stats } else { blurred }
+}
 
-    let Some(scanline_index) = build_scanline_segment_index(&segments, height, 1, 0.5) else {
-        emit_zero_rows(&mut rle, height, width);
-        return (rle.finish(), stats);
-    };
-    let scanline_starts = scanline_index.starts;
-    let scanline_row_offsets = scanline_index.row_offsets;
-    let y_start = scanline_index.y_start;
-    let y_end_exclusive = scanline_index.y_end_exclusive;
-    let first_physical_y = y_start;
-    // Emit zero rows before the rasterized region.
-    emit_zero_rows(&mut rle, first_physical_y, width);
-
-    let pixel_area_mm2 = ((job.build_width_mm as f64)
-        / (job.effective_render_width_px().max(1) as f64))
-        * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
-
-    let mut min_x = i32::MAX;
-    let mut min_y = i32::MAX;
-    let mut max_x = i32::MIN;
-    let mut max_y = i32::MIN;
-
-    let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
-    let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
-
-    // Keep the previous spans for winding repair/coherence and direct emission.
-    let mut prev_spans: Vec<RowSpan> = Vec::new();
-    let mut current_physical_y = first_physical_y;
-    // last_emitted_py: the most recent physical row fully committed to `rle`.
-    // Starts at first_physical_y - 1 (we just emitted zeros 0..first_physical_y).
-    #[allow(unused_assignments)]
-    let mut last_emitted_py = first_physical_y.wrapping_sub(1);
-
-    // Helper closure: commit `current_physical_y`'s row to `rle`, then emit
-    // zero-rows for any skipped rows up to (but not including) `next_py`.
-    macro_rules! flush_up_to {
-        ($next_py:expr) => {{
-            emit_binary_row_spans(&mut rle, &prev_spans, 0, width);
-            last_emitted_py = current_physical_y;
-
-            let next = $next_py;
-            let gap = next.saturating_sub(last_emitted_py + 1);
-            if gap > 0 {
-                emit_zero_rows(&mut rle, gap, width);
-                last_emitted_py = next - 1;
-            }
-        }};
-    }
-
-    for y in y_start..y_end_exclusive {
-        let physical_y = y;
-
-        if physical_y != current_physical_y {
-            flush_up_to!(physical_y);
-            current_physical_y = physical_y;
-        }
-
-        active_edges.retain(|edge| edge.end_exclusive > y);
-        let row_start = scanline_row_offsets[y];
-        let row_end = scanline_row_offsets[y + 1];
-        if row_start != row_end {
-            merge_active_edges_sorted(
-                &mut active_edges,
-                &scanline_starts[row_start..row_end],
-                &mut merge_scratch,
-            );
-        }
-        if active_edges.is_empty() {
-            prev_spans.clear();
-            continue;
-        }
-
-        let spans = build_row_spans_nonzero_ctx(&active_edges, width, true, Some(&prev_spans));
-
-        for span in spans.iter().copied() {
-            let filled = (span.end - span.start + 1) as u32;
-            stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
-            min_x = min_x.min(span.start as i32);
-            max_x = max_x.max(span.end as i32);
-            min_y = min_y.min(physical_y as i32);
-            max_y = max_y.max(physical_y as i32);
-        }
-
-        prev_spans = spans;
-
-        for edge in &mut active_edges {
-            edge.x += edge.dx_dy;
-        }
-        restore_active_edges_sorted(&mut active_edges);
-    }
-
-    // Flush the final accumulated physical row.
-    flush_up_to!(current_physical_y + 1);
-
-    // Emit remaining zero rows to fill the image height.
-    let rows_emitted = last_emitted_py + 1;
-    if rows_emitted < height {
-        emit_zero_rows(&mut rle, height - rows_emitted, width);
-    }
-
-    let runs = rle.finish();
-
-    if stats.total_solid_pixels > 0 {
-        stats.min_x = min_x;
-        stats.min_y = min_y;
-        stats.max_x = max_x;
-        stats.max_y = max_y;
-
-        if compute_area_stats {
-            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
-                compute_component_area_stats_from_rle_8_connected(
-                    &runs,
-                    width,
-                    height,
-                    pixel_area_mm2,
-                );
-
-            stats.total_solid_pixels = total_pixels;
-            let total_area = (total_pixels as f64) * pixel_area_mm2;
-            stats.total_solid_area_mm2 = total_area;
-            stats.largest_area_mm2 = largest_area_mm2;
-            stats.smallest_area_mm2 = smallest_area_mm2;
-            stats.area_count = area_count;
-        } else {
-            let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
-            stats.total_solid_area_mm2 = total_area;
-            stats.largest_area_mm2 = total_area;
-            stats.smallest_area_mm2 = total_area;
-            stats.area_count = 1;
-        }
-    }
-
-    (runs, stats)
+/// Full-frame binary rasterization retains previous-row winding coherence.
+pub(crate) fn rasterize_binary_layer_rle_from_segments(
+    job: &SliceJobV3, segments: &[Segment], compute_area_stats: bool,
+) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
+    let mut raster = BinaryScanlineRaster::new_rle(job, segments, compute_area_stats, None);
+    raster.render_scalar(None).expect("uncancelled binary raster");
+    raster.finish_rle()
 }
 
 /// Compute per-window layer stats from a window-relative run stream.
@@ -3864,160 +3874,17 @@ pub fn rasterize_layer_rle_block(
     }
 
     let z_mm = (layer_index as f32 + 0.5) * job.layer_height_mm;
-    let segments = build_single_plane_segments(job, triangles, layer_indices, z_mm);
+    let segments = build_segments_for_layer(job, triangles, layer_indices, z_mm);
     rasterize_binary_layer_rle_block_from_segments(job, &segments, compute_area_stats, block)
 }
 
 /// Blocks use global coordinates but intentionally no previous-row coherence.
-#[allow(unused_assignments)]
 pub(crate) fn rasterize_binary_layer_rle_block_from_segments(
-    job: &SliceJobV3,
-    segments: &[Segment],
-    compute_area_stats: bool,
-    block: crate::rle::RleBlockSpec,
+    job: &SliceJobV3, segments: &[Segment], compute_area_stats: bool, block: crate::rle::RleBlockSpec,
 ) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
-    use crate::rle::{emit_zero_rows, RleAccum};
-    let full_width = job.effective_render_width_px() as usize;
-    let height = job.source_height_px as usize;
-    let wstart = (block.start_col as usize).min(full_width);
-    let wend = wstart.saturating_add(block.width as usize).min(full_width);
-    let wwidth = wend - wstart;
-    let mut rle = RleAccum::new();
-    let mut stats = LayerAreaStatsV3::default();
-    if wwidth == 0 || height == 0 { return (rle.finish(), stats); }
-    let pixel_area_mm2 = ((job.build_width_mm as f64)
-        / (job.effective_render_width_px().max(1) as f64))
-        * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
-    let mut min_x = i32::MAX;
-    let mut min_y = i32::MAX;
-    let mut max_x = i32::MIN;
-    let mut max_y = i32::MIN;
-    if segments.is_empty() {
-        emit_zero_rows(&mut rle, height, wwidth);
-        return (rle.finish(), stats);
-    }
-
-    let Some(scanline_index) = build_scanline_segment_index(&segments, height, 1, 0.5) else {
-        emit_zero_rows(&mut rle, height, wwidth);
-        return (rle.finish(), stats);
-    };
-    let scanline_starts = scanline_index.starts;
-    let scanline_row_offsets = scanline_index.row_offsets;
-    let y_start = scanline_index.y_start;
-    let y_end_exclusive = scanline_index.y_end_exclusive;
-    let first_physical_y = y_start;
-    emit_zero_rows(&mut rle, first_physical_y, wwidth);
-
-    let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
-    let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
-
-    let mut current_spans: Vec<RowSpan> = Vec::new();
-    let mut current_physical_y = first_physical_y;
-    #[allow(unused_assignments)]
-    let mut last_emitted_py = first_physical_y.wrapping_sub(1);
-
-    macro_rules! flush_up_to {
-        ($next_py:expr) => {{
-            emit_binary_row_spans(&mut rle, &current_spans, wstart, wwidth);
-            // The block path has no previous-row coherence dependency. Release
-            // these spans before building the next row, with no scratch buffer.
-            current_spans = Vec::new();
-            last_emitted_py = current_physical_y;
-
-            let next = $next_py;
-            let gap = next.saturating_sub(last_emitted_py + 1);
-            if gap > 0 {
-                emit_zero_rows(&mut rle, gap, wwidth);
-                last_emitted_py = next - 1;
-            }
-        }};
-    }
-
-    for y in y_start..y_end_exclusive {
-        let physical_y = y;
-
-        if physical_y != current_physical_y {
-            flush_up_to!(physical_y);
-            current_physical_y = physical_y;
-        }
-
-        active_edges.retain(|edge| edge.end_exclusive > y);
-        let row_start = scanline_row_offsets[y];
-        let row_end = scanline_row_offsets[y + 1];
-        if row_start != row_end {
-            merge_active_edges_sorted(
-                &mut active_edges,
-                &scanline_starts[row_start..row_end],
-                &mut merge_scratch,
-            );
-        }
-        if active_edges.is_empty() {
-            continue;
-        }
-
-        let spans = build_row_spans_nonzero_ctx(&active_edges, full_width, true, None);
-
-        for span in spans.iter().copied() {
-            let s = span.start.max(wstart);
-            let e = span.end.min(wend - 1);
-            if s > e {
-                continue;
-            }
-            let filled = (e - s + 1) as u32;
-            stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
-            min_x = min_x.min(s as i32);
-            max_x = max_x.max(e as i32);
-            min_y = min_y.min(physical_y as i32);
-            max_y = max_y.max(physical_y as i32);
-        }
-        current_spans = spans;
-
-        for edge in &mut active_edges {
-            edge.x += edge.dx_dy;
-        }
-        restore_active_edges_sorted(&mut active_edges);
-    }
-
-    flush_up_to!(current_physical_y + 1);
-
-    let rows_emitted = last_emitted_py + 1;
-    if rows_emitted < height {
-        emit_zero_rows(&mut rle, height - rows_emitted, wwidth);
-    }
-
-    let runs = rle.finish();
-
-    if stats.total_solid_pixels > 0 {
-        stats.min_x = min_x;
-        stats.min_y = min_y;
-        stats.max_x = max_x;
-        stats.max_y = max_y;
-
-        if compute_area_stats {
-            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
-                compute_component_area_stats_from_rle_8_connected(
-                    &runs,
-                    wwidth,
-                    height,
-                    pixel_area_mm2,
-                );
-
-            stats.total_solid_pixels = total_pixels;
-            let total_area = (total_pixels as f64) * pixel_area_mm2;
-            stats.total_solid_area_mm2 = total_area;
-            stats.largest_area_mm2 = largest_area_mm2;
-            stats.smallest_area_mm2 = smallest_area_mm2;
-            stats.area_count = area_count;
-        } else {
-            let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
-            stats.total_solid_area_mm2 = total_area;
-            stats.largest_area_mm2 = total_area;
-            stats.smallest_area_mm2 = total_area;
-            stats.area_count = 1;
-        }
-    }
-
-    (runs, stats)
+    let mut raster = BinaryScanlineRaster::new_rle(job, segments, compute_area_stats, Some(block));
+    raster.render_scalar(None).expect("uncancelled binary raster");
+    raster.finish_rle()
 }
 
 // ── Resolution-scaling supersampler ───────────────────────────────────────────

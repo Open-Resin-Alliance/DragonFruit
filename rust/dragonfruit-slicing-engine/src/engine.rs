@@ -4290,199 +4290,219 @@ pub fn slice_and_rasterize_rle_blocks_v3(
     let tail_cure_lut_ref = tail_cure_lut.as_ref();
     let encode_block_fn_ref = encode_block_fn.as_ref();
 
-    let produce_layer = |layer: u32, prepared: Option<crate::raw_simd::LayerSegments>| -> Result<
-        (Vec<crate::pipeline::RleBlockPayload>, LayerAreaStatsV3, u64),
-        SlicerV3Error,
+    struct BlockLayer {
+        layer: u32,
+        prepared: Option<crate::raw_layers::LayerSegments>,
+        model_indices: Vec<usize>,
+        support_segments: Option<Vec<crate::raster::Segment>>,
+        payloads: Vec<crate::pipeline::RleBlockPayload>,
+        stats: LayerAreaStatsV3,
+    }
+
+    let produce_layers = |batch: Vec<(u32, Option<crate::raw_layers::LayerSegments>)>| -> Result<
+        (Vec<(u32, Vec<crate::pipeline::RleBlockPayload>, LayerAreaStatsV3)>, u64), SlicerV3Error,
     > {
         use crate::pipeline::RleBlockPayload;
+        use crate::raster::BinaryScanlineRaster;
         use crate::rle::{crop_rle_columns, make_rle_block};
+        use crate::scanline_simd::render_scanline_batch;
 
-        let layer_candidates = layer_index.candidates_for_layer(layer);
-
-        let (model_indices, support_indices): (Vec<usize>, Vec<usize>) =
-            if prepared.is_some() {
-                (Vec::new(), Vec::new())
-            } else if let Some(model_triangle_count) = support_split_model_triangle_count {
-                let mut model = Vec::with_capacity(layer_candidates.len());
-                let mut support = Vec::new();
-                for &candidate in layer_candidates {
-                    if candidate < model_triangle_count {
-                        model.push(candidate);
-                    } else {
-                        support.push(candidate);
+        let mut layers: Vec<BlockLayer> = batch.into_par_iter().map(|(layer, prepared)| {
+            let candidates = layer_index.candidates_for_layer(layer);
+            let mut model_indices = Vec::new();
+            let mut support_indices = Vec::new();
+            if prepared.is_none() {
+                if let Some(split) = support_split_model_triangle_count {
+                    model_indices.reserve(candidates.len());
+                    for &candidate in candidates {
+                        if candidate < split { model_indices.push(candidate); }
+                        else { support_indices.push(candidate); }
                     }
                 }
-                (model, support)
-            } else {
-                (Vec::new(), Vec::new())
-            };
-        let model_candidates = if support_split_model_triangle_count.is_none() {
-            layer_candidates
-        } else {
-            &model_indices
-        };
-        // Perturbation model geometry remains on its original path, but its
-        // separate binary support geometry is also staged just once per layer.
-        let support_segments_owned = if prepared.is_none() && !support_indices.is_empty() {
-            support_job_ref.map(|support_job| {
-                let mut segments = Vec::new();
-                crate::raw_simd::build_segments_into(
-                    support_job, triangles, &support_indices,
-                    (layer as f32 + 0.5) * support_job.layer_height_mm,
-                    &mut segments, Backend::detected(),
-                );
-                segments
-            })
-        } else { None };
-        let support_segments = prepared.as_ref().and_then(|layer| layer.support.as_deref())
-            .or(support_segments_owned.as_deref());
-
-        let mut payloads = Vec::with_capacity(blocks.len());
-        let mut layer_stats = LayerAreaStatsV3::default();
+            }
+            let support_segments = if !support_indices.is_empty() {
+                support_job_ref.map(|support_job| {
+                    let mut segments = Vec::with_capacity(support_indices.len());
+                    let z = (layer as f32 + 0.5) * support_job.layer_height_mm;
+                    for &candidate in &support_indices {
+                        crate::raster::push_segment_for_triangle_at_z(
+                            support_job, &triangles[candidate], z, &mut segments);
+                    }
+                    segments
+                })
+            } else { None };
+            BlockLayer { layer, prepared, model_indices, support_segments,
+                payloads: Vec::with_capacity(blocks.len()), stats: LayerAreaStatsV3::default() }
+        }).collect();
+        let eligible = layers.first().is_some_and(|layer| layer.prepared.is_some());
         let mut raw_scanline_ns = 0u64;
-
         for (block_index, block) in blocks.iter().enumerate() {
             if cancel_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                 return Err(SlicerV3Error::Cancelled);
             }
             let out_start = (block.start_col as usize).min(out_width);
-            let out_end = out_start
-                .saturating_add(block.width as usize)
-                .min(out_width);
+            let out_end = out_start.saturating_add(block.width as usize).min(out_width);
             if out_end <= out_start {
-                let empty: Vec<crate::rle::RleRun> = Vec::new();
-                payloads.push(match encode_block_fn_ref {
-                    Some(f) => RleBlockPayload::Encoded(f(layer, block_index as u32, &empty)?),
-                    None => RleBlockPayload::Runs(empty),
-                });
+                layers.par_iter_mut().try_for_each(|state| -> Result<(), SlicerV3Error> {
+                    let empty = Vec::new();
+                    state.payloads.push(match encode_block_fn_ref {
+                        Some(f) => RleBlockPayload::Encoded(f(state.layer, block_index as u32, &empty)?),
+                        None => RleBlockPayload::Runs(empty),
+                    });
+                    Ok(())
+                })?;
                 continue;
             }
-
-            // Blur reads neighbor columns: over-render interior edges by the
-            // kernel radius, post-process at the widened width, then crop the
-            // halo so the seam matches the full-width raster exactly.
+            // Halo coordinates and sample phase remain global at every scale.
             let halo_left = blur_radius.min(out_start);
             let halo_right = blur_radius.min(out_width - out_end);
             let wid_start = out_start - halo_left;
-            let wid_w = (out_end + halo_right) - wid_start;
-
-            let raster_block = make_rle_block(
-                (wid_start * ssaa_factor) as u32,
-                (wid_w * ssaa_factor) as u32,
-            );
-
-            let scanline_start = prepared.as_ref().map(|_| std::time::Instant::now());
-            let (raster_runs, _) = if let Some(prepared) = prepared.as_ref() {
-                crate::raster::rasterize_binary_layer_rle_block_from_segments(
-                    raster_job_ref, &prepared.model, false, raster_block,
-                )
+            let wid_w = out_end + halo_right - wid_start;
+            let raster_block = make_rle_block((wid_start * ssaa_factor) as u32,
+                (wid_w * ssaa_factor) as u32);
+            let scanline_start = eligible.then(std::time::Instant::now);
+            let rendered: Vec<_> = if eligible {
+                let mut models: Vec<_> = layers.par_iter().map(|state| {
+                    BinaryScanlineRaster::new_rle(raster_job_ref,
+                        &state.prepared.as_ref().expect("prepared binary group").model, false, Some(raster_block))
+                }).collect();
+                render_scanline_batch(&mut models, Backend::detected(), cancel_flag)?;
+                let support_slots: Vec<_> = layers.iter().map(|state| {
+                    state.prepared.as_ref().and_then(|layer| layer.support.as_deref()).is_some()
+                }).collect();
+                let mut supports: Vec<_> = layers.par_iter().filter_map(|state| {
+                    state.prepared.as_ref().and_then(|layer| layer.support.as_deref()).map(|segments| {
+                        BinaryScanlineRaster::new_rle(support_job_ref.unwrap_or(raster_job_ref),
+                            segments, false, Some(raster_block))
+                    })
+                }).collect();
+                render_scanline_batch(&mut supports, Backend::detected(), cancel_flag)?;
+                let mut supports = supports.into_iter();
+                models.into_iter().zip(support_slots).map(|(model, has_support)| {
+                    (model.finish_rle().0, if has_support {
+                        Some(supports.next().expect("prepared support stream").finish_rle().0)
+                    } else { None })
+                }).collect()
             } else {
-                crate::raster::rasterize_layer_rle_block(
-                    raster_job_ref, triangles, model_candidates, layer, false, raster_block,
-                )
+                layers.par_iter().map(|state| {
+                    let candidates = if support_split_model_triangle_count.is_some() {
+                        state.model_indices.as_slice()
+                    } else { layer_index.candidates_for_layer(state.layer) };
+                    let model = crate::raster::rasterize_layer_rle_block(raster_job_ref, triangles,
+                        candidates, state.layer, false, raster_block).0;
+                    let support = state.support_segments.as_ref().map(|segments| {
+                        crate::raster::rasterize_binary_layer_rle_block_from_segments(
+                            support_job_ref.unwrap_or(raster_job_ref), segments, false, raster_block).0
+                    });
+                    (model, support)
+                }).collect()
             };
-
-            let support_raster_runs = support_segments.map(|segments| {
-                crate::raster::rasterize_binary_layer_rle_block_from_segments(
-                    support_job_ref.unwrap_or(raster_job_ref), segments, false, raster_block,
-                ).0
-            });
-
-            // Per-block stats over the exact (halo-cropped) raster window,
-            // merged with support geometry, in absolute raster-space columns.
-            {
-                let raster_w = (wid_w * ssaa_factor) as u32;
-                let crop_l = (halo_left * ssaa_factor) as u32;
-                let crop_r = (halo_right * ssaa_factor) as u32;
-                let model_exact = if crop_l > 0 || crop_r > 0 {
-                    crop_rle_columns(&raster_runs, raster_w, crop_l, crop_r)
-                } else {
-                    raster_runs.clone()
-                };
-                let stats_runs = if let Some(support) = support_raster_runs.as_ref() {
-                    let support_exact = if crop_l > 0 || crop_r > 0 {
-                        crop_rle_columns(support, raster_w, crop_l, crop_r)
-                    } else {
-                        support.clone()
-                    };
-                    merge_rle_max(model_exact, &support_exact)
-                } else {
-                    model_exact
-                };
-                let mut stats = crate::raster::recompute_layer_stats_from_rle(
-                    &stats_runs,
-                    (out_end - out_start) * ssaa_factor,
-                    super_height,
-                    pixel_area_mm2,
-                    compute_area_stats,
-                );
-                if stats.total_solid_pixels > 0 {
-                    stats.min_x += (out_start * ssaa_factor) as i32;
-                    stats.max_x += (out_start * ssaa_factor) as i32;
-                }
-                accumulate_block_stats(&mut layer_stats, &stats);
-            }
             if let Some(start) = scanline_start {
-                raw_scanline_ns = raw_scanline_ns
-                    .saturating_add(start.elapsed().as_nanos() as u64);
+                raw_scanline_ns = raw_scanline_ns.saturating_add(start.elapsed().as_nanos() as u64);
             }
+            let stats_ns = AtomicU64::new(0);
+            layers.par_iter_mut().zip(rendered.into_par_iter()).try_for_each(
+                |(state, (raster_runs, support_raster_runs))| -> Result<(), SlicerV3Error> {
+                    if cancel_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                        return Err(SlicerV3Error::Cancelled);
+                    }
+                    let layer = state.layer;
+                    let stats_start = eligible.then(std::time::Instant::now);
+                    // Per-block stats over the exact (halo-cropped) raster window,
+                    // merged with support geometry, in absolute raster-space columns.
+                    {
+                        let raster_w = (wid_w * ssaa_factor) as u32;
+                        let crop_l = (halo_left * ssaa_factor) as u32;
+                        let crop_r = (halo_right * ssaa_factor) as u32;
+                        let model_exact = if crop_l > 0 || crop_r > 0 {
+                            crop_rle_columns(&raster_runs, raster_w, crop_l, crop_r)
+                        } else {
+                            raster_runs.clone()
+                        };
+                        let stats_runs = if let Some(support) = support_raster_runs.as_ref() {
+                            let support_exact = if crop_l > 0 || crop_r > 0 {
+                                crop_rle_columns(support, raster_w, crop_l, crop_r)
+                            } else {
+                                support.clone()
+                            };
+                            merge_rle_max(model_exact, &support_exact)
+                        } else {
+                            model_exact
+                        };
+                        let mut stats = crate::raster::recompute_layer_stats_from_rle(
+                            &stats_runs,
+                            (out_end - out_start) * ssaa_factor,
+                            super_height,
+                            pixel_area_mm2,
+                            compute_area_stats,
+                        );
+                        if stats.total_solid_pixels > 0 {
+                            stats.min_x += (out_start * ssaa_factor) as i32;
+                            stats.max_x += (out_start * ssaa_factor) as i32;
+                        }
+                        accumulate_block_stats(&mut state.stats, &stats);
+                    }
+                    if let Some(start) = stats_start {
+                        stats_ns.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    }
+                    // Post-process at the widened width (mirrors `wrapped_on_rle`).
+                    let downsample_min_alpha_u8 = ssaa_downsample_min_alpha_u8(blur_radius, 0);
+                    let gray_runs = if ssaa_factor > 1 {
+                        downsample_binary_rle_to_gray_rle(
+                            &raster_runs,
+                            wid_w * ssaa_factor,
+                            super_height,
+                            ssaa_factor,
+                            downsample_min_alpha_u8,
+                        )
+                    } else {
+                        raster_runs
+                    };
 
-            // Post-process at the widened width (mirrors `wrapped_on_rle`).
-            let downsample_min_alpha_u8 = ssaa_downsample_min_alpha_u8(blur_radius, 0);
-            let gray_runs = if ssaa_factor > 1 {
-                downsample_binary_rle_to_gray_rle(
-                    &raster_runs,
-                    wid_w * ssaa_factor,
-                    super_height,
-                    ssaa_factor,
-                    downsample_min_alpha_u8,
-                )
-            } else {
-                raster_runs
-            };
+                    let post_aa_runs = if blur_radius > 0 {
+                        blur_gray_rle_streaming(&gray_runs, wid_w, out_height, blur_radius, 0)
+                    } else {
+                        gray_runs
+                    };
 
-            let post_aa_runs = if blur_radius > 0 {
-                blur_gray_rle_streaming(&gray_runs, wid_w, out_height, blur_radius, 0)
-            } else {
-                gray_runs
-            };
+                    let final_runs = if let Some(lut) = tail_cure_lut_ref {
+                        remap_gray_rle_with_lut(&post_aa_runs, lut)
+                    } else {
+                        post_aa_runs
+                    };
 
-            let final_runs = if let Some(lut) = tail_cure_lut_ref {
-                remap_gray_rle_with_lut(&post_aa_runs, lut)
-            } else {
-                post_aa_runs
-            };
+                    let final_runs = if let Some(support_raster_runs) = support_raster_runs.as_ref() {
+                        let support_runs = if ssaa_factor > 1 {
+                            downsample_binary_rle_to_gray_rle(
+                                support_raster_runs,
+                                wid_w * ssaa_factor,
+                                super_height,
+                                ssaa_factor,
+                                255,
+                            )
+                        } else {
+                            support_raster_runs.clone()
+                        };
+                        merge_rle_max(final_runs, &support_runs)
+                    } else {
+                        final_runs
+                    };
 
-            let final_runs = if let Some(support_raster_runs) = support_raster_runs.as_ref() {
-                let support_runs = if ssaa_factor > 1 {
-                    downsample_binary_rle_to_gray_rle(
-                        support_raster_runs,
-                        wid_w * ssaa_factor,
-                        super_height,
-                        ssaa_factor,
-                        255,
-                    )
-                } else {
-                    support_raster_runs.clone()
-                };
-                merge_rle_max(final_runs, &support_runs)
-            } else {
-                final_runs
-            };
+                    let final_runs = if halo_left > 0 || halo_right > 0 {
+                        crop_rle_columns(&final_runs, wid_w as u32, halo_left as u32, halo_right as u32)
+                    } else {
+                        final_runs
+                    };
 
-            let final_runs = if halo_left > 0 || halo_right > 0 {
-                crop_rle_columns(&final_runs, wid_w as u32, halo_left as u32, halo_right as u32)
-            } else {
-                final_runs
-            };
-
-            payloads.push(match encode_block_fn_ref {
-                Some(f) => RleBlockPayload::Encoded(f(layer, block_index as u32, &final_runs)?),
-                None => RleBlockPayload::Runs(final_runs),
-            });
+                    state.payloads.push(match encode_block_fn_ref {
+                        Some(f) => RleBlockPayload::Encoded(f(layer, block_index as u32, &final_runs)?),
+                        None => RleBlockPayload::Runs(final_runs),
+                    });
+                    Ok(())
+                })?;
+            raw_scanline_ns = raw_scanline_ns.saturating_add(stats_ns.load(Ordering::Relaxed));
         }
-
-        Ok((payloads, layer_stats, raw_scanline_ns))
+        Ok((layers.into_iter().map(|state| (state.layer, state.payloads, state.stats)).collect(), raw_scanline_ns))
     };
 
     let (layer_area_stats, mut perf) = crate::pipeline::render_layers_rle_blocks(
@@ -4490,7 +4510,7 @@ pub fn slice_and_rasterize_rle_blocks_v3(
         triangles,
         layer_index,
         support_split_model_triangle_count,
-        produce_layer,
+        produce_layers,
         on_block,
         on_progress,
         cancel_flag,

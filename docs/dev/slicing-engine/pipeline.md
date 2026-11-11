@@ -62,34 +62,33 @@ This path is still bounded/cancelable and useful for encoders not exposing paral
 - AA on => subscanline coverage accumulation to grayscale
 - output is row-major `Vec<RleRun>`
 
-### Coverage-off RAW batching
+### Coverage-off RAW scanline batching
 
-Binary-core jobs prepare bounded groups of real layers through `raw_simd`.
-Each SIMD packet contains pending triangle/layer pairs and can fill across
-layer boundaries without requiring geometry overlap. Candidate slices borrow
-the existing index/model. Completed layers are rasterized and encoded/sent
-individually; channels, ordered draining and per-arrival progress stay per
-layer. Batches retain one full current layer of segments plus packet-sized
-spill, not a group of full framebuffer or RLE outputs.
+Binary-core jobs use the original scalar triangle/plane intersection math.
+The scanline stage batches independent real layers through `scanline_simd`:
+lanes keep separate row cursors, edge lists, winding, spans and output. Variable
+edge counts, row extents, empty layers and tails do not require matching geometry.
+Healthy-row winding and span-boundary arithmetic execute as SIMD; defective-row
+repair retains the existing scalar semantics.
 
-Single-layer and block callers use the same SIMD geometry preparation for
-binary work. Blocks reuse a layer's prepared geometry while preserving their
-context-free span behavior, absolute-column phase, halo/crop handling and
-window-local statistics; full-width output retains previous-row span history.
-Model/support streams, cancellation and sink failures retain their original
-per-layer contracts. Noneligible AA/perturbation work remains on its existing
-path, without changes to blur, dithering or encoding quality.
+Groups contain at most four streams and count against the existing live-layer
+concurrency cap. Only a bounded number of group jobs run in the same Rayon
+pool; nested preparation/encoding can use idle workers without a blocking
+worker semaphore or another thread pool. No model copies or extra full-plate
+masks are introduced. Outputs still use ordered per-layer draining, existing
+channels, progress and cancellation.
 
-`pipeline::render_layers_rle_blocks` is crate-private: it takes the shared
-job, triangles, layer index and optional support split, then calls
-`produce_layer(layer, prepared_segments)`. Binary-eligible layers supply
-`Some(LayerSegments)` for reuse across all block windows; noneligible layers
-supply `None` and use the existing AA raster path. The producer returns one
-layer's `(payloads, statistics, raw_scanline_ns)`. The timing covers eligible
-binary raster/stat work only and stops before postprocessing and format
-encoding; ineligible paths contribute zero. Its sole engine caller consumes
-the prepared geometry without cloning it or re-running intersection per block.
-The old total-layer-count-only producer API has been removed.
+Full-width output retains previous-row coherence. Blocks retain context-free
+repair, absolute-column phase, halo/crop handling and window-local statistics,
+while reusing each layer's scalar geometry across windows. Model/support stream
+presence and merged statistics retain their original contracts. Noneligible
+AA/perturbation and downstream blur/dithering/encoding remain unchanged.
+
+The crate-private block producer now works with bounded layer groups so each
+window can use cross-layer scanline SIMD. It reports eligible raster/stat time
+separately from postprocessing and format encoding. `raw_geometry_ns` records
+scalar geometry preparation; `raw_scanline_ns` records scanline setup and
+rendering. Both remain summed worker elapsed times, not pipeline wall time.
 
 ## 8) O(num_runs) PNG encode details
 

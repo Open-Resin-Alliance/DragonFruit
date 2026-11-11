@@ -45,63 +45,58 @@ edge pixels; old raster hashes are not a correctness oracle for the fix.
 `binary_annulus_matches_center_samples_and_global_block_coordinates` cover
 half-pixel ties, clipping, thin geometry, annulus symmetry and block seams.
 
-### Coverage-off RAW work-pair SIMD
+### Coverage-off RAW scanline SIMD
 
-`raw_simd` batches independent triangle/layer intersection work through the
-existing Pulp backend. SIMD lanes are real candidate/plane pairs, not AA samples
-of one triangle; neighboring layers need not intersect the same triangles.
-The parsed/projected triangle array and `LayerIndex` candidate slices remain
-shared. Batching creates no model copy or triangle-by-layer Cartesian-product
-queue.
+Triangle/plane intersections use the original scalar geometry helper. The
+previous intersection work-pair SIMD kernel has been removed. Parsed/projected
+triangles and `LayerIndex` candidate slices remain shared; the cutover adds no
+whole-model copy or triangle-by-layer Cartesian-product queue.
 
-`RawLayerRequest` names a layer, its exact existing Z plane and borrowed
-candidates. `build_segments_into` reuses a single caller's segment vector;
-`for_each_layer_segments` streams `LayerSegments` for a bounded request group.
-Candidate order, duplicates and model/support classification are retained.
-Support-stream presence follows input candidates, including support candidates
-that produce no segment. Empty layers and partial SIMD/batch tails are emitted
-normally.
+`scanline_simd` renders bounded groups of independent real layer streams.
+Each SIMD lane has its own row cursor, active edges, winding accumulator,
+spans, previous-row history and output. Layers need not share geometry, edge
+counts or Y extents. Healthy-row winding predicates and binary span-boundary
+arithmetic are vectorized; this is not merely SIMD geometry preparation or
+edge-X advancement. Defective rows retain the existing scalar matched-crossing
+repair, with previous-row coherence for full output and context-free repair for
+block windows.
 
-Crate-internal model-only example, called on the worker executing the chunk:
+`BinaryScanlineRaster` owns one stream's scanline index, scratch and output.
+Its row preparation and commit methods retain global coordinates, zero rows,
+statistics and incremental-X ordering. The crate-internal RLE entrypoint is:
 
 ```rust
-let requests = [crate::raw_simd::RawLayerRequest {
-    layer_index: layer,
-    z_mm: (layer as f32 + 0.5) * job.layer_height_mm,
-    candidates: index.candidates_for_layer(layer),
-}];
-crate::raw_simd::for_each_layer_segments(
-    job, triangles, &requests, None, backend, cancel_flag, |prepared| {
-        let (runs, stats) = crate::raster::rasterize_binary_layer_rle_from_segments(
-            job, &prepared.model, compute_area_stats,
-        );
-        on_layer(prepared.layer_index, runs, stats)
-    },
+let mut rasters = segments_by_layer.iter().map(|segments| {
+    crate::raster::BinaryScanlineRaster::new_rle(job, segments, false, None)
+}).collect::<Vec<_>>();
+crate::scanline_simd::render_scanline_batch(
+    &mut rasters, backend, cancel_flag,
 )?;
+for raster in rasters {
+    let (runs, stats) = raster.finish_rle();
+    consume_layer(runs, stats)?;
+}
 ```
 
-Request groups must not exceed `MAX_RAW_LAYER_BATCH`. The callback consumes each
-layer before the next allocation grows; send its output through the existing
-bounded channel rather than retaining completed layers. Support-split consumers
-must retain the separate optional support stream and union-statistics policy.
-See [Pipeline](pipeline.md) for producer integration and ordered draining.
+A group contains at most `MAX_SCANLINE_LANES` streams. The pipeline charges live
+layers against the existing concurrency limit rather than multiplying that
+limit by the SIMD width. Bounded group jobs use the same Rayon pool; nested
+scalar preparation and per-layer encoding can use otherwise idle workers.
+Binary masks use their required output buffers, not an additional full-frame
+RLE expansion. Blocks reuse scalar-prepared geometry across windows.
 
-Layer-major packet filling drains completed layers before fetching more work.
-At most one full layer's segment storage plus packet-sized spill is retained;
-it does not accumulate eight fully rendered layers or full-plate masks. Rayon
-still schedules chunks in parallel, with small-job grain selection preserving
-thread-level concurrency. Per-layer winding/repair, scanline history, RLE
-emission and block coordinates remain independent.
+`Backend::for_layer_scanline` narrows x86 execution to four native f32 lanes;
+the complete batch enters one Pulp feature gate on its executing worker.
+Scalar fallback is real scalar rendering. No per-row/per-vector feature
+dispatch, FMA, approximate reciprocal, changed pixel-center phase or
+closed-form replacement of incremental scanline X is introduced. Mask selection
+uses portable Pulp operations, never mask/vector size assumptions.
 
-The vector kernel preserves scalar crossing predicates, exact division,
-separate multiply/add rounding, point-deduplication tolerances and orientation.
-Inactive divisions use safe operands. No FMA, approximate reciprocal or
-closed-form replacement of incremental scanline X history is introduced.
-Expand validity through `Simd::select_u32s`, not a size-preserving mask bitcast:
-AVX512 masks are compact and scalar masks are booleans, unlike their u32 vectors.
-Non-binary AA/perturbation and postprocessing keep their existing algorithms.
-Evaluate complete coverage-off RAW output and resource behavior; throughput
-benchmarks are a separate acceptance step, not implied by SIMD lane width.
+`raw_geometry_ns` now measures scalar preparation. `raw_scanline_ns` measures
+scanline setup/render/stat work, excluding postprocessing, format encoding and
+sink waits. They remain summed worker elapsed times, not wall time. Noneligible
+AA/perturbation, blur and dithering retain their original algorithms. Compare
+real output and the existing phase counters before claiming a throughput gain.
 
 ### `rle`
 
@@ -185,9 +180,9 @@ or image buffer is introduced.
 
 ### Portable SIMD arithmetic
 
-`pulp_simd` is a crate-private dispatch seam shared by XY/Z blur and RAW geometry.
+`pulp_simd` is a crate-private dispatch seam shared by XY/Z blur and RAW scanlines.
 Operations implement `pulp::WithSimd` once: blur uses generic integer arithmetic,
-while `raw_simd` uses exact FP32 work-pair arithmetic. The application owns no
+while `scanline_simd` uses integer winding and exact FP32 span arithmetic. The application owns no
 x86 intrinsics or handwritten CPU-feature-gated kernels. Pulp 0.22.3
 provides the runtime-gated native implementations. On x86 the cached selection
 is AVX512/x86-64-v4, then AVX2/x86-64-v3, then SSE/x86-64-v2, then scalar. The
