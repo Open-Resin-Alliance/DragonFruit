@@ -287,6 +287,63 @@ test('per-region candidate count is capped (densification never exceeds the cap)
         `capped (${candidates.length} ≤ ${MAX_GRID_CANDIDATES_PER_REGION})`);
 });
 
+test('MED-04: suction-boosted overflow (> 800) falls back to angle-only spacing and caps interior lattice at 800', () => {
+    // Case 1: 80×80 mm flat overhang (area 6400 mm²) with suctionAreaExponent 0.35 and
+    // areaPerSupportMm2 18: suction-boosted spacing hits the 1.2 mm floor (estimate = 4624 > 800),
+    // while angle-only fallbackSpacing = √18 × 0.7 ≈ 2.97 mm gives baseEstimate = 784 ≤ 800.
+    // Leaving spacing unassigned kept the 1.2 mm lattice with stride = 1 (4489 interior points).
+    const baseOverflowSettings = {
+        ...createDefaultAutoSupportSettings(),
+        areaPerSupportMm2: 18,
+        gridAreaThresholdMm2: 25,
+        flatDensityBoost: 0.7,
+        suctionAreaExponent: 0.35,
+    };
+    const slab80 = rectRegion('o-med04-a', -40, 40, -40, 40, 6400, 6.5, 0);
+    const candidatesA = generateGridCandidates([slab80], baseOverflowSettings);
+    const interiorA = candidatesA.filter((c) => c.id.startsWith('grid-'));
+    assert.ok(interiorA.length > 0, 'interior lattice is emitted');
+    assert.ok(
+        interiorA.length <= MAX_GRID_CANDIDATES_PER_REGION,
+        `baseEstimate ≤ 800 regime caps interior lattice (${interiorA.length} ≤ ${MAX_GRID_CANDIDATES_PER_REGION})`,
+    );
+
+    // Case 2: 80×80 mm flat overhang with default areaPerSupportMm2 = 10 and suctionAreaExponent 0.35
+    // where BOTH estimate (4624) and baseEstimate (1369) exceed 800.
+    const doubleOverflowSettings = {
+        ...createDefaultAutoSupportSettings(),
+        areaPerSupportMm2: 10,
+        gridAreaThresholdMm2: 25,
+        flatDensityBoost: 0.7,
+        suctionAreaExponent: 0.35,
+    };
+    const candidatesB = generateGridCandidates([slab80], doubleOverflowSettings);
+    const interiorB = candidatesB.filter((c) => c.id.startsWith('grid-'));
+    assert.ok(interiorB.length > 0, 'subsampled interior lattice is emitted');
+    assert.ok(
+        interiorB.length <= MAX_GRID_CANDIDATES_PER_REGION,
+        `baseEstimate > 800 regime caps interior lattice (${interiorB.length} ≤ ${MAX_GRID_CANDIDATES_PER_REGION})`,
+    );
+
+    // Case 3: Ceiling-rounding edge case where ceil(sqrt(baseEstimate / 800)) = 2
+    // on nx = 56, ny = 55 would yield 29 × 28 = 812 > 800 without the post-stride guard.
+    const edgeSlab = rectRegion('o-med04-c', -39.55, 39.55, -38.85, 38.85, 6146, 6.5, 0);
+    const edgeSettings = {
+        ...createDefaultAutoSupportSettings(),
+        areaPerSupportMm2: 4.08,
+        gridAreaThresholdMm2: 25,
+        flatDensityBoost: 0.7,
+        suctionAreaExponent: 0.35,
+    };
+    const candidatesC = generateGridCandidates([edgeSlab], edgeSettings);
+    const interiorC = candidatesC.filter((c) => c.id.startsWith('grid-'));
+    assert.ok(interiorC.length > 0, 'edge-case lattice is emitted');
+    assert.ok(
+        interiorC.length <= MAX_GRID_CANDIDATES_PER_REGION,
+        `ceiling guard keeps interior lattice ≤ ${MAX_GRID_CANDIDATES_PER_REGION} (got ${interiorC.length})`,
+    );
+});
+
 /**
  * A thin rib under the area threshold used to take the single-candidate path:
  * one pillar at its centre, both ends of the anchoring edge unsupported. Shape

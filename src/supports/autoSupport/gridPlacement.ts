@@ -551,7 +551,7 @@ export function generateGridCandidates(
         const baseSpacing = computeRegionSpacing(island, settings);
         // An internal ceiling is bridged to the cavity floor, not carried to
         // the plate; the short strut needs far fewer contacts.
-        const spacing = baseSpacing
+        let spacing = baseSpacing
             * steepFlatSpacingMultiplier(island, baseSpacing, partThicknessMm)
             * (island.interior ? INTERIOR_CAVITY_SPACING_SCALE : 1);
 
@@ -621,17 +621,28 @@ export function generateGridCandidates(
         const spanX = Math.max(0.5, width - 2 * inset);
         const spanY = Math.max(0.5, height - 2 * inset);
         let stride = 1;
+        let nx: number;
+        let ny: number;
         const estimate = (Math.floor(spanX / spacing) + 2) * (Math.floor(spanY / spacing) + 2);
         if (estimate > MAX_GRID_CANDIDATES_PER_REGION) {
-            const fallbackSpacing = computeRegionSpacing(island, { ...settings, suctionAreaExponent: 0 });
+            const fallbackBaseSpacing = computeRegionSpacing(island, { ...settings, suctionAreaExponent: 0 });
+            const fallbackSpacing = fallbackBaseSpacing
+                * steepFlatSpacingMultiplier(island, fallbackBaseSpacing, partThicknessMm)
+                * (island.interior ? INTERIOR_CAVITY_SPACING_SCALE : 1);
+            spacing = fallbackSpacing;
+            nx = Math.max(1, Math.round(spanX / spacing));
+            ny = Math.max(1, Math.round(spanY / spacing));
             const baseEstimate = (Math.floor(spanX / fallbackSpacing) + 2) * (Math.floor(spanY / fallbackSpacing) + 2);
             if (baseEstimate > MAX_GRID_CANDIDATES_PER_REGION) {
-                stride = Math.ceil(baseEstimate / MAX_GRID_CANDIDATES_PER_REGION);
+                stride = Math.ceil(Math.sqrt(baseEstimate / MAX_GRID_CANDIDATES_PER_REGION));
             }
+            while ((Math.floor(nx / stride) + 1) * (Math.floor(ny / stride) + 1) > MAX_GRID_CANDIDATES_PER_REGION) {
+                stride += 1;
+            }
+        } else {
+            nx = Math.max(1, Math.round(spanX / spacing));
+            ny = Math.max(1, Math.round(spanY / spacing));
         }
-
-        const nx = Math.max(1, Math.round(spanX / spacing));
-        const ny = Math.max(1, Math.round(spanY / spacing));
         const spacingX = spanX / nx;
         const spacingY = spanY / ny;
 

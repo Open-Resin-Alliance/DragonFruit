@@ -177,11 +177,17 @@ pub struct Island {
     pub centroid_count: u64,
     pub centroid: Option<Centroid>,
     pub last_layer_centroid: Option<Centroid>,
-    /// Last-layer centroid in **pixel coordinates** (x, y) with Z as a
-    /// **layer index** — the island's final layer center, not a world-space
-    /// "center voxel". World conversion must use `first_layer`:
+    /// First-layer (birth) centroid in **pixel coordinates** (x, y) with Z as
+    /// the **`first_layer` index** (not a world-space coordinate). Used for
+    /// support contact snapping; world Z conversion must use `first_layer`:
     /// `bbox_min_z + first_layer * layer_height_mm` for the contact base.
     pub seed_voxel: Option<Centroid>,
+    #[serde(skip)]
+    birth_centroid_sum_x: f64,
+    #[serde(skip)]
+    birth_centroid_sum_y: f64,
+    #[serde(skip)]
+    birth_centroid_count: u64,
 }
 
 impl Island {
@@ -191,28 +197,44 @@ impl Island {
         area_mm2: f64,
         comp: Option<&ComponentInfo>,
     ) -> Self {
-        let (centroid_sum_x, centroid_sum_y, centroid_sum_z, centroid_count, last_layer_centroid) =
-            if let Some(c) = comp {
-                let count = c.size as u64;
-                let llc = if c.size > 0 {
+        let (
+            centroid_sum_x,
+            centroid_sum_y,
+            centroid_sum_z,
+            centroid_count,
+            last_layer_centroid,
+            birth_centroid_sum_x,
+            birth_centroid_sum_y,
+            birth_centroid_count,
+        ) = if let Some(c) = comp {
+            let count = c.size as u64;
+            let (llc, bx, by, bc) = if c.size > 0 {
+                (
                     Some(Centroid {
                         x: c.centroid_sum_x / c.size as f64,
                         y: c.centroid_sum_y / c.size as f64,
                         z: layer as f64,
-                    })
-                } else {
-                    None
-                };
-                (
+                    }),
                     c.centroid_sum_x,
                     c.centroid_sum_y,
-                    count as f64 * layer as f64,
                     count,
-                    llc,
                 )
             } else {
-                (0.0, 0.0, 0.0, 0, None)
+                (None, 0.0, 0.0, 0)
             };
+            (
+                c.centroid_sum_x,
+                c.centroid_sum_y,
+                count as f64 * layer as f64,
+                count,
+                llc,
+                bx,
+                by,
+                bc,
+            )
+        } else {
+            (0.0, 0.0, 0.0, 0, None, 0.0, 0.0, 0)
+        };
 
         let mut per_layer = HashMap::new();
         per_layer.insert(layer, area_mm2);
@@ -237,17 +259,35 @@ impl Island {
             centroid: None,
             last_layer_centroid,
             seed_voxel: last_layer_centroid,
+            birth_centroid_sum_x,
+            birth_centroid_sum_y,
+            birth_centroid_count,
         }
     }
 
     /// Update island with new layer data (continuation).
     pub fn update(&mut self, layer: u32, area_mm2: f64, comp: Option<&ComponentInfo>) {
-        self.last_layer = layer;
+        let prev_first_layer = self.first_layer;
+        if layer < self.first_layer {
+            self.first_layer = layer;
+        }
+        if layer >= self.last_layer {
+            self.last_layer = layer;
+        }
         self.total_area_mm2 += area_mm2;
-        self.per_layer_area_mm2.insert(layer, area_mm2);
+        let layer_area = match self.per_layer_area_mm2.entry(layer) {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                *e.get_mut() += area_mm2;
+                *e.get()
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(area_mm2);
+                area_mm2
+            }
+        };
 
-        if self.max_area_mm2.map_or(true, |m| area_mm2 > m) {
-            self.max_area_mm2 = Some(area_mm2);
+        if self.max_area_mm2.map_or(true, |m| layer_area > m) {
+            self.max_area_mm2 = Some(layer_area);
             self.max_area_layer = Some(layer);
         }
 
@@ -258,11 +298,35 @@ impl Island {
             self.centroid_count += c.size as u64;
 
             if c.size > 0 {
-                self.last_layer_centroid = Some(Centroid {
+                let layer_centroid = Centroid {
                     x: c.centroid_sum_x / c.size as f64,
                     y: c.centroid_sum_y / c.size as f64,
                     z: layer as f64,
-                });
+                };
+                if layer >= self.last_layer {
+                    self.last_layer_centroid = Some(layer_centroid);
+                }
+
+                if layer < prev_first_layer {
+                    self.birth_centroid_sum_x = c.centroid_sum_x;
+                    self.birth_centroid_sum_y = c.centroid_sum_y;
+                    self.birth_centroid_count = c.size as u64;
+                    self.seed_voxel = Some(layer_centroid);
+                } else if layer == prev_first_layer {
+                    self.birth_centroid_sum_x += c.centroid_sum_x;
+                    self.birth_centroid_sum_y += c.centroid_sum_y;
+                    self.birth_centroid_count += c.size as u64;
+                    self.seed_voxel = Some(Centroid {
+                        x: self.birth_centroid_sum_x / self.birth_centroid_count as f64,
+                        y: self.birth_centroid_sum_y / self.birth_centroid_count as f64,
+                        z: layer as f64,
+                    });
+                } else if self.seed_voxel.is_none() {
+                    self.birth_centroid_sum_x = c.centroid_sum_x;
+                    self.birth_centroid_sum_y = c.centroid_sum_y;
+                    self.birth_centroid_count = c.size as u64;
+                    self.seed_voxel = Some(layer_centroid);
+                }
             }
         }
     }
@@ -341,4 +405,85 @@ pub struct IslandScanResult {
     pub grid: GridRef,
     pub islands: Vec<Island>,
     pub island_labels_per_layer: Vec<RleLabels>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn comp(id: i32, size: i32, cx: f64, cy: f64) -> ComponentInfo {
+        ComponentInfo {
+            id,
+            label: id,
+            area_px: size,
+            size,
+            centroid_sum_x: cx * size as f64,
+            centroid_sum_y: cy * size as f64,
+        }
+    }
+
+    #[test]
+    fn island_birth_layer_update_computes_canonical_seed_voxel() {
+        // Born at layer 2 with a single corner pixel at (1, 1), then updated on
+        // the same birth layer 2 with a 3-pixel body centered at (5, 3), and then
+        // continued onto higher layer 3 at (50, 50). `seed_voxel` must reflect the
+        // pixel-weighted birth-layer centroid ((1*1 + 3*5)/4 = 4.0, (1*1 + 3*3)/4 = 2.5)
+        // at z = 2.0, neither locked to (1, 1) nor overwritten by layer 3.
+        let corner = comp(1, 1, 1.0, 1.0);
+        let birth_body = comp(2, 3, 5.0, 3.0);
+        let upper = comp(3, 10, 50.0, 50.0);
+
+        let mut island = Island::new(IslandId(1), 2, 0.05, Some(&corner));
+        island.update(2, 0.15, Some(&birth_body));
+        island.update(3, 0.50, Some(&upper));
+
+        assert_eq!(island.first_layer, 2);
+        assert_eq!(island.last_layer, 3);
+        let seed = island.seed_voxel.expect("seed_voxel present");
+        assert!((seed.x - 4.0).abs() < 1e-9, "seed.x = {}", seed.x);
+        assert!((seed.y - 2.5).abs() < 1e-9, "seed.y = {}", seed.y);
+        assert!((seed.z - 2.0).abs() < 1e-9, "seed.z = {}", seed.z);
+    }
+
+    #[test]
+    fn island_update_anchors_seed_voxel_to_first_layer_and_backfills_none() {
+        // 1. Backfill when Island::new starts with comp = None, then lock to
+        //    that seed rather than overwriting on upper layers.
+        let mut from_none = Island::new(IslandId(10), 2, 0.0, None);
+        assert!(from_none.seed_voxel.is_none());
+        let c_fill = comp(1, 4, 6.5, 8.25);
+        from_none.update(3, 0.20, Some(&c_fill));
+        from_none.update(4, 0.50, Some(&comp(2, 10, 30.0, 40.0)));
+        assert_eq!(
+            from_none.seed_voxel,
+            Some(Centroid {
+                x: 6.5,
+                y: 8.25,
+                z: 3.0,
+            })
+        );
+
+        // 2. Updating an islandborn at layer 5 with a lower birth layer 2
+        //    anchors `first_layer == 2` and `seed_voxel` to layer 2 regardless
+        //    of update order.
+        let tip_2 = comp(3, 2, 3.5, 7.0);
+        let tip_5 = comp(4, 6, 18.0, 14.0);
+
+        let mut a_then_b = Island::new(IslandId(11), 2, 0.10, Some(&tip_2));
+        a_then_b.update(5, 0.30, Some(&tip_5));
+
+        let mut b_then_a = Island::new(IslandId(12), 5, 0.30, Some(&tip_5));
+        b_then_a.update(2, 0.10, Some(&tip_2));
+
+        let expected_seed = Some(Centroid {
+            x: 3.5,
+            y: 7.0,
+            z: 2.0,
+        });
+        assert_eq!(a_then_b.first_layer, 2);
+        assert_eq!(b_then_a.first_layer, 2);
+        assert_eq!(b_then_a.last_layer, 5);
+        assert_eq!(a_then_b.seed_voxel, expected_seed);
+        assert_eq!(b_then_a.seed_voxel, expected_seed);
+    }
 }

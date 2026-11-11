@@ -286,7 +286,7 @@ async function sliceCandidateLayers(
               runNext();
             };
             w.addEventListener('message', onMessage);
-            w.postMessage({ type: 'layer', z: zTop, layerHeightMm, gridRef, opts });
+            w.postMessage({ type: 'layer', z: zTop, layerHeightMm, gridRef, opts, candidatesOnly: true });
           };
           runNext();
         }),

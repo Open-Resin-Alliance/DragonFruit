@@ -7,32 +7,37 @@ import { BucketedSlicer } from '@/components/analysis/Slice2D';
 
 let slicer: BucketedSlicer | null = null;
 
-interface InitMessage {
+export interface InitMessage {
     type: 'init';
     positions: Float32Array;
 }
 
-interface StartMessage {
+export interface StartMessage {
     type: 'start';
     current: { data: Uint8Array; width: number; height: number };
     prev: { data: Uint8Array; width: number; height: number } | null;
     opts: RasterScanOptions;
 }
 
-interface LayerMessage {
+export interface LayerMessage {
     type: 'layer';
     z: number;
     layerHeightMm: number;
     gridRef?: { originX: number; originZ: number; width: number; height: number; px_mm: number };
     opts: RasterScanOptions;
+    candidatesOnly?: boolean;
 }
+
+export type ScanlineWorkerMessage = InitMessage | StartMessage | LayerMessage;
 
 function toMaskFromGridRef(ref: { originX: number; originZ: number; width: number; height: number; px_mm: number }): Mask {
     return { data: new Uint8Array(ref.width * ref.height), width: ref.width, height: ref.height, originX: ref.originX, originZ: ref.originZ, px_mm: ref.px_mm } as Mask;
 }
 
-self.onmessage = (e: MessageEvent<InitMessage | StartMessage | LayerMessage>) => {
-    const msg = e.data;
+export function dispatchScanlineWorkerMessage(
+    msg: ScanlineWorkerMessage | null | undefined,
+    post: (payload: { type: 'done'; result: Record<string, unknown> }, transfer?: Transferable[]) => void,
+): void {
     if (!msg) return;
 
     if (msg.type === 'init') {
@@ -100,15 +105,44 @@ self.onmessage = (e: MessageEvent<InitMessage | StartMessage | LayerMessage>) =>
             console.log(`Layer ${msg.z.toFixed(2)}: Slice ${(t1 - t0).toFixed(2)}ms, Raster ${(t2 - t1).toFixed(2)}ms, RLE Encode ${(t3 - t2).toFixed(2)}ms, Island ${(t4 - t3).toFixed(2)}ms`);
         }
 
-        // Only the candidate voxels go back. The RLE, the solid mask, the
-        // components and the grid all describe this layer to a caller that only
-        // wants these, and cloning them per layer on the receiving thread was
-        // most of a scan's wall clock. See `candidateVoxelPairs`.
-        self.postMessage({
-            type: 'done',
-            result: { candidatePairs: candidateVoxelPairs(res.labels) },
-        });
+        if (msg.candidatesOnly) {
+            // Only the candidate voxels go back. The RLE, the solid mask, the
+            // components and the grid all describe this layer to a caller that only
+            // wants these, and cloning them per layer on the receiving thread was
+            // most of a scan's wall clock. See `candidateVoxelPairs`.
+            const candidatePairs = candidateVoxelPairs(res.labels);
+            post(
+                {
+                    type: 'done',
+                    result: { candidatePairs },
+                },
+                [candidatePairs.buffer],
+            );
+        } else {
+            post({
+                type: 'done',
+                result: {
+                    solidMaskRle: res.solidMask,
+                    islandLabelsRle: res.labels,
+                    islandCount: res.components.length,
+                    components: res.components,
+                },
+            });
+        }
         return;
     }
-};
+}
+
+if (typeof self !== 'undefined') {
+    self.onmessage = (e: MessageEvent<ScanlineWorkerMessage>) => {
+        dispatchScanlineWorkerMessage(e.data, (payload, transfer) => {
+            if (transfer && transfer.length > 0) {
+                self.postMessage(payload, { transfer });
+            } else {
+                self.postMessage(payload);
+            }
+        });
+    };
+}
+
 

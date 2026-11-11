@@ -235,10 +235,24 @@ pub fn classify_overhangs(
         }
     }
 
-    for pair in edges.windows(2) {
-        if pair[0].key == pair[1].key {
-            union(&mut parent, pair[0].tri, pair[1].tri);
+    let mut run_start = 0;
+    while run_start < edges.len() {
+        let key = edges[run_start].key;
+        let mut run_end = run_start + 1;
+        while run_end < edges.len() && edges[run_end].key == key {
+            run_end += 1;
         }
+        let mut first_overhang: Option<u32> = None;
+        for edge in &edges[run_start..run_end] {
+            if is_overhang[edge.tri as usize] {
+                if let Some(root_tri) = first_overhang {
+                    union(&mut parent, root_tri, edge.tri);
+                } else {
+                    first_overhang = Some(edge.tri);
+                }
+            }
+        }
+        run_start = run_end;
     }
 
     // Group by root (sorted for determinism).
@@ -2391,5 +2405,184 @@ mod tests {
         // A part with no drag says so rather than printing a bogus margin.
         let flat = report_for(&unit_cube_soup(), 45.0).to_log_line();
         assert!(flat.contains("no down-facing drag"), "{flat}");
+    }
+
+    /// Extrude an outward-wound XZ boundary loop (`perimeter_ccw`) along `y ∈ [0, depth]`,
+    /// capped at `y = 0` and `y = depth` with an explicit non-overlapping triangulation
+    /// (`cap_tris` indices into `perimeter_ccw`, CCW in XZ) so concave shells stay
+    /// strictly 2-manifold and watertight.
+    fn manifold_prism(
+        perimeter_ccw: &[(f32, f32)],
+        cap_tris: &[[usize; 3]],
+        depth: f32,
+    ) -> Vec<f32> {
+        let mut out = Vec::new();
+        let n = perimeter_ccw.len();
+        for i in 0..n {
+            let p = perimeter_ccw[i];
+            let q = perimeter_ccw[(i + 1) % n];
+            let a = [p.0, 0.0, p.1];
+            let b = [q.0, 0.0, q.1];
+            let c = [q.0, depth, q.1];
+            let d = [p.0, depth, p.1];
+            for v in [a, c, b, a, d, c] {
+                out.extend_from_slice(&v);
+            }
+        }
+        for &[i0, i1, i2] in cap_tris {
+            let p0 = perimeter_ccw[i0];
+            let p1 = perimeter_ccw[i1];
+            let p2 = perimeter_ccw[i2];
+            for v in [
+                // -Y cap (normal (0, -1, 0))
+                [p0.0, 0.0, p0.1],
+                [p1.0, 0.0, p1.1],
+                [p2.0, 0.0, p2.1],
+                // +Y cap (normal (0, +1, 0))
+                [p0.0, depth, p0.1],
+                [p2.0, depth, p2.1],
+                [p1.0, depth, p1.1],
+            ] {
+                out.extend_from_slice(&v);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn single_connected_shell_two_disjoint_overhang_arms_stay_separate() {
+        // Single watertight T-bar shell: a central stem with a 60° self-supporting
+        // V-keel base rises to two horizontal downward-facing overhang arms at z = 15:
+        //   left arm:  x ∈ [2, 12],  y ∈ [0, 8], z = 15 (80 mm², normal -Z)
+        //   right arm: x ∈ [18, 28], y ∈ [0, 8], z = 15 (80 mm², normal -Z)
+        // Both arms belong to ONE connected mesh shell connected via vertical walls
+        // and the top crossbar, yet must remain two separate OverhangRegions.
+        let section = [
+            (15.0, 0.0),  // 0: V-keel apex
+            (18.0, 5.2),  // 1: right keel shoulder (~60° > 45°, self-supporting)
+            (18.0, 15.0), // 2: right inner stem corner
+            (28.0, 15.0), // 3: right overhang arm tip (underside 2->3 is -Z)
+            (28.0, 20.0), // 4: right top corner
+            (18.0, 20.0), // 5: top split right
+            (12.0, 20.0), // 6: top split left
+            (2.0, 20.0),  // 7: left top corner
+            (2.0, 15.0),  // 8: left overhang arm tip (underside 8->9 is -Z)
+            (12.0, 15.0), // 9: left inner stem corner
+            (12.0, 5.2),  // 10: left keel shoulder (~60° > 45°, self-supporting)
+        ];
+        let cap_tris = [
+            [0, 1, 10], // V-keel
+            [10, 1, 2], // stem quad
+            [10, 2, 9],
+            [8, 9, 6],  // left crossbar quad
+            [8, 6, 7],
+            [9, 2, 5],  // center crossbar quad
+            [9, 5, 6],
+            [2, 3, 4],  // right crossbar quad
+            [2, 4, 5],
+        ];
+        let soup = manifold_prism(&section, &cap_tris, 8.0);
+        let (mut regions, _) = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false);
+        assert_eq!(
+            regions.len(),
+            2,
+            "disjoint overhang arms on one shell must not collapse: {regions:?}"
+        );
+
+        regions.sort_by(|a, b| a.xy_min[0].total_cmp(&b.xy_min[0]));
+        let left = &regions[0];
+        let right = &regions[1];
+
+        assert!((left.area_mm2 - 80.0).abs() < 0.5, "left area {}", left.area_mm2);
+        assert!((right.area_mm2 - 80.0).abs() < 0.5, "right area {}", right.area_mm2);
+
+        let left_cx = 0.5 * (left.xy_min[0] + left.xy_max[0]);
+        let right_cx = 0.5 * (right.xy_min[0] + right.xy_max[0]);
+        assert!((left_cx - 7.0).abs() < 0.1, "left cx {left_cx}");
+        assert!((right_cx - 23.0).abs() < 0.1, "right cx {right_cx}");
+        assert!(left.xy_max[0] < right.xy_min[0], "footprints stay disjoint in X");
+
+        assert!(!left.perimeter_loops.is_empty(), "left arm has closed perimeter");
+        assert!(!right.perimeter_loops.is_empty(), "right arm has closed perimeter");
+        assert!(
+            left.perimeter_loops[0].iter().all(|p| p[0] >= 2.0 && p[0] <= 12.0),
+            "left perimeter stays on left arm: {:?}",
+            left.perimeter_loops
+        );
+        assert!(
+            right.perimeter_loops[0].iter().all(|p| p[0] >= 18.0 && p[0] <= 28.0),
+            "right perimeter stays on right arm: {:?}",
+            right.perimeter_loops
+        );
+    }
+
+    #[test]
+    fn single_shell_vertically_stacked_ledges_preserve_distinct_surface_z() {
+        // Single watertight F-bracket shell: vertical spine on x ∈ [0, 4] (with a
+        // 60° self-supporting V-keel base) carrying two horizontal overhang ledges
+        // overlapping in XY (x ∈ [4, 14], y ∈ [0, 8]) at Z = 10 mm and Z = 25 mm.
+        let section = [
+            (2.0, 0.0),   // 0: V-keel apex
+            (4.0, 3.5),   // 1: right keel shoulder (~60.3° > 45°)
+            (4.0, 10.0),  // 2: lower ledge root
+            (14.0, 10.0), // 3: lower ledge tip (underside 2->3 at z = 10, -Z)
+            (14.0, 14.0), // 4: lower ledge top tip
+            (4.0, 14.0),  // 5: lower ledge top root (+Z)
+            (4.0, 25.0),  // 6: upper ledge root
+            (14.0, 25.0), // 7: upper ledge tip (underside 6->7 at z = 25, -Z)
+            (14.0, 29.0), // 8: upper ledge top tip
+            (4.0, 29.0),  // 9: top spine split
+            (0.0, 29.0),  // 10: top-left spine
+            (0.0, 25.0),  // 11: left spine at z=25
+            (0.0, 14.0),  // 12: left spine at z=14
+            (0.0, 10.0),  // 13: left spine at z=10
+            (0.0, 3.5),   // 14: left keel shoulder (~60.3° > 45°)
+        ];
+        let cap_tris = [
+            [0, 1, 14],   // V-keel
+            [14, 1, 2],   // spine z 3.5..10
+            [14, 2, 13],
+            [13, 2, 5],   // spine z 10..14
+            [13, 5, 12],
+            [2, 3, 4],    // lower ledge z 10..14
+            [2, 4, 5],
+            [12, 5, 6],   // spine z 14..25
+            [12, 6, 11],
+            [11, 6, 9],   // spine z 25..29
+            [11, 9, 10],
+            [6, 7, 8],    // upper ledge z 25..29
+            [6, 8, 9],
+        ];
+        let soup = manifold_prism(&section, &cap_tris, 8.0);
+        let (mut regions, _) = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false);
+        assert_eq!(
+            regions.len(),
+            2,
+            "stacked overhang ledges on one shell must stay separate: {regions:?}"
+        );
+
+        regions.sort_by(|a, b| a.min_z.total_cmp(&b.min_z));
+        let lower = &regions[0];
+        let upper = &regions[1];
+
+        assert!((lower.min_z - 10.0).abs() < 1e-3, "lower min_z {}", lower.min_z);
+        assert!((lower.max_z - 10.0).abs() < 1e-3, "lower max_z {}", lower.max_z);
+        assert!((upper.min_z - 25.0).abs() < 1e-3, "upper min_z {}", upper.min_z);
+        assert!((upper.max_z - 25.0).abs() < 1e-3, "upper max_z {}", upper.max_z);
+
+        // Sample interior pixel (x = 9.0, y = 4.0) where both ledges overlap in XY.
+        let sample_z = |r: &OverhangRegion, x: f32, y: f32| -> (u8, f32) {
+            let f = &r.footprint;
+            let col = (((x - f.origin_x) / f.px_mm) - 0.5).round() as usize;
+            let row = (((y - f.origin_y) / f.px_mm) - 0.5).round() as usize;
+            let idx = row * f.width as usize + col;
+            (f.data[idx], f.surface_z[idx])
+        };
+        let (lo_on, lo_z) = sample_z(lower, 9.0, 4.0);
+        let (hi_on, hi_z) = sample_z(upper, 9.0, 4.0);
+        assert_eq!(lo_on, 1);
+        assert_eq!(hi_on, 1);
+        assert!((lo_z - 10.0).abs() < 1e-3, "lower surface_z {lo_z}");
+        assert!((hi_z - 25.0).abs() < 1e-3, "upper surface_z {hi_z}");
     }
 }
