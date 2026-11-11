@@ -391,24 +391,27 @@ impl RenderedRawLayer {
     }
 }
 
-/// Only these long-lived jobs may hold a group. Nested preparation/encoding
-/// uses the same Rayon pool, so live raster layers never exceed the old cap.
+/// Each long-lived job holds at most one group of four RAW layers (one otherwise).
+/// Up to max_concurrent.max(1) groups share the existing Rayon pool, bounding live
+/// raster layers by four times that worker cap. Nested preparation/encoding stays
+/// inside its group's slot; no layer-count-sized task queue is created.
 fn for_each_layer_group(
     total_layers: u32, max_concurrent: usize, raw_eligible: bool,
     process: impl Fn(u32, u32) -> Result<(), SlicerV3Error> + Sync,
 ) -> Result<(), SlicerV3Error> {
     let cap = max_concurrent.max(1);
     let grain = if raw_eligible {
-        MAX_SCANLINE_LANES.min(cap).min(total_layers.max(1) as usize)
+        MAX_SCANLINE_LANES.min(total_layers.max(1) as usize)
     } else { 1 };
-    let slots = (cap / grain).max(1);
-    let next = AtomicU32::new(0);
+    let slots = cap.min(total_layers.div_ceil(grain as u32) as usize);
+    let next = AtomicU64::new(0);
     let stopped = AtomicBool::new(false);
     (0..slots).into_par_iter().try_for_each(|_| {
         while !stopped.load(Ordering::Relaxed) {
-            let start = next.fetch_add(grain as u32, Ordering::Relaxed);
-            if start >= total_layers { break; }
-            if let Err(error) = process(start, (start + grain as u32).min(total_layers)) {
+            let start = next.fetch_add(grain as u64, Ordering::Relaxed);
+            if start >= total_layers as u64 { break; }
+            let end = (start + grain as u64).min(total_layers as u64);
+            if let Err(error) = process(start as u32, end as u32) {
                 stopped.store(true, Ordering::Relaxed);
                 return Err(error);
             }
@@ -1486,6 +1489,58 @@ mod raw_consumer_tests {
     use crate::raster::{push_segment_for_triangle_at_z, rasterize_binary_layer_rle_block_from_segments};
     use crate::rle::{expand_rle_to_mask, make_rle_block};
     use std::sync::Arc;
+
+    #[test]
+    fn layer_groups_keep_full_width_at_low_caps_and_cover_tails_once() {
+        for raw_eligible in [false, true] {
+            for cap in [0, 1, 2, 3, 12] {
+                for total in [0, 1, 2, 3, 4, 5, 47, 48, 49] {
+                    let groups = Mutex::new(Vec::new());
+                    for_each_layer_group(total, cap, raw_eligible, |start, end| {
+                        groups.lock().unwrap().push((start, end));
+                        Ok(())
+                    }).unwrap();
+                    let mut groups = groups.into_inner().unwrap();
+                    groups.sort_unstable();
+                    let grain = if raw_eligible { MAX_SCANLINE_LANES as u32 } else { 1 };
+                    let expected: Vec<_> = (0..total).step_by(grain as usize)
+                        .map(|start| (start, (start + grain).min(total))).collect();
+                    assert_eq!(groups, expected, "total={total}, cap={cap}, RAW={raw_eligible}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn raw_groups_admit_four_layers_per_worker_without_dividing_worker_cap() {
+        let pool = ThreadPoolBuilder::new().num_threads(12).build().unwrap();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let release = (Mutex::new(false), std::sync::Condvar::new());
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| pool.install(|| {
+                for_each_layer_group(48, 12, true, |start, end| {
+                    ready_tx.send((start, end)).unwrap();
+                    let (released, changed) = &release;
+                    let mut released = released.lock().unwrap();
+                    while !*released { released = changed.wait(released).unwrap(); }
+                    Ok(())
+                })
+            }));
+            let mut admitted = Vec::new();
+            for _ in 0..12 {
+                match ready_rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                    Ok(group) => admitted.push(group),
+                    Err(_) => break,
+                }
+            }
+            // Release even on failed admission so the regression cannot strand workers.
+            *release.0.lock().unwrap() = true;
+            release.1.notify_all();
+            worker.join().unwrap().unwrap();
+            admitted.sort_unstable();
+            assert_eq!(admitted, (0..48).step_by(4).map(|start| (start, start + 4)).collect::<Vec<_>>());
+        });
+    }
 
     fn add_box(xyz: &mut Vec<f32>, x0: f32, x1: f32, y0: f32, y1: f32, z0: f32, z1: f32) {
         let vertices = [[x0,y0,z0], [x1,y0,z0], [x1,y1,z0], [x0,y1,z0],

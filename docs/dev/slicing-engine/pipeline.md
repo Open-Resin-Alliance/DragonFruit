@@ -71,12 +71,15 @@ edge counts, row extents, empty layers and tails do not require matching geometr
 Healthy-row winding and span-boundary arithmetic execute as SIMD; defective-row
 repair retains the existing scalar semantics.
 
-Groups contain at most four streams and count against the existing live-layer
-concurrency cap. Only a bounded number of group jobs run in the same Rayon
-pool; nested preparation/encoding can use idle workers without a blocking
-worker semaphore or another thread pool. No model copies or extra full-plate
-masks are introduced. Outputs still use ordered per-layer draining, existing
-channels, progress and cancellation.
+Groups contain at most four streams. The concurrency cap admits scanner groups
+rather than dividing worker parallelism by four. Twelve workers can therefore
+hold up to forty-eight live layer contexts; the bound is at most four times
+`DF_V3_MAX_CONCURRENT`. This increases raster scratch and partial-output RSS
+relative to singleton scalar rendering and must be included in comparisons.
+Groups share one Rayon pool; nested preparation/encoding needs no admission
+semaphore or second pool. No model copies or extra output representations are
+introduced. Ordered per-layer draining, channels, progress and cancellation
+retain their contracts.
 
 Full-width output retains previous-row coherence. Blocks retain context-free
 repair, absolute-column phase, halo/crop handling and window-local statistics,

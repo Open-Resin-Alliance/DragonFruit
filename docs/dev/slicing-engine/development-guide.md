@@ -78,12 +78,16 @@ for raster in rasters {
 }
 ```
 
-A group contains at most `MAX_SCANLINE_LANES` streams. The pipeline charges live
-layers against the existing concurrency limit rather than multiplying that
-limit by the SIMD width. Bounded group jobs use the same Rayon pool; nested
-scalar preparation and per-layer encoding can use otherwise idle workers.
-Binary masks use their required output buffers, not an additional full-frame
-RLE expansion. Blocks reuse scalar-prepared geometry across windows.
+A group contains at most `MAX_SCANLINE_LANES` streams. `DF_V3_MAX_CONCURRENT`
+limits scanner groups/workers, not layers divided by the SIMD width: twelve
+workers can run twelve four-layer groups, retaining up to forty-eight layer
+contexts. This finite working-set increase is intentional and must be measured
+as peak RSS; it is not an implicit promise of the old one-layer-per-worker RAM
+footprint. Group jobs use the same Rayon pool, with nested scalar preparation
+and per-layer encoding. Binary masks use their required per-layer output
+buffers, not an additional full-frame RLE expansion. Blocks reuse scalar
+geometry across windows. Use the same high safety ceiling (without memory-high
+throttling) when comparing variants, so real RSS differences remain visible.
 
 `Backend::for_layer_scanline` narrows x86 execution to four native f32 lanes;
 the complete batch enters one Pulp feature gate on its executing worker.
