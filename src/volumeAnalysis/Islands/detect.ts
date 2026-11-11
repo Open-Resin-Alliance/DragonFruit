@@ -264,37 +264,63 @@ async function sliceCandidateLayers(
   let nextIndex = 0;
   let done = 0;
 
-  await Promise.all(
-    workers.map(
-      (w) =>
-        new Promise<void>((resolve) => {
-          const runNext = () => {
-            if (nextIndex >= numLayers) {
-              resolve();
-              return;
-            }
-            const idx = nextIndex++;
-            const zTop = minZ + (idx + 1) * layerHeightMm + 1e-6;
-
-            const onMessage = (e: MessageEvent) => {
-              const msg = e.data as { type?: string; result?: { candidatePairs: Int32Array } };
-              if (msg?.type !== 'done') return;
-              w.removeEventListener('message', onMessage);
-              candidateLayers[idx] = msg.result!.candidatePairs;
-              done++;
-              reportSliceProgress(() => onProgress?.(done, numLayers, 'Slicing', phaseNumber('Slicing'), PHASES.length));
-              runNext();
-            };
-            w.addEventListener('message', onMessage);
-            w.postMessage({ type: 'layer', z: zTop, layerHeightMm, gridRef, opts });
-          };
-          runNext();
-        }),
-    ),
-  );
-
-  workers.forEach((w) => w.terminate());
+  // One awaited request per layer. The previous shape asked for the next layer
+  // from inside the reply handler of the current one; with a host whose
+  // `postMessage` delivers synchronously (the Node harness) that is one stack
+  // frame set per layer, and a scan of ~1300 layers overflows the stack. An
+  // `await` returns to the event loop between layers whatever the delivery.
+  try {
+    await Promise.all(
+      workers.map(async (w) => {
+        for (;;) {
+          const idx = nextIndex++;
+          if (idx >= numLayers) return;
+          const zTop = minZ + (idx + 1) * layerHeightMm + 1e-6;
+          candidateLayers[idx] = await requestLayer(w, { type: 'layer', z: zTop, layerHeightMm, gridRef, opts });
+          done++;
+          reportSliceProgress(() => onProgress?.(done, numLayers, 'Slicing', phaseNumber('Slicing'), PHASES.length));
+        }
+      }),
+    );
+  } finally {
+    workers.forEach((w) => w.terminate());
+  }
   return candidateLayers;
+}
+
+/**
+ * One layer round trip. A worker that throws (`error` event) or that answers
+ * with an `error` message rejects, instead of leaving the scan waiting forever
+ * for a `done` that never comes.
+ */
+function requestLayer(
+  w: Worker,
+  message: { type: 'layer'; z: number; layerHeightMm: number; gridRef: GridRef; opts: object },
+): Promise<Int32Array> {
+  return new Promise<Int32Array>((resolve, reject) => {
+    const cleanup = () => {
+      w.removeEventListener('message', onMessage);
+      w.removeEventListener('error', onError);
+    };
+    const onMessage = (e: MessageEvent) => {
+      const msg = e.data as { type?: string; message?: string; result?: { candidatePairs: Int32Array } };
+      if (msg?.type === 'error') {
+        cleanup();
+        reject(new Error(`island scan worker: ${msg.message ?? 'unknown error'}`));
+        return;
+      }
+      if (msg?.type !== 'done') return;
+      cleanup();
+      resolve(msg.result!.candidatePairs);
+    };
+    const onError = (e: ErrorEvent) => {
+      cleanup();
+      reject(e.error instanceof Error ? e.error : new Error(`island scan worker: ${e.message ?? 'worker error'}`));
+    };
+    w.addEventListener('message', onMessage);
+    w.addEventListener('error', onError);
+    w.postMessage(message);
+  });
 }
 
 interface GridGeom {
