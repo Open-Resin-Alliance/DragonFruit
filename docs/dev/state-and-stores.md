@@ -148,6 +148,53 @@ colors to the canvas. Both are theme entries (`meshSelectionColor`,
 and from the Mesh tab's Selection & Hover section, which mirrors them rather
 than holding an override.
 
+## Auto-arrange height grouping
+
+`src/features/scene/arrange/useArrangeManager.ts` keeps the Arrange panel's
+settings in component-local state, not in a preferences module. Height grouping
+is opt-in through `arrangeGroupByHeight`; `arrangeHeightToleranceMm` starts at
+10 mm. Neither setting is persisted. `ArrangePanel` exposes Compact / By Height
+for Auto layout; Manual arrays and Duplicate retain their existing layouts.
+
+Both Standard and High-Precision arrange partition the run into tallest-first
+height buckets before using their existing XY packers. Print height is the
+highest world Z above the plate, including transformed supports, rather than
+the mesh's untransformed height or its bounding-box extent. Rotation, scale and
+lift therefore affect the grouping; arranging does not change Z.
+High-Precision support hull points are localized with the model's stored world
+transform, not its target plate-local transform: changing the active plate must
+not inflate the support footprint.
+
+The React-free helpers in `src/features/scene/arrange/heightBuckets.ts` are:
+
+- `bucketModelsByHeight`: takes models, a print-height callback and a maximum
+  height difference in millimetres. Heights and tolerance must be finite and
+  nonnegative. It measures each model once, preserves the input array and
+  same-height order, and returns buckets with models and minimum/maximum heights.
+- `heightRangesFit`: checks whether an occupied plate's height range and an
+  incoming bucket's combined range fit the tolerance. A null occupied range
+  means an empty plate.
+
+```ts
+const groups = bucketModelsByHeight([19, 21, 45], height => height, 10);
+// groups.map(group => group.models) is [[45], [21, 19]].
+```
+
+Each bucket is anchored to its tallest model; neighbouring heights cannot chain
+into a bucket wider than the tolerance, and close heights across a multiple of
+the tolerance are not artificially split. The boundary is inclusive; zero
+tolerance groups only identical heights.
+
+A run gives each plate to at most one bucket. Compatible occupied plates are
+tried before empty plates; fixed objects remain blockers and contribute their
+height range. Selected-only runs do not move unselected objects, and locked
+plates/models are excluded. This Plate retains its existing scope and adds new
+plates for overflow rather than touching other existing plates. Height grouping
+may use more plates than Compact. The existing bed cap and oversized-object
+fallback still apply. Plate creation/removal and placements use the same scene
+snapshot history step, so undo/redo restore them together; see
+[History and Undo/Redo](history-and-undo-redo.md).
+
 ## Which pattern to use
 
 - **Transient cross-module state** (hover, reachability, selection) → module

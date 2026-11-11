@@ -9,11 +9,12 @@ import { type HullCacheEntry, type ArrangeModel as HighPrecisionArrangeModel } f
 import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
 import { freeRectsForPlate, type PlateRect } from '@/features/scene/arrange/plateFreeSpace';
 import { modelPlateScope } from '@/features/scene/plates/plateInteractivity';
+import { bucketModelsByHeight, heightRangesFit, type HeightRange } from '@/features/scene/arrange/heightBuckets';
 
 type SceneManager = ReturnType<typeof useSceneCollectionManager>;
 type TransformManager = ReturnType<typeof useTransformManager>;
 type SceneModel = SceneManager['models'][number];
-type ModelDimsMm = { width: number; depth: number; height: number };
+type ModelDimsMm = { width: number; depth: number; height: number; printHeight: number };
 type SupportAwareDimsFn = (model: SceneModel, rotationZOverride?: number, transformOverride?: SceneModel['transform']) => ModelDimsMm;
 type FootprintPolygonFn = (model: SceneModel, rotationZOverride?: number, transformOverride?: SceneModel['transform']) => THREE.Vector2[];
 
@@ -131,6 +132,8 @@ export function useArrangeManager({
 
   const [arrangePrecisionMode, setArrangePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
   const [arrangePlateFillMode, setArrangePlateFillMode] = React.useState<ArrangePlateFillMode>('plates');
+  const [arrangeGroupByHeight, setArrangeGroupByHeight] = React.useState(false);
+  const [arrangeHeightToleranceMm, setArrangeHeightToleranceMm] = React.useState(10);
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
   const [arrangeLayoutMode, setArrangeLayoutMode] = React.useState<ArrangeLayoutMode>('auto');
   const [arrangeAnchorMode, setArrangeAnchorMode] = React.useState<ArrangeAnchorMode>('center');
@@ -277,16 +280,15 @@ export function useArrangeManager({
     if (arrangeAllowRotateOnZ) return;
     setArrangeAllowRotateOnZ(true);
   }, [arrangePrecisionMode, arrangeAllowRotateOnZ]);
-  const buildHighPrecisionArrangeSupportLocalPoints = React.useCallback((
-    modelTransformById: Map<string, (typeof scene.models)[number]['transform']>,
-  ) => {
+  const buildHighPrecisionArrangeSupportLocalPoints = React.useCallback(() => {
     const supportLocalPointsByModelId = new Map<string, { points: THREE.Vector3[]; key: string }>();
 
     for (const model of scene.models) {
       const supportBounds = supportBoundsByModelId.get(model.id);
       if (!supportBounds || supportBounds.isEmpty()) continue;
 
-      const t = modelTransformById.get(model.id) ?? model.transform;
+      // Bounds are world-space; a target transform may already be plate-local.
+      const t = model.transform;
       const worldMatrix = new THREE.Matrix4().compose(
         t.position,
         new THREE.Quaternion().setFromEuler(t.rotation),
@@ -335,7 +337,7 @@ export function useArrangeManager({
     sourceModels: (typeof scene.models),
     modelTransformById: Map<string, (typeof scene.models)[number]['transform']>,
   ): HighPrecisionArrangeModel[] => {
-    const supportLocalPointsByModelId = buildHighPrecisionArrangeSupportLocalPoints(modelTransformById);
+    const supportLocalPointsByModelId = buildHighPrecisionArrangeSupportLocalPoints();
 
     return sourceModels.map((model): HighPrecisionArrangeModel => {
       const t = modelTransformById.get(model.id) ?? model.transform;
@@ -409,6 +411,17 @@ export function useArrangeManager({
     };
   }, [arrangePlateOffset, scene.view3dSettings]);
 
+  const resolveArrangeHeightGroups = React.useCallback((models: SceneModel[]): Array<{
+    models: SceneModel[];
+    heightRange: HeightRange | null;
+  }> => {
+    if (!arrangeGroupByHeight) return [{ models, heightRange: null }];
+    return bucketModelsByHeight(models, (model) => {
+      const t = getArrangeTransform(model);
+      return getModelSupportAwareDimensionsMm(model, undefined, t).printHeight;
+    }, arrangeHeightToleranceMm).map((bucket) => ({ models: bucket.models, heightRange: bucket }));
+  }, [arrangeGroupByHeight, arrangeHeightToleranceMm, getArrangeTransform, getModelSupportAwareDimensionsMm]);
+
   /**
    * The beds a run fills, in the order it fills them, each with the room already taken on
    * it.
@@ -426,16 +439,19 @@ export function useArrangeManager({
   const resolveArrangeBedTargets = React.useCallback((
     mode: ArrangePlateFillMode,
     runModelIds: ReadonlySet<string>,
-  ): Array<{ plateId: string; occupied: PlateRect[] }> => {
+  ): Array<{ plateId: string; occupied: PlateRect[]; heightRange: HeightRange | null }> => {
     const otherBeds = mode === 'plates'
       ? scene.plates.filter((plate) => plate.id !== scene.activePlateId && !scene.isPlateLocked(plate.id))
       : [];
 
-    const plateIds = [scene.activePlateId, ...otherBeds.map((plate) => plate.id)];
+    const plateIds = [scene.activePlateId, ...otherBeds.map((plate) => plate.id)]
+      .filter((plateId) => !arrangeGroupByHeight || !scene.isPlateLocked(plateId));
 
-    return plateIds.map((plateId) => {
+    const targets = plateIds.map((plateId) => {
       const { dxMm, dyMm } = scene.plateOffsetFor(plateId);
       const occupied: PlateRect[] = [];
+      let minHeightMm = Number.POSITIVE_INFINITY;
+      let maxHeightMm = Number.NEGATIVE_INFINITY;
 
       for (const model of scene.models) {
         if (runModelIds.has(model.id)) continue;
@@ -445,6 +461,10 @@ export function useArrangeManager({
         const dims = getModelSupportAwareDimensionsMm(model, undefined, t);
         const x = t.position.x - dxMm;
         const y = t.position.y - dyMm;
+        if (arrangeGroupByHeight) {
+          minHeightMm = Math.min(minHeightMm, dims.printHeight);
+          maxHeightMm = Math.max(maxHeightMm, dims.printHeight);
+        }
 
         occupied.push({
           minX: x - dims.width * 0.5,
@@ -454,9 +474,18 @@ export function useArrangeManager({
         });
       }
 
-      return { plateId, occupied };
+      const heightRange: HeightRange | null = arrangeGroupByHeight && occupied.length > 0
+        ? { minHeightMm, maxHeightMm }
+        : null;
+      return { plateId, occupied, heightRange };
     });
+    // Fill compatible occupied beds before claiming empty beds for another bucket.
+    if (arrangeGroupByHeight) {
+      targets.sort((a, b) => Number(b.heightRange !== null) - Number(a.heightRange !== null));
+    }
+    return targets;
   }, [
+    arrangeGroupByHeight,
     getArrangeTransform,
     getModelSupportAwareDimensionsMm,
     scene.activePlateId,
@@ -530,7 +559,10 @@ export function useArrangeManager({
       activePlateId: scene.activePlateId,
       plateCount: scene.plates.length,
     }) === 'loose';
-    const inRun = (model: SceneModel) => sceneWide || onActivePlate(model) || standsOnNoPlate(model);
+    const inRun = (model: SceneModel) => (
+      (!arrangeGroupByHeight || !scene.isModelPlateLocked(model))
+      && (sceneWide || onActivePlate(model) || standsOnNoPlate(model))
+    );
 
     if (scope === 'all') {
       return scene.models.filter((m) => m.visible && inRun(m));
@@ -547,6 +579,8 @@ export function useArrangeManager({
 
     return scene.models.filter((m) => m.visible && selectedIdSet.has(m.id) && inRun(m));
   }, [
+    arrangeGroupByHeight,
+    scene.isModelPlateLocked,
     scene.activeModelId,
     scene.activePlateId,
     scene.models,
@@ -643,7 +677,7 @@ export function useArrangeManager({
       plateFillModeForRun === 'plates',
     );
 
-    if (visibleModels.length <= 1) {
+    if (visibleModels.length <= 1 && (!arrangeGroupByHeight || visibleModels.length === 0)) {
       if (visibleModels.length === 1) {
         const model = visibleModels[0];
         const t = getArrangeTransform(model);
@@ -1099,42 +1133,45 @@ export function useArrangeManager({
       };
 
       const passes: PlannedPass[] = [];
-      let pending: SceneModel[] = [...visibleModels];
+      const claimedBeds = new Set<string>();
+      const leftovers: SceneModel[] = [];
+      let addedBeds = 0;
 
-      // Fill what the scene already has: each bed's own free space, its largest rectangle
-      // first, so a bed that is half full still takes what fits before another is made.
-      for (const target of targets) {
-        if (pending.length === 0) break;
-
-        const freeRects = freeRectsForPlate(localFrame, target.occupied, {
-          gapMm: spacingMmForRun,
-          minSideMm: 2,
-        });
-
-        for (const rect of freeRects) {
+      for (const group of resolveArrangeHeightGroups(visibleModels)) {
+        let pending = group.models;
+        // A bed belongs to one height bucket for this run, even if it has spare room.
+        for (const target of targets) {
           if (pending.length === 0) break;
-          const pass = planPass(pending, rect);
-          if (pass.placed.length === 0) continue;
-          passes.push({ placed: pass.placed, plateId: target.plateId });
+          if (claimedBeds.has(target.plateId)) continue;
+          if (group.heightRange && !heightRangesFit(target.heightRange, group.heightRange, arrangeHeightToleranceMm)) continue;
+
+          const freeRects = freeRectsForPlate(localFrame, target.occupied, {
+            gapMm: spacingMmForRun,
+            minSideMm: 2,
+          });
+          for (const rect of freeRects) {
+            if (pending.length === 0) break;
+            const pass = planPass(pending, rect);
+            if (pass.placed.length === 0) continue;
+            passes.push({ placed: pass.placed, plateId: target.plateId });
+            claimedBeds.add(target.plateId);
+            pending = pass.spilled;
+          }
+        }
+
+        while (pending.length > 0 && addedBeds < MAX_ARRANGE_BEDS) {
+          const pass = planPass(pending, localFrame);
+          if (pass.placed.length === 0) break;
+          passes.push({ placed: pass.placed, plateId: null });
+          addedBeds += 1;
           pending = pass.spilled;
         }
+        for (const model of pending) leftovers.push(model);
       }
 
-      // Everything the scene had is full: add beds until the rest has somewhere to stand.
-      // The cap only bites on a set that cannot be packed at all, where a pass below makes
-      // no progress and the rest goes beside the plate instead.
-      while (pending.length > 0 && passes.filter((pass) => pass.plateId === null).length < MAX_ARRANGE_BEDS) {
-        const pass = planPass(pending, localFrame);
-        if (pass.placed.length === 0) break;
-
-        passes.push({ placed: pass.placed, plateId: null });
-        pending = pass.spilled;
-      }
-
-      if (pending.length > 0) {
-        // A model bigger than a bed, or a set past the bed cap: the leftover goes beside
-        // the active plate, which is what arrange has always done with it.
-        passes.push({ placed: placeBesidePlate(pending), plateId: scene.activePlateId });
+      // Share one fallback column across buckets so oversized models do not overlap.
+      if (leftovers.length > 0) {
+        passes.push({ placed: placeBesidePlate(leftovers), plateId: scene.activePlateId });
       }
 
       const newPlateCount = passes.filter((pass) => pass.plateId === null).length;
@@ -1192,7 +1229,7 @@ export function useArrangeManager({
       setActiveArrangeOperation(null);
       setArrangeOverlayModelCount(null);
     }
-  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, bedsEmptiedByRun, getArrangeTransform, getModelSupportAwareDimensionsMm, isAutoArranging, resolveArrangeBedTargets, resolveArrangeFrame, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
+  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeGroupByHeight, arrangeHeightToleranceMm, arrangePlateFillMode, arrangeSpacingMm, bedsEmptiedByRun, getArrangeTransform, getModelSupportAwareDimensionsMm, isAutoArranging, resolveArrangeBedTargets, resolveArrangeFrame, resolveArrangeHeightGroups, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
 
   const handleHighPrecisionArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
     if (isAutoArranging) return;
@@ -1204,7 +1241,7 @@ export function useArrangeManager({
       explicitSelectedIds,
       arrangePlateFillMode === 'plates',
     );
-    if (visibleModels.length <= 1) {
+    if (visibleModels.length <= 1 && (!arrangeGroupByHeight || visibleModels.length === 0)) {
       if (visibleModels.length === 1) {
         const model = visibleModels[0];
         const t = getArrangeTransform(model);
@@ -1287,8 +1324,7 @@ export function useArrangeManager({
       };
 
       const passes: PlannedPass[] = [];
-      let pendingIds = visibleModels.map((model) => model.id);
-      /** The last pass's own placement beside its bed, in plate millimetres. */
+      let pendingIds: string[] = [];
 
       /**
        * Packs whatever is still pending into one rectangle of one bed.
@@ -1363,35 +1399,40 @@ export function useArrangeManager({
         pendingIds = result.spilledIds;
       };
 
-      // Fill what the scene already has: each bed's own free space, its largest rectangle
-      // first, so a bed that is half full still takes what fits before another is made.
-      for (const target of targets) {
-        if (pendingIds.length === 0) break;
-
-        const freeRects = freeRectsForPlate(localFrame, target.occupied, {
-          gapMm: arrangeSpacingMm,
-          minSideMm: 2,
-        });
-
-        for (const rect of freeRects) {
-          if (pendingIds.length === 0) break;
-          await packIntoRect(rect, target.plateId);
-        }
-      }
-
-      // Everything the scene had is full: add beds until the rest has somewhere to stand.
+      const claimedBeds = new Set<string>();
+      const leftoverIds = new Set<string>();
       let addedBeds = 0;
-      while (pendingIds.length > 0 && addedBeds < MAX_ARRANGE_BEDS) {
-        const before = pendingIds.length;
-        await packIntoRect(localFrame, null);
-        if (pendingIds.length >= before) break;
-        addedBeds += 1;
+      for (const group of resolveArrangeHeightGroups(visibleModels)) {
+        pendingIds = group.models.map((model) => model.id);
+        for (const target of targets) {
+          if (pendingIds.length === 0) break;
+          if (claimedBeds.has(target.plateId)) continue;
+          if (group.heightRange && !heightRangesFit(target.heightRange, group.heightRange, arrangeHeightToleranceMm)) continue;
+
+          const freeRects = freeRectsForPlate(localFrame, target.occupied, {
+            gapMm: arrangeSpacingMm,
+            minSideMm: 2,
+          });
+          for (const rect of freeRects) {
+            if (pendingIds.length === 0) break;
+            const before = pendingIds.length;
+            await packIntoRect(rect, target.plateId);
+            if (pendingIds.length < before) claimedBeds.add(target.plateId);
+          }
+        }
+
+        while (pendingIds.length > 0 && addedBeds < MAX_ARRANGE_BEDS) {
+          const before = pendingIds.length;
+          await packIntoRect(localFrame, null);
+          if (pendingIds.length >= before) break;
+          addedBeds += 1;
+        }
+        for (const id of pendingIds) leftoverIds.add(id);
       }
 
-      if (pendingIds.length > 0) {
-        // A model bigger than a bed, or a set past the bed cap: the leftover goes in a
-        // column beside the beds, which is what arrange has always done with it.
-        const leftoverModels = visibleModels.filter((model) => pendingIds.includes(model.id));
+      if (leftoverIds.size > 0) {
+        // Keep all oversized buckets in one column beside the beds.
+        const leftoverModels = visibleModels.filter((model) => leftoverIds.has(model.id));
         const beside = placeModelsBesideBeds({
           models: leftoverModels,
           frame: localFrame,
@@ -1448,14 +1489,12 @@ export function useArrangeManager({
         }));
       });
 
-      if (updates.length > 1) {
-        applyArrangeTransforms(
-          updates,
-          newPlateCount > 0 || emptiedPlateIds.size > 0
-            ? { platesBefore, platesAfter: { plates: reserved.plates, activePlateId: scene.activePlateId } }
-            : undefined,
-        );
-      }
+      applyArrangeTransforms(
+        updates,
+        newPlateCount > 0 || emptiedPlateIds.size > 0
+          ? { platesBefore, platesAfter: { plates: reserved.plates, activePlateId: scene.activePlateId } }
+          : undefined,
+      );
     } finally {
       const elapsed = performance.now() - startedAt;
       if (elapsed < minSpinnerMs) {
@@ -1468,13 +1507,18 @@ export function useArrangeManager({
   }, [
     arrangeAllowRotateOnZ,
     arrangeAnchorMode,
+    arrangeGroupByHeight,
+    arrangeHeightToleranceMm,
+    arrangePlateFillMode,
     arrangePlateOffset,
     arrangeSpacingMm,
     bedsEmptiedByRun,
     getArrangeTransform,
+    getModelSupportAwareDimensionsMm,
     isAutoArranging,
     resolveArrangeBedTargets,
     resolveArrangeFrame,
+    resolveArrangeHeightGroups,
     resolveArrangeVisibleModels,
     scene,
     sleep,
@@ -2048,6 +2092,10 @@ export function useArrangeManager({
     setArrangePrecisionMode,
     arrangePlateFillMode,
     setArrangePlateFillMode,
+    arrangeGroupByHeight,
+    setArrangeGroupByHeight,
+    arrangeHeightToleranceMm,
+    setArrangeHeightToleranceMm,
     arrangeAllowRotateOnZ,
     setArrangeAllowRotateOnZ,
     arrangeLayoutMode,

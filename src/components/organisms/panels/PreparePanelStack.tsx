@@ -141,6 +141,10 @@ export function PreparePanelStack({
     setArrangePlateFillMode,
     arrangeLayoutMode,
     setArrangeLayoutMode,
+    arrangeGroupByHeight,
+    setArrangeGroupByHeight,
+    arrangeHeightToleranceMm,
+    setArrangeHeightToleranceMm,
     arrangeAllowRotateOnZ,
     setArrangeAllowRotateOnZ,
     arrangeArrayCountX,
@@ -319,6 +323,10 @@ export function PreparePanelStack({
           onFillModeChange={setArrangePlateFillMode}
           layoutMode={arrangeLayoutMode}
           onLayoutModeChange={setArrangeLayoutMode}
+          groupByHeight={arrangeGroupByHeight}
+          onGroupByHeightChange={setArrangeGroupByHeight}
+          heightToleranceMm={arrangeHeightToleranceMm}
+          onHeightToleranceMmChange={setArrangeHeightToleranceMm}
           spacingMm={arrangeSpacingMm}
           onSpacingMmChange={setArrangeSpacingMm}
           allowRotateOnZ={arrangeAllowRotateOnZ}

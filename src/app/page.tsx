@@ -7838,6 +7838,7 @@ export default function Home() {
       width: Math.max(2, maxX - minX),
       depth: Math.max(2, maxY - minY),
       height: Math.max(2, maxZ - minZ),
+      printHeight: Math.max(0, maxZ),
     };
   }, [getArrangeTransform, supportBoundsByModelId]);
 
