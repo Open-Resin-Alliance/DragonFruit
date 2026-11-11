@@ -73,21 +73,23 @@ half-pixel ties, clipping, thin geometry, annulus symmetry and block seams.
 - validate early and fail clearly
 - keep error variants meaningful and surfaced
 
-### Prepared perturbation 3DAA support splits
+### Prepared RLE support splits
 
-For a valid model/support boundary with support AA disabled, the perturbation
-3DAA RLE path prepares `PerturbSupportSplitJobs` once per render in `pipeline.rs`.
-The internal model job clears split metadata after candidate classification, so
-it cannot re-enter the generic support-bypass full-frame mask fallback. Model AA
-samples, patterns and all later XY/Z/LUT/dither processing are unchanged. The
-cached support job remains AA Off/Coverage with a binary core, merged after the
-model tail. No halo settings or generation are introduced.
+For a valid model/support boundary (when support AA is disabled or Support Halo
+is enabled), the split RLE paths (raw RLE PNG/stream, 2DAA RLE stream, and
+perturbation 3DAA RLE) prepare `SupportSplitJobs` (and optional
+`SupportHaloPrecalc`) once per render in `pipeline.rs`. The internal model job
+clears split and halo metadata after candidate classification, so it cannot
+re-enter the generic support-bypass full-frame mask fallback. Model AA samples,
+patterns and all later XY/Z/LUT/dither processing are unchanged. The cached
+support job remains AA Off/Coverage with a binary core (plus optional grayscale
+Support Halo evaluated via `SupportHaloPrecalc`), merged after the model tail.
 
 Support-free layers use the prepared model directly before partition allocation.
 Required component statistics are computed once on the final combined or
-support-only stream. Raw, ordinary 2DAA and support-AA-enabled jobs retain their
-previous paths. No worker, queue/window or adaptive RAM limits are changed by
-support preparation.
+support-only stream. Unsplit raw, dense 2DAA, and support-AA-enabled jobs
+without Support Halo retain their previous paths. No worker, queue/window or
+adaptive RAM limits are changed by support preparation.
 
 ### Active-row perturbation RLE coverage
 
