@@ -267,7 +267,7 @@ export function ModelManagerPanel({
     beginPanelResize(e.clientX);
   }, [beginPanelResize]);
 
-  const selectedSet = useMemo(() => new Set(selectedModelIds), []);
+  const selectedSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const selectedBodySet = useMemo(() => new Set(selectedBodyKeys), [selectedBodyKeys]);
 
   const grouped = useMemo<GroupedEntry[]>(() => {
