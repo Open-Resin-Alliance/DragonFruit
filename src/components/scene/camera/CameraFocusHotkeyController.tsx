@@ -4,6 +4,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { useCameraFocusHotkey } from '@/hotkeys/useCameraFocusHotkey';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { clearCursorPivotAnchor } from './orbitControlsPivot';
 
 /**
  * How far below the middle of the view a plate lands when one is picked, as a fraction of
@@ -210,6 +211,11 @@ export function CameraFocusHotkeyController({
     // preserves the on-screen scale while re-targeting the pivot — for an
     // orthographic camera the frustum is derived from that distance.
     const endPos = endTarget.clone().add(viewDir.clone().multiplyScalar(fitDistance));
+
+    // A scripted framing ends whatever cursor pivot was in force: the animation
+    // drives `target`, and an anchor would re-aim the camera to keep the old pixel
+    // — the view would swing to the cursor instead of the model.
+    clearCursorPivotAnchor(controls);
 
     // Disable damping so no pending velocity is applied during update()
     const prevDamping = controls.enableDamping;

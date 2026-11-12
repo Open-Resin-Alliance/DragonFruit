@@ -18,6 +18,7 @@ import {
   WHEEL_ZOOM_POSE_RELEASE_MS,
   type WheelZoomPose,
 } from '@/components/scene/camera/wheelZoomPose';
+import { clearCursorPivotAnchor } from '@/components/scene/camera/orbitControlsPivot';
 
 /**
  * Teach R3F's pointer picking the orthographic depth range.
@@ -469,6 +470,7 @@ export function CameraModeEntryFramingController({
       camera.position.lerpVectors(startPos, endPos, eased);
       orbit.target.lerpVectors(startTarget, endTarget, eased);
 
+      clearCursorPivotAnchor(orbit);
       orbit.update();
 
       if (t < 1) {
