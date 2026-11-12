@@ -6,6 +6,7 @@ import type { SupportMode } from '@/supports/types';
 import { Camera as CameraIcon, Hand as HandIcon } from 'lucide-react';
 import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
 import type { CameraFeelPreset } from '@/components/settings/cameraFeelPreferences';
+import type { CameraOrbitPivot } from '@/components/settings/cameraOrbitPivotPreferences';
 import type { CameraTrackpadModifierKey, CameraTrackpadPrimaryAction } from '@/components/settings/cameraTrackpadPreferences';
 import type { CameraScopeMode, WorkspaceCameraDefaults } from '@/components/settings/workspaceCameraPreferences';
 import { FOV_MIN, FOV_MAX } from '@/components/settings/cameraFovPreferences';
@@ -23,6 +24,8 @@ interface CameraSettingsTabProps {
   onPerspectiveFovChange: (fov: number) => void;
   cameraFeelPreset: CameraFeelPreset;
   onCameraFeelPresetChange: (preset: CameraFeelPreset) => void;
+  cameraOrbitPivot: CameraOrbitPivot;
+  onCameraOrbitPivotChange: (pivot: CameraOrbitPivot) => void;
   cameraTrackpadPrimaryAction: CameraTrackpadPrimaryAction;
   onCameraTrackpadPrimaryActionChange: (action: CameraTrackpadPrimaryAction) => void;
   cameraTrackpadModifierKey: CameraTrackpadModifierKey;
@@ -55,6 +58,8 @@ export function CameraSettingsTab({
   onPerspectiveFovChange,
   cameraFeelPreset,
   onCameraFeelPresetChange,
+  cameraOrbitPivot,
+  onCameraOrbitPivotChange,
   cameraTrackpadPrimaryAction,
   onCameraTrackpadPrimaryActionChange,
   cameraTrackpadModifierKey,
@@ -115,6 +120,7 @@ export function CameraSettingsTab({
             label="Camera scope"
             value={cameraScope}
             onChange={(next) => onCameraScopeChange(next as CameraScopeMode)}
+            optionClassName="min-w-[92px] px-2 text-[10px]"
             options={[
               { value: 'global', label: 'Global' },
               { value: 'workspace', label: 'Workspace' },
@@ -129,14 +135,17 @@ export function CameraSettingsTab({
               label="Projection mode"
               description="Use one projection mode everywhere when global scope is active."
             >
-              <SegmentedControl
-                label="Projection mode"
+              <SelectDropdown<CameraProjectionMode>
                 value={cameraProjectionMode}
-                onChange={(next) => onCameraProjectionModeChange(next as CameraProjectionMode)}
                 options={[
-                  { value: 'orthographic', label: 'Ortho' },
+                  { value: 'orthographic', label: 'Orthographic' },
                   { value: 'perspective', label: 'Perspective' },
                 ]}
+                onChange={(next) => onCameraProjectionModeChange(next)}
+                ariaLabel="Projection mode"
+                title="Projection mode"
+                className="w-36"
+                menuAlign="right"
               />
             </SettingRow>
 
@@ -188,14 +197,17 @@ export function CameraSettingsTab({
               label={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
               description={workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.hint}
             >
-              <SegmentedControl
-                label={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
+              <SelectDropdown<CameraProjectionMode>
                 value={workspaceCameraDefaults[activeWorkspace]}
-                onChange={(next) => onWorkspaceCameraModeChange(activeWorkspace, next as CameraProjectionMode)}
                 options={[
-                  { value: 'orthographic', label: 'Ortho' },
+                  { value: 'orthographic', label: 'Orthographic' },
                   { value: 'perspective', label: 'Perspective' },
                 ]}
+                onChange={(next) => onWorkspaceCameraModeChange(activeWorkspace, next)}
+                ariaLabel={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
+                title={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
+                className="w-36"
+                menuAlign="right"
               />
             </SettingRow>
           </div>
@@ -218,6 +230,26 @@ export function CameraSettingsTab({
             onChange={(next) => onCameraFeelPresetChange(next)}
             ariaLabel="Camera feel"
             title="Camera feel"
+            className="w-36"
+            menuAlign="right"
+          />
+        </SettingRow>
+
+        <SettingRow
+          bordered
+          className="mt-2"
+          label="Orbit pivot"
+          description="What a right-drag turns around."
+        >
+          <SelectDropdown<CameraOrbitPivot>
+            value={cameraOrbitPivot}
+            options={[
+              { value: 'view-center', label: 'View centre' },
+              { value: 'cursor', label: 'Cursor' },
+            ]}
+            onChange={(next) => onCameraOrbitPivotChange(next)}
+            ariaLabel="Orbit pivot"
+            title="Orbit pivot"
             className="w-36"
             menuAlign="right"
           />

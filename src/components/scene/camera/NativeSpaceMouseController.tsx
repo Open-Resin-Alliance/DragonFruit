@@ -22,6 +22,7 @@ import {
   orthoAspectOf,
   resolveOrthoNavRadius,
 } from './orthoDolly';
+import { clearCursorPivotAnchor } from './orbitControlsPivot';
 import { getWindowFocused, retainWindowFocus } from './windowFocus';
 
 type OrbitLikeControls = {
@@ -308,6 +309,7 @@ export function NativeSpaceMouseController({
       controls.target
         .copy(camera.position)
         .addScaledVector(dir, focusDistRef.current);
+      clearCursorPivotAnchor(controls);
       controls.enabled = true;
       controls.update();
       // The roll navlib left is corrected by HorizonLock once navigation ends.

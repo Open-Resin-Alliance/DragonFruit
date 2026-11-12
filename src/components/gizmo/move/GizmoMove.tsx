@@ -3,7 +3,7 @@
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent, useThree } from '@react-three/fiber';
-import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
+import { GIZMO_COLORS, GIZMO_SIZES } from '../constants';
 import type { GizmoAxis as AxisType } from '../types';
 import { getCachedConeGeometry, getCachedMoveShaftGeometry, getCachedSphereGeometry } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
@@ -19,7 +19,6 @@ interface GizmoMoveProps {
   suppressHover?: boolean;
   opacityScale?: number;
   interactionsEnabled?: boolean;
-  enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
   handleScale?: number;
   moveHandleBidirectional?: boolean;
@@ -53,7 +52,6 @@ export function GizmoMove({
   suppressHover = false,
   opacityScale = 1,
   interactionsEnabled = true,
-  enableLighting = true,
   gizmoPosition,
   handleScale = 1.0,
   moveHandleBidirectional = false,
@@ -268,11 +266,6 @@ export function GizmoMove({
   const opacity = baseOpacity * opacityScale;
   const hoverScale = isActive ? 1.18 : effectiveHovered ? 1.1 : 1.0;
   const dimmedColor = '#cccccc';
-  const lightIntensity = isActive
-    ? GIZMO_LIGHTING.pointLightIntensity.active
-    : effectiveHovered
-    ? GIZMO_LIGHTING.pointLightIntensity.hovered
-    : GIZMO_LIGHTING.pointLightIntensity.idle;
 
   const gradientGeometry = useMemo(
     () => getCachedMoveShaftGeometry(axis, shaftRadius, shaftLength),
@@ -393,26 +386,6 @@ export function GizmoMove({
             />
           </mesh>
         </group>
-      )}
-
-      {enableLighting && !isDimmed && (
-        <pointLight
-          position={arrowTipPosition}
-          color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : axisColors.end}
-          intensity={lightIntensity}
-          distance={GIZMO_LIGHTING.pointLightDistance}
-          decay={GIZMO_LIGHTING.pointLightDecay}
-        />
-      )}
-
-      {moveHandleBidirectional && enableLighting && !isDimmed && (
-        <pointLight
-          position={oppositeArrowTipPosition}
-          color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : axisColors.end}
-          intensity={lightIntensity}
-          distance={GIZMO_LIGHTING.pointLightDistance}
-          decay={GIZMO_LIGHTING.pointLightDecay}
-        />
       )}
     </group>
   );

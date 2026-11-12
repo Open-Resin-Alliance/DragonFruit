@@ -3,6 +3,7 @@
 import React from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { clearCursorPivotAnchor } from './orbitControlsPivot';
 
 type CameraHomeResetControllerProps = {
   runId: number;
@@ -93,6 +94,9 @@ export function CameraHomeResetController({
     const currentTarget = new THREE.Vector3();
 
     animatingRef.current = true;
+    // The scripted move owns the target now; a cursor pivot would re-aim every
+    // frame's `update()` to keep its old pixel.
+    clearCursorPivotAnchor(controls);
     const prevEnableDamping = controls.enableDamping;
     const prevEnabled = controls.enabled;
     const prevEnableRotate = controls.enableRotate;

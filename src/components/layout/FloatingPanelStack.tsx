@@ -29,7 +29,6 @@ type PanelPlacement = {
 
 type PanelLayoutState = {
   panels: Record<string, PanelPlacement>;
-  docks: { leftWidth?: number; rightWidth?: number };
 };
 
 type CollapsiblePanelRegistration = {
@@ -40,9 +39,9 @@ type CollapsiblePanelRegistration = {
 
 type FloatingPanelStackContextValue = {
   registerCollapsiblePanel: (panelId: string, registration: CollapsiblePanelRegistration) => () => void;
-  /** Start a dock resize from a panel's own edge handle. */
-  beginDockResize: (side: 'left' | 'right', clientX: number) => void;
   requestPanelExpand: (panelId: string) => void;
+  /** Start dragging a panel's own width from its edge handle. */
+  beginPanelResize: (panelId: string, clientX: number) => void;
 };
 
 const FloatingPanelStackContext = React.createContext<FloatingPanelStackContextValue | null>(null);
@@ -64,12 +63,14 @@ type FloatingPanelItemProps = {
 };
 
 /**
- * A panel's own edge handle resizes the dock it sits in, so the visible
- * affordance and the working one are the same control.
+ * Lets a panel drag its own width from an edge handle. The width belongs to the
+ * panel, so it survives undocking and may exceed the dock it is in.
  */
-export function useFloatingPanelDockResize() {
+export function useFloatingPanelResize() {
   const stack = React.useContext(FloatingPanelStackContext);
-  return stack?.beginDockResize ?? null;
+  const panelId = React.useContext(FloatingPanelItemContext);
+  if (!stack || !panelId) return null;
+  return (clientX: number) => stack.beginPanelResize(panelId, clientX);
 }
 
 export function useFloatingPanelCollapse(defaultExpanded = true, options?: { autoCollapse?: boolean }) {
@@ -136,6 +137,7 @@ type DropTarget = {
 
 const PANEL_MARGIN = 6;
 const PANEL_GAP = 6;
+const MAX_PANEL_WIDTH = 520;
 const DEFAULT_PANEL_WIDTH = 320;
 const DEFAULT_PANEL_HEIGHT = 150;
 const MIN_DOCK_WIDTH = 200;
@@ -249,14 +251,16 @@ function flattenPanelChildren(
 }
 
 function loadPanelLayout(): PanelLayoutState {
-  if (typeof window === 'undefined') return { panels: {}, docks: {} };
+  if (typeof window === 'undefined') return { panels: {} };
 
   try {
     const raw = window.localStorage.getItem(FLOATING_LAYOUT_STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as { version?: number; panels?: Record<string, PanelPlacement>; docks?: PanelLayoutState['docks'] };
+      const parsed = JSON.parse(raw) as { version?: number; panels?: Record<string, PanelPlacement> };
       if (parsed?.version === 6 && parsed.panels && typeof parsed.panels === 'object') {
-        return { panels: parsed.panels, docks: parsed.docks ?? {} };
+        // Docks are a fixed width now; saved layouts still carry their old
+        // `docks` block and it is simply dropped here.
+        return { panels: parsed.panels };
       }
     }
 
@@ -285,13 +289,13 @@ function loadPanelLayout(): PanelLayoutState {
         };
       }
 
-      return { panels, docks: {} };
+      return { panels };
     }
   } catch {
     // Fall through to defaults.
   }
 
-  return { panels: {}, docks: {} };
+  return { panels: {} };
 }
 
 function placePanel(
@@ -308,7 +312,9 @@ function placePanel(
     const order = Object.values(panels)
       .filter((placement) => placement.dock === 'float')
       .reduce((max, placement) => Math.max(max, placement.order), -1) + 1;
-    panels[panelId] = { dock: 'float', order, float };
+    // Keep the panel's own width: undocking must not snap a widened model list
+    // back to its base width.
+    panels[panelId] = { ...panels[panelId], dock: 'float', order, float };
   } else {
     const targetIds = Object.keys(panels)
       .filter((id) => id !== panelId && panels[id].dock === dock)
@@ -420,14 +426,14 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
   const collapsiblePanelsRef = React.useRef<Record<string, CollapsiblePanelRegistration>>({});
 
   const [layout, setLayout] = React.useState<PanelLayoutState>(() => (
-    isFloatingLayoutPersistenceEnabled() ? loadPanelLayout() : { panels: {}, docks: {} }
+    isFloatingLayoutPersistenceEnabled() ? loadPanelLayout() : { panels: {} }
   ));
   const [viewportSize, setViewportSize] = React.useState<PanelSize>({ width: 1200, height: 800 });
   const [panelSizeVersion, setPanelSizeVersion] = React.useState(0);
   const [registryVersion, setRegistryVersion] = React.useState(0);
   const [drag, setDrag] = React.useState<DragState | null>(null);
   const [dropTarget, setDropTarget] = React.useState<DropTarget | null>(null);
-  const [dockResize, setDockResize] = React.useState<{ side: 'left' | 'right'; startX: number; startWidth: number } | null>(null);
+  const [panelResize, setPanelResize] = React.useState<{ panelId: string; startX: number; startWidth: number } | null>(null);
   const [windowContextMenu, setWindowContextMenu] = React.useState<WindowContextMenuState | null>(null);
   const [persistLayout, setPersistLayout] = React.useState<boolean>(() => isFloatingLayoutPersistenceEnabled());
 
@@ -444,8 +450,10 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
     panelIdsRef.current = panelIds;
   }, [panelIds]);
 
+  // A stored width may widen a panel, never narrow it: the base width every
+  // panel has is the floor, so an old save cannot leave one too narrow.
   const getPanelWidth = React.useCallback(
-    (panelId: string) => layout.panels[panelId]?.width ?? getPanelBaseWidth(panelId),
+    (panelId: string) => Math.max(getPanelBaseWidth(panelId), layout.panels[panelId]?.width ?? 0),
     [layout.panels],
   );
   const getPanelSize = React.useCallback((panelId: string): PanelSize => (
@@ -481,20 +489,23 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
     .filter((id) => placementFor(id).dock === 'float')
     .sort((a, b) => placementFor(a).order - placementFor(b).order), [panelIds, placementFor]);
 
-  const dockWidth = React.useCallback((side: 'left' | 'right', ids: string[]) => {
-    const stored = side === 'left' ? layout.docks.leftWidth : layout.docks.rightWidth;
-    const widestPanel = ids.reduce((max, id) => Math.max(max, getPanelWidth(id)), 0);
+  // A dock is a fixed column: its width comes from the base widths of the
+  // panels it holds, and nothing resizes it. A panel with its own width (the
+  // model list) overflows the dock instead of dragging it wider - otherwise
+  // undocking that panel would leave its width stuck to the dock's.
+  const dockWidth = React.useCallback((ids: string[]) => {
+    const widestPanel = ids.reduce((max, id) => Math.max(max, getPanelBaseWidth(id)), 0);
     const content = (widestPanel || DEFAULT_PANEL_WIDTH) + PANEL_MARGIN * 2;
-    // Only a dock holding a panel the edge drag can size keeps a stored width;
-    // the others stay snug around their panels. Either way the dock is never
-    // narrower than the panel it holds, because it clips horizontally.
-    const resizable = ids.some((id) => RESIZABLE_PANELS.has(id));
-    const width = resizable && stored != null ? Math.max(stored, content) : content;
-    return clamp(width, MIN_DOCK_WIDTH, MAX_DOCK_WIDTH);
-  }, [getPanelWidth, layout.docks]);
+    return clamp(content, MIN_DOCK_WIDTH, MAX_DOCK_WIDTH);
+  }, []);
 
-  const leftWidth = dockWidth('left', leftPanels);
-  const rightWidth = dockWidth('right', rightPanels);
+  const leftWidth = dockWidth(leftPanels);
+  const rightWidth = dockWidth(rightPanels);
+  // A panel widened past its dock has to be allowed to spill over the canvas.
+  // The dock only drops its clipping while that is true, so the normal case
+  // keeps its vertical scrolling.
+  const leftSpills = leftPanels.some((id) => getPanelWidth(id) > leftWidth - PANEL_MARGIN * 2);
+  const rightSpills = rightPanels.some((id) => getPanelWidth(id) > rightWidth - PANEL_MARGIN * 2);
 
   React.useLayoutEffect(() => {
     const element = containerRef.current;
@@ -534,7 +545,6 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
       window.localStorage.setItem(FLOATING_LAYOUT_STORAGE_KEY, JSON.stringify({
         version: 6,
         panels: layout.panels,
-        docks: layout.docks,
       }));
     } catch {
       // Ignore storage failures.
@@ -589,17 +599,19 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
     }
   }, [getPanelSize, leftPanels, placementFor, rightPanels, viewportSize.height]);
 
-  const beginDockResize = React.useCallback((side: 'left' | 'right', clientX: number) => {
-    const dock = containerRef.current?.querySelector(`[data-dock="${side}"]`);
-    const startWidth = dock?.getBoundingClientRect().width ?? (side === 'left' ? leftWidth : rightWidth);
-    setDockResize({ side, startX: clientX, startWidth });
-  }, [leftWidth, rightWidth]);
+  // A panel the user is allowed to size resizes itself, from an edge handle on
+  // the panel. Docked or floating, its width lives on the panel's placement, so
+  // it survives undocking and can exceed the dock it sits in.
+  const beginPanelResize = React.useCallback((panelId: string, clientX: number) => {
+    if (!RESIZABLE_PANELS.has(panelId)) return;
+    setPanelResize({ panelId, startX: clientX, startWidth: getPanelWidth(panelId) });
+  }, [getPanelWidth]);
 
   const floatingPanelStackContext = React.useMemo<FloatingPanelStackContextValue>(() => ({
     registerCollapsiblePanel,
     requestPanelExpand,
-    beginDockResize,
-  }), [registerCollapsiblePanel, requestPanelExpand, beginDockResize]);
+    beginPanelResize,
+  }), [registerCollapsiblePanel, requestPanelExpand, beginPanelResize]);
 
   // Auto-compact a dock that no longer fits, from the bottom up.
   React.useEffect(() => {
@@ -793,41 +805,37 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
   ]);
 
   React.useEffect(() => {
-    if (!dockResize) return;
+    if (!panelResize) return;
 
     const onPointerMove = (event: PointerEvent) => {
-      const delta = event.clientX - dockResize.startX;
+      const delta = event.clientX - panelResize.startX;
+      // A panel in the right dock grows leftwards, so the drag has to read
+      // backwards there; a floating panel's edge follows the pointer directly.
+      const growsLeftwards = placementFor(panelResize.panelId).dock === 'right';
+      // The base width every panel has is the floor: a panel may be widened
+      // past its dock, never squeezed below the width it ships with.
       const width = clamp(
-        dockResize.startWidth + (dockResize.side === 'left' ? delta : -delta),
-        MIN_DOCK_WIDTH,
-        MAX_DOCK_WIDTH,
+        panelResize.startWidth + (growsLeftwards ? -delta : delta),
+        getPanelBaseWidth(panelResize.panelId),
+        MAX_PANEL_WIDTH,
       );
-      const side = dockResize.side;
       setLayout((previous) => {
-        const panels = { ...previous.panels };
-        // The drag sets the panels' own width; the dock follows them, so a
-        // panel keeps that width when it is dragged out to float. The drag can
-        // only widen: a panel never goes below its natural width.
-        let widest = 0;
-        (side === 'left' ? leftPanels : rightPanels).forEach((id) => {
-          if (!RESIZABLE_PANELS.has(id)) return;
-          const nextWidth = Math.max(getPanelBaseWidth(id), width - PANEL_MARGIN * 2);
-          widest = Math.max(widest, nextWidth);
-          panels[id] = { ...(panels[id] ?? defaultPlacement(id, 0)), width: nextWidth };
-        });
-        const dockWidth = widest > 0 ? widest + PANEL_MARGIN * 2 : width;
+        const current = previous.panels[panelResize.panelId];
+        if (current?.width === width) return previous;
         return {
           ...previous,
-          panels,
-          docks: {
-            ...previous.docks,
-            [side === 'left' ? 'leftWidth' : 'rightWidth']: dockWidth,
+          panels: {
+            ...previous.panels,
+            [panelResize.panelId]: {
+              ...(current ?? defaultPlacement(panelResize.panelId, 0)),
+              width,
+            },
           },
         };
       });
     };
 
-    const onPointerUp = () => setDockResize(null);
+    const onPointerUp = () => setPanelResize(null);
 
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
@@ -836,7 +844,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
     };
-  }, [dockResize, leftPanels, rightPanels]);
+  }, [panelResize, placementFor]);
 
   const closeWindowContextMenu = React.useCallback(() => {
     setWindowContextMenu(null);
@@ -856,7 +864,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
 
   const resetAllWindows = React.useCallback(() => {
     closeWindowContextMenu();
-    setLayout({ panels: {}, docks: {} });
+    setLayout({ panels: {} });
     setPanelSizeVersion((version) => version + 1);
 
     if (typeof window !== 'undefined') {
@@ -892,7 +900,6 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
         panelIds: [...panelIds],
         positions,
         placements: { ...layout.panels },
-        docks: { ...layout.docks },
       };
 
       detail.onResult(snapshot);
@@ -902,7 +909,7 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
     return () => {
       window.removeEventListener(FLOATING_LAYOUT_DEBUG_REQUEST_EVENT, handleDebugDumpRequest as EventListener);
     };
-  }, [layout.docks, layout.panels, panelIds, persistLayout, placementFor]);
+  }, [layout.panels, panelIds, persistLayout, placementFor]);
 
   const renderPanel = (panelId: string, index: number, docked: boolean) => {
     const entry = panelEntries.find((candidate) => candidate.id === panelId);
@@ -955,25 +962,11 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
             padding: PANEL_MARGIN,
             gap: PANEL_GAP,
             alignItems: 'flex-start',
-            overflowY: drag ? 'visible' : 'auto',
-            overflowX: drag ? 'visible' : 'hidden',
+            overflowY: drag || leftSpills ? 'visible' : 'auto',
+            overflowX: drag || leftSpills ? 'visible' : 'hidden',
           }}
         >
           {leftPanels.map((panelId, index) => renderPanel(panelId, index, true))}
-          <div
-            className="absolute inset-y-0 cursor-col-resize pointer-events-auto"
-            style={{ right: 0, width: 6 }}
-            onPointerDown={(event) => {
-              event.preventDefault();
-              // Read the rendered width: a closure captured before the last
-              // commit would start the drag from a stale value and jump.
-              setDockResize({
-                side: 'left',
-                startX: event.clientX,
-                startWidth: event.currentTarget.parentElement?.getBoundingClientRect().width ?? leftWidth,
-              });
-            }}
-          />
         </div>
 
         <div
@@ -985,23 +978,11 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
             padding: PANEL_MARGIN,
             gap: PANEL_GAP,
             alignItems: 'flex-end',
-            overflowY: drag ? 'visible' : 'auto',
-            overflowX: drag ? 'visible' : 'hidden',
+            overflowY: drag || rightSpills ? 'visible' : 'auto',
+            overflowX: drag || rightSpills ? 'visible' : 'hidden',
           }}
         >
           {rightPanels.map((panelId, index) => renderPanel(panelId, index, true))}
-          <div
-            className="absolute inset-y-0 cursor-col-resize pointer-events-auto"
-            style={{ left: 0, width: 6 }}
-            onPointerDown={(event) => {
-              event.preventDefault();
-              setDockResize({
-                side: 'right',
-                startX: event.clientX,
-                startWidth: event.currentTarget.parentElement?.getBoundingClientRect().width ?? rightWidth,
-              });
-            }}
-          />
         </div>
 
         {floatingPanels.map((panelId, index) => renderPanel(panelId, index, false))}

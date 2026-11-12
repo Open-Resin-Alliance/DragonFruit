@@ -32,8 +32,14 @@ type PanelPlacement = {
   starts in the right dock, in the order the tool renders it.
 - Dragging a header moves the panel. Releasing over a dock inserts it at the
   nearest order; releasing over the canvas floats it at the drop point.
-- A dock is a flex column. Its width is the widest docked panel plus padding,
-  clamped to 200..520 px, and the handle on its inner edge resizes it.
+- A dock is a flex column at a fixed width: the base width of the widest panel it
+  holds plus padding, clamped to 200..520 px. Nothing resizes it.
+- The model lists (`RESIZABLE_PANELS`) own their width instead. A hover-revealed
+  handle on the panel's edge drags it in either state, and the width lives on the
+  panel's placement — so a docked model list may grow past its dock, spilling
+  over the canvas, and it keeps that width when it is undocked. It can only be
+  widened: the base width every panel ships with is the floor. The dock drops
+  its clipping only while a panel does this, so it otherwise still scrolls.
 - `useFloatingPanelCollapse` owns a panel's expanded state. A dock that no
   longer fits collapses its lowest expanded panels before it scrolls.
 - The layout is saved under `lumenslicer:floating-panel-layout:v6`. The v5 key
