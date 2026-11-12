@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { pickFanHost, leafPathCrossesSupports, collectFanShaftPoints, fanLeafToHost, findMergeHost, buildConsolidationBranch, type FanShaftPoint } from '../autoSupport/autoPlace';
+import { setSettings } from '../Settings/state';
+import { createDefaultSettings } from '../Settings/types';
 import type { SupportState } from '../types';
 import { createEmptySupportCollections, NEAR_PLATE_ORIGIN } from '../supportTypeRegistry';
 
@@ -157,30 +159,81 @@ test('buildConsolidationBranch attaches a routed branch to a host shaft', () => 
         assert.equal(Object.keys(result.draft.branches).length, 1, 'one branch');
         assert.equal(Object.keys(result.draft.knots).length, 1, 'one knot');
         const branch = Object.values(result.draft.branches)[0];
-        assert.equal(branch.origin, 'overhang', 'branch carries the overhang origin');
+        assert.equal(branch.origin, 'overhang', 'branch carries the overhang origin by default');
+    }
+
+    const reinforced = buildConsolidationBranch({
+        tip: { x: 1, y: 0, z: 15 },
+        tipNormal: { x: 0, y: 0, z: -1 },
+        modelId: 'm',
+        pool,
+        pruned: draft,
+        mesh: undefined,
+        radiusMm: 8,
+        maxAttachments: 12,
+        knotId: 'con-branch-reinf',
+        origin: 'reinforcement',
+    });
+    assert.ok(reinforced, 'reinforcement consolidation branch built on the host shaft');
+    if (reinforced) {
+        assert.equal(Object.values(reinforced.draft.branches)[0].origin, 'reinforcement',
+            'consolidation branch preserves explicit reinforcement origin');
     }
 });
 
 /**
  * A tip further off the host axis is refused rather than linked: the contact
  * cone is clamped to the surface normal, so the shaft loses its last couple of
- * millimeters of rise to the cone bend and would leave the host too flat. The
- * pillar stays standalone instead.
+ * millimeters of rise to the cone bend and would leave the host too flat. On-grid
+ * consolidation uses `90 - minBranchAngleDeg` (30° from vertical at default 60°);
+ * off-grid consolidation caps shaft departure at 50° from vertical.
  */
 test('buildConsolidationBranch refuses a link whose shaft would leave too flat', () => {
+    setSettings(createDefaultSettings());
     const draft = trunkWithShaft('host', 0, 0, 0, 19);
-    const result = buildConsolidationBranch({
+    const pool = collectFanShaftPoints(draft);
+
+    const gridRefused = buildConsolidationBranch({
         tip: { x: 3, y: 0, z: 15 },
         tipNormal: { x: 0, y: 0, z: -1 },
         modelId: 'm',
-        pool: collectFanShaftPoints(draft),
+        pool,
         pruned: draft,
         mesh: undefined,
         radiusMm: 8,
         maxAttachments: 12,
-        knotId: 'con-branch-2',
+        knotId: 'con-branch-grid-refused',
+        gridEnabled: true,
     });
-    assert.equal(result, null, 'no member — the pillar stays standalone');
+    assert.equal(gridRefused, null, 'on-grid refuses ~38° shaft departure (> 30° grid cap)');
+
+    const offGridAdmitted = buildConsolidationBranch({
+        tip: { x: 3, y: 0, z: 15 },
+        tipNormal: { x: 0, y: 0, z: -1 },
+        modelId: 'm',
+        pool,
+        pruned: draft,
+        mesh: undefined,
+        radiusMm: 8,
+        maxAttachments: 12,
+        knotId: 'con-branch-offgrid-admitted',
+        gridEnabled: false,
+    });
+    assert.ok(offGridAdmitted, 'off-grid admits ~38° shaft departure (<= 50° off-grid cap)');
+
+    const offGridRefused = buildConsolidationBranch({
+        tip: { x: 5.5, y: 0, z: 15 },
+        tipNormal: { x: 0, y: 0, z: -1 },
+        modelId: 'm',
+        pool,
+        pruned: draft,
+        mesh: undefined,
+        radiusMm: 8,
+        maxAttachments: 12,
+        knotId: 'con-branch-offgrid-refused',
+        gridEnabled: false,
+    });
+    assert.equal(offGridRefused, null, 'off-grid refuses > 50° shaft departure — the pillar stays standalone');
 });
 
 test('collectFanShaftPoints excludes anchor-origin trunks', () => {
@@ -328,6 +381,17 @@ test('fanLeafToHost branches a long overhang span too', () => {
         assert.equal(Object.keys(fan.draft.leaves).length, 0, 'no leaf cone built');
         assert.equal(Object.values(fan.draft.branches)[0].origin, 'overhang',
             'and it carries the overhang origin, like the consolidation branches do');
+    }
+
+    const reinfFan = fanLeafToHost(
+        { x: 3, y: 0, z: 18 }, 'm', [sp('host', 0, 0, 12)],
+        new Set(), 'fan-test-reinf', 8, 2.5, 60, 12, draft, undefined, 'reinforcement',
+    );
+    assert.equal(reinfFan.ok, true, 'reinforcement fan succeeds');
+    if (reinfFan.ok) {
+        assert.equal(reinfFan.kind, 'branch', 'a 6.7mm reinforcement span gets a real shaft');
+        assert.equal(Object.values(reinfFan.draft.branches)[0].origin, 'reinforcement',
+            'and preserves the reinforcement origin');
     }
 });
 

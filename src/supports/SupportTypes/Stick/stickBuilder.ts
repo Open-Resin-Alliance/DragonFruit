@@ -184,11 +184,15 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
         diameter: jointDiameter,
     };
 
+    // Normalize ordering so the ID/joint ordering is deterministic across equivalent inputs.
+    const swap = aPos.z > bPos.z
+        || (aPos.z === bPos.z && (aPos.y > bPos.y || (aPos.y === bPos.y && aPos.x > bPos.x)));
+
     const segment: Segment = {
         id: uuidv4(),
         diameter: shaftDiameter,
-        bottomJoint: socketJointA,
-        topJoint: socketJointB,
+        bottomJoint: swap ? socketJointB : socketJointA,
+        topJoint: swap ? socketJointA : socketJointB,
     };
 
     const contactConeA: ContactCone = {
@@ -210,11 +214,6 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
         profile: profileB,
         socketJointId: socketJointB.id,
     };
-
-    // Normalize ordering so the ID/joint ordering is deterministic across equivalent inputs.
-        const a = new THREE.Vector3(aPos.x, aPos.y, aPos.z);
-    const b = new THREE.Vector3(bPos.x, bPos.y, bPos.z);
-    const swap = a.z > b.z || (a.z === b.z && (a.y > b.y || (a.y === b.y && a.x > b.x)));
 
     const stickId = uuidv4();
     const stick: Stick = {
@@ -238,26 +237,28 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
         // The tip cones are left out of it, as every other type leaves its own:
         // a tip is anchored where it was aimed, and its length is already
         // bounded by the gap it crosses (`clampConeLengthToFreeGap`).
+        const lowerSocket = segment.bottomJoint!.pos;
+        const upperSocket = segment.topJoint!.pos;
         const span = Math.hypot(
-            socketB.x - socketA.x,
-            socketB.y - socketA.y,
-            socketB.z - socketA.z,
+            upperSocket.x - lowerSocket.x,
+            upperSocket.y - lowerSocket.y,
+            upperSocket.z - lowerSocket.z,
         );
         if (span > GEOMETRY_EPSILON) {
             const inset = Math.min(shaftRadius + 0.15, span * 0.4);
-            const ux = (socketB.x - socketA.x) / span;
-            const uy = (socketB.y - socketA.y) / span;
-            const uz = (socketB.z - socketA.z) / span;
+            const ux = (upperSocket.x - lowerSocket.x) / span;
+            const uy = (upperSocket.y - lowerSocket.y) / span;
+            const uz = (upperSocket.z - lowerSocket.z) / span;
             const blocked = isShaftBlocked(
                 {
-                    x: socketA.x + ux * inset,
-                    y: socketA.y + uy * inset,
-                    z: socketA.z + uz * inset,
+                    x: lowerSocket.x + ux * inset,
+                    y: lowerSocket.y + uy * inset,
+                    z: lowerSocket.z + uz * inset,
                 },
                 {
-                    x: socketB.x - ux * inset,
-                    y: socketB.y - uy * inset,
-                    z: socketB.z - uz * inset,
+                    x: upperSocket.x - ux * inset,
+                    y: upperSocket.y - uy * inset,
+                    z: upperSocket.z - uz * inset,
                 },
                 shaftRadius,
                 mesh,

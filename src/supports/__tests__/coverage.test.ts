@@ -4,6 +4,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 
 import {
+    collectSupportTips,
     computeRegionCoverage,
     findUncoveredClusters,
     buildGapFillCandidates,
@@ -12,24 +13,27 @@ import {
     REGION_COVERAGE_TARGET,
 } from '../autoSupport/coverage';
 import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
+import { DEFAULT_TIP_PROFILE } from '../SupportPrimitives/ContactCone/types';
+import type { ContactCone, ContactDiskProfile } from '../SupportPrimitives/ContactCone/types';
+import type { ContactDisk, SupportState, Vec3 } from '../types';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function rectRegion(id: string, minX: number, maxX: number, minY: number, maxY: number): DetectedIsland {
+function rectRegion(id: string, minX: number, maxX: number, minY: number, maxY: number, z: number = 10): DetectedIsland {
     const contactVoxels: { x: number; y: number; z?: number }[] = [];
     for (let x = minX; x <= maxX; x += 0.25) {
         for (let y = minY; y <= maxY; y += 0.25) {
-            contactVoxels.push({ x, y, z: 10 });
+            contactVoxels.push({ x, y, z });
         }
     }
     return {
         id,
         source: 'overhang',
-        contact: new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, 10),
-        baseZ: 10,
+        contact: new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, z),
+        baseZ: z,
         areaMm2: (maxX - minX) * (maxY - minY),
         surfaceNormal: { x: 0, y: 0, z: -1 },
         contactVoxels: footprintFromPoints(contactVoxels),
@@ -140,4 +144,147 @@ test('gap-fill packs large flats denser than small regions', () => {
         [{ ...rectRegion('big', -10, 10, -10, 10), areaMm2: 400 }], settings, tips);
     assert.equal(smallGaps.length, 0, 'small region fully covered at 3mm discs');
     assert.ok(bigGaps.length > 0, 'large flat needs fills at 1.5mm discs');
+});
+
+function makeCone(id: string, pos: Vec3): ContactCone {
+    return {
+        id,
+        pos,
+        normal: { x: 0, y: 0, z: -1 },
+        surfaceNormal: { x: 0, y: 0, z: -1 },
+        profile: DEFAULT_TIP_PROFILE,
+    };
+}
+
+const DISK_PROFILE: ContactDiskProfile = {
+    type: 'disk',
+    diskThicknessMm: 0.1,
+    maxStandoffMm: 0.25,
+    standoffAngleThreshold: Math.PI / 4,
+};
+
+function makeDisk(id: string, pos: Vec3): ContactDisk {
+    return {
+        id,
+        pos,
+        surfaceNormal: { x: 0, y: 0, z: -1 },
+        coneAxis: { x: 0, y: 0, z: -1 },
+        profile: DISK_PROFILE,
+        contactDiameterMm: 0.36,
+    };
+}
+
+test('collectSupportTips walks all contact-bearing support types, selects upper bridge tips only, and scopes by modelId', () => {
+    const state: SupportState = {
+        roots: {},
+        knots: {},
+        trunks: {
+            'tr-a': { id: 'tr-a', modelId: 'model-a', rootId: 'r1', segments: [], contactCone: makeCone('c-tr-a', { x: 1, y: 0, z: 20 }) },
+            'tr-b': { id: 'tr-b', modelId: 'model-b', rootId: 'r2', segments: [], contactCone: makeCone('c-tr-b', { x: 1, y: 5, z: 30 }) },
+        },
+        branches: {
+            'br-a': { id: 'br-a', modelId: 'model-a', parentKnotId: 'k1', segments: [], contactCone: makeCone('c-br-a', { x: 2, y: 0, z: 22 }) },
+        },
+        leaves: {
+            'lf-a': { id: 'lf-a', modelId: 'model-a', parentKnotId: 'k2', contactCone: makeCone('c-lf-a', { x: 3, y: 0, z: 24 }) },
+        },
+        stumps: {
+            'st-a': {
+                id: 'st-a',
+                modelId: 'model-a',
+                rootPos: { x: 4, y: 0, z: 0 },
+                rootBaseDiameter: 2,
+                rootTopDiameter: 1,
+                rootHeight: 1,
+                joint: { id: 'j1', pos: { x: 4, y: 0, z: 1 }, diameter: 0.8 },
+                segments: [],
+                contactCone: makeCone('c-st-a', { x: 4, y: 0, z: 4 }),
+            },
+        },
+        sticks: {
+            'sk-a': {
+                id: 'sk-a',
+                modelId: 'model-a',
+                segments: [],
+                contactConeA: makeCone('c-sk-a-lo', { x: 5, y: 0, z: 6 }),
+                contactConeB: makeCone('c-sk-a-hi', { x: 5, y: 0, z: 18 }),
+            },
+            'sk-b': {
+                id: 'sk-b',
+                modelId: 'model-b',
+                segments: [],
+                // Un-canonicalized literal (lower field has higher Z) to verify higher-Z fallback too.
+                contactConeA: makeCone('c-sk-b-hi', { x: 5, y: 5, z: 28 }),
+                contactConeB: makeCone('c-sk-b-lo', { x: 5, y: 5, z: 7 }),
+            },
+        },
+        twigs: {
+            'tw-a': {
+                id: 'tw-a',
+                modelId: 'model-a',
+                segments: [],
+                contactDiskA: makeDisk('d-tw-a-lo', { x: 6, y: 0, z: 8 }),
+                contactDiskB: makeDisk('d-tw-a-hi', { x: 6, y: 0, z: 14 }),
+            },
+            'tw-b': {
+                id: 'tw-b',
+                modelId: 'model-b',
+                segments: [],
+                contactDiskA: makeDisk('d-tw-b-lo', { x: 6, y: 5, z: 9 }),
+                contactDiskB: makeDisk('d-tw-b-hi', { x: 6, y: 5, z: 26 }),
+            },
+        },
+        braces: {
+            'bc-a': { id: 'bc-a', modelId: 'model-a', startKnotId: 'k1', endKnotId: 'k2', profile: { diameter: 0.5 } },
+        },
+        kickstands: {},
+        selectedId: null,
+        hoveredId: null,
+    };
+
+    const tipsA = collectSupportTips(state, 'model-a');
+    const zA = tipsA.map((t) => t.z).sort((a, b) => a - b);
+    assert.deepEqual(
+        zA,
+        [4, 14, 18, 20, 22, 24],
+        'model-a includes trunk, branch, leaf, stump, stick upper (18), and twig upper (14), excluding lower feet (6, 8) and model-b',
+    );
+
+    const tipsAll = collectSupportTips(state);
+    const zAll = tipsAll.map((t) => t.z).sort((a, b) => a - b);
+    assert.deepEqual(
+        zAll,
+        [4, 14, 18, 20, 22, 24, 26, 28, 30],
+        'unscoped call collects upper tips across both models while excluding all lower landing feet (6, 7, 8, 9)',
+    );
+});
+
+test('upper-shelf tips more than 1mm above a lower overhang do not claim downward coverage even at dx=dy=0', () => {
+    const regionAt12 = rectRegion('shelf12', -2, 2, -2, 2, 12);
+    // Directly above center voxel (0, 0, 12) at z = 24 -> tip.z - vz = 12 > 1.0 -> zero coverage.
+    assert.equal(computeRegionCoverage(regionAt12, [{ x: 0, y: 0, z: 24 }]), 0);
+
+    // With another distant tip so tips.length > 0, all Z=12 voxels remain uncovered.
+    const clusters = findUncoveredClusters(regionAt12, [
+        { x: 0, y: 0, z: 24 },
+        { x: 50, y: 50, z: 12 },
+    ]);
+    assert.equal(clusters.length, 1, 'lower shelf remains a single uncovered cluster beneath upper-shelf tip');
+    assert.ok(Math.abs(clusters[0].x) < 1e-6 && Math.abs(clusters[0].y) < 1e-6, 'cluster centroid stays at (0, 0)');
+    assert.equal(clusters[0].z, 12);
+
+    // Local sloped-surface tolerance (tip.z - vz <= 1.0, e.g. vz = 10.0, tip.z = 10.8) still covers normally.
+    const slopedRegion = rectRegion('slope10', -10, 10, -10, 10, 10);
+    const slopedCov = computeRegionCoverage(slopedRegion, [{ x: 0, y: 0, z: 10.8 }]);
+    assert.ok(slopedCov > 0, `expected sloped surface within 1mm tolerance to stay covered, got ${slopedCov}`);
+});
+
+test('buildGapFillCandidates emits rescue candidates even when zero tips were placed on an exterior overhang', () => {
+    const region = rectRegion('rescue0', -5, 5, -5, 5, 10);
+    const settings = createDefaultAutoSupportSettings();
+    const candidates = buildGapFillCandidates([region], settings, []);
+
+    assert.ok(candidates.length >= 1, 'zero-tip exterior overhang still receives >= 1 gap-fill rescue candidate');
+    assert.equal(candidates[0].gridPoint, true);
+    assert.equal(candidates[0].zHeight, 10);
 });

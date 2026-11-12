@@ -158,6 +158,8 @@ export interface OrphanInfo {
     hostId?: string;
     knotId?: string;
     detail?: string;
+    /** True when this member was orphaned because its host shaft pierced the mesh and was culled. */
+    hostCulled?: boolean;
 }
 
 

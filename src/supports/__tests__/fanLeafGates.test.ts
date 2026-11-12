@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 
-import { collectFanShaftPoints, fanLeafToHost } from '../autoSupport/autoPlace';
+import { collectFanShaftPoints, computeAutoSupportPlan, fanLeafToHost } from '../autoSupport/autoPlace';
 import { getSnapshot, resetStore, resetKickstandsInState } from '../state';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import { initializeBVH } from '@/utils/bvh';
+import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
+import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
 import { buildTrunkData } from '../SupportTypes/Trunk/trunkBuilder';
 
 /** The four gates a fanning leaf passes through, tested at the function itself. */
@@ -157,3 +159,64 @@ test('the grid-host radius is stricter than the island-host radius', () => {
     assert.equal(result.ok, false, 'a grid host must not accept a 4mm fan');
     if (!result.ok) assert.equal(result.reason, 'noHost');
 });
+
+test('off-grid placement honors leafFanMaxAngleDeg without clamping to grid.minBranchAngleDeg', () => {
+    const hostIsland: DetectedIsland = {
+        id: 'host-primary',
+        source: 'voxel',
+        contact: new THREE.Vector3(0, 0, 20),
+        baseZ: 20,
+        areaMm2: 30,
+        layerSpan: [0, 400],
+    };
+    // At (3.3, 0, 6.0), even the lowest shaft sample above root top (~1.5-2.0mm)
+    // requires ~37-41° from vertical: legal under leafFanMaxAngleDeg=45°,
+    // refused under a 30° (= 90 - 60) grid branch-angle clamp.
+    const subThresholdOverhang: DetectedIsland = {
+        id: 'overhang-fan-target',
+        source: 'overhang',
+        contact: new THREE.Vector3(3.3, 0, 6.0),
+        baseZ: 6.0,
+        areaMm2: 4,
+        surfaceNormal: { x: 0, y: 0, z: -1 },
+        contactVoxels: footprintFromPoints([
+            { x: 3.3, y: 0, z: 6.0 },
+            { x: 3.55, y: 0, z: 6.0 },
+            { x: 3.3, y: 0.25, z: 6.0 },
+            { x: 3.55, y: 0.25, z: 6.0 },
+        ]),
+    };
+
+    resetStore();
+    resetKickstandsInState();
+    initializeBVH();
+    const offGridSettings = createDefaultSettings();
+    offGridSettings.grid.enabled = false;
+    offGridSettings.grid.minBranchAngleDeg = 60;
+    setSettings(offGridSettings);
+
+    const offGridPlan = computeAutoSupportPlan(
+        [hostIsland, subThresholdOverhang],
+        MODEL,
+        { leafFanMaxAngleDeg: 45, debugSkipAutoBracing: true, stabilizationEnabled: false },
+    );
+    assert.ok(offGridPlan, 'off-grid plan computed');
+    assert.ok(offGridPlan.result.placed.leaf >= 1, `expected off-grid ~38° fan leaf to place, got ${JSON.stringify(offGridPlan.result.placed)}`);
+    assert.equal(offGridPlan.analytics.placement?.fanRefusals?.angle, undefined, 'off-grid fan must not refuse with angle');
+
+    resetStore();
+    resetKickstandsInState();
+    const onGridSettings = createDefaultSettings();
+    onGridSettings.grid.enabled = true;
+    onGridSettings.grid.minBranchAngleDeg = 60;
+    setSettings(onGridSettings);
+
+    const onGridPlan = computeAutoSupportPlan(
+        [hostIsland, subThresholdOverhang],
+        MODEL,
+        { leafFanMaxAngleDeg: 45, debugSkipAutoBracing: true, stabilizationEnabled: false },
+    );
+    assert.ok(onGridPlan, 'grid-enabled plan computed');
+    assert.equal(onGridPlan.result.placed.leaf, 0, 'grid-enabled mode enforces 90 - minBranchAngleDeg = 30° cap');
+});
+

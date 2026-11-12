@@ -8,6 +8,7 @@ import {
     resolveSupportTypeIdOf,
     selectTypeForPlacement,
     SHAFT_HOSTED_MEMBER_TYPES,
+    SUPPORT_STATE_TYPES,
     SUPPORT_TYPES,
     NEAR_PLATE_ORIGIN,
 } from '../supportTypeRegistry';
@@ -118,7 +119,8 @@ const LOG_PREFIX = '[AutoSupport]';
  * near-level bars came from: a member at 45° from vertical carries almost
  * nothing along its axis and reads as a stray branch off the host.
  */
-function memberMaxAngleFromVerticalDeg(): number {
+function memberMaxAngleFromVerticalDeg(gridEnabled: boolean = Boolean(getSettings().grid?.enabled)): number {
+    if (!gridEnabled) return 90;
     const minRiseDeg = getSettings().grid?.minBranchAngleDeg ?? DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG;
     return Math.max(0, Math.min(90, 90 - minRiseDeg));
 }
@@ -652,6 +654,10 @@ const ORIGIN_BY_SOURCE: Record<CandidatePoint['source'], SupportOrigin> = {
     reinforcement: 'reinforcement',
 };
 
+function hostedOriginForSource(source: CandidatePoint['source']): SupportOrigin {
+    return source === 'overhang' ? 'overhang' : ORIGIN_BY_SOURCE[source];
+}
+
 /** Find the closest existing host (shaft or tip) within merge radius.
  *  Stump-origin entities never host merges: they are load-bearing standalone
  *  pillars, leaves are not. */
@@ -781,8 +787,10 @@ export function buildConsolidationBranch(args: {
     excludeHostIds?: ReadonlySet<string>;
     autoSettings?: Partial<AutoSupportSettings>;
     tipDiameterMm?: number;
+    gridEnabled?: boolean;
+    origin?: SupportOrigin;
 }): { draft: SupportState; branchId: string; kind: AttachmentKind } | null {
-    const { tip, tipNormal, modelId, pool, pruned, mesh, radiusMm, maxAttachments, knotId, excludeHostIds, autoSettings, tipDiameterMm } = args;
+    const { tip, tipNormal, modelId, pool, pruned, mesh, radiusMm, maxAttachments, knotId, excludeHostIds, autoSettings, tipDiameterMm, gridEnabled, origin } = args;
 
     // Steepest eligible host sample (≤ the branch-angle rule from vertical —
     // the leaf fan's cap is looser). Steepest, not nearest: the contact cone
@@ -811,7 +819,7 @@ export function buildConsolidationBranch(args: {
         const vDist = tip.z - sp.pos.z;
         if (vDist < 1.5) continue;
         const angleDeg = (Math.atan2(Math.hypot(ddx, ddy), vDist) * 180) / Math.PI;
-        if (angleDeg > Math.min(50, memberMaxAngleFromVerticalDeg())) continue;
+        if (angleDeg > Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled))) continue;
         if (angleDeg < bestAngleDeg) {
             bestAngleDeg = angleDeg;
             best = sp;
@@ -850,14 +858,14 @@ export function buildConsolidationBranch(args: {
             autoSettings,
         );
         if (!built) return null;
-        if (branchDepartureAngleDeg(built.branch, parentKnot.pos) > memberMaxAngleFromVerticalDeg()) return null;
+        if (branchDepartureAngleDeg(built.branch, parentKnot.pos) > Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled))) return null;
         if (leafPathCrossesSupports(parentKnot.pos, built.branch.contactCone?.pos ?? tip, 0.25, pruned, best.hostId, excludeHostIds)) return null;
 
         if (cappedTip !== undefined && built.branch.contactCone) {
             built.branch.contactCone = applyExplicitTipCapToCone(built.branch.contactCone, cappedTip);
         }
         let d = draftAddPrimitive(pruned, 'knots', parentKnot);
-        built.branch.origin = 'overhang';
+        built.branch.origin = origin ?? 'overhang';
         const memberTypeId = builtMemberTypeId(built.branch);
         d = draftAddEntity(d, memberTypeId, built.branch);
         return { draft: d, branchId: built.branch.id, kind: memberTypeId };
@@ -1099,7 +1107,7 @@ function placeOneCandidate(
                     `auto-fan-${candidate.id}`,
                     Math.max(MIN_LEAF_FAN_RADIUS_MM, auto.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM),
                     GRID_HOST_FAN_RADIUS_MM,
-                    Math.min(auto.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG, memberMaxAngleFromVerticalDeg()),
+                    Math.min(auto.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG, memberMaxAngleFromVerticalDeg(gridEnabled)),
                     auto.maxAttachmentsPerTrunk ?? 12,
                     draft,
                     mesh,
@@ -1147,7 +1155,7 @@ function placeOneCandidate(
                 `auto-fan-${candidate.id}`,
                 Math.max(MIN_LEAF_FAN_RADIUS_MM, auto.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM),
                 GRID_HOST_FAN_RADIUS_MM,
-                Math.min(auto.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG, memberMaxAngleFromVerticalDeg()),
+                Math.min(auto.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG, memberMaxAngleFromVerticalDeg(gridEnabled)),
                 auto.maxAttachmentsPerTrunk ?? 12,
                 draft,
                 mesh,
@@ -1194,7 +1202,7 @@ function placeOneCandidate(
             // the relaxed leafFanMaxAngleDeg default (was 60°).
             const STEEP_MIN_RISE_DEG = Math.max(
                 45,
-                90 - memberMaxAngleFromVerticalDeg(),
+                90 - memberMaxAngleFromVerticalDeg(gridEnabled),
             );
             const MAX_MERGE_ATTACH_SPAN_MM = 12;
             // Walk the host span in fixed steps from its top and take the FIRST
@@ -1326,7 +1334,7 @@ function placeOneCandidate(
                                     // fall through to standalone trunk
                                 } else {
                                     d = draftAddPrimitive(d, 'knots', parentKnot);
-                                    leaf.origin = candidate.source === 'overhang' ? 'overhang' : 'island';
+                                    leaf.origin = hostedOriginForSource(candidate.source);
                                     const memberTypeId = builtMemberTypeId(leaf);
                                     d = draftAddEntity(d, memberTypeId, leaf);
                                     const la = (Math.atan2(hDist, vDist) * 180) / Math.PI;
@@ -1351,7 +1359,7 @@ function placeOneCandidate(
                     );
                     const vDist2 = tipPos.z - knotPos.z;
                     const mergeAngleDeg = (Math.atan2(hDist2, vDist2) * 180) / Math.PI;
-                    if (mergeAngleDeg > Math.min(50, memberMaxAngleFromVerticalDeg())) {
+                    if (mergeAngleDeg > Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled))) {
                         logPlacement(
                             `Merge skip ${candidate.id}: angle too shallow (${mergeAngleDeg.toFixed(0)}° from vertical > 50°) span=${leafSpanMm.toFixed(1)}mm`);
                     } else try {
@@ -1373,7 +1381,7 @@ function placeOneCandidate(
                         );
                         if (!built) {
                             logPlacement(`Branch (merge) ${candidate.id}: collision, falling back`);
-                        } else if (branchDepartureAngleDeg(built.branch, knotPos) > memberMaxAngleFromVerticalDeg()) {
+                        } else if (branchDepartureAngleDeg(built.branch, knotPos) > Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled))) {
                             logPlacement(
                                 `Merge skip ${candidate.id}: shaft leaves the host too flat ` +
                                 `(${branchDepartureAngleDeg(built.branch, knotPos).toFixed(0)}° from vertical) span=${leafSpanMm.toFixed(1)}mm`);
@@ -1388,7 +1396,7 @@ function placeOneCandidate(
                                     built.branch.contactCone = applyExplicitTipCapToCone(built.branch.contactCone, cappedTip);
                                 }
                                 d = draftAddPrimitive(d, 'knots', parentKnot);
-                                built.branch.origin = candidate.source === 'overhang' ? 'overhang' : 'island';
+                                built.branch.origin = hostedOriginForSource(candidate.source);
                                 const memberTypeId = builtMemberTypeId(built.branch);
                                 d = draftAddEntity(d, memberTypeId, built.branch);
                                 const ma = (Math.atan2(hDist2, vDist2) * 180) / Math.PI;
@@ -1465,11 +1473,11 @@ function placeOneCandidate(
                     // ordinary fan leaves off it, not to strand a cavity tip.
                     CAVITY_FAN_RADIUS_MM,
                     CAVITY_FAN_RADIUS_MM,
-                    Math.min(auto.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG, memberMaxAngleFromVerticalDeg()),
+                    auto.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG,
                     auto.maxAttachmentsPerTrunk ?? 12,
                     draft,
                     mesh,
-                    candidate.source as SupportOrigin | undefined,
+                    hostedOriginForSource(candidate.source),
                     'steepest',
                     Number.POSITIVE_INFINITY,
                     undefined,
@@ -1499,18 +1507,16 @@ function placeOneCandidate(
             if (cavityResult) {
                 // Keep short cavity twigs but cap long bridges at 12mm; a
                 // rejected tip is reconsidered by fan/merge in a later pass.
-                // BUG (see docs/dev/support-registry-findings.md): the cap measures
-                // from `upper`, which the builder sorts to the tip, so the span
-                // is always ~0 and the cap has never rejected anything.
                 const entity = cavityResult.entity;
-                const upperField = contactEndpointsFor(cavityResult.kind)
-                    .find(({ end }) => end === 'upper')?.field;
-                const lower = upperField
-                    ? (entity as unknown as Record<string, { pos?: Vec3 } | undefined>)[upperField]?.pos
-                    : undefined;
-                const bridgeLen = lower
-                    ? Math.hypot(tipPos.x - lower.x, tipPos.y - lower.y, tipPos.z - lower.z)
-                    : null;
+                const record = entity as unknown as Record<string, { pos?: Vec3 } | undefined>;
+                let maxSpanMm = -1;
+                for (const { field } of contactEndpointsFor(cavityResult.kind)) {
+                    const p = record[field]?.pos;
+                    if (!p) continue;
+                    const d = Math.hypot(tipPos.x - p.x, tipPos.y - p.y, tipPos.z - p.z);
+                    if (d > maxSpanMm) maxSpanMm = d;
+                }
+                const bridgeLen = maxSpanMm >= 0 ? maxSpanMm : null;
 
                 if (bridgeLen !== null && bridgeLen > MAX_CAVITY_BRIDGE_MM) {
                     logPlacement(`Cavity ${cavityResult.kind} rejected (bridge ${bridgeLen.toFixed(1)}mm > ${MAX_CAVITY_BRIDGE_MM}mm) ${candidate.id}`);
@@ -1995,9 +2001,9 @@ export function rehostLegacyKnots(draft: SupportState, modelId?: string): Suppor
             let bestDist2 = Infinity;
             let bestT = 0;
             for (const seg of legacyHost.segments) {
-                const start = seg.bottomJoint?.pos ?? { x: 0, y: 0, z: 0 };
-                const end = seg.topJoint?.pos;
-                if (!end) continue;
+                const span = hostSegmentSpan(draft, legacyHost, seg);
+                if (!span) continue;
+                const { start, end } = span;
                 // Compute t of projection of knot.pos onto segment
                 const abx = end.x - start.x, aby = end.y - start.y, abz = end.z - start.z;
                 const apx = knot.pos.x - start.x, apy = knot.pos.y - start.y, apz = knot.pos.z - start.z;
@@ -2161,6 +2167,7 @@ export function syncContactConeDiameters(draft: SupportState, modelId?: string):
 interface ShaftHostedMemberEntity {
     id: string;
     modelId?: string;
+    origin?: SupportOrigin;
     contactCone?: ContactCone;
     segments: Segment[];
 }
@@ -2365,7 +2372,15 @@ export function validateAndCullOrphans(
             const culledHostId = host?.hostId ?? knot.parentShaftId;
             const culledTypeName = culledHostTypeNameById.get(culledHostId);
             if (culledTypeName) {
-                orphans.push({ id: memberId, kind: typeId, reason: 'missingHost', hostId: culledHostId, knotId: knot.id, detail: `${culledTypeName} culled (blocked)` });
+                orphans.push({
+                    id: memberId,
+                    kind: typeId,
+                    reason: 'missingHost',
+                    hostId: culledHostId,
+                    knotId: knot.id,
+                    detail: `${culledTypeName} culled (blocked)`,
+                    hostCulled: true,
+                });
                 removal.add(memberId);
             }
         }
@@ -2653,6 +2668,11 @@ export function fanLeafToHost(
             ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, tipDiameterMm)
             : undefined;
         if (Math.sqrt(dist2) > MAX_LEAF_SPAN_BEFORE_BRANCH_MM) {
+            const branchMaxAngleDeg = Math.min(50, maxAngleDeg);
+            if (angleDeg > branchMaxAngleDeg) {
+                lastBlockedReason = 'angle';
+                continue;
+            }
             try {
                 const band = activeSizingBand(autoSettings);
                 const built = buildHostedBranch(
@@ -2675,7 +2695,7 @@ export function fanLeafToHost(
                     lastBlockedReason = 'blocked';
                     continue;
                 }
-                if (branchDepartureAngleDeg(built.branch, parentKnot.pos) > maxAngleDeg) {
+                if (branchDepartureAngleDeg(built.branch, parentKnot.pos) > branchMaxAngleDeg) {
                     lastBlockedReason = 'angle';
                     continue;
                 }
@@ -2688,7 +2708,7 @@ export function fanLeafToHost(
                         built.branch.contactCone = applyExplicitTipCapToCone(built.branch.contactCone, cappedTip);
                     }
                     const next = draftAddPrimitive(draft, 'knots', parentKnot);
-                    built.branch.origin = origin === 'overhang' ? 'overhang' : 'island';
+                    built.branch.origin = origin ?? 'island';
                     const memberTypeId = builtMemberTypeId(built.branch);
                     return {
                         ok: true,
@@ -3008,9 +3028,11 @@ export function forestReportToText(report: ForestReport, autoSettings?: Partial<
             const maxFromVertical = memberMaxAngleFromVerticalDeg();
             const effectiveFan = Math.min(fanMaxDeg, maxFromVertical);
             const effectiveLink = Math.min(Math.max(fanMaxDeg, CONSOLIDATION_MAX_ANGLE_DEG), maxFromVertical);
+            const riseClause = maxFromVertical < 90
+                ? `Every member must rise ≥${90 - maxFromVertical}° above horizontal (grid.minBranchAngleDeg), so placement `
+                : `Placement `;
             lines.push(
-                `  (host trunk → its leaves/branches. Every member must rise ≥${90 - maxFromVertical}° above horizontal ` +
-                `(grid.minBranchAngleDeg), so placement fans ≤${effectiveFan}° from vertical within 5mm ` +
+                `  (host trunk → its leaves/branches. ${riseClause}fans ≤${effectiveFan}° from vertical within 5mm ` +
                 `(2.5mm for grid hosts) and chunk-consolidation links ≤${effectiveLink}° within ` +
                 `${CONSOLIDATION_FAN_RADIUS_MM}mm; cap ${cap} members per host. ` +
                 `each member's own Ø (a branch's widest segment, a leaf's cone body) follows its span/angle; ` +
@@ -3577,7 +3599,7 @@ export function computeAutoSupportPlan(
     const conFanRadiusMm = Math.max(autoSettings.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM, CONSOLIDATION_FAN_RADIUS_MM);
     const conFanMaxAngleDeg = Math.min(
         Math.max(autoSettings.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG, CONSOLIDATION_MAX_ANGLE_DEG),
-        memberMaxAngleFromVerticalDeg(),
+        memberMaxAngleFromVerticalDeg(Boolean(gridEnabled)),
     );
     let consolidated = 0;
     // Reused per attempt: the pillar being converted is the host that must not
@@ -3627,6 +3649,7 @@ export function computeAutoSupportPlan(
             excludeHostId.clear();
             excludeHostId.add(hostId);
             const explicitTipCapMm = entity.contactCone?.profile?.maxContactDiameterMm;
+            const consolidatedOrigin: SupportOrigin = entity.origin === 'reinforcement' ? 'reinforcement' : 'overhang';
             const fan = fanLeafToHost(
                 tip,
                 modelId,
@@ -3639,7 +3662,7 @@ export function computeAutoSupportPlan(
                 autoSettings.maxAttachmentsPerTrunk,
                 draft,
                 resolvedMesh ?? undefined,
-                'overhang',
+                consolidatedOrigin,
                 'nearest',
                 undefined,
                 excludeHostId,
@@ -3670,6 +3693,8 @@ export function computeAutoSupportPlan(
                         excludeHostIds: excludeHostId,
                         autoSettings,
                         tipDiameterMm: explicitTipCapMm,
+                        gridEnabled: Boolean(gridEnabled),
+                        origin: consolidatedOrigin,
                     })
                     : null;
                 if (branchResult) {
@@ -3740,12 +3765,7 @@ export function computeAutoSupportPlan(
     // iterating until the coverage target is met or nothing more places.
     let gapFilledTrunks = 0;
     for (let pass = 0; pass < MAX_GAP_FILL_PASSES; pass++) {
-        // Reads the committed store, not the draft: the run's own supports are
-        // not counted here. Left as-is deliberately (a worker seeds the store
-        // with the pre-run state so it matches the main thread); switching to
-        // `draft` converges properly and moves placement by one twig on the
-        // signature fixture. See docs/dev/backlog.md.
-        const tips = collectSupportTips(before, modelId);
+        const tips = collectSupportTips(draft, modelId);
         const gapCandidates = buildGapFillCandidates(overhangIslands, autoSettings, tips)
             .map((c): CandidatePoint => ({ ...c, modelId }));
         if (gapCandidates.length === 0) break;
@@ -3884,7 +3904,7 @@ export function computeAutoSupportPlan(
     const fanRadiusMm = Math.max(MIN_LEAF_FAN_RADIUS_MM, autoSettings.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM);
     const fanMaxAngleDeg = Math.min(
         autoSettings.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG,
-        memberMaxAngleFromVerticalDeg(),
+        memberMaxAngleFromVerticalDeg(Boolean(gridEnabled)),
     );
 
     console.log(LOG_PREFIX,
@@ -3983,7 +4003,7 @@ export function computeAutoSupportPlan(
             console.log(LOG_PREFIX,
                 `Leaf fanning pass ${pass}: 0 leaves — ` +
                 `${skippedDist} too far (>${fanRadiusMm}mm), ` +
-                `${skippedAngle} angle too steep (>${LEAF_FAN_MAX_ANGLE_DEG}°), ` +
+                `${skippedAngle} angle too steep (>${fanMaxAngleDeg}°), ` +
                 `${skippedSameZ} same Z (can't attach), ` +
                 `${skippedCross} crossing another support, ` +
                 `${skippedOther} blocked/build/capacity.`);
@@ -4009,14 +4029,23 @@ export function computeAutoSupportPlan(
     const COVERAGE_STUB_REACH_MM = Math.max(MIN_LEAF_FAN_RADIUS_MM, autoSettings.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM);
     // Host shafts for the stubs, sampled once. The host set is stable here:
     // the pass only adds branches.
-    const stubHosts: Array<{ hostTypeId: SupportTypeId; hostId: string; pos: { x: number; y: number; z: number }; diameter: number }> = [];
+    const stubHosts: Array<{ hostTypeId: SupportTypeId; hostId: string; segmentId: string; t: number; pos: { x: number; y: number; z: number }; diameter: number }> = [];
     for (const { hostTypeId, hostId, entity } of collectHostEntities(draft)) {
         // Stubs hang off this model's hosts only, like every other fan.
         if (entity.modelId !== modelId) continue;
         const lastSeg = entity.segments[entity.segments.length - 1];
-        const knotPos = lastSeg?.topJoint?.pos ?? entity.contactCone?.pos;
+        if (!lastSeg) continue;
+        const span = hostSegmentSpan(draft, entity, lastSeg);
+        const knotPos = span?.end ?? lastSeg.topJoint?.pos ?? entity.contactCone?.pos;
         if (!knotPos) continue;
-        stubHosts.push({ hostTypeId, hostId, pos: knotPos, diameter: lastSeg?.diameter ?? 1.0 });
+        stubHosts.push({
+            hostTypeId,
+            hostId,
+            segmentId: lastSeg.id,
+            t: 1,
+            pos: knotPos,
+            diameter: lastSeg.diameter ?? 1.0,
+        });
     }
 
     for (const island of islands) {
@@ -4102,7 +4131,8 @@ export function computeAutoSupportPlan(
                     // host (the "dozens of branches on one host" report).
                     const parentKnot = {
                         id: `auto-overhang-${host.hostId}-${island.id}-${r}-${c}`,
-                        parentShaftId: host.hostId,
+                        parentShaftId: host.segmentId,
+                        t: host.t,
                         pos: host.pos,
                         diameter: host.diameter + 0.1,
                     };
@@ -4188,17 +4218,17 @@ export function computeAutoSupportPlan(
 
     if (changed) {
         try {
-            const resized = computeForestDiameterProfile(draft, modelId);
-            if (resized !== draft) {
-                draft = resized;
-                console.log(LOG_PREFIX, 'Forest resize pass applied (attachment-loaded trunks thickened).');
-            }
             // Legacy fan knots used trunkId as parentShaftId — rehost to the nearest segment so
             // diameter demands and drift checks use segment ids.
             const rehosted = rehostLegacyKnots(draft, modelId);
             if (rehosted !== draft) {
                 draft = rehosted;
                 console.log(LOG_PREFIX, 'Legacy knot rehost: entity id → segment id');
+            }
+            const resized = computeForestDiameterProfile(draft, modelId);
+            if (resized !== draft) {
+                draft = resized;
+                console.log(LOG_PREFIX, 'Forest resize pass applied (attachment-loaded trunks thickened).');
             }
             // Post-resize validation: drift (>0.5mm), cross after thickening, or missing host.
             // This is where the "leaf attached to nowhere" shows up in the report.
@@ -4215,11 +4245,15 @@ export function computeAutoSupportPlan(
                     // standard placement (merge/fan/trunk decide fresh). Single
                     // pass; re-placed members are not themselves re-queued.
                     const requeue = culled.orphans.filter((o) =>
-                        o.reason === 'missingHost' && (o.detail ?? '').includes('host trunk culled'));
+                        o.reason === 'missingHost' && o.hostCulled === true);
                     if (requeue.length > 0) {
                         let replaced = 0;
                         for (const o of requeue) {
-                            const member = preCullDraft.leaves[o.id] ?? preCullDraft.branches[o.id];
+                            let member: ShaftHostedMemberEntity | undefined;
+                            for (const { collectionKey } of SHAFT_HOSTED_MEMBER_TYPES) {
+                                member = hostedMemberEntities(preCullDraft, collectionKey)[o.id];
+                                if (member) break;
+                            }
                             const cone = member?.contactCone;
                             if (!member || !cone?.pos || member.modelId !== modelId) continue;
                             const recandidate: CandidatePoint = {
@@ -4227,7 +4261,7 @@ export function computeAutoSupportPlan(
                                 tipPos: cone.pos,
                                 tipNormal: cone.surfaceNormal ?? cone.normal,
                                 modelId: member.modelId,
-                                source: member.origin === 'overhang' ? 'overhang' : 'voxel',
+                                source: member.origin === 'overhang' ? 'overhang' : member.origin === 'reinforcement' ? 'reinforcement' : 'voxel',
                                 islandAreaMm2: 0.05,
                                 zHeight: cone.pos.z,
                                 priority: 0,
@@ -4274,6 +4308,23 @@ export function computeAutoSupportPlan(
                 }
             } catch (e) {
                 console.warn(LOG_PREFIX, `Orphan validation failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+            }
+
+            // Reconcile `placed` strictly from actual surviving run-created entities
+            // so culled supports are subtracted, non-deleted `cross` warnings stay
+            // counted, and pre-existing `before` supports never pollute run totals.
+            for (const descriptor of SUPPORT_STATE_TYPES) {
+                if (!descriptor.isAutoPlaced) continue;
+                const key = descriptor.location.key;
+                const beforeColl = (before[key] ?? {}) as Record<string, unknown>;
+                const finalColl = (draft[key] ?? {}) as Record<string, { modelId?: string }>;
+                let netRunCount = 0;
+                for (const [id, ent] of Object.entries(finalColl)) {
+                    if (id in beforeColl) continue;
+                    if (ent.modelId !== modelId) continue;
+                    netRunCount++;
+                }
+                placed[descriptor.id] = netRunCount;
             }
 
             // Cone/shaft sync: the resize and merge passes thicken shafts and
