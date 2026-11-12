@@ -44,6 +44,7 @@ mdns-sd = "0.11"
 tungstenite = "0.24"
 base64 = "0.22"
 sha2 = "0.10"
+md-5 = "0.10"
 tokio = { version = "1", features = ["sync", "fs", "time", "rt"] }
 tokio-util = { version = "0.7", features = ["io"] }
 futures-util = "0.3"

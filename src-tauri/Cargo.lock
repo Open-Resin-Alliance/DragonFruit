@@ -1657,6 +1657,7 @@ dependencies = [
  "if-addrs",
  "libloading 0.8.9",
  "log",
+ "md-5",
  "mdns-sd",
  "memmap2",
  "meshopt",
