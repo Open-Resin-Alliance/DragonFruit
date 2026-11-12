@@ -698,7 +698,15 @@ things the target does **not** cover:
   raising `lib`.
 - **Web APIs.** `DecompressionStream` (Safari 16.4) goes through
   `src/utils/inflateZlib.ts`, which inflates synchronously with `fflate` where
-  it is missing.
+  it is missing. `tsc` cannot see these: the DOM `lib` is not versioned.
+  `CanvasRenderingContext2D.roundRect` and `AbortSignal.timeout` (both Safari
+  16.0) are polyfilled where missing by `src/utils/legacyWebKitPolyfills.ts`,
+  installed from `src/instrumentation-client.ts` before any app or plugin
+  code; add to it rather than guarding each call site. Feature-detect anything
+  newer than Safari 15.6 (`requestIdleCallback` is missing from every Safari).
+  Known gap: the printing preview sizes itself with `cqw`/`cqh` (Safari 16.0),
+  which macOS 12 ignores, so the preview there keeps the full width and may
+  not keep its aspect ratio.
 
 The macOS line of the log's `[header]` names the WebKit the process loaded,
 with its path. Lift this rule when `minimumSystemVersion` moves to 14.4.
