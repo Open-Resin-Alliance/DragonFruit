@@ -246,6 +246,14 @@ sets `target` plus `anchorNdc` to the press point's own pixel.
   pins: a pivot already on its pixel reproduces the pose, the pixel survives the
   whole orbit, the horizon stays level, and the along-up degenerate case is
   refused.
+- **Another owner of the camera re-anchors the pivot, it does not drop it.**
+  A SpaceMouse gesture, a Home reset or a mode framing can move the orbit target
+  while the controls are disabled. On release, resuming the old pixel would swing
+  the camera to put the new target under it — the jump users saw. `CursorOrbitPivot`
+  re-anchors on wherever the target now projects while the controls are someone
+  else's, which is the same no-op invariant as a pick (see `anchoredAim`'s "a pivot
+  already on its pixel reproduces the pose"). Panning never enters that path: it is
+  this control's own target sliding, and the anchor travels with it.
 - **The anchor is the pivot's own pixel, not the pointer's.** Both are the same
   place for a surface hit, but off the model the pivot is the model centre or the
   plate, which sit somewhere else on screen: anchoring those to the pointer would

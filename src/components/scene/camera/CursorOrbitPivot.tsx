@@ -1,6 +1,7 @@
 "use client";
 import React from 'react';
 import * as THREE from 'three';
+import { useFrame } from '@react-three/fiber';
 import type { PivotOrbitControls } from './orbitControlsPivot';
 
 /**
@@ -35,6 +36,28 @@ const _forward = new THREE.Vector3();
 const _toPivot = new THREE.Vector3();
 const _projected = new THREE.Vector3();
 const TARGET_EPSILON_SQ = 1e-6;
+
+/**
+ * Point the control's anchor at the pixel `pivot` already occupies.
+ *
+ * Anchoring on the pivot rather than on the pointer is what makes adoption a
+ * no-op: a surface hit puts the two in the same place, and every other pivot
+ * (the model centre, the plate, a target another owner just re-seated) keeps the
+ * view exactly where it is instead of swinging to centre it.
+ */
+function anchorAtPivot(
+  controls: PivotOrbitControls,
+  camera: THREE.Camera,
+  pivot: THREE.Vector3,
+): boolean {
+  camera.updateMatrixWorld();
+  const projected = _projected.copy(pivot).project(camera);
+  if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || projected.z >= 1) {
+    return false;
+  }
+  controls.anchorNdc.set(projected.x, projected.y);
+  return true;
+}
 
 export function CursorOrbitPivot({
   active,
@@ -91,22 +114,14 @@ export function CursorOrbitPivot({
           camera.updateMatrixWorld();
         }
       }
-      // Anchor the pivot where it already is, not where the pointer is. A
-      // surface hit puts the two in the same place, but the fallback pivots (the
-      // model centre, the plate) sit somewhere else on screen: anchoring those to
-      // the pointer would swing the view to bring them under the cursor.
       const cameraForAnchor = cameraRef.current;
-      let anchorX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      let anchorY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-      if (cameraForAnchor) {
-        cameraForAnchor.updateMatrixWorld();
-        const projected = _projected.copy(pivot).project(cameraForAnchor);
-        if (Number.isFinite(projected.x) && Number.isFinite(projected.y) && projected.z < 1) {
-          anchorX = projected.x;
-          anchorY = projected.y;
-        }
+      if (!(cameraForAnchor && anchorAtPivot(controls, cameraForAnchor, pivot))) {
+        // No usable projection: fall back to the press pixel.
+        controls.anchorNdc.set(
+          ((event.clientX - rect.left) / rect.width) * 2 - 1,
+          -((event.clientY - rect.top) / rect.height) * 2 + 1,
+        );
       }
-      controls.anchorNdc.set(anchorX, anchorY);
       pickedRef.current.copy(pivot);
       pickedRefValid.current = true;
       setOrbitTargetFromPoint(pivot, { animate: false });
@@ -134,6 +149,26 @@ export function CursorOrbitPivot({
     pickedRefValid.current = false;
     controlsRef.current?.anchorNdc.set(0, 0);
   }, [active, controlsRef]);
+
+  // Another owner of the camera — a SpaceMouse gesture, a home/mode framing — can
+  // move the orbit target while the controls are disabled. Resuming the old pixel
+  // after that swings the camera to put the new target under it: the jump on
+  // release. Re-anchor on wherever the target ended up, which is a no-op for the
+  // view and keeps the pivot. Panning never gets here: it is this control's own
+  // target sliding, and the anchor is meant to travel with it.
+  useFrame(() => {
+    const controls = controlsRef.current;
+    const camera = cameraRef.current;
+    if (!active || !controls || !camera || !pickedRefValid.current) return;
+    if (controls.enabled) return;
+
+    _target.copy(controls.target);
+    if (_target.distanceToSquared(pickedRef.current) <= TARGET_EPSILON_SQ) return;
+
+    if (anchorAtPivot(controls, camera, _target)) {
+      pickedRef.current.copy(_target);
+    }
+  });
 
   return null;
 }
