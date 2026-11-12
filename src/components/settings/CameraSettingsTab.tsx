@@ -237,16 +237,19 @@ export function CameraSettingsTab({
           bordered
           className="mt-2"
           label="Orbit pivot"
-          description="What a right-drag orbit turns around. The cursor takes the point under the pointer — the model surface, or the build plate — instead of the view centre."
+          description="What a right-drag turns around."
         >
-          <SegmentedControl
-            label="Orbit pivot"
+          <SelectDropdown<CameraOrbitPivot>
             value={cameraOrbitPivot}
-            onChange={(next) => onCameraOrbitPivotChange(next as CameraOrbitPivot)}
             options={[
               { value: 'view-center', label: 'View centre' },
               { value: 'cursor', label: 'Cursor' },
             ]}
+            onChange={(next) => onCameraOrbitPivotChange(next)}
+            ariaLabel="Orbit pivot"
+            title="Orbit pivot"
+            className="w-36"
+            menuAlign="right"
           />
         </SettingRow>
       </section>
