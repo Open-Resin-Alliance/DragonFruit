@@ -88,6 +88,54 @@ export function resinVolumeGeometryInputs(geometry: BufferGeometry): ResinVolume
 }
 
 /**
+ * One triangle's contribution to the signed volume, the divergence-theorem sum
+ * around the origin. Positive for outward-facing winding.
+ */
+function signedTetraVolume(
+  ax: number, ay: number, az: number,
+  bx: number, by: number, bz: number,
+  cx: number, cy: number, cz: number,
+): number {
+  return (
+    ax * (by * cz - bz * cy)
+    - ay * (bx * cz - bz * cx)
+    + az * (bx * cy - by * cx)
+  ) / 6;
+}
+
+/**
+ * The enclosed volume of a geometry in mm³, without yielding.
+ *
+ * For the small meshes the app builds itself (the raft's base, wall and line
+ * beams), which are the same triangles the slicer gets. A model's own geometry
+ * goes through `computeModelBaseResinMl`, which yields so an import does not
+ * freeze the frame.
+ */
+export function geometryVolumeMm3(geometry: BufferGeometry): number {
+  const position = geometry.getAttribute('position') as unknown as ResinVolumePositionAttribute | undefined;
+  if (!position) return 0;
+  const index = geometry.getIndex() as unknown as ResinVolumeIndexAttribute | null;
+
+  let signedVolume = 0;
+
+  const addTriangle = (ia: number, ib: number, ic: number) => {
+    signedVolume += signedTetraVolume(
+      position.getX(ia), position.getY(ia), position.getZ(ia),
+      position.getX(ib), position.getY(ib), position.getZ(ib),
+      position.getX(ic), position.getY(ic), position.getZ(ic),
+    );
+  };
+
+  if (index) {
+    for (let i = 0; i < index.count; i += 3) addTriangle(index.getX(i), index.getX(i + 1), index.getX(i + 2));
+  } else {
+    for (let i = 0; i < position.count; i += 3) addTriangle(i, i + 1, i + 2);
+  }
+
+  return Math.abs(signedVolume);
+}
+
+/**
  * The enclosed volume of one geometry in millilitres, or null when the sum is not
  * a finite number (a mesh with NaN coordinates).
  */
@@ -97,26 +145,12 @@ export async function computeModelBaseResinMl(
 ): Promise<number | null> {
   let signedVolume = 0;
 
-  const vax = { x: 0, y: 0, z: 0 };
-  const vbx = { x: 0, y: 0, z: 0 };
-  const vcx = { x: 0, y: 0, z: 0 };
-
-  const readVertex = (i: number, out: { x: number; y: number; z: number }) => {
-    out.x = position.getX(i);
-    out.y = position.getY(i);
-    out.z = position.getZ(i);
-  };
-
   const addTriangle = (ia: number, ib: number, ic: number) => {
-    readVertex(ia, vax);
-    readVertex(ib, vbx);
-    readVertex(ic, vcx);
-
-    signedVolume += (
-      vax.x * (vbx.y * vcx.z - vbx.z * vcx.y)
-      - vax.y * (vbx.x * vcx.z - vbx.z * vcx.x)
-      + vax.z * (vbx.x * vcx.y - vbx.y * vcx.x)
-    ) / 6;
+    signedVolume += signedTetraVolume(
+      position.getX(ia), position.getY(ia), position.getZ(ia),
+      position.getX(ib), position.getY(ib), position.getZ(ib),
+      position.getX(ic), position.getY(ic), position.getZ(ic),
+    );
   };
 
   let processedTriangles = 0;

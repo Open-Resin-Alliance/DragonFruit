@@ -11,8 +11,12 @@ three separate places used to compute it and only one of them agreed.
 | Part | Module | Method |
 | --- | --- | --- |
 | Model volume | `src/features/printing/modelResinVolume.ts` | Signed tetrahedron sum of the mesh (the divergence theorem), in the geometry's own coordinates, ÷ 1000 for millilitres. |
-| Support and raft volume | `src/features/printing/supportResinVolume.ts` | `computeSupportAndRaftResinMl` — analytic primitives (root disk, frustum cone, sphere cap, contact cone/disk, brace chord) plus the raft footprint. `computePlateAndSceneSupportResinMl` composes it for one plate and for the scene. |
+| Support volume | `src/features/printing/supportResinVolume.ts` | Analytic primitives, each mirroring the shape the slicer emits: root disk and cone, joint spheres (deduped by joint id), shaft cylinders along their own polyline, contact cones at their authored profile, disk contacts as cylinder plus tip sphere, braces at the diameter their host knots give them, anchors at their inline root. |
+| Raft volume | same module, via `buildRaftMeshesForCircles` | Not approximated: the exporter's own meshes (chamfered base, crenelated or perimeter wall, line-mode beam network) are built and their triangles measured. |
 | Money, layer count, print time | `src/app/page.tsx` | Not volume, but shown in the same card; the volume only feeds the cost line. |
+
+`computePlateAndSceneSupportResinMl` composes the support and raft halves for one
+plate and for the scene.
 
 `modelResinVolume.ts` exposes the whole model-side surface:
 
@@ -65,6 +69,22 @@ state: nothing renders differently while it is pending.
 
 Base model volume is estimated in the background across every editable workspace, so
 the export and printing figures are warm when the user gets there.
+
+## How accurate it is
+
+`supportResinVolumeParity.test.ts` hands the same support state to
+`buildSupportAndRaftWorldTriangles` — the function that produces the triangles the
+slicer slices — and compares the estimate with the volume of those triangles. The
+estimate is a few percent above them, and the reason is detail, not shape: the
+exporter tessellates (a 14-sided root, 12-sided shafts, a polyhedral joint sphere,
+fewer sides in a dense scene), while the analytic primitives measure true circles.
+The comparison is therefore held at 5%; a structural miss (a missing wall, a chamfer,
+a beam network, a root cap the slicer does not print) lands far outside it.
+
+What the estimate still cannot know before a slice is the output-side shaping: the
+anti-aliasing tip shrink (`supportTipShrinkPercent`) and the material's tip
+penetration, both resolved from the active profiles at export time. Contacts are
+measured at their authored size.
 
 ## What this estimate is not
 

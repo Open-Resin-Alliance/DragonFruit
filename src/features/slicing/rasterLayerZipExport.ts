@@ -12,12 +12,9 @@ import {
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
-import { buildRaftFootprintMeshes } from '@/supports/Rafts/Crenelated/geometry/generateRaftFromFootprint';
 import { collectModelPlateFootprint, type PlateFootprintSource } from '@/supports/Rafts/Crenelated/geometry/modelPlateFootprint';
-import { inflateModelPlateClearance, raftBandTopMm } from '@/supports/Rafts/Crenelated/geometry/computeRaftFootprint';
-import { filterLineRaftEdges, generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
-import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBeam';
-import { buildLineRaftEdgePairs } from '@/supports/Rafts/Crenelated/geometry/buildLineRaftEdgePairs';
+import { raftBandTopMm } from '@/supports/Rafts/Crenelated/geometry/computeRaftFootprint';
+import { buildRaftMeshesForCircles } from '@/supports/Rafts/Crenelated/geometry/buildRaftMeshesForCircles';
 import type { ContactDisk, Segment, SupportState, Vec3 } from '@/supports/types';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
@@ -819,8 +816,6 @@ export function buildSupportAndRaftWorldTriangles(
   const sink: TriangleSink = collector ?? out;
   const tipScale = 1 - supportTipShrinkPercent / 100;
   const raftSettings = getRaftSettings();
-  const hasSolidBottom = raftSettings.bottomMode === 'solid';
-  const raftThickness = raftSettings.thickness;
   const tessellation = resolveSupportSliceTessellation(supportState, supportState);
   const segmentTessellation = {
     shaftRadialSegments: tessellation.shaftRadialSegments,
@@ -1044,62 +1039,14 @@ export function buildSupportAndRaftWorldTriangles(
       plateClearanceModels,
       raftBandTopMm(raft),
     );
-    const clearanceCut = inflateModelPlateClearance(clearance);
 
     for (const circles of rootsByModel.values()) {
       if (circles.length === 0) continue;
 
-      const parts = buildRaftFootprintMeshes({ circles, raft, clearance });
-      if (!parts.baseMesh && parts.footprint.length === 0) continue;
-
-      if (parts.baseMesh) {
-        appendGeometryTriangles(sink, parts.baseMesh.geometry);
-      } else if (raft.bottomMode === 'line') {
-        const nodes2d = circles.map((c) => new THREE.Vector2(c.x, c.y));
-        const hasBorderRing = parts.footprint.length > 0;
-        const edgePairs = buildLineRaftEdgePairs(nodes2d, {
-          hasBorderRing,
-          keepFactor: 8,
-          absMaxLen: 220,
-          enforceConnected: true,
-        });
-
-        const beamHeight = Math.max(0.01, raft.lineHeightMm);
-
-        // Beams a model on the plate is in the way of are never drawn: cutting them
-    // would leave severed ends to close up again, and two clusters either side of
-    // a model should stay two clusters.
-    const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = filterLineRaftEdges(
-      edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]),
-      clearanceCut,
-      raft.lineWidthMm,
-    );
-        const unionMesh = generateUnionedLineRaftMesh(unionEdges, {
-          widthMm: raft.lineWidthMm,
-          heightMm: beamHeight,
-          borderProfile: null,
-        });
-
-        const unionPositionAttribute = unionMesh.geometry.getAttribute('position');
-        const unionHasGeometry = !!unionPositionAttribute && unionPositionAttribute.count > 0;
-        if (unionHasGeometry) {
-          appendGeometryTriangles(sink, unionMesh.geometry);
-        } else {
-          for (const [a, b] of unionEdges) {
-            const start = new THREE.Vector3(a.x, a.y, 0);
-            const end = new THREE.Vector3(b.x, b.y, 0);
-            const beam = generateChamferedBeam(start, end, {
-              widthMm: raft.lineWidthMm,
-              heightMm: beamHeight,
-              chamferAngleDeg: 90,
-            });
-            appendGeometryTriangles(sink, beam.geometry);
-          }
-        }
-      }
-
-      if (parts.wallMesh) {
-        appendGeometryTriangles(sink, parts.wallMesh.geometry);
+      // The one raft builder: base (or line beams) then wall, as the estimate
+      // measures them. A model in the way drops whole beams, never cuts them.
+      for (const mesh of buildRaftMeshesForCircles({ circles, raft, clearance })) {
+        appendGeometryTriangles(sink, mesh.geometry);
       }
     }
   }
