@@ -223,10 +223,19 @@ export function CameraFocusHotkeyController({
     if (typeof prevDamping === 'boolean') controls.enableDamping = false;
     if (typeof prevEnabled === 'boolean') controls.enabled = false;
 
+    // Start from the point the camera is *looking at*, not from `controls.target`:
+    // the two differ whenever a cursor pivot holds the target off the screen's
+    // middle, and starting from the target would snap the aim before the transition
+    // began. Aiming at the look point reproduces the current orientation exactly, so
+    // the view rotates to the new centre instead of jumping.
+    const startLookPoint = camera.position
+      .clone()
+      .addScaledVector(camera.getWorldDirection(new THREE.Vector3()), currentRadius);
+
     transitionRef.current = {
       startPos: camera.position.clone(),
       endPos,
-      startTarget: controls.target.clone(),
+      startTarget: startLookPoint,
       endTarget,
       startTime: null,
       // The caller can stretch the slide: a far pan benefits from a longer, calmer
