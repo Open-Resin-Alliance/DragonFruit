@@ -274,8 +274,6 @@ export function computeSupportAndRaftResinMl({
     for (const circles of rootsByModel.values()) {
       if (circles.length === 0) continue;
 
-      const thickness = raftSettings.bottomMode === 'line' ? raftSettings.lineHeightMm : raftSettings.thickness;
-
       const footprint = computeRaftFootprintPolygons({
         circles,
         raft: raftSettings,
@@ -308,4 +306,49 @@ export function computeSupportAndRaftResinMl({
   }
 
   return supportMl + raftMl;
+}
+
+export interface PlateAndSceneSupportResinInput {
+  supportState: SupportCollections;
+  raftSettings: RaftSettings;
+  /** Every model that counts, on every plate: visible and inside its build volume. */
+  resinModelIds: ReadonlySet<string>;
+  /** The models on the plate being worked on: layer count, time and resin are its own. */
+  activePlateModelIds: ReadonlySet<string>;
+  /** Visible models on the active plate; the raft is trimmed where they stand. */
+  activePlateModels: readonly PlateFootprintSource[];
+  /** Every visible model in the scene, for the scene-wide raft clearance. */
+  sceneModels: readonly PlateFootprintSource[];
+}
+
+/**
+ * Support and raft resin for the plate being worked on, and for the whole scene.
+ *
+ * The per-plate figure intersects the two id sets itself: a plate's resin is the
+ * supports and raft of the models standing on it, and a caller that handed the
+ * scene-wide set to the per-plate sum made a plate report its neighbour's raft.
+ */
+export function computePlateAndSceneSupportResinMl({
+  supportState,
+  raftSettings,
+  resinModelIds,
+  activePlateModelIds,
+  activePlateModels,
+  sceneModels,
+}: PlateAndSceneSupportResinInput): { activePlate: number; scene: number } {
+  const activePlateResinModelIds = new Set([...resinModelIds].filter((id) => activePlateModelIds.has(id)));
+  return {
+    activePlate: computeSupportAndRaftResinMl({
+      supportState,
+      raftSettings,
+      visibleModelIds: activePlateResinModelIds,
+      plateModels: activePlateModels,
+    }),
+    scene: computeSupportAndRaftResinMl({
+      supportState,
+      raftSettings,
+      visibleModelIds: resinModelIds,
+      plateModels: sceneModels,
+    }),
+  };
 }

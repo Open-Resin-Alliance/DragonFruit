@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { computeSupportAndRaftResinMl } from '../supportResinVolume';
+import { computePlateAndSceneSupportResinMl, computeSupportAndRaftResinMl } from '../supportResinVolume';
 import { DEFAULT_RAFT_SETTINGS } from '@/supports/Rafts/Crenelated/RaftDefaults';
 import { createEmptySupportCollections } from '@/supports/supportTypeRegistry';
 import type { Roots, SupportCollections, Trunk } from '@/supports/types';
@@ -97,4 +97,36 @@ test('a solid raft adds resin under the roots', () => {
     const without = computeSupportAndRaftResinMl({ ...args, raftSettings: RAFT_OFF });
     const withRaft = computeSupportAndRaftResinMl({ ...args, raftSettings: DEFAULT_RAFT_SETTINGS });
     assert.ok(withRaft > without, `raft ${withRaft} vs ${without}`);
+});
+
+test('a plate counts its own supports; the scene figure counts every plate', () => {
+    const state = supportsWith([createRoot('a', 'model-a', 0), createRoot('b', 'model-b', 20)]);
+    const { activePlate, scene } = computePlateAndSceneSupportResinMl({
+        supportState: state,
+        raftSettings: RAFT_OFF,
+        resinModelIds: new Set(['model-a', 'model-b']),
+        activePlateModelIds: new Set(['model-a']),
+        activePlateModels: [],
+        sceneModels: [],
+    });
+
+    const oneRoot = rootMl(3, 0.5, 0.5, 3 * 0.35);
+    // The root on the other plate must not reach the active plate's figure.
+    assert.ok(Math.abs(activePlate - oneRoot) < 1e-9, `active plate got ${activePlate}`);
+    assert.ok(Math.abs(scene - 2 * oneRoot) < 1e-9, `scene got ${scene}`);
+});
+
+test('the plate being worked on is the one whose models are in its set', () => {
+    const state = supportsWith([createRoot('b', 'model-b', 20)]);
+    const { activePlate, scene } = computePlateAndSceneSupportResinMl({
+        supportState: state,
+        raftSettings: RAFT_OFF,
+        resinModelIds: new Set(['model-b']),
+        activePlateModelIds: new Set(['model-a']),
+        activePlateModels: [],
+        sceneModels: [],
+    });
+
+    assert.equal(activePlate, 0);
+    assert.ok(scene > 0, `scene got ${scene}`);
 });

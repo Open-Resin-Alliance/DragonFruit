@@ -392,7 +392,12 @@ import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/c
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
-import { computeSupportAndRaftResinMl } from '@/features/printing/supportResinVolume';
+import { computePlateAndSceneSupportResinMl } from '@/features/printing/supportResinVolume';
+import {
+  computeModelBaseResinMl,
+  resinVolumeGeometryInputs,
+  scaleResinMl,
+} from '@/features/printing/modelResinVolume';
 import { getSupportsForModel, modelIdOfParentShaft } from '@/supports/PlacementLogic/SupportModelLinker';
 import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayerZipExport';
 import { resolveCompositeMaterialLabel, resolveMaterialFamilyNameLabel } from '@/utils/materialLabel';
@@ -693,6 +698,13 @@ const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
 const DEFAULT_RELAY_AUTORETRY_LIMIT = 2;
 const DEFAULT_RELAY_AUTORETRY_DELAY_MS = 1200;
 const RESIN_ESTIMATE_BACKGROUND_REFRESH_MS = 12_000;
+/**
+ * Deferral for the support/raft resin aggregation. It walks every support and
+ * unions the raft footprint, so running it inside the render of the Support
+ * workspace would block every edit; a burst of support writes collapses into
+ * one pass once the forest settles.
+ */
+const SUPPORT_RESIN_ESTIMATE_DEBOUNCE_MS = 250;
 
 function readRemoteOfflineLayerHeightSnapshotMm(): number | null {
   if (typeof window === 'undefined') return null;
@@ -2759,7 +2771,10 @@ export default function Home() {
   // collections snapshot is identity-cached, so an edit still invalidates it.
   const supportMenuSelectedId = React.useSyncExternalStore(subscribeSupportState, getSelectedId, getSelectedId);
   const supportMenuSelectedCategory = React.useSyncExternalStore(subscribeSupportState, getSelectedCategory, getSelectedCategory);
-  const supportMenuCollections = React.useSyncExternalStore(
+  // Live in every workspace, including Support — where `supportStateSnapshot`
+  // stays empty so the page does not follow every support edit. The menu and the
+  // resin estimate are the two readers that need the collections there too.
+  const liveSupportCollections = React.useSyncExternalStore(
     subscribeSupportState,
     getHomeSupportCollectionsSnapshot,
     getHomeSupportCollectionsSnapshot,
@@ -2770,9 +2785,9 @@ export default function Home() {
     return {
       selectedId,
       selectedCategory: supportMenuSelectedCategory,
-      isBraceSelected: Boolean(selectedId && supportMenuCollections.braces[selectedId]),
+      isBraceSelected: Boolean(selectedId && liveSupportCollections.braces[selectedId]),
     };
-  }, [supportMenuSelectedId, supportMenuSelectedCategory, supportMenuCollections]);
+  }, [supportMenuSelectedId, supportMenuSelectedCategory, liveSupportCollections]);
 
   const supportsCanToggleCurve = React.useMemo(() => {
     if (scene.mode !== 'support') return false;
@@ -2788,7 +2803,7 @@ export default function Home() {
     // The collections are read through a helper, not named here: the lookup is
     // the invalidation this memo needs, and a support edit is what moves it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorContextMenuSupportTarget?.segmentId, supportMenuCollections]);
+  }, [editorContextMenuSupportTarget?.segmentId, liveSupportCollections]);
 
   const supportsCanAddJoint = React.useMemo(() => {
     if (scene.mode !== 'support') return false;
@@ -3257,93 +3272,10 @@ export default function Home() {
     return fmt.quantity(bytes / (1024 * 1024), 2, 'MB');
   }, [printingArtifact, fmt]);
 
-  const yieldResinEstimateToMainThread = React.useCallback(async () => {
-    await new Promise<void>((resolve) => {
-      if (typeof window !== 'undefined' && typeof (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback === 'function') {
-        (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback?.(() => resolve(), { timeout: 16 });
-        return;
-      }
-      setTimeout(resolve, 0);
-    });
-  }, []);
-
-  const computeBaseResinMlChunked = React.useCallback(async (
-    position: { getX: (i: number) => number; getY: (i: number) => number; getZ: (i: number) => number; count: number },
-    index: { getX: (i: number) => number; count: number } | null,
-  ): Promise<number | null> => {
-    let signedVolume = 0;
-
-    const vax = { x: 0, y: 0, z: 0 };
-    const vbx = { x: 0, y: 0, z: 0 };
-    const vcx = { x: 0, y: 0, z: 0 };
-
-    const readVertex = (i: number, out: { x: number; y: number; z: number }) => {
-      out.x = position.getX(i);
-      out.y = position.getY(i);
-      out.z = position.getZ(i);
-    };
-
-    const addTriangle = (ia: number, ib: number, ic: number) => {
-      readVertex(ia, vax);
-      readVertex(ib, vbx);
-      readVertex(ic, vcx);
-
-      signedVolume += (
-        vax.x * (vbx.y * vcx.z - vbx.z * vcx.y)
-        - vax.y * (vbx.x * vcx.z - vbx.z * vcx.x)
-        + vax.z * (vbx.x * vcx.y - vbx.y * vcx.x)
-      ) / 6;
-    };
-
-    const yieldEveryTriangles = 4096;
-    let processedTriangles = 0;
-
-    if (index) {
-      for (let i = 0; i < index.count; i += 3) {
-        addTriangle(index.getX(i), index.getX(i + 1), index.getX(i + 2));
-        processedTriangles += 1;
-        if (processedTriangles % yieldEveryTriangles === 0) {
-          await yieldResinEstimateToMainThread();
-        }
-      }
-    } else {
-      for (let i = 0; i < position.count; i += 3) {
-        addTriangle(i, i + 1, i + 2);
-        processedTriangles += 1;
-        if (processedTriangles % yieldEveryTriangles === 0) {
-          await yieldResinEstimateToMainThread();
-        }
-      }
-    }
-
-    const baseVolumeMm3 = Math.abs(signedVolume);
-    return Number.isFinite(baseVolumeMm3) ? (baseVolumeMm3 / 1000) : null;
-  }, [yieldResinEstimateToMainThread]);
-
   const getOrComputeBaseResinMl = React.useCallback(async (model: (typeof scene.models)[number]): Promise<number | null> => {
-    const geometry = model.geometry.geometry;
-    const positionAttr = geometry.getAttribute('position');
-    if (!positionAttr) return null;
-
-    const sourceKey = String(geometry.userData?.resinVolumeSourceKey ?? geometry.uuid);
-    geometry.userData = {
-      ...geometry.userData,
-      resinVolumeSourceKey: sourceKey,
-    };
-
-    const position = positionAttr as {
-      getX: (i: number) => number;
-      getY: (i: number) => number;
-      getZ: (i: number) => number;
-      count: number;
-      version?: number;
-      data?: { version?: number };
-    };
-    const index = geometry.getIndex() as ({ getX: (i: number) => number; count: number; version?: number } | null);
-
-    const positionVersion = position.version ?? position.data?.version ?? 0;
-    const indexVersion = index?.version ?? 0;
-    const cacheKey = `${sourceKey}:${positionVersion}:${indexVersion}`;
+    const inputs = resinVolumeGeometryInputs(model.geometry.geometry);
+    if (!inputs) return null;
+    const { position, index, cacheKey } = inputs;
 
     const cached = printingBaseResinMlCacheRef.current.get(cacheKey);
     if (cached !== undefined) return cached;
@@ -3351,7 +3283,7 @@ export default function Home() {
     const inFlight = printingInFlightBaseResinMlRef.current.get(cacheKey);
     if (inFlight) return inFlight;
 
-    const promise = computeBaseResinMlChunked(position, index)
+    const promise = computeModelBaseResinMl(position, index)
       .then((result) => {
         printingBaseResinMlCacheRef.current.set(cacheKey, result);
         printingInFlightBaseResinMlRef.current.delete(cacheKey);
@@ -3364,14 +3296,12 @@ export default function Home() {
 
     printingInFlightBaseResinMlRef.current.set(cacheKey, promise);
     return promise;
-  }, [computeBaseResinMlChunked]);
+  }, []);
 
-  // Support/raft aggregation is comparatively heavy, so it runs only where the
-  // estimate is read: the Export workspace, sliced or not, and pre-artifact
-  // printing. Printing unlocks only once a slice exists, so gating on it alone
-  // never counted supports (#907). Base model volume estimation runs in the
-  // background across active editing modes (for warm, up-to-date estimates).
-  const shouldCalculateSupportAndRaftVolumes = scene.mode === 'export' || (scene.mode === 'printing' && !printingArtifact);
+  // Support/raft aggregation runs in every workspace: the stats card reads the
+  // estimate in Prepare and Support too, and gating it to Export counted the
+  // models alone there, so the figure read low (#907). Base model volume
+  // estimation runs in the background across active editing modes.
   const resinBuildVolumeBounds = React.useMemo(() => {
     if (!scene.view3dSettings.enabled) return null;
 
@@ -3496,20 +3426,46 @@ export default function Home() {
     return parts.join('|');
   }, [visibleResinModels]);
 
-  const supportAndRaftResinMl = React.useMemo(() => {
-    if (!shouldCalculateSupportAndRaftVolumes) return 0;
-    return computeSupportAndRaftResinMl({
-      supportState: supportStateSnapshot,
-      raftSettings: raftSettingsSnapshot,
-      visibleModelIds: resinInBoundsModelIdSet,
-      plateModels: scene.models.filter((model) => model.visible),
-    });
+  /** Visible models on the active plate: the raft is trimmed where they stand. */
+  const activePlateVisibleModels = React.useMemo(
+    () => scene.models.filter((model) => model.visible && activePlateModelIds.has(model.id)),
+    [activePlateModelIds, scene.models],
+  );
+
+  // Deferred, not computed in render: the aggregation walks every support and
+  // unions the raft footprint, and the Support workspace writes the forest on
+  // every edit. The last figure stands until the new one lands, so the estimate
+  // never flashes a supports-free number in between. Supports and raft belong to
+  // the plate they print on, so the plate's figure and the scene's are two walks.
+  const [supportAndRaftResinMl, setSupportAndRaftResinMl] = React.useState({ activePlate: 0, scene: 0 });
+  React.useEffect(() => {
+    let cancelled = false;
+    const handle = window.setTimeout(() => {
+      if (cancelled) return;
+      const next = computePlateAndSceneSupportResinMl({
+        supportState: liveSupportCollections,
+        raftSettings: raftSettingsSnapshot,
+        resinModelIds: resinInBoundsModelIdSet,
+        activePlateModelIds,
+        activePlateModels: activePlateVisibleModels,
+        sceneModels: scene.models.filter((model) => model.visible),
+      });
+      setSupportAndRaftResinMl((previous) => (
+        previous.activePlate === next.activePlate && previous.scene === next.scene ? previous : next
+      ));
+    }, SUPPORT_RESIN_ESTIMATE_DEBOUNCE_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
   }, [
-    resinInBoundsModelIdSet,
-    shouldCalculateSupportAndRaftVolumes,
+    activePlateModelIds,
+    activePlateVisibleModels,
+    liveSupportCollections,
     raftSettingsSnapshot,
+    resinInBoundsModelIdSet,
     scene.models,
-    supportStateSnapshot,
   ]);
 
   React.useEffect(() => {
@@ -3541,7 +3497,7 @@ export default function Home() {
     }
 
     const visibleModels = visibleResinModels;
-    const compositeSignature = `${resinEstimateComputationSignature}::supports:${supportAndRaftResinMl.toFixed(6)}`;
+    const compositeSignature = `${resinEstimateComputationSignature}::supports:${supportAndRaftResinMl.activePlate.toFixed(6)}/${supportAndRaftResinMl.scene.toFixed(6)}`;
     const hasChangedSinceLastSuccess = compositeSignature !== lastCompletedResinEstimateSignatureRef.current;
     const hadPriorValue = printingEstimatedResinMlRef.current != null;
     if (hadPriorValue && hasChangedSinceLastSuccess) {
@@ -3561,21 +3517,19 @@ export default function Home() {
         if (cancelled) return;
         if (baseMl == null) continue;
 
-        const sx = Math.abs(model.transform.scale.x || 1);
-        const sy = Math.abs(model.transform.scale.y || 1);
-        const sz = Math.abs(model.transform.scale.z || 1);
-        const contribution = baseMl * sx * sy * sz;
+        const contribution = scaleResinMl(baseMl, model.transform.scale);
         sceneTotalMl += contribution;
         if (activePlateModelIds.has(model.id)) totalMl += contribution;
         found = true;
       }
 
       if (cancelled) return;
-      const totalWithSupports = totalMl + supportAndRaftResinMl;
+      const totalWithSupports = totalMl + supportAndRaftResinMl.activePlate;
       const nextValue = found || totalWithSupports > 0 ? totalWithSupports : null;
       printingEstimatedResinMlRef.current = nextValue;
       setPrintingEstimatedResinMl(nextValue);
-      setPrintingEstimatedResinTotalMl(found || sceneTotalMl > 0 ? sceneTotalMl + supportAndRaftResinMl : null);
+      const sceneTotalWithSupports = sceneTotalMl + supportAndRaftResinMl.scene;
+      setPrintingEstimatedResinTotalMl(found || sceneTotalWithSupports > 0 ? sceneTotalWithSupports : null);
       lastCompletedResinEstimateSignatureRef.current = compositeSignature;
       setIsPrintingEstimatedResinBusy(false);
     };
@@ -6416,21 +6370,11 @@ export default function Home() {
         if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
           const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
           if (pastedModel) {
-            const geom = pastedModel.geometry.geometry;
-            const pos = geom.getAttribute('position');
-            const idx = geom.getIndex();
-            const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
-            const posVer = (pos as { version?: number; data?: { version?: number } }).version
-              ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
-            const idxVer = (idx as { version?: number } | null)?.version ?? 0;
-            const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
-            const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
+            const inputs = resinVolumeGeometryInputs(pastedModel.geometry.geometry);
+            const cachedMl = inputs ? printingBaseResinMlCacheRef.current.get(inputs.cacheKey) ?? null : null;
             if (cachedMl != null) {
-              const sx = Math.abs(pastedModel.transform.scale.x || 1);
-              const sy = Math.abs(pastedModel.transform.scale.y || 1);
-              const sz = Math.abs(pastedModel.transform.scale.z || 1);
-              const addedMl = cachedMl * sx * sy * sz;
-              const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
+              // Supports and the raft did not change: only the model's own volume joins.
+              const nextTotal = printingEstimatedResinMlRef.current + scaleResinMl(cachedMl, pastedModel.transform.scale);
               printingEstimatedResinMlRef.current = nextTotal;
               setPrintingEstimatedResinMl(nextTotal);
             }
@@ -10197,21 +10141,11 @@ export default function Home() {
           if (pastedIds.length > 0 && printingEstimatedResinMlRef.current != null) {
             const pastedModel = scene.models.find((m) => pastedIds.includes(m.id));
             if (pastedModel) {
-              const geom = pastedModel.geometry.geometry;
-              const pos = geom.getAttribute('position');
-              const idx = geom.getIndex();
-              const sourceKey = String(geom.userData?.resinVolumeSourceKey ?? geom.uuid);
-              const posVer = (pos as { version?: number; data?: { version?: number } }).version
-                ?? (pos as { version?: number; data?: { version?: number } }).data?.version ?? 0;
-              const idxVer = (idx as { version?: number } | null)?.version ?? 0;
-              const cacheKey = `${sourceKey}:${posVer}:${idxVer}`;
-              const cachedMl = printingBaseResinMlCacheRef.current.get(cacheKey) ?? null;
+              const inputs = resinVolumeGeometryInputs(pastedModel.geometry.geometry);
+              const cachedMl = inputs ? printingBaseResinMlCacheRef.current.get(inputs.cacheKey) ?? null : null;
               if (cachedMl != null) {
-                const sx = Math.abs(pastedModel.transform.scale.x || 1);
-                const sy = Math.abs(pastedModel.transform.scale.y || 1);
-                const sz = Math.abs(pastedModel.transform.scale.z || 1);
-                const addedMl = cachedMl * sx * sy * sz;
-                const nextTotal = (printingEstimatedResinMlRef.current - supportAndRaftResinMl) + addedMl + supportAndRaftResinMl;
+                // Supports and the raft did not change: only the model's own volume joins.
+                const nextTotal = printingEstimatedResinMlRef.current + scaleResinMl(cachedMl, pastedModel.transform.scale);
                 printingEstimatedResinMlRef.current = nextTotal;
                 setPrintingEstimatedResinMl(nextTotal);
               }
@@ -10241,7 +10175,6 @@ export default function Home() {
     arrangeSpacingMm,
     handleTopBarSaveScene,
     printingEstimatedResinMlRef,
-    supportAndRaftResinMl,
     printingBaseResinMlCacheRef,
     setPrintingEstimatedResinMl
   ]);

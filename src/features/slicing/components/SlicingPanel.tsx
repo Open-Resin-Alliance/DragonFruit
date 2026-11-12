@@ -82,7 +82,14 @@ interface SlicingPanelProps {
   activeModel: LoadedModel | null;
   estimatedLayerCountOverride?: number | null;
   estimatedLayerHeightMmOverride?: number | null;
-  estimatedVolumeLabelOverride?: string | null;
+  /**
+   * The plate's resin estimate, formatted by the caller.
+   *
+   * Not recomputed here: the app owns one volume model (mesh volume, supports and
+   * raft), and a second guess in the panel — a bounding box, which it used to fall
+   * back to — reported a box where the model has a shape.
+   */
+  estimatedVolumeLabel: string;
   /** The scene shot for a plate's file. The bed frames it: a batch writes one shot per bed. */
   captureSceneThumbnailPng?: (plateId?: string) => Promise<Uint8Array | null>;
   /** A run's first moment, with the bed it is slicing, so per-bed state is dropped for that bed. */
@@ -786,7 +793,7 @@ export function SlicingPanel({
   activeModel,
   estimatedLayerCountOverride,
   estimatedLayerHeightMmOverride,
-  estimatedVolumeLabelOverride,
+  estimatedVolumeLabel,
   captureSceneThumbnailPng,
   onSliceRunStarted,
   onSlicingFinished,
@@ -1335,29 +1342,6 @@ export function SlicingPanel({
     map[activePrinterProfileId] = sliceIntent;
     writeSliceIntentByPrinterProfile(map);
   }, [activePrinterProfileId, sliceIntent]);
-
-  const estimatedVolumeLabel = useMemo(() => {
-    if (estimatedVolumeLabelOverride && estimatedVolumeLabelOverride.trim().length > 0) {
-      return estimatedVolumeLabelOverride;
-    }
-
-    if (visibleModels.length === 0) return '—';
-
-    let totalMm3 = 0;
-    for (const model of visibleModels) {
-      const bbox = model.geometry.bbox;
-      const sizeX = Math.max(0, bbox.max.x - bbox.min.x);
-      const sizeY = Math.max(0, bbox.max.y - bbox.min.y);
-      const sizeZ = Math.max(0, bbox.max.z - bbox.min.z);
-      const sx = Math.abs(model.transform.scale.x || 1);
-      const sy = Math.abs(model.transform.scale.y || 1);
-      const sz = Math.abs(model.transform.scale.z || 1);
-      totalMm3 += (sizeX * sx) * (sizeY * sy) * (sizeZ * sz);
-    }
-
-    const ml = totalMm3 / 1000;
-    return fmt.quantity(ml, 2, 'ml');
-  }, [estimatedVolumeLabelOverride, visibleModels, fmt]);
 
   const effectiveLayerHeightMm = useMemo(() => {
     if (showRemoteOfflineLayerHeightOverride) {

@@ -141,7 +141,7 @@ export function ExportPanelStack({
         activeModel={scene.activeModel}
         estimatedLayerCountOverride={estimatedSlicerLayerCount}
         estimatedLayerHeightMmOverride={crossSectionLayerHeightMm}
-        estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
+        estimatedVolumeLabel={estimatedVolumeMlLabel}
         captureSceneThumbnailPng={captureExportThumbnailPng}
         onSliceRunStarted={handleSliceRunStartedForPrinting}
         onSlicingFinished={handleSlicingFinishedForPrinting}
