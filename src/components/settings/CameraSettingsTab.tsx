@@ -135,17 +135,17 @@ export function CameraSettingsTab({
               label="Projection mode"
               description="Use one projection mode everywhere when global scope is active."
             >
-              <SegmentedControl
-                label="Projection mode"
+              <SelectDropdown<CameraProjectionMode>
                 value={cameraProjectionMode}
-                onChange={(next) => onCameraProjectionModeChange(next as CameraProjectionMode)}
-                // "Perspective" is wider than the standard segment; tighten the
-                // type so both segments keep the standard width.
-                optionClassName="min-w-[92px] px-2 text-[10px]"
                 options={[
-                  { value: 'orthographic', label: 'Ortho' },
+                  { value: 'orthographic', label: 'Orthographic' },
                   { value: 'perspective', label: 'Perspective' },
                 ]}
+                onChange={(next) => onCameraProjectionModeChange(next)}
+                ariaLabel="Projection mode"
+                title="Projection mode"
+                className="w-36"
+                menuAlign="right"
               />
             </SettingRow>
 
@@ -197,15 +197,17 @@ export function CameraSettingsTab({
               label={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
               description={workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.hint}
             >
-              <SegmentedControl
-                label={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
+              <SelectDropdown<CameraProjectionMode>
                 value={workspaceCameraDefaults[activeWorkspace]}
-                onChange={(next) => onWorkspaceCameraModeChange(activeWorkspace, next as CameraProjectionMode)}
-                optionClassName="min-w-[92px] px-2 text-[10px]"
                 options={[
-                  { value: 'orthographic', label: 'Ortho' },
+                  { value: 'orthographic', label: 'Orthographic' },
                   { value: 'perspective', label: 'Perspective' },
                 ]}
+                onChange={(next) => onWorkspaceCameraModeChange(activeWorkspace, next)}
+                ariaLabel={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
+                title={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
+                className="w-36"
+                menuAlign="right"
               />
             </SettingRow>
           </div>
