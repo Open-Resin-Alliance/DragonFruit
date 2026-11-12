@@ -250,12 +250,9 @@ sets `target` plus `anchorNdc` to the press point's own pixel.
   entry framing and the focus hotkey drive `target` themselves and call
   `controls.update()` per frame; a cursor anchor would re-aim each of those frames
   to keep its old pixel, so the view would swing to the cursor instead of the
-  model. All four call `clearCursorPivotAnchor` before they start. F **pans**: the active
-  model's centre moves to the middle of the screen and the view direction and scale
-  stay put — refitting the distance as well turned a "centre this" key into a zoom.
-  The pointer's hover is not consulted while there is an active model. The one
-  refit left is the SpaceMouse's Fit request, because navlib sizes its own fit for
-  a perspective projection and lands too close in ortho.
+  model. All four call `clearCursorPivotAnchor` before they start. F resolves to
+  the *active* model's bounding sphere — the pointer's hover is not consulted while
+  there is an active model.
 - **The SpaceMouse handoff drops the cursor pivot.** Both SpaceMouse controllers
   disable OrbitControls for the gesture and, on release, copy their own pivot into
   `controls.target` and re-enable — all in one tick, before any frame could notice

@@ -276,16 +276,7 @@ export function CameraFocusHotkeyController({
     // run id actually starts a pan.
   }, [cameraRef, orbitControlsRef, perspectiveFov, plateFocus, plateFocusRunId, snapCameraToPoint]);
 
-  /**
-   * Frame what the user is working on.
-   *
-   * F pans: the active model's centre moves to the middle of the screen, and the
-   * view direction and on-screen scale are left alone. Refitting the distance as
-   * well turned a "centre this" key into a zoom, which is not what it says. The
-   * SpaceMouse's Fit button asks for the fit too, because navlib sizes its own fit
-   * for a perspective projection and lands too close in ortho.
-   */
-  const runFocus = React.useCallback((options?: { fit?: boolean }) => {
+  const runFocus = React.useCallback(() => {
     const visibleModels = models.filter(
       (model) => model.visible && (isModelFocusable?.(model) ?? true),
     );
@@ -298,7 +289,7 @@ export function CameraFocusHotkeyController({
     const activeModel = activeModelId ? visibleById.get(activeModelId) ?? null : null;
     if (activeModel) {
       const sphere = computeModelWorldBoundingSphere(activeModel);
-      snapCameraToPoint(sphere.center, options?.fit ? sphere.radius : undefined);
+      snapCameraToPoint(sphere.center, sphere.radius);
       return;
     }
 
@@ -335,7 +326,7 @@ export function CameraFocusHotkeyController({
     const preferredModel = preferredIds.length > 0 ? visibleById.get(preferredIds[0]) ?? null : null;
     if (preferredModel) {
       const sphere = computeModelWorldBoundingSphere(preferredModel);
-      snapCameraToPoint(sphere.center, options?.fit ? sphere.radius : undefined);
+      snapCameraToPoint(sphere.center, sphere.radius);
       return;
     }
 
@@ -353,18 +344,17 @@ export function CameraFocusHotkeyController({
     }
 
     const bestSphere = computeModelWorldBoundingSphere(bestModel);
-    snapCameraToPoint(bestSphere.center, options?.fit ? bestSphere.radius : undefined);
+    snapCameraToPoint(bestSphere.center, bestSphere.radius);
   }, [activeModelId, hoveredModelId, isModelFocusable, models, orbitTarget, selectedModelIds, snapCameraToPoint]);
 
-  useCameraFocusHotkey(React.useCallback(() => runFocus(), [runFocus]));
+  useCameraFocusHotkey(runFocus);
 
   // The SpaceMouse's Fit button is delivered through navlib, whose fit distance is
   // sized for a perspective projection and lands too close in ortho. Run the same
   // focus the F key does instead — it frames the model properly.
   React.useEffect(() => {
-    const fit = () => runFocus({ fit: true });
-    window.addEventListener('camera-fit-request', fit);
-    return () => window.removeEventListener('camera-fit-request', fit);
+    window.addEventListener('camera-fit-request', runFocus);
+    return () => window.removeEventListener('camera-fit-request', runFocus);
   }, [runFocus]);
 
   return null;
