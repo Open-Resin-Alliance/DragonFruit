@@ -246,14 +246,19 @@ sets `target` plus `anchorNdc` to the press point's own pixel.
   pins: a pivot already on its pixel reproduces the pose, the pixel survives the
   whole orbit, the horizon stays level, and the along-up degenerate case is
   refused.
-- **Another owner of the camera re-anchors the pivot, it does not drop it.**
-  A SpaceMouse gesture, a Home reset or a mode framing can move the orbit target
-  while the controls are disabled. On release, resuming the old pixel would swing
-  the camera to put the new target under it — the jump users saw. `CursorOrbitPivot`
-  re-anchors on wherever the target now projects while the controls are someone
-  else's, which is the same no-op invariant as a pick (see `anchoredAim`'s "a pivot
-  already on its pixel reproduces the pose"). Panning never enters that path: it is
-  this control's own target sliding, and the anchor travels with it.
+- **The SpaceMouse handoff drops the cursor pivot.** Both SpaceMouse controllers
+  disable OrbitControls for the gesture and, on release, copy their own pivot into
+  `controls.target` and re-enable — all in one tick, before any frame could notice
+  the change. A cursor anchor left over from before the gesture then re-aimed the
+  camera to put that new target back under the old pixel: the jump on release.
+  Every handoff now calls `clearCursorPivotAnchor`, so the camera resumes on the
+  SpaceMouse's pivot, which is the pose the gesture ended on.
+- **While another owner has the controls, the anchor follows the target.**
+  `CursorOrbitPivot` re-anchors on wherever the target projects if it moved while
+  the controls were disabled (Home, a mode framing). That is the same no-op
+  invariant as a pick — see `anchoredAim`'s "a pivot already on its pixel
+  reproduces the pose". Panning never enters that path: it is this control's own
+  target sliding, and the anchor travels with it.
 - **The anchor is the pivot's own pixel, not the pointer's.** Both are the same
   place for a surface hit, but off the model the pivot is the model centre or the
   plate, which sit somewhere else on screen: anchoring those to the pointer would

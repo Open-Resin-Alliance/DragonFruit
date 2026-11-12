@@ -45,6 +45,16 @@ export class PivotOrbitControls extends OrbitControls {
   private savedPolarLimits: { min: number; max: number } | null = null;
 
   /**
+   * Give up the cursor pivot. Another camera owner (a SpaceMouse gesture) has
+   * re-seated the target, and resuming our pixel would swing the view to put it
+   * back under that pixel — the jump on release.
+   */
+  clearAnchor(): void {
+    this.anchorNdc.set(0, 0);
+    this.hasAim = false;
+  }
+
+  /**
    * Tighten the polar range while a cursor pivot is active, and hand the app's
    * own limits back the moment it is not. `update()` runs before `super`, so the
    * clamp is in place when upstream applies its own.
@@ -94,4 +104,15 @@ export class PivotOrbitControls extends OrbitControls {
     camera.updateMatrixWorld();
     return changed;
   }
+}
+
+/**
+ * Drop a cursor pivot from any controls that carry one. The SpaceMouse
+ * controllers call this when they hand the camera back, because the pivot they
+ * used is the one the camera resumes from.
+ */
+export function clearCursorPivotAnchor(controls: unknown): void {
+  if (!controls || typeof controls !== 'object' || !('clearAnchor' in controls)) return;
+  const visible = controls as { clearAnchor?: () => void };
+  visible.clearAnchor?.();
 }
