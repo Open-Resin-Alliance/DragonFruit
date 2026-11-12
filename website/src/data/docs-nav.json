@@ -460,6 +460,10 @@
               "slug": "dev/slice-job-assembly"
             },
             {
+              "label": "Resin Estimate",
+              "slug": "dev/resin-estimate"
+            },
+            {
               "label": "Benchmarking",
               "slug": "dev/slicing-engine/benchmarking"
             },

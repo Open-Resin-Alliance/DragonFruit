@@ -70,7 +70,13 @@ the raft is trimmed where the model stands:
 viewport (`RaftRenderer`, `LineRaftRenderer`, `RaftProxyMeshLayer` via
 `ModelAttachedSupportLayer`), the exporter (`ExportManager.exportScene`), the
 slicer (`buildSupportAndRaftWorldTriangles` in `features/slicing/rasterLayerZipExport.ts`)
-and the resin estimate (`computeSupportAndRaftResinMl` in `src/features/printing/supportResinVolume.ts`).
+and the resin estimate (`computeSupportAndRaftResinMl` in
+`src/features/printing/supportResinVolume.ts`, through `buildRaftMeshesForCircles`).
+
+`buildRaftMeshesForCircles` is the one place that assembles a cluster's raft meshes —
+base or line beams, then wall. The exporter slices them and the estimate measures
+their volume, so neither can hold a private idea of what the raft prints. Line mode's
+beams live there too; they used to be built inline in the exporter.
 
 ## Constraints
 
