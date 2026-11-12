@@ -277,6 +277,16 @@ export function CameraFocusHotkeyController({
     const visibleById = new Map(visibleModels.map((model) => [model.id, model] as const));
     const hoverPoint = hoverPointRef.current;
 
+    // The active model wins outright: F means "show me the model I am working
+    // on", so it frames that model's centre whatever the pointer happens to be
+    // over. Hover and selection only decide when there is no active model.
+    const activeModel = activeModelId ? visibleById.get(activeModelId) ?? null : null;
+    if (activeModel) {
+      const sphere = computeModelWorldBoundingSphere(activeModel);
+      snapCameraToPoint(sphere.center, sphere.radius);
+      return;
+    }
+
     const hoveredSelectedModel = hoveredModelId
       && (
         hoveredModelId === activeModelId
@@ -304,7 +314,6 @@ export function CameraFocusHotkeyController({
       preferredIds.push(id);
     };
 
-    pushPreferred(activeModelId);
     selectedModelIds.forEach((id) => pushPreferred(id));
     pushPreferred(hoveredModelId);
 
