@@ -83,8 +83,10 @@ test('runAutoPlace places standalone trunks and pushes an undoable history entry
     assert.equal(result.changed, true);
 
     const snapshot = getSnapshot();
+    const kickstandCount = Object.keys(snapshot.kickstands).length;
     assert.equal(Object.keys(snapshot.trunks).length, 2, 'two trunks committed to the store');
-    assert.equal(Object.keys(snapshot.roots).length, 2, 'two roots committed');
+    assert.equal(kickstandCount, 1, 'two collinear tall trunks (>=15mm) receive one orthogonal kickstand');
+    assert.equal(Object.keys(snapshot.roots).length, 2 + kickstandCount, 'trunk and kickstand roots committed');
 
     // The run must be undoable as one entry.
     undo();
@@ -93,6 +95,8 @@ test('runAutoPlace places standalone trunks and pushes an undoable history entry
     const payload = captured[0].payload as { before?: unknown; after?: unknown };
     assert.ok(payload.before && payload.after, 'payload carries before/after snapshots');
     assert.equal(Object.keys(getSnapshot().trunks).length, 0, 'undo restores the empty pre-run snapshot');
+    assert.equal(Object.keys(getSnapshot().kickstands).length, 0, 'undo removes auto-generated kickstands');
+    assert.equal(Object.keys(getSnapshot().roots).length, 0, 'undo removes all committed roots');
 
     unregisterCapture();
     disposeHandlers();

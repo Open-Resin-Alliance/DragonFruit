@@ -45,57 +45,28 @@ export function AutoBracingSettingsCard({
     status,
 }: AutoBracingSettingsCardProps) {
     const { _ } = useLingui();
-    // Zigzag chains step by their own rise, not the fixed interval — when
-    // both patterns are zigzag the interval does nothing and is disabled.
-    const intervalDisabled = settings.initialPattern === 'zigZag' && settings.repeatingPattern === 'zigZag';
-    const ToggleButton = ({
-        checked,
-        onChange,
-        label,
-    }: {
-        checked: boolean;
-        onChange: () => void;
-        label: string;
-    }) => (
-        <button
-            type="button"
-            role="switch"
-            aria-checked={checked}
-            onClick={onChange}
-            className="ui-input w-full h-[36px] px-2.5 leading-tight text-sm inline-flex items-center justify-between"
-            style={checked
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)',
-                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)',
-                    color: 'var(--text-strong)',
-                }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                }}
-        >
-            <span className="text-[12px] font-semibold uppercase tracking-wide">{label}</span>
-            <span
-                className="inline-flex h-5 w-9 rounded-full p-0.5 transition-colors"
-                style={{ background: checked ? 'var(--accent-secondary)' : 'var(--surface-2)' }}
-            >
-                <span className={`h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-4' : 'translate-x-0'}`} />
-            </span>
-        </button>
-    );
+    // Initial zigzag climbs continuously to maxZ without discrete repeating tiers,
+    // so both Repeating Pattern and Repeat Interval have no effect when initialPattern === 'zigZag'.
+    const repeatingDisabled = settings.initialPattern === 'zigZag';
+    const repeatingDisabledTitle = repeatingDisabled
+        ? _(msg`Initial Zig Zag climbs continuously to the top — repeating tiers have no effect`)
+        : undefined;
 
     const renderPatternSelect = (
         label: string,
         value: AutoBracingPattern,
         onPatternChange: (pattern: AutoBracingPattern) => void,
+        disabled = false,
+        title?: string,
     ) => {
         return (
-            <label className="space-y-1 min-w-0">
+            <label className="space-y-1 min-w-0" style={disabled ? { opacity: 0.45 } : undefined} title={title}>
                 <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{label}</div>
                 <SelectDropdown
                     value={value}
                     onChange={(nextValue) => onPatternChange(nextValue as AutoBracingPattern)}
+                    disabled={disabled}
+                    title={title}
                     options={AUTO_BRACING_PATTERN_OPTIONS.map((pattern) => ({
                         value: pattern,
                         label: pattern === 'singleDiagonal' ? _(msg`Single Diagonal`) : pattern === 'zigZag' ? _(msg`Zig Zag`) : _(msg`Crosses`),
@@ -158,15 +129,15 @@ export function AutoBracingSettingsCard({
                         {unitHint('mm')}
                     </div>
                 </label>
-                <label className="space-y-1 min-w-0" style={intervalDisabled ? { opacity: 0.45 } : undefined}>
+                <label className="space-y-1 min-w-0" style={repeatingDisabled ? { opacity: 0.45 } : undefined}>
                     <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }}>{_(msg`Repeat Interval`)}</div>
-                    <div className="relative" title={intervalDisabled ? _(msg`Zigzag chains step by their own rise — interval has no effect`) : undefined}>
+                    <div className="relative" title={repeatingDisabledTitle}>
                         <NumberInput
                             value={settings.patternIntervalMm}
                             onChange={(value) => onChange({ patternIntervalMm: value })}
                             step={0.1}
                             showStepper={false}
-                            disabled={intervalDisabled}
+                            disabled={repeatingDisabled}
                             className={compactInputClass}
                         />
                         {unitHint('mm')}
@@ -177,7 +148,13 @@ export function AutoBracingSettingsCard({
             {/* Row 3: Initial Pattern | Repeating Pattern */}
             <div className="grid grid-cols-2 gap-1.5 items-start">
                 {renderPatternSelect(_(msg`Initial Pattern`), settings.initialPattern, (initialPattern) => onChange({ initialPattern }))}
-                {renderPatternSelect(_(msg`Repeating Pattern`), settings.repeatingPattern, (repeatingPattern) => onChange({ repeatingPattern }))}
+                {renderPatternSelect(
+                    _(msg`Repeating Pattern`),
+                    settings.repeatingPattern,
+                    (repeatingPattern) => onChange({ repeatingPattern }),
+                    repeatingDisabled,
+                    repeatingDisabledTitle,
+                )}
             </div>
 
             {/* Row 4: Seed Spacing (full width) */}

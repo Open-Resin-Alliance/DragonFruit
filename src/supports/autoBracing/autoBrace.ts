@@ -32,6 +32,7 @@ import { applyInitialPattern } from './initialPattern';
 import { applyRepeatingPattern } from './repeatingPattern';
 import { runZigZagChain } from './zigzagChain';
 import { buildBraceProfile } from './braceDiameter';
+import { MIN_HEIGHT_FOR_MANDATORY_BRACING_MM } from '../SupportTypes/Kickstand/kickstandStabiliser';
 import type { KickstandBuildResult } from '../SupportTypes/Kickstand/types';
 import { generateLateralStabilisers, getSupportTypeDescriptor, parsePrefixedSegmentId, isAutoBraceableShaftType, isLateralStabiliserType, lateralStabiliserTypes, spanKnotHostType, SUPPORT_TYPES, type SupportCollectionKey, type SupportEdge, type SupportTypeDescriptor, type SupportTypeId } from '../supportTypeRegistry';
 import { resolveSegmentEndpoints } from '../SupportPrimitives/Knot/segmentEndpoints';
@@ -61,6 +62,7 @@ type SupportSample = {
     topReferenceZ: number;
     bottomReferenceZ: number;
     sortAnchor: Vec3;
+    bottomSortAnchor: Vec3;
     hostSegmentId?: string;
 };
 
@@ -115,6 +117,8 @@ function sortSupports(a: SupportSample, b: SupportSample): number {
     // height and kind before falling back to the id.
     if (a.topReferenceZ !== b.topReferenceZ) return a.topReferenceZ - b.topReferenceZ;
     if (a.bottomReferenceZ !== b.bottomReferenceZ) return a.bottomReferenceZ - b.bottomReferenceZ;
+    if (a.bottomSortAnchor.x !== b.bottomSortAnchor.x) return a.bottomSortAnchor.x - b.bottomSortAnchor.x;
+    if (a.bottomSortAnchor.y !== b.bottomSortAnchor.y) return a.bottomSortAnchor.y - b.bottomSortAnchor.y;
     if (a.supportKind !== b.supportKind) return a.supportKind.localeCompare(b.supportKind);
     // Ids are random for generated supports. At equal geometry the stable sort
     // keeps the insertion order, which is the placement order; comparing ids
@@ -136,7 +140,12 @@ function createUniqueIdFactory(prefix: string, existingIds: Set<string>) {
     };
 }
 
-function collectSegmentExtrema(segments: SegmentSample[]): { topReferenceZ: number; bottomReferenceZ: number; sortAnchor: Vec3 } {
+function collectSegmentExtrema(segments: SegmentSample[]): {
+    topReferenceZ: number;
+    bottomReferenceZ: number;
+    sortAnchor: Vec3;
+    bottomSortAnchor: Vec3;
+} {
     let topPoint: Vec3 | null = null;
     let bottomPoint: Vec3 | null = null;
 
@@ -151,6 +160,7 @@ function collectSegmentExtrema(segments: SegmentSample[]): { topReferenceZ: numb
         topReferenceZ: topPoint?.z ?? 0,
         bottomReferenceZ: bottomPoint?.z ?? 0,
         sortAnchor: topPoint ?? { x: 0, y: 0, z: 0 },
+        bottomSortAnchor: bottomPoint ?? { x: 0, y: 0, z: 0 },
     };
 }
 
@@ -539,7 +549,34 @@ export function buildAutoBracedSnapshot(
     // the literal 'trunk', so branch samples were built and then discarded here.
     const trunkSamples = buildSupportSamples(snapshot, targetModelId).filter(s => isAutoBraceableShaftType(s.supportKind));
 
-    if (trunkSamples.length < AUTO_BRACING_HARD_RULES.minGroupSize) {
+    const hasMandatoryTallSupport = trunkSamples.some((s) => {
+        const trunkEntity = snapshot.trunks[s.supportId];
+        const rootZ = trunkEntity?.rootId ? snapshot.roots[trunkEntity.rootId]?.transform.pos.z : undefined;
+        const baseZ = typeof rootZ === 'number' ? Math.min(rootZ, s.bottomReferenceZ) : s.bottomReferenceZ;
+        return s.topReferenceZ - baseZ >= MIN_HEIGHT_FOR_MANDATORY_BRACING_MM;
+    });
+    const hasInScopeExistingStabiliser = lateralStabiliserTypes().some((typeId) => {
+        const descriptor = getSupportTypeDescriptor(typeId);
+        const collection = (snapshot as unknown as Record<string, Record<string, Record<string, unknown>>>)[descriptor.location.key] ?? {};
+        return Object.values(collection).some((entity) => {
+            const entityModelId = (typeof entity.modelId === 'string' ? entity.modelId : undefined)
+                ?? (typeof entity.rootId === 'string' ? snapshot.roots[entity.rootId]?.modelId : undefined)
+                ?? (typeof entity.hostSegmentId === 'string' ? segmentOwnerModelId.get(entity.hostSegmentId) : undefined);
+            const inScope = !targetModelId || entityModelId === targetModelId;
+            if (!inScope) return false;
+            return entity.generatedBy !== 'autoBracing' || settings.removeExistingBracing;
+        });
+    });
+    const hasRemovableAutoBrace = settings.removeExistingBracing
+        && Object.values(snapshot.braces ?? {}).some(
+            (brace) => (!targetModelId || brace.modelId === targetModelId) && brace.generatedBy === 'autoBracing',
+        );
+    const hasRemovableAutoBracing = hasRemovableAutoBrace || hasInScopeExistingStabiliser;
+
+    if (
+        trunkSamples.length === 0 ||
+        (trunkSamples.length < AUTO_BRACING_HARD_RULES.minGroupSize && !hasMandatoryTallSupport && !hasRemovableAutoBracing)
+    ) {
         return {
             snapshot,
             generatedBraceCount: 0,
@@ -554,11 +591,11 @@ export function buildAutoBracedSnapshot(
     let selectedStabiliserCleared: boolean | null = null;
     const removedStabiliserRootIds = new Set<string>();
     const removedStabiliserKnotIds = new Set<string>();
+    let removedAutoGeneratedCount = 0;
     {
         const nextStabilisers: StabiliserSource['kickstands'] = {};
         const nextRoots: StabiliserSource['roots'] = {};
         const nextKnots: StabiliserSource['knots'] = {};
-        let removedAutoGeneratedCount = 0;
 
         // Keeps every stabiliser this run did not generate, along with the
         // primitives it claims through its declared edges.
@@ -572,7 +609,7 @@ export function buildAutoBracedSnapshot(
                     ?? (typeof entity.hostSegmentId === 'string' ? segmentOwnerModelId.get(entity.hostSegmentId) : undefined);
                 const inScope = !targetModelId || entityModelId === targetModelId;
 
-                if (inScope && entity.generatedBy === 'autoBracing') {
+                if (inScope && entity.generatedBy === 'autoBracing' && settings.removeExistingBracing) {
                     removedAutoGeneratedCount += 1;
                     if (typeof entity.rootId === 'string') removedStabiliserRootIds.add(entity.rootId);
                     if (typeof entity.hostKnotId === 'string') removedStabiliserKnotIds.add(entity.hostKnotId);
@@ -891,17 +928,22 @@ export function buildAutoBracedSnapshot(
     }
 
     const groupedSupports: SupportSample[][] = [];
-    for (const groupIds of trunkGroupIds) {
-        const g = groupIds
-            .map((id) => trunkById.get(id))
-            .filter((trunk): trunk is SupportSample => Boolean(trunk));
+    const allowGroupPairing = trunkSamples.length >= AUTO_BRACING_HARD_RULES.minGroupSize
+        || hasMandatoryTallSupport
+        || stabiliserSamples.length > 0;
+    if (allowGroupPairing) {
+        for (const groupIds of trunkGroupIds) {
+            const g = groupIds
+                .map((id) => trunkById.get(id))
+                .filter((trunk): trunk is SupportSample => Boolean(trunk));
 
-        const members: SupportSample[] = [...g];
-        for (const trunk of g) {
-            const kickstands = stabilisersByHostId.get(trunk.supportId);
-            if (kickstands && kickstands.length > 0) members.push(...kickstands);
+            const members: SupportSample[] = [...g];
+            for (const trunk of g) {
+                const kickstands = stabilisersByHostId.get(trunk.supportId);
+                if (kickstands && kickstands.length > 0) members.push(...kickstands);
+            }
+            groupedSupports.push(members);
         }
-        groupedSupports.push(members);
     }
 
     const groupedIds = new Set<string>();
@@ -1054,11 +1096,17 @@ export function buildAutoBracedSnapshot(
                         const bBase = getGridCorrelatedPoint(sb, activeGridSettings);
                         const dx = bBase.x - aBase.x;
                         const dy = bBase.y - aBase.y;
-                        if (!isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) continue;
+                        if (!ignoreDistanceForSb && !isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) continue;
 
                         const hDist = Math.sqrt(dx * dx + dy * dy);
-                        if (hDist < 0.000001) continue;
-                        d = { hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) };
+                        if (hDist < 0.000001) {
+                            if (!ignoreDistanceForSb) continue;
+                            const zRef = referenceZForDistance(trunk, sb);
+                            d = horizontalDistanceAtZ(trunk, sb, zRef);
+                            if (!d) continue;
+                        } else {
+                            d = { hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) };
+                        }
                     } else {
                         const zRef = referenceZForDistance(trunk, sb);
                         d = horizontalDistanceAtZ(trunk, sb, zRef);
@@ -1090,11 +1138,17 @@ export function buildAutoBracedSnapshot(
                         const bBase = getGridCorrelatedPoint(sb2, activeGridSettings);
                         const dx = bBase.x - aBase.x;
                         const dy = bBase.y - aBase.y;
-                        if (!isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) continue;
+                        if (!ignoreDistanceForPair && !isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) continue;
 
                         const hDist = Math.sqrt(dx * dx + dy * dy);
-                        if (hDist < 0.000001) continue;
-                        d = { hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) };
+                        if (hDist < 0.000001) {
+                            if (!ignoreDistanceForPair) continue;
+                            const zRef = referenceZForDistance(sb1, sb2);
+                            d = horizontalDistanceAtZ(sb1, sb2, zRef);
+                            if (!d) continue;
+                        } else {
+                            d = { hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) };
+                        }
                     } else {
                         const zRef = referenceZForDistance(sb1, sb2);
                         d = horizontalDistanceAtZ(sb1, sb2, zRef);
@@ -1337,29 +1391,31 @@ export function buildAutoBracedSnapshot(
         const zigZagMinRiseMm = AUTO_BRACING_HARD_RULES.minZigZagRiseMm;
         if (settings.initialPattern === 'zigZag') {
             runZigZagChain(pairs, settings.initialDistanceMm, maxZ, 'initial', place, zigZagMinRiseMm);
-        } else if (settings.repeatingPattern === 'zigZag') {
-            runZigZagChain(
-                pairs,
-                settings.initialDistanceMm + settings.patternIntervalMm,
-                maxZ,
-                'repeating',
-                place,
-                zigZagMinRiseMm,
-            );
-        }
-        ladder.forEach((anchorZ, tierIndex) => {
-            const isInitial = tierIndex === 0;
-            const pattern = isInitial ? settings.initialPattern : settings.repeatingPattern;
-            // Zigzag tiers are covered by the chains above.
-            if (pattern === 'zigZag') return;
-            const placeAtTier = (lowS: SupportSample, highS: SupportSample, section: 'initial' | 'repeating') =>
-                place(lowS, highS, section, anchorZ);
-            if (isInitial) {
-                applyInitialPattern(pairs, pattern, placeAtTier);
-            } else {
-                applyRepeatingPattern(pairs, pattern, placeAtTier);
+        } else {
+            if (settings.repeatingPattern === 'zigZag') {
+                runZigZagChain(
+                    pairs,
+                    settings.initialDistanceMm + settings.patternIntervalMm,
+                    maxZ,
+                    'repeating',
+                    place,
+                    zigZagMinRiseMm,
+                );
             }
-        });
+            ladder.forEach((anchorZ, tierIndex) => {
+                const isInitial = tierIndex === 0;
+                const pattern = isInitial ? settings.initialPattern : settings.repeatingPattern;
+                // Zigzag tiers are covered by the chains above.
+                if (pattern === 'zigZag') return;
+                const placeAtTier = (lowS: SupportSample, highS: SupportSample, section: 'initial' | 'repeating') =>
+                    place(lowS, highS, section, anchorZ);
+                if (isInitial) {
+                    applyInitialPattern(pairs, pattern, placeAtTier);
+                } else {
+                    applyRepeatingPattern(pairs, pattern, placeAtTier);
+                }
+            });
+        }
     }
 
     // ── Post-ladder reconciliation ──────────────────────────────────
@@ -1370,16 +1426,19 @@ export function buildAutoBracedSnapshot(
     // of stacking a kickstand next to an already-stable trunk.
     if (generatedStabilisers.length > 0 && bracedAxesByTrunkId.size > 0) {
         const drops = new Set<string>();
-        for (const build of generatedStabilisers) {
-            const hostTrunkId = segmentOwnerTrunkId.get(build.kickstand.hostSegmentId);
+        for (const id of generatedStabiliserIds) {
+            const ks = stabiliserState.kickstands[id];
+            if (!ks) continue;
+            const hostTrunkId = segmentOwnerTrunkId.get(ks.hostSegmentId);
             if (!hostTrunkId) continue;
             const axes = bracedAxesByTrunkId.get(hostTrunkId) ?? [];
             if (hasQualifiedTwoAxisBracing(axes, AUTO_BRACING_HARD_RULES.minAxisSeparationDeg)) {
-                drops.add(build.kickstand.id);
+                drops.add(id);
             }
         }
 
         if (drops.size > 0) {
+            generatedStabiliserCount = Math.max(0, generatedStabilisers.length - drops.size);
             const droppedSegmentIds = new Set<string>();
             for (const id of drops) {
                 const ks = stabiliserState.kickstands[id];
@@ -1420,7 +1479,12 @@ export function buildAutoBracedSnapshot(
 
     const generatedBraceCount = Object.keys(generatedBraces).length;
     const removedBraceCount = removedBraceCountForPass;
-    const changed = generatedBraceCount > 0 || removedBraceCount > 0 || generatedStabiliserCount > 0 || removedStabiliserRootIds.size > 0;
+    const changed =
+        generatedBraceCount > 0 ||
+        removedBraceCount > 0 ||
+        generatedStabiliserCount > 0 ||
+        removedAutoGeneratedCount > 0 ||
+        removedStabiliserRootIds.size > 0;
 
     // Fold the kickstand result back in: nextSnapshot was spread from the input
     // and still holds the pre-regeneration kickstands.

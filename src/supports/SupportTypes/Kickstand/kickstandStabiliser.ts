@@ -14,14 +14,10 @@ import {
     normalizeAxisAngleRad,
 } from '../../autoBracing/twoAxisDetection';
 
-const MIN_HEIGHT_FOR_MANDATORY_BRACING_MM = 15.0;
+export const MIN_HEIGHT_FOR_MANDATORY_BRACING_MM = 15.0;
 const DROP_COLLISION_SAMPLES = 20;
-const MAX_GRID_ROOT_SEARCH_RING = 1;
 const MIN_ROOT_PROXIMITY_CLEARANCE_MM = 2.0;
 
-function createVector3(v: Vec3) {
-    return new THREE.Vector3(v.x, v.y, v.z);
-}
 
 /**
  * Ensures that any trunk over 15mm tall has at least 2-axis bracing.
@@ -85,71 +81,6 @@ export function generateRequiredKickstands(
     const isGridNodeOccupied = (modelId: string, gx: number, gy: number): boolean => {
         if (!isGridEnabled) return false;
         return occupiedGridNodeKeys.has(gridNodeKey(modelId, gx, gy));
-    };
-
-    const snapToGlobalGrid = (valueMm: number, spacingMm: number): number => {
-        const idx = snapToGridIndex(valueMm, spacingMm);
-        return idx * spacingMm;
-    };
-
-    const findNearestAvailableGridPoint = (
-        x: number,
-        y: number,
-        hostX: number,
-        hostY: number,
-        modelId: string,
-        maxRingOverride?: number,
-    ): { x: number; y: number } | null => {
-        if (!isGridEnabled) return { x, y };
-
-        const spacing = gridSettings.spacingMm;
-        // Hard rule: search must stay within the host-centered grid neighborhood.
-        // We then pick the candidate nearest to the desired target point.
-        const centerGx = snapToGridIndex(hostX, spacing);
-        const centerGy = snapToGridIndex(hostY, spacing);
-        const defaultMaxRing = Math.max(1, Math.ceil(maxHorizontalRun / spacing) + 2);
-        const maxRing = typeof maxRingOverride === 'number'
-            ? Math.max(0, Math.min(defaultMaxRing, maxRingOverride))
-            : defaultMaxRing;
-        if (maxRing < 1) return null;
-
-        // Match manual support-brace snapping neighborhood: immediate cardinal nodes around host.
-        const candidates = [
-            { gx: centerGx + 1, gy: centerGy },
-            { gx: centerGx - 1, gy: centerGy },
-            { gx: centerGx, gy: centerGy + 1 },
-            { gx: centerGx, gy: centerGy - 1 },
-        ];
-
-        let best: { x: number; y: number; distSq: number } | null = null;
-        for (const candidate of candidates) {
-            const worldX = candidate.gx * spacing;
-            const worldY = candidate.gy * spacing;
-            if (isGridNodeOccupied(modelId, candidate.gx, candidate.gy)) continue;
-            if (isCandidateRootTooCloseToExistingRoot(worldX, worldY)) continue;
-
-            const ddx = worldX - x;
-            const ddy = worldY - y;
-            const distSq = ddx * ddx + ddy * ddy;
-            if (!best || distSq < best.distSq) {
-                best = { x: worldX, y: worldY, distSq };
-            }
-        }
-
-        if (best) {
-            return { x: best.x, y: best.y };
-        }
-
-        return null;
-    };
-
-    const toCanonicalGridPoint = (x: number, y: number): { x: number; y: number } => {
-        const snappedX = snapToGlobalGrid(x, gridSettings.spacingMm);
-        const snappedY = snapToGlobalGrid(y, gridSettings.spacingMm);
-        return {
-            x: snappedX,
-            y: snappedY,
-        };
     };
 
     const segmentOwnerTrunkId = new Map<string, string>();
@@ -241,6 +172,17 @@ export function generateRequiredKickstands(
         }
     }
 
+    const sampleWorld = new THREE.Vector3();
+    const sampleLocal = new THREE.Vector3();
+    const hitWorld = new THREE.Vector3();
+    const worldTri = new THREE.Triangle();
+    const inverseTransform = new THREE.Matrix4();
+    const resultTarget = {
+        point: new THREE.Vector3(),
+        distance: 0,
+        faceIndex: -1,
+    };
+
     const checkSlantedCollision = (topPos: Vec3, bottomPos: Vec3, modelId: string, radius: number): boolean => {
         const entry = meshEntries.get(modelId);
         if (!entry) return false;
@@ -248,18 +190,48 @@ export function generateRequiredKickstands(
         const bvh = (entry.geometry as any).boundsTree;
         if (!bvh) return false;
 
-        const inverseMatrix = entry.transform.clone().invert();
-        const start = createVector3(topPos).applyMatrix4(inverseMatrix);
-        const end = createVector3(bottomPos).applyMatrix4(inverseMatrix);
-        
-        const resultTarget: { point?: THREE.Vector3; distance?: number } = {};
+        const e = entry.transform.elements;
+        const sx = Math.hypot(e[0], e[1], e[2]);
+        const sy = Math.hypot(e[4], e[5], e[6]);
+        const sz = Math.hypot(e[8], e[9], e[10]);
+        const minScale = Math.max(1e-6, Math.min(sx, sy, sz));
+        const maxScale = Math.max(sx, sy, sz);
+        const isAnisotropic = maxScale - minScale > 1e-4;
+        const maxLocalDistance = radius / minScale;
+        const radiusSq = radius * radius;
+
+        inverseTransform.copy(entry.transform).invert();
 
         for (let i = 0; i <= DROP_COLLISION_SAMPLES; i++) {
             const t = i / DROP_COLLISION_SAMPLES;
-            const p = new THREE.Vector3().lerpVectors(start, end, t);
-            const result = bvh.closestPointToPoint(p, resultTarget);
-            if (result && (result.distance as number) < radius) {
-                return true; // Collision detected
+            sampleWorld.set(
+                topPos.x + (bottomPos.x - topPos.x) * t,
+                topPos.y + (bottomPos.y - topPos.y) * t,
+                topPos.z + (bottomPos.z - topPos.z) * t,
+            );
+            sampleLocal.copy(sampleWorld).applyMatrix4(inverseTransform);
+            if (!isAnisotropic) {
+                const result = bvh.closestPointToPoint(sampleLocal, resultTarget, 0, maxLocalDistance);
+                if (result) {
+                    hitWorld.copy(resultTarget.point).applyMatrix4(entry.transform);
+                    if (hitWorld.distanceToSquared(sampleWorld) < radiusSq) {
+                        return true; // Collision detected
+                    }
+                }
+            } else {
+                const collided = bvh.shapecast({
+                    intersectsBounds: (box: THREE.Box3) => box.distanceToPoint(sampleLocal) <= maxLocalDistance,
+                    intersectsTriangle: (tri: THREE.Triangle) => {
+                        worldTri.a.copy(tri.a).applyMatrix4(entry.transform);
+                        worldTri.b.copy(tri.b).applyMatrix4(entry.transform);
+                        worldTri.c.copy(tri.c).applyMatrix4(entry.transform);
+                        worldTri.closestPointToPoint(sampleWorld, hitWorld);
+                        return hitWorld.distanceToSquared(sampleWorld) < radiusSq;
+                    },
+                });
+                if (collided) {
+                    return true;
+                }
             }
         }
         return false;
@@ -364,8 +336,6 @@ export function generateRequiredKickstands(
         candidateAnchors.sort((a, b) => b.pos.z - a.pos.z);
 
         const rootPos = root.transform.pos;
-        const gridOriginX = rootPos.x;
-        const gridOriginY = rootPos.y;
         let existingAxis = decisionAxes.length > 0
             ? decisionAxes[0]
             : (localAxes.length > 0 ? localAxes[0] : 0);
@@ -379,12 +349,21 @@ export function generateRequiredKickstands(
                 break;
             }
 
+            const needBefore = additionalAxesNeededForTwoAxisBracing(
+                groupAxesState,
+                AUTO_BRACING_HARD_RULES.minAxisSeparationDeg,
+            );
+            if (needBefore <= 0) {
+                break;
+            }
+
             const angleOffset = maxBracesToGenerate === 2
                 ? (i === 0 ? 0 : existingAxis + Math.PI / 2)
                 : (existingAxis + Math.PI / 2);
-            const dropDist = GENERATION_DISTANCE_MM;
-            let selectedBuild: KickstandBuildResult | null = null;
-            let selectedRootPos: Vec3 | null = null;
+            const dropDist = Math.max(MIN_ROOT_PROXIMITY_CLEARANCE_MM + 0.25, GENERATION_DISTANCE_MM);
+            let selectedBuild = null as KickstandBuildResult | null;
+            let selectedRootPos = null as Vec3 | null;
+            let selectedGridNode = null as { gx: number; gy: number } | null;
             let selectedRootDistSq = Infinity;
 
             // Iterate through possible anchor points (highest first)
@@ -392,76 +371,43 @@ export function generateRequiredKickstands(
                 // Calculate the lateral drift of the trunk up to THIS anchor so we can mirror it
                 const trunkDx = anchor.pos.x - rootPos.x;
                 const trunkDy = anchor.pos.y - rootPos.y;
+                let attemptCounter = 0;
 
-                // Simple iterative solver to find a non-colliding drop from this anchor
-                const maxAttempts = isCleanupPass ? 12 : 8;
-                for (let attempt = 0; attempt < maxAttempts; attempt++) {
-                    let angle = angleOffset + (attempt % 2 === 0 ? 0 : Math.PI);
-                    if (isCleanupPass) {
-                        const cleanupPhase = attempt % 6;
-                        if (cleanupPhase === 2) {
-                            angle = existingAxis + Math.PI / 2;
-                        } else if (cleanupPhase === 3) {
-                            angle = existingAxis + (3 * Math.PI) / 2;
-                        } else if (cleanupPhase === 4) {
-                            angle = existingAxis;
-                        } else if (cleanupPhase === 5) {
-                            angle = existingAxis + Math.PI;
-                        }
-                    }
-                    const currentDist = isGridEnabled
-                        ? dropDist
-                        : dropDist + Math.floor(attempt / 2) * 2; // Expand only in non-grid mode
-
-                    if (currentDist > maxHorizontalRun) break; // Don't generate out of connection range
-
-                    // Calculate the top anchor point offset from the trunk
-                    const topAnchorX = anchor.pos.x + Math.cos(angle) * currentDist;
-                    const topAnchorY = anchor.pos.y + Math.sin(angle) * currentDist;
-
-                    // Drop parallel to the trunk: subtract the trunk's lateral drift from the top anchor
-                    let candidateRootX = topAnchorX - trunkDx;
-                    let candidateRootY = topAnchorY - trunkDy;
-
-                    if (isGridEnabled) {
-                        const snapped = findNearestAvailableGridPoint(
-                            candidateRootX,
-                            candidateRootY,
-                            gridOriginX,
-                            gridOriginY,
-                            trunk.modelId,
-                            MAX_GRID_ROOT_SEARCH_RING,
-                        );
-                        if (!snapped) continue;
-                        const canonical = toCanonicalGridPoint(snapped.x, snapped.y);
-                        candidateRootX = canonical.x;
-                        candidateRootY = canonical.y;
-
-                        const hostGx = snapToGridIndex(rootPos.x, gridSettings.spacingMm);
-                        const hostGy = snapToGridIndex(rootPos.y, gridSettings.spacingMm);
-                        const candidateGx = snapToGridIndex(candidateRootX, gridSettings.spacingMm);
-                        const candidateGy = snapToGridIndex(candidateRootY, gridSettings.spacingMm);
-                        if (Math.abs(candidateGx - hostGx) > 1 || Math.abs(candidateGy - hostGy) > 1) {
-                            continue;
-                        }
+                const evaluateCandidateRoot = (
+                    candidateRootX: number,
+                    candidateRootY: number,
+                    gridNode: { gx: number; gy: number } | null,
+                ): void => {
+                    if (gridNode && isGridNodeOccupied(trunk.modelId, gridNode.gx, gridNode.gy)) {
+                        return;
                     }
 
-                    const candidateRootPos = {
-                        x: candidateRootX,
-                        y: candidateRootY,
-                        z: 0 // Drop to build plate
-                    };
+                    const candidateAxis = normalizeAxisAngleRad(
+                        Math.atan2(candidateRootY - rootPos.y, candidateRootX - rootPos.x),
+                    );
+                    const candidateNeedAfter = additionalAxesNeededForTwoAxisBracing(
+                        [...groupAxesState, candidateAxis],
+                        AUTO_BRACING_HARD_RULES.minAxisSeparationDeg,
+                    );
+                    if (candidateNeedAfter >= needBefore) {
+                        return;
+                    }
 
                     const hostDx = candidateRootX - anchor.pos.x;
                     const hostDy = candidateRootY - anchor.pos.y;
                     if (hostDx * hostDx + hostDy * hostDy <= minRootProximityClearanceSq) {
-                        continue;
+                        return;
                     }
 
                     const hostRootDx = candidateRootX - rootPos.x;
                     const hostRootDy = candidateRootY - rootPos.y;
-                    if (hostRootDx * hostRootDx + hostRootDy * hostRootDy <= minRootProximityClearanceSq) {
-                        continue;
+                    const hostDistSq = hostRootDx * hostRootDx + hostRootDy * hostRootDy;
+                    if (hostDistSq <= minRootProximityClearanceSq) {
+                        return;
+                    }
+
+                    if (selectedBuild && hostDistSq >= selectedRootDistSq) {
+                        return;
                     }
 
                     const hostSegDx = anchor.pos.x - rootPos.x;
@@ -476,40 +422,51 @@ export function generateRequiredKickstands(
                         const shaftDx = candidateRootX - nearestX;
                         const shaftDy = candidateRootY - nearestY;
                         if (shaftDx * shaftDx + shaftDy * shaftDy <= minRootProximityClearanceSq) {
-                            continue;
+                            return;
                         }
                     } else {
                         // Degenerate host projection fallback: treat as host point clearance.
                         const rootPointDx = candidateRootX - rootPos.x;
                         const rootPointDy = candidateRootY - rootPos.y;
                         if (rootPointDx * rootPointDx + rootPointDy * rootPointDy <= minRootProximityClearanceSq) {
-                            continue;
+                            return;
                         }
                     }
 
                     if (isCandidateRootTooCloseToExistingRoot(candidateRootX, candidateRootY)) {
-                        continue;
+                        return;
                     }
 
                     // Prevent generating exactly on top of an already placed kickstand root
-                    const isOverlapping = usedRootPositions.some(used => 
-                        Math.abs(used.x - candidateRootX) < 0.1 && Math.abs(used.y - candidateRootY) < 0.1
+                    const isOverlapping = usedRootPositions.some((used) =>
+                        Math.abs(used.x - candidateRootX) < 0.1 && Math.abs(used.y - candidateRootY) < 0.1,
                     );
-                    
                     if (isOverlapping) {
-                        continue;
+                        return;
                     }
 
-                    const topAnchorPos = { x: topAnchorX, y: topAnchorY, z: anchor.pos.z };
+                    const candidateRootPos: Vec3 = {
+                        x: candidateRootX,
+                        y: candidateRootY,
+                        z: 0, // Drop to build plate
+                    };
+                    const topAnchorPos: Vec3 = {
+                        x: candidateRootX + trunkDx,
+                        y: candidateRootY + trunkDy,
+                        z: anchor.pos.z,
+                    };
 
                     if (!linePassesMeshClearance(topAnchorPos, anchor.pos, trunk.modelId, anchor.diameterMm)) {
-                        continue;
+                        return;
                     }
 
                     const candidateBraceRadius = Math.max(0.001, anchor.diameterMm / 2);
                     if (checkSlantedCollision(topAnchorPos, candidateRootPos, trunk.modelId, candidateBraceRadius + 1.0)) {
-                        continue;
+                        return;
                     }
+
+                    const attemptId = attemptCounter;
+                    attemptCounter += 1;
 
                     const hostTarget: KickstandHostTarget = {
                         segmentId: anchor.segmentId,
@@ -523,7 +480,7 @@ export function generateRequiredKickstands(
                         modelId: trunk.modelId,
                         rootPos: candidateRootPos,
                         host: hostTarget,
-                        idSeed: `auto-ks-${passIndex}-${trunkIndex}-${i}-${anchorIndex}-${attempt}`,
+                        idSeed: `auto-ks-${passIndex}-${trunkIndex}-${i}-${anchorIndex}-${attemptId}`,
                     };
 
                     try {
@@ -532,9 +489,9 @@ export function generateRequiredKickstands(
                         // error means the terminal cannot reach the host at a
                         // legal angle (or runs through the model), leaving a
                         // column beside the trunk rather than a kickstand.
-                        if (trialBuild.error) continue;
+                        if (trialBuild.error) return;
                         if (!builtKickstandPassesMeshClearance(trialBuild, trunk.modelId)) {
-                            continue;
+                            return;
                         }
 
                         // Prefer the SNUGGEST valid root: the mirrored side
@@ -542,15 +499,142 @@ export function generateRequiredKickstands(
                         // for axis coverage, so keep whichever sits closer to
                         // the host — minimal plate footprint, stable across
                         // re-runs. Never break on the first valid drop.
-                        const hostDistSq = (candidateRootPos.x - rootPos.x) ** 2
-                            + (candidateRootPos.y - rootPos.y) ** 2;
                         if (!selectedBuild || hostDistSq < selectedRootDistSq) {
                             selectedBuild = trialBuild;
                             selectedRootPos = candidateRootPos;
+                            selectedGridNode = gridNode;
                             selectedRootDistSq = hostDistSq;
                         }
                     } catch (err) {
                         console.warn("Failed to build generative Kickstand", err);
+                    }
+                };
+
+                if (isGridEnabled) {
+                    const spacing = gridSettings.spacingMm;
+                    const hostGx = snapToGridIndex(rootPos.x, spacing);
+                    const hostGy = snapToGridIndex(rootPos.y, spacing);
+                    const kMin = Math.max(1, Math.ceil((MIN_ROOT_PROXIMITY_CLEARANCE_MM + 0.05) / spacing));
+                    const kMax = Math.max(kMin, Math.ceil(maxHorizontalRun / spacing));
+                    const preferXAxis = Math.abs(Math.cos(angleOffset)) >= Math.abs(Math.sin(angleOffset));
+
+                    // Tier 1: Cardinal grid ring slots (hostGx ± k, hostGy) and (hostGx, hostGy ± k)
+                    for (let k = kMin; k <= kMax; k++) {
+                        const xPair = [
+                            { gx: hostGx + k, gy: hostGy },
+                            { gx: hostGx - k, gy: hostGy },
+                        ];
+                        const yPair = [
+                            { gx: hostGx, gy: hostGy + k },
+                            { gx: hostGx, gy: hostGy - k },
+                        ];
+                        const orderedPairs = preferXAxis ? [xPair, yPair] : [yPair, xPair];
+                        for (const pair of orderedPairs) {
+                            for (const slot of pair) {
+                                const worldX = slot.gx * spacing;
+                                const worldY = slot.gy * spacing;
+                                const dist = Math.hypot(worldX - rootPos.x, worldY - rootPos.y);
+                                if (dist <= MIN_ROOT_PROXIMITY_CLEARANCE_MM || dist > maxHorizontalRun + 1e-6) {
+                                    continue;
+                                }
+                                evaluateCandidateRoot(worldX, worldY, slot);
+                            }
+                            if (selectedBuild) break;
+                        }
+                        if (selectedBuild) break;
+                    }
+
+                    // Tier 2: Non-cardinal grid perimeter slots (Math.max(|dx|, |dy|) === k)
+                    if (!selectedBuild) {
+                        for (let k = kMin; k <= kMax; k++) {
+                            const perimeterSlots: Array<{
+                                gx: number;
+                                gy: number;
+                                worldX: number;
+                                worldY: number;
+                                dist: number;
+                                align: number;
+                            }> = [];
+                            for (let dx = -k; dx <= k; dx++) {
+                                for (let dy = -k; dy <= k; dy++) {
+                                    if (dx === 0 || dy === 0) continue;
+                                    if (Math.max(Math.abs(dx), Math.abs(dy)) !== k) continue;
+                                    const gx = hostGx + dx;
+                                    const gy = hostGy + dy;
+                                    const worldX = gx * spacing;
+                                    const worldY = gy * spacing;
+                                    const dist = Math.hypot(worldX - rootPos.x, worldY - rootPos.y);
+                                    if (dist <= MIN_ROOT_PROXIMITY_CLEARANCE_MM || dist > maxHorizontalRun + 1e-6) {
+                                        continue;
+                                    }
+                                    const slotAngle = Math.atan2(worldY - rootPos.y, worldX - rootPos.x);
+                                    const align = Math.abs(Math.cos(slotAngle - angleOffset));
+                                    perimeterSlots.push({ gx, gy, worldX, worldY, dist, align });
+                                }
+                            }
+                            perimeterSlots.sort((a, b) => (b.align - a.align) || (a.dist - b.dist));
+                            for (const slot of perimeterSlots) {
+                                evaluateCandidateRoot(slot.worldX, slot.worldY, { gx: slot.gx, gy: slot.gy });
+                            }
+                            if (selectedBuild) break;
+                        }
+                    }
+
+                    // Tier 3: Continuous radial fallback when all grid slots in [kMin, kMax] are occupied or obstructed
+                    if (!selectedBuild) {
+                        const radialStart = MIN_ROOT_PROXIMITY_CLEARANCE_MM + 0.25;
+                        const radialStep = 1.0;
+                        const angleCandidates = [
+                            angleOffset,
+                            angleOffset + Math.PI,
+                            angleOffset + Math.PI / 2,
+                            angleOffset + (3 * Math.PI) / 2,
+                            angleOffset + Math.PI / 4,
+                            angleOffset + (5 * Math.PI) / 4,
+                            angleOffset + (3 * Math.PI) / 4,
+                            angleOffset + (7 * Math.PI) / 4,
+                        ];
+                        for (let currentDist = radialStart; currentDist <= maxHorizontalRun + 1e-6; currentDist += radialStep) {
+                            const clampedDist = Math.min(currentDist, maxHorizontalRun);
+                            if (clampedDist <= MIN_ROOT_PROXIMITY_CLEARANCE_MM) continue;
+                            for (const angle of angleCandidates) {
+                                const topAnchorX = anchor.pos.x + Math.cos(angle) * clampedDist;
+                                const topAnchorY = anchor.pos.y + Math.sin(angle) * clampedDist;
+                                const candidateRootX = topAnchorX - trunkDx;
+                                const candidateRootY = topAnchorY - trunkDy;
+                                evaluateCandidateRoot(candidateRootX, candidateRootY, null);
+                            }
+                            if (selectedBuild || clampedDist >= maxHorizontalRun) break;
+                        }
+                    }
+                } else {
+                    // Simple iterative solver to find a non-colliding drop from this anchor
+                    const maxAttempts = isCleanupPass ? 12 : 8;
+                    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                        let angle = angleOffset + (attempt % 2 === 0 ? 0 : Math.PI);
+                        if (isCleanupPass) {
+                            const cleanupPhase = attempt % 6;
+                            if (cleanupPhase === 2) {
+                                angle = existingAxis + Math.PI / 2;
+                            } else if (cleanupPhase === 3) {
+                                angle = existingAxis + (3 * Math.PI) / 2;
+                            } else if (cleanupPhase === 4) {
+                                angle = existingAxis;
+                            } else if (cleanupPhase === 5) {
+                                angle = existingAxis + Math.PI;
+                            }
+                        }
+                        const currentDist = dropDist + Math.floor(attempt / 2) * 2;
+                        if (currentDist > maxHorizontalRun) break; // Don't generate out of connection range
+
+                        // Calculate the top anchor point offset from the trunk
+                        const topAnchorX = anchor.pos.x + Math.cos(angle) * currentDist;
+                        const topAnchorY = anchor.pos.y + Math.sin(angle) * currentDist;
+
+                        // Drop parallel to the trunk: subtract the trunk's lateral drift from the top anchor
+                        const candidateRootX = topAnchorX - trunkDx;
+                        const candidateRootY = topAnchorY - trunkDy;
+                        evaluateCandidateRoot(candidateRootX, candidateRootY, null);
                     }
                 }
 
@@ -559,10 +643,6 @@ export function generateRequiredKickstands(
 
             if (selectedBuild && selectedRootPos) {
                 const actualAngle = normalizeAxisAngleRad(Math.atan2(selectedRootPos.y - rootPos.y, selectedRootPos.x - rootPos.x));
-                const needBefore = additionalAxesNeededForTwoAxisBracing(
-                    groupAxesState,
-                    AUTO_BRACING_HARD_RULES.minAxisSeparationDeg,
-                );
                 const needAfter = additionalAxesNeededForTwoAxisBracing(
                     [...groupAxesState, actualAngle],
                     AUTO_BRACING_HARD_RULES.minAxisSeparationDeg,
@@ -575,10 +655,8 @@ export function generateRequiredKickstands(
 
                 generatedKickstands.push(selectedBuild);
 
-                if (isGridEnabled) {
-                    const gx = snapToGridIndex(selectedRootPos.x, gridSettings.spacingMm);
-                    const gy = snapToGridIndex(selectedRootPos.y, gridSettings.spacingMm);
-                    occupiedGridNodeKeys.add(gridNodeKey(trunk.modelId, gx, gy));
+                if (isGridEnabled && selectedGridNode) {
+                    occupiedGridNodeKeys.add(gridNodeKey(trunk.modelId, selectedGridNode.gx, selectedGridNode.gy));
                 }
                 occupiedRootPositions.push(selectedRootPos);
 

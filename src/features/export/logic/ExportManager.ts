@@ -22,7 +22,12 @@ import { inflateModelPlateClearance, raftBandTopMm } from '@/supports/Rafts/Cren
 import { filterLineRaftEdges, generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
 import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBeam';
 import { buildLineRaftEdgePairs } from '@/supports/Rafts/Crenelated/geometry/buildLineRaftEdgePairs';
-import { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
+import {
+  collectRaftBaseCirclesByModel,
+  fromRaftModelKey,
+  RAFT_UNASSIGNED_MODEL_KEY,
+} from '@/supports/Rafts/Crenelated/raftFootprintCircles';
+import type { PolygonWithHoles } from '@/supports/Rafts/Crenelated/geometry/polygonSet2d';
 
 export interface ExportOptions {
   filename: string;
@@ -98,6 +103,121 @@ function snapshotToken(obj: unknown): string {
     snapshotTokens.set(obj, token);
   }
   return token;
+}
+
+export function buildExportRaftGroups(
+  supportState: ReturnType<typeof getSnapshot>,
+  options: { scopedModelIds?: ReadonlySet<string> | null; clearanceTargets?: readonly LoadedModel[] } = {},
+): THREE.Group[] {
+  const { scopedModelIds = null, clearanceTargets = [] } = options;
+  const exportGroups: THREE.Group[] = [];
+  const circlesByModel = collectRaftBaseCirclesByModel(supportState, {
+    fallbackModelKey: RAFT_UNASSIGNED_MODEL_KEY,
+  });
+  if (circlesByModel.size === 0) return exportGroups;
+
+  const clearanceByBandTop = new Map<
+    number,
+    { clearance: PolygonWithHoles[]; clearanceCut: PolygonWithHoles[] | null }
+  >();
+  const getClearanceEntry = (bandTop: number) => {
+    let entry = clearanceByBandTop.get(bandTop);
+    if (!entry) {
+      const clearance = collectModelPlateFootprint(clearanceTargets, bandTop);
+      entry = { clearance, clearanceCut: null };
+      clearanceByBandTop.set(bandTop, entry);
+    }
+    return entry;
+  };
+
+  for (const [modelKey, circles] of circlesByModel) {
+    if (circles.length === 0) continue;
+
+    const modelId = fromRaftModelKey(modelKey, RAFT_UNASSIGNED_MODEL_KEY);
+    if (scopedModelIds != null) {
+      if (!modelId || !scopedModelIds.has(modelId)) continue;
+    }
+
+    const raftSettings = modelId ? getRaftSettingsForModel(modelId) : getRaftSettings();
+    if (raftSettings.bottomMode === 'off') continue;
+
+    // The raft keeps clear of any model standing on the plate, so the
+    // exported solid matches the viewport (and the slice).
+    const clearanceEntry = getClearanceEntry(raftBandTopMm(raftSettings));
+    const parts = buildRaftFootprintMeshes({
+      circles,
+      raft: raftSettings,
+      clearance: clearanceEntry.clearance,
+    });
+    if (!parts.baseMesh && parts.footprint.length === 0) continue;
+
+    const raftGroup = new THREE.Group();
+    raftGroup.name = 'Raft';
+
+    if (parts.baseMesh) raftGroup.add(parts.baseMesh);
+
+    if (raftSettings.bottomMode === 'line') {
+      const nodes2d = circles.map((c) => new THREE.Vector2(c.x, c.y));
+      const hasBorderRing = parts.footprint.length > 0;
+      const edgePairs = buildLineRaftEdgePairs(nodes2d, {
+        hasBorderRing,
+        keepFactor: 8,
+        absMaxLen: 220,
+        enforceConnected: true,
+      });
+
+      const beamHeight = Math.max(0.01, raftSettings.lineHeightMm);
+      if (!clearanceEntry.clearanceCut) {
+        clearanceEntry.clearanceCut = inflateModelPlateClearance(clearanceEntry.clearance);
+      }
+
+      // Beams a model on the plate is in the way of are never drawn: cutting them
+      // would leave severed ends to close up again, and two clusters either side of
+      // a model should stay two clusters.
+      const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = filterLineRaftEdges(
+        edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]),
+        clearanceEntry.clearanceCut,
+        raftSettings.lineWidthMm,
+      );
+      const unionMesh = generateUnionedLineRaftMesh(unionEdges, {
+        widthMm: raftSettings.lineWidthMm,
+        heightMm: beamHeight,
+        borderProfile: null,
+      });
+
+      const unionPositionAttribute = unionMesh.geometry.getAttribute('position');
+      const unionHasGeometry = !!unionPositionAttribute && unionPositionAttribute.count > 0;
+      if (unionHasGeometry) {
+        raftGroup.add(unionMesh);
+      } else {
+        unionMesh.geometry.dispose();
+        if (Array.isArray(unionMesh.material)) {
+          unionMesh.material.forEach((m) => m.dispose());
+        } else {
+          unionMesh.material?.dispose();
+        }
+        for (const [a, b] of unionEdges) {
+          const start = new THREE.Vector3(a.x, a.y, 0);
+          const end = new THREE.Vector3(b.x, b.y, 0);
+          const beam = generateChamferedBeam(start, end, {
+            widthMm: raftSettings.lineWidthMm,
+            heightMm: beamHeight,
+            chamferAngleDeg: 90,
+          });
+          raftGroup.add(beam);
+        }
+      }
+    }
+
+    if (parts.wallMesh) raftGroup.add(parts.wallMesh);
+
+    if (raftGroup.children.length > 0) {
+      raftGroup.updateMatrixWorld(true);
+      exportGroups.push(raftGroup);
+    }
+  }
+
+  return exportGroups;
 }
 
 /**
@@ -968,103 +1088,13 @@ export class ExportManager {
 
     // 4. Add Raft (if requested and enabled) — per-model so each model gets its own raft
     if (options.includeRaft) {
-      const globalRaftSettings = getRaftSettings();
-      if (globalRaftSettings.bottomMode !== 'off') {
-        const supportState = getSnapshot();
-        const allRoots = Object.values(supportState.roots);
-
-        // Group roots by modelId so each model gets a separate raft
-        const rootsByModel = new Map<string, typeof allRoots>();
-        for (const root of allRoots) {
-          const rootModelId = root.modelId ?? null;
-          if (hasScopedModelFilter) {
-            if (!rootModelId || !scopedModelIds.has(rootModelId)) {
-              continue;
-            }
-          }
-
-          const mid = rootModelId ?? '__orphan__';
-          let arr = rootsByModel.get(mid);
-          if (!arr) { arr = []; rootsByModel.set(mid, arr); }
-          arr.push(root);
-        }
-
-        const clearanceTargets = (sceneContext?.models ?? []).filter((model) => model.visible);
-
-        for (const [modelKey, roots] of rootsByModel) {
-          if (roots.length === 0) continue;
-
-          // Use per-model raft settings if available, otherwise use global settings
-          const modelId = modelKey === '__orphan__' ? null : modelKey;
-          const raftSettings = modelId ? getRaftSettingsForModel(modelId) : globalRaftSettings;
-
-          const circles: SupportBaseCircle[] = roots.map(r => ({
-            x: r.transform.pos.x,
-            y: r.transform.pos.y,
-            r: r.diameter / 2
-          }));
-
-          // The raft keeps clear of any model standing on the plate, so the
-          // exported solid matches the viewport (and the slice).
-          const clearance = collectModelPlateFootprint(clearanceTargets, raftBandTopMm(raftSettings));
-          const parts = buildRaftFootprintMeshes({ circles, raft: raftSettings, clearance });
-          if (!parts.baseMesh && parts.footprint.length === 0) continue;
-
-          const raftGroup = new THREE.Group();
-          raftGroup.name = 'Raft';
-
-          if (parts.baseMesh) raftGroup.add(parts.baseMesh);
-
-          if (raftSettings.bottomMode === 'line') {
-            const nodes2d = roots.map((r) => new THREE.Vector2(r.transform.pos.x, r.transform.pos.y));
-            const hasBorderRing = parts.footprint.length > 0;
-            const edgePairs = buildLineRaftEdgePairs(nodes2d, {
-              hasBorderRing,
-              keepFactor: 8,
-              absMaxLen: 220,
-              enforceConnected: true,
-            });
-
-            const beamHeight = Math.max(0.01, raftSettings.lineHeightMm);
-
-            // Beams a model on the plate is in the way of are never drawn: cutting them
-    // would leave severed ends to close up again, and two clusters either side of
-    // a model should stay two clusters.
-    const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = filterLineRaftEdges(
-      edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]),
-      inflateModelPlateClearance(clearance),
-      raftSettings.lineWidthMm,
-    );
-            const unionMesh = generateUnionedLineRaftMesh(unionEdges, {
-              widthMm: raftSettings.lineWidthMm,
-              heightMm: beamHeight,
-              borderProfile: null,
-            });
-
-            const unionPositionAttribute = unionMesh.geometry.getAttribute('position');
-            const unionHasGeometry = !!unionPositionAttribute && unionPositionAttribute.count > 0;
-            if (unionHasGeometry) {
-              raftGroup.add(unionMesh);
-            } else {
-              for (const [a, b] of unionEdges) {
-                const start = new THREE.Vector3(a.x, a.y, 0);
-                const end = new THREE.Vector3(b.x, b.y, 0);
-                const beam = generateChamferedBeam(start, end, {
-                  widthMm: raftSettings.lineWidthMm,
-                  heightMm: beamHeight,
-                  chamferAngleDeg: 90,
-                });
-                raftGroup.add(beam);
-              }
-            }
-          }
-
-          if (parts.wallMesh) raftGroup.add(parts.wallMesh);
-
-          raftGroup.updateMatrixWorld(true);
-          exportObjects.push(raftGroup);
-        }
-      }
+      const supportState = getSnapshot();
+      const clearanceTargets = (sceneContext?.models ?? []).filter((model) => model.visible);
+      const raftGroups = buildExportRaftGroups(supportState, {
+        scopedModelIds: hasScopedModelFilter ? scopedModelIds : null,
+        clearanceTargets,
+      });
+      exportObjects.push(...raftGroups);
     }
 
     // 5. Serialize and write

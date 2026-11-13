@@ -50,8 +50,10 @@ function resolveRaftSettings(next: RaftSettings, wallIsExplicit: boolean): RaftS
 
 type RaftStoreListener = () => void;
 const listeners = new Set<RaftStoreListener>();
+let raftStoreRevision = 0;
 
 function notify() {
+  raftStoreRevision += 1;
   listeners.forEach((listener) => {
     try {
       listener();
@@ -59,6 +61,10 @@ function notify() {
       console.error('[RaftStore] listener error', err);
     }
   });
+}
+
+export function getRaftStoreRevision(): number {
+  return raftStoreRevision;
 }
 
 export function getRaftSettings(): RaftSettings {
@@ -201,4 +207,5 @@ export function seedRaftStateSnapshot(snapshot: RaftStateSnapshot): void {
       wallEnabled: normalized.bottomMode === 'solid' ? normalized.wallEnabled : false,
     });
   }
+  raftStoreRevision += 1;
 }

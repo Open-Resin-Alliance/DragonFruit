@@ -6,11 +6,12 @@ import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
 import { supportAnswersPointer, SCENERY_DIM } from '@/features/scene/plates/plateInteractivity';
 import { useSyncExternalStore } from 'react';
 import { subscribe, getSnapshot } from '@/supports/state';
-import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
+import { getRaftSettingsForModel, getRaftStoreRevision, subscribeToRaftStore } from '../RaftState';
 import { buildRaftFootprintMeshes } from '../geometry/generateRaftFromFootprint';
 import { collectModelPlateFootprint, type PlateFootprintSource } from '../geometry/modelPlateFootprint';
 import { raftBandTopMm } from '../geometry/computeRaftFootprint';
-import { collectRaftBaseCirclesByModel, fromRaftModelKey } from '../raftFootprintCircles';
+import type { PolygonWithHoles } from '../geometry/polygonSet2d';
+import { collectRaftBaseCirclesByModel, fromRaftModelKey, type RaftFootprintSource } from '../raftFootprintCircles';
 import { noteActivity } from '@/utils/debug/heartbeatContext';
 
 /**
@@ -42,6 +43,95 @@ interface RaftRendererProps {
 
 const EMPTY_PLATE_CLEARANCE_TARGETS: readonly PlateFootprintSource[] = Object.freeze([]);
 
+export interface SolidViewportRaftMeshesOptions {
+  modelFilterId?: string | null;
+  excludeModelId?: string | null;
+  excludedModelIds?: ReadonlySet<string> | Iterable<string>;
+  plateClearanceTargets?: readonly PlateFootprintSource[];
+  raftOpacity?: number;
+  raftTransparent?: boolean;
+  ghostRenderOrder?: number;
+  clippingPlanes?: THREE.Plane[];
+}
+
+export function buildSolidViewportRaftMeshes(
+  supportState: RaftFootprintSource,
+  options: SolidViewportRaftMeshesOptions = {},
+): Array<{ baseMesh: THREE.Mesh; wallMesh: THREE.Mesh | null }> {
+  const {
+    modelFilterId = null,
+    excludeModelId = null,
+    excludedModelIds,
+    plateClearanceTargets = EMPTY_PLATE_CLEARANCE_TARGETS,
+    raftOpacity = 1,
+    raftTransparent = false,
+    ghostRenderOrder = 0,
+    clippingPlanes = getSceneClipPlanes(),
+  } = options;
+
+  const rootsByModel = collectRaftBaseCirclesByModel(supportState, {
+    modelFilterId,
+    excludeModelId,
+    excludedModelIds,
+    fallbackModelKey: 'unknown',
+  });
+  if (rootsByModel.size === 0) return [];
+
+  const clearanceByBandTop = new Map<number, PolygonWithHoles[]>();
+  const getClearance = (bandTop: number) => {
+    let clearance = clearanceByBandTop.get(bandTop);
+    if (!clearance) {
+      clearance = collectModelPlateFootprint(plateClearanceTargets, bandTop);
+      clearanceByBandTop.set(bandTop, clearance);
+    }
+    return clearance;
+  };
+
+  const meshes: Array<{ baseMesh: THREE.Mesh; wallMesh: THREE.Mesh | null }> = [];
+  let notedActivity = false;
+
+  for (const [modelKey, circles] of rootsByModel) {
+    if (circles.length === 0) continue;
+    const resolvedModelId = fromRaftModelKey(modelKey, 'unknown');
+    const modelRaft = getRaftSettingsForModel(resolvedModelId);
+    if (modelRaft.bottomMode !== 'solid') continue;
+
+    if (!notedActivity) {
+      noteActivity('support-mode:raft-meshes');
+      notedActivity = true;
+    }
+
+    const modelId = resolvedModelId ?? modelKey;
+    const clearance = getClearance(raftBandTopMm(modelRaft));
+
+    const parts = buildRaftFootprintMeshes({ circles, raft: modelRaft, clearance });
+    if (!parts.baseMesh) continue;
+
+    const baseMesh = parts.baseMesh;
+    baseMesh.userData.modelId = modelId;
+    baseMesh.renderOrder = ghostRenderOrder;
+    baseMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+    baseMesh.castShadow = false;
+    baseMesh.receiveShadow = true;
+
+    let wallMesh: THREE.Mesh | null = parts.wallMesh;
+    if (wallMesh && (wallMesh.geometry as THREE.BufferGeometry).attributes?.position?.count > 0) {
+      wallMesh.userData.modelId = modelId;
+      wallMesh.userData.isWall = true;
+      wallMesh.renderOrder = ghostRenderOrder;
+      wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+      wallMesh.castShadow = false;
+      wallMesh.receiveShadow = true;
+    } else {
+      wallMesh = null;
+    }
+
+    meshes.push({ baseMesh, wallMesh });
+  }
+
+  return meshes;
+}
+
 export default function RaftRenderer({
   passive = false,
   colorized = true,
@@ -60,7 +150,7 @@ export default function RaftRenderer({
   plateClearanceTargets = EMPTY_PLATE_CLEARANCE_TARGETS,
 }: RaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
-  const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+  const raftRevision = useSyncExternalStore(subscribeToRaftStore, getRaftStoreRevision, getRaftStoreRevision);
   const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
   const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
   const lastSyncedPrepareActiveModelIdRef = React.useRef<string | null>(activeModelId ?? null);
@@ -136,57 +226,19 @@ export default function RaftRenderer({
   const raftOpacity = Math.max(0.05, Math.min(1, ghostOpacity));
   const raftTransparent = raftOpacity < 0.999;
 
-  const clearance = React.useMemo(
-    () => (raft.bottomMode === 'off'
-      ? []
-      : collectModelPlateFootprint(plateClearanceTargets, raftBandTopMm(raft))),
-    [plateClearanceTargets, raft],
-  );
-
-  const raftMeshes = React.useMemo(() => {
-    if (raft.bottomMode !== 'solid') return null;
-
-    noteActivity('support-mode:raft-meshes');
-    const rootsByModel = collectRaftBaseCirclesByModel(supportState, {
+  const raftMeshes = React.useMemo(
+    () => buildSolidViewportRaftMeshes(supportState, {
       modelFilterId,
       excludeModelId,
       excludedModelIds: excludedModelIdSet,
-      fallbackModelKey: 'unknown',
-    });
-
-    const meshes: Array<{ baseMesh: THREE.Mesh; wallMesh: THREE.Mesh | null }> = [];
-
-    for (const [modelKey, circles] of rootsByModel) {
-      if (circles.length === 0) continue;
-      const modelId = fromRaftModelKey(modelKey, 'unknown') ?? modelKey;
-
-      const parts = buildRaftFootprintMeshes({ circles, raft, clearance });
-      if (!parts.baseMesh) continue;
-
-      const baseMesh = parts.baseMesh;
-      baseMesh.userData.modelId = modelId;
-      baseMesh.renderOrder = ghostRenderOrder;
-      baseMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
-      baseMesh.castShadow = false;
-      baseMesh.receiveShadow = true;
-
-      let wallMesh: THREE.Mesh | null = parts.wallMesh;
-      if (wallMesh && (wallMesh.geometry as THREE.BufferGeometry).attributes?.position?.count > 0) {
-        wallMesh.userData.modelId = modelId;
-        wallMesh.userData.isWall = true;
-        wallMesh.renderOrder = ghostRenderOrder;
-        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
-        wallMesh.castShadow = false;
-        wallMesh.receiveShadow = true;
-      } else {
-        wallMesh = null;
-      }
-
-      meshes.push({ baseMesh, wallMesh });
-    }
-
-    return meshes;
-  }, [clearance, excludeModelId, excludedModelIdSet, modelFilterId, supportState, raft, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
+      plateClearanceTargets,
+      raftOpacity,
+      raftTransparent,
+      ghostRenderOrder,
+      clippingPlanes,
+    }),
+    [excludeModelId, excludedModelIdSet, modelFilterId, plateClearanceTargets, supportState, raftRevision, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes],
+  );
 
   const handleClick = React.useCallback((e: any) => {
     if (passive) return;
@@ -261,13 +313,14 @@ export default function RaftRenderer({
       if (!material || Array.isArray(material) || !(material instanceof THREE.MeshStandardMaterial)) continue;
 
       const modelId = (mesh.userData?.modelId as string | undefined) ?? null;
+      const modelRaft = getRaftSettingsForModel(modelId === 'unknown' ? null : modelId);
       const tintStrength = resolveTintStrength(modelId);
       const isWall = mesh.userData?.isWall === true
         || (
           !!mesh.geometry
           && ((mesh.geometry as THREE.BufferGeometry).attributes?.position?.count ?? 0) > 0
           && mesh.geometry.boundingBox?.max?.z !== undefined
-          && ((mesh.geometry.boundingBox?.max.z ?? 0) > (raft.thickness + 0.001))
+          && ((mesh.geometry.boundingBox?.max.z ?? 0) > (modelRaft.thickness + 0.001))
         );
       const tintHex = isWall ? '#22c55e' : '#3b82f6';
       const nextColor = blendColor('#a3a3a3', tintHex, tintStrength);
@@ -300,8 +353,8 @@ export default function RaftRenderer({
         mesh.renderOrder = ghostRenderOrder;
       }
     }
-  }, [colorized, effectiveHoverModelId, effectiveVisualActiveModelId, hasSelectedModels, hoverized, raft.thickness, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet, clippingPlanes, pointerSceneryModelIds]);
+  }, [colorized, effectiveHoverModelId, effectiveVisualActiveModelId, hasSelectedModels, hoverized, raftRevision, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet, clippingPlanes, pointerSceneryModelIds]);
 
-  if (raft.bottomMode === 'off') return null;
+  if (!raftMeshes || raftMeshes.length === 0) return null;
   return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;
 }

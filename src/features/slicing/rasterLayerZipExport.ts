@@ -11,14 +11,22 @@ import {
 } from '@/components/settings/performancePreferences';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
-import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
+import { getRaftSettings, getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
 import { buildRaftFootprintMeshes } from '@/supports/Rafts/Crenelated/geometry/generateRaftFromFootprint';
 import { collectModelPlateFootprint, type PlateFootprintSource } from '@/supports/Rafts/Crenelated/geometry/modelPlateFootprint';
 import { inflateModelPlateClearance, raftBandTopMm } from '@/supports/Rafts/Crenelated/geometry/computeRaftFootprint';
+import type { PolygonWithHoles } from '@/supports/Rafts/Crenelated/geometry/polygonSet2d';
+import {
+  collectRaftBaseCirclesByModel,
+  fromRaftModelKey,
+  RAFT_UNASSIGNED_MODEL_KEY,
+} from '@/supports/Rafts/Crenelated/raftFootprintCircles';
 import { filterLineRaftEdges, generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
 import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBeam';
 import { buildLineRaftEdgePairs } from '@/supports/Rafts/Crenelated/geometry/buildLineRaftEdgePairs';
-import type { ContactDisk, Segment, SupportState, Vec3 } from '@/supports/types';
+import type { Brace, ContactDisk, Segment, SupportState, Vec3 } from '@/supports/types';
+import { braceSpanDiameters } from '@/supports/SupportTypes/Brace/braceSpanDiameters';
+import { taperWidthAlong } from '@/supports/SupportPrimitives/Shaft/shaftTaperGeometry';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
@@ -701,8 +709,10 @@ function appendSegmentPrimitive(
   diameter: number,
   segment?: { type?: string; controlPoint1?: { x: number; y: number; z: number }; controlPoint2?: { x: number; y: number; z: number } },
   tessellation?: { shaftRadialSegments?: number; bezierRadialSegments?: number; bezierSteps?: number },
+  endDiameter: number = diameter,
 ): void {
-  const radius = Math.max(0.001, diameter * 0.5);
+  const startRadius = Math.max(0.001, diameter * 0.5);
+  const endRadius = Math.max(0.001, endDiameter * 0.5);
   const shaftRadialSegments = Math.max(3, Math.floor(tessellation?.shaftRadialSegments ?? 12));
   const bezierRadialSegments = Math.max(3, Math.floor(tessellation?.bezierRadialSegments ?? 10));
   const bezierSteps = Math.max(2, Math.floor(tessellation?.bezierSteps ?? 12));
@@ -712,13 +722,16 @@ function appendSegmentPrimitive(
     const p1 = segment.controlPoint1;
     const p2 = segment.controlPoint2;
     const p3 = { x: end.x, y: end.y, z: end.z };
+    const widthAt = taperWidthAlong(bezierSteps + 1, diameter, endDiameter);
 
     let prev = new THREE.Vector3(start.x, start.y, start.z);
     for (let i = 1; i <= bezierSteps; i += 1) {
       const t = i / bezierSteps;
       const p = getBezierPointAtT(p0, p1, p2, p3, t);
       const cur = new THREE.Vector3(p.x, p.y, p.z);
-      const g = createFrustumGeometryBetween(prev, cur, radius, radius, bezierRadialSegments);
+      const r0 = Math.max(0.001, widthAt(i - 1) * 0.5);
+      const r1 = Math.max(0.001, widthAt(i) * 0.5);
+      const g = createFrustumGeometryBetween(prev, cur, r0, r1, bezierRadialSegments);
       if (g) {
         appendGeometryTriangles(sink, g);
         g.dispose();
@@ -728,7 +741,7 @@ function appendSegmentPrimitive(
     return;
   }
 
-  const geom = createFrustumGeometryBetween(start, end, radius, radius, shaftRadialSegments);
+  const geom = createFrustumGeometryBetween(start, end, startRadius, endRadius, shaftRadialSegments);
   if (!geom) return;
   appendGeometryTriangles(sink, geom);
   geom.dispose();
@@ -818,9 +831,6 @@ export function buildSupportAndRaftWorldTriangles(
   const supportState = getSupportSnapshot();
   const sink: TriangleSink = collector ?? out;
   const tipScale = 1 - supportTipShrinkPercent / 100;
-  const raftSettings = getRaftSettings();
-  const hasSolidBottom = raftSettings.bottomMode === 'solid';
-  const raftThickness = raftSettings.thickness;
   const tessellation = resolveSupportSliceTessellation(supportState, supportState);
   const segmentTessellation = {
     shaftRadialSegments: tessellation.shaftRadialSegments,
@@ -993,20 +1003,23 @@ export function buildSupportAndRaftWorldTriangles(
       });
 
       // A brace spans its two knots instead of carrying a shaft. Its diameter
-      // mirrors the renderer: derived from the host knots, not profile.diameter.
+      // mirrors the renderer: derived from the host knots and capped by profile.diameter.
       if (descriptor.lower.kind === 'knot' && descriptor.upper.kind === 'knot' && !descriptor.hasSegments) {
         const endKnot = knotAt(1);
         if (!hostKnot || !endKnot) continue;
-        const profileDiameter = Math.max(0.001, (entity.profile as { diameter?: number } | undefined)?.diameter ?? 1);
-        const startHostDia = Math.max(0.05, (hostKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
-        const endHostDia = Math.max(0.05, (endKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
+        const { startDiameterMm, endDiameterMm } = braceSpanDiameters(
+          entity as unknown as Pick<Brace, 'profile'>,
+          hostKnot,
+          endKnot,
+        );
         appendSegmentPrimitive(
           sink,
           new THREE.Vector3(hostKnot.pos.x, hostKnot.pos.y, hostKnot.pos.z),
           new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z),
-          (startHostDia + endHostDia) * 0.5,
+          Math.max(0.001, startDiameterMm),
           entity.curve as any,
           segmentTessellation,
+          Math.max(0.001, endDiameterMm),
         );
       }
 
@@ -1023,37 +1036,65 @@ export function buildSupportAndRaftWorldTriangles(
     }
   }
 
-  // raftSettings already resolved at top of function; reuse it.
-  const raft = raftSettings;
-  if (raft.bottomMode !== 'off') {
-    const rootsByModel = new Map<string, Array<{ x: number; y: number; r: number }>>();
-    for (const root of Object.values(supportState.roots)) {
-      const rootVisibleByModel = visibleModelIds.has(root.modelId);
-      const rootVisibleByLink = visibleRootIds.has(root.id);
-      if (!rootVisibleByModel && !rootVisibleByLink) continue;
+  const LEGACY_UNASSIGNED_VISIBLE_KEY = '__unassigned_visible__';
+  const visibleRoots: SupportState['roots'] = {};
+  for (const root of Object.values(supportState.roots)) {
+    const effectiveModelId = visibleModelIds.has(root.modelId)
+      ? root.modelId
+      : visibleRootIds.has(root.id)
+        ? (rootModelKeyById.get(root.id) ?? root.modelId ?? LEGACY_UNASSIGNED_VISIBLE_KEY)
+        : null;
+    if (!effectiveModelId) continue;
+    visibleRoots[root.id] = effectiveModelId === root.modelId
+      ? root
+      : { ...root, modelId: effectiveModelId };
+  }
 
-      const modelKey = rootModelKeyById.get(root.id) ?? root.modelId ?? `__root_${root.id}`;
-      const arr = rootsByModel.get(modelKey) ?? [];
-      arr.push({ x: root.transform.pos.x, y: root.transform.pos.y, r: root.diameter * 0.5 });
-      rootsByModel.set(modelKey, arr);
-    }
+  const circlesByModel = collectRaftBaseCirclesByModel(
+    { ...supportState, roots: visibleRoots },
+    { fallbackModelKey: RAFT_UNASSIGNED_MODEL_KEY },
+  );
 
+  if (circlesByModel.size > 0) {
     // A model standing on the plate keeps the sliced raft out of itself, exactly
     // as the viewport does — preview and print must not disagree.
-    const clearance = collectModelPlateFootprint(
-      plateClearanceModels,
-      raftBandTopMm(raft),
-    );
-    const clearanceCut = inflateModelPlateClearance(clearance);
+    const clearanceByBandTop = new Map<
+      number,
+      { clearance: PolygonWithHoles[]; clearanceCut: PolygonWithHoles[] | null }
+    >();
+    const getClearanceEntry = (bandTop: number) => {
+      let entry = clearanceByBandTop.get(bandTop);
+      if (!entry) {
+        const clearance = collectModelPlateFootprint(plateClearanceModels, bandTop);
+        entry = { clearance, clearanceCut: null };
+        clearanceByBandTop.set(bandTop, entry);
+      }
+      return entry;
+    };
 
-    for (const circles of rootsByModel.values()) {
+    for (const [modelKey, circles] of circlesByModel) {
       if (circles.length === 0) continue;
 
-      const parts = buildRaftFootprintMeshes({ circles, raft, clearance });
+      const modelId = fromRaftModelKey(modelKey, RAFT_UNASSIGNED_MODEL_KEY);
+      if (!modelId) continue;
+      if (modelId !== LEGACY_UNASSIGNED_VISIBLE_KEY && !visibleModelIds.has(modelId)) continue;
+
+      const raft = modelId !== LEGACY_UNASSIGNED_VISIBLE_KEY
+        ? getRaftSettingsForModel(modelId)
+        : getRaftSettings();
+      if (raft.bottomMode === 'off') continue;
+
+      const clearanceEntry = getClearanceEntry(raftBandTopMm(raft));
+      const parts = buildRaftFootprintMeshes({
+        circles,
+        raft,
+        clearance: clearanceEntry.clearance,
+      });
       if (!parts.baseMesh && parts.footprint.length === 0) continue;
 
       if (parts.baseMesh) {
         appendGeometryTriangles(sink, parts.baseMesh.geometry);
+        disposeTempMesh(parts.baseMesh);
       } else if (raft.bottomMode === 'line') {
         const nodes2d = circles.map((c) => new THREE.Vector2(c.x, c.y));
         const hasBorderRing = parts.footprint.length > 0;
@@ -1065,15 +1106,18 @@ export function buildSupportAndRaftWorldTriangles(
         });
 
         const beamHeight = Math.max(0.01, raft.lineHeightMm);
+        if (!clearanceEntry.clearanceCut) {
+          clearanceEntry.clearanceCut = inflateModelPlateClearance(clearanceEntry.clearance);
+        }
 
         // Beams a model on the plate is in the way of are never drawn: cutting them
-    // would leave severed ends to close up again, and two clusters either side of
-    // a model should stay two clusters.
-    const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = filterLineRaftEdges(
-      edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]),
-      clearanceCut,
-      raft.lineWidthMm,
-    );
+        // would leave severed ends to close up again, and two clusters either side of
+        // a model should stay two clusters.
+        const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = filterLineRaftEdges(
+          edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]),
+          clearanceEntry.clearanceCut,
+          raft.lineWidthMm,
+        );
         const unionMesh = generateUnionedLineRaftMesh(unionEdges, {
           widthMm: raft.lineWidthMm,
           heightMm: beamHeight,
@@ -1094,17 +1138,30 @@ export function buildSupportAndRaftWorldTriangles(
               chamferAngleDeg: 90,
             });
             appendGeometryTriangles(sink, beam.geometry);
+            disposeTempMesh(beam);
           }
         }
+        disposeTempMesh(unionMesh);
       }
 
       if (parts.wallMesh) {
         appendGeometryTriangles(sink, parts.wallMesh.geometry);
+        disposeTempMesh(parts.wallMesh);
       }
     }
   }
 
   return out;
+}
+
+function disposeTempMesh(mesh: THREE.Mesh | null | undefined): void {
+  if (!mesh) return;
+  mesh.geometry?.dispose();
+  if (Array.isArray(mesh.material)) {
+    mesh.material.forEach((m) => m?.dispose());
+  } else {
+    mesh.material?.dispose();
+  }
 }
 
 function mirrorWorldX(xMm: number, mirrorX: boolean): number {
