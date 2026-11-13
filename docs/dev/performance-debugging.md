@@ -166,9 +166,14 @@ the problem, and send `dragonfruit.log`.
 
 Every one of these cost a wasted test cycle before it was understood.
 
-**`console.log` from the webview never reaches `dragonfruit.log`.** `attachConsole`
-mirrors Rust records *into* the webview console; nothing travels the other way.
-Measurements meant for a log file must go through `@tauri-apps/plugin-log`.
+**`console.log` from the webview never reaches `dragonfruit.log`.** Only
+`console.warn`, `console.error`, uncaught errors and unhandled promise
+rejections are forwarded, tagged `[webview]`, by `src/components/AppLogger.tsx`.
+Measurements meant for a log file must go through `@tauri-apps/plugin-log`
+(`logToNativeFile` in `src/utils/nativeLog.ts`). Forwarding rides the same IPC
+as everything else, so a webview whose IPC is broken logs nothing; the backend
+notices that on its own when the splash is still up 20 s after the main window
+was created (`[startup]` warning in `src-tauri/src/main.rs`).
 
 **`Physical footprint (peak)` is reset** when WebKit relieves memory pressure, so
 reading it with `vmmap` after the fact reports a peak lower than the real one —

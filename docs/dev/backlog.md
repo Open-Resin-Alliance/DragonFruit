@@ -671,6 +671,46 @@ still applies, on the main thread, before the handover.
 **Temporary until:** nothing — this is a decision. See
 [`auto-support-presets.md`](auto-support-presets.md).
 
+## Temporary rule: the macOS webview is the WebKit macOS shipped with
+
+The app's WKWebView runs the WebKit of the installed macOS release, not the
+user's Safari. A Safari update on an older macOS is staged under
+`/Library/Apple/System/Library/StagedFrameworks/Safari/` and only Safari loads
+it. Confirmed on macOS 12.7.6 with Safari 17.6: the system WebKit is
+`17613.3.9.1.16` (15.6), and `eval("class A{static{}}")` in the app's console
+throws. Gram-ax/gramax#1030 reports the same machine profile.
+
+| macOS | Webview WebKit |
+| --- | --- |
+| 12 Monterey | 15.6 |
+| 13 Ventura | 16.x (16.4 from 13.3) |
+| 14 Sonoma | 17.x (17.4 from 14.4) |
+
+`minimumSystemVersion` is 12.0, so `browserslist` targets `safari >= 15.6`. SWC
+then lowers syntax WebKit 15.6 cannot parse, such as the class static blocks
+Next's own code compiles to; with `safari >= 17.4` one of those in the App
+Router chunk stopped the whole frontend before it could log anything. Two
+things the target does **not** cover:
+
+- **APIs.** Syntax is lowered, built-ins are not. `tsconfig`'s `lib` is
+  ES2022 so that `tsc` rejects `Object.groupBy`, `Promise.withResolvers`,
+  `Array.fromAsync` and the rest of ES2023/2024. Rewrite the call rather than
+  raising `lib`.
+- **Web APIs.** `DecompressionStream` (Safari 16.4) goes through
+  `src/utils/inflateZlib.ts`, which inflates synchronously with `fflate` where
+  it is missing. `tsc` cannot see these: the DOM `lib` is not versioned.
+  `CanvasRenderingContext2D.roundRect` and `AbortSignal.timeout` (both Safari
+  16.0) are polyfilled where missing by `src/utils/legacyWebKitPolyfills.ts`,
+  installed from `src/instrumentation-client.ts` before any app or plugin
+  code; add to it rather than guarding each call site. Feature-detect anything
+  newer than Safari 15.6 (`requestIdleCallback` is missing from every Safari).
+  Known gap: the printing preview sizes itself with `cqw`/`cqh` (Safari 16.0),
+  which macOS 12 ignores, so the preview there keeps the full width and may
+  not keep its aspect ratio.
+
+The macOS line of the log's `[header]` names the WebKit the process loaded,
+with its path. Lift this rule when `minimumSystemVersion` moves to 14.4.
+
 ## Lingui + React Compiler: interpolating translations
 
 **Do not** add interpolating `msg` translations inline inside a React component

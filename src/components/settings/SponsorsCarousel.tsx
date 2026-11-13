@@ -136,13 +136,12 @@ function writeCachedSponsors(sponsors: Sponsor[]) {
   }
 }
 function blobToDataURL(blob: Blob): Promise<string> {
-
-  const { promise, resolve, reject } = Promise.withResolvers<string>();
-  const reader = new FileReader();
-  reader.onloadend = () => resolve(reader.result as string);
-  reader.onerror = () => reject(reader.error);
-  reader.readAsDataURL(blob);
-  return promise;
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 
 function toHighResUrl(src: string, profile?: string | null): string {
