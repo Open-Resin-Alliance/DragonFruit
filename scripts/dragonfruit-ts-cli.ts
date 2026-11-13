@@ -8,7 +8,7 @@
  * state format. No THREE.js or React dependencies.
  *
  * Usage:
- *   npx tsx scripts/dragonfruit-ts-cli.ts scene create -o scene.voxl
+ *   npx tsx scripts/dragonfruit-ts-cli.ts scene create --o scene.voxl
  *   npx tsx scripts/dragonfruit-ts-cli.ts scene add-model scene.voxl --mesh cube.stl --name Cube
  *   npx tsx scripts/dragonfruit-ts-cli.ts scene list-models scene.voxl --json
  *   npx tsx scripts/dragonfruit-ts-cli.ts support add-trunk scene.voxl --model-id m1 --position 10,20,0
@@ -20,9 +20,11 @@
 // stubs `npm test` loads for the same reason. The CLI runs as CommonJS under tsx,
 // so the imports below are resolved one after another, after this has run.
 import './test-unit/register.mjs';
-import { readFileSync, writeFileSync, statSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from 'fs';
+import { tmpdir } from 'os';
+import { fileURLToPath } from 'url';
 import { basename, resolve, dirname } from 'path';
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { createRequire } from 'module';
 import { v4 as uuidv4 } from 'uuid';
 import { parseVoxlAuto } from '../src/features/scene/voxl/codec';
@@ -53,6 +55,17 @@ import type {
 import type { AaPreset } from '../src/features/slicing/autoAaPhysics';
 import type { SceneSliceModelInput } from './cli/sceneSliceMesh';
 import type { RaftSettings } from '../src/supports/Rafts/Crenelated/RaftTypes';
+
+/** A fresh scratch directory under the OS temp dir (not `/tmp`, which Windows lacks). */
+function makeTempDir(prefix: string): string {
+  return mkdtempSync(resolve(tmpdir(), prefix));
+}
+
+/** The release build of the Rust CLI beside this script, with the platform's extension. */
+function rustCliPath(): string {
+  const exe = process.platform === 'win32' ? 'dragonfruit-cli.exe' : 'dragonfruit-cli';
+  return resolve(dirname(fileURLToPath(import.meta.url)), '../rust/dragonfruit-cli/target/release', exe);
+}
 
 // ---------------------------------------------------------------------------
 // VOXL File I/O
@@ -1101,15 +1114,13 @@ async function sceneExportStl(args: ReturnType<typeof parseArgs>): Promise<void>
   let off = 0;
   for (const p of allPositions) { merged.set(p, off); off += p.length; }
 
-  const tmpDir = `/tmp/df-export-stl-${Date.now()}`;
-  execSync(`mkdir -p ${tmpDir}`);
+  const tmpDir = makeTempDir('df-export-stl-');
   const posPath = resolve(tmpDir, 'positions.bin');
   writePositionsBin(posPath, merged);
 
   // Shell out to Rust CLI
-  const rustCli = resolve(dirname(new URL(import.meta.url).pathname), '../rust/dragonfruit-cli/target/release/dragonfruit-cli');
-  execSync(`${rustCli} mesh export-stl -i ${tmpDir} -o ${resolve(output)}`, { stdio: 'inherit' });
-  execSync(`rm -rf ${tmpDir}`);
+  execFileSync(rustCliPath(), ['mesh', 'export-stl', '-i', tmpDir, '-o', resolve(output)], { stdio: 'inherit' });
+  rmSync(tmpDir, { recursive: true, force: true });
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({
@@ -1661,8 +1672,7 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   releaseHeap();
 
   // Phase 3: Write positions.bin
-  const tmpDir = `/tmp/df-scene-slice-${Date.now()}`;
-  execSync(`mkdir -p ${tmpDir}`);
+  const tmpDir = makeTempDir('df-scene-slice-');
   const mergedPath = resolve(tmpDir, 'positions.bin');
   const totalTriangles = meshPositions.length / 9;
   writePositionsBin(mergedPath, meshPositions);
@@ -1676,7 +1686,6 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   releaseHeap();
 
   // Phase 4: Shell out to Rust slicer
-  const rustCli = resolve(dirname(new URL(import.meta.url).pathname), '../rust/dragonfruit-cli/target/release/dragonfruit-cli');
   const run = sliceJob.buildSceneSliceRun(job, {
     maxZMm,
     modelTriangleCount,
@@ -1709,12 +1718,12 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   }
 
   const shown = run.args.map((arg, i) => (run.args[i - 1] === '--metadata-json' ? `<${arg.length} bytes>` : arg));
-  console.error(`  slicing: ${rustCli} ${shown.join(' ')}`);
+  console.error(`  slicing: ${rustCliPath()} ${shown.join(' ')}`);
   // No shell: the metadata is JSON, and the paths may contain spaces.
-  const result = execFileSync(rustCli, run.args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+  const result = execFileSync(rustCliPath(), run.args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
 
   // Cleanup temp
-  execSync(`rm -rf ${tmpDir}`);
+  rmSync(tmpDir, { recursive: true, force: true });
 
   if (jsonOutput(args.flags)) {
     // Parse and augment the Rust output with scene info

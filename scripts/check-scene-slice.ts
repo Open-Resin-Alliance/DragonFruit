@@ -30,9 +30,10 @@ import { DYNAMIC_PLATE_ORDERING } from '../src/features/scene/plates/plateCascad
 import { computePlateFrames } from '../src/features/scene/plates/plateLayout';
 
 const root = resolve(__dirname, '..');
-const tsx = join(root, 'node_modules', '.bin', 'tsx');
+// Through node: the `.bin` entry is a shell script, which Windows cannot execute.
+const tsx = join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const cliScript = join(root, 'scripts', 'dragonfruit-ts-cli.ts');
-const rustCli = join(root, 'rust', 'dragonfruit-cli', 'target', 'release', 'dragonfruit-cli');
+const rustCli = join(root, 'rust', 'dragonfruit-cli', 'target', 'release', process.platform === 'win32' ? 'dragonfruit-cli.exe' : 'dragonfruit-cli');
 const printer = join(root, 'scripts', 'bench', 'printers', 'saturn_2-bundle.json');
 
 const CUBE_MM = 20;
@@ -75,7 +76,7 @@ function cubeStl(size: number, z0: number): Buffer {
 }
 
 function cli(...args: string[]): string {
-  return execFileSync(tsx, [cliScript, ...args], { cwd: root, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return execFileSync(process.execPath, [tsx, cliScript, ...args], { cwd: root, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 function fail(message: string): void {
