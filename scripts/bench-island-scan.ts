@@ -47,12 +47,25 @@ interface WorkerShim {
 }
 
 /**
- * The stand-in worker. Delivery is synchronous, so the reply goes to the shim
- * whose message is being handled: the worker file calls `self.postMessage`, and
- * that is pointed at the calling shim for the duration of its own handler.
+ * The stand-in worker. A message is delivered on a later microtask, as a real
+ * worker's would be, and the reply goes to the shim whose message is being
+ * handled: the worker file calls `self.postMessage`, and that is pointed at the
+ * calling shim for the duration of its own handler.
+ *
+ * Delivering synchronously instead made every reply handler run inside the
+ * `postMessage` that asked for it. A caller that asks for the next layer from
+ * inside its reply handler (`sliceCandidateLayers`) then nests one frame set per
+ * layer, and a model of ~1300 layers at the default pitch overflows the stack.
+ *
+ * Listeners are dispatched from a snapshot, like a DOM event target: a handler
+ * that removes itself and registers the next one must not see the same message
+ * again. Dispatching over the live Set hands one reply to every handler added
+ * during the dispatch, which answers every remaining layer with the first
+ * layer's candidates: zero islands, and a scan that "finishes" instantly.
  */
 function createWorkerShim(): WorkerShim {
     const listeners = new Set<(event: { data: unknown }) => void>();
+    let alive = true;
     return {
         postMessage: (message: unknown) => {
             const globals = globalThis as unknown as {
@@ -62,10 +75,13 @@ function createWorkerShim(): WorkerShim {
             if (!globals.onmessage) {
                 throw new Error('the scanline worker module is not loaded; await installInProcessWorkers() first');
             }
-            globals.postMessage = (data: unknown) => {
-                for (const listener of listeners) listener({ data });
-            };
-            globals.onmessage({ data: message });
+            queueMicrotask(() => {
+                if (!alive) return;
+                globals.postMessage = (data: unknown) => {
+                    for (const listener of [...listeners]) listener({ data });
+                };
+                globals.onmessage!({ data: message });
+            });
         },
         addEventListener: (type, listener) => {
             if (type === 'message') listeners.add(listener);
@@ -73,7 +89,10 @@ function createWorkerShim(): WorkerShim {
         removeEventListener: (type, listener) => {
             if (type === 'message') listeners.delete(listener);
         },
-        terminate: () => listeners.clear(),
+        terminate: () => {
+            alive = false;
+            listeners.clear();
+        },
     };
 }
 

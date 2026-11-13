@@ -49,7 +49,9 @@ self.onmessage = (e: MessageEvent<InitMessage | StartMessage | LayerMessage>) =>
 
     if (msg.type === 'layer') {
         if (!slicer) {
-            console.error('Worker received layer request before init');
+            // Answer, so the caller's per-layer promise rejects instead of
+            // waiting forever for a 'done' that never comes.
+            self.postMessage({ type: 'error', message: 'layer request before init' });
             return;
         }
 
