@@ -11,23 +11,25 @@ placement pipeline is built:
 | **Density & Sizing** | How many supports, how thick, and which Support Studio preset sizes them |
 | **Stability** | How the part is held against toppling and peel |
 | **Post-processing** | What happens after placement: how much one trunk may carry, and how completely gaps are filled |
-| **Diagnostics** | The debug switches and the last run's diagnostics, always on screen |
+| **Diagnostics** | The debug switches (`Origin Colors`, `No Brace`, `Simplified`) and the `Debug Mode` (`debugMode`) switch that reveals the last run's diagnostics on the floating **Auto Supports** card |
 | **Advanced (calibration)** | The sizing constants the engine ships with, framed in the warning tone |
 
 Every section is a card of fields on one scrolling page — there is no tab to
-switch to, and the whole policy fits without one. Every field has a label, a ⓘ
-with its help text, and its own tooltip on hover. Numbers are typed or stepped
-with the field's own carets rather than dragged on a slider, and each one carries
-its unit in the label (`Min Island Size (mm²)`, `Fan Angle (°)`, `Coverage Target
-(%)`). A switch is a pill. **Sizing Tier** at the top of **Density & Sizing** is a
-dropdown of your Support Studio presets — the tip, shaft and root numbers of the
-one you pick are what the run sizes with, so editing that manual preset changes
-what auto-support prints.
+switch to, and the whole policy fits without one. Every field has a unitless label,
+a ⓘ with its help text, and its own tooltip on hover. Numbers are typed or stepped
+with `LabeledNumberInput`'s own carets rather than dragged on a slider, with each
+unit rendered inside the input field (`mm²`, `°`, `%`) and bounds matching
+`AUTO_SUPPORT_CONSTRAINTS`. A switch is a pill. **Sizing Tier** at the top of
+**Density & Sizing** is a dropdown of your Support Studio presets (`sizingPreset`) —
+the tip, shaft and root numbers of the one you pick are what the run sizes with,
+so editing that manual preset changes what auto-support prints.
 
-**Edits are staged.** Changing a field or a switch in the dialog does nothing
-until you press **Apply**; **Cancel** discards the edits. Selecting a *preset* is
-the exception, and it is deliberate: picking a preset is choosing a policy for
-the next run, so it applies immediately.
+**Edits are staged.** Changing a policy field in the dialog does nothing until you
+press **Save** (which keeps the dialog open and flashes `Saved!` for two seconds;
+the title bar carries an **X** / Close button, and there is no separate
+**Apply**/**Cancel** pair). Selecting a *preset* is the exception, and it is
+deliberate: picking a preset is choosing a policy for the next run, so it applies
+immediately.
 
 ## Presets
 
@@ -39,13 +41,14 @@ the app:
 - **Medium** — balanced supports, structure sizing.
 - **Heavy** — dense supports, anchor sizing.
 
-They are also the three buttons on the Auto Supports card, so the quick-select
-and the preset selector are the same policy under the same names.
+The floating **Auto Supports** card carries the `AutoSupportPresetSelect` dropdown
+(offering every built-in and custom preset), the **Auto-Lift** toggle, and
+**Run**.
 
 The selector at the top of the dialog shows the preset your settings are; its
 menu lists the presets — built-ins first, then your own, each with the sizing tier
 it names and whether it is a built-in, the one in use ticked — and carries
-**New preset…**, which saves the current settings under a new name and selects it.
+**New**, which saves the current settings under a new name and selects it.
 
 Beside the selector:
 
@@ -62,11 +65,12 @@ The dialog's footer commits:
 - **Reset**: discard the edits made in the dialog and reload the selected preset.
   Available once there is something to discard.
 - **Save**: write the settings, and overwrite the selected preset with them when
-  it has drifted. This is the dialog's commit — it closes the dialog, and there is
-  no separate Apply. Available once there is something to save, and while a
-  **custom** preset is selected: a built-in's block is the factory's and cannot be
-  saved over, so **Duplicate** it first. **Cancel** lives in the dialog's title bar, and Escape and a click
-  outside do the same.
+  it has drifted. **Save** keeps the modal open and flashes `Saved!` for two
+  seconds (there is no separate **Apply**/**Cancel** pair). Available once there
+  is something to save, and while a **custom** preset is selected: a built-in's
+  block is locked and cannot be saved over, so **Duplicate** it first. The
+  dialog's title bar carries **X** (**Close**), and Escape and a click outside
+  do the same.
 
 While your settings no longer match the selected preset, its name carries a `*`.
 Editing a field never rewrites the preset by itself.
@@ -83,14 +87,18 @@ Support Studio's presets — the Detail / Structure / Anchor cards you pick when
 placing supports by hand — are a **different system**. They describe the geometry
 of a *manually placed* support (tip, shaft, roots) and do not carry auto-support
 settings; these auto-support presets describe how an automatic run is policed and
-carry no geometry. They do not share storage, names or files, and changing one
-does not change the other. See [Support Placement](../workflows/support-placement.md).
+carry no geometry. They do not share storage or files — **except** that each
+auto-support policy names a Support Studio preset via `sizingPreset`, so editing
+the Studio preset referenced by `sizingPreset` directly changes auto-support
+tip, shaft, and root sizing. See [Support Placement](../workflows/support-placement.md).
 
 ## Advanced (calibration)
 
 **Advanced (calibration)** is the last card, outlined in the warning tone so it
-does not read as one more preference. (The debug switches and the last run's
-diagnostics are the card above it.) These six values are not preferences: they are
+does not read as one more preference. (The **Diagnostics** card above it holds
+the debug switches and the `Debug Mode` toggle; when `Debug Mode` (`debugMode`)
+is enabled, the last run's diagnostics appear on the floating `AutoSupportPanel`
+card rather than inside this dialog.) These six values are not preferences: they are
 tuned by hand. They shape the fit rules — a contact tip whose margin is too generous overhangs the feature it lands
 on, a member whose ratio is too small reads as a needle beside its host, and a
 run-level cap that is too high thickens shafts past what the band intends. They

@@ -1931,16 +1931,15 @@ and `EXTD` are inflate + `JSON.parse` synchronously, one task. Only
 MESH/HSRC/CAVT/PSRC are in the async bulk path. Moving their `unzlibSync` to the
 existing async inflate removes the blocking decompress; the parse order stays.
 
-**Auto-support generate** (`autoPlaceWorkerClient.ts`):
-every run posts `baseState: getSnapshot()` — the whole plate's support state,
-structured-cloned in the calling task — plus `mesh`/`cavityMesh` slices that the
-worker already caches by key (`autoPlace.worker.shared.ts`). Omitting
-what the worker already holds, and transferring the first copies, removes the
-per-run clone.
+**Auto-support generate** (`autoPlaceWorkerClient.ts`, `autoPlace.worker.shared.ts` — **fixed**):
+repeat runs reuse the worker's cached `mesh`/`cavityMesh` by `meshKey` (`BUG-PERF-WIRE[a]`),
+skipping redundant serialization/BVH rebuilds, and worker-side `createOwnedDraft`
+passes use `payloadOwned` with sealed `[OWNED_DRAFT]` ownership (`BUG-PERF-WIRE[b]`)
+alongside in-place Phase 3c `draft` gap-fill convergence (`HIGH-02`).
 
-**Auto-support generate** (`AutoSupportPanel.tsx`):
-the replace pre-pass walks every model's supports, rebuilds the knot map and then
-`setSnapshot`s — and the commit rebuilds it again.
+**Auto-support generate** (`AutoSupportPanel.tsx` — **fixed**):
+`Replace all` now pushes a single atomic `Ctrl+Z` history entry across both the
+strip and regenerate steps (`MED-06[b]`), including deferred post-scan and no-op runs.
 
 **Every support write** (`src/supports/state.ts`, `normaliseSupportState`): the
 canonical `supports` map is rebuilt one entity at a time and each supplied

@@ -27,6 +27,7 @@ import {
   SUPPORT_BLOCKER_BRUSH_MAX_MM,
 } from '@/supports/autoSupport/supportBlockers';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+import { getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
 
 /** Set while an orient sweep runs. Page-level overlay reads this to show the
  *  "Orienting Model" modal. Module-level (not state) so the panel can flip it
@@ -155,9 +156,10 @@ export function AutoRotationPanel({ activeModelId, activeModelName, currentRotat
           }
           const index = (mesh.geometry.index?.array as ArrayLike<number> | undefined) ?? null;
           const blocked = getSupportBlockedTriangles(activeModelId);
+          const hasRaft = getRaftSettingsForModel(activeModelId).bottomMode !== 'off';
           const result = suggestOrientationForGeometry(
             { attributes: { position: { array: baked } }, index },
-            { objective, ...(blocked.size > 0 ? { blockedTriangleIndices: blocked } : {}) },
+            { objective, hasRaft, ...(blocked.size > 0 ? { blockedTriangleIndices: blocked } : {}) },
           );
           if (!result) {
             setError(_(NO_GEOMETRY));

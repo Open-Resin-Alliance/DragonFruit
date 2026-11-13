@@ -3,9 +3,11 @@
 Design pre-plan for automatic build-orientation of models, tuned for
 masked-resin (MSLA) printing. M1 has shipped (`suggestOrientation` in
 `src/supports/autoSupport/orientationAdvisor.ts`, sweeping
-`generateM1Candidates` plus `restingPoseCandidates` with coordinate-descent
-refinement), as has M2 (support blockers — see below); M3–M5 are still
-planned, sequenced so each lands as a usable improvement. It
+`generateM1Candidates` plus strided `restingPoseCandidates` with coordinate-descent
+refinement and raft-aware stability via `hasRaft`); M2 (support blockers — see
+below) is deferred/unwired (`Blockers` UI is disabled in `PreparePanelStack.tsx`
+and not wired into worker `AutoPlaceWorkerPayload`); M3–M5 are still planned,
+sequenced so each lands as a usable improvement. It
 absorbs the intent of the closed WIP attempt (#224: Fibonacci sweep with
 protected-face painting) while discarding its implementation, which did
 not work well in practice and was never merged. Designed to interlock
@@ -96,7 +98,8 @@ showed up as a cube coming back oriented onto a corner:
   Unstable is the constant-free part of the report: no bearing polygon (a point
   or edge contact), or the volume centroid outside the base. Finite on purpose,
   so the search still returns the least bad pose when every candidate is
-  unstable, and `stabilityWeight: 0` restores ranking on contact area alone.
+  unstable, and `stabilityWeight: 0` (or `hasRaft: true`, when a raft provides
+  plate anchorage) waives the penalty.
 
 `measurePoseStability` is the same model `compute_stability_report`
 (`src-tauri/src/overhang.rs`) logs for the placed pose — driving moment
@@ -111,9 +114,14 @@ carries the terms (`bearingAreaMm2`, `bearingEdges`, `centroidDepthMm`,
 `marginMm`, `adhesionRatio`, `stabilityPenaltyMm2`) so the suggestion surface
 can show why a pose lost.
 
-### "No supports" painted faces (shipped as support blockers)
+### "No supports" painted faces (support blockers — deferred / unwired)
 
-Users paint surface regions that must never carry supports — a figurine's
+> **Status: Deferred / unwired.** The `Blockers` UI is disabled in
+> `PreparePanelStack.tsx` and the blocker mask is not wired into the worker's
+> `AutoPlaceWorkerPayload`; `supportBlockers.ts` and the advisor's
+> `blockedTriangleIndices` option remain dormant until re-enabled.
+
+When active, users paint surface regions that must never carry supports — a figurine's
 face is the canonical case — with the Blockers button (secondary, next to
 Orient Model) entering a paint mode with a fixed-radius brush, red overlay,
 and Clear. The mask is a per-model set of model-space triangle indices
@@ -188,17 +196,18 @@ sizing band remains the base; peel exposure modulates it.
 
 ## Phases
 
-1. **M1 — Sweep and score** (shipped): Fibonacci + resting-pose candidates,
+1. **M1 — Sweep and score** (shipped): Fibonacci + strided resting-pose candidates,
    CPU scoring (overhang primary with an anchoring margin that trades up to ~5%
-   contact for the widest base; height/footprint tie-breakers, or height
-   objective rank, one-click apply with optimize-for dropdown (Fewest Supports /
-   Shortest Print Time / Least Scarring), auto-lift reseat above the plate,
-   destructive-transform confirm clearing placed supports first, and toast
+   contact for the widest base; `hasRaft` raft-aware stability penalty; height/footprint
+   tie-breakers, or height objective rank), one-click apply with optimize-for dropdown
+   (Fewest Supports / Shortest Print Time / Least Scarring), auto-lift reseat above
+   the plate, destructive-transform confirm clearing placed supports first, and toast
    receipts (applied / already-optimal).
-2. **M2 — "No supports" painted faces** (shipped): triangle mask with
-   paint mode (Blockers button), red overlay, Clear, stroke history;
-   heavy finite blocked-contact weight in the search, hard refusal in the
-   candidate generators.
+2. **M2 — "No supports" painted faces** (deferred / unwired): `Blockers` UI
+   disabled in `PreparePanelStack.tsx` and not wired into worker
+   `AutoPlaceWorkerPayload`; triangle mask (`supportBlockers.ts`), heavy finite
+   blocked-contact weight in the search, and hard refusal in the candidate
+   generators remain dormant until re-enabled.
 3. **M3 — GPU peel proxy**: orthographic coverage rendering, max/integral
    cross-section terms replacing the CPU proxies.
 4. **M4 — Drainage**: trapped-volume term and drain-path viability for

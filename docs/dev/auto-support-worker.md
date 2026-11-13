@@ -38,17 +38,21 @@ path they got.
 
 `computeAutoSupportPlan` is pure with respect to the stores it *writes* (one
 commit at the end, see [Auto-Supports](auto-supports.md)), but it still reads
-three pieces of module state:
+module state across the pipeline:
 
-- the settings store, through `getSettings()` (21 call sites across the
-  pipeline, including the registry's placement thresholds),
+- the settings store, through `getSettings()` (including `appSettings.presets`
+  and `sizingBands` resolved via `resolvedSizingBandsForRun`),
+- the per-model raft settings, through `getRaftSettingsForModel(modelId)` (`RaftState.ts`),
 - the support snapshot, through `getSnapshot()` (the gap-fill coverage pass),
-- the model mesh, through `getModelMesh()` and the brace clearance store.
+- the model mesh, cavity mesh, and brace clearance store, through `getModelMesh()`
+  and `meshGeometryStore`.
 
-A worker thread has its own copies of all three, so every run seeds them from
-the payload first, in `seedAutoPlaceEnvironment`. **A new read of module state
-inside the plan must be seeded here too**, or the worker will quietly place
-different supports than the main thread. `__tests__/autoPlaceWorker.test.ts`
+(Note: `supportBlockers.ts` remains deferred/unwired in the worker.)
+
+A worker thread has its own copies of this state, so every run seeds them from
+the `AutoPlaceWorkerPayload` first, in `seedAutoPlaceEnvironment`. **A new read of
+module state inside the plan must be seeded here too**, or the worker will quietly
+place different supports than the main thread. `__tests__/autoPlaceWorker.test.ts`
 pins the equality (support state, analytics and placement counts) so that
 mistake fails a test instead of shipping.
 

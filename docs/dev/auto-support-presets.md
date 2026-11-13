@@ -41,11 +41,11 @@ factory preset it matches (else `structure`) and the obsolete key is dropped.
 | `getActiveAutoSupportPresetId()` | the selected preset id, or `null` |
 | `setActiveAutoSupportPreset(id)` | selects a preset and applies its block; `null` clears the selection without touching the settings |
 | `createAutoSupportPreset(name)` | captures the live `autoSupport` block as a new preset and selects it |
-| `saveAutoSupportPreset(id)` | writes the live block into a preset — the UI's Save |
+| `saveAutoSupportPreset(id)` | writes the live block into a custom preset — the UI's Save; returns `false` on a built-in (`isBuiltIn: true`) or unknown id |
 | `renameAutoSupportPreset(id, name)` | renames a user preset, returning the name actually applied; `null` for a built-in or unknown id |
 | `duplicateAutoSupportPreset(id)` | copies a preset (built-ins included) under a new name, without selecting it |
 | `deleteAutoSupportPreset(id)` | deletes a user preset; a built-in is refused |
-| `restoreAutoSupportFactoryDefaults()` | puts the built-ins back to their factory settings, leaving the user's presets and the live settings alone |
+| `restoreAutoSupportFactoryDefaults()` | puts the built-ins back to their factory settings, leaving the user's presets and the live settings alone (store-level helper with no UI caller) |
 | `resetToActivePreset()` | re-applies the active preset over the live settings — the UI's Revert |
 | `isAutoSupportPresetDirty()` | whether the live block still matches the active preset |
 | `exportAutoSupportPresetToJson(id)` | the preset as a JSON document |
@@ -73,13 +73,14 @@ they are.
 
 Built-ins are defined in code and treated as the reserved tier:
 
-- a stored record for a built-in id may carry the user's saved edits, never its
-  identity or name — the factory record is the base on every load;
+- a stored record for a built-in id is locked (`isBuiltIn: true`) — the factory
+  record is the base on every load;
 - they cannot be renamed (their title is translated by id at render, so a stored
   rename could never be displayed) or deleted (the panel's tier row and the file
   format are defined in terms of those ids);
-- they *can* be saved over — that is how a user keeps a tweaked tier — and
-  `restoreAutoSupportFactoryDefaults()` is the way back.
+- they **cannot** be saved over (`saveAutoSupportPreset` returns `false` on a
+  built-in) — users must **Duplicate** into a custom preset to edit and save,
+  and `restoreAutoSupportFactoryDefaults()` has no UI caller.
 
 ## Storage and reload
 
@@ -188,7 +189,9 @@ should also subscribe to `subscribeToSettings` from `src/supports/Settings/state
 setActiveAutoSupportPreset('light');   // apply the light policy
 updateAutoSupportSettings({ areaPerSupportMm2: 12 });   // user edits a knob
 isAutoSupportPresetDirty();            // true — the preset is untouched
-saveAutoSupportPreset('light');        // keep the edit, or:
+saveAutoSupportPreset('light');        // false — built-ins are locked
+const copy = duplicateAutoSupportPreset('light');
+if (copy) saveAutoSupportPreset(copy.id); // save into the custom copy, or:
 resetToActivePreset();                 // discard it
 ```
 

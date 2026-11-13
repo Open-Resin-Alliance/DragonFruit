@@ -338,6 +338,7 @@ export async function runAutoPlaceInWorker(
     settingsOverride?: Partial<AutoSupportSettings>,
     onProgress?: (progress: { phase: string; done: number; total: number }) => void,
     cavityGeometry?: THREE.BufferGeometry | null,
+    beforeOverride?: SupportState,
 ): Promise<AutoPlaceResult> {
     const target = ensureWorker();
     const cavityPose = cavityGeometry ? getModelMesh(modelId) : null;
@@ -347,7 +348,7 @@ export async function runAutoPlaceInWorker(
     if (!target) {
         // No worker in this environment (tests, plain browser), or one that has
         // already failed: the plan is still correct, it just runs on this thread.
-        return runAutoPlace(islands, modelId, settingsOverride, cavityMesh);
+        return runAutoPlace(islands, modelId, settingsOverride, cavityMesh, beforeOverride);
     }
 
     let plan: AutoSupportPlan | null;
@@ -366,7 +367,7 @@ export async function runAutoPlaceInWorker(
             'Later runs this session go straight to in-process.',
             error,
         );
-        return runAutoPlace(islands, modelId, settingsOverride, cavityMesh);
+        return runAutoPlace(islands, modelId, settingsOverride, cavityMesh, beforeOverride);
     }
 
     // The worker's own logs do not reach `dragonfruit.log`, and the run's
@@ -374,6 +375,6 @@ export async function runAutoPlaceInWorker(
     // log bridge can see it.
     logAutoPlaceTimings(plan?.analytics.timings);
 
-    return commitAutoPlacePlan(plan);
+    return commitAutoPlacePlan(plan, beforeOverride);
 }
 

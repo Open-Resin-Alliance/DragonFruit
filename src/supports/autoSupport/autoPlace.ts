@@ -33,7 +33,7 @@ import type { AutoPlaceTimings } from './types';
 import { normalizeAutoSupportSettings, AUTO_SUPPORT_CONSTRAINTS, MIN_CONTACT_TIP_DIAMETER_MM } from './settings';
 import { activeSizingBand, applySizingOverridesToSettings, estimateHostCount, TIP_CONTACT_MIN_SHAFT_RATIO } from './parameterSizing';
 import { candidateFromIsland, generateCandidates, deduplicateCandidates } from './candidateGeneration';
-import { applyContactTipCap, applyContactTipCaps } from './contactTipCap';
+import { applyContactTipCaps } from './contactTipCap';
 import { generateGridCandidates, shouldUseDensityGrid } from './gridPlacement';
 import { computeStabilizationAnchors } from './stabilization';
 import { computeMinimaReinforcementPoints } from './minimaReinforcement';
@@ -74,7 +74,7 @@ import {
 } from '../PlacementLogic/ConeAxisPolicy';
 import { DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG } from '../Settings/defaults';
 import { cloneSupportState, getSnapshot, setSnapshot } from '../state';
-import { createOwnedDraft, draftAddEntity, draftAddPrimitive, draftCommitSupport, draftRemoveEntity, draftRemovePrimitive } from './supportDraft';
+import { createOwnedDraft, draftAddEntity, draftAddPrimitive, draftCommitSupport, draftRemoveEntity, draftRemovePrimitive, sealOwnedDraft } from './supportDraft';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import { buildTrunkData } from '../SupportTypes/Trunk/trunkBuilder';
 import { buildCavityBridge } from '../SupportTypes/Trunk/useTrunkPlacement';
@@ -4540,22 +4540,29 @@ export function computeAutoSupportPlan(
  * what the in-process path does, and so a `null` plan (auto-support disabled)
  * reports the same result either way.
  */
-export function commitAutoPlacePlan(plan: AutoSupportPlan | null): AutoPlaceResult {
+export function commitAutoPlacePlan(plan: AutoSupportPlan | null, beforeOverride?: SupportState): AutoPlaceResult {
     if (!plan) {
         return makeResult(emptyPlacedCounts(), 0, false, 'disabled');
     }
 
     if (plan.result.changed) {
+        const sealedAfter = sealOwnedDraft(plan.support);
+        const beforeRaw = beforeOverride ?? plan.before;
+        const sealedBefore = beforeRaw === sealedAfter ? cloneSupportState(beforeRaw) : sealOwnedDraft(beforeRaw);
+
         // plan.support carries the kickstands now, so one write restores everything.
-        setSnapshot(plan.support);
+        setSnapshot(sealedAfter);
         try {
-            pushSupportHistory({
-                type: SUPPORT_AUTO_PLACE,
-                payload: {
-                    before: plan.before,
-                    after: plan.support,
+            pushSupportHistory(
+                {
+                    type: SUPPORT_AUTO_PLACE,
+                    payload: {
+                        before: sealedBefore,
+                        after: sealedAfter,
+                    },
                 },
-            });
+                { payloadOwned: true },
+            );
             console.log(LOG_PREFIX, 'History entry pushed — undo available.');
         } catch (e) {
             console.warn(LOG_PREFIX,
@@ -4571,6 +4578,10 @@ export function runAutoPlace(
     modelId: string,
     settingsOverride?: Partial<AutoSupportSettings>,
     cavityMesh?: THREE.Mesh,
+    beforeOverride?: SupportState,
 ): AutoPlaceResult {
-    return commitAutoPlacePlan(computeAutoSupportPlan(islands, modelId, settingsOverride, undefined, undefined, undefined, cavityMesh));
+    return commitAutoPlacePlan(
+        computeAutoSupportPlan(islands, modelId, settingsOverride, undefined, undefined, undefined, cavityMesh),
+        beforeOverride,
+    );
 }

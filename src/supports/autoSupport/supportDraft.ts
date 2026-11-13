@@ -39,6 +39,21 @@ export function createOwnedDraft(source: SupportState): SupportState {
     return draft;
 }
 
+/** Check whether a state is an owned draft that may be mutated in place. */
+export function isOwnedDraft(state: SupportState): boolean {
+    return Boolean((state as SupportState & { [OWNED_DRAFT]?: OwnedCollections })[OWNED_DRAFT]);
+}
+
+/**
+ * Strips the owned-draft symbol from `state` so no downstream caller or helper
+ * can ever mutate a committed live or history snapshot in place.
+ */
+export function sealOwnedDraft(state: SupportState): SupportState {
+    delete (state as unknown as Record<symbol, unknown>)[OWNED_DRAFT];
+    return state;
+}
+
+
 /**
  * The draft's own object for `key`, copied the first time it is written.
  * Returns null for an immutable draft, whose callers fall back to spreading.

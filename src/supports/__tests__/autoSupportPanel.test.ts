@@ -17,6 +17,19 @@ import {
   getAutoSupportPreset,
   getAutoSupportPresets,
 } from '@/supports/Settings/autoSupportPresets';
+import { KNOBS, KNOBS_BY_SECTION } from '@/components/controls/autoSupport/autoSupportPanelTabs';
+import { AUTO_SUPPORT_CONSTRAINTS } from '@/supports/autoSupport/settings';
+import {
+  modelHasExistingSupports,
+  prepareReplaceSupports,
+  handleReplaceSupportsOutcome,
+  handleReplaceSupportsError,
+} from '@/components/controls/AutoSupportPanel';
+import { clearHistory, getUndoCount, undo } from '../../history/historyStore';
+import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
+import { commitAutoPlacePlan } from '../autoSupport/autoPlace';
+import { resetStore, getSnapshot, setSnapshot } from '../state';
+import type { SupportState } from '../types';
 
 /**
  * The panel's settings dialog, mounted without a DOM.
@@ -570,3 +583,183 @@ test('the panel’s selector names the unselected state instead of rendering an 
   assert.equal(options[0].label, 'Custom — not a preset');
   assert.ok(renderPresetRow(null).includes('Custom — not a preset'));
 });
+
+test('MED-03[b] every numeric knob in KNOBS and KNOBS_BY_SECTION aligns with AUTO_SUPPORT_CONSTRAINTS', () => {
+  for (const knob of KNOBS) {
+    const constraint = AUTO_SUPPORT_CONSTRAINTS[knob.key];
+    assert.ok(constraint, `Constraint must exist for knob ${knob.key}`);
+    assert.equal(knob.min, constraint.min, `Knob ${knob.key} min should match constraint min`);
+    assert.equal(knob.max, constraint.max, `Knob ${knob.key} max should match constraint max`);
+    assert.equal(knob.step, constraint.step, `Knob ${knob.key} step should match constraint step`);
+  }
+
+  for (const [sectionKey, sectionKnobs] of Object.entries(KNOBS_BY_SECTION)) {
+    for (const knob of sectionKnobs) {
+      const constraint = AUTO_SUPPORT_CONSTRAINTS[knob.key];
+      assert.ok(constraint, `Constraint must exist for knob ${knob.key} in section ${sectionKey}`);
+      assert.equal(knob.min, constraint.min, `Knob ${knob.key} min in section ${sectionKey} should match constraint min`);
+      assert.equal(knob.max, constraint.max, `Knob ${knob.key} max in section ${sectionKey} should match constraint max`);
+      assert.equal(knob.step, constraint.step, `Knob ${knob.key} step in section ${sectionKey} should match constraint step`);
+    }
+  }
+});
+
+test('MED-03[b] modelHasExistingSupports detects all support types per model', () => {
+  resetStore();
+  const baseSnap = getSnapshot();
+
+  // False when store is empty
+  assert.equal(modelHasExistingSupports(baseSnap, 'model-1'), false);
+
+  // False when supports exist for a different model
+  const otherModelSnap: SupportState = {
+    ...baseSnap,
+    stumps: {
+      stump1: { id: 'stump1', modelId: 'model-2', typeId: 'stump' } as any,
+    },
+  };
+  assert.equal(modelHasExistingSupports(otherModelSnap, 'model-1'), false);
+  assert.equal(modelHasExistingSupports(otherModelSnap, 'model-2'), true);
+
+  // True when model has ONLY stumps
+  const stumpsOnly: SupportState = {
+    ...baseSnap,
+    stumps: {
+      stump1: { id: 'stump1', modelId: 'model-1', typeId: 'stump' } as any,
+    },
+  };
+  assert.equal(modelHasExistingSupports(stumpsOnly, 'model-1'), true);
+
+  // True when model has ONLY sticks
+  const sticksOnly: SupportState = {
+    ...baseSnap,
+    sticks: {
+      stick1: { id: 'stick1', modelId: 'model-1', typeId: 'stick' } as any,
+    },
+  };
+  assert.equal(modelHasExistingSupports(sticksOnly, 'model-1'), true);
+
+  // True when model has ONLY twigs
+  const twigsOnly: SupportState = {
+    ...baseSnap,
+    twigs: {
+      twig1: { id: 'twig1', modelId: 'model-1', typeId: 'twig' } as any,
+    },
+  };
+  assert.equal(modelHasExistingSupports(twigsOnly, 'model-1'), true);
+
+  // True when model has braces
+  const bracesOnly: SupportState = {
+    ...baseSnap,
+    braces: {
+      brace1: { id: 'brace1', modelId: 'model-1', typeId: 'brace' } as any,
+    },
+  };
+  assert.equal(modelHasExistingSupports(bracesOnly, 'model-1'), true);
+
+  // True when model has kickstands
+  const kickstandsOnly: SupportState = {
+    ...baseSnap,
+    kickstands: {
+      ks1: { id: 'ks1', modelId: 'model-1', typeId: 'kickstand' } as any,
+    },
+  };
+  assert.equal(modelHasExistingSupports(kickstandsOnly, 'model-1'), true);
+
+  // True when entity references a root owned by model-1
+  const rootOnly: SupportState = {
+    ...baseSnap,
+    roots: {
+      root1: { id: 'root1', modelId: 'model-1' } as any,
+    },
+    trunks: {
+      trunk1: { id: 'trunk1', rootId: 'root1', typeId: 'trunk' } as any,
+    },
+  };
+  assert.equal(modelHasExistingSupports(rootOnly, 'model-1'), true);
+});
+
+test('MED-03[b] Replace all orchestration pushes exactly 1 history entry and undo() restores pre-replace supports', () => {
+  const disposeHandlers = registerSupportHistoryHandlers();
+  try {
+    clearHistory();
+    resetStore();
+
+    // 1. Set up an existing support in the snapshot
+    const initialTrunk = {
+      id: 'pre-existing-trunk',
+      modelId: 'model-1',
+      typeId: 'trunk',
+      contactCone: { pos: { x: 0, y: 0, z: 10 } },
+    } as any;
+    setSnapshot({
+      ...getSnapshot(),
+      trunks: { [initialTrunk.id]: initialTrunk },
+    });
+
+    assert.equal(modelHasExistingSupports(getSnapshot(), 'model-1'), true);
+    assert.equal(getUndoCount(), 0);
+
+    // Immediate replace: prepareReplaceSupports removes supports and captures replaceBefore
+    const prep = prepareReplaceSupports('model-1');
+    assert.equal(prep.removedCount, 1);
+    assert.ok(prep.replaceBefore);
+    assert.equal(getUndoCount(), 0, 'Must NOT push history during prepare/removal');
+    assert.equal(modelHasExistingSupports(getSnapshot(), 'model-1'), false);
+
+    // Simulate successful auto-place with replaceBefore override
+    const newTrunk = {
+      id: 'new-auto-trunk',
+      modelId: 'model-1',
+      typeId: 'trunk',
+      contactCone: { pos: { x: 5, y: 5, z: 10 } },
+    } as any;
+    const fakePlan: any = {
+      before: getSnapshot(),
+      support: { ...getSnapshot(), trunks: { [newTrunk.id]: newTrunk } },
+      analytics: { timings: {} },
+      result: { changed: true, placed: { trunks: 1 }, rejected: 0, status: 'success' },
+    };
+
+    const res = commitAutoPlacePlan(fakePlan, prep.replaceBefore);
+    handleReplaceSupportsOutcome(prep.replaceBefore, res);
+
+    // Assert EXACTLY 1 history entry pushed
+    assert.equal(getUndoCount(), 1, 'Replace all must push exactly 1 history entry');
+    assert.ok(getSnapshot().trunks['new-auto-trunk'], 'New trunk should be live');
+    assert.ok(!getSnapshot().trunks['pre-existing-trunk'], 'Old trunk should be replaced');
+
+    // Single undo() restores pre-replace state
+    undo();
+    assert.equal(getUndoCount(), 0);
+    assert.ok(getSnapshot().trunks['pre-existing-trunk'], 'Old trunk must be restored on single undo');
+    assert.ok(!getSnapshot().trunks['new-auto-trunk'], 'New trunk must be undone');
+
+    // 2. Deferred post-scan replace where 0 islands placed (!changed)
+    clearHistory();
+    const prep2 = prepareReplaceSupports('model-1');
+    assert.equal(prep2.removedCount, 1);
+    assert.equal(getUndoCount(), 0);
+
+    // simulate no islands / no changes
+    handleReplaceSupportsOutcome(prep2.replaceBefore, { changed: false } as any);
+    assert.equal(getUndoCount(), 1, 'Even when unchanged, stripping supports must push exactly 1 edit history entry');
+    assert.equal(modelHasExistingSupports(getSnapshot(), 'model-1'), false);
+
+    // Single undo() restores pre-replace state
+    undo();
+    assert.equal(getUndoCount(), 0);
+    assert.ok(getSnapshot().trunks['pre-existing-trunk'], 'Old trunk must be restored on single undo after 0-islands/unchanged');
+
+    // 3. Error case restores state cleanly
+    clearHistory();
+    const prep3 = prepareReplaceSupports('model-1');
+    assert.equal(prep3.removedCount, 1);
+    handleReplaceSupportsError(prep3.replaceBefore, new Error('placement failed'));
+    assert.equal(getUndoCount(), 0, 'No history entry on error');
+    assert.ok(getSnapshot().trunks['pre-existing-trunk'], 'Pre-replace supports restored on error');
+  } finally {
+    disposeHandlers();
+  }
+});
+

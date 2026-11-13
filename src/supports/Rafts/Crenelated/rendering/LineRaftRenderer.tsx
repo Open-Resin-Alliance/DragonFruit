@@ -138,7 +138,7 @@ const EMPTY_PLATE_CLEARANCE_TARGETS: readonly PlateFootprintSource[] = Object.fr
 export interface LineViewportRaftMeshesOptions {
   modelFilterId?: string | null;
   excludeModelId?: string | null;
-  excludedModelIds?: ReadonlySet<string> | Iterable<string>;
+  excludedModelIds?: Iterable<string>;
   plateClearanceTargets?: readonly PlateFootprintSource[];
   raftOpacity?: number;
   raftTransparent?: boolean;

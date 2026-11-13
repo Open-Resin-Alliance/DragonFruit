@@ -20,7 +20,9 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { clearHistory, getUndoCount, undo, registerHistoryHandler } from '../../history/historyStore';
 import { SUPPORT_AUTO_PLACE } from '../history/actionTypes';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
-import { computeAutoSupportPlan, runAutoPlace } from '../autoSupport/autoPlace';
+import { computeAutoSupportPlan, commitAutoPlacePlan, runAutoPlace } from '../autoSupport/autoPlace';
+import { createOwnedDraft, draftAddEntity, isOwnedDraft, sealOwnedDraft } from '../autoSupport/supportDraft';
+import type { AutoSupportPlan } from '../autoSupport/types';
 import { modelMeshKey, runAutoPlaceRequest, serializeIsland, serializeModelMesh } from '../autoSupport/autoPlace.worker.shared';
 import { setModelMesh } from '../autoSupport/meshStore';
 import { resetStore, getSnapshot, setSnapshot, resetKickstandsInState, getSupportTypeOf } from '../state';
@@ -38,7 +40,7 @@ import {
     selectTypeForPlacement,
 } from '../supportTypeRegistry';
 import { entitiesIn, keyOf } from './helpers/typeCollections';
-import type { Knot, SupportEntityAny } from '../types';
+import type { Knot, SupportEntityAny, SupportState } from '../types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1566,4 +1568,108 @@ test('Phase 3c gap-fill reads draft tips on a clean store and converges without 
         disposeHandlers();
     }
 });
+
+test('BUG-PERF-WIRE[b] commitAutoPlacePlan seals drafts, prevents undoStack mutation, and respects beforeOverride', () => {
+    const disposeHandlers = registerSupportHistoryHandlers();
+    try {
+        clearHistory();
+        resetStore();
+
+        // 1. Setup base snapshot
+        const initialTrunk = {
+            id: 't-pre',
+            modelId: 'model-x',
+            typeId: 'trunk',
+            contactCone: { pos: { x: 0, y: 0, z: 10 } },
+        } as any;
+        const initialSnap: SupportState = {
+            ...getSnapshot(),
+            trunks: { [initialTrunk.id]: initialTrunk },
+        };
+        setSnapshot(initialSnap);
+
+        // Create an owned draft representing an auto-place run
+        let draft = createOwnedDraft(initialSnap);
+        assert.equal(isOwnedDraft(draft), true, 'draft must be an owned draft initially');
+
+        const newTrunk = {
+            id: 't-new',
+            modelId: 'model-x',
+            typeId: 'trunk',
+            contactCone: { pos: { x: 1, y: 1, z: 10 } },
+        } as any;
+        draft = draftAddEntity(draft, 'trunk', newTrunk);
+
+        const plan = {
+            before: initialSnap,
+            support: draft,
+            analytics: { timings: {} as any },
+            result: { changed: true, placed: { trunks: 1 } as any, rejected: 0, status: 'success' },
+        } as unknown as AutoSupportPlan;
+
+        // Commit plan
+        const res = commitAutoPlacePlan(plan);
+        assert.equal(res.changed, true);
+
+        // After commitAutoPlacePlan(plan) commits with { payloadOwned: true }:
+        // getSnapshot() is NOT an owned draft
+        const committedSnap = getSnapshot();
+        assert.equal(isOwnedDraft(committedSnap), false, 'committed snapshot must be sealed (not an owned draft)');
+        assert.equal(isOwnedDraft(plan.support), false, 'plan.support must be sealed');
+        assert.notEqual(plan.before, plan.support);
+
+        // Subsequent mutations to getSnapshot() (or draftAddEntity / direct mutation on committedSnap)
+        // must NOT mutate undoStack entries in place
+        const postMutationTrunk = {
+            id: 't-mutated',
+            modelId: 'model-x',
+            typeId: 'trunk',
+            contactCone: { pos: { x: 2, y: 2, z: 10 } },
+        } as any;
+        (committedSnap.trunks as any)['t-mutated'] = postMutationTrunk;
+
+        // Undo should restore plan.before exactly
+        undo();
+        const restoredSnap = getSnapshot();
+        assert.ok(restoredSnap.trunks['t-pre'], 'pre-run trunk must be restored');
+        assert.ok(!restoredSnap.trunks['t-new'], 'placed trunk must be undone');
+        assert.ok(!restoredSnap.trunks['t-mutated'], 'subsequent mutation must not have polluted history/undo');
+
+        // 2. Test beforeOverride
+        clearHistory();
+        resetStore();
+        const replaceBefore: SupportState = {
+            ...getSnapshot(),
+            trunks: {
+                't-override': {
+                    id: 't-override',
+                    modelId: 'model-x',
+                    typeId: 'trunk',
+                } as any,
+            },
+        };
+
+        let draft2 = createOwnedDraft(getSnapshot());
+        draft2 = draftAddEntity(draft2, 'trunk', { id: 't-from-plan', modelId: 'model-x' } as any);
+        const plan2 = {
+            before: getSnapshot(),
+            support: draft2,
+            analytics: { timings: {} as any },
+            result: { changed: true, placed: { trunks: 1 } as any, rejected: 0, status: 'success' },
+        } as unknown as AutoSupportPlan;
+
+        commitAutoPlacePlan(plan2, replaceBefore);
+        assert.equal(getUndoCount(), 1);
+        assert.ok(getSnapshot().trunks['t-from-plan']);
+        assert.ok(!getSnapshot().trunks['t-override']);
+
+        // Undo restores replaceBefore!
+        undo();
+        assert.ok(getSnapshot().trunks['t-override'], 'beforeOverride must be restored by undo()');
+        assert.ok(!getSnapshot().trunks['t-from-plan']);
+    } finally {
+        disposeHandlers();
+    }
+});
+
 

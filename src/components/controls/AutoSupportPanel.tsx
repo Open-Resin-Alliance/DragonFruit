@@ -21,8 +21,10 @@ import {
   getAutoSupportPresetsSnapshot,
   subscribeToAutoSupportPresets,
 } from '@/supports/Settings/autoSupportPresets';
-import { getSnapshot, removeSupportEntitiesForModel } from '@/supports/state';
-import { captureSupportEditSnapshot, pushSupportEditHistory } from '@/supports/history/supportEditHistory';
+import { cloneSupportState, getSnapshot, removeSupportEntitiesForModel, setSnapshot } from '@/supports/state';
+import { SUPPORT_STATE_TYPES, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
+import type { SupportState } from '@/supports/types';
+import { captureSupportEditSnapshot, flushSupportEditHistory, pushSupportEditHistory } from '@/supports/history/supportEditHistory';
 import { REPLACE_SUPPORTS_LABEL } from '@/supports/history/supportHistoryLabels';
 import { AutoSupportSettingsBody } from './autoSupport/AutoSupportSettingsBody';
 import { AutoSupportRunDiagnostics } from './autoSupport/AutoSupportRunDiagnostics';
@@ -68,6 +70,51 @@ export function setAutoSupportProgress(p: AutoSupportProgress | null) {
 /** Set to true while auto-support is driving its own scan, so the
  *  native island-scan overlay can be suppressed. */
 export let autoSupportDrivingScan = false;
+
+/**
+ * Returns true if the model has any existing supports across all support types
+ * (trunks, branches, leaves, sticks, twigs, stumps, braces, kickstands),
+ * checking either the entity's modelId or its referenced root's modelId.
+ */
+export function modelHasExistingSupports(snap: SupportState, modelId: string): boolean {
+  for (const descriptor of SUPPORT_STATE_TYPES) {
+    const collection = snap[descriptor.location.key as SupportCollectionKey];
+    if (!collection) continue;
+    for (const entity of Object.values(collection)) {
+      const e = entity as unknown as { modelId?: string; rootId?: string };
+      if (e.modelId === modelId || (e.rootId && snap.roots?.[e.rootId]?.modelId === modelId)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function prepareReplaceSupports(modelId: string): { replaceBefore: SupportState; removedCount: number } {
+  const replaceBefore = cloneSupportState(getSnapshot());
+  const removedCount = removeSupportEntitiesForModel(modelId);
+  return { replaceBefore, removedCount };
+}
+
+export function handleReplaceSupportsOutcome(
+  replaceBefore: SupportState | null,
+  result?: { changed: boolean } | null,
+): void {
+  if (!replaceBefore) return;
+  if (!result?.changed) {
+    pushSupportEditHistory(REPLACE_SUPPORTS_LABEL, { support: replaceBefore }, captureSupportEditSnapshot());
+    flushSupportEditHistory();
+  }
+}
+
+export function handleReplaceSupportsError(
+  replaceBefore: SupportState | null,
+  _error: unknown,
+): void {
+  if (replaceBefore) {
+    setSnapshot(replaceBefore);
+  }
+}
 
 interface AutoSupportPanelProps {
   islands: UseIslandsReturn;
@@ -152,6 +199,10 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
 
 
   const pendingRef = React.useRef(false);
+  const pendingReplaceBeforeRef = React.useRef<SupportState | null>(null);
+  React.useEffect(() => {
+    pendingReplaceBeforeRef.current = null;
+  }, [activeModelId]);
   const islandsRef = React.useRef(islands);
   islandsRef.current = islands;
 
@@ -159,6 +210,8 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
   // the panel used to block the main thread (and the modal) for all of it.
   const runAutoSupports = React.useCallback(async (list: UseIslandsReturn['filteredIslands']) => {
     if (!activeModelId) return;
+    const replaceBefore = pendingReplaceBeforeRef.current;
+    pendingReplaceBeforeRef.current = null;
     try {
       const result = await runAutoPlaceInWorker(
         list,
@@ -166,10 +219,13 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
         getSettings().autoSupport,
         setAutoSupportProgress,
         getCavityGeometry?.(activeModelId) ?? null,
+        replaceBefore ?? undefined,
       );
+      handleReplaceSupportsOutcome(replaceBefore, result);
       if (result.analytics?.sizingDebug) setSizingDebugState(result.analytics.sizingDebug);
       if (result.analytics?.forestReport) setForestReportState(result.analytics.forestReport);
     } catch (e) {
+      handleReplaceSupportsError(replaceBefore, e);
       console.error('[AutoSupport] runAutoPlace failed:', e);
     }
   }, [activeModelId, getCavityGeometry]);
@@ -189,6 +245,9 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
         setBusy(false);
       });
     } else {
+      const replaceBefore = pendingReplaceBeforeRef.current;
+      pendingReplaceBeforeRef.current = null;
+      handleReplaceSupportsOutcome(replaceBefore, null);
       setAutoSupportBusy(false);
       setBusy(false);
     }
@@ -197,11 +256,21 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
   const doRun = React.useCallback((replace: boolean) => {
     if (!activeModelId) return;
     if (replace) {
-      // One cascade, so a dependent of another model goes too; the entry is a
-      // snapshot because the auto-place that follows pushes its own.
-      const before = captureSupportEditSnapshot();
-      if (removeSupportEntitiesForModel(activeModelId) > 0) {
-        pushSupportEditHistory(REPLACE_SUPPORTS_LABEL, before, captureSupportEditSnapshot());
+      let replaceBefore: SupportState | null = null;
+      try {
+        const prep = prepareReplaceSupports(activeModelId);
+        if (prep.removedCount > 0) {
+          replaceBefore = prep.replaceBefore;
+          pendingReplaceBeforeRef.current = replaceBefore;
+        } else {
+          pendingReplaceBeforeRef.current = null;
+        }
+      } catch (err) {
+        if (replaceBefore) {
+          setSnapshot(replaceBefore);
+        }
+        pendingReplaceBeforeRef.current = null;
+        throw err;
       }
       // rAF fires after React flushes the snapshot, giving us
       // fresh islands.filteredIslands with updated supported flags.
@@ -227,11 +296,17 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
                   }
                 });
               } else {
+                const replaceBeforeCurrent = pendingReplaceBeforeRef.current;
+                pendingReplaceBeforeRef.current = null;
+                handleReplaceSupportsOutcome(replaceBeforeCurrent, null);
                 setAutoSupportBusy(false);
                 setBusy(false);
               }
             } catch (e) {
               console.error('[AutoSupport] run failed:', e);
+              const replaceBeforeCurrent = pendingReplaceBeforeRef.current;
+              pendingReplaceBeforeRef.current = null;
+              handleReplaceSupportsError(replaceBeforeCurrent, e);
               setAutoSupportBusy(false);
               setBusy(false);
             }
@@ -240,6 +315,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
       });
       return;
     }
+    pendingReplaceBeforeRef.current = null;
     setBusy(true);
     setAutoSupportBusy(true);
     const list = islands.filteredIslands;
@@ -274,17 +350,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
       // be placed against — ask before generating, not after.
       if (onBeforeRun && !(await onBeforeRun())) return;
       // Check for existing supports.
-      const snap = getSnapshot();
-      let hasSupports = false;
-      for (const t of Object.values(snap.trunks)) {
-        if (t.modelId === activeModelId) { hasSupports = true; break; }
-      }
-      if (!hasSupports) {
-        for (const b of Object.values(snap.branches)) {
-          if (b.modelId === activeModelId) { hasSupports = true; break; }
-        }
-      }
-      if (hasSupports) {
+      if (modelHasExistingSupports(getSnapshot(), activeModelId)) {
         setShowReplaceDialog(true);
         return;
       }
