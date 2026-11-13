@@ -508,5 +508,30 @@ test('near-plate flat overhangs (e.g. 32mm mini feet) get perimeter and infill b
     assert.equal(shouldUseDensityGrid(nearPlateFoot, settings), true, 'near-plate flat overhang should use density grid');
     const candidates = generateGridCandidates([nearPlateFoot], settings);
     assert.ok(candidates.some((c) => c.id.startsWith('fill-')), 'near-plate foot emits perimeter ring candidates');
+    assert.ok(candidates.some((c) => c.id.startsWith('grid-')), 'near-plate foot emits grid infill candidates');
     assert.ok(candidates.length >= 4, `near-plate foot emits multiple perimeter/infill candidates (${candidates.length})`);
+
+    // Even a narrow 2×2 mm low-poly foot patch near the plate gets infill + perimeter.
+    const narrowFoot: DetectedIsland = {
+        ...rectRegion('foot-narrow-plate', -1, 1, -1, 1, 4, 1.5),
+        perimeterLoops: [[[-1, -1, 1.5], [1, -1, 1.5], [1, 1, 1.5], [-1, 1, 1.5]]],
+        steepFlat: false,
+        interior: false,
+    };
+    assert.equal(shouldUseDensityGrid(narrowFoot, settings), true);
+    const narrowCandidates = generateGridCandidates([narrowFoot], settings);
+    assert.ok(narrowCandidates.some((c) => c.id.startsWith('grid-')), 'narrow near-plate foot emits infill');
+    assert.ok(narrowCandidates.some((c) => c.id.startsWith('fill-')), 'narrow near-plate foot emits perimeter');
+
+    // Smaller-model foot (1.2×1.2 mm) near the plate also receives both infill and perimeter.
+    const smallFoot: DetectedIsland = {
+        ...rectRegion('foot-small-plate', -0.6, 0.6, -0.6, 0.6, 1.44, 1.0),
+        perimeterLoops: [[[-0.6, -0.6, 1.0], [0.6, -0.6, 1.0], [0.6, 0.6, 1.0], [-0.6, 0.6, 1.0]]],
+        steepFlat: false,
+        interior: false,
+    };
+    assert.equal(shouldUseDensityGrid(smallFoot, settings), true);
+    const smallCandidates = generateGridCandidates([smallFoot], settings);
+    assert.ok(smallCandidates.some((c) => c.id.startsWith('grid-')), 'small near-plate foot emits infill');
+    assert.ok(smallCandidates.some((c) => c.id.startsWith('fill-')), 'small near-plate foot emits perimeter');
 });

@@ -267,6 +267,70 @@ pub fn classify_overhangs(
     let mut groups: Vec<(u32, Vec<u32>)> = by_root.into_iter().collect();
     groups.sort_by_key(|(root, _)| *root);
 
+    // Merge nearby coplanar / same-Z overhang facets (e.g. low-poly foot soles
+    // split by narrow bevels or unwelded seams) while keeping vertically stacked
+    // overhangs (e.g. arm above foot) and disjoint arms separate.
+    if groups.len() > 1 {
+        const COPLANAR_XY_GAP_MM: f32 = 0.5;
+        const COPLANAR_Z_GAP_MM: f32 = 1.5;
+        let bounds: Vec<([f32; 2], [f32; 2], f32, f32)> = groups
+            .iter()
+            .map(|(_, tris)| {
+                let mut xy_min = [f32::INFINITY; 2];
+                let mut xy_max = [f32::NEG_INFINITY; 2];
+                let mut z_min = f32::INFINITY;
+                let mut z_max = f32::NEG_INFINITY;
+                for &fi in tris {
+                    for v in mesh.tri_positions(fi) {
+                        xy_min[0] = xy_min[0].min(v.x);
+                        xy_min[1] = xy_min[1].min(v.y);
+                        xy_max[0] = xy_max[0].max(v.x);
+                        xy_max[1] = xy_max[1].max(v.y);
+                        z_min = z_min.min(v.z);
+                        z_max = z_max.max(v.z);
+                    }
+                }
+                (xy_min, xy_max, z_min, z_max)
+            })
+            .collect();
+
+        let mut g_parent: Vec<u32> = (0..groups.len() as u32).collect();
+        for i in 0..groups.len() {
+            let (min_a, max_a, za0, za1) = bounds[i];
+            for j in (i + 1)..groups.len() {
+                let (min_b, max_b, zb0, zb1) = bounds[j];
+                let xy_close = min_a[0] - COPLANAR_XY_GAP_MM <= max_b[0]
+                    && min_b[0] - COPLANAR_XY_GAP_MM <= max_a[0]
+                    && min_a[1] - COPLANAR_XY_GAP_MM <= max_b[1]
+                    && min_b[1] - COPLANAR_XY_GAP_MM <= max_a[1];
+                let z_close = za0 - COPLANAR_Z_GAP_MM <= zb1 && zb0 - COPLANAR_Z_GAP_MM <= za1;
+                if xy_close && z_close {
+                    union(&mut g_parent, i as u32, j as u32);
+                }
+            }
+        }
+
+        let mut merged_groups: Vec<Option<(u32, Vec<u32>)>> = groups.into_iter().map(Some).collect();
+        for i in 0..merged_groups.len() {
+            let root = find(&mut g_parent, i as u32) as usize;
+            if root != i {
+                if let Some((_, mut tris)) = merged_groups[i].take() {
+                    if let Some((_, target_tris)) = merged_groups[root].as_mut() {
+                        target_tris.append(&mut tris);
+                    }
+                }
+            }
+        }
+        groups = merged_groups
+            .into_iter()
+            .flatten()
+            .map(|(root, mut tris)| {
+                tris.sort_unstable();
+                (root, tris)
+            })
+            .collect();
+    }
+
     // The part's own base plane: the drag moment is measured from it, exactly
     // as `compute_stability_report` does, so a region's share is comparable
     // with the pose total.
@@ -2587,5 +2651,21 @@ mod tests {
         assert_eq!(hi_on, 1);
         assert!((lo_z - 10.0).abs() < 1e-3, "lower surface_z {lo_z}");
         assert!((hi_z - 25.0).abs() < 1e-3, "upper surface_z {hi_z}");
+    }
+
+    #[test]
+    fn nearby_coplanar_low_poly_facets_merge_across_narrow_bevel_gap() {
+        // Two downward-facing low-poly triangles at Z=2.0 separated by 0.3 mm in X
+        // (simulating a narrow self-supporting bevel or unwelded seam on a foot sole).
+        let soup = vec![
+            0.0, 0.0, 2.0, 0.0, 4.0, 2.0, 2.0, 0.0, 2.0,
+            2.3, 0.0, 2.2, 2.3, 4.0, 2.2, 4.3, 0.0, 2.2,
+        ];
+        let (regions, _) = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false);
+        assert_eq!(
+            regions.len(),
+            1,
+            "nearby coplanar facets on the same sole should merge: {regions:?}"
+        );
     }
 }

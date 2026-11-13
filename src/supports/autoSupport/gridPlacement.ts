@@ -496,7 +496,7 @@ export function shouldUseDensityGrid(
     if (!island.interior
         && !island.steepFlat
         && island.contact.z <= ANCHOR_HEIGHT_THRESHOLD_MM
-        && ((island.areaMm2 ?? 0) >= 4 || major >= 3)) {
+        && ((island.areaMm2 ?? 0) >= 0.8 || major >= 0.8)) {
         return true;
     }
     // Longer than the two-point band: a thin rib (a plank's underside) needs
@@ -562,6 +562,10 @@ export function generateGridCandidates(
         let spacing = baseSpacing
             * steepFlatSpacingMultiplier(island, baseSpacing, partThicknessMm)
             * (island.interior ? INTERIOR_CAVITY_SPACING_SCALE : 1);
+        const nearPlateFlat = !island.interior && !island.steepFlat && island.contact.z <= ANCHOR_HEIGHT_THRESHOLD_MM;
+        if (nearPlateFlat) {
+            spacing = Math.max(0.85, Math.min(spacing * 0.75, 1.15));
+        }
 
         const voxels = island.contactVoxels;
         if (!voxels || voxels.count === 0) continue;
@@ -661,7 +665,7 @@ export function generateGridCandidates(
         // A footprint thinner than one lattice cell gets no infill: the rows
         // would land a fraction of a millimeter apart, doubling the density on
         // a rib the ring already carries end to end.
-        if (!isSliver && Math.min(width, height) >= spacing) {
+        if (!isSliver && (nearPlateFlat || Math.min(width, height) >= spacing)) {
             for (let i = 0; i <= nx; i += stride) {
                 for (let j = 0; j <= ny; j += stride) {
                     const x = minX + inset + i * spacingX;
@@ -680,7 +684,8 @@ export function generateGridCandidates(
         // engages peel first) and deduped against the lattice at half the
         // ring spacing, so the outline is traced even on small regions where
         // every ring point sits within a lattice cell of some interior point.
-        const ringSpacing = Math.max(PERIMETER_SPACING_FLOOR_MM, spacing * PERIMETER_RING_FACTOR) * stride;
+        const ringFloor = nearPlateFlat ? 0.75 : PERIMETER_SPACING_FLOOR_MM;
+        const ringSpacing = Math.max(ringFloor, spacing * PERIMETER_RING_FACTOR) * stride;
         const ringCoverageSq = (ringSpacing * 0.5) * (ringSpacing * 0.5);
         const boundary: Array<{ x: number; y: number; z: number; faceIndex?: number }> = sampleBoundary2D(island.perimeterLoops, ringSpacing, surfaceAt)
             ?? buildBoundaryPoints(
