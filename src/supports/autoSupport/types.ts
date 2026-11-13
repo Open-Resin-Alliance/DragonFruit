@@ -43,6 +43,9 @@ export interface CandidatePoint {
     /** The contact is on a cavity (internal) surface. A plate route would have
      *  to leave the cavity, so only a bridge that stays inside is allowed. */
     interior?: boolean;
+    /** Base overhang within ANCHOR_HEIGHT_THRESHOLD_MM of the model's lowest Z.
+     *  Preserves generated density on slightly sloped soles during dedup. */
+    nearBase?: boolean;
 }
 
 /** Why a candidate was rejected. */

@@ -34,7 +34,7 @@ import { normalizeAutoSupportSettings, AUTO_SUPPORT_CONSTRAINTS, MIN_CONTACT_TIP
 import { activeSizingBand, applySizingOverridesToSettings, estimateHostCount, TIP_CONTACT_MIN_SHAFT_RATIO } from './parameterSizing';
 import { candidateFromIsland, generateCandidates, deduplicateCandidates } from './candidateGeneration';
 import { applyContactTipCaps } from './contactTipCap';
-import { generateGridCandidates, shouldUseDensityGrid } from './gridPlacement';
+import { baseOverhangWindowMm, generateGridCandidates, meshWorldZBounds, shouldUseDensityGrid } from './gridPlacement';
 import { computeStabilizationAnchors } from './stabilization';
 import { computeMinimaReinforcementPoints } from './minimaReinforcement';
 import {
@@ -3321,7 +3321,9 @@ export function computeAutoSupportPlan(
     // generation failure must not kill the whole run — fall back to the
     // region's single candidate.
     const overhangIslands = islandsToCover.filter((i) => i.source === 'overhang');
-    const eligible = overhangIslands.filter((i) => shouldUseDensityGrid(i, autoSettings));
+    const { minZ: modelMinZ, heightMm: modelHeightMm } = meshWorldZBounds(resolvedMesh);
+    const baseWindowMm = baseOverhangWindowMm(modelHeightMm);
+    const eligible = overhangIslands.filter((i) => shouldUseDensityGrid(i, autoSettings, modelMinZ, baseWindowMm));
     if (eligible.length > 0) {
         let generated: CandidatePoint[] = [];
         try {
@@ -3332,6 +3334,8 @@ export function computeAutoSupportPlan(
                 modelId,
                 slenderPart,
                 poseStability?.thicknessMm ?? 0,
+                modelMinZ,
+                baseWindowMm,
             )
                 .map((c): CandidatePoint => ({ ...c, modelId }));
         } catch (e) {

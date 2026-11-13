@@ -269,18 +269,33 @@ pub fn classify_overhangs(
 
     // Merge nearby coplanar / same-Z overhang facets (e.g. low-poly foot soles
     // split by narrow bevels or unwelded seams) while keeping vertically stacked
-    // overhangs (e.g. arm above foot) and disjoint arms separate.
+    // overhangs (e.g. arm above foot), sloped limbs, and disjoint arms separate.
     if groups.len() > 1 {
         const COPLANAR_XY_GAP_MM: f32 = 0.5;
         const COPLANAR_Z_GAP_MM: f32 = 1.5;
-        let bounds: Vec<([f32; 2], [f32; 2], f32, f32)> = groups
+        const COPLANAR_NORMAL_DOT_MIN: f32 = 0.866_025_4; // cos(30°)
+        #[derive(Clone, Copy)]
+        struct GroupSummary {
+            xy_min: [f32; 2],
+            xy_max: [f32; 2],
+            z_min: f32,
+            z_max: f32,
+            normal: [f32; 3],
+        }
+        let mut summaries: Vec<GroupSummary> = groups
             .iter()
             .map(|(_, tris)| {
                 let mut xy_min = [f32::INFINITY; 2];
                 let mut xy_max = [f32::NEG_INFINITY; 2];
                 let mut z_min = f32::INFINITY;
                 let mut z_max = f32::NEG_INFINITY;
+                let mut n_sum = [0.0f32; 3];
                 for &fi in tris {
+                    let area = mesh.tri_area(fi);
+                    let n = mesh.tri_normal(fi);
+                    n_sum[0] += n.x * area;
+                    n_sum[1] += n.y * area;
+                    n_sum[2] += n.z * area;
                     for v in mesh.tri_positions(fi) {
                         xy_min[0] = xy_min[0].min(v.x);
                         xy_min[1] = xy_min[1].min(v.y);
@@ -290,22 +305,52 @@ pub fn classify_overhangs(
                         z_max = z_max.max(v.z);
                     }
                 }
-                (xy_min, xy_max, z_min, z_max)
+                let len = (n_sum[0] * n_sum[0] + n_sum[1] * n_sum[1] + n_sum[2] * n_sum[2]).sqrt();
+                let normal = if len > 1e-6 {
+                    [n_sum[0] / len, n_sum[1] / len, n_sum[2] / len]
+                } else {
+                    [0.0, 0.0, -1.0]
+                };
+                GroupSummary { xy_min, xy_max, z_min, z_max, normal }
             })
             .collect();
 
         let mut g_parent: Vec<u32> = (0..groups.len() as u32).collect();
         for i in 0..groups.len() {
-            let (min_a, max_a, za0, za1) = bounds[i];
             for j in (i + 1)..groups.len() {
-                let (min_b, max_b, zb0, zb1) = bounds[j];
-                let xy_close = min_a[0] - COPLANAR_XY_GAP_MM <= max_b[0]
-                    && min_b[0] - COPLANAR_XY_GAP_MM <= max_a[0]
-                    && min_a[1] - COPLANAR_XY_GAP_MM <= max_b[1]
-                    && min_b[1] - COPLANAR_XY_GAP_MM <= max_a[1];
-                let z_close = za0 - COPLANAR_Z_GAP_MM <= zb1 && zb0 - COPLANAR_Z_GAP_MM <= za1;
-                if xy_close && z_close {
-                    union(&mut g_parent, i as u32, j as u32);
+                let ri = find(&mut g_parent, i as u32) as usize;
+                let rj = find(&mut g_parent, j as u32) as usize;
+                if ri == rj {
+                    continue;
+                }
+                let a = summaries[ri];
+                let b = summaries[rj];
+                // Only merge flat/coplanar patches; never chain upward across
+                // stepped or tall sloped overhangs.
+                let merged_z_min = a.z_min.min(b.z_min);
+                let merged_z_max = a.z_max.max(b.z_max);
+                if merged_z_max - merged_z_min > COPLANAR_Z_GAP_MM {
+                    continue;
+                }
+                let normal_dot = a.normal[0] * b.normal[0]
+                    + a.normal[1] * b.normal[1]
+                    + a.normal[2] * b.normal[2];
+                if normal_dot < COPLANAR_NORMAL_DOT_MIN {
+                    continue;
+                }
+                let xy_close = a.xy_min[0] - COPLANAR_XY_GAP_MM <= b.xy_max[0]
+                    && b.xy_min[0] - COPLANAR_XY_GAP_MM <= a.xy_max[0]
+                    && a.xy_min[1] - COPLANAR_XY_GAP_MM <= b.xy_max[1]
+                    && b.xy_min[1] - COPLANAR_XY_GAP_MM <= a.xy_max[1];
+                if xy_close {
+                    union(&mut g_parent, ri as u32, rj as u32);
+                    let new_root = find(&mut g_parent, ri as u32) as usize;
+                    summaries[new_root].xy_min[0] = a.xy_min[0].min(b.xy_min[0]);
+                    summaries[new_root].xy_min[1] = a.xy_min[1].min(b.xy_min[1]);
+                    summaries[new_root].xy_max[0] = a.xy_max[0].max(b.xy_max[0]);
+                    summaries[new_root].xy_max[1] = a.xy_max[1].max(b.xy_max[1]);
+                    summaries[new_root].z_min = merged_z_min;
+                    summaries[new_root].z_max = merged_z_max;
                 }
             }
         }

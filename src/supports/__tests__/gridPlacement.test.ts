@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 
-import { generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, steepFlatAnchorBandTop, steepFlatSpacingMultiplier, STEEP_FLAT_SPACING_MULTIPLIER, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
+import { baseOverhangWindowMm, generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, steepFlatAnchorBandTop, steepFlatSpacingMultiplier, STEEP_FLAT_SPACING_MULTIPLIER, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
+import { deduplicateCandidates } from '../autoSupport/candidateGeneration';
 import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
 import { SLOPE_RELAX_RAMP_START } from '../autoSupport/constants';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
@@ -534,4 +535,58 @@ test('near-plate flat overhangs (e.g. 32mm mini feet) get perimeter and infill b
     const smallCandidates = generateGridCandidates([smallFoot], settings);
     assert.ok(smallCandidates.some((c) => c.id.startsWith('grid-')), 'small near-plate foot emits infill');
     assert.ok(smallCandidates.some((c) => c.id.startsWith('fill-')), 'small near-plate foot emits perimeter');
+});
+
+test('lifted modelMinZ preserves base-overhang density window and deduplicateCandidates keeps sloped grid points', () => {
+    const settings = createDefaultAutoSupportSettings();
+    const liftedFoot: DetectedIsland = {
+        ...rectRegion('foot-lifted', -1, 1, -1, 1, 4, 6.5), // z = 6.5mm (> 5mm world, <= 5mm above modelMinZ = 5mm)
+        perimeterLoops: [[[-1, -1, 6.5], [1, -1, 6.5], [1, 1, 6.5], [-1, 1, 6.5]]],
+        steepFlat: false,
+        interior: false,
+    };
+    assert.equal(shouldUseDensityGrid(liftedFoot, settings, 0), false, 'world Z=6.5 without modelMinZ is above anchor window');
+    assert.equal(shouldUseDensityGrid(liftedFoot, settings, 5.0), true, 'model-relative Z=1.5 stays in base overhang window');
+
+    const liftedCandidates = generateGridCandidates([liftedFoot], settings, undefined, undefined, false, 0, 5.0);
+    assert.ok(liftedCandidates.some((c) => c.id.startsWith('grid-')), 'lifted near-base foot emits infill');
+    assert.ok(liftedCandidates.some((c) => c.id.startsWith('fill-')), 'lifted near-base foot emits perimeter');
+
+    // Simulate sloped sole points 0.85mm apart in XY with 2.0mm Z rise:
+    // grown influenceRadiusMm(2.0) would suppress at ~1.01mm in XY, erasing the sloped sole.
+    const slopedGrid = [0, 1, 2].map((i) => ({
+        id: `sloped-${i}`,
+        tipPos: { x: i * 0.85, y: 0, z: 1.0 + i * 1.5 },
+        tipNormal: { x: 0, y: 0, z: -1 },
+        modelId: 'm',
+        source: 'overhang' as const,
+        islandAreaMm2: settings.areaPerSupportMm2,
+        zHeight: 1.0 + i * 1.5,
+        priority: 0,
+        gridPoint: true,
+        nearBase: true,
+    }));
+    const retained = deduplicateCandidates(slopedGrid, settings);
+    assert.equal(retained.length, 3, 'sloped gridPoint candidates are not suppressed by vertical influence growth');
+
+    // 28mm mini base window = 2.8mm: excludes mid-height crotch overhang at 5.0mm.
+    const miniWindow = baseOverhangWindowMm(28);
+    assert.ok(Math.abs(miniWindow - 2.8) < 1e-6);
+    const crotchOverhang: DetectedIsland = {
+        ...rectRegion('crotch-5mm', -1, 1, -1, 1, 4, 5.0),
+        steepFlat: false,
+        interior: false,
+    };
+    assert.equal(shouldUseDensityGrid(crotchOverhang, settings, 0, miniWindow), false, '5mm crotch stays out of 28mm mini base window');
+
+    // A tall continuous overhang starting near the base (z=1.0..15.0mm) must not
+    // receive near-base over-densification or nearBase dedup bypass.
+    const climbingOverhang: DetectedIsland = {
+        ...rectRegion('climbing-15mm', -4, 4, -4, 4, 64, 1.0),
+        maxZ: 15.0,
+        steepFlat: false,
+        interior: false,
+    };
+    const climbingCandidates = generateGridCandidates([climbingOverhang], settings, undefined, undefined, false, 0, 0, miniWindow);
+    assert.ok(climbingCandidates.every((c) => !c.nearBase), 'climbing overhang does not inherit nearBase dedup bypass');
 });

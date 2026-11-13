@@ -233,11 +233,11 @@ export function deduplicateCandidates(
                     const ddx = c.tipPos.x - r.tipPos.x;
                     const ddy = c.tipPos.y - r.tipPos.y;
                     const dz = Math.abs(c.tipPos.z - r.tipPos.z);
-                    // Discrete islands (voxel/minima/intersection) are
-                    // must-support points: flat 3D ball only, so neighboring
-                    // islands never eat each other. The grown disc applies to
-                    // overhang-lattice pairs, where merging is the goal.
-                    if (c.source !== 'overhang' || r.source !== 'overhang') {
+                    // Discrete islands (voxel/minima/intersection) and near-base
+                    // overhang points (e.g. slightly sloped soles) use the flat
+                    // 3D ball only so higher-Z points on a sloped foot aren't
+                    // erased by the vertical influence-radius growth.
+                    if (c.source !== 'overhang' || r.source !== 'overhang' || (c.nearBase && r.nearBase)) {
                         const ddz = c.tipPos.z - r.tipPos.z;
                         if (ddx * ddx + ddy * ddy + ddz * ddz <= baseRadius * baseRadius) {
                             duplicate = true;

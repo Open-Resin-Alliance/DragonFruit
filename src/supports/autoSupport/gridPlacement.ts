@@ -3,7 +3,6 @@ import * as THREE from 'three';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import type { CandidatePoint } from './types';
 import {
-    ANCHOR_HEIGHT_THRESHOLD_MM,
     OVERHANG_SELF_SUPPORT_ANGLE_DEG,
     GRID_SPACING_MIN_FACTOR,
     SLOPE_RELAX_RAMP_START,
@@ -481,9 +480,35 @@ export function steepFlatAnchorBandTop(
     );
 }
 
+export const BASE_OVERHANG_WINDOW_MIN_MM = 1.8;
+export const BASE_OVERHANG_WINDOW_MAX_MM = 3.5;
+export const BASE_OVERHANG_WINDOW_DEFAULT_MM = 3.0;
+export const BASE_OVERHANG_HEIGHT_FRACTION = 0.1;
+
+/** Base-overhang densification window (mm) scaled by oriented model height. */
+export function baseOverhangWindowMm(modelHeightMm = 0): number {
+    if (!(modelHeightMm > 0)) return BASE_OVERHANG_WINDOW_DEFAULT_MM;
+    return Math.min(
+        BASE_OVERHANG_WINDOW_MAX_MM,
+        Math.max(BASE_OVERHANG_WINDOW_MIN_MM, modelHeightMm * BASE_OVERHANG_HEIGHT_FRACTION),
+    );
+}
+
+/** World-space Z bottom and height (mm) of an oriented mesh bounding box. */
+export function meshWorldZBounds(mesh?: THREE.Mesh): { minZ: number; heightMm: number } {
+    if (!mesh) return { minZ: 0, heightMm: 0 };
+    mesh.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(mesh);
+    const minZ = Number.isFinite(box.min.z) ? box.min.z : 0;
+    const maxZ = Number.isFinite(box.max.z) ? box.max.z : minZ;
+    return { minZ, heightMm: Math.max(0, maxZ - minZ) };
+}
+
 export function shouldUseDensityGrid(
     island: DetectedIsland,
     settings: AutoSupportSettings,
+    modelMinZ = 0,
+    baseWindowMm = BASE_OVERHANG_WINDOW_DEFAULT_MM,
 ): boolean {
     if (island.source !== 'overhang') return false;
     if ((island.areaMm2 ?? 0) >= settings.gridAreaThresholdMm2) return true;
@@ -495,7 +520,9 @@ export function shouldUseDensityGrid(
     const major = Math.max(maxX - minX, maxY - minY);
     if (!island.interior
         && !island.steepFlat
-        && island.contact.z <= ANCHOR_HEIGHT_THRESHOLD_MM
+        && (island.contact.z - modelMinZ) <= baseWindowMm
+        && ((island.maxZ ?? island.contact.z) - modelMinZ) <= baseWindowMm * 1.5
+        && voxels !== undefined && voxels.count > 1
         && ((island.areaMm2 ?? 0) >= 0.8 || major >= 0.8)) {
         return true;
     }
@@ -548,21 +575,35 @@ export function generateGridCandidates(
      *  contacts: the sag between two of them goes as the span to the fourth
      *  power. */
     partThicknessMm = 0,
+    /** Lowest world Z (mm) of the oriented model bounding box, so lifted
+     *  models keep their base-overhang density window relative to the model. */
+    modelMinZ?: number,
+    /** Height (mm) of the base-overhang densification window above modelMinZ. */
+    baseWindowMm?: number,
 ): CandidatePoint[] {
     const baseSpacing = Math.sqrt(Math.max(settings.areaPerSupportMm2, 0.5));
     if (baseSpacing <= 0) return [];
 
+    const meshZ = (modelMinZ === undefined || baseWindowMm === undefined)
+        ? meshWorldZBounds(mesh)
+        : null;
+    const resolvedMinZ = modelMinZ ?? meshZ!.minZ;
+    const resolvedWindowMm = baseWindowMm ?? baseOverhangWindowMm(meshZ!.heightMm);
+
     const candidates: CandidatePoint[] = [];
 
     for (const island of overhangIslands) {
-        if (!shouldUseDensityGrid(island, settings)) continue;
+        if (!shouldUseDensityGrid(island, settings, resolvedMinZ, resolvedWindowMm)) continue;
         const baseSpacing = computeRegionSpacing(island, settings);
         // An internal ceiling is bridged to the cavity floor, not carried to
         // the plate; the short strut needs far fewer contacts.
         let spacing = baseSpacing
             * steepFlatSpacingMultiplier(island, baseSpacing, partThicknessMm)
             * (island.interior ? INTERIOR_CAVITY_SPACING_SCALE : 1);
-        const nearPlateFlat = !island.interior && !island.steepFlat && island.contact.z <= ANCHOR_HEIGHT_THRESHOLD_MM;
+        const nearPlateFlat = !island.interior
+            && !island.steepFlat
+            && (island.contact.z - resolvedMinZ) <= resolvedWindowMm
+            && ((island.maxZ ?? island.contact.z) - resolvedMinZ) <= resolvedWindowMm * 1.5;
         if (nearPlateFlat) {
             spacing = Math.max(0.85, Math.min(spacing * 0.75, 1.15));
         }
@@ -616,6 +657,7 @@ export function generateGridCandidates(
                 priority: 0,
                 gridPoint: true,
                 interior: island.interior,
+                nearBase: (nearPlateFlat && (z - resolvedMinZ) <= resolvedWindowMm) || undefined,
             });
         };
 
