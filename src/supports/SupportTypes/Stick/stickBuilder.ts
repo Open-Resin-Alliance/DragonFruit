@@ -81,7 +81,7 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     const tipProfile: SupportTipProfile = {
         type: 'disk',
         contactDiameterMm: tipContactDiameterMm,
-        bodyDiameterMm: settings.tip.bodyDiameterMm,
+        bodyDiameterMm: input.shaftDiameterMm !== undefined ? shaftDiameter : settings.tip.bodyDiameterMm,
         lengthMm: settings.tip.lengthMm,
         penetrationMm: settings.tip.penetrationMm,
         diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,

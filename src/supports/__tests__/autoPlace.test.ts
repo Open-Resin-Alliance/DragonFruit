@@ -21,6 +21,7 @@ import { clearHistory, getUndoCount, undo, registerHistoryHandler } from '../../
 import { SUPPORT_AUTO_PLACE } from '../history/actionTypes';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
 import { computeAutoSupportPlan, commitAutoPlacePlan, runAutoPlace } from '../autoSupport/autoPlace';
+import { buildStick } from '../SupportTypes/Stick/stickBuilder';
 import { createOwnedDraft, draftAddEntity, isOwnedDraft, sealOwnedDraft } from '../autoSupport/supportDraft';
 import type { AutoSupportPlan } from '../autoSupport/types';
 import { modelMeshKey, runAutoPlaceRequest, serializeIsland, serializeModelMesh } from '../autoSupport/autoPlace.worker.shared';
@@ -1670,6 +1671,23 @@ test('BUG-PERF-WIRE[b] commitAutoPlacePlan seals drafts, prevents undoStack muta
     } finally {
         disposeHandlers();
     }
+});
+
+test('buildStick matches cone bodyDiameterMm to explicit shaftDiameterMm override', () => {
+    const { stick, error } = buildStick({
+        modelId: 'stick-sizing-test',
+        aPos: { x: 0, y: 0, z: 10 },
+        aNormal: { x: 0, y: 0, z: -1 },
+        bPos: { x: 0, y: 0, z: 2 },
+        bNormal: { x: 0, y: 0, z: 1 },
+        shaftDiameterMm: 1.65,
+        tipContactDiameterMm: 0.35,
+    });
+    assert.equal(error, undefined);
+    assert.equal(stick.segments[0]?.diameter, 1.65);
+    assert.equal(stick.contactConeA.profile.bodyDiameterMm, 1.65);
+    assert.equal(stick.contactConeB.profile.bodyDiameterMm, 1.65);
+    assert.equal(stick.contactConeA.profile.contactDiameterMm, 0.35);
 });
 
 

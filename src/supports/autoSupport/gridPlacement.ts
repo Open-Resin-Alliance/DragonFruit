@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import type { CandidatePoint } from './types';
 import {
+    ANCHOR_HEIGHT_THRESHOLD_MM,
     OVERHANG_SELF_SUPPORT_ANGLE_DEG,
     GRID_SPACING_MIN_FACTOR,
     SLOPE_RELAX_RAMP_START,
@@ -491,11 +492,18 @@ export function shouldUseDensityGrid(
     const bounds = voxels ? footprintBounds(voxels) : null;
     if (!bounds) return false;
     const { minX, minY, maxX, maxY } = bounds;
+    const major = Math.max(maxX - minX, maxY - minY);
+    if (!island.interior
+        && !island.steepFlat
+        && island.contact.z <= ANCHOR_HEIGHT_THRESHOLD_MM
+        && ((island.areaMm2 ?? 0) >= 4 || major >= 3)) {
+        return true;
+    }
     // Longer than the two-point band: a thin rib (a plank's underside) needs
     // its edge sampled, whether or not it erodes away completely. The lattice
     // is skipped for it below — a footprint thinner than one lattice cell has
     // nothing to infill.
-    return Math.max(maxX - minX, maxY - minY) >= ISLAND_TWO_POINT_MAX_MM;
+    return major >= ISLAND_TWO_POINT_MAX_MM;
 }
 
 /**

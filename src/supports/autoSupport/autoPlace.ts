@@ -1065,7 +1065,16 @@ function placeOneCandidate(
         // cavity. A plate trunk would leave through a wall or a bore, which is
         // what put supports through the shell.
         const band = activeSizingBand(auto);
-        const bridge = mesh ? buildCavityBridge(tipPos, tipNormal, candidate.modelId, mesh, band) : null;
+        const bridgeSizing = sizeParameters(candidate, auto.sizeScale ?? 1, sizingCtx, auto);
+        const cappedBridgeTip = candidate.tipDiameterMm !== undefined
+            ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, candidate.tipDiameterMm)
+            : (bridgeSizing.tipContactDiameterMm ?? band.tipContactDiameterMm);
+        const bridge = mesh
+            ? buildCavityBridge(tipPos, tipNormal, candidate.modelId, mesh, {
+                shaftDiameterMm: bridgeSizing.shaftDiameterMm ?? band.shaftDiameterMm,
+                tipContactDiameterMm: cappedBridgeTip,
+            })
+            : null;
         if (bridge) {
             d = draftAddEntity(d, bridge.kind, bridge.entity);
             logPlacement(`${bridge.kind} (interior) ${candidate.id} Z=${candidate.zHeight.toFixed(1)}mm`);
@@ -1503,7 +1512,13 @@ function placeOneCandidate(
                     })`;
             } catch {}
             const band = activeSizingBand(auto);
-            const cavityResult = buildCavityBridge(tipPos, tipNormal, candidate.modelId, mesh, band);
+            const cappedBridgeTip = candidate.tipDiameterMm !== undefined
+                ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, candidate.tipDiameterMm)
+                : (overrides.tipContactDiameterMm ?? band.tipContactDiameterMm);
+            const cavityResult = buildCavityBridge(tipPos, tipNormal, candidate.modelId, mesh, {
+                shaftDiameterMm: overrides.shaftDiameterMm ?? band.shaftDiameterMm,
+                tipContactDiameterMm: cappedBridgeTip,
+            });
             if (cavityResult) {
                 // Keep short cavity twigs but cap long bridges at 12mm; a
                 // rejected tip is reconsidered by fan/merge in a later pass.

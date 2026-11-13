@@ -496,3 +496,17 @@ test('an interior cavity ceiling gets a far sparser grid', () => {
     assert.ok(interior.length <= Math.ceil(exterior.length / 4),
         `interior forest is much sparser (${interior.length} vs ${exterior.length})`);
 });
+
+test('near-plate flat overhangs (e.g. 32mm mini feet) get perimeter and infill below gridAreaThresholdMm2', () => {
+    const settings = createDefaultAutoSupportSettings();
+    const nearPlateFoot: DetectedIsland = {
+        ...rectRegion('foot-near-plate', -2, 2, -2, 2, 16, 2.0), // 4×4 = 16 mm² (< 25 mm² threshold)
+        perimeterLoops: [[[-2, -2, 2.0], [2, -2, 2.0], [2, 2, 2.0], [-2, 2, 2.0]]],
+        steepFlat: false,
+        interior: false,
+    };
+    assert.equal(shouldUseDensityGrid(nearPlateFoot, settings), true, 'near-plate flat overhang should use density grid');
+    const candidates = generateGridCandidates([nearPlateFoot], settings);
+    assert.ok(candidates.some((c) => c.id.startsWith('fill-')), 'near-plate foot emits perimeter ring candidates');
+    assert.ok(candidates.length >= 4, `near-plate foot emits multiple perimeter/infill candidates (${candidates.length})`);
+});
