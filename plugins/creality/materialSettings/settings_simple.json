@@ -1,0 +1,210 @@
+{
+  "displayName": "cxdlpv4 Resin Settings",
+  "replacesDefaultMaterialSettings": true,
+  "tabs": [
+    { "id": "simple", "title": "Simple", "order": 10 }
+  ],
+  "sections": [
+    { "id": "global", "title": "General Settings", "tabId": "simple", "order": 9 },
+    { "id": "burn-in", "title": "Burn In Layers", "tabId": "simple", "order": 10 },
+    { "id": "normal", "title": "Normal Layers", "tabId": "simple", "order": 20 },
+    { "id": "timing", "title": "Timing", "tabId": "simple", "order": 30 },
+    { "id": "light", "title": "Light Settings", "tabId": "simple", "order": 40 }
+  ],
+  "cards": [
+    { "id": "global-settings", "title": "General Settings", "tabId": "simple", "sectionId": "global", "order": 9 },
+    { "id": "burn-in-settings", "title": "Burn In Layers", "tabId": "simple", "sectionId": "burn-in", "order": 10 },
+    { "id": "normal-settings", "title": "Normal Layers", "tabId": "simple", "sectionId": "normal", "order": 20 },
+    { "id": "timing-settings", "title": "Timing", "tabId": "simple", "sectionId": "timing", "order": 30 },
+    { "id": "light-settings", "title": "Light Settings", "tabId": "simple", "sectionId": "light", "order": 40 }
+  ],
+  "fields": [
+    {
+      "key": "layerHeightMm",
+      "label": "Layer Thickness (mm)",
+      "kind": "number",
+      "defaultValue": 0.05,
+      "min": 0.001,
+      "max": 1,
+      "step": 0.001,
+      "placement": { "tabId": "simple", "sectionId": "global", "cardId": "global-settings", "order": 10 },
+      "metadataPath": "material.layerHeightMm"
+    },
+    {
+      "key": "bottomLayerCount",
+      "label": "Burn-in Layers",
+      "kind": "integer",
+      "defaultValue": 5,
+      "min": 0,
+      "max": 200,
+      "step": 1,
+      "placement": { "tabId": "simple", "sectionId": "burn-in", "cardId": "burn-in-settings", "order": 10 },
+      "metadataPath": "material.bottomLayerCount"
+    },
+    {
+      "key": "transitionLayerCount",
+      "label": "Transition Layers",
+      "kind": "integer",
+      "defaultValue": 0,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": { "tabId": "simple", "sectionId": "burn-in", "cardId": "burn-in-settings", "order": 20 },
+      "metadataPath": "cxdlpv4.transitionLayerCount"
+    },
+    {
+      "key": "bottomExposureSec",
+      "label": "Burn-in Exposure (s)",
+      "kind": "number",
+      "defaultValue": 25,
+      "min": 0,
+      "max": 300,
+      "step": 0.1,
+      "placement": { "tabId": "simple", "sectionId": "burn-in", "cardId": "burn-in-settings", "order": 30 },
+      "metadataPath": "material.bottomExposureSec"
+    },
+    {
+      "key": "bottomLiftDistanceMm",
+      "label": "Burn-in Lift Distance (mm)",
+      "kind": "number",
+      "defaultValue": 6,
+      "min": 0,
+      "max": 50,
+      "step": 0.01,
+      "placement": { "tabId": "simple", "sectionId": "burn-in", "cardId": "burn-in-settings", "order": 40 },
+      "metadataPath": "material.bottomLiftDistanceMm"
+    },
+    {
+      "key": "bottomLiftSpeedMmMin",
+      "label": "Burn-in Lift Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 60,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": { "tabId": "simple", "sectionId": "burn-in", "cardId": "burn-in-settings", "order": 50 },
+      "metadataPath": "material.bottomLiftSpeedMmMin"
+    },
+    {
+      "key": "bottomRetractSpeedMmMin",
+      "label": "Burn-in Retract Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 120,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": { "tabId": "simple", "sectionId": "burn-in", "cardId": "burn-in-settings", "order": 60 },
+      "metadataPath": "material.bottomRetractSpeedMmMin"
+    },
+    {
+      "key": "normalExposureSec",
+      "label": "Normal Exposure (s)",
+      "kind": "number",
+      "defaultValue": 2.5,
+      "min": 0,
+      "max": 120,
+      "step": 0.01,
+      "placement": { "tabId": "simple", "sectionId": "normal", "cardId": "normal-settings", "order": 20 },
+      "metadataPath": "material.normalExposureSec"
+    },
+    {
+      "key": "liftDistanceMm",
+      "label": "Lift Distance (mm)",
+      "kind": "number",
+      "defaultValue": 6,
+      "min": 0,
+      "max": 50,
+      "step": 0.01,
+      "placement": { "tabId": "simple", "sectionId": "normal", "cardId": "normal-settings", "order": 30 },
+      "metadataPath": "material.liftDistanceMm"
+    },
+    {
+      "key": "liftSpeedMmMin",
+      "label": "Lift Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 60,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": { "tabId": "simple", "sectionId": "normal", "cardId": "normal-settings", "order": 40 },
+      "metadataPath": "material.liftSpeedMmMin"
+    },
+    {
+      "key": "retractSpeedMmMin",
+      "label": "Retract Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 150,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": { "tabId": "simple", "sectionId": "normal", "cardId": "normal-settings", "order": 50 },
+      "metadataPath": "material.retractSpeedMmMin"
+    },
+    {
+      "key": "bottomLightOffDelaySec",
+      "label": "Burn-in Light Off Delay (s)",
+      "kind": "number",
+      "defaultValue": 1,
+      "min": 0,
+      "max": 120,
+      "step": 0.01,
+      "placement": { "tabId": "simple", "sectionId": "timing", "cardId": "timing-settings", "order": 10 },
+      "metadataPath": "cxdlpv4.bottomLightOffDelaySec"
+    },
+    {
+      "key": "lightOffDelaySec",
+      "label": "Normal Light Off Delay (s)",
+      "kind": "number",
+      "defaultValue": 1,
+      "min": 0,
+      "max": 120,
+      "step": 0.01,
+      "placement": { "tabId": "simple", "sectionId": "timing", "cardId": "timing-settings", "order": 20 },
+      "metadataPath": "cxdlpv4.lightOffDelaySec"
+    },
+    {
+      "key": "waitTimeBeforeCureSec",
+      "label": "Wait Before Cure (s)",
+      "kind": "number",
+      "defaultValue": 0,
+      "min": 0,
+      "max": 120,
+      "step": 0.01,
+      "placement": { "tabId": "simple", "sectionId": "timing", "cardId": "timing-settings", "order": 40 },
+      "metadataPath": "cxdlpv4.waitTimeBeforeCureSec"
+    },
+    {
+      "key": "waitTimeAfterCureSec",
+      "label": "Wait After Cure (s)",
+      "kind": "number",
+      "defaultValue": 0,
+      "min": 0,
+      "max": 120,
+      "step": 0.01,
+      "placement": { "tabId": "simple", "sectionId": "timing", "cardId": "timing-settings", "order": 50 },
+      "metadataPath": "cxdlpv4.waitTimeAfterCureSec"
+    },
+    {
+      "key": "waitTimeAfterLiftSec",
+      "label": "Wait After Lift (s)",
+      "kind": "number",
+      "defaultValue": 0,
+      "min": 0,
+      "max": 120,
+      "step": 0.01,
+      "placement": { "tabId": "simple", "sectionId": "timing", "cardId": "timing-settings", "order": 60 },
+      "metadataPath": "cxdlpv4.waitTimeAfterLiftSec"
+    },
+    {
+      "key": "projectorPwmPercent",
+      "label": "Projector PWM (%)",
+      "kind": "number",
+      "defaultValue": 100,
+      "min": 1,
+      "max": 100,
+      "step": 1,
+      "placement": { "tabId": "simple", "sectionId": "light", "cardId": "light-settings", "order": 70 },
+      "metadataPath": "cxdlpv4.projectorPwmPercent"
+    }
+  ]
+}

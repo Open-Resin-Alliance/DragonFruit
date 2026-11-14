@@ -1,0 +1,98 @@
+//! Data structures for Creality `.cxdlpv4` (CXSW3DV2 version 4) binary containers.
+
+/// Extracted print and container parameters for `.cxdlpv4` encoding.
+#[derive(Debug, Clone)]
+pub struct CxdlpV4Metadata {
+    pub machine_name: String,
+    pub bed_size_x_mm: f32,
+    pub bed_size_y_mm: f32,
+    pub bed_size_z_mm: f32,
+    pub layer_height_mm: f32,
+    pub bottom_layer_count: u32,
+    pub transition_layer_count: u32,
+    pub bottom_exposure_sec: f32,
+    pub normal_exposure_sec: f32,
+    pub bottom_lift_height_mm: f32,
+    pub bottom_lift_speed_mm_min: f32,
+    pub bottom_lift_height2_mm: f32,
+    pub bottom_lift_speed2_mm_min: f32,
+    pub bottom_retract_speed_mm_min: f32,
+    pub lift_height_mm: f32,
+    pub lift_speed_mm_min: f32,
+    pub lift_height2_mm: f32,
+    pub lift_speed2_mm_min: f32,
+    pub retract_speed_mm_min: f32,
+    pub retract_height2_mm: f32,
+    pub retract_speed2_mm_min: f32,
+    pub bottom_light_off_delay_sec: f32,
+    pub light_off_delay_sec: f32,
+    pub wait_time_before_cure_sec: f32,
+    pub wait_time_after_cure_sec: f32,
+    pub wait_time_after_lift_sec: f32,
+    pub light_pwm: u16,
+    pub bottom_light_pwm: u16,
+    pub anti_alias_level: u32,
+    pub projector_type: u32,
+    pub resin_density_g_ml: f32,
+    pub resin_price_per_liter: f32,
+    pub modified_timestamp_minutes: u32,
+}
+
+impl Default for CxdlpV4Metadata {
+    fn default() -> Self {
+        Self {
+            machine_name: "HALOT-R6".to_string(),
+            bed_size_x_mm: 82.62,
+            bed_size_y_mm: 130.56,
+            bed_size_z_mm: 160.0,
+            layer_height_mm: 0.05,
+            bottom_layer_count: 5,
+            transition_layer_count: 0,
+            bottom_exposure_sec: 25.0,
+            normal_exposure_sec: 2.5,
+            bottom_lift_height_mm: 6.0,
+            bottom_lift_speed_mm_min: 60.0,
+            bottom_lift_height2_mm: 0.0,
+            bottom_lift_speed2_mm_min: 0.0,
+            bottom_retract_speed_mm_min: 120.0,
+            lift_height_mm: 6.0,
+            lift_speed_mm_min: 60.0,
+            lift_height2_mm: 0.0,
+            lift_speed2_mm_min: 0.0,
+            retract_speed_mm_min: 150.0,
+            retract_height2_mm: 0.0,
+            retract_speed2_mm_min: 0.0,
+            bottom_light_off_delay_sec: 1.0,
+            light_off_delay_sec: 1.0,
+            wait_time_before_cure_sec: 0.0,
+            wait_time_after_cure_sec: 0.0,
+            wait_time_after_lift_sec: 0.0,
+            light_pwm: 255,
+            bottom_light_pwm: 255,
+            anti_alias_level: 1,
+            projector_type: 0,
+            resin_density_g_ml: 1.1,
+            resin_price_per_liter: 0.0,
+            modified_timestamp_minutes: 0,
+        }
+    }
+}
+
+/// Per-layer physical parameters stored before each layer's RLE image data.
+#[derive(Debug, Clone, Copy)]
+pub struct CxdlpLayerTiming {
+    pub position_z_mm: f32,
+    pub exposure_sec: f32,
+    pub light_off_sec: f32,
+    pub lift_height_mm: f32,
+    pub lift_speed_mm_min: f32,
+    pub lift_height2_mm: f32,
+    pub lift_speed2_mm_min: f32,
+    pub retract_speed_mm_min: f32,
+    pub retract_height2_mm: f32,
+    pub retract_speed2_mm_min: f32,
+    pub rest_time_before_lift_sec: f32,
+    pub rest_time_after_lift_sec: f32,
+    pub rest_time_after_retract_sec: f32,
+    pub light_pwm: f32,
+}

@@ -1,0 +1,47 @@
+{
+  "$inherit": "twostage",
+  "displayName": "cxdlpv4 Resin Settings (All Fields)",
+  "$update": {
+    "tabs": [
+      { "id": "allfields", "title": "All Fields", "order": 40 }
+    ],
+    "sections": [
+      { "id": "advanced-cxdlpv4", "title": "Advanced CXDLPV4", "tabId": "allfields", "order": 10 }
+    ],
+    "cards": [
+      { "id": "advanced-cxdlpv4-settings", "title": "Container & Header Fields", "tabId": "allfields", "sectionId": "advanced-cxdlpv4", "order": 10 }
+    ],
+    "fields": [
+      {
+        "key": "machineName",
+        "label": "Machine Identifier (Header)",
+        "kind": "text",
+        "defaultValue": "HALOT-R6",
+        "placement": { "tabId": "allfields", "sectionId": "advanced-cxdlpv4", "cardId": "advanced-cxdlpv4-settings", "order": 10 },
+        "metadataPath": "cxdlpv4.machineName"
+      },
+      {
+        "key": "bottomProjectorPwmPercent",
+        "label": "Burn-in Projector PWM (%)",
+        "kind": "number",
+        "defaultValue": 100,
+        "min": 1,
+        "max": 100,
+        "step": 1,
+        "placement": { "tabId": "allfields", "sectionId": "advanced-cxdlpv4", "cardId": "advanced-cxdlpv4-settings", "order": 20 },
+        "metadataPath": "cxdlpv4.bottomProjectorPwmPercent"
+      },
+      {
+        "key": "antiAliasingLevel",
+        "label": "Anti-Aliasing Level (Header)",
+        "kind": "integer",
+        "defaultValue": 1,
+        "min": 1,
+        "max": 16,
+        "step": 1,
+        "placement": { "tabId": "allfields", "sectionId": "advanced-cxdlpv4", "cardId": "advanced-cxdlpv4-settings", "order": 30 },
+        "metadataPath": "cxdlpv4.antiAliasingLevel"
+      }
+    ]
+  }
+}

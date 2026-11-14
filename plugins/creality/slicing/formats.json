@@ -1,0 +1,8 @@
+{
+  "cxdlpv4": {
+    "extensions": [".cxdlpv4"],
+    "displayName": "Creality CXDLPV4 (.cxdlpv4)",
+    "description": "Creality HALOT CXSW3DV2 v4 format",
+    "layerDataKind": "raw-mask"
+  }
+}

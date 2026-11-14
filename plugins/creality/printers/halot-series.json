@@ -1,0 +1,31 @@
+[
+  {
+    "presetId": "creality-halot-r6-cxdlpv4",
+    "profileVersion": 1,
+    "manufacturer": "Creality",
+    "family": "HALOT",
+    "name": "HALOT-R6",
+    "imageAssetPath": "./assets/halot-series/halot-r6.png",
+    "antiAliasing": true,
+    "hasCamera": false,
+    "networkSupport": null,
+    "buildVolumeMm": {
+      "width": 82.62,
+      "depth": 130.56,
+      "height": 160
+    },
+    "pixelSize": {
+      "x": 51,
+      "y": 51
+    },
+    "display": {
+      "resolutionX": 1620,
+      "resolutionY": 2560,
+      "outputFormat": ".cxdlpv4",
+      "formatVersion": "v4",
+      "settingsMode": "simple",
+      "mirrorX": false,
+      "mirrorY": true
+    }
+  }
+]

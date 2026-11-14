@@ -1,0 +1,85 @@
+{
+  "$inherit": "simple",
+  "displayName": "cxdlpv4 Resin Settings (Two-Stage)",
+  "$update": {
+    "tabs": [
+      { "id": "twostage", "title": "Two-Stage", "order": 20 }
+    ],
+    "sections": [
+      { "id": "ts-burn-in", "title": "Burn In Motion (Two-Stage)", "tabId": "twostage", "order": 10 },
+      { "id": "ts-normal", "title": "Normal Motion (Two-Stage)", "tabId": "twostage", "order": 20 }
+    ],
+    "cards": [
+      { "id": "ts-burn-in-settings", "title": "Burn In Two-Stage Motion", "tabId": "twostage", "sectionId": "ts-burn-in", "order": 10 },
+      { "id": "ts-normal-settings", "title": "Normal Two-Stage Motion", "tabId": "twostage", "sectionId": "ts-normal", "order": 20 }
+    ],
+    "fields": [
+      {
+        "key": "bottomLiftDistance2Mm",
+        "label": "Burn-in Lift Distance 2 (mm)",
+        "kind": "number",
+        "defaultValue": 0,
+        "min": 0,
+        "max": 50,
+        "step": 0.01,
+        "placement": { "tabId": "twostage", "sectionId": "ts-burn-in", "cardId": "ts-burn-in-settings", "order": 10 },
+        "metadataPath": "cxdlpv4.bottomLiftDistance2Mm"
+      },
+      {
+        "key": "bottomLiftSpeed2MmMin",
+        "label": "Burn-in Lift Speed 2 (mm/min)",
+        "kind": "number",
+        "defaultValue": 0,
+        "min": 0,
+        "max": 100000,
+        "step": 1,
+        "placement": { "tabId": "twostage", "sectionId": "ts-burn-in", "cardId": "ts-burn-in-settings", "order": 20 },
+        "metadataPath": "cxdlpv4.bottomLiftSpeed2MmMin"
+      },
+      {
+        "key": "liftDistance2Mm",
+        "label": "Normal Lift Distance 2 (mm)",
+        "kind": "number",
+        "defaultValue": 0,
+        "min": 0,
+        "max": 50,
+        "step": 0.01,
+        "placement": { "tabId": "twostage", "sectionId": "ts-normal", "cardId": "ts-normal-settings", "order": 10 },
+        "metadataPath": "cxdlpv4.liftDistance2Mm"
+      },
+      {
+        "key": "liftSpeed2MmMin",
+        "label": "Normal Lift Speed 2 (mm/min)",
+        "kind": "number",
+        "defaultValue": 0,
+        "min": 0,
+        "max": 100000,
+        "step": 1,
+        "placement": { "tabId": "twostage", "sectionId": "ts-normal", "cardId": "ts-normal-settings", "order": 20 },
+        "metadataPath": "cxdlpv4.liftSpeed2MmMin"
+      },
+      {
+        "key": "retractDistance2Mm",
+        "label": "Retract Distance 2 (mm)",
+        "kind": "number",
+        "defaultValue": 0,
+        "min": 0,
+        "max": 50,
+        "step": 0.01,
+        "placement": { "tabId": "twostage", "sectionId": "ts-normal", "cardId": "ts-normal-settings", "order": 30 },
+        "metadataPath": "cxdlpv4.retractDistance2Mm"
+      },
+      {
+        "key": "retractSpeed2MmMin",
+        "label": "Retract Speed 2 (mm/min)",
+        "kind": "number",
+        "defaultValue": 0,
+        "min": 0,
+        "max": 100000,
+        "step": 1,
+        "placement": { "tabId": "twostage", "sectionId": "ts-normal", "cardId": "ts-normal-settings", "order": 40 },
+        "metadataPath": "cxdlpv4.retractSpeed2MmMin"
+      }
+    ]
+  }
+}
