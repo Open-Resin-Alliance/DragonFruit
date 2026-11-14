@@ -33,6 +33,7 @@ pub struct CxdlpV4Metadata {
     pub bottom_light_pwm: u16,
     pub anti_alias_level: u32,
     pub projector_type: u32,
+    pub per_layer_settings: bool,
     pub resin_density_g_ml: f32,
     pub resin_price_per_liter: f32,
     pub modified_timestamp_minutes: u32,
@@ -41,10 +42,10 @@ pub struct CxdlpV4Metadata {
 impl Default for CxdlpV4Metadata {
     fn default() -> Self {
         Self {
-            machine_name: "HALOT-R6".to_string(),
-            bed_size_x_mm: 82.62,
-            bed_size_y_mm: 130.56,
-            bed_size_z_mm: 160.0,
+            machine_name: "DragonFruit CXDLPV4".to_string(),
+            bed_size_x_mm: 100.0,
+            bed_size_y_mm: 100.0,
+            bed_size_z_mm: 100.0,
             layer_height_mm: 0.05,
             bottom_layer_count: 5,
             transition_layer_count: 0,
@@ -71,6 +72,7 @@ impl Default for CxdlpV4Metadata {
             bottom_light_pwm: 255,
             anti_alias_level: 1,
             projector_type: 0,
+            per_layer_settings: false,
             resin_density_g_ml: 1.1,
             resin_price_per_liter: 0.0,
             modified_timestamp_minutes: 0,

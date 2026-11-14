@@ -6,37 +6,37 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::cxdlpv4_types::{CxdlpLayerTiming, CxdlpV4Metadata};
 use crate::types::SliceJobV3;
 
-fn read_f32(node: Option<&Value>, keys: &[&str], default: f32) -> f32 {
-    let Some(obj) = node.and_then(|v| v.as_object()) else {
-        return default;
-    };
+fn read_opt_f32(node: Option<&Value>, keys: &[&str]) -> Option<f32> {
+    let obj = node.and_then(|v| v.as_object())?;
     for key in keys {
         if let Some(val) = obj.get(*key).and_then(|v| v.as_f64()) {
             if val.is_finite() {
-                return val as f32;
+                return Some(val as f32);
             }
         }
     }
-    default
+    None
 }
 
-fn read_u32(node: Option<&Value>, keys: &[&str], default: u32) -> u32 {
-    let Some(obj) = node.and_then(|v| v.as_object()) else {
-        return default;
-    };
+fn read_f32(node: Option<&Value>, keys: &[&str], default: f32) -> f32 {
+    read_opt_f32(node, keys).unwrap_or(default)
+}
+
+fn read_opt_u32(node: Option<&Value>, keys: &[&str]) -> Option<u32> {
+    let obj = node.and_then(|v| v.as_object())?;
     for key in keys {
         if let Some(val) = obj.get(*key) {
             if let Some(u) = val.as_u64() {
-                return u.min(u32::MAX as u64) as u32;
+                return Some(u.min(u32::MAX as u64) as u32);
             }
             if let Some(f) = val.as_f64() {
                 if f.is_finite() && f >= 0.0 {
-                    return (f.round() as u64).min(u32::MAX as u64) as u32;
+                    return Some((f.round() as u64).min(u32::MAX as u64) as u32);
                 }
             }
         }
     }
-    default
+    None
 }
 
 fn read_str(node: Option<&Value>, keys: &[&str]) -> Option<String> {
@@ -57,15 +57,18 @@ fn pwm_percent_to_u16(percent: f32) -> u16 {
     ((clamped / 100.0) * 255.0).round().clamp(0.0, 255.0) as u16
 }
 
-fn normalize_creality_machine_name(raw: Option<String>) -> String {
-    let Some(name) = raw else {
-        return "HALOT-R6".to_string();
-    };
-    let upper = name.trim().to_ascii_uppercase();
-    if upper.contains("HALOT") && upper.contains("R6") {
-        return "HALOT-R6".to_string();
-    }
-    name.trim().to_string()
+fn read_scoped_f32(primary: Option<&Value>, secondary: Option<&Value>, fallback: Option<&Value>, keys: &[&str], default: f32) -> f32 {
+    read_opt_f32(primary, keys)
+        .or_else(|| read_opt_f32(secondary, keys))
+        .or_else(|| read_opt_f32(fallback, keys))
+        .unwrap_or(default)
+}
+
+fn read_scoped_u32(primary: Option<&Value>, secondary: Option<&Value>, fallback: Option<&Value>, keys: &[&str], default: u32) -> u32 {
+    read_opt_u32(primary, keys)
+        .or_else(|| read_opt_u32(secondary, keys))
+        .or_else(|| read_opt_u32(fallback, keys))
+        .unwrap_or(default)
 }
 
 pub fn extract_cxdlpv4_metadata(job: &SliceJobV3) -> CxdlpV4Metadata {
@@ -82,26 +85,31 @@ pub fn extract_cxdlpv4_metadata(job: &SliceJobV3) -> CxdlpV4Metadata {
     let material = root.and_then(|v| v.get("material"));
     let resin = root.and_then(|v| v.get("resin"));
     let cxdlpv4 = root.and_then(|v| v.get("cxdlpv4"));
-    let ctb = root.and_then(|v| v.get("ctb"));
-    let goo = root.and_then(|v| v.get("goo"));
     let export_cxdlpv4 = root
         .and_then(|v| v.get("export"))
         .and_then(|v| v.get("cxdlpv4"));
 
-    // Machine identifier written into header (`HALOT-R6` validated by firmware).
-    let explicit_machine = read_str(cxdlpv4, &["machineName", "printerModel"])
+    if let Some(name) = read_str(cxdlpv4, &["machineName", "printerModel"])
         .or_else(|| read_str(export_cxdlpv4, &["machineName", "printerModel"]))
-        .or_else(|| read_str(printer, &["name", "model"]));
-    meta.machine_name = normalize_creality_machine_name(explicit_machine);
+        .or_else(|| read_str(printer, &["machineName", "name", "model"]))
+    {
+        meta.machine_name = name;
+    }
 
     meta.bed_size_x_mm = job.build_width_mm.max(1.0);
     meta.bed_size_y_mm = job.build_depth_mm.max(1.0);
-    let build_height_mm = read_f32(
-        printer,
-        &["buildHeightMm", "buildVolumeHeightMm", "bedSizeZMm"],
-        0.0,
-    );
-    if build_height_mm > 1.0 {
+    let build_height_mm = read_opt_f32(cxdlpv4, &["bedSizeZMm", "buildHeightMm"])
+        .or_else(|| read_opt_f32(export_cxdlpv4, &["bedSizeZMm", "buildHeightMm"]))
+        .or_else(|| {
+            printer
+                .and_then(|p| p.get("buildVolumeMm"))
+                .and_then(|bv| bv.get("height"))
+                .and_then(Value::as_f64)
+                .map(|v| v as f32)
+        })
+        .or_else(|| read_opt_f32(printer, &["buildHeightMm", "buildVolumeHeightMm", "bedSizeZMm"]))
+        .unwrap_or_else(|| (job.layer_height_mm.max(0.0) * job.total_layers as f32).max(1.0));
+    if build_height_mm.is_finite() && build_height_mm > 0.0 {
         meta.bed_size_z_mm = build_height_mm;
     }
 
@@ -111,155 +119,231 @@ pub fn extract_cxdlpv4_metadata(job: &SliceJobV3) -> CxdlpV4Metadata {
         read_f32(material, &["layerHeightMm"], 0.05).max(0.001)
     };
 
-    meta.bottom_layer_count = read_u32(
+    meta.bottom_layer_count = read_scoped_u32(
         cxdlpv4,
+        export_cxdlpv4,
+        material,
         &["bottomLayerCount"],
-        read_u32(material, &["bottomLayerCount"], meta.bottom_layer_count),
+        meta.bottom_layer_count,
     );
-    meta.transition_layer_count = read_u32(
+    meta.transition_layer_count = read_scoped_u32(
         cxdlpv4,
+        export_cxdlpv4,
+        material,
         &["transitionLayerCount"],
-        read_u32(
-            ctb,
-            &["transitionLayerCount"],
-            read_u32(goo, &["transitionLayerCount"], 0),
-        ),
+        0,
     );
 
-    meta.bottom_exposure_sec =
-        read_f32(material, &["bottomExposureSec"], meta.bottom_exposure_sec).max(0.0);
-    meta.normal_exposure_sec =
-        read_f32(material, &["normalExposureSec"], meta.normal_exposure_sec).max(0.0);
+    meta.bottom_exposure_sec = read_scoped_f32(
+        cxdlpv4,
+        export_cxdlpv4,
+        material,
+        &["bottomExposureSec"],
+        meta.bottom_exposure_sec,
+    )
+    .max(0.0);
+    meta.normal_exposure_sec = read_scoped_f32(
+        cxdlpv4,
+        export_cxdlpv4,
+        material,
+        &["normalExposureSec"],
+        meta.normal_exposure_sec,
+    )
+    .max(0.0);
 
-    meta.bottom_lift_height_mm = read_f32(
+    meta.bottom_lift_height_mm = read_scoped_f32(
+        cxdlpv4,
+        export_cxdlpv4,
         material,
         &["bottomLiftDistanceMm", "bottomLiftHeightMm"],
         meta.bottom_lift_height_mm,
     )
     .max(0.0);
-    meta.bottom_lift_speed_mm_min = read_f32(
+    meta.bottom_lift_speed_mm_min = read_scoped_f32(
+        cxdlpv4,
+        export_cxdlpv4,
         material,
         &["bottomLiftSpeedMmMin"],
         meta.bottom_lift_speed_mm_min,
     )
     .max(0.0);
-    meta.bottom_lift_height2_mm = read_f32(
+    meta.bottom_lift_height2_mm = read_scoped_f32(
         cxdlpv4,
+        export_cxdlpv4,
+        material,
         &["bottomLiftDistance2Mm"],
-        read_f32(material, &["bottomLiftDistance2Mm"], 0.0),
+        0.0,
     )
     .max(0.0);
-    meta.bottom_lift_speed2_mm_min = read_f32(
+    meta.bottom_lift_speed2_mm_min = read_scoped_f32(
         cxdlpv4,
+        export_cxdlpv4,
+        material,
         &["bottomLiftSpeed2MmMin"],
-        read_f32(material, &["bottomLiftSpeed2MmMin"], 0.0),
+        0.0,
     )
     .max(0.0);
-    meta.bottom_retract_speed_mm_min = read_f32(
+    meta.bottom_retract_speed_mm_min = read_scoped_f32(
+        cxdlpv4,
+        export_cxdlpv4,
         material,
         &["bottomRetractSpeedMmMin", "retractSpeedMmMin"],
         meta.bottom_retract_speed_mm_min,
     )
     .max(0.0);
 
-    meta.lift_height_mm =
-        read_f32(material, &["liftDistanceMm", "liftHeightMm"], meta.lift_height_mm).max(0.0);
-    meta.lift_speed_mm_min =
-        read_f32(material, &["liftSpeedMmMin"], meta.lift_speed_mm_min).max(0.0);
-    meta.lift_height2_mm = read_f32(
+    meta.lift_height_mm = read_scoped_f32(
         cxdlpv4,
+        export_cxdlpv4,
+        material,
+        &["liftDistanceMm", "liftHeightMm"],
+        meta.lift_height_mm,
+    )
+    .max(0.0);
+    meta.lift_speed_mm_min = read_scoped_f32(
+        cxdlpv4,
+        export_cxdlpv4,
+        material,
+        &["liftSpeedMmMin"],
+        meta.lift_speed_mm_min,
+    )
+    .max(0.0);
+    meta.lift_height2_mm = read_scoped_f32(
+        cxdlpv4,
+        export_cxdlpv4,
+        material,
         &["liftDistance2Mm"],
-        read_f32(material, &["liftDistance2Mm"], 0.0),
+        0.0,
     )
     .max(0.0);
-    meta.lift_speed2_mm_min = read_f32(
+    meta.lift_speed2_mm_min = read_scoped_f32(
         cxdlpv4,
+        export_cxdlpv4,
+        material,
         &["liftSpeed2MmMin"],
-        read_f32(material, &["liftSpeed2MmMin"], 0.0),
+        0.0,
     )
     .max(0.0);
 
-    meta.retract_speed_mm_min =
-        read_f32(material, &["retractSpeedMmMin"], meta.retract_speed_mm_min).max(0.0);
-    meta.retract_height2_mm = read_f32(
+    meta.retract_speed_mm_min = read_scoped_f32(
         cxdlpv4,
+        export_cxdlpv4,
+        material,
+        &["retractSpeedMmMin"],
+        meta.retract_speed_mm_min,
+    )
+    .max(0.0);
+    meta.retract_height2_mm = read_scoped_f32(
+        cxdlpv4,
+        export_cxdlpv4,
+        material,
         &["retractDistance2Mm"],
-        read_f32(material, &["retractDistance2Mm"], 0.0),
+        0.0,
     )
     .max(0.0);
-    meta.retract_speed2_mm_min = read_f32(
+    meta.retract_speed2_mm_min = read_scoped_f32(
         cxdlpv4,
+        export_cxdlpv4,
+        material,
         &["retractSpeed2MmMin"],
-        read_f32(material, &["retractSpeed2MmMin"], 0.0),
+        0.0,
     )
     .max(0.0);
 
-    meta.wait_time_before_cure_sec = read_f32(
+    meta.wait_time_before_cure_sec = read_scoped_f32(
         cxdlpv4,
+        export_cxdlpv4,
+        material,
         &["waitTimeBeforeCureSec"],
-        read_f32(goo, &["waitTimeBeforeCureSec"], 0.0),
+        0.0,
     )
     .max(0.0);
-    meta.wait_time_after_cure_sec = read_f32(
+    meta.wait_time_after_cure_sec = read_scoped_f32(
         cxdlpv4,
+        export_cxdlpv4,
+        material,
         &["waitTimeAfterCureSec"],
-        read_f32(goo, &["waitTimeAfterCureSec"], 0.0),
+        0.0,
     )
     .max(0.0);
-    meta.wait_time_after_lift_sec = read_f32(
+    meta.wait_time_after_lift_sec = read_scoped_f32(
         cxdlpv4,
+        export_cxdlpv4,
+        material,
         &["waitTimeAfterLiftSec"],
-        read_f32(goo, &["waitTimeAfterLiftSec"], 0.0),
+        0.0,
     )
     .max(0.0);
 
-    let explicit_light_off = read_f32(cxdlpv4, &["lightOffDelaySec"], -1.0);
-    meta.light_off_delay_sec = if explicit_light_off >= 0.0 {
-        explicit_light_off
-    } else if meta.wait_time_before_cure_sec > 0.0 {
-        meta.wait_time_before_cure_sec
-    } else {
-        1.0
+    let explicit_light_off = read_opt_f32(cxdlpv4, &["lightOffDelaySec"])
+        .or_else(|| read_opt_f32(export_cxdlpv4, &["lightOffDelaySec"]));
+    meta.light_off_delay_sec = match explicit_light_off {
+        Some(v) if v >= 0.0 => v,
+        _ if meta.wait_time_before_cure_sec > 0.0 => meta.wait_time_before_cure_sec,
+        _ => 1.0,
     };
 
-    let explicit_bottom_light_off = read_f32(cxdlpv4, &["bottomLightOffDelaySec"], -1.0);
-    meta.bottom_light_off_delay_sec = if explicit_bottom_light_off >= 0.0 {
-        explicit_bottom_light_off
-    } else {
-        meta.light_off_delay_sec
+    let explicit_bottom_light_off = read_opt_f32(cxdlpv4, &["bottomLightOffDelaySec"])
+        .or_else(|| read_opt_f32(export_cxdlpv4, &["bottomLightOffDelaySec"]));
+    meta.bottom_light_off_delay_sec = match explicit_bottom_light_off {
+        Some(v) if v >= 0.0 => v,
+        _ => meta.light_off_delay_sec,
     };
 
-    let pwm_percent = read_f32(
+    let pwm_percent = read_scoped_f32(
         cxdlpv4,
+        export_cxdlpv4,
+        None,
         &["projectorPwmPercent"],
-        read_f32(goo, &["projectorPwmPercent"], 100.0),
+        100.0,
     );
     meta.light_pwm = pwm_percent_to_u16(pwm_percent);
 
-    let bottom_pwm_percent = read_f32(
+    let bottom_pwm_percent = read_scoped_f32(
         cxdlpv4,
+        export_cxdlpv4,
+        None,
         &["bottomProjectorPwmPercent"],
         pwm_percent,
     );
     meta.bottom_light_pwm = pwm_percent_to_u16(bottom_pwm_percent);
 
-    meta.anti_alias_level = read_u32(
-        cxdlpv4,
-        &["antiAliasingLevel", "antiAliasLevel"],
-        read_u32(ctb, &["antiAliasLevel"], 1),
-    )
-    .clamp(1, 16);
+    let job_aa_steps = (job.configured_xy_aa_steps() as u32).max(1).clamp(1, 16);
+    meta.anti_alias_level = read_opt_u32(cxdlpv4, &["antiAliasingLevel", "antiAliasLevel"])
+        .or_else(|| read_opt_u32(export_cxdlpv4, &["antiAliasingLevel", "antiAliasLevel"]))
+        .unwrap_or(job_aa_steps)
+        .clamp(1, 16);
 
-    meta.resin_density_g_ml = read_f32(
+    let settings_mode = read_str(cxdlpv4, &["settingsMode", "mode"])
+        .or_else(|| read_str(export_cxdlpv4, &["settingsMode", "mode"]))
+        .or_else(|| read_str(printer, &["settingsMode", "mode"]))
+        .map(|s| s.to_ascii_lowercase());
+    let has_two_stage_motion = meta.bottom_lift_height2_mm > 0.0
+        || meta.bottom_lift_speed2_mm_min > 0.0
+        || meta.lift_height2_mm > 0.0
+        || meta.lift_speed2_mm_min > 0.0
+        || meta.retract_height2_mm > 0.0
+        || meta.retract_speed2_mm_min > 0.0;
+    meta.per_layer_settings = match settings_mode.as_deref() {
+        Some("simple") => false,
+        Some("twostage") | Some("allfields") => true,
+        _ => has_two_stage_motion || meta.transition_layer_count > 0,
+    };
+
+    meta.resin_density_g_ml = read_scoped_f32(
         resin,
-        &["densityGMl", "density"],
-        read_f32(material, &["resinDensityGMl"], 1.1),
+        material,
+        cxdlpv4,
+        &["densityGMl", "density", "resinDensityGMl", "resinDensity"],
+        1.1,
     )
     .max(0.01);
-    meta.resin_price_per_liter = read_f32(
+    meta.resin_price_per_liter = read_scoped_f32(
         resin,
-        &["pricePerLiter", "costPerLiter"],
-        read_f32(material, &["resinCostPerLiter"], 0.0),
+        material,
+        cxdlpv4,
+        &["pricePerLiter", "costPerLiter", "resinCostPerLiter"],
+        0.0,
     )
     .max(0.0);
 

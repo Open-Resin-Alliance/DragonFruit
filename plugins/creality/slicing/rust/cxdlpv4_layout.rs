@@ -19,7 +19,7 @@ const LAYER_DEF_EX_SIZE: usize = 44;
 
 /// Pushes a single `(gray8, count)` span into a Chitubox/Creality 7-bit RLE stream.
 #[inline]
-pub fn push_ctb_rle_run(out: &mut Vec<u8>, gray8: u8, count: u32) {
+pub fn push_rle7_run(out: &mut Vec<u8>, gray8: u8, count: u32) {
     let gray7 = (gray8 >> 1) & 0x7F;
     let mut remaining = count;
     while remaining > 0 {
@@ -68,14 +68,14 @@ pub fn encode_rle_runs_to_cxdlpv4_layer(
         match cur_gray7 {
             Some(prev) if prev == g7 => {
                 let Some(next_len) = cur_len.checked_add(run.length) else {
-                    push_ctb_rle_run(&mut out, prev << 1, cur_len);
+                    push_rle7_run(&mut out, prev << 1, cur_len);
                     cur_len = run.length;
                     continue;
                 };
                 cur_len = next_len;
             }
             Some(prev) => {
-                push_ctb_rle_run(&mut out, prev << 1, cur_len);
+                push_rle7_run(&mut out, prev << 1, cur_len);
                 cur_gray7 = Some(g7);
                 cur_len = run.length;
             }
@@ -87,7 +87,7 @@ pub fn encode_rle_runs_to_cxdlpv4_layer(
     }
 
     if let Some(prev) = cur_gray7 {
-        push_ctb_rle_run(&mut out, prev << 1, cur_len);
+        push_rle7_run(&mut out, prev << 1, cur_len);
     }
 
     if seen != expected_pixels {
@@ -115,15 +115,15 @@ pub fn encode_raw_mask_to_cxdlpv4_layer(mask: &[u8]) -> Vec<u8> {
                 run_len = next;
                 continue;
             }
-            push_ctb_rle_run(&mut out, cur_g7 << 1, run_len);
+            push_rle7_run(&mut out, cur_g7 << 1, run_len);
             run_len = 1;
         } else {
-            push_ctb_rle_run(&mut out, cur_g7 << 1, run_len);
+            push_rle7_run(&mut out, cur_g7 << 1, run_len);
             cur_g7 = g7;
             run_len = 1;
         }
     }
-    push_ctb_rle_run(&mut out, cur_g7 << 1, run_len);
+    push_rle7_run(&mut out, cur_g7 << 1, run_len);
     out
 }
 
@@ -133,7 +133,7 @@ pub fn encode_empty_cxdlpv4_layer(expected_pixels: u64) -> Vec<u8> {
     let mut remaining = expected_pixels;
     while remaining > 0 {
         let chunk = remaining.min(u32::MAX as u64) as u32;
-        push_ctb_rle_run(&mut out, 0, chunk);
+        push_rle7_run(&mut out, 0, chunk);
         remaining -= chunk as u64;
     }
     out
@@ -345,7 +345,7 @@ pub fn build_cxdlpv4_container(
     push_f32_le(&mut out, meta.retract_height2_mm);
     push_f32_le(&mut out, meta.retract_speed2_mm_min);
     push_f32_le(&mut out, meta.wait_time_after_lift_sec);
-    push_u32_le(&mut out, 1); // PerLayerSettings = 1
+    push_u32_le(&mut out, u32::from(meta.per_layer_settings));
     push_u32_le(&mut out, meta.modified_timestamp_minutes);
     push_u32_le(&mut out, meta.anti_alias_level);
     push_u32_le(&mut out, 0); // SoftwareVersion

@@ -75,7 +75,7 @@ mod tests {
     use crate::rle::RleRun;
 
     #[test]
-    fn encodes_valid_cxdlpv4_container_for_halot_r6() {
+    fn encodes_valid_cxdlpv4_container_from_job_metadata() {
         let width_px = 1620u32;
         let height_px = 2560u32;
         let total_px = width_px * height_px;
@@ -90,9 +90,13 @@ mod tests {
             build_depth_mm: 130.56,
             layer_height_mm: 0.05,
             total_layers: 2,
-            anti_aliasing_level: "Off".to_string(),
+            anti_aliasing_level: "4x".to_string(),
             metadata_json: serde_json::json!({
-                "printer": { "name": "HALOT-R6", "buildHeightMm": 160.0 },
+                "printer": {
+                    "name": "Sample Printer",
+                    "buildVolumeMm": { "width": 82.62, "depth": 130.56, "height": 160.0 },
+                    "settingsMode": "simple"
+                },
                 "material": {
                     "layerHeightMm": 0.05,
                     "bottomLayerCount": 1,
@@ -106,9 +110,8 @@ mod tests {
                     "retractSpeedMmMin": 150.0
                 },
                 "cxdlpv4": {
-                    "lightOffDelaySec": 1.0,
+                    "lightOffDelaySec": 2.0,
                     "bottomLightOffDelaySec": 1.0,
-                    "antiAliasingLevel": 1,
                     "projectorPwmPercent": 100
                 }
             })
@@ -153,12 +156,17 @@ mod tests {
         let bytes = enc.finalize().expect("finalize");
         assert!(bytes.len() > 256);
 
-        // Header magic, BE version 4, BE printer model "HALOT-R6\0"
+        // Header magic, BE version 4, BE dynamic printer model "Sample Printer\0"
+        let expected_model = b"Sample Printer\0";
         assert_eq!(&bytes[0..4], &9u32.to_be_bytes());
         assert_eq!(&bytes[4..13], b"CXSW3DV2\0");
         assert_eq!(&bytes[13..15], &4u16.to_be_bytes());
-        assert_eq!(&bytes[15..19], &9u32.to_be_bytes());
-        assert_eq!(&bytes[19..28], b"HALOT-R6\0");
+        assert_eq!(&bytes[15..19], &(expected_model.len() as u32).to_be_bytes());
+        let model_end = 19 + expected_model.len();
+        assert_eq!(&bytes[19..model_end], expected_model);
+        // After model string + 2x u16 res (4B) + 5x f32 (20B) + 7x u32 (28B) + printParams offset/size (8B) -> anti_alias_level = 4
+        let aa_offset = model_end + 4 + 20 + 28 + 8;
+        assert_eq!(u32::from_le_bytes(bytes[aa_offset..aa_offset + 4].try_into().unwrap()), 4);
 
         // Verify Creality CRC32 trailer
         let payload_len = bytes.len() - 4;
@@ -202,7 +210,7 @@ mod tests {
             total_layers: 3,
             export_thumbnail_png_base64: Some(b64),
             metadata_json: serde_json::json!({
-                "printer": { "name": "HALOT-R6" },
+                "printer": { "name": "Sample Printer" },
                 "material": { "bottomLayerCount": 1, "bottomExposureSec": 25.0, "normalExposureSec": 2.5 },
                 "cxdlpv4": { "transitionLayerCount": 1, "lightOffDelaySec": 1.5 }
             })
@@ -221,5 +229,85 @@ mod tests {
             u32::from_be_bytes(bytes[payload_len..].try_into().unwrap()),
             compute_creality_crc32(&bytes[..payload_len])
         );
+    }
+
+    #[test]
+    fn slices_mesh_end_to_end_via_engine_to_cxdlpv4() {
+        // 10x10x1 mm centered box (12 triangles)
+        let (x0, x1, y0, y1, z0, z1) = (-5.0f32, 5.0f32, -5.0f32, 5.0f32, 0.0f32, 1.0f32);
+        #[rustfmt::skip]
+        let triangles_xyz = vec![
+            // Bottom (z0)
+            x0, y0, z0,  x1, y1, z0,  x1, y0, z0,
+            x0, y0, z0,  x0, y1, z0,  x1, y1, z0,
+            // Top (z1)
+            x0, y0, z1,  x1, y0, z1,  x1, y1, z1,
+            x0, y0, z1,  x1, y1, z1,  x0, y1, z1,
+            // Front (y0)
+            x0, y0, z0,  x1, y0, z0,  x1, y0, z1,
+            x0, y0, z0,  x1, y0, z1,  x0, y0, z1,
+            // Back (y1)
+            x0, y1, z0,  x1, y1, z1,  x1, y1, z0,
+            x0, y1, z0,  x0, y1, z1,  x1, y1, z1,
+            // Left (x0)
+            x0, y0, z0,  x0, y0, z1,  x0, y1, z1,
+            x0, y0, z0,  x0, y1, z1,  x0, y1, z0,
+            // Right (x1)
+            x1, y0, z0,  x1, y1, z1,  x1, y0, z1,
+            x1, y0, z0,  x1, y1, z0,  x1, y1, z1,
+        ];
+
+        let job = SliceJobV3 {
+            output_format: ".cxdlpv4".to_string(),
+            source_width_px: 1620,
+            source_height_px: 2560,
+            width_px: 1620,
+            height_px: 2560,
+            build_width_mm: 82.62,
+            build_depth_mm: 130.56,
+            layer_height_mm: 0.05,
+            total_layers: 20,
+            mirror_y: true,
+            anti_aliasing_level: "Off".to_string(),
+            triangles_xyz,
+            metadata_json: serde_json::json!({
+                "printer": {
+                    "name": "Sample Printer",
+                    "buildVolumeMm": { "width": 82.62, "depth": 130.56, "height": 160.0 },
+                    "settingsMode": "simple"
+                },
+                "material": {
+                    "layerHeightMm": 0.05,
+                    "bottomLayerCount": 5,
+                    "bottomExposureSec": 35.0,
+                    "normalExposureSec": 3.0,
+                    "bottomLiftDistanceMm": 6.0,
+                    "bottomLiftSpeedMmMin": 60.0,
+                    "bottomRetractSpeedMmMin": 120.0,
+                    "liftDistanceMm": 6.0,
+                    "liftSpeedMmMin": 60.0,
+                    "retractSpeedMmMin": 150.0
+                },
+                "cxdlpv4": {
+                    "lightOffDelaySec": 2.0,
+                    "bottomLightOffDelaySec": 1.0,
+                    "projectorPwmPercent": 100
+                }
+            })
+            .to_string(),
+            ..Default::default()
+        };
+
+        let artifact = crate::engine::slice_with_progress_v3(&job, None, None)
+            .expect("end-to-end slice_with_progress_v3 to .cxdlpv4");
+        assert!(artifact.bytes.len() > 1024);
+        assert_eq!(&artifact.bytes[4..13], b"CXSW3DV2\0");
+
+        if let Ok(out_path) = std::env::var("DF_CREALITY_E2E_OUT") {
+            if !out_path.trim().is_empty() {
+                std::fs::write(&out_path, &artifact.bytes)
+                    .expect("write e2e .cxdlpv4 output");
+            }
+        }
     }
 }
