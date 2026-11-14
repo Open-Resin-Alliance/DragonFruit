@@ -116,6 +116,7 @@ import {
   LabeledCurrencySelect,
   MaterialProfileFormSections,
   MaterialAntiAliasingSection,
+  MaterialBottomCompensationSection,
   MaterialProfileIdentitySection,
   PluginLocalMaterialSettingsSections,
   ReplacementMaterialEditorShell,
@@ -466,6 +467,9 @@ export function ProfileSettingsModal({
     liftSpeedMmMin: 60,
     retractSpeedMmMin: 150,
     minimumAaAlphaPercent: 35,
+    bottomOutlineCompensationMm: 0,
+    bottomHoleCompensationMm: 0,
+    bottomCompensationFade: true,
     antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
   });
   const [newMaterialDraft, setNewMaterialDraft] = React.useState<Omit<MaterialProfile, 'id' | 'printerProfileId'>>({
@@ -484,6 +488,9 @@ export function ProfileSettingsModal({
     liftSpeedMmMin: 60,
     retractSpeedMmMin: 150,
     minimumAaAlphaPercent: 35,
+    bottomOutlineCompensationMm: 0,
+    bottomHoleCompensationMm: 0,
+    bottomCompensationFade: true,
     antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
   });
   const [editMaterialLocalSettingsByOutput, setEditMaterialLocalSettingsByOutput] = React.useState<LocalSettingsByOutputDraft>({});
@@ -786,9 +793,10 @@ export function ProfileSettingsModal({
     return [
       ...declared,
       { id: 'meta', title: 'Meta', order: 1000 },
+      { id: 'compensation', title: _(msg`Compensation`), order: 1005 },
       { id: 'anti-aliasing', title: 'Anti-Aliasing', order: 1010 },
     ];
-  }, [selectedLocalMaterialSettingsAdapter, usePluginLocalSettingsAsReplacement]);
+  }, [_, selectedLocalMaterialSettingsAdapter, usePluginLocalSettingsAsReplacement]);
 
   const replacementMaterialEditorDefaultTab = React.useMemo(() => {
     if (!usePluginLocalSettingsAsReplacement) return 'meta';
@@ -3194,6 +3202,9 @@ export function ProfileSettingsModal({
       liftSpeedMmMin: selectedMaterial.liftSpeedMmMin,
       retractSpeedMmMin: selectedMaterial.retractSpeedMmMin,
       minimumAaAlphaPercent: selectedMaterial.minimumAaAlphaPercent,
+      bottomOutlineCompensationMm: selectedMaterial.bottomOutlineCompensationMm,
+      bottomHoleCompensationMm: selectedMaterial.bottomHoleCompensationMm,
+      bottomCompensationFade: selectedMaterial.bottomCompensationFade,
       antiAliasingSettings: selectedMaterial.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
       compatiblePrinterProfileIds: selectedMaterial.compatiblePrinterProfileIds,
     });
@@ -3342,6 +3353,9 @@ export function ProfileSettingsModal({
       liftSpeedMmMin: 60,
       retractSpeedMmMin: 150,
       minimumAaAlphaPercent: 35,
+      bottomOutlineCompensationMm: 0,
+      bottomHoleCompensationMm: 0,
+      bottomCompensationFade: true,
       antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
     });
     setNewMaterialLocalSettingsByOutput(
@@ -3373,6 +3387,9 @@ export function ProfileSettingsModal({
       liftSpeedMmMin: preset.liftSpeedMmMin ?? 60,
       retractSpeedMmMin: preset.retractSpeedMmMin ?? 150,
       minimumAaAlphaPercent: preset.minimumAaAlphaPercent ?? 35,
+      bottomOutlineCompensationMm: preset.bottomOutlineCompensationMm ?? 0,
+      bottomHoleCompensationMm: preset.bottomHoleCompensationMm ?? 0,
+      bottomCompensationFade: preset.bottomCompensationFade ?? true,
       antiAliasingSettings: preset.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
       ...(preset.templateId ? { officialTemplateId: preset.templateId } : {}),
       ...(preset.profileVersion != null ? { officialTemplateVersion: preset.profileVersion } : {}),
@@ -3421,6 +3438,9 @@ export function ProfileSettingsModal({
         liftSpeedMmMin: preset.liftSpeedMmMin ?? 60,
         retractSpeedMmMin: preset.retractSpeedMmMin ?? 150,
         minimumAaAlphaPercent: preset.minimumAaAlphaPercent ?? 35,
+        bottomOutlineCompensationMm: preset.bottomOutlineCompensationMm ?? 0,
+        bottomHoleCompensationMm: preset.bottomHoleCompensationMm ?? 0,
+        bottomCompensationFade: preset.bottomCompensationFade ?? true,
         antiAliasingSettings: preset.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
         ...(preset.templateId ? { officialTemplateId: preset.templateId } : {}),
         ...(preset.profileVersion != null ? { officialTemplateVersion: preset.profileVersion } : {}),
@@ -3563,6 +3583,9 @@ export function ProfileSettingsModal({
       liftSpeedMmMin: selectedMaterial.liftSpeedMmMin,
       retractSpeedMmMin: selectedMaterial.retractSpeedMmMin,
       minimumAaAlphaPercent: selectedMaterial.minimumAaAlphaPercent,
+      bottomOutlineCompensationMm: selectedMaterial.bottomOutlineCompensationMm,
+      bottomHoleCompensationMm: selectedMaterial.bottomHoleCompensationMm,
+      bottomCompensationFade: selectedMaterial.bottomCompensationFade,
       antiAliasingSettings: selectedMaterial.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
       compatiblePrinterProfileIds: selectedMaterial.compatiblePrinterProfileIds,
       localSettingsByOutput: selectedMaterial.localSettingsByOutput,
@@ -3740,6 +3763,9 @@ export function ProfileSettingsModal({
           minimumAaAlphaPercent: Number.isFinite(Number(source.minimumAaAlphaPercent))
             ? Math.max(0, Math.min(100, Number(source.minimumAaAlphaPercent)))
             : 35,
+          bottomOutlineCompensationMm: source.bottomOutlineCompensationMm,
+          bottomHoleCompensationMm: source.bottomHoleCompensationMm,
+          bottomCompensationFade: source.bottomCompensationFade,
           antiAliasingSettings: source.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
           localSettingsByOutput: source.localSettingsByOutput
             ? (source.localSettingsByOutput as Record<string, Record<string, string | number | boolean>>)
@@ -5461,6 +5487,10 @@ export function ProfileSettingsModal({
                       shareablePrinterIds={editShareablePrinterIds}
                       ownerPrinterId={selectedMaterial?.printerProfileId}
                     />
+                    <MaterialBottomCompensationSection
+                      draft={editMaterialDraft}
+                      onChange={setEditMaterialDraft}
+                    />
                     <MaterialAntiAliasingSection
                       draft={editMaterialDraft}
                       onChange={setEditMaterialDraft}
@@ -6379,6 +6409,10 @@ export function ProfileSettingsModal({
                       printerProfiles={profileState.printerProfiles}
                       shareablePrinterIds={newShareablePrinterIds}
                       ownerPrinterId={selectedPrinter?.id}
+                    />
+                    <MaterialBottomCompensationSection
+                      draft={newMaterialDraft}
+                      onChange={setNewMaterialDraft}
                     />
                     <MaterialAntiAliasingSection
                       draft={newMaterialDraft}

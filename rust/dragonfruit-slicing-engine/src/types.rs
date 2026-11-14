@@ -191,6 +191,29 @@ pub struct SliceJobV3 {
     /// metadata is available.
     #[serde(default)]
     pub aa_on_supports: bool,
+    /// Bottom-layer contour compensation for outer outlines, in mm ("elephant's foot").
+    ///
+    /// Applied to the first `bottom_compensation_layers` layers before anti-aliasing:
+    /// negative shrinks outlines, positive grows them; islands inside holes count as
+    /// outlines. `0` disables it.
+    #[serde(default)]
+    pub bottom_outline_compensation_mm: f32,
+    /// Bottom-layer contour compensation for holes, in mm: negative opens holes,
+    /// positive closes them. `0` disables it.
+    #[serde(default)]
+    pub bottom_hole_compensation_mm: f32,
+    /// How many layers from the build plate get the full bottom compensation:
+    /// the bottom layers, plus the transition layers when there is no fade.
+    #[serde(default)]
+    pub bottom_compensation_layers: u32,
+    /// How many layers after those the compensation fades over, normally the
+    /// transition layers. Each fading layer gets a share that drops in equal steps,
+    /// following the transition exposure, which the encoders ramp from the bottom
+    /// exposure to reach the normal exposure on the last transition layer: layer `k`
+    /// of `n` gets `1 - k / n`, so the last one gets none. `0` stops the
+    /// compensation dead after the full-strength layers.
+    #[serde(default)]
+    pub bottom_compensation_fade_layers: u32,
     /// How many resin tanks the machine feeds this job from.
     ///
     /// `1` is a single-material machine and the historical behaviour. A job with
@@ -289,6 +312,31 @@ impl SliceJobV3 {
     #[inline]
     pub fn effective_render_width_px(&self) -> u32 {
         self.source_width_px
+    }
+
+    /// The bottom contour compensation to apply to `layer` at this job's raster
+    /// resolution, or `None` when the layer is past the bottom layers or the
+    /// compensation is off.
+    pub fn bottom_compensation_for_layer(
+        &self,
+        layer: u32,
+    ) -> Option<crate::compensation::ContourCompensation> {
+        let full = self.bottom_compensation_layers;
+        let fade = self.bottom_compensation_fade_layers;
+        let share = if layer < full {
+            1.0
+        } else if layer < full.saturating_add(fade) {
+            1.0 - (layer - full + 1) as f32 / fade as f32
+        } else {
+            return None;
+        };
+        let comp = crate::compensation::ContourCompensation {
+            outline_mm: self.bottom_outline_compensation_mm * share,
+            hole_mm: self.bottom_hole_compensation_mm * share,
+            pitch_x_mm: self.build_width_mm / self.effective_render_width_px().max(1) as f32,
+            pitch_y_mm: self.build_depth_mm / self.source_height_px.max(1) as f32,
+        };
+        (!comp.is_noop()).then_some(comp)
     }
 
     /// Physical XY pixel pitch in millimeters (width axis).
@@ -464,6 +512,34 @@ impl SliceJobV3 {
 #[cfg(test)]
 mod tests {
     use super::{dynamic_minimum_alpha_lut, SliceJobV3};
+
+    #[test]
+    fn bottom_compensation_fades_over_the_transition_layers() {
+        let job = SliceJobV3 {
+            build_width_mm: 100.0,
+            build_depth_mm: 100.0,
+            source_width_px: 1000,
+            source_height_px: 1000,
+            bottom_outline_compensation_mm: -0.6,
+            bottom_hole_compensation_mm: 0.3,
+            bottom_compensation_layers: 2,
+            bottom_compensation_fade_layers: 3,
+            ..Default::default()
+        };
+        let outline = |layer| job.bottom_compensation_for_layer(layer).map(|c| c.outline_mm);
+        assert_eq!(outline(0), Some(-0.6));
+        assert_eq!(outline(1), Some(-0.6));
+        assert!((outline(2).unwrap() + 0.4).abs() < 1e-6, "2/3 of the way back");
+        assert!((outline(3).unwrap() + 0.2).abs() < 1e-6, "1/3");
+        assert_eq!(outline(4), None, "last transition layer, at normal exposure");
+        assert_eq!(outline(5), None, "first normal layer");
+        let hole = job.bottom_compensation_for_layer(3).unwrap().hole_mm;
+        assert!((hole - 0.1).abs() < 1e-6, "both settings fade together");
+
+        let hard = SliceJobV3 { bottom_compensation_fade_layers: 0, ..job.clone() };
+        assert_eq!(hard.bottom_compensation_for_layer(1).map(|c| c.outline_mm), Some(-0.6));
+        assert_eq!(hard.bottom_compensation_for_layer(2), None);
+    }
 
     fn dither_job(enabled: bool, bit_depth: Option<u32>) -> SliceJobV3 {
         SliceJobV3 {

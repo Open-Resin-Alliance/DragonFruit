@@ -935,6 +935,9 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
     liftSpeedMmMin: sanitizeNumber(value.liftSpeedMmMin, 60, 0, 100000),
     retractSpeedMmMin: sanitizeNumber(value.retractSpeedMmMin, 150, 0, 100000),
     minimumAaAlphaPercent: sanitizeNumber(value.minimumAaAlphaPercent, 35, 0, 100),
+    bottomOutlineCompensationMm: sanitizeNumber(value.bottomOutlineCompensationMm, 0, -2, 2),
+    bottomHoleCompensationMm: sanitizeNumber(value.bottomHoleCompensationMm, 0, -2, 2),
+    bottomCompensationFade: typeof value.bottomCompensationFade === 'boolean' ? value.bottomCompensationFade : true,
     antiAliasingSettings: (value.antiAliasingSettings && typeof value.antiAliasingSettings === 'object')
       ? value.antiAliasingSettings as MaterialProfile['antiAliasingSettings']
       : {

@@ -30,6 +30,10 @@ export const SLICE_JOB_LIMITS = {
   zBlendMinimumAlphaPercent: { min: 0, max: 100, fallback: 0 },
   zBlendMaxAlphaPercent: { min: 0, max: 100, fallback: 90 },
   minimumAaAlphaPercent: { min: 0, max: 100, fallback: 0 },
+  bottomOutlineCompensationMm: { min: -2, max: 2, fallback: 0 },
+  bottomHoleCompensationMm: { min: -2, max: 2, fallback: 0 },
+  bottomCompensationLayers: { min: 0, snap: 'round', fallback: 0 },
+  bottomCompensationFadeLayers: { min: 0, snap: 'round', fallback: 0 },
   modelTriangleCount: { min: 0, snap: 'floor', fallback: 0 },
   containerCompressionLevel: { min: 0, max: 9, snap: 'round', fallback: 2 },
 } as const satisfies Record<string, SliceJobLimit>;

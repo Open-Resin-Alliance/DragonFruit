@@ -281,6 +281,49 @@ export function mergeMetadataOverridesIntoMetadata(
 }
 
 /**
+ * Which layers from the build plate the bottom contour compensation covers, from
+ * the bottom and transition layer counts as the format's encoder reads them in the
+ * merged metadata (the GOO and CTB encoders look in `<format>.<key>`, then
+ * `export.<format>.<key>`, then `material.<key>`).
+ *
+ * With `fade`, the bottom layers get the full compensation (`layers`) and it fades
+ * out over the transition layers (`fadeLayers`); without, the bottom and transition
+ * layers all get it in full and `fadeLayers` is 0. A format that records no
+ * transition layers has no fade.
+ */
+export function resolveBottomCompensationLayers(
+  metadataJson: string,
+  outputFormat: string,
+  fade: boolean,
+): { layers: number; fadeLayers: number } {
+  let metadata: Record<string, unknown>;
+  try {
+    metadata = JSON.parse(metadataJson) as Record<string, unknown>;
+  } catch {
+    return { layers: 0, fadeLayers: 0 };
+  }
+  const nodeOf = (value: unknown): Record<string, unknown> | undefined => (
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+  );
+  const formatKey = outputFormat.replace(/^\./, '').toLowerCase();
+  const nodes = [
+    nodeOf(metadata[formatKey]),
+    nodeOf(nodeOf(metadata.export)?.[formatKey]),
+    nodeOf(metadata.material),
+  ];
+  const layerCount = (key: string): number => {
+    for (const node of nodes) {
+      const value = Number(node?.[key]);
+      if (node && node[key] != null && Number.isFinite(value)) return Math.max(0, Math.round(value));
+    }
+    return 0;
+  };
+  const bottom = layerCount('bottomLayerCount');
+  const transition = layerCount('transitionLayerCount');
+  return fade ? { layers: bottom, fadeLayers: transition } : { layers: bottom + transition, fadeLayers: 0 };
+}
+
+/**
  * Layer count for a scene whose highest point is `maxZMm`, clipped to the
  * printer's build height.
  */
@@ -401,6 +444,14 @@ export type AssembledSliceJob = {
   ditherDeviceGamma: number;
   /** The anti-aliasing fields; see `resolveSliceJobAntiAliasing`. */
   antiAliasing: SliceJobAntiAliasing;
+  /** Bottom contour compensation for outlines, in mm, from the material. */
+  bottomOutlineCompensationMm: number;
+  /** Bottom contour compensation for holes, in mm, from the material. */
+  bottomHoleCompensationMm: number;
+  /** Layers with the full compensation; see `resolveBottomCompensationLayers`. */
+  bottomCompensationLayers: number;
+  /** Layers after those it fades out over; see `resolveBottomCompensationLayers`. */
+  bottomCompensationFadeLayers: number;
   /** How the format's encoder takes its layers, which decides the PNG compression. */
   layerDataKind: SlicingFormatDefinition['layerDataKind'];
   metadataJson: string;
@@ -442,6 +493,18 @@ export function assembleSliceJob(options: {
     ...buildSliceJobManifestNodes({ printerProfile, materialProfile, settings, scene }),
   };
   const dither = resolveEffectiveDitherPolicy({ printerProfile, materialProfile, ...options.dither });
+  const metadataJson = mergeMetadataOverridesIntoMetadata(
+    JSON.stringify(manifest),
+    format.outputFormat,
+    materialProfile,
+    settingsMode,
+    printerProfile.display.outputFormat,
+  );
+  const compensationLayers = resolveBottomCompensationLayers(
+    metadataJson,
+    format.outputFormat,
+    materialProfile.bottomCompensationFade ?? true,
+  );
 
   return {
     outputFormat: format.outputFormat,
@@ -467,14 +530,12 @@ export function assembleSliceJob(options: {
       layerHeightMm: settings.layerHeightMm,
       request: options.antiAliasing,
     }),
+    bottomOutlineCompensationMm: materialProfile.bottomOutlineCompensationMm ?? 0,
+    bottomHoleCompensationMm: materialProfile.bottomHoleCompensationMm ?? 0,
+    bottomCompensationLayers: compensationLayers.layers,
+    bottomCompensationFadeLayers: compensationLayers.fadeLayers,
     layerDataKind: format.layerDataKind,
-    metadataJson: mergeMetadataOverridesIntoMetadata(
-      JSON.stringify(manifest),
-      format.outputFormat,
-      materialProfile,
-      settingsMode,
-      printerProfile.display.outputFormat,
-    ),
+    metadataJson,
   };
 }
 
@@ -550,6 +611,10 @@ export function buildNativeSliceJob(assembled: AssembledSliceJob, options: {
     zaaDuplicateZ: antiAliasing.zaaDuplicateZ,
     aaOnSupports: antiAliasing.aaOnSupports ?? options.aaOnSupportsFallback,
     minimumAaAlphaPercent: antiAliasing.minimumAaAlphaPercent,
+    bottomOutlineCompensationMm: assembled.bottomOutlineCompensationMm,
+    bottomHoleCompensationMm: assembled.bottomHoleCompensationMm,
+    bottomCompensationLayers: assembled.bottomCompensationLayers,
+    bottomCompensationFadeLayers: assembled.bottomCompensationFadeLayers,
     mirrorX: assembled.mirrorX,
     mirrorY: assembled.mirrorY,
     ditherEnabled: assembled.ditherEnabled,

@@ -664,6 +664,18 @@ struct SliceJobMetadata {
     aa_on_supports: bool,
     #[serde(default = "default_minimum_aa_alpha_percent")]
     minimum_aa_alpha_percent: f32,
+    /// Bottom contour compensation for outlines, in mm (`0` = off).
+    #[serde(default)]
+    bottom_outline_compensation_mm: f32,
+    /// Bottom contour compensation for holes, in mm (`0` = off).
+    #[serde(default)]
+    bottom_hole_compensation_mm: f32,
+    /// Layers from the plate with the full bottom compensation.
+    #[serde(default)]
+    bottom_compensation_layers: u32,
+    /// Layers after those the bottom compensation fades out over (`0` = hard stop).
+    #[serde(default)]
+    bottom_compensation_fade_layers: u32,
     #[serde(default)]
     mirror_x: bool,
     #[serde(default)]
@@ -1670,6 +1682,10 @@ async fn slice_solid_native_to_temp_path(
             tank_count: meta.tank_count,
             triangle_tank_index: meta.triangle_tank_index,
             minimum_aa_alpha_percent: meta.minimum_aa_alpha_percent,
+            bottom_outline_compensation_mm: meta.bottom_outline_compensation_mm,
+            bottom_hole_compensation_mm: meta.bottom_hole_compensation_mm,
+            bottom_compensation_layers: meta.bottom_compensation_layers,
+            bottom_compensation_fade_layers: meta.bottom_compensation_fade_layers,
             mirror_x: meta.mirror_x,
             mirror_y: meta.mirror_y,
             z_blend_look_back: meta.z_blend_look_back,

@@ -34,6 +34,10 @@ const FIELDS: Array<[keyof ReturnType<typeof assembleSliceJob>, string]> = [
   ['ditherEnabled', 'dither_enabled'],
   ['ditherBitDepth', 'dither_bit_depth'],
   ['ditherDeviceGamma', 'dither_device_gamma'],
+  ['bottomOutlineCompensationMm', 'bottom_outline_compensation_mm'],
+  ['bottomHoleCompensationMm', 'bottom_hole_compensation_mm'],
+  ['bottomCompensationLayers', 'bottom_compensation_layers'],
+  ['bottomCompensationFadeLayers', 'bottom_compensation_fade_layers'],
 ];
 
 for (const printer of PRINTERS) {

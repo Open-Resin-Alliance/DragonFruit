@@ -378,6 +378,23 @@ export type MaterialProfile = {
     liftSpeedMmMin: number;
     retractSpeedMmMin: number;
     minimumAaAlphaPercent: number;
+    /**
+     * Bottom-layer contour compensation for outer outlines, in mm: negative shrinks
+     * them, positive grows them; an island inside a hole counts as an outline. Applied
+     * to the bottom and transition layers. 0 is off.
+     */
+    bottomOutlineCompensationMm: number;
+    /**
+     * Bottom-layer contour compensation for holes, in mm: negative opens them,
+     * positive closes them. Applied to the bottom and transition layers. 0 is off.
+     */
+    bottomHoleCompensationMm: number;
+    /**
+     * Whether the bottom compensation fades out through the transition layers (full
+     * on the bottom layers, then smaller in equal steps) instead of applying in full
+     * to the transition layers and stopping. Defaults to true.
+     */
+    bottomCompensationFade: boolean;
     antiAliasingSettings: MaterialAntiAliasingSettings;
     localSettingsByOutput?: Record<string, LocalMaterialSettingsMap>;
     /** Other printers this profile is shared with. The owner remains `printerProfileId`. */
@@ -410,6 +427,17 @@ function normalizeMinimumAaAlphaPercent(value: unknown, fallback = 35): number {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return fallback;
     return Math.max(0, Math.min(100, numeric));
+}
+
+/** The largest bottom compensation distance either way, in mm. */
+export const BOTTOM_COMPENSATION_LIMIT_MM = 2;
+
+function normalizeBottomCompensationMm(value: unknown, fallback = 0): number {
+    return clampNumber(value, fallback, -BOTTOM_COMPENSATION_LIMIT_MM, BOTTOM_COMPENSATION_LIMIT_MM);
+}
+
+function normalizeBottomCompensationFade(value: unknown, fallback = true): boolean {
+    return typeof value === 'boolean' ? value : fallback;
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -1121,6 +1149,9 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
         color: sanitizeMaterialColor((template as any).color),
         currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : 'USD',
         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((template as any).minimumAaAlphaPercent, 35),
+        bottomOutlineCompensationMm: normalizeBottomCompensationMm((template as any).bottomOutlineCompensationMm),
+        bottomHoleCompensationMm: normalizeBottomCompensationMm((template as any).bottomHoleCompensationMm),
+        bottomCompensationFade: normalizeBottomCompensationFade((template as any).bottomCompensationFade),
         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((template as any).antiAliasingSettings),
         localSettingsByOutput: sanitizeLocalSettingsByOutput((template as any).localSettingsByOutput),
         id: createDefaultMaterialIdFromTemplateName(template.name),
@@ -1386,6 +1417,9 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                         liftSpeedMmMin: Number((profile as any).liftSpeedMmMin) || 60,
                         retractSpeedMmMin: Number((profile as any).retractSpeedMmMin) || 150,
                         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((profile as any).minimumAaAlphaPercent, 35),
+                        bottomOutlineCompensationMm: normalizeBottomCompensationMm((profile as any).bottomOutlineCompensationMm),
+                        bottomHoleCompensationMm: normalizeBottomCompensationMm((profile as any).bottomHoleCompensationMm),
+                        bottomCompensationFade: normalizeBottomCompensationFade((profile as any).bottomCompensationFade),
                         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings((profile as any).antiAliasingSettings),
                         localSettingsByOutput: sanitizeLocalSettingsByOutput((profile as any).localSettingsByOutput),
                         compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds((profile as any).compatiblePrinterProfileIds),
@@ -1638,6 +1672,9 @@ function ensureActiveMaterialForActivePrinter(nextState: ProfileStoreState): Pro
             liftSpeedMmMin: 60,
             retractSpeedMmMin: 150,
             minimumAaAlphaPercent: 35,
+            bottomOutlineCompensationMm: 0,
+            bottomHoleCompensationMm: 0,
+            bottomCompensationFade: true,
             antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
             localSettingsByOutput: undefined,
         };
@@ -2042,6 +2079,9 @@ export function addMaterialProfile(
         liftSpeedMmMin: partial?.liftSpeedMmMin ?? 60,
         retractSpeedMmMin: partial?.retractSpeedMmMin ?? 150,
         minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(partial?.minimumAaAlphaPercent, 35),
+        bottomOutlineCompensationMm: normalizeBottomCompensationMm(partial?.bottomOutlineCompensationMm),
+        bottomHoleCompensationMm: normalizeBottomCompensationMm(partial?.bottomHoleCompensationMm),
+        bottomCompensationFade: normalizeBottomCompensationFade(partial?.bottomCompensationFade),
         antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(partial?.antiAliasingSettings),
         localSettingsByOutput: sanitizeLocalSettingsByOutput(partial?.localSettingsByOutput),
         compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds(partial?.compatiblePrinterProfileIds, printerProfileId),
@@ -2412,6 +2452,18 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
             antiAliasingSettings: updates.antiAliasingSettings !== undefined
                 ? sanitizeMaterialAntiAliasingSettings(updates.antiAliasingSettings)
                 : profile.antiAliasingSettings,
+            bottomOutlineCompensationMm: normalizeBottomCompensationMm(
+                updates.bottomOutlineCompensationMm,
+                profile.bottomOutlineCompensationMm,
+            ),
+            bottomHoleCompensationMm: normalizeBottomCompensationMm(
+                updates.bottomHoleCompensationMm,
+                profile.bottomHoleCompensationMm,
+            ),
+            bottomCompensationFade: normalizeBottomCompensationFade(
+                updates.bottomCompensationFade,
+                profile.bottomCompensationFade,
+            ),
             compatiblePrinterProfileIds: updates.compatiblePrinterProfileIds !== undefined
                 ? sanitizeCompatiblePrinterIds(updates.compatiblePrinterProfileIds, profile.printerProfileId)
                 : profile.compatiblePrinterProfileIds,
@@ -2533,6 +2585,9 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
                 liftSpeedMmMin: 60,
                 retractSpeedMmMin: 150,
                 minimumAaAlphaPercent: 35,
+                bottomOutlineCompensationMm: 0,
+                bottomHoleCompensationMm: 0,
+                bottomCompensationFade: true,
                 antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
                 localSettingsByOutput: undefined,
             },
@@ -2701,6 +2756,9 @@ export function importPrinterBundle(payload: unknown): string {
             liftSpeedMmMin: Number.isFinite(Number(material.liftSpeedMmMin)) ? Number(material.liftSpeedMmMin) : 60,
             retractSpeedMmMin: Number.isFinite(Number(material.retractSpeedMmMin)) ? Number(material.retractSpeedMmMin) : 150,
             minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(material.minimumAaAlphaPercent, 35),
+            bottomOutlineCompensationMm: normalizeBottomCompensationMm(material.bottomOutlineCompensationMm),
+            bottomHoleCompensationMm: normalizeBottomCompensationMm(material.bottomHoleCompensationMm),
+            bottomCompensationFade: normalizeBottomCompensationFade(material.bottomCompensationFade),
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(material.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
             compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds(material.compatiblePrinterProfileIds),
@@ -2736,6 +2794,9 @@ export function importPrinterBundle(payload: unknown): string {
             liftSpeedMmMin: 60,
             retractSpeedMmMin: 150,
             minimumAaAlphaPercent: 35,
+            bottomOutlineCompensationMm: 0,
+            bottomHoleCompensationMm: 0,
+            bottomCompensationFade: true,
             antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
             localSettingsByOutput: undefined,
         });
@@ -3084,6 +3145,9 @@ export function importSceneMaterials(printerProfileId: string, materials: unknow
             liftSpeedMmMin: Number.isFinite(Number(source.liftSpeedMmMin)) ? Number(source.liftSpeedMmMin) : 60,
             retractSpeedMmMin: Number.isFinite(Number(source.retractSpeedMmMin)) ? Number(source.retractSpeedMmMin) : 150,
             minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(source.minimumAaAlphaPercent, 35),
+            bottomOutlineCompensationMm: normalizeBottomCompensationMm(source.bottomOutlineCompensationMm),
+            bottomHoleCompensationMm: normalizeBottomCompensationMm(source.bottomHoleCompensationMm),
+            bottomCompensationFade: normalizeBottomCompensationFade(source.bottomCompensationFade),
             antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(source.antiAliasingSettings),
             localSettingsByOutput: sanitizeLocalSettingsByOutput(source.localSettingsByOutput),
             compatiblePrinterProfileIds: sanitizeCompatiblePrinterIds(source.compatiblePrinterProfileIds),
@@ -3303,6 +3367,18 @@ export function applyOfficialMaterialProfileUpdate(materialProfileId: string): A
                 minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(
                     (template as any).minimumAaAlphaPercent,
                     item.minimumAaAlphaPercent,
+                ),
+                bottomOutlineCompensationMm: normalizeBottomCompensationMm(
+                    (template as any).bottomOutlineCompensationMm,
+                    item.bottomOutlineCompensationMm,
+                ),
+                bottomHoleCompensationMm: normalizeBottomCompensationMm(
+                    (template as any).bottomHoleCompensationMm,
+                    item.bottomHoleCompensationMm,
+                ),
+                bottomCompensationFade: normalizeBottomCompensationFade(
+                    (template as any).bottomCompensationFade,
+                    item.bottomCompensationFade,
                 ),
                 antiAliasingSettings: sanitizeMaterialAntiAliasingSettings(
                     (template as any).antiAliasingSettings ?? item.antiAliasingSettings,

@@ -22,6 +22,9 @@ const material = (overrides: Partial<MaterialProfile> = {}): MaterialProfile => 
     liftSpeedMmMin: 60,
     retractSpeedMmMin: 150,
     minimumAaAlphaPercent: 35,
+    bottomOutlineCompensationMm: 0,
+    bottomHoleCompensationMm: 0,
+    bottomCompensationFade: true,
     antiAliasingSettings: {} as MaterialProfile['antiAliasingSettings'],
     ...overrides,
 });

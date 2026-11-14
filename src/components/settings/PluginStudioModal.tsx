@@ -237,6 +237,9 @@ const DEFAULT_MATERIAL_DRAFT: MaterialDraft = {
   liftSpeedMmMin: 60,
   retractSpeedMmMin: 150,
   minimumAaAlphaPercent: 35,
+  bottomOutlineCompensationMm: 0,
+  bottomHoleCompensationMm: 0,
+  bottomCompensationFade: true,
   antiAliasingSettings: DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
 };
 

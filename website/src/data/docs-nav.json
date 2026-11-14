@@ -175,6 +175,10 @@
           "slug": "reference/file-formats"
         },
         {
+          "label": "Bottom Compensation",
+          "slug": "reference/bottom-compensation"
+        },
+        {
           "label": "Auto-Support Settings",
           "slug": "reference/auto-support-settings"
         },

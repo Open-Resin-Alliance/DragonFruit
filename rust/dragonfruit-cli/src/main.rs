@@ -365,6 +365,18 @@ enum SliceCommands {
         /// Minimum AA alpha threshold (percent, 0-100)
         #[arg(long, default_value = "0.0")]
         min_aa_alpha: f32,
+        /// Bottom contour compensation for outlines, in mm (negative shrinks them, 0 = off)
+        #[arg(long, default_value = "0.0", allow_negative_numbers = true)]
+        bottom_outline_compensation_mm: f32,
+        /// Bottom contour compensation for holes, in mm (negative opens them, 0 = off)
+        #[arg(long, default_value = "0.0", allow_negative_numbers = true)]
+        bottom_hole_compensation_mm: f32,
+        /// Layers from the plate with the full bottom compensation
+        #[arg(long, default_value = "0")]
+        bottom_compensation_layers: u32,
+        /// Layers after those the bottom compensation fades out over (0 = hard stop)
+        #[arg(long, default_value = "0")]
+        bottom_compensation_fade_layers: u32,
         /// Enable Floyd-Steinberg dithering (low-bit-depth panels, e.g. 3-bit mono)
         #[arg(long)]
         dither: bool,
@@ -388,7 +400,9 @@ enum SliceCommands {
             "png_compression", "anti_aliasing", "anti_aliasing_mode", "blur_brush_radius_px",
             "blur_brush_kernel", "blur_brush_sigma_x", "blur_brush_sigma_y", "z_blur_radius_layers",
             "z_blur_kernel", "z_blur_sigma", "z_blend_look_back", "aa_on_supports", "x_packing_mode",
-            "mirror_x", "mirror_y", "format_version", "min_aa_alpha", "dither", "dither_bit_depth",
+            "mirror_x", "mirror_y", "format_version", "min_aa_alpha", "bottom_outline_compensation_mm",
+            "bottom_hole_compensation_mm", "bottom_compensation_layers", "bottom_compensation_fade_layers",
+            "dither", "dither_bit_depth",
             "dither_device_gamma", "metadata_json",
         ])]
         job: Option<PathBuf>,
@@ -1165,6 +1179,10 @@ fn cmd_slice_run(
     mirror_y: bool,
     format_version: &Option<String>,
     min_aa_alpha: f32,
+    bottom_outline_compensation_mm: f32,
+    bottom_hole_compensation_mm: f32,
+    bottom_compensation_layers: u32,
+    bottom_compensation_fade_layers: u32,
     dither: bool,
     dither_bit_depth: Option<u32>,
     dither_device_gamma: f64,
@@ -1293,6 +1311,10 @@ fn cmd_slice_run(
             metadata_json: metadata_json.to_string(),
             format_version: format_version.clone(),
             minimum_aa_alpha_percent: min_aa_alpha,
+            bottom_outline_compensation_mm,
+            bottom_hole_compensation_mm,
+            bottom_compensation_layers,
+            bottom_compensation_fade_layers,
             ..Default::default()
         }
     };
@@ -1959,16 +1981,20 @@ fn main() {
                 anti_aliasing_mode, blur_brush_radius_px, blur_brush_kernel, blur_brush_sigma_x,
                 blur_brush_sigma_y, z_blur_radius_layers, z_blur_kernel, z_blur_sigma,
                 z_blend_look_back, aa_on_supports, x_packing_mode, mirror_x, mirror_y,
-                format_version, min_aa_alpha, dither, dither_bit_depth, dither_device_gamma,
-                sample_interval_ms, metadata_json, job, json } =>
+                format_version, min_aa_alpha, bottom_outline_compensation_mm,
+                bottom_hole_compensation_mm, bottom_compensation_layers, bottom_compensation_fade_layers,
+                dither, dither_bit_depth, dither_device_gamma, sample_interval_ms, metadata_json, job,
+                json } =>
                 cmd_slice_run(&input, &output, layer_height, build_width_mm, build_depth_mm,
                     source_width_px, source_height_px, &png_compression, &anti_aliasing,
                     &anti_aliasing_mode, blur_brush_radius_px, &blur_brush_kernel,
                     blur_brush_sigma_x, blur_brush_sigma_y, z_blur_radius_layers,
                     &z_blur_kernel, z_blur_sigma, z_blend_look_back, aa_on_supports,
                     &x_packing_mode, mirror_x, mirror_y, &format_version,
-                    min_aa_alpha, dither, dither_bit_depth, dither_device_gamma,
-                    sample_interval_ms, &metadata_json, &job, json),
+                    min_aa_alpha, bottom_outline_compensation_mm, bottom_hole_compensation_mm,
+                    bottom_compensation_layers, bottom_compensation_fade_layers, dither,
+                    dither_bit_depth, dither_device_gamma, sample_interval_ms, &metadata_json, &job,
+                    json),
             SliceCommands::Formats => { cmd_slice_formats(); Ok(()) },
             SliceCommands::PreviewLayer { input, layer, output } =>
                 extract_layer_png(&input, layer, &output),
