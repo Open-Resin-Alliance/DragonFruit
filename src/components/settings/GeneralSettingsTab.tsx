@@ -3,6 +3,7 @@
 import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import { ArrowLeft, ArrowUp, Bug, ClipboardCopy, Database, HelpCircle, Languages, LayoutGrid, PanelTop, RotateCcw, ZoomIn } from 'lucide-react';
 import { Button, SegmentedControl, SettingRow } from '@/components/atoms';
 import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
@@ -93,12 +94,12 @@ export function GeneralSettingsTab({
     const detail: FloatingLayoutDebugRequestDetail = {
       onResult: (snapshot) => {
         setLayoutDump(JSON.stringify(snapshot, null, 2));
-        setDumpStatus('Captured current floating layout from runtime state.');
+        setDumpStatus(_(msg`Captured current floating layout from runtime state.`));
       },
     };
 
     window.dispatchEvent(new CustomEvent(FLOATING_LAYOUT_DEBUG_REQUEST_EVENT, { detail }));
-  }, []);
+  }, [_]);
 
   const handleDumpSavedLayout = React.useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -106,34 +107,34 @@ export function GeneralSettingsTab({
     const raw = window.localStorage.getItem(FLOATING_LAYOUT_STORAGE_KEY);
     if (!raw) {
       setLayoutDump('');
-      setDumpStatus('No saved layout JSON found in local storage.');
+      setDumpStatus(_(msg`No saved layout JSON found in local storage.`));
       return;
     }
 
     try {
       const parsed = JSON.parse(raw);
       setLayoutDump(JSON.stringify(parsed, null, 2));
-      setDumpStatus('Loaded saved floating layout JSON from local storage.');
+      setDumpStatus(_(msg`Loaded saved floating layout JSON from local storage.`));
     } catch {
       setLayoutDump(raw);
-      setDumpStatus('Saved layout was not valid JSON; showing raw payload.');
+      setDumpStatus(_(msg`Saved layout was not valid JSON; showing raw payload.`));
     }
-  }, []);
+  }, [_]);
 
   const handleCopyDump = React.useCallback(async () => {
     if (!layoutDump) return;
     if (typeof navigator === 'undefined' || !navigator.clipboard) {
-      setDumpStatus('Clipboard API unavailable in this environment.');
+      setDumpStatus(_(msg`Clipboard API unavailable in this environment.`));
       return;
     }
 
     try {
       await navigator.clipboard.writeText(layoutDump);
-      setDumpStatus('Copied layout JSON to clipboard.');
+      setDumpStatus(_(msg`Copied layout JSON to clipboard.`));
     } catch {
-      setDumpStatus('Failed to copy layout JSON to clipboard.');
+      setDumpStatus(_(msg`Failed to copy layout JSON to clipboard.`));
     }
-  }, [layoutDump]);
+  }, [_, layoutDump]);
 
   return (
     <div className="space-y-3">
@@ -156,10 +157,10 @@ export function GeneralSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Language
+              <Trans>Language</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Choose the interface language. Detected from your system on first run; your choice is remembered.
+              <Trans>Choose the interface language. Detected from your system on first run; your choice is remembered.</Trans>
             </p>
           </div>
         </div>
@@ -193,10 +194,10 @@ export function GeneralSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              UI Scale
+              <Trans>UI Scale</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Adjusts the size of the entire interface. 100% adapts to your screen automatically.
+              <Trans>Adjusts the size of the entire interface. 100% adapts to your screen automatically.</Trans>
             </p>
           </div>
         </div>
@@ -210,11 +211,11 @@ export function GeneralSettingsTab({
               value={isCustomScale ? 'custom' : String(uiScale)}
               options={[
                 ...UI_SCALE_PRESETS.map((preset) => ({ value: String(preset), label: fmt.quantity(preset * 100, 0, 'percent') })),
-                { value: 'custom', label: 'Custom' },
+                { value: 'custom', label: _(msg`Custom`) },
               ]}
               onChange={handleUiScaleChange}
-              ariaLabel="Interface scale"
-              title="Interface scale"
+              ariaLabel={_(msg`Interface scale`)}
+              title={_(msg`Interface scale`)}
               className="w-36"
               menuAlign="right"
               leadingDisplay={<ZoomIn className="w-4 h-4" />}
@@ -224,7 +225,7 @@ export function GeneralSettingsTab({
           {isCustomScale && (
             <div className="mt-2.5 flex items-center justify-between gap-3">
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Custom scale
+                <Trans>Custom scale</Trans>
               </div>
               <ScrollableNumberField
                 className="w-36"
@@ -233,7 +234,7 @@ export function GeneralSettingsTab({
                 max={MAX_UI_SCALE * 100}
                 step={1}
                 unit="%"
-                ariaLabel="Custom interface scale"
+                ariaLabel={_(msg`Custom interface scale`)}
                 commitOnBlur
                 onChange={handleCustomUiScaleChange}
               />
@@ -261,10 +262,10 @@ export function GeneralSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Toolbar
+              <Trans>Toolbar</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Park the tools in a column on the left edge, or in a bar centred under the app bar.
+              <Trans>Park the tools in a column on the left edge, or in a bar centred under the app bar.</Trans>
             </p>
           </div>
         </div>
@@ -282,8 +283,8 @@ export function GeneralSettingsTab({
               { value: 'vertical', label: _(msg`Left`) },
             ]}
             onChange={(next) => onToolLayoutChange(next)}
-            ariaLabel="Toolbar position"
-            title="Toolbar position"
+            ariaLabel={_(msg`Toolbar position`)}
+            title={_(msg`Toolbar position`)}
             className="w-36"
             menuAlign="right"
             leadingDisplay={toolLayout === 'horizontal'
@@ -312,10 +313,10 @@ export function GeneralSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Floating Windows
+              <Trans>Floating Windows</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Keep moved panel positions between sessions, or always start from the default workspace layout.
+              <Trans>Keep moved panel positions between sessions, or always start from the default workspace layout.</Trans>
             </p>
           </div>
         </div>
@@ -350,7 +351,7 @@ export function GeneralSettingsTab({
             className="!h-10 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap"
           >
             <RotateCcw className="h-4 w-4 shrink-0" />
-            Reset
+            <Trans>Reset</Trans>
           </Button>
         </SettingRow>
       </section>
@@ -374,10 +375,10 @@ export function GeneralSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Support Tooltips
+              <Trans>Support Tooltips</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Show placement tooltips next to the cursor while adding supports.
+              <Trans>Show placement tooltips next to the cursor while adding supports.</Trans>
             </p>
           </div>
         </div>
@@ -423,10 +424,10 @@ export function GeneralSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Import Defaults
+              <Trans>Import Defaults</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Applied automatically when importing Scene Files.
+              <Trans>Applied automatically when importing Scene Files.</Trans>
             </p>
           </div>
         </div>
@@ -449,8 +450,8 @@ export function GeneralSettingsTab({
               raftBottomMode: next,
               rootsEnabled: next === 'line' ? true : importDefaults.rootsEnabled,
             })}
-            ariaLabel="Default Raft Base"
-            title="Default Raft Base"
+            ariaLabel={_(msg`Default Raft Base`)}
+            title={_(msg`Default Raft Base`)}
             className="w-36"
             menuAlign="right"
           />

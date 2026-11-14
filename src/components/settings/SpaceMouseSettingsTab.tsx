@@ -3,12 +3,20 @@
 import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { Trans } from '@lingui/react/macro';
 import { ArrowLeftRight, Ban, CheckCircle2, Gamepad2, MousePointer2, SlidersHorizontal } from 'lucide-react';
 import { SegmentedControl, Select, SettingRow } from '@/components/atoms';
 import type { SpaceMouseSettings } from '@/components/settings/spacemousePreferences';
 import { getCandidateGamepads, NAMED_3D_MOUSE } from '@/components/scene/camera/SpaceMouseController';
 import { getNativeSpaceMouseActive, subscribeNativeSpaceMouseActive } from '@/components/scene/camera/nativeSpaceMouseBridge';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+
+type TranslateFn = (descriptor: MessageDescriptor) => string;
+
+function formatAxisCountLabel(translate: TranslateFn, count: number): string {
+  return translate(msg`${count} axes`);
+}
 
 type SpaceMouseSettingsTabProps = {
   settings: SpaceMouseSettings;
@@ -68,10 +76,10 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              3D Mouse Input
+              <Trans>3D Mouse Input</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              6-DoF navigation for pan, orbit, zoom, and roll using compatible 3D mouse devices.
+              <Trans>6-DoF navigation for pan, orbit, zoom, and roll using compatible 3D mouse devices.</Trans>
             </p>
           </div>
         </div>
@@ -97,12 +105,12 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           <div className="flex items-center gap-2 mb-2">
             <Gamepad2 className="h-4 w-4" style={{ color: candidatePads.length > 0 ? 'var(--accent)' : 'var(--text-muted)' }} />
             <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Detected devices
+              <Trans>Detected devices</Trans>
             </div>
           </div>
           {candidatePads.length === 0 ? (
             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              No compatible input devices detected. Ensure your 3D mouse driver is installed.
+              <Trans>No compatible input devices detected. Ensure your 3D mouse driver is installed.</Trans>
             </p>
           ) : (
             <div className="flex flex-col gap-1.5">
@@ -136,8 +144,8 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
                         </span>
                       </div>
                       <div className="text-[11px] mt-0.5 pl-4.5" style={{ color: 'var(--text-muted)' }}>
-                        {pad.axes.length} axes ·{' '}
-                        {isBlocked ? 'blocked' : isNamed ? 'recognized 3D mouse' : 'unrecognized — used as fallback'}
+                        {formatAxisCountLabel(_, pad.axes.length)} ·{' '}
+                        {isBlocked ? _(msg`blocked`) : isNamed ? _(msg`recognized 3D mouse`) : _(msg`unrecognized — used as fallback`)}
                       </div>
                     </div>
                     <button
@@ -153,7 +161,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
                         ? { borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }
                         : { borderColor: 'color-mix(in srgb, #f87171, var(--border-subtle) 50%)', color: '#f87171', background: 'color-mix(in srgb, #f87171, var(--surface-0) 92%)' }}
                     >
-                      {isBlocked ? 'Unblock' : 'Block'}
+                      {isBlocked ? _(msg`Unblock`) : _(msg`Block`)}
                     </button>
                   </div>
                 );
@@ -166,18 +174,18 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
         <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
           <div className="space-y-1">
             <label className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Pivot mode
+              <Trans>Pivot mode</Trans>
             </label>
             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              Auto picks selected/single/nearest model center. Camera Raycast picks the model center nearest your current view beam.
+              <Trans>Auto picks selected/single/nearest model center. Camera Raycast picks the model center nearest your current view beam.</Trans>
             </p>
             <Select
               value={settings.pivotMode}
               onChange={(e) => onChange({ pivotMode: e.target.value as SpaceMouseSettings['pivotMode'] })}
               className="w-full !h-8"
             >
-              <option value="auto">Auto</option>
-              <option value="camera-ray">Camera Raycast</option>
+              <option value="auto">{_(msg`Auto`)}</option>
+              <option value="camera-ray">{_(msg`Camera Raycast`)}</option>
             </Select>
           </div>
         </div>
@@ -204,10 +212,10 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Motion Tuning
+              <Trans>Motion Tuning</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Adjust sensitivity and movement behavior for translation, rotation, zoom, and deadzone.
+              <Trans>Adjust sensitivity and movement behavior for translation, rotation, zoom, and deadzone.</Trans>
             </p>
           </div>
         </div>
@@ -215,7 +223,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
         <div className="mt-2 grid grid-cols-2 gap-2">
           <div className="space-y-0.5">
             <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
-              <span>Translation</span>
+              <span><Trans>Translation</Trans></span>
               <span style={{ color: 'var(--text-strong)' }}>{fmt.fixed(settings.translationSensitivity, 2)}</span>
             </label>
             <input
@@ -231,7 +239,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
 
           <div className="space-y-0.5">
             <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
-              <span>Rotation</span>
+              <span><Trans>Rotation</Trans></span>
               <span style={{ color: 'var(--text-strong)' }}>{fmt.fixed(settings.rotationSensitivity, 2)}</span>
             </label>
             <input
@@ -247,7 +255,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
 
           <div className="space-y-0.5">
             <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
-              <span>Zoom</span>
+              <span><Trans>Zoom</Trans></span>
               <span style={{ color: 'var(--text-strong)' }}>{fmt.fixed(settings.zoomSensitivity, 2)}</span>
             </label>
             <input
@@ -263,7 +271,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
 
           <div className="space-y-0.5">
             <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
-              <span>Deadzone</span>
+              <span><Trans>Deadzone</Trans></span>
               <span style={{ color: 'var(--text-strong)' }}>{fmt.fixed(settings.deadzone, 2)}</span>
             </label>
             <input
@@ -317,22 +325,22 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Axis Inversion
+              <Trans>Axis Inversion</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Flip the direction of individual pan, zoom, pitch, yaw, and roll axes.
+              <Trans>Flip the direction of individual pan, zoom, pitch, yaw, and roll axes.</Trans>
             </p>
           </div>
         </div>
         <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
           {([
-            ['invertTx', 'Invert X pan'],
-            ['invertTy', 'Invert Y pan'],
-            ['invertTz', 'Invert zoom'],
-            ['invertRx', 'Invert pitch'],
-            ['invertRy', 'Invert yaw'],
-            ['invertRz', 'Invert roll'],
-          ] as Array<[keyof SpaceMouseSettings, string]>).map(([key, label]) => (
+            ['invertTx', msg`Invert X pan`],
+            ['invertTy', msg`Invert Y pan`],
+            ['invertTz', msg`Invert zoom`],
+            ['invertRx', msg`Invert pitch`],
+            ['invertRy', msg`Invert yaw`],
+            ['invertRz', msg`Invert roll`],
+          ] as Array<[keyof SpaceMouseSettings, MessageDescriptor]>).map(([key, labelDescriptor]) => (
             <label key={key} className="inline-flex items-center gap-2 rounded border px-2 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
               <input
                 type="checkbox"
@@ -340,7 +348,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
                 onChange={(e) => onChange({ [key]: e.target.checked })}
                 className="ui-checkbox !w-3.5 !h-3.5"
               />
-              <span style={{ color: 'var(--text-muted)' }}>{label}</span>
+              <span style={{ color: 'var(--text-muted)' }}>{_(labelDescriptor)}</span>
             </label>
           ))}
         </div>
@@ -355,7 +363,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
         }}
       >
         <p className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-          Supports 3Dconnexion SpaceMouse devices. “SpaceMouse” is a trademark of 3Dconnexion.
+          <Trans>Supports 3Dconnexion SpaceMouse devices. “SpaceMouse” is a trademark of 3Dconnexion.</Trans>
         </p>
       </div>
     </div>

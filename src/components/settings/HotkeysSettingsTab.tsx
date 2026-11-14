@@ -1,6 +1,10 @@
 'use client';
 
 import React, { useMemo, useState, useEffect } from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { Trans } from '@lingui/react/macro';
 import { Keyboard, RotateCcw } from 'lucide-react';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { HotkeyBinding } from '@/hotkeys/hotkeyConfig';
@@ -10,54 +14,63 @@ import { usePlatformModifier } from '@/hooks/usePlatformModifier';
 import { SECONDARY_DELETE_KEY } from '@/features/delete/useDeleteHotkey';
 import { Button, IconButton } from '@/components/atoms';
 
-const PINNED_SLOT_LABELS: Record<string, string> = {
-  SLOT_1: 'Slot 1',
-  SLOT_2: 'Slot 2',
-  SLOT_3: 'Slot 3',
-  SLOT_4: 'Slot 4',
-  SLOT_5: 'Slot 5',
-  SLOT_6: 'Slot 6',
+type TranslateFn = (descriptor: MessageDescriptor) => string;
+
+function formatResetSectionAriaLabel(translate: TranslateFn, title: string): string {
+  return translate(msg`Reset ${title} section to default shortcuts`);
+}
+
+const PINNED_SLOT_LABELS: Record<string, MessageDescriptor> = {
+  SLOT_1: msg`Slot 1`,
+  SLOT_2: msg`Slot 2`,
+  SLOT_3: msg`Slot 3`,
+  SLOT_4: msg`Slot 4`,
+  SLOT_5: msg`Slot 5`,
+  SLOT_6: msg`Slot 6`,
 };
 
-const CATEGORY_LABELS: Record<string, string> = {
-  GLOBAL: 'General',
-  CAMERA: 'Camera',
-  CANVAS: 'Canvas Tools',
-  SUPPORTS: 'Supports',
-  PRESETS: 'Presets',
+const CATEGORY_LABELS: Record<string, MessageDescriptor> = {
+  GLOBAL: msg`General`,
+  CAMERA: msg`Camera`,
+  CANVAS: msg`Canvas Tools`,
+  SUPPORTS: msg`Supports`,
+  PRESETS: msg`Presets`,
 };
 
 const SECTION_GROUPS: Array<{
   id: string;
-  title: string;
-  description: string;
+  title: MessageDescriptor;
+  description: MessageDescriptor;
   categories: string[];
 }> = [
   {
     id: 'global',
-    title: 'Global',
-    description: 'General and camera shortcuts available across all workspaces.',
+    title: msg`Global`,
+    description: msg`General and camera shortcuts available across all workspaces.`,
     categories: ['GLOBAL', 'CAMERA'],
   },
   {
     id: 'scene',
-    title: 'Prepare',
-    description: 'Canvas tool switching and scene arrangement shortcuts.',
+    title: msg`Prepare`,
+    description: msg`Canvas tool switching and scene arrangement shortcuts.`,
     categories: ['CANVAS'],
   },
   {
     id: 'supports',
-    title: 'Supports',
-    description: 'Support authoring workflow shortcuts.',
+    title: msg`Supports`,
+    description: msg`Support authoring workflow shortcuts.`,
     categories: ['SUPPORTS'],
   },
   {
     id: 'presets',
-    title: 'Support Presets',
-    description: 'Quick-apply support preset shortcuts.',
+    title: msg`Support Presets`,
+    description: msg`Quick-apply support preset shortcuts.`,
     categories: ['PRESETS'],
   },
 ];
+
+// i18n-ignore
+const MODIFIER_EVENT_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
 
 function normalizeRecordedKey(rawKey: string): string {
   if (rawKey === ' ') return 'Space';
@@ -66,6 +79,7 @@ function normalizeRecordedKey(rawKey: string): string {
 
 
 export function HotkeysSettingsTab() {
+  const { _ } = useLingui();
   const { config, updateHotkey, resetCategories } = useHotkeyConfig();
   const [recordingKey, setRecordingKey] = useState<{ category: string, action: string } | null>(null);
 
@@ -96,7 +110,7 @@ export function HotkeysSettingsTab() {
       if (e.altKey) modifiers.push('alt');
       if (e.metaKey) modifiers.push('meta');
 
-      if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
+      if (MODIFIER_EVENT_KEYS.has(e.key)) {
         return;
       }
 
@@ -116,7 +130,7 @@ export function HotkeysSettingsTab() {
     const handleKeyUp = (e: KeyboardEvent) => {
       if (pressedNonModifier) return;
 
-      if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
+      if (MODIFIER_EVENT_KEYS.has(e.key)) {
         e.preventDefault();
         e.stopPropagation();
 
@@ -170,7 +184,7 @@ export function HotkeysSettingsTab() {
               return { action, label: binding.description, binding };
             }
 
-            const slotLabel = PINNED_SLOT_LABELS[action] ?? action;
+            const slotLabel = PINNED_SLOT_LABELS[action] ? _(PINNED_SLOT_LABELS[action]) : action;
             return {
               action,
               label: slotLabel,
@@ -180,7 +194,7 @@ export function HotkeysSettingsTab() {
 
           return {
             category,
-            categoryLabel: CATEGORY_LABELS[category] ?? category,
+            categoryLabel: CATEGORY_LABELS[category] ? _(CATEGORY_LABELS[category]) : category,
             entries,
           };
         })
@@ -188,10 +202,12 @@ export function HotkeysSettingsTab() {
 
       return {
         ...section,
+        title: _(section.title),
+        description: _(section.description),
         categories,
       };
     }).filter((section) => section.categories.some((category) => category.entries.length > 0));
-  }, [config]);
+  }, [_, config]);
 
   const sectionRows = useMemo(() => {
     const rows: Array<[typeof configurableSections[number] | null, typeof configurableSections[number] | null]> = [];
@@ -248,8 +264,8 @@ export function HotkeysSettingsTab() {
         <IconButton
           type="button"
           onClick={() => resetCategories(section.categories.map((category) => category.category))}
-          title="Reset section to default shortcuts"
-          aria-label={`Reset ${section.title} section to default shortcuts`}
+          title={_(msg`Reset section to default shortcuts`)}
+          aria-label={formatResetSectionAriaLabel(_, section.title)}
           className="!h-7 !w-7 !p-0 shrink-0 rounded-md"
         >
           <RotateCcw className="h-3.5 w-3.5" />
@@ -316,15 +332,15 @@ export function HotkeysSettingsTab() {
           >
             <div className="flex items-center gap-1.5">
               <h4 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Recording Shortcut
+                <Trans>Recording Shortcut</Trans>
               </h4>
             </div>
 
             <p className="mt-2 text-sm" style={{ color: 'var(--text-muted)' }}>
-              Press the new key combination now.
+              <Trans>Press the new key combination now.</Trans>
             </p>
             <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-              Press <strong>Esc</strong> or click outside to cancel.
+              <Trans>Press <strong>Esc</strong> or click outside to cancel.</Trans>
             </p>
 
             <div className="mt-4 flex justify-end">
@@ -335,7 +351,7 @@ export function HotkeysSettingsTab() {
                 size="auto"
                 className="!h-8 !px-3 !py-0 text-xs rounded-md"
               >
-                Cancel
+                <Trans>Cancel</Trans>
               </Button>
             </div>
           </div>
@@ -353,6 +369,7 @@ function HotkeyRow({ label, binding, isRecording, onRecord, onCancel, secondaryT
   onCancel: () => void,
   secondaryToken?: string,
 }) {
+  const { _ } = useLingui();
   const primaryModifierLabel = usePlatformModifier();
   const tokens = getBindingTokens(binding, primaryModifierLabel);
 
@@ -386,18 +403,18 @@ function HotkeyRow({ label, binding, isRecording, onRecord, onCancel, secondaryT
               onRecord();
             }
           }}
-          title={isRecording ? 'Cancel' : 'Click to change'}
+          title={isRecording ? _(msg`Cancel`) : _(msg`Click to change`)}
           className="inline-flex min-w-[92px] items-center justify-center gap-1 rounded-md px-1 py-0.5 transition-colors hover:brightness-110"
         >
           {isRecording ? (
-            <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Press keys…</span>
+            <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}><Trans>Press keys…</Trans></span>
           ) : (
             tokens.map((token) => <KbdToken key={`${binding.description}-${token}`}>{token}</KbdToken>)
           )}
         </button>
 
         {!isRecording && secondaryToken && (
-          <span className="inline-flex items-center gap-1" title="Always available">
+          <span className="inline-flex items-center gap-1" title={_(msg`Always available`)}>
             <span className="text-[11px]" style={{ color: 'var(--text-muted)' }} aria-hidden>/</span>
             <KbdToken muted>{secondaryToken}</KbdToken>
           </span>

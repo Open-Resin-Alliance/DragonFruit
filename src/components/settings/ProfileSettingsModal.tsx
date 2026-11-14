@@ -1,6 +1,9 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg, plural } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
 import { Plural, Trans } from '@lingui/react/macro';
 import { createPortal } from 'react-dom';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
@@ -310,6 +313,157 @@ function mergeWithLocalSettingsDefaults(
   return base;
 }
 
+type TranslateFn = (descriptor: MessageDescriptor) => string;
+
+function formatUnknownNetworkModeLabel(translate: TranslateFn, mode: string): string {
+  return translate(msg`Unknown (${mode})`);
+}
+
+function formatPrinterFleetTitle(translate: TranslateFn, printerName: string): string {
+  return translate(msg`${printerName} Fleet`);
+}
+
+function formatConnectToLoadMaterialsMessage(translate: TranslateFn, modeLabel: string): string {
+  return translate(msg`Connect to a ${modeLabel} printer to load on-device materials.`);
+}
+
+function formatFailedToLoadMaterialsMessage(translate: TranslateFn, modeLabel: string): string {
+  return translate(msg`Failed to load ${modeLabel} materials.`);
+}
+
+function formatFailedToSaveMaterialProfileMessage(translate: TranslateFn, modeLabel: string): string {
+  return translate(msg`Failed to save ${modeLabel} material profile.`);
+}
+
+function formatProfileUpdatedRefreshingMessage(translate: TranslateFn, modeLabel: string): string {
+  return translate(msg`${modeLabel} profile updated. Refreshing materials…`);
+}
+
+function formatFailedToSaveProfileMessage(translate: TranslateFn, modeLabel: string): string {
+  return translate(msg`Failed to save ${modeLabel} profile.`);
+}
+
+function formatModePrinterFallback(translate: TranslateFn, modeLabel: string): string {
+  return translate(msg`${modeLabel} Printer`);
+}
+
+function formatScanningLocalSubnetForModeMessage(translate: TranslateFn, modeLabel: string): string {
+  return translate(msg`Scanning local subnet for ${modeLabel} devices…`);
+}
+
+function formatScanningEndpointsProgress(translate: TranslateFn, scanned: number, total: number): string {
+  return translate(msg`Scanning local subnet… ${scanned}/${total} endpoints`);
+}
+
+function formatFoundNetworkDevicesSummary(
+  translate: TranslateFn,
+  deviceCount: number,
+  modeLabel: string,
+  localHostnamesCount: number,
+  subnetHostsCount: number,
+  endpointsCount: number,
+): string {
+  return translate(
+    msg`Found ${plural(deviceCount, { one: '# device', other: '# devices' })} for ${modeLabel} (resolved ${localHostnamesCount} .local hostnames, scanned ${subnetHostsCount} subnet hosts / ${endpointsCount} endpoints).`,
+  );
+}
+
+function formatNoNetworkDevicesFoundSummary(
+  translate: TranslateFn,
+  modeLabel: string,
+  localHostnamesCount: number,
+  subnetHostsCount: number,
+  endpointsCount: number,
+): string {
+  return translate(
+    msg`No ${modeLabel} devices found (resolved ${localHostnamesCount} .local hostnames, scanned ${subnetHostsCount} subnet hosts / ${endpointsCount} endpoints).`,
+  );
+}
+
+function formatConnectingToHostMessage(translate: TranslateFn, modeLabel: string): string {
+  return translate(msg`Connecting to ${modeLabel} host…`);
+}
+
+function formatConnectedToHostMessage(translate: TranslateFn, hostName: string): string {
+  return translate(msg`Connected to ${hostName}`);
+}
+
+function formatHostUnreachableMessage(translate: TranslateFn, modeLabel: string): string {
+  return translate(msg`${modeLabel} host unreachable.`);
+}
+
+function formatSelectedDeviceMessage(translate: TranslateFn, deviceName: string): string {
+  return translate(msg`Selected ${deviceName}`);
+}
+
+function formatDisconnectedDeviceMessage(translate: TranslateFn, deviceName: string): string {
+  return translate(msg`Disconnected ${deviceName}`);
+}
+
+function formatRemovedDeviceFromFleetMessage(translate: TranslateFn, deviceName: string): string {
+  return translate(msg`Removed ${deviceName} from this profile fleet.`);
+}
+
+function formatDefaultMaterialName(translate: TranslateFn, index: number): string {
+  return translate(msg`Material ${index}`);
+}
+
+function formatBitDepthLabel(translate: TranslateFn, bits: number): string {
+  return translate(msg`${bits} Bit`);
+}
+
+function formatBitDepthDisplayTitle(translate: TranslateFn, bitDepthLabel: string): string {
+  return translate(msg`${bitDepthLabel} display`);
+}
+
+function formatShowingConnectedDevices(translate: TranslateFn, printerName: string): string {
+  return translate(msg`Showing connected devices for ${printerName}.`);
+}
+
+function formatOpenFleetViewAria(translate: TranslateFn, fleetCount: number): string {
+  return translate(msg`Open fleet view (${fleetCount})`);
+}
+
+function formatSwitchToFleetViewTitle(translate: TranslateFn, fleetCount: number): string {
+  return translate(msg`Switch to fleet view (${fleetCount})`);
+}
+
+function formatVersionUpdateTitle(
+  translate: TranslateFn,
+  currentVersion: string | number,
+  latestVersion: string | number,
+): string {
+  return translate(msg`Update v${currentVersion} to v${latestVersion}`);
+}
+
+function formatNoOnDeviceMaterialsReturned(translate: TranslateFn, modeLabel: string): string {
+  return translate(msg`No on-device materials were returned by this ${modeLabel} host.`);
+}
+
+function formatEditOutputMaterialProfileTitle(translate: TranslateFn, outputLabel: string): string {
+  return translate(msg`Edit ${outputLabel} Material Profile`);
+}
+
+function formatCreateOutputMaterialProfileTitle(translate: TranslateFn, outputLabel: string): string {
+  return translate(msg`Create ${outputLabel} Material Profile`);
+}
+
+function formatActivePrinterSummary(translate: TranslateFn, deviceName: string): string {
+  return translate(msg`Active: ${deviceName}`);
+}
+
+function formatSelectedPrinterSummary(translate: TranslateFn, deviceName: string): string {
+  return translate(msg`Selected: ${deviceName}`);
+}
+
+function formatCloseRemoteMaterialEditDialogAria(translate: TranslateFn, modeLabel: string): string {
+  return translate(msg`Close ${modeLabel} edit dialog`);
+}
+
+function formatSaveToNetworkModeLabel(translate: TranslateFn, modeLabel: string): string {
+  return translate(msg`Save to ${modeLabel}`);
+}
+
 export function ProfileSettingsModal({
   isOpen,
   onClose,
@@ -318,6 +472,7 @@ export function ProfileSettingsModal({
   openNetworkSettingsToken = 0,
   openMaterialAntiAliasingToken = 0,
 }: ProfileSettingsModalProps) {
+  const { _ } = useLingui();
   const logNetworkScanDebug = React.useCallback((scope: string, details: Record<string, unknown>) => {
     try {
       console.info(`[NetworkSettings][AutoScan][${scope}]`, details);
@@ -519,7 +674,7 @@ export function ProfileSettingsModal({
     // Track first-appearance order so families display in manifest order.
     const familyOrder = new Map<string, number>();
     filteredPrinterPresets.forEach((preset) => {
-      const family = (preset.family ?? '').trim() || 'Other';
+      const family = (preset.family ?? '').trim() || _(msg`Other`);
       const current = grouped.get(family);
       if (current) {
         current.push(preset);
@@ -532,7 +687,7 @@ export function ProfileSettingsModal({
     return Array.from(grouped.entries())
       .sort(([a], [b]) => (familyOrder.get(a) ?? 999) - (familyOrder.get(b) ?? 999))
       .map(([family, presets]) => ({ family, presets }));
-  }, [filteredPrinterPresets, selectedPresetManufacturer]);
+  }, [_, filteredPrinterPresets, selectedPresetManufacturer]);
 
   const addedOfficialPresetIds = React.useMemo(() => {
     const set = new Set<string>();
@@ -621,10 +776,10 @@ export function ProfileSettingsModal({
       .map((tab, index) => ({ id: tab.id, title: tab.title, order: tab.order ?? (index + 1) * 10 }));
     return [
       ...declared,
-      { id: 'meta', title: 'Meta', order: 1000 },
-      { id: 'anti-aliasing', title: 'Anti-Aliasing', order: 1010 },
+      { id: 'meta', title: _(msg`Meta`), order: 1000 },
+      { id: 'anti-aliasing', title: _(msg`Anti-Aliasing`), order: 1010 },
     ];
-  }, [selectedLocalMaterialSettingsAdapter, usePluginLocalSettingsAsReplacement]);
+  }, [_, selectedLocalMaterialSettingsAdapter, usePluginLocalSettingsAsReplacement]);
 
   const replacementMaterialEditorDefaultTab = React.useMemo(() => {
     if (!usePluginLocalSettingsAsReplacement) return 'meta';
@@ -842,7 +997,7 @@ export function ProfileSettingsModal({
   const groupedFilteredMaterialPresets = React.useMemo(() => {
     const grouped = new Map<string, typeof filteredMaterialPresets>();
     filteredMaterialPresets.forEach((preset) => {
-      const family = RESIN_FAMILY_OPTIONS.find((option) => option.value === preset.resinFamily)?.label ?? 'Other';
+      const family = RESIN_FAMILY_OPTIONS.find((option) => option.value === preset.resinFamily)?.label ?? _(msg`Other`);
       const current = grouped.get(family);
       if (current) current.push(preset);
       else grouped.set(family, [preset]);
@@ -851,7 +1006,7 @@ export function ProfileSettingsModal({
     return Array.from(grouped.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([family, presets]) => ({ family, presets }));
-  }, [filteredMaterialPresets]);
+  }, [_, filteredMaterialPresets]);
 
   const isSearchingMaterialPresets = materialPresetSearch.trim().length > 0;
 
@@ -921,22 +1076,22 @@ export function ProfileSettingsModal({
   const registeredNetworkModeOptions = React.useMemo<Array<{ value: PrinterOutputFormat; label: string }>>(() => {
     const modes = getAvailableProfileNetworkModes();
     return [
-      { value: '', label: 'None (Local only)' },
+      { value: '', label: _(msg`None (Local only)`) },
       ...modes.map((mode) => ({
         value: mode.mode,
         label: mode.displayName,
       })),
     ];
-  }, []);
+  }, [_]);
   const selectedPrinterNetworkModeOptions = React.useMemo<Array<{ value: PrinterOutputFormat; label: string }>>(() => {
     const currentMode = (selectedPrinter?.networkSupport ?? '').trim().toLowerCase();
     if (!currentMode) return registeredNetworkModeOptions;
     if (registeredNetworkModeOptions.some((option) => option.value === currentMode)) return registeredNetworkModeOptions;
     return [
       ...registeredNetworkModeOptions,
-      { value: currentMode, label: `Unknown (${currentMode})` },
+      { value: currentMode, label: formatUnknownNetworkModeLabel(_, currentMode) },
     ];
-  }, [registeredNetworkModeOptions, selectedPrinter?.networkSupport]);
+  }, [_, registeredNetworkModeOptions, selectedPrinter?.networkSupport]);
   const networkUiAdapter = React.useMemo(
     () => getProfileNetworkUiAdapter(selectedPrinter?.networkSupport),
     [selectedPrinter?.networkSupport],
@@ -948,7 +1103,7 @@ export function ProfileSettingsModal({
   const supportsRemoteMaterialProfiles = Boolean(
     networkUiAdapter && networkUiAdapter.supportsRemoteMaterialProfiles !== false,
   );
-  const selectedNetworkModeLabel = networkUiAdapter?.displayName ?? 'Unknown';
+  const selectedNetworkModeLabel = networkUiAdapter?.displayName ?? _(msg`Unknown`);
   const selectedActiveNetworkDeviceReachability = selectedPrinter?.activeNetworkDeviceId
     ? printerReachabilityByDeviceId[selectedPrinter.activeNetworkDeviceId]
     : null;
@@ -1143,7 +1298,7 @@ export function ProfileSettingsModal({
 
     const toDisplayString = (value: unknown): string => {
       if (value == null) return '—';
-      if (typeof value === 'boolean') return value ? 'Enabled' : 'Disabled';
+      if (typeof value === 'boolean') return value ? _(msg`Enabled`) : _(msg`Disabled`);
       if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '—';
       if (typeof value === 'string') {
         const trimmed = value.trim();
@@ -1194,7 +1349,7 @@ export function ProfileSettingsModal({
 
     walkDiff(currentComparable, nextComparable, '');
     return rows;
-  }, [selectedPrinter, selectedPrinterPreset, selectedPrinterUpdate]);
+  }, [_, selectedPrinter, selectedPrinterPreset, selectedPrinterUpdate]);
   const selectedPrinterNetworkFilterHint = React.useMemo(() => {
     const explicit = selectedPrinter?.networkFilter?.trim() || '';
     if (explicit.length > 0) return explicit;
@@ -1299,9 +1454,9 @@ export function ProfileSettingsModal({
     () => profileState.printerProfiles.findIndex((profile) => profile.id === selectedPrinter?.id),
     [profileState.printerProfiles, selectedPrinter?.id],
   );
-  const networkSettingsActionLabel = connectedManagedNetworkPrinterCount > 0 ? 'Manage Fleet' : 'Network Settings';
+  const networkSettingsActionLabel = connectedManagedNetworkPrinterCount > 0 ? _(msg`Manage Fleet`) : _(msg`Network Settings`);
   const shouldShowFleetSwitchAction = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 0;
-  const regularNetworkActionLabel = shouldShowFleetSwitchAction ? 'Show Fleet' : 'Network Settings';
+  const regularNetworkActionLabel = shouldShowFleetSwitchAction ? _(msg`Show Fleet`) : _(msg`Network Settings`);
   const accentSecondaryActionColor = isLightTheme
     ? 'color-mix(in srgb, #4f8a08, var(--text-strong) 30%)'
     : 'var(--accent-secondary)';
@@ -1328,8 +1483,8 @@ export function ProfileSettingsModal({
     ? 'color-mix(in srgb, var(--surface-2), white 20%)'
     : '#1c2027';
   const printerSectionTitle = shouldRenderFleetRail
-    ? `${selectedPrinter?.name ?? 'Printer'} Fleet`
-    : '3D Printer';
+    ? (selectedPrinter?.name ? formatPrinterFleetTitle(_, selectedPrinter.name) : _(msg`Printer Fleet`))
+    : _(msg`3D Printer`);
   const moveDraggedPrinter = React.useCallback((draggedId: string, beforeId?: string | null) => {
     if (!draggedId) return;
     movePrinterProfile(draggedId, beforeId ?? undefined);
@@ -1907,7 +2062,7 @@ export function ProfileSettingsModal({
     if (!host) {
       setRemoteMaterials([]);
       setIsLoadingRemoteMaterials(false);
-      setRemoteMaterialsError(`Connect to a ${selectedNetworkModeLabel} printer to load on-device materials.`);
+      setRemoteMaterialsError(formatConnectToLoadMaterialsMessage(_, selectedNetworkModeLabel));
       return;
     }
 
@@ -1981,7 +2136,7 @@ export function ProfileSettingsModal({
         setRemoteMaterialsError(null);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : `Failed to load ${selectedNetworkModeLabel} materials.`;
+      const message = error instanceof Error ? error.message : formatFailedToLoadMaterialsMessage(_, selectedNetworkModeLabel);
       if (!cachedEntry?.materials?.length) {
         setRemoteMaterials([]);
       }
@@ -1989,7 +2144,7 @@ export function ProfileSettingsModal({
     } finally {
       setIsLoadingRemoteMaterials(false);
     }
-  }, [effectiveNetworkUiAdapter, networkUiAdapter, remoteMaterialsCacheKey, selectedNetworkModeLabel, selectedRemoteMaterialHost, selectedPrinterResolvedId]);
+  }, [_, effectiveNetworkUiAdapter, networkUiAdapter, remoteMaterialsCacheKey, selectedNetworkModeLabel, selectedRemoteMaterialHost, selectedPrinterResolvedId]);
 
   React.useEffect(() => {
     if (!shouldUseRemoteOnDeviceMaterials || !selectedPrinterResolvedId) {
@@ -2077,20 +2232,20 @@ export function ProfileSettingsModal({
 
       const payload = await response.json().catch(() => null) as any;
       if (!response.ok || payload?.ok !== true) {
-        throw new Error(typeof payload?.error === 'string' ? payload.error : `Failed to save ${selectedNetworkModeLabel} material profile.`);
+        throw new Error(typeof payload?.error === 'string' ? payload.error : formatFailedToSaveMaterialProfileMessage(_, selectedNetworkModeLabel));
       }
 
       setIsRemoteMaterialEditDialogOpen(false);
-      setNetworkConnectionMessage(`${selectedNetworkModeLabel} profile updated. Refreshing materials…`);
+      setNetworkConnectionMessage(formatProfileUpdatedRefreshingMessage(_, selectedNetworkModeLabel));
       await loadRemoteMaterials();
     } catch (error) {
-      const message = error instanceof Error ? error.message : `Failed to save ${selectedNetworkModeLabel} profile.`;
+      const message = error instanceof Error ? error.message : formatFailedToSaveProfileMessage(_, selectedNetworkModeLabel);
       setRemoteMaterialsError(message);
       setNetworkConnectionMessage(message);
     } finally {
       setIsSavingRemoteMaterialEdit(false);
     }
-  }, [effectiveNetworkUiAdapter, loadRemoteMaterials, remoteMaterialEditDraft, networkUiAdapter, selectedRemoteMaterial, selectedPrinter]);
+  }, [_, effectiveNetworkUiAdapter, loadRemoteMaterials, remoteMaterialEditDraft, networkUiAdapter, selectedNetworkModeLabel, selectedRemoteMaterial, selectedPrinter]);
 
   const handleRunNetworkDiscovery = React.useCallback(async () => {
     if (!selectedPrinter) return;
@@ -2109,8 +2264,8 @@ export function ProfileSettingsModal({
     const isCurrentRun = () => discoveryRunIdRef.current === runId;
 
     setIsNetworkScanning(true);
-    setNetworkScanPhaseLabel('Resolving friendly .local hostnames…');
-    setNetworkConnectionMessage('Resolving friendly .local hostnames…');
+    setNetworkScanPhaseLabel(_(msg`Resolving friendly .local hostnames…`));
+    setNetworkConnectionMessage(_(msg`Resolving friendly .local hostnames…`));
     setNetworkScanProgressPct(8);
 
     try {
@@ -2236,7 +2391,7 @@ export function ProfileSettingsModal({
             printerModel,
             modeLabel: selectedNetworkModeLabel,
             networkSupport: selectedPrinter.networkSupport,
-            fallbackName: `${selectedNetworkModeLabel} Printer`,
+            fallbackName: formatModePrinterFallback(_, selectedNetworkModeLabel),
           }),
           ipAddress,
           status: 'online' as const,
@@ -2248,11 +2403,11 @@ export function ProfileSettingsModal({
       ));
 
       setNetworkScanProgressPct(44);
-      setNetworkScanPhaseLabel('Scanning local subnet…');
-      setNetworkConnectionMessage(`Scanning local subnet for ${selectedNetworkModeLabel} devices…`);
+      setNetworkScanPhaseLabel(_(msg`Scanning local subnet…`));
+      setNetworkConnectionMessage(formatScanningLocalSubnetForModeMessage(_, selectedNetworkModeLabel));
             setNetworkScanProgressPct(42);
-            setNetworkScanPhaseLabel('Verifying previously discovered printers…');
-            setNetworkConnectionMessage('Checking if previously discovered printers are still available…');
+            setNetworkScanPhaseLabel(_(msg`Verifying previously discovered printers…`));
+            setNetworkConnectionMessage(_(msg`Checking if previously discovered printers are still available…`));
 
             const verifiedCachedPrinters: typeof baseDiscovered = [];
             if (carryForwardDiscovered.length > 0) {
@@ -2365,7 +2520,7 @@ export function ProfileSettingsModal({
               printerModel,
               modeLabel: selectedNetworkModeLabel,
               networkSupport: selectedPrinter.networkSupport,
-              fallbackName: `${selectedNetworkModeLabel} Printer`,
+              fallbackName: formatModePrinterFallback(_, selectedNetworkModeLabel),
             }),
             ipAddress,
             status: 'online' as const,
@@ -2388,7 +2543,7 @@ export function ProfileSettingsModal({
         const progressPct = Math.round(56 + (subnetProgressRatio * 42));
 
         setNetworkScanProgressPct(Math.max(56, Math.min(98, progressPct)));
-        setNetworkScanPhaseLabel(`Scanning local subnet… ${subnetScannedEndpoints}/${subnetTotalEndpoints || 0} endpoints`);
+        setNetworkScanPhaseLabel(formatScanningEndpointsProgress(_, subnetScannedEndpoints, subnetTotalEndpoints || 0));
 
         const done = payload?.done === true;
         const nextBatchStart = Number.isFinite(Number(payload?.nextBatchStart)) ? Number(payload.nextBatchStart) : subnetScannedEndpoints;
@@ -2411,7 +2566,7 @@ export function ProfileSettingsModal({
       if (isCurrentRun()) {
         setDiscoveredPrinters(merged);
         setNetworkScanProgressPct(100);
-        setNetworkScanPhaseLabel('Scan complete');
+        setNetworkScanPhaseLabel(_(msg`Scan complete`));
         setCachedDiscoveredPrinters(merged);
       }
 
@@ -2426,20 +2581,33 @@ export function ProfileSettingsModal({
       if (merged.length > 0) {
         if (isCurrentRun()) {
           setNetworkConnectionMessage(
-            `Found ${merged.length} ${selectedNetworkModeLabel} device${merged.length === 1 ? '' : 's'} (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`,
+            formatFoundNetworkDevicesSummary(
+              _,
+              merged.length,
+              selectedNetworkModeLabel,
+              scannedLocalHostnames,
+              scannedSubnetHosts,
+              scannedEndpoints,
+            ),
           );
         }
       } else {
         if (isCurrentRun()) {
           setNetworkConnectionMessage(
             scannedSubnetHosts > 0 || scannedLocalHostnames > 0
-              ? `No ${selectedNetworkModeLabel} devices found (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`
-              : 'No local IPv4 subnet detected by the scanner. Try entering printer IP and scanning again.',
+              ? formatNoNetworkDevicesFoundSummary(
+                _,
+                selectedNetworkModeLabel,
+                scannedLocalHostnames,
+                scannedSubnetHosts,
+                scannedEndpoints,
+              )
+              : _(msg`No local IPv4 subnet detected by the scanner. Try entering printer IP and scanning again.`),
           );
         }
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Discovery failed';
+      const message = error instanceof Error ? error.message : _(msg`Discovery failed`);
       logNetworkScanDebug('discover/error', {
         message,
         requestedNetworkFilter: selectedPrinterNetworkFilterHint || null,
@@ -2447,7 +2615,7 @@ export function ProfileSettingsModal({
       });
       if (isCurrentRun()) {
         setNetworkConnectionMessage(message);
-        setNetworkScanPhaseLabel('Scan failed');
+        setNetworkScanPhaseLabel(_(msg`Scan failed`));
         setNetworkScanProgressPct(100);
       }
     } finally {
@@ -2462,6 +2630,7 @@ export function ProfileSettingsModal({
       discoveryInFlightRef.current = false;
     }
   }, [
+    _,
     cachedDiscoveredPrinters,
     discoveredPrinters,
     discoveryInFlightRef,
@@ -2471,6 +2640,7 @@ export function ProfileSettingsModal({
     networkDiscoveryEnabled,
     networkIpAddress,
     networkUiAdapter,
+    selectedNetworkModeLabel,
     selectedPrinter,
     selectedPrinterModelHint,
     selectedPrinterNetworkFilterHint,
@@ -2488,7 +2658,7 @@ export function ProfileSettingsModal({
     const debugSentinelHost = '192.168.999.999';
     if (!host) {
       const now = new Date().toISOString();
-      setNetworkConnectionMessage('Enter a printer IP address or host first.');
+      setNetworkConnectionMessage(_(msg`Enter a printer IP address or host first.`));
       updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
         mode: selectedPrinter.networkSupport,
         connected: false,
@@ -2496,7 +2666,7 @@ export function ProfileSettingsModal({
         ipAddress: '',
         port: 80,
         lastCheckedAt: now,
-        statusText: 'Missing printer host/IP.',
+        statusText: _(msg`Missing printer host/IP.`),
       });
       return false;
     }
@@ -2550,7 +2720,7 @@ export function ProfileSettingsModal({
     }
 
     setIsNetworkConnecting(true);
-    setNetworkConnectionMessage(`Connecting to ${selectedNetworkModeLabel} host…`);
+    setNetworkConnectionMessage(formatConnectingToHostMessage(_, selectedNetworkModeLabel));
 
     try {
       const response = await pluginNetworkFetch({
@@ -2629,7 +2799,7 @@ export function ProfileSettingsModal({
           mode: selectedPrinter.networkSupport,
           port: Number.isFinite(Number(payload.port)) ? Number(payload.port) : 80,
           lastCheckedAt: now,
-          statusText: typeof payload.statusText === 'string' ? payload.statusText : 'Connected',
+          statusText: typeof payload.statusText === 'string' ? payload.statusText : _(msg`Connected`),
           displayName: resolvedHostName,
         }, { select: true });
 
@@ -2647,10 +2817,10 @@ export function ProfileSettingsModal({
           ipAddress: resolvedIpAddress,
           port: Number.isFinite(Number(payload.port)) ? Number(payload.port) : 80,
           lastCheckedAt: now,
-          statusText: typeof payload.statusText === 'string' ? payload.statusText : 'Connected',
+          statusText: typeof payload.statusText === 'string' ? payload.statusText : _(msg`Connected`),
         });
 
-        setNetworkConnectionMessage(`Connected to ${resolvedHostName}`);
+        setNetworkConnectionMessage(formatConnectedToHostMessage(_, resolvedHostName));
         setIsAddingNetworkPrinter(false);
         if (options?.closeOnSuccess) {
           setIsNetworkSettingsOpen(false);
@@ -2659,7 +2829,7 @@ export function ProfileSettingsModal({
       } else {
         const statusText = typeof payload?.statusText === 'string'
           ? payload.statusText
-          : `${selectedNetworkModeLabel} host unreachable.`;
+          : formatHostUnreachableMessage(_, selectedNetworkModeLabel);
 
         updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
           mode: selectedPrinter.networkSupport,
@@ -2676,7 +2846,7 @@ export function ProfileSettingsModal({
       }
     } catch (error) {
       const now = new Date().toISOString();
-      const statusText = error instanceof Error ? error.message : 'Connection failed';
+      const statusText = error instanceof Error ? error.message : _(msg`Connection failed`);
 
       updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
         mode: selectedPrinter.networkSupport,
@@ -2694,6 +2864,7 @@ export function ProfileSettingsModal({
       setIsNetworkConnecting(false);
     }
   }, [
+    _,
     discoveredPrinters,
     effectiveNetworkUiAdapter,
     managedNetworkPrinters,
@@ -2710,14 +2881,14 @@ export function ProfileSettingsModal({
     if (!selectedPrinter) return;
     selectPrinterNetworkDevice(selectedPrinter.id, device.id);
     setNetworkIpAddress(device.ipAddress);
-    setNetworkConnectionMessage(`Selected ${device.displayName || device.hostName || device.ipAddress}`);
-  }, [selectedPrinter]);
+    setNetworkConnectionMessage(formatSelectedDeviceMessage(_, device.displayName || device.hostName || device.ipAddress));
+  }, [_, selectedPrinter]);
 
   const handleDisconnectManagedPrinter = React.useCallback((device: PrinterNetworkDevice) => {
     if (!selectedPrinter) return;
     disconnectPrinterNetworkDevice(selectedPrinter.id, device.id);
-    setNetworkConnectionMessage(`Disconnected ${device.displayName || device.hostName || device.ipAddress}`);
-  }, [selectedPrinter]);
+    setNetworkConnectionMessage(formatDisconnectedDeviceMessage(_, device.displayName || device.hostName || device.ipAddress));
+  }, [_, selectedPrinter]);
 
   const handleRemoveManagedPrinter = React.useCallback((device: PrinterNetworkDevice) => {
     if (!selectedPrinter) return;
@@ -2725,8 +2896,8 @@ export function ProfileSettingsModal({
     if (networkIpAddress.trim() === device.ipAddress.trim()) {
       setNetworkIpAddress('');
     }
-    setNetworkConnectionMessage(`Removed ${device.displayName || device.hostName || device.ipAddress} from this profile fleet.`);
-  }, [networkIpAddress, selectedPrinter]);
+    setNetworkConnectionMessage(formatRemovedDeviceFromFleetMessage(_, device.displayName || device.hostName || device.ipAddress));
+  }, [_, networkIpAddress, selectedPrinter]);
 
   const handleOpenNetworkSettings = React.useCallback(() => {
     if (!selectedPrinter) return;
@@ -2753,7 +2924,7 @@ export function ProfileSettingsModal({
     const nextDisplayName = editingFleetUnitNickname.trim()
       || editingFleetUnit.hostName
       || editingFleetUnit.ipAddress
-      || 'Printer';
+      || _(msg`Printer`);
 
     upsertPrinterNetworkDevice(selectedPrinter.id, {
       id: editingFleetUnit.id,
@@ -2763,13 +2934,13 @@ export function ProfileSettingsModal({
     });
 
     setIsEditFleetUnitModalOpen(false);
-  }, [editingFleetUnit, editingFleetUnitImageDataUrl, editingFleetUnitNickname, selectedPrinter]);
+  }, [_, editingFleetUnit, editingFleetUnitImageDataUrl, editingFleetUnitNickname, selectedPrinter]);
 
   const handleResetFleetUnitDraft = React.useCallback(() => {
     if (!editingFleetUnit) return;
-    setEditingFleetUnitNickname(editingFleetUnit.hostName || editingFleetUnit.ipAddress || 'Printer');
+    setEditingFleetUnitNickname(editingFleetUnit.hostName || editingFleetUnit.ipAddress || _(msg`Printer`));
     setEditingFleetUnitImageDataUrl(null);
-  }, [editingFleetUnit]);
+  }, [_, editingFleetUnit]);
 
   const handleFleetUnitImageUploadChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -2886,7 +3057,7 @@ export function ProfileSettingsModal({
         mode: networkContext.mode as PrinterNetworkSupport | undefined,
         hostName: displayName,
         lastCheckedAt: new Date().toISOString(),
-        statusText: 'Connected',
+        statusText: _(msg`Connected`),
         displayName,
       }, { select: true });
       handlePickPrinter(newId);
@@ -2905,7 +3076,7 @@ export function ProfileSettingsModal({
       return next;
     });
     setVariantChooserPreset(null);
-  }, [handlePickPrinter, presetManufacturers]);
+  }, [_, handlePickPrinter, presetManufacturers]);
 
   const requestDeleteSelectedPrinter = React.useCallback(() => {
     if (!selectedPrinter) return;
@@ -2916,7 +3087,7 @@ export function ProfileSettingsModal({
     if (!selectedPrinter) return;
     setMaterialEditorTab('meta');
     setNewMaterialDraft({
-      name: `Material ${printerMaterials.length + 1}`,
+      name: formatDefaultMaterialName(_, printerMaterials.length + 1),
       brand: selectedManufacturerValue ?? 'Default',
       currencyCode: 'USD',
       bottlePrice: 0,
@@ -2940,7 +3111,7 @@ export function ProfileSettingsModal({
       ),
     );
     setIsCreateMaterialOpen(true);
-  }, [printerMaterials.length, replacementMaterialEditorDefaultTab, selectedPrinter, selectedManufacturerValue, selectedResinFamilyValue, selectedResolvedSettingsMode]);
+  }, [_, printerMaterials.length, replacementMaterialEditorDefaultTab, selectedPrinter, selectedManufacturerValue, selectedResinFamilyValue, selectedResolvedSettingsMode]);
 
   const handleApplyMaterialLibraryPreset = React.useCallback((preset: MaterialPreset) => {
     if (!selectedPrinter) return;
@@ -3036,7 +3207,7 @@ export function ProfileSettingsModal({
 
     const newId = addMaterialProfile(selectedPrinter.id, {
       ...newMaterialDraft,
-      name: newMaterialDraft.name.trim() || `Material ${printerMaterials.length + 1}`,
+      name: newMaterialDraft.name.trim() || formatDefaultMaterialName(_, printerMaterials.length + 1),
       brand: newMaterialDraft.brand.trim() || 'Default',
       localSettingsByOutput: newMaterialLocalSettingsByOutput,
     });
@@ -3046,7 +3217,7 @@ export function ProfileSettingsModal({
     setSelectedMaterialId(newId);
     setActiveMaterialProfile(newId);
     setIsCreateMaterialOpen(false);
-  }, [newMaterialDraft, newMaterialLocalSettingsByOutput, printerMaterials.length, selectedPrinter]);
+  }, [_, newMaterialDraft, newMaterialLocalSettingsByOutput, printerMaterials.length, selectedPrinter]);
 
   const requestDeleteSelectedMaterial = React.useCallback(() => {
     if (!selectedMaterial) return;
@@ -3298,10 +3469,10 @@ export function ProfileSettingsModal({
             : undefined,
           name: typeof source.name === 'string' && source.name.trim().length > 0
             ? source.name.trim()
-            : `Material ${printerMaterials.length + 1}`,
+            : formatDefaultMaterialName(_, printerMaterials.length + 1),
           brand: typeof source.brand === 'string' && source.brand.trim().length > 0
             ? source.brand.trim()
-            : 'Default',
+            : 'Default', // i18n-ignore
           currencyCode: typeof source.currencyCode === 'string' && source.currencyCode.trim().length > 0
             ? source.currencyCode.trim().toUpperCase()
             : 'USD',
@@ -3331,7 +3502,7 @@ export function ProfileSettingsModal({
 
         const importedBrand = typeof source.brand === 'string' && source.brand.trim().length > 0
           ? source.brand.trim()
-          : 'Default';
+          : 'Default'; // i18n-ignore
         const importedFamily = (source.resinFamily ?? 'standard') as MaterialProfile['resinFamily'];
         setSelectedManufacturer(importedBrand);
         setSelectedResinFamily(importedFamily);
@@ -3343,7 +3514,7 @@ export function ProfileSettingsModal({
         console.warn('[ProfileSettingsModal] Failed to import material bundle', error);
       }
     })();
-  }, [printerMaterials.length, selectedPrinter, selectedResolvedSettingsMode]);
+  }, [_, printerMaterials.length, selectedPrinter, selectedResolvedSettingsMode]);
 
   const renderPresetLibraryCard = React.useCallback((preset: (typeof availablePrinterPresets)[number]) => {
     const variantIds = preset.modelVariants ?? [];
@@ -3363,7 +3534,7 @@ export function ProfileSettingsModal({
       ? Math.round(Number(preset.bitDepth?.bits))
       : null;
     const bitDepthLabel = bitDepthBits != null && bitDepthBits !== 8
-      ? `${bitDepthBits} Bit`
+      ? formatBitDepthLabel(_, bitDepthBits)
       : null;
 
     const handleToggle = () => {
@@ -3454,7 +3625,7 @@ export function ProfileSettingsModal({
                     ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
                     : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
               }}
-              title={preset.bitDepth?.description || `${bitDepthLabel} display`}
+              title={preset.bitDepth?.description || formatBitDepthDisplayTitle(_, bitDepthLabel)}
             >
               {bitDepthLabel}
             </span>
@@ -3478,14 +3649,14 @@ export function ProfileSettingsModal({
                 }}
                 aria-hidden={!isAlreadyAdded}
               >
-                Added
+                <Trans>Added</Trans>
               </span>
             </span>
           </div>
         </div>
       </button>
     );
-  }, [addedOfficialPresetIds, availablePrinterPresets, selectedLibraryPresetIds]);
+  }, [_, addedOfficialPresetIds, availablePrinterPresets, selectedLibraryPresetIds]);
 
   if (!isOpen) return null;
   const hasPrinters = profileState.printerProfiles.length > 0;
@@ -3518,14 +3689,14 @@ export function ProfileSettingsModal({
               <Box className="w-4 h-4" style={{ color: 'var(--accent)' }} />
             </span>
             <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Printer & Material Profiles
+              <Trans>Printer &amp; Material Profiles</Trans>
             </h2>
           </div>
           <IconButton
             variant="surface"
             size="sm"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={_(msg`Close`)}
             type="button"
           >
             <X className="w-4 h-4" />
@@ -3545,7 +3716,7 @@ export function ProfileSettingsModal({
             >
               <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" style={{ color: '#d97706' }} />
               <span>
-                <strong style={{ color: 'var(--text-strong)' }}>Safety warning:</strong> Custom, non-official profiles may increase the risk of print failure and can potentially damage the machine or cause personal injury. Verify all settings carefully before printing.
+                <Trans><strong style={{ color: 'var(--text-strong)' }}>Safety warning:</strong> Custom, non-official profiles may increase the risk of print failure and can potentially damage the machine or cause personal injury. Verify all settings carefully before printing.</Trans>
               </span>
             </div>
           )}
@@ -3569,10 +3740,10 @@ export function ProfileSettingsModal({
                 </div>
 
                 <h4 className="text-2xl font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Welcome to Printer Profiles
+                  <Trans>Welcome to Printer Profiles</Trans>
                 </h4>
                 <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                  Add your first printer from the library to unlock a tailored materials list and printer-specific defaults.
+                  <Trans>Add your first printer from the library to unlock a tailored materials list and printer-specific defaults.</Trans>
                 </p>
 
                 <Button
@@ -3599,8 +3770,8 @@ export function ProfileSettingsModal({
                   </h3>
                   <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
                     {shouldRenderFleetRail
-                      ? `Showing connected devices for ${selectedPrinter?.name ?? 'selected profile'}.`
-                      : 'Each printer can store its own image and has a dedicated set of compatible material profiles.'}
+                      ? formatShowingConnectedDevices(_, selectedPrinter?.name ?? _(msg`selected profile`))
+                      : _(msg`Each printer can store its own image and has a dedicated set of compatible material profiles.`)}
                   </p>
                 </div>
 
@@ -3616,8 +3787,8 @@ export function ProfileSettingsModal({
                         borderColor: 'var(--border-subtle)',
                         background: 'var(--surface-1)',
                       }}
-                      aria-label="Move selected printer left"
-                      title="Move selected printer left"
+                      aria-label={_(msg`Move selected printer left`)}
+                      title={_(msg`Move selected printer left`)}
                     >
                       <ChevronLeft className="w-3.5 h-3.5" />
                     </Button>
@@ -3631,8 +3802,8 @@ export function ProfileSettingsModal({
                         borderColor: 'var(--border-subtle)',
                         background: 'var(--surface-1)',
                       }}
-                      aria-label="Move selected printer right"
-                      title="Move selected printer right"
+                      aria-label={_(msg`Move selected printer right`)}
+                      title={_(msg`Move selected printer right`)}
                     >
                       <ChevronRight className="w-3.5 h-3.5" />
                     </Button>
@@ -3670,7 +3841,7 @@ export function ProfileSettingsModal({
                     const reachable = printerReachabilityByDeviceId[device.id] !== false;
                     const online = device.connected === true && reachable;
                     const cardTitle = device.displayName || device.hostName || device.ipAddress;
-                    const statusLabel = online ? 'Online' : device.connected ? 'Limited' : 'Offline';
+                    const statusLabel = online ? _(msg`Online`) : device.connected ? _(msg`Limited`) : _(msg`Offline`);
 
                     return renderPrinterRailCard({
                       key: device.id,
@@ -3688,7 +3859,7 @@ export function ProfileSettingsModal({
                       imageFallback: (
                         <>
                           {online ? <Wifi className="w-5 h-5 mx-auto mb-1" /> : <WifiOff className="w-5 h-5 mx-auto mb-1" />}
-                          {online ? 'Online' : 'Offline'}
+                          {online ? _(msg`Online`) : _(msg`Offline`)}
                         </>
                       ),
                       imageOverlay: (
@@ -3759,14 +3930,14 @@ export function ProfileSettingsModal({
                     : undefined;
                   const hasOfficialUpdate = officialPrinterUpdateIds.has(printer.id);
                   const cardBadgeText = printer.isCustom
-                    ? 'CUSTOM'
+                    ? _(msg`CUSTOM`)
                     : platformBadge?.text;
-                  const resolvedCardBadgeText = hasOfficialUpdate ? 'UPDATE' : cardBadgeText;
+                  const resolvedCardBadgeText = hasOfficialUpdate ? _(msg`UPDATE`) : cardBadgeText;
                   const bitDepthBits = Number.isFinite(Number(printer.bitDepth?.bits))
                     ? Math.round(Number(printer.bitDepth?.bits))
                     : null;
                   const bitDepthLabel = bitDepthBits != null && bitDepthBits !== 8
-                    ? `${bitDepthBits} Bit`
+                    ? formatBitDepthLabel(_, bitDepthBits)
                     : null;
 
                   return renderPrinterRailCard({
@@ -3810,18 +3981,18 @@ export function ProfileSettingsModal({
                             ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
                             : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
                         }}
-                        title={printer.bitDepth?.description || `${bitDepthLabel} display`}
+                        title={printer.bitDepth?.description || formatBitDepthDisplayTitle(_, bitDepthLabel)}
                       >
                         <span className="relative top-[0.5px]">{bitDepthLabel}</span>
                       </span>
                     ) : null,
-                    imageFallback: isGenericPrinter ? <><Printer className="w-5 h-5 mx-auto mb-1" />Generic</> : <><ImagePlus className="w-5 h-5 mx-auto mb-1" />No image</>,
+                    imageFallback: isGenericPrinter ? <><Printer className="w-5 h-5 mx-auto mb-1" /><Trans>Generic</Trans></> : <><ImagePlus className="w-5 h-5 mx-auto mb-1" /><Trans>No image</Trans></>,
                     imageOverlay: (isNetworkConnected || isNetworkOffline) ? (
                       <span
                         className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border"
                         title={isNetworkConnected
-                          ? `Connected to ${printer.networkConnection?.hostName || printer.networkConnection?.ipAddress || 'network printer'}`
-                          : 'Printer not connected'}
+                          ? formatConnectedToHostMessage(_, printer.networkConnection?.hostName || printer.networkConnection?.ipAddress || _(msg`network printer`))
+                          : _(msg`Printer not connected`)}
                         style={isNetworkConnected
                           ? {
                               borderColor: 'color-mix(in srgb, #22c55e, white 12%)',
@@ -3862,7 +4033,7 @@ export function ProfileSettingsModal({
                       </span>
                     ) : null,
                     title: printer.name,
-                    subtitle: printer.manufacturer || 'Generic',
+                    subtitle: printer.manufacturer || _(msg`Generic`),
                     footer: supportsNetworkFleet ? (
                       <Button
                         type="button"
@@ -3877,7 +4048,7 @@ export function ProfileSettingsModal({
                           setIsAddingNetworkPrinter(true);
                           setIsNetworkSettingsOpen(true);
                         }}
-                        aria-label={fleetCount > 0 ? `Open fleet view (${fleetCount})` : 'Set up network'}
+                        aria-label={fleetCount > 0 ? formatOpenFleetViewAria(_, fleetCount) : _(msg`Set up network`)}
                         variant="secondary" size="auto" className="!h-7 !w-7 !px-0 !py-0 text-sm inline-flex items-center justify-center rounded-md shrink-0"
                         style={fleetCount > 0
                           ? {
@@ -3886,7 +4057,7 @@ export function ProfileSettingsModal({
                               background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
                             }
                           : accentSecondaryActionStyle93}
-                        title={fleetCount > 0 ? `Switch to fleet view (${fleetCount})` : 'Set up network'}
+                        title={fleetCount > 0 ? formatSwitchToFleetViewTitle(_, fleetCount) : _(msg`Set up network`)}
                       >
                         {fleetCount > 0 ? (
                           <span className="grid h-full w-full place-items-center text-[12px] font-semibold leading-none tabular-nums">{fleetCount}</span>
@@ -3916,7 +4087,7 @@ export function ProfileSettingsModal({
                     color: 'var(--text-muted)',
                   }}
                 >
-                  <div className="text-xs">No fleet devices saved for this printer profile yet.</div>
+                  <div className="text-xs"><Trans>No fleet devices saved for this printer profile yet.</Trans></div>
                   <Button
                     type="button"
                     onClick={() => {
@@ -3927,7 +4098,7 @@ export function ProfileSettingsModal({
                     style={accentSecondaryActionStyle93}
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    Add First Device
+                    <Trans>Add First Device</Trans>
                   </Button>
                 </div>
               )}
@@ -3943,7 +4114,7 @@ export function ProfileSettingsModal({
                         variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1 rounded-md"
                         style={accentSecondaryActionStyle93}
                       >
-                        Return to Printers
+                        <Trans>Return to Printers</Trans>
                       </Button>
                       <Button
                         type="button"
@@ -3953,7 +4124,7 @@ export function ProfileSettingsModal({
                         style={{ color: 'var(--text-strong)' }}
                       >
                         <Search className="w-3.5 h-3.5" />
-                        Manage Fleet
+                        <Trans>Manage Fleet</Trans>
                       </Button>
                       <Button
                         type="button"
@@ -3963,7 +4134,7 @@ export function ProfileSettingsModal({
                         style={{ color: 'var(--text-strong)' }}
                       >
                         <Edit3 className="w-3.5 h-3.5" />
-                        Edit Unit
+                        <Trans>Edit Unit</Trans>
                       </Button>
                     </>
                   ) : (
@@ -3994,10 +4165,10 @@ export function ProfileSettingsModal({
                           onClick={() => setShowPrinterUpdateDiffModal(true)}
                           variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1 rounded-md"
                           style={accentSecondaryActionStyle92}
-                          title={`Update v${selectedPrinterUpdate.currentVersion} to v${selectedPrinterUpdate.latestVersion}`}
+                          title={formatVersionUpdateTitle(_, selectedPrinterUpdate.currentVersion, selectedPrinterUpdate.latestVersion)}
                         >
                           <Download className="w-3.5 h-3.5" />
-                          Update Printer
+                          <Trans>Update Printer</Trans>
                         </Button>
                       )}
                       <Button
@@ -4011,7 +4182,7 @@ export function ProfileSettingsModal({
                         style={{ color: 'var(--text-strong)' }}
                       >
                         <Edit3 className="w-3.5 h-3.5" />
-                        Edit
+                        <Trans>Edit</Trans>
                       </Button>
                       <Button
                         type="button"
@@ -4021,7 +4192,7 @@ export function ProfileSettingsModal({
                         style={{ color: 'var(--text-strong)' }}
                       >
                         <Upload className="w-3.5 h-3.5" />
-                        Import
+                        <Trans>Import</Trans>
                       </Button>
                       <Button
                         type="button"
@@ -4031,7 +4202,7 @@ export function ProfileSettingsModal({
                         style={{ color: 'var(--text-strong)' }}
                       >
                         <Download className="w-3.5 h-3.5" />
-                        Export
+                        <Trans>Export</Trans>
                       </Button>
                       <Button
                         type="button"
@@ -4041,7 +4212,7 @@ export function ProfileSettingsModal({
                         style={{ color: !hasPrinters ? 'var(--text-muted)' : 'var(--danger)' }}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
-                        Remove
+                        <Trans>Remove</Trans>
                       </Button>
                     </>
                   )}
@@ -4065,20 +4236,20 @@ export function ProfileSettingsModal({
                 <div>
                   <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-strong)' }}>
                     <FlaskConical className="w-4 h-4" />
-                    Material Settings
+                    <Trans>Material Settings</Trans>
                   </h3>
                   <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
                     {shouldUseRemoteOnDeviceMaterials
-                      ? <>Connected {selectedNetworkModeLabel} profiles are loaded directly from <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span>. Selection is read-only for now.</>
+                      ? <Trans>Connected {selectedNetworkModeLabel} profiles are loaded directly from <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span>. Selection is read-only for now.</Trans>
                       : shouldShowRemoteMaterialSelectedPrinterOfflineState
-                        ? <>Printer not connected. Reconnect the selected machine in Fleet Management, then refresh on-device materials.</>
+                        ? <Trans>Printer not connected. Reconnect the selected machine in Fleet Management, then refresh on-device materials.</Trans>
                         : shouldShowRemoteMaterialConnectInfo
-                          ? <>Connect to a machine to view on-device material profiles.</>
-                          : <>Profiles below are bound to <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span> and follow the selected printer hardware.</>}
+                          ? <Trans>Connect to a machine to view on-device material profiles.</Trans>
+                          : <Trans>Profiles below are bound to <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span> and follow the selected printer hardware.</Trans>}
                   </p>
                   {selectedMaterialUpdate && (
                     <p className="text-xs mt-1" style={{ color: 'var(--accent-secondary)' }}>
-                      Update available for selected material profile (v{selectedMaterialUpdate.currentVersion} → v{selectedMaterialUpdate.latestVersion}).
+                      <Trans>Update available for selected material profile (v{selectedMaterialUpdate.currentVersion} → v{selectedMaterialUpdate.latestVersion}).</Trans>
                     </p>
                   )}
                 </div>
@@ -4090,12 +4261,12 @@ export function ProfileSettingsModal({
                           <Button
                             type="button"
                             disabled
-                            aria-label="Edit material (work in progress)"
+                            aria-label={_(msg`Edit material (work in progress)`)}
                             variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1 rounded-md opacity-35 cursor-not-allowed"
                             style={{ color: 'var(--text-strong)', pointerEvents: 'none' }}
                           >
                             <Edit3 className="w-3.5 h-3.5" />
-                            Edit
+                            <Trans>Edit</Trans>
                           </Button>
                           <div
                             className="pointer-events-none absolute right-0 top-full mt-2 z-[70] w-[220px] rounded-md border px-2.5 py-2 text-[11px] leading-tight opacity-0 -translate-y-1 transition-all duration-150 group-hover:opacity-100 group-hover:translate-y-0"
@@ -4108,7 +4279,7 @@ export function ProfileSettingsModal({
                             role="tooltip"
                             aria-hidden="true"
                           >
-                            <div className="font-semibold mb-0.5" style={{ color: 'var(--text-strong)' }}>Work in progress</div>
+                            <div className="font-semibold mb-0.5" style={{ color: 'var(--text-strong)' }}><Trans>Work in progress</Trans></div>
                             <div>{effectiveNetworkUiAdapter.remoteMaterialEditingWipNotice}</div>
                           </div>
                         </div>
@@ -4121,7 +4292,7 @@ export function ProfileSettingsModal({
                           style={{ color: 'var(--text-strong)' }}
                         >
                           <Edit3 className="w-3.5 h-3.5" />
-                          Edit
+                          <Trans>Edit</Trans>
                         </Button>
                       )}
                       <Button
@@ -4130,8 +4301,8 @@ export function ProfileSettingsModal({
                         disabled={isLoadingRemoteMaterials || !selectedRemoteMaterialHost}
                         variant="secondary" size="auto" className="!h-8 !w-8 !p-0 inline-flex items-center justify-center rounded-md disabled:opacity-45"
                         style={{ color: 'var(--text-strong)' }}
-                        title="Refresh remote materials"
-                        aria-label="Refresh remote materials"
+                        title={_(msg`Refresh remote materials`)}
+                        aria-label={_(msg`Refresh remote materials`)}
                       >
                         {isLoadingRemoteMaterials ? <Spinner size="sm" /> : <RefreshCw className="w-3.5 h-3.5" />}
                       </Button>
@@ -4150,7 +4321,7 @@ export function ProfileSettingsModal({
                         }}
                       >
                         <FlaskConical className="w-3.5 h-3.5" />
-                        Library
+                        <Trans>Library</Trans>
                       </Button>
                       <Button
                         type="button"
@@ -4159,7 +4330,7 @@ export function ProfileSettingsModal({
                         style={accentSecondaryActionStyle93}
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        New
+                        <Trans>New</Trans>
                       </Button>
                     </>
                   )}
@@ -4174,11 +4345,11 @@ export function ProfileSettingsModal({
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
                       {isLoadingRemoteMaterials && remoteMaterials.length === 0 ? (
                         <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)' }}>
-                          Loading materials from printer…
+                          <Trans>Loading materials from printer…</Trans>
                         </div>
                       ) : remoteMaterials.length === 0 ? (
                         <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)' }}>
-                          {remoteMaterialsError || `No on-device materials were returned by this ${selectedNetworkModeLabel} host.`}
+                          {remoteMaterialsError || formatNoOnDeviceMaterialsReturned(_, selectedNetworkModeLabel)}
                         </div>
                       ) : (
                         remoteMaterials.map((material) => {
@@ -4239,10 +4410,10 @@ export function ProfileSettingsModal({
                       <WifiOff className="w-5 h-5" style={{ color: 'var(--danger)' }} />
                     </div>
                     <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      Printer Not Connected
+                      <Trans>Printer Not Connected</Trans>
                     </h4>
                     <p className="mt-1 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                      A network printer is configured, but it is not responding right now. Reconnect it in Fleet Management, then refresh to load on-device materials.
+                      <Trans>A network printer is configured, but it is not responding right now. Reconnect it in Fleet Management, then refresh to load on-device materials.</Trans>
                     </p>
                     {selectedPrinterSupportsNetworkSettings && (
                       <Button
@@ -4252,7 +4423,7 @@ export function ProfileSettingsModal({
                         style={accentSecondaryActionStyle93}
                       >
                         <Search className="w-3.5 h-3.5" />
-                        Open Fleet Management
+                        <Trans>Open Fleet Management</Trans>
                       </Button>
                     )}
                     {remoteMaterialsError && (
@@ -4269,10 +4440,10 @@ export function ProfileSettingsModal({
                       <WifiOff className="w-5 h-5" style={{ color: 'var(--danger)' }} />
                     </div>
                     <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      Connect to a Machine
+                      <Trans>Connect to a Machine</Trans>
                     </h4>
                     <p className="mt-1 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                      Connect to a machine to view on-device material profiles.
+                      <Trans>Connect to a machine to view on-device material profiles.</Trans>
                     </p>
                     {selectedPrinterSupportsNetworkSettings && (
                       <Button
@@ -4282,7 +4453,7 @@ export function ProfileSettingsModal({
                         style={accentSecondaryActionStyle93}
                       >
                         <Search className="w-3.5 h-3.5" />
-                        Connect Now
+                        <Trans>Connect Now</Trans>
                       </Button>
                     )}
                   </div>
@@ -4292,7 +4463,7 @@ export function ProfileSettingsModal({
               <div className="rounded-md border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                 <div className="grid grid-cols-[1fr_1fr_1.25fr] flex-1 min-h-0 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                   <div className="border-r min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="px-2.5 py-2 text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Manufacturer</div>
+                    <div className="px-2.5 py-2 text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Manufacturer</Trans></div>
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
                       {availableManufacturers.map((manufacturer) => {
                         const active = selectedManufacturerValue === manufacturer;
@@ -4326,7 +4497,7 @@ export function ProfileSettingsModal({
                   </div>
 
                   <div className="border-r min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="px-2.5 py-2 text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Material Type</div>
+                    <div className="px-2.5 py-2 text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Material Type</Trans></div>
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
                       {availableResinTypes.map((resinType) => {
                         const active = selectedResinFamilyValue === resinType;
@@ -4360,7 +4531,7 @@ export function ProfileSettingsModal({
                   </div>
 
                   <div className="min-h-0 flex flex-col">
-                    <div className="px-2.5 py-2 text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Profile</div>
+                    <div className="px-2.5 py-2 text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Profile</Trans></div>
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
                       {filteredMaterialProfiles.map((material) => {
                         const active = selectedMaterial?.id === material.id;
@@ -4424,10 +4595,10 @@ export function ProfileSettingsModal({
                         borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
                         background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
                       }}
-                      title={`Update v${selectedMaterialUpdate.currentVersion} to v${selectedMaterialUpdate.latestVersion}`}
+                      title={formatVersionUpdateTitle(_, selectedMaterialUpdate.currentVersion, selectedMaterialUpdate.latestVersion)}
                     >
                       <Download className="w-3.5 h-3.5" />
-                      Update Material
+                      <Trans>Update Material</Trans>
                     </Button>
                   )}
                   <Button
@@ -4438,7 +4609,7 @@ export function ProfileSettingsModal({
                     style={{ color: 'var(--text-strong)' }}
                   >
                     <Edit3 className="w-3.5 h-3.5" />
-                    Edit
+                    <Trans>Edit</Trans>
                   </Button>
                   <Button
                     type="button"
@@ -4446,10 +4617,10 @@ export function ProfileSettingsModal({
                     disabled={!selectedMaterial}
                     variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
                     style={{ color: 'var(--text-strong)' }}
-                    title="Duplicate this material profile as a new editable copy"
+                    title={_(msg`Duplicate this material profile as a new editable copy`)}
                   >
                     <Copy className="w-3.5 h-3.5" />
-                    Duplicate
+                    <Trans>Duplicate</Trans>
                   </Button>
                   <Button
                     type="button"
@@ -4459,7 +4630,7 @@ export function ProfileSettingsModal({
                     style={{ color: 'var(--text-strong)' }}
                   >
                     <Upload className="w-3.5 h-3.5" />
-                    Import
+                    <Trans>Import</Trans>
                   </Button>
                   <Button
                     type="button"
@@ -4469,7 +4640,7 @@ export function ProfileSettingsModal({
                     style={{ color: 'var(--text-strong)' }}
                   >
                     <Download className="w-3.5 h-3.5" />
-                    Export
+                    <Trans>Export</Trans>
                   </Button>
                   {selectedMaterial && !isSelectedMaterialOfficial && (
                     <Button
@@ -4477,11 +4648,11 @@ export function ProfileSettingsModal({
                       onClick={handleToggleMaterialLock}
                       variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1 rounded-md"
                       style={{ color: 'var(--text-strong)' }}
-                      title={selectedMaterial.locked === true ? 'Unlock this material profile' : 'Lock this material profile to prevent accidental edits'}
+                      title={selectedMaterial.locked === true ? _(msg`Unlock this material profile`) : _(msg`Lock this material profile to prevent accidental edits`)}
                     >
                       {selectedMaterial.locked === true
-                        ? <><Unlock className="w-3.5 h-3.5" /> Unlock</>
-                        : <><Lock className="w-3.5 h-3.5" /> Lock</>}
+                        ? <><Unlock className="w-3.5 h-3.5" /> <Trans>Unlock</Trans></>
+                        : <><Lock className="w-3.5 h-3.5" /> <Trans>Lock</Trans></>}
                     </Button>
                   )}
                   <Button
@@ -4492,7 +4663,7 @@ export function ProfileSettingsModal({
                     style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : 'var(--danger)' }}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    Delete
+                    <Trans>Delete</Trans>
                   </Button>
                 </div>
               </div>
@@ -4528,9 +4699,9 @@ export function ProfileSettingsModal({
             <div className="w-full max-w-[760px] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Edit Unit</h3>
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Edit Unit</Trans></h3>
                   <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Customize nickname and card thumbnail for this fleet unit in DragonFruit.
+                    <Trans>Customize nickname and card thumbnail for this fleet unit in DragonFruit.</Trans>
                   </p>
                 </div>
                 <IconButton
@@ -4538,7 +4709,7 @@ export function ProfileSettingsModal({
                   size="sm"
                   type="button"
                   onClick={() => setIsEditFleetUnitModalOpen(false)}
-                  aria-label="Close Edit Unit"
+                  aria-label={_(msg`Close Edit Unit`)}
                 >
                   <X className="w-4 h-4" />
                 </IconButton>
@@ -4547,15 +4718,15 @@ export function ProfileSettingsModal({
               <div className="p-3">
                 <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_340px] gap-3">
                   <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
-                    <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Unit Identity</div>
+                    <div className="ui-meta font-semibold uppercase tracking-wide mb-2"><Trans>Unit Identity</Trans></div>
                     <div className="grid grid-cols-1 gap-2">
                       <LabeledInput
-                        label="Nickname"
+                        label={_(msg`Nickname`)}
                         value={editingFleetUnitNickname}
                         onChange={setEditingFleetUnitNickname}
                       />
                       <LabeledInput
-                        label="IP Address"
+                        label={_(msg`IP Address`)}
                         value={editingFleetUnit.ipAddress}
                         disabled
                         onChange={() => {}}
@@ -4563,18 +4734,18 @@ export function ProfileSettingsModal({
                     </div>
 
                     <div className="mt-2 rounded-md border px-2 py-1.5 text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--surface-2), transparent 6%)' }}>
-                      Reset will clear custom nickname + thumbnail and fall back to the device hostname/IP.
+                      <Trans>Reset will clear custom nickname + thumbnail and fall back to the device hostname/IP.</Trans>
                     </div>
                   </div>
 
                   <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
-                    <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Card Thumbnail</div>
+                    <div className="ui-meta font-semibold uppercase tracking-wide mb-2"><Trans>Card Thumbnail</Trans></div>
                     <div className="h-[220px] w-full rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: printerImageWellBackground }}>
                       {editingFleetUnitImageDataUrl ? (
-                        <AutoTrimmedImage src={editingFleetUnitImageDataUrl} alt={editingFleetUnitNickname || editingFleetUnit.displayName || 'Fleet unit'} className="h-full w-full object-cover" />
+                        <AutoTrimmedImage src={editingFleetUnitImageDataUrl} alt={editingFleetUnitNickname || editingFleetUnit.displayName || _(msg`Fleet unit`)} className="h-full w-full object-cover" />
                       ) : (
                         <div className="text-xs text-center px-3" style={{ color: 'var(--text-muted)' }}>
-                          No custom image
+                          <Trans>No custom image</Trans>
                         </div>
                       )}
                     </div>
@@ -4586,7 +4757,7 @@ export function ProfileSettingsModal({
                         style={{ color: 'var(--text-strong)' }}
                       >
                         <Upload className="w-3.5 h-3.5" />
-                        Upload Image
+                        <Trans>Upload Image</Trans>
                       </Button>
                       <Button
                         type="button"
@@ -4596,7 +4767,7 @@ export function ProfileSettingsModal({
                         disabled={!editingFleetUnitImageDataUrl}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
-                        Clear
+                        <Trans>Clear</Trans>
                       </Button>
                     </div>
                   </div>
@@ -4611,7 +4782,7 @@ export function ProfileSettingsModal({
                   style={{ color: 'var(--danger)' }}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  Reset Unit
+                  <Trans>Reset Unit</Trans>
                 </Button>
                 <div className="flex items-center gap-2">
                 <Button
@@ -4619,7 +4790,7 @@ export function ProfileSettingsModal({
                   onClick={() => setIsEditFleetUnitModalOpen(false)}
                   variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-xs rounded-md"
                 >
-                  Cancel
+                  <Trans>Cancel</Trans>
                 </Button>
                 <Button
                   type="button"
@@ -4632,7 +4803,7 @@ export function ProfileSettingsModal({
                   }}
                 >
                   <Check className="w-3.5 h-3.5" />
-                  Save Unit
+                  <Trans>Save Unit</Trans>
                 </Button>
                 </div>
               </div>
@@ -4665,8 +4836,8 @@ export function ProfileSettingsModal({
                     <Printer className="w-4 h-4" style={{ color: 'var(--accent-secondary)' }} />
                   </span>
                   <div>
-                    <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printer Library</h3>
-                    <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>Choose an official printer preset to add.</p>
+                    <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Printer Library</Trans></h3>
+                    <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}><Trans>Choose an official printer preset to add.</Trans></p>
                   </div>
                 </div>
                 <IconButton
@@ -4674,7 +4845,7 @@ export function ProfileSettingsModal({
                   size="sm"
                   type="button"
                   onClick={() => setShowPresetPicker(false)}
-                  aria-label="Close printer library"
+                  aria-label={_(msg`Close printer library`)}
                 >
                   <X className="w-4 h-4" />
                 </IconButton>
@@ -4688,7 +4859,7 @@ export function ProfileSettingsModal({
                       <input
                         value={presetSearch}
                         onChange={(event) => setPresetSearch(event.target.value)}
-                        placeholder="Search printers"
+                        placeholder={_(msg`Search printers`)}
                         className="ui-input w-full h-8 text-xs"
                         style={{ paddingLeft: '2.5rem', paddingRight: '0.625rem' }}
                       />
@@ -4765,8 +4936,8 @@ export function ProfileSettingsModal({
               <div className="flex items-center justify-between gap-3 px-3 py-3 border-t shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                 <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
                   {selectedLibraryPresetIds.size > 0
-                    ? `${selectedLibraryPresetIds.size} printer${selectedLibraryPresetIds.size !== 1 ? 's' : ''} selected`
-                    : 'Select printers to add'}
+                    ? <Plural value={selectedLibraryPresetIds.size} one="# printer selected" other="# printers selected" />
+                    : <Trans>Select printers to add</Trans>}
                 </span>
                 <Button
                   type="button"
@@ -4804,8 +4975,8 @@ export function ProfileSettingsModal({
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                     {usePluginLocalSettingsAsReplacement && replacementMaterialModalLabel
-                      ? `Edit ${replacementMaterialModalLabel} Material Profile`
-                      : 'Material Profile Settings'}
+                      ? formatEditOutputMaterialProfileTitle(_, replacementMaterialModalLabel)
+                      : _(msg`Material Profile Settings`)}
                   </h3>
                   <p className="ui-meta">{selectedMaterial.name} • {selectedMaterial.brand}</p>
                 </div>
@@ -4814,7 +4985,7 @@ export function ProfileSettingsModal({
                   size="sm"
                   type="button"
                   onClick={() => setIsMaterialEditorOpen(false)}
-                  aria-label="Close material editor"
+                  aria-label={_(msg`Close material editor`)}
                 >
                   <X className="w-4 h-4" />
                 </IconButton>
@@ -4870,7 +5041,7 @@ export function ProfileSettingsModal({
                   style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : 'var(--danger)' }}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  Delete Material
+                  <Trans>Delete Material</Trans>
                 </Button>
                 <div className="flex items-center gap-2">
                   <Button
@@ -4878,7 +5049,7 @@ export function ProfileSettingsModal({
                     onClick={() => setIsMaterialEditorOpen(false)}
                     variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-xs rounded-full"
                   >
-                    Cancel
+                    <Trans>Cancel</Trans>
                   </Button>
                   <Button
                     type="button"
@@ -4887,7 +5058,7 @@ export function ProfileSettingsModal({
                     style={accentSecondaryActionStyle92}
                   >
                     <Check className="w-3.5 h-3.5" />
-                    Save Material
+                    <Trans>Save Material</Trans>
                   </Button>
                 </div>
               </div>
@@ -4903,16 +5074,16 @@ export function ProfileSettingsModal({
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Printer Profile Settings
+                    <Trans>Printer Profile Settings</Trans>
                   </h3>
-                  <p className="ui-meta">{selectedPrinter.name} • {selectedPrinter.manufacturer || 'Generic'}</p>
+                  <p className="ui-meta">{selectedPrinter.name} • {selectedPrinter.manufacturer || _(msg`Generic`)}</p>
                 </div>
                 <IconButton
                   variant="surface"
                   size="sm"
                   type="button"
                   onClick={() => setIsEditingPrinter(false)}
-                  aria-label="Close printer editor"
+                  aria-label={_(msg`Close printer editor`)}
                 >
                   <X className="w-4 h-4" />
                 </IconButton>
@@ -4924,10 +5095,10 @@ export function ProfileSettingsModal({
                     <div className="flex-1 min-w-[240px]">
                       <div className="text-sm font-semibold inline-flex items-center gap-1.5" style={{ color: 'var(--text-strong)' }}>
                         <AlertTriangle className="w-4 h-4 shrink-0" style={{ color: '#d97706' }} />
-                        Official Profile — Edits Limited
+                        <Trans>Official Profile — Edits Limited</Trans>
                       </div>
                       <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                        Only some fields are editable here; everything else unlocks with a custom copy. Custom copies may increase the risk of print failure or injury.
+                        <Trans>Only some fields are editable here; everything else unlocks with a custom copy. Custom copies may increase the risk of print failure or injury.</Trans>
                       </p>
                     </div>
                     <Button
@@ -4939,31 +5110,31 @@ export function ProfileSettingsModal({
                       style={accentSecondaryActionStyle92}
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      Create Custom Copy
+                      <Trans>Create Custom Copy</Trans>
                     </Button>
                   </div>
                 )}
 
                 <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Identity</div>
+                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2"><Trans>Identity</Trans></div>
                   <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_240px] gap-3 md:items-stretch">
                     <div className="space-y-3">
                       <LabeledInput
-                        label="Printer Name"
+                        label={_(msg`Printer Name`)}
                         value={selectedPrinter.name}
                         disabled={isSelectedPrinterOfficial}
                         onChange={(value) => updatePrinterProfile(selectedPrinter.id, { name: value })}
                       />
 
                       <LabeledInput
-                        label="Manufacturer"
+                        label={_(msg`Manufacturer`)}
                         value={selectedPrinter.manufacturer ?? ''}
                         disabled={isSelectedPrinterOfficial}
                         onChange={(value) => updatePrinterProfile(selectedPrinter.id, { manufacturer: value })}
                       />
 
                       <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
-                        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Profile Image</div>
+                        <div className="ui-meta font-semibold uppercase tracking-wide mb-2"><Trans>Profile Image</Trans></div>
                         <div className="flex items-center gap-2 flex-wrap">
                           <Button
                             type="button"
@@ -4973,7 +5144,7 @@ export function ProfileSettingsModal({
                             style={{ color: isSelectedPrinterOfficial ? 'var(--text-muted)' : 'var(--text-strong)' }}
                           >
                             <Upload className="w-3.5 h-3.5" />
-                            Upload Image
+                            <Trans>Upload Image</Trans>
                           </Button>
                           <Button
                             type="button"
@@ -4986,7 +5157,7 @@ export function ProfileSettingsModal({
                             style={{ color: selectedPrinter.imageDataUrl ? 'var(--danger)' : 'var(--text-muted)' }}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
-                            Clear Image
+                            <Trans>Clear Image</Trans>
                           </Button>
                         </div>
                       </div>
@@ -4998,7 +5169,7 @@ export function ProfileSettingsModal({
                       ) : (
                         <div className="text-xs text-center px-3" style={{ color: 'var(--text-muted)' }}>
                           <Printer className="w-5 h-5 mx-auto mb-1" />
-                          No preview image
+                          <Trans>No preview image</Trans>
                         </div>
                       )}
                     </div>
@@ -5006,7 +5177,7 @@ export function ProfileSettingsModal({
                 </div>
 
                 <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Build Volume</div>
+                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2"><Trans>Build Volume</Trans></div>
                   <div
                     className="mb-3 rounded-md border p-2.5 flex flex-wrap items-center justify-between gap-2"
                     style={{
@@ -5016,10 +5187,10 @@ export function ProfileSettingsModal({
                   >
                     <div>
                       <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                        Auto-Calculate Width/Depth
+                        <Trans>Auto-Calculate Width/Depth</Trans>
                       </div>
                       <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                        Uses Resolution × Pixel Size. Non-destructive: switching back restores previous manual width/depth.
+                        <Trans>Uses Resolution × Pixel Size. Non-destructive: switching back restores previous manual width/depth.</Trans>
                       </div>
                     </div>
                     <Button
@@ -5033,13 +5204,13 @@ export function ProfileSettingsModal({
                         ? accentSecondaryActionStyle92
                         : { color: 'var(--text-strong)' }}
                     >
-                      {selectedBuildDimensionMode === 'auto' ? 'Auto' : 'Manual'}
+                      {selectedBuildDimensionMode === 'auto' ? _(msg`Auto`) : _(msg`Manual`)}
                     </Button>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
                     <LabeledNumberInput
-                      label="Build Width (mm)"
+                      label={_(msg`Build Width (mm)`)}
                       disabled={selectedBuildDimensionMode === 'auto' || isSelectedPrinterOfficial}
                       value={selectedPrinter.buildVolumeMm.width}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
@@ -5050,7 +5221,7 @@ export function ProfileSettingsModal({
                       })}
                     />
                     <LabeledNumberInput
-                      label="Build Depth (mm)"
+                      label={_(msg`Build Depth (mm)`)}
                       disabled={selectedBuildDimensionMode === 'auto' || isSelectedPrinterOfficial}
                       value={selectedPrinter.buildVolumeMm.depth}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
@@ -5061,7 +5232,7 @@ export function ProfileSettingsModal({
                       })}
                     />
                     <LabeledNumberInput
-                      label="Build Height (mm)"
+                      label={_(msg`Build Height (mm)`)}
                       disabled={isSelectedPrinterOfficial}
                       value={selectedPrinter.buildVolumeMm.height}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
@@ -5075,7 +5246,7 @@ export function ProfileSettingsModal({
 
                   <div className="mt-2.5 grid grid-cols-2 md:grid-cols-4 gap-2.5">
                     <LabeledNumberInput
-                      label="Front Margin (mm)"
+                      label={_(msg`Front Margin (mm)`)}
                       disabled={isSelectedPrinterOfficial}
                       value={selectedPrinterSafetyMargins.front}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
@@ -5086,7 +5257,7 @@ export function ProfileSettingsModal({
                       })}
                     />
                     <LabeledNumberInput
-                      label="Back Margin (mm)"
+                      label={_(msg`Back Margin (mm)`)}
                       disabled={isSelectedPrinterOfficial}
                       value={selectedPrinterSafetyMargins.back}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
@@ -5097,7 +5268,7 @@ export function ProfileSettingsModal({
                       })}
                     />
                     <LabeledNumberInput
-                      label="Left Margin (mm)"
+                      label={_(msg`Left Margin (mm)`)}
                       disabled={isSelectedPrinterOfficial}
                       value={selectedPrinterSafetyMargins.left}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
@@ -5108,7 +5279,7 @@ export function ProfileSettingsModal({
                       })}
                     />
                     <LabeledNumberInput
-                      label="Right Margin (mm)"
+                      label={_(msg`Right Margin (mm)`)}
                       disabled={isSelectedPrinterOfficial}
                       value={selectedPrinterSafetyMargins.right}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
@@ -5122,10 +5293,10 @@ export function ProfileSettingsModal({
                 </div>
 
                 <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Display</div>
+                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2"><Trans>Display</Trans></div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
                     <LabeledNumberInput
-                      label="Resolution X (px)"
+                      label={_(msg`Resolution X (px)`)}
                       disabled={isSelectedPrinterOfficial}
                       value={selectedPrinter.display.resolutionX}
                       onChange={(value) => handlePrinterDisplayChange({
@@ -5133,7 +5304,7 @@ export function ProfileSettingsModal({
                       })}
                     />
                     <LabeledNumberInput
-                      label="Resolution Y (px)"
+                      label={_(msg`Resolution Y (px)`)}
                       disabled={isSelectedPrinterOfficial}
                       value={selectedPrinter.display.resolutionY}
                       onChange={(value) => handlePrinterDisplayChange({
@@ -5141,27 +5312,27 @@ export function ProfileSettingsModal({
                       })}
                     />
                     <LabeledNumberInput
-                      label="Bit Depth"
+                      label={_(msg`Bit Depth`)}
                       disabled={isSelectedPrinterOfficial}
                       value={selectedPrinter.bitDepth?.bits ?? 8}
                       onChange={handlePrinterBitDepthChange}
                     />
 
                     <LabeledNumberInput
-                      label="Pixel Size X (μm)"
+                      label={_(msg`Pixel Size X (μm)`)}
                       disabled={isSelectedPrinterOfficial}
                       value={selectedPrinter.pixelSize?.x ?? 1}
                       onChange={(value) => handlePrinterPixelSizeChange('x', value)}
                     />
                     <LabeledNumberInput
-                      label="Pixel Size Y (μm)"
+                      label={_(msg`Pixel Size Y (μm)`)}
                       disabled={isSelectedPrinterOfficial}
                       value={selectedPrinter.pixelSize?.y ?? 1}
                       onChange={(value) => handlePrinterPixelSizeChange('y', value)}
                     />
 
                     <LabeledToggleInput
-                      label="Anti-Aliasing"
+                      label={_(msg`Anti-Aliasing`)}
                       disabled={isSelectedPrinterOfficial}
                       checked={selectedPrinter.antiAliasing === true}
                       onChange={(checked) => updatePrinterProfile(selectedPrinter.id, { antiAliasing: checked })}
@@ -5170,17 +5341,17 @@ export function ProfileSettingsModal({
                 </div>
 
                 <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Output</div>
+                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2"><Trans>Output</Trans></div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
                     <LabeledSelectInput
-                      label="Output Format"
+                      label={_(msg`Output Format`)}
                       value={selectedPrinter.display.outputFormat}
                       options={OUTPUT_FORMAT_OPTIONS}
                       onChange={(value) => handlePrinterDisplayChange({ outputFormat: value })}
                     />
 
                     <LabeledSelectInput
-                      label="Network Support"
+                      label={_(msg`Network Support`)}
                       value={selectedPrinter.networkSupport ?? ''}
                       options={selectedPrinterNetworkModeOptions}
                       onChange={(value) => {
@@ -5195,14 +5366,14 @@ export function ProfileSettingsModal({
                     />
 
                     <LabeledToggleInput
-                      label="Webcam Support"
+                      label={_(msg`Webcam Support`)}
                       checked={selectedPrinter.hasCamera !== false}
                       onChange={(checked) => updatePrinterProfile(selectedPrinter.id, { hasCamera: checked })}
                     />
 
                     {selectedPrinter.hasCamera !== false && (
                       <LabeledSelectInput
-                        label="Webcam Rotation"
+                        label={_(msg`Webcam Rotation`)}
                         value={String(selectedPrinter.display.webcamRotationDeg ?? 0)}
                         options={WEBCAM_ROTATION_OPTIONS}
                         onChange={(value) => {
@@ -5217,7 +5388,7 @@ export function ProfileSettingsModal({
 
                     {selectedFormatVersionOptions.length > 0 && (
                       <SelectDropdown
-                        label="Format Version"
+                        label={_(msg`Format Version`)}
                         value={selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0].value}
                         options={selectedFormatVersionOptions}
                         onChange={(value) => handlePrinterDisplayChange({ formatVersion: value })}
@@ -5226,7 +5397,7 @@ export function ProfileSettingsModal({
 
                     {selectedSettingsModeOptions.length > 0 && (
                       <SelectDropdown
-                        label="Settings Mode"
+                        label={_(msg`Settings Mode`)}
                         value={selectedResolvedSettingsMode ?? selectedSettingsModeOptions[0].value}
                         options={selectedSettingsModeOptions}
                         disabled={isSelectedPrinterOfficial}
@@ -5235,14 +5406,14 @@ export function ProfileSettingsModal({
                     )}
 
                     <LabeledToggleInput
-                      label="Mirror X"
+                      label={_(msg`Mirror X`)}
                       disabled={isSelectedPrinterOfficial}
                       checked={selectedPrinter.display.mirrorX === true}
                       onChange={(checked) => handlePrinterDisplayChange({ mirrorX: checked })}
                     />
 
                     <LabeledToggleInput
-                      label="Mirror Y"
+                      label={_(msg`Mirror Y`)}
                       disabled={isSelectedPrinterOfficial}
                       checked={selectedPrinter.display.mirrorY === true}
                       onChange={(checked) => handlePrinterDisplayChange({ mirrorY: checked })}
@@ -5253,7 +5424,7 @@ export function ProfileSettingsModal({
 
               <div className="px-2 py-2 border-t flex items-center justify-between gap-2 shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Changes are applied immediately.
+                  <Trans>Changes are applied immediately.</Trans>
                 </span>
                 <Button
                   type="button"
@@ -5262,7 +5433,7 @@ export function ProfileSettingsModal({
                   style={accentSecondaryActionStyle92}
                 >
                   <Check className="w-3.5 h-3.5" />
-                  Done
+                  <Trans>Done</Trans>
                 </Button>
               </div>
             </div>
@@ -5297,8 +5468,12 @@ export function ProfileSettingsModal({
                     <FlaskConical className="w-4 h-4" style={{ color: 'var(--accent)' }} />
                   </span>
                   <div>
-                    <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Material Library{selectedPrinter ? ` for ${selectedPrinter.manufacturer} ${selectedPrinter.name}` : ''}</h3>
-                    <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>Choose an official material preset to add.</p>
+                    <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                      {selectedPrinter
+                        ? <Trans>Material Library for {selectedPrinter.manufacturer} {selectedPrinter.name}</Trans>
+                        : <Trans>Material Library</Trans>}
+                    </h3>
+                    <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}><Trans>Choose an official material preset to add.</Trans></p>
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -5307,8 +5482,8 @@ export function ProfileSettingsModal({
                     size="sm"
                     type="button"
                     onClick={() => setShowMaterialLibraryExplainer(true)}
-                    aria-label="About material presets"
-                    title="About material presets"
+                    aria-label={_(msg`About material presets`)}
+                    title={_(msg`About material presets`)}
                   >
                     <Info className="w-4 h-4" />
                   </IconButton>
@@ -5317,7 +5492,7 @@ export function ProfileSettingsModal({
                     size="sm"
                     type="button"
                     onClick={() => setShowMaterialPresetPicker(false)}
-                    aria-label="Close material library"
+                    aria-label={_(msg`Close material library`)}
                   >
                     <X className="w-4 h-4" />
                   </IconButton>
@@ -5331,7 +5506,7 @@ export function ProfileSettingsModal({
                       <input
                         value={materialPresetSearch}
                         onChange={(event) => setMaterialPresetSearch(event.target.value)}
-                        placeholder="Search materials"
+                        placeholder={_(msg`Search materials`)}
                         className="ui-input w-full h-8 text-xs"
                         style={{ paddingLeft: '2.5rem', paddingRight: '0.625rem' }}
                       />
@@ -5411,10 +5586,10 @@ export function ProfileSettingsModal({
                     <div className="h-full min-h-[320px] flex flex-col items-center justify-center text-center px-6">
                       <Frown className="w-16 h-16 mb-3" style={{ color: 'var(--text-muted)' }} strokeWidth={1.5} />
                       <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                        No presets here yet
+                        <Trans>No presets here yet</Trans>
                       </div>
                       <p className="mt-1 text-xs leading-snug max-w-[340px]" style={{ color: 'var(--text-muted)' }}>
-                        We searched high and low, but there are no material presets for {selectedPrinter.name} yet. We're working on adding some soon.
+                        <Trans>We searched high and low, but there are no material presets for {selectedPrinter.name} yet. We're working on adding some soon.</Trans>
                       </p>
                     </div>
                   ) : (
@@ -5486,7 +5661,7 @@ export function ProfileSettingsModal({
                                     className="text-[11px] rounded-full border px-1.5 py-0.5 font-semibold whitespace-nowrap"
                                     style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}
                                   >
-                                    Added
+                                    <Trans>Added</Trans>
                                   </span>
                                 )}
                               </div>
@@ -5533,8 +5708,8 @@ export function ProfileSettingsModal({
               <div className="flex items-center justify-between gap-3 px-3 py-3 border-t shrink-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                 <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
                   {selectedLibraryMaterialKeys.size > 0
-                    ? `${selectedLibraryMaterialKeys.size} material${selectedLibraryMaterialKeys.size !== 1 ? 's' : ''} selected`
-                    : 'Select materials to add'}
+                    ? <Plural value={selectedLibraryMaterialKeys.size} one="# material selected" other="# materials selected" />
+                    : <Trans>Select materials to add</Trans>}
                 </span>
                 <Button
                   type="button"
@@ -5545,8 +5720,8 @@ export function ProfileSettingsModal({
                 >
                   <Plus className="w-3.5 h-3.5" />
                   {selectedLibraryMaterialKeys.size > 0
-                    ? `Add ${selectedLibraryMaterialKeys.size} Material${selectedLibraryMaterialKeys.size !== 1 ? 's' : ''}`
-                    : 'Add Materials'}
+                    ? <Plural value={selectedLibraryMaterialKeys.size} one="Add # Material" other="Add # Materials" />
+                    : <Trans>Add Materials</Trans>}
                 </Button>
               </div>
             </div>
@@ -5558,7 +5733,7 @@ export function ProfileSettingsModal({
                 }}
                 role="dialog"
                 aria-modal="true"
-                aria-label="Material presets disclaimer"
+                aria-label={_(msg`Material presets disclaimer`)}
               >
                 <div
                   className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
@@ -5581,16 +5756,16 @@ export function ProfileSettingsModal({
                     />
                     <div className="min-w-0 pr-2">
                       <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                        Heads up about presets
+                        <Trans>Heads up about presets</Trans>
                       </h2>
                       <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                        Good baselines, still calibrate.
+                        <Trans>Good baselines, still calibrate.</Trans>
                       </p>
                     </div>
                   </div>
                   <div className="space-y-4 p-5">
                     <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                      All material presets are good baselines and generally tested on hardware, but we still recommend individual calibration for the best results. Exposure, lift and temperature can vary by machine, resin batch and environment.
+                      <Trans>All material presets are good baselines and generally tested on hardware, but we still recommend individual calibration for the best results. Exposure, lift and temperature can vary by machine, resin batch and environment.</Trans>
                     </p>
                     <div className="grid grid-cols-2 gap-2 pt-1">
                       <Button
@@ -5605,7 +5780,7 @@ export function ProfileSettingsModal({
                         ) : (
                           <Square className="h-3.5 w-3.5 shrink-0" style={{ color: '#f59e0b' }} strokeWidth={1.5} />
                         )}
-                        Do not show again
+                        <Trans>Do not show again</Trans>
                       </Button>
                       <Button
                         type="button"
@@ -5619,7 +5794,7 @@ export function ProfileSettingsModal({
                           setShowMaterialLibraryExplainer(false);
                         }}
                       >
-                        Got it
+                        <Trans>Got it</Trans>
                       </Button>
                     </div>
                   </div>
@@ -5639,8 +5814,8 @@ export function ProfileSettingsModal({
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                     {usePluginLocalSettingsAsReplacement && replacementMaterialModalLabel
-                      ? `Create ${replacementMaterialModalLabel} Material Profile`
-                      : 'Create Material Profile'}
+                      ? formatCreateOutputMaterialProfileTitle(_, replacementMaterialModalLabel)
+                      : _(msg`Create Material Profile`)}
                   </h3>
                   <p className="ui-meta">{selectedPrinter.name}</p>
                 </div>
@@ -5649,7 +5824,7 @@ export function ProfileSettingsModal({
                   size="sm"
                   type="button"
                   onClick={() => setIsCreateMaterialOpen(false)}
-                  aria-label="Close create material dialog"
+                  aria-label={_(msg`Close create material dialog`)}
                 >
                   <X className="w-4 h-4" />
                 </IconButton>
@@ -5699,7 +5874,7 @@ export function ProfileSettingsModal({
                   onClick={() => setIsCreateMaterialOpen(false)}
                   variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-xs rounded-full"
                 >
-                  Cancel
+                  <Trans>Cancel</Trans>
                 </Button>
                 <Button
                   type="button"
@@ -5708,7 +5883,7 @@ export function ProfileSettingsModal({
                   style={accentSecondaryActionStyle92}
                 >
                   <Check className="w-3.5 h-3.5" />
-                  Save Material
+                  <Trans>Save Material</Trans>
                 </Button>
               </div>
             </div>
@@ -5757,10 +5932,10 @@ export function ProfileSettingsModal({
               onNetworkIpAddressChange={setNetworkIpAddress}
               onConnectManual={() => { void handleConnectNetworkPrinter(); }}
               activePrinterSummary={activeManagedNetworkPrinter?.connected
-                ? `Active: ${activeManagedNetworkPrinter.displayName || activeManagedNetworkPrinter.hostName || activeManagedNetworkPrinter.ipAddress}`
+                ? formatActivePrinterSummary(_, activeManagedNetworkPrinter.displayName || activeManagedNetworkPrinter.hostName || activeManagedNetworkPrinter.ipAddress)
                 : activeManagedNetworkPrinter
-                  ? `Selected: ${activeManagedNetworkPrinter.displayName || activeManagedNetworkPrinter.ipAddress}`
-                  : 'No active printer selected'}
+                  ? formatSelectedPrinterSummary(_, activeManagedNetworkPrinter.displayName || activeManagedNetworkPrinter.ipAddress)
+                  : _(msg`No active printer selected`)}
               onClose={() => setIsNetworkSettingsOpen(false)}
             />
           </div>
@@ -5793,7 +5968,7 @@ export function ProfileSettingsModal({
               <div className="px-4 py-3 border-b flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Official Printer Update
+                    <Trans>Official Printer Update</Trans>
                   </h3>
                   <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                     {selectedPrinter.name} • v{selectedPrinterUpdate.currentVersion} → v{selectedPrinterUpdate.latestVersion}
@@ -5804,7 +5979,7 @@ export function ProfileSettingsModal({
                   size="sm"
                   type="button"
                   onClick={() => setShowPrinterUpdateDiffModal(false)}
-                  aria-label="Close update preview"
+                  aria-label={_(msg`Close update preview`)}
                 >
                   <X className="w-4 h-4" />
                 </IconButton>
@@ -5812,15 +5987,15 @@ export function ProfileSettingsModal({
 
               <div className="p-3 overflow-y-auto custom-scrollbar flex-1 min-h-0 space-y-3">
                 <div className="rounded-md border px-3 py-2 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
-                  Review the incoming changes before applying this official profile update.
+                  <Trans>Review the incoming changes before applying this official profile update.</Trans>
                 </div>
 
                 {selectedPrinterUpdateDiffItems.length > 0 ? (
                   <div className="rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                     <div className="grid grid-cols-[170px_minmax(0,1fr)_minmax(0,1fr)] gap-0 border-b text-[11px] font-semibold uppercase tracking-wide" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                      <div className="px-2.5 py-2" style={{ borderRight: '1px solid var(--border-subtle)' }}>Field</div>
-                      <div className="px-2.5 py-2" style={{ borderRight: '1px solid var(--border-subtle)' }}>Current</div>
-                      <div className="px-2.5 py-2">Update</div>
+                      <div className="px-2.5 py-2" style={{ borderRight: '1px solid var(--border-subtle)' }}><Trans>Field</Trans></div>
+                      <div className="px-2.5 py-2" style={{ borderRight: '1px solid var(--border-subtle)' }}><Trans>Current</Trans></div>
+                      <div className="px-2.5 py-2"><Trans>Update</Trans></div>
                     </div>
                     <div className="divide-y divide-[var(--border-subtle)]">
                       {selectedPrinterUpdateDiffItems.map((item) => (
@@ -5834,7 +6009,7 @@ export function ProfileSettingsModal({
                   </div>
                 ) : (
                   <div className="rounded-md border px-3 py-3 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
-                    No profile field-level changes were detected, but the official version marker will still advance to v{selectedPrinterUpdate.latestVersion}.
+                    <Trans>No profile field-level changes were detected, but the official version marker will still advance to v{selectedPrinterUpdate.latestVersion}.</Trans>
                   </div>
                 )}
               </div>
@@ -5845,7 +6020,7 @@ export function ProfileSettingsModal({
                   onClick={() => setShowPrinterUpdateDiffModal(false)}
                   variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-xs rounded-md"
                 >
-                  Cancel
+                  <Trans>Cancel</Trans>
                 </Button>
                 <Button
                   type="button"
@@ -5857,7 +6032,7 @@ export function ProfileSettingsModal({
                   style={accentSecondaryActionStyle92}
                 >
                   <Download className="w-3.5 h-3.5" />
-                  Apply Update
+                  <Trans>Apply Update</Trans>
                 </Button>
               </div>
             </div>
@@ -5867,13 +6042,13 @@ export function ProfileSettingsModal({
         {showOfficialLockDialog && (
           <StructuredDialogModal
             open={showOfficialLockDialog}
-            ariaLabel="Official profile locked"
-            title="Official Profile Locked"
-            subtitle="Official slicer profiles can't be edited directly."
+            ariaLabel={_(msg`Official profile locked`)}
+            title={_(msg`Official Profile Locked`)}
+            subtitle={_(msg`Official slicer profiles can't be edited directly.`)}
             icon={<Lock className="h-4 w-4" />}
             iconTone="warning"
             zIndexClassName="z-[75]"
-            closeAriaLabel="Close official profile lock dialog"
+            closeAriaLabel={_(msg`Close official profile lock dialog`)}
             onClose={() => {
               setShowOfficialLockDialog(false);
               setOfficialLockedProfileId(null);
@@ -5888,7 +6063,7 @@ export function ProfileSettingsModal({
                     setOfficialLockedProfileId(null);
                   }}
                 >
-                  Cancel
+                  <Trans>Cancel</Trans>
                 </Button>
                 <Button
                   type="button"
@@ -5897,32 +6072,34 @@ export function ProfileSettingsModal({
                   style={accentSecondaryActionStyle92}
                 >
                   <Lock className="w-3.5 h-3.5" />
-                  Make Custom Copy
+                  <Trans>Make Custom Copy</Trans>
                 </Button>
               </>
             )}
           >
             <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-              For safety reasons, official slicer profiles cannot be modified directly.
-              <br />
-              Choose <strong>Make Custom Copy</strong> to duplicate and edit safely.
-              <br />
-              <strong>Warning:</strong> Custom, non-official profiles may increase print-failure risk and can potentially damage the machine or cause personal injury.
+              <Trans>
+                For safety reasons, official slicer profiles cannot be modified directly.
+                <br />
+                Choose <strong>Make Custom Copy</strong> to duplicate and edit safely.
+                <br />
+                <strong>Warning:</strong> Custom, non-official profiles may increase print-failure risk and can potentially damage the machine or cause personal injury.
+              </Trans>
             </p>
           </StructuredDialogModal>
         )}
 
         <StructuredDialogModal
           open={showOfficialMaterialLockDialog && Boolean(selectedMaterial)}
-          ariaLabel="Material profile locked"
-          title={materialLockDialogIsOfficial ? 'Official Profile Locked' : 'Profile Locked'}
+          ariaLabel={_(msg`Material profile locked`)}
+          title={materialLockDialogIsOfficial ? _(msg`Official Profile Locked`) : _(msg`Profile Locked`)}
           subtitle={materialLockDialogIsOfficial
-            ? "Official material profiles can't be edited directly."
-            : 'This material profile is locked to prevent accidental edits.'}
+            ? _(msg`Official material profiles can't be edited directly.`)
+            : _(msg`This material profile is locked to prevent accidental edits.`)}
           icon={<Lock className="h-4 w-4" />}
           iconTone="warning"
           zIndexClassName="z-[75]"
-          closeAriaLabel="Close material profile lock dialog"
+          closeAriaLabel={_(msg`Close material profile lock dialog`)}
           onClose={() => setShowOfficialMaterialLockDialog(false)}
           actions={(
             <>
@@ -5931,7 +6108,7 @@ export function ProfileSettingsModal({
                 variant="secondary" size="md" className="whitespace-nowrap"
                 onClick={() => setShowOfficialMaterialLockDialog(false)}
               >
-                Cancel
+                <Trans>Cancel</Trans>
               </Button>
               {!materialLockDialogIsOfficial && (
                 <Button
@@ -5944,7 +6121,7 @@ export function ProfileSettingsModal({
                   style={accentSecondaryActionStyle92}
                 >
                   <Unlock className="w-3.5 h-3.5" />
-                  Unlock
+                  <Trans>Unlock</Trans>
                 </Button>
               )}
               <Button
@@ -5954,39 +6131,43 @@ export function ProfileSettingsModal({
                 style={accentSecondaryActionStyle92}
               >
                 <Copy className="w-3.5 h-3.5" />
-                Make Custom Copy
+                <Trans>Make Custom Copy</Trans>
               </Button>
             </>
           )}
         >
           {materialLockDialogIsOfficial ? (
             <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-              Official material profiles cannot be edited directly.
-              <br />
-              Choose <strong>Make Custom Copy</strong> to duplicate and adjust exposure settings safely.
-              <br />
-              <br />
-              <strong style={{ color: 'var(--danger)' }}>Warning:</strong> Custom exposure settings may affect print quality and could damage the machine or cause personal injury.
+              <Trans>
+                Official material profiles cannot be edited directly.
+                <br />
+                Choose <strong>Make Custom Copy</strong> to duplicate and adjust exposure settings safely.
+                <br />
+                <br />
+                <strong style={{ color: 'var(--danger)' }}>Warning:</strong> Custom exposure settings may affect print quality and could damage the machine or cause personal injury.
+              </Trans>
             </p>
           ) : (
             <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-              This material profile is locked, so its settings are read-only.
-              <br />
-              Choose <strong>Unlock</strong> to edit it directly, or <strong>Make Custom Copy</strong> to duplicate it as a new editable profile.
+              <Trans>
+                This material profile is locked, so its settings are read-only.
+                <br />
+                Choose <strong>Unlock</strong> to edit it directly, or <strong>Make Custom Copy</strong> to duplicate it as a new editable profile.
+              </Trans>
             </p>
           )}
         </StructuredDialogModal>
 
         <StructuredDialogModal
           open={Boolean(deleteConfirmTarget)}
-          ariaLabel="Confirm delete"
-          title={deleteConfirmTarget?.kind === 'printer' ? 'Delete Printer Profile' : 'Delete Material Profile'}
-          subtitle="This action cannot be undone."
+          ariaLabel={_(msg`Confirm delete`)}
+          title={deleteConfirmTarget?.kind === 'printer' ? _(msg`Delete Printer Profile`) : _(msg`Delete Material Profile`)}
+          subtitle={_(msg`This action cannot be undone.`)}
           icon={<AlertTriangle className="h-4 w-4" />}
           iconTone="warning"
           zIndexClassName="z-[76]"
           onClose={() => setDeleteConfirmTarget(null)}
-          closeAriaLabel="Close delete confirmation dialog"
+          closeAriaLabel={_(msg`Close delete confirmation dialog`)}
           actions={(
             <>
               <Button
@@ -5994,7 +6175,7 @@ export function ProfileSettingsModal({
                 variant="secondary" size="md"
                 onClick={() => setDeleteConfirmTarget(null)}
               >
-                Cancel
+                <Trans>Cancel</Trans>
               </Button>
               <Button
                 type="button"
@@ -6004,7 +6185,7 @@ export function ProfileSettingsModal({
                 className="gap-1.5"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                Delete
+                <Trans>Delete</Trans>
               </Button>
             </>
           )}
@@ -6012,8 +6193,8 @@ export function ProfileSettingsModal({
           {deleteConfirmTarget ? (
             <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
               {deleteConfirmTarget.kind === 'printer'
-                ? <>Delete <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong> and remove all material profiles linked to it?</>
-                : <>Delete material profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong>?</>}
+                ? <Trans>Delete <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong> and remove all material profiles linked to it?</Trans>
+                : <Trans>Delete material profile <strong style={{ color: 'var(--text-strong)' }}>{deleteConfirmTarget.name}</strong>?</Trans>}
             </p>
           ) : null}
         </StructuredDialogModal>
@@ -6063,6 +6244,7 @@ function RemoteMaterialEditDialog({
   onClose,
   onSave,
 }: RemoteMaterialEditDialogProps) {
+  const { _ } = useLingui();
   if (!isOpen || !material) return null;
 
   return (
@@ -6072,8 +6254,8 @@ function RemoteMaterialEditDialog({
       <div className="w-full max-w-[920px] max-h-[88vh] rounded-xl border shadow-2xl overflow-hidden flex flex-col ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
         <div className="flex items-center justify-between px-4 py-3 border-b shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
           <div>
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Edit {networkModeLabel} Material Profile</h3>
-            <p className="ui-meta">{material.name} • Profile ID {material.id}</p>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Edit {networkModeLabel} Material Profile</Trans></h3>
+            <p className="ui-meta"><Trans>{material.name} • Profile ID {material.id}</Trans></p>
           </div>
           <IconButton
             variant="surface"
@@ -6081,7 +6263,7 @@ function RemoteMaterialEditDialog({
             type="button"
             onClick={onClose}
             disabled={isSaving}
-            aria-label={`Close ${networkModeLabel} edit dialog`}
+            aria-label={formatCloseRemoteMaterialEditDialogAria(_, networkModeLabel)}
           >
             <X className="w-4 h-4" />
           </IconButton>
@@ -6097,7 +6279,7 @@ function RemoteMaterialEditDialog({
                 ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
                 : { color: 'var(--text-muted)' }}
             >
-              Basic
+              <Trans>Basic</Trans>
             </Button>
             <Button
               type="button"
@@ -6107,7 +6289,7 @@ function RemoteMaterialEditDialog({
                 ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
                 : { color: 'var(--text-muted)' }}
             >
-              Advanced
+              <Trans>Advanced</Trans>
             </Button>
           </div>
 
@@ -6129,9 +6311,9 @@ function RemoteMaterialEditDialog({
                           background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
                           color: '#d97706',
                         }}
-                        title="Dynamic Wait is controlling Wait Before Print fields"
+                        title={_(msg`Dynamic Wait is controlling Wait Before Print fields`)}
                       >
-                        Dynamic Wait active
+                        <Trans>Dynamic Wait active</Trans>
                       </span>
                     )}
                   </div>
@@ -6140,7 +6322,7 @@ function RemoteMaterialEditDialog({
                       const field = primaryFieldByKey.get(key);
                       const isDynamicWaitLockedField = isDynamicWaitEnabledState && (key === 'SupportBeforeWait' || key === 'BeforeWait');
                       const dynamicWaitHelp = isDynamicWaitLockedField
-                        ? 'Controlled by Dynamic Wait. Disable Dynamic Wait in Advanced settings to edit this value.'
+                        ? _(msg`Controlled by Dynamic Wait. Disable Dynamic Wait in Advanced settings to edit this value.`)
                         : undefined;
                       const numericValue = Number(value);
                       const isNumeric = Number.isFinite(numericValue);
@@ -6221,7 +6403,7 @@ function RemoteMaterialEditDialog({
               ) : (
                 <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    No additional advanced controls were found for this profile.
+                    <Trans>No additional advanced controls were found for this profile.</Trans>
                   </div>
                 </div>
               )}
@@ -6238,7 +6420,7 @@ function RemoteMaterialEditDialog({
           }}
         >
           <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            {`Applies to ${networkModeLabel} profile on the printer (all scalar parameters from this profile).`}
+            <Trans>Applies to {networkModeLabel} profile on the printer (all scalar parameters from this profile).</Trans>
           </span>
           <div className="flex items-center gap-2">
             <Button
@@ -6247,7 +6429,7 @@ function RemoteMaterialEditDialog({
               disabled={isSaving}
               variant="secondary" size="auto" className="!h-8 !px-3 !py-0 text-xs rounded-full"
             >
-              Cancel
+              <Trans>Cancel</Trans>
             </Button>
             <Button
               type="button"
@@ -6257,7 +6439,7 @@ function RemoteMaterialEditDialog({
               style={{ color: 'var(--accent-secondary)' }}
             >
               {isSaving ? <Spinner size="sm" /> : <Check className="w-3.5 h-3.5" />}
-              {isSaving ? 'Saving…' : `Save to ${networkModeLabel}`}
+              {isSaving ? _(msg`Saving…`) : formatSaveToNetworkModeLabel(_, networkModeLabel)}
             </Button>
           </div>
         </div>

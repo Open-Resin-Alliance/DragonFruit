@@ -1,6 +1,10 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import type { MessageDescriptor } from '@lingui/core';
+import { msg, plural } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import { AlertTriangle, CheckCircle2, Download, ExternalLink, Github, PackageCheck, Plug, ShieldCheck, Trash2 } from 'lucide-react';
 import { Button, Spinner } from '@/components/atoms';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -16,6 +20,27 @@ import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 import { PluginStudioModal } from './PluginStudioModal';
 
 const BUILTIN_ATHENA_REPOSITORY_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
+type TranslateFn = (descriptor: MessageDescriptor) => string;
+
+function formatUninstalledPluginStatus(translate: TranslateFn, name: string): string {
+  return translate(msg`Uninstalled plugin: ${name}`);
+}
+
+function formatInstalledUnverifiedPluginStatus(translate: TranslateFn, name: string): string {
+  return translate(msg`Installed unverified plugin: ${name}`);
+}
+
+function formatInstalledPluginStatus(translate: TranslateFn, name: string): string {
+  return translate(msg`Installed plugin: ${name}`);
+}
+
+function formatLiabilityAcceptedAtTitle(translate: TranslateFn, acceptedAt: string): string {
+  return translate(msg`Liability accepted at ${acceptedAt}`);
+}
+
+function formatPluginContentsSummary(translate: TranslateFn, printerCount: number, materialCount: number): string {
+  return translate(msg`${plural(printerCount, { one: '# printer preset', other: '# printer presets' })}, ${plural(materialCount, { one: '# material template', other: '# material templates' })}`);
+}
 
 function isOraHostedRepository(url: string | undefined): boolean {
   if (!url) return false;
@@ -90,6 +115,7 @@ function normalizePluginManifest(input: GithubManifestResponse['manifest']): Plu
 }
 
 export function PluginsSettingsTab() {
+  const { _ } = useLingui();
   React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
 
   const [isLightTheme, setIsLightTheme] = React.useState(false);
@@ -138,7 +164,7 @@ export function PluginsSettingsTab() {
 
     const payload = await response.json().catch(() => null) as GithubManifestResponse | null;
     if (!response.ok || !payload?.ok || !payload.manifest) {
-      const err = new Error(payload?.error || 'Unable to install plugin from GitHub repository.') as Error & {
+      const err = new Error(payload?.error || _(msg`Unable to install plugin from GitHub repository.`)) as Error & {
         payload?: GithubManifestResponse | null;
       };
       err.payload = payload;
@@ -146,12 +172,12 @@ export function PluginsSettingsTab() {
     }
 
     return payload;
-  }, []);
+  }, [_]);
 
   const handleInstall = React.useCallback(async () => {
     const trimmed = repoUrl.trim();
     if (!trimmed) {
-      setStatus({ kind: 'error', message: 'Please enter a GitHub repository URL.' });
+      setStatus({ kind: 'error', message: _(msg`Please enter a GitHub repository URL.`) });
       return;
     }
 
@@ -165,7 +191,7 @@ export function PluginsSettingsTab() {
 
       const manifest = normalizePluginManifest(payload.manifest);
       if (!manifest) {
-        throw new Error('Plugin manifest is missing required fields.');
+        throw new Error(_(msg`Plugin manifest is missing required fields.`));
       }
 
       setPendingInstallPreview({
@@ -187,18 +213,18 @@ export function PluginsSettingsTab() {
         });
         setStatus({
           kind: 'error',
-          message: 'This repository is not on the allowlist. Review and acknowledge the warning to proceed.',
+          message: _(msg`This repository is not on the allowlist. Review and acknowledge the warning to proceed.`),
         });
         return;
       }
       setStatus({
         kind: 'error',
-        message: error instanceof Error ? error.message : 'Plugin installation failed.',
+        message: error instanceof Error ? error.message : _(msg`Plugin installation failed.`),
       });
     } finally {
       setIsInstalling(false);
     }
-  }, [repoUrl, runInstallRequest]);
+  }, [_, repoUrl, runInstallRequest]);
 
   const handleConfirmLiabilityInstall = React.useCallback(async () => {
     if (!pendingLiabilityInstall) return;
@@ -214,7 +240,7 @@ export function PluginsSettingsTab() {
 
       const manifest = normalizePluginManifest(payload.manifest);
       if (!manifest) {
-        throw new Error('Plugin manifest is missing required fields.');
+        throw new Error(_(msg`Plugin manifest is missing required fields.`));
       }
 
       setPendingInstallPreview({
@@ -229,12 +255,12 @@ export function PluginsSettingsTab() {
     } catch (error) {
       setStatus({
         kind: 'error',
-        message: error instanceof Error ? error.message : 'Plugin installation failed.',
+        message: error instanceof Error ? error.message : _(msg`Plugin installation failed.`),
       });
     } finally {
       setIsInstalling(false);
     }
-  }, [pendingLiabilityInstall, runInstallRequest]);
+  }, [_, pendingLiabilityInstall, runInstallRequest]);
 
   const handleUninstall = React.useCallback((pluginId: string, pluginName: string) => {
     setPendingRemovePlugin({ id: pluginId, name: pluginName });
@@ -244,10 +270,10 @@ export function PluginsSettingsTab() {
     if (!pendingRemovePlugin) return;
     const removed = uninstallPlugin(pendingRemovePlugin.id);
     if (removed) {
-      setStatus({ kind: 'success', message: `Uninstalled plugin: ${pendingRemovePlugin.name}` });
+      setStatus({ kind: 'success', message: formatUninstalledPluginStatus(_, pendingRemovePlugin.name) });
     }
     setPendingRemovePlugin(null);
-  }, [pendingRemovePlugin]);
+  }, [_, pendingRemovePlugin]);
 
   const handleInstallFromPreview = React.useCallback(() => {
     if (!pendingInstallPreview) return;
@@ -264,20 +290,20 @@ export function PluginsSettingsTab() {
       setStatus({
         kind: 'success',
         message: pendingInstallPreview.trust === 'unverified-user-approved'
-          ? `Installed unverified plugin: ${pendingInstallPreview.manifest.name}`
-          : `Installed plugin: ${pendingInstallPreview.manifest.name}`,
+          ? formatInstalledUnverifiedPluginStatus(_, pendingInstallPreview.manifest.name)
+          : formatInstalledPluginStatus(_, pendingInstallPreview.manifest.name),
       });
       setRepoUrl('');
       setPendingInstallPreview(null);
     } catch (error) {
       setStatus({
         kind: 'error',
-        message: error instanceof Error ? error.message : 'Plugin installation failed.',
+        message: error instanceof Error ? error.message : _(msg`Plugin installation failed.`),
       });
     } finally {
       setIsInstalling(false);
     }
-  }, [pendingInstallPreview]);
+  }, [_, pendingInstallPreview]);
 
   React.useEffect(() => {
     if (isDevRuntime) return;
@@ -353,15 +379,15 @@ export function PluginsSettingsTab() {
             <Plug className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Plugin Loader</h3>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Plugin Loader</Trans></h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Install plugin manifests from GitHub repositories (profile packs only). Remote code execution is not supported.
+              <Trans>Install plugin manifests from GitHub repositories (profile packs only). Remote code execution is not supported.</Trans>
             </p>
           </div>
         </div>
         {isDevRuntime && (
           <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-            Debug URLs: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
+            <Trans>Debug URLs: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code></Trans>
           </p>
         )}
 
@@ -383,7 +409,7 @@ export function PluginsSettingsTab() {
             style={accentSecondaryActionStyle92}
           >
             {isInstalling ? <Spinner size="sm" /> : <Download className="h-3.5 w-3.5" />}
-            {isInstalling ? 'Installing…' : 'Install Plugin'}
+            {isInstalling ? _(msg`Installing…`) : _(msg`Install Plugin`)}
           </Button>
         </div>
 
@@ -411,22 +437,21 @@ export function PluginsSettingsTab() {
               </span>
               <div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Unverified Plugin Liability Warning
+                  <Trans>Unverified Plugin Liability Warning</Trans>
                 </div>
                 <div className="mt-1 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-                  This repository is not on the trusted allowlist. You can still install this <strong>simple/data-only</strong> plugin,
-                  but you accept responsibility for validating the source and manifest contents.
+                  <Trans>This repository is not on the trusted allowlist. You can still install this <strong>simple/data-only</strong> plugin, but you accept responsibility for validating the source and manifest contents.</Trans>
                 </div>
               </div>
             </div>
             <div className="mt-3 rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                <span style={{ color: 'var(--text-strong)' }}>Repo:</span>{' '}
+                <span style={{ color: 'var(--text-strong)' }}><Trans>Repo:</Trans></span>{' '}
                 {pendingLiabilityInstall.unverifiedRepo?.owner}/{pendingLiabilityInstall.unverifiedRepo?.name}
               </div>
               {Array.isArray(pendingLiabilityInstall.allowlistRules) && pendingLiabilityInstall.allowlistRules.length > 0 && (
                 <div className="mt-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <span style={{ color: 'var(--text-strong)' }}>Allowlist:</span> {pendingLiabilityInstall.allowlistRules.join(', ')}
+                  <span style={{ color: 'var(--text-strong)' }}><Trans>Allowlist:</Trans></span> {pendingLiabilityInstall.allowlistRules.join(', ')}
                 </div>
               )}
             </div>
@@ -440,7 +465,7 @@ export function PluginsSettingsTab() {
                 disabled={isInstalling}
                 onClick={() => setPendingLiabilityInstall(null)}
               >
-                Cancel
+                <Trans>Cancel</Trans>
               </Button>
               <Button
                 type="button"
@@ -451,7 +476,7 @@ export function PluginsSettingsTab() {
                 disabled={isInstalling}
                 onClick={() => { void handleConfirmLiabilityInstall(); }}
               >
-                {isInstalling ? 'Installing…' : 'I Understand, Install Anyway'}
+                {isInstalling ? _(msg`Installing…`) : _(msg`I Understand, Install Anyway`)}
               </Button>
             </div>
           </div>
@@ -482,10 +507,10 @@ export function PluginsSettingsTab() {
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    Review Plugin Before Install
+                    <Trans>Review Plugin Before Install</Trans>
                   </div>
                   <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                    Confirm source and metadata before adding this plugin to your profile library.
+                    <Trans>Confirm source and metadata before adding this plugin to your profile library.</Trans>
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
@@ -506,7 +531,7 @@ export function PluginsSettingsTab() {
                           : 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
                       }}
                     >
-                      {pendingInstallPreview.trust === 'allowlisted' ? 'Allowlisted Source' : 'Unverified Source'}
+                      {pendingInstallPreview.trust === 'allowlisted' ? _(msg`Allowlisted Source`) : _(msg`Unverified Source`)}
                     </span>
                   </div>
                 </div>
@@ -515,29 +540,32 @@ export function PluginsSettingsTab() {
 
             <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Identity</div>
+                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Identity</Trans></div>
                 <div className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <div><span style={{ color: 'var(--text-strong)' }}>ID:</span> {pendingInstallPreview.manifest.id}</div>
+                  <div><span style={{ color: 'var(--text-strong)' }}><Trans>ID:</Trans></span> {pendingInstallPreview.manifest.id}</div>
                   {pendingInstallPreview.manifest.author && (
-                    <div><span style={{ color: 'var(--text-strong)' }}>Author:</span> {pendingInstallPreview.manifest.author}</div>
+                    <div><span style={{ color: 'var(--text-strong)' }}><Trans>Author:</Trans></span> {pendingInstallPreview.manifest.author}</div>
                   )}
                   <div>
-                    <span style={{ color: 'var(--text-strong)' }}>Contents:</span>{' '}
-                    {pendingInstallPreview.manifest.printerPresets?.length ?? 0} printer preset(s),{' '}
-                    {pendingInstallPreview.manifest.materialTemplates?.length ?? 0} material template(s)
+                    <span style={{ color: 'var(--text-strong)' }}><Trans>Contents:</Trans></span>{' '}
+                    {formatPluginContentsSummary(
+                      _,
+                      pendingInstallPreview.manifest.printerPresets?.length ?? 0,
+                      pendingInstallPreview.manifest.materialTemplates?.length ?? 0,
+                    )}
                   </div>
                 </div>
               </div>
 
               <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Origin</div>
+                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Origin</Trans></div>
                 <div className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <div className="break-all"><span style={{ color: 'var(--text-strong)' }}>Repo:</span> {pendingInstallPreview.repoUrl}</div>
+                  <div className="break-all"><span style={{ color: 'var(--text-strong)' }}><Trans>Repo:</Trans></span> {pendingInstallPreview.repoUrl}</div>
                   {pendingInstallPreview.originUrl && (
-                    <div className="break-all"><span style={{ color: 'var(--text-strong)' }}>Manifest URL:</span> {pendingInstallPreview.originUrl}</div>
+                    <div className="break-all"><span style={{ color: 'var(--text-strong)' }}><Trans>Manifest URL:</Trans></span> {pendingInstallPreview.originUrl}</div>
                   )}
                   {pendingInstallPreview.manifestSha256 && (
-                    <div className="break-all"><span style={{ color: 'var(--text-strong)' }}>SHA-256:</span> {pendingInstallPreview.manifestSha256}</div>
+                    <div className="break-all"><span style={{ color: 'var(--text-strong)' }}><Trans>SHA-256:</Trans></span> {pendingInstallPreview.manifestSha256}</div>
                   )}
                 </div>
               </div>
@@ -545,7 +573,7 @@ export function PluginsSettingsTab() {
 
             {pendingInstallPreview.manifest.description && (
               <div className="mt-3 rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Description</div>
+                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Description</Trans></div>
                 <div className="mt-1.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
                   {pendingInstallPreview.manifest.description}
                 </div>
@@ -561,7 +589,7 @@ export function PluginsSettingsTab() {
                 disabled={isInstalling}
                 onClick={() => setPendingInstallPreview(null)}
               >
-                Cancel
+                <Trans>Cancel</Trans>
               </Button>
               <Button
                 type="button"
@@ -572,7 +600,7 @@ export function PluginsSettingsTab() {
                 disabled={isInstalling}
                 onClick={handleInstallFromPreview}
               >
-                {isInstalling ? 'Installing…' : 'Install'}
+                {isInstalling ? _(msg`Installing…`) : _(msg`Install`)}
               </Button>
             </div>
           </div>
@@ -596,10 +624,10 @@ export function PluginsSettingsTab() {
               </span>
               <div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Remove Plugin?
+                  <Trans>Remove Plugin?</Trans>
                 </div>
                 <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  This removes <span style={{ color: 'var(--text-strong)' }}>{pendingRemovePlugin.name}</span> from installed plugins.
+                  <Trans>This removes <span style={{ color: 'var(--text-strong)' }}>{pendingRemovePlugin.name}</span> from installed plugins.</Trans>
                 </div>
               </div>
             </div>
@@ -612,7 +640,7 @@ export function PluginsSettingsTab() {
                 className="!h-8 !px-3 !py-0 text-xs"
                 onClick={() => setPendingRemovePlugin(null)}
               >
-                Cancel
+                <Trans>Cancel</Trans>
               </Button>
               <Button
                 type="button"
@@ -623,7 +651,7 @@ export function PluginsSettingsTab() {
                 onClick={handleConfirmUninstall}
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                Remove
+                <Trans>Remove</Trans>
               </Button>
             </div>
           </div>
@@ -639,9 +667,9 @@ export function PluginsSettingsTab() {
             <PackageCheck className="h-4 w-4" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Installed Plugins</h3>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Installed Plugins</Trans></h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Manage built-in and user-installed plugin packs.
+              <Trans>Manage built-in and user-installed plugin packs.</Trans>
             </p>
           </div>
         </div>
@@ -692,7 +720,7 @@ export function PluginsSettingsTab() {
                         {manifest.id}
                       </span>
                       <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                        {isBuiltin ? 'Built-in' : 'GitHub'}
+                        {isBuiltin ? _(msg`Built-in`) : _(msg`GitHub`)}
                       </span>
                       <span className="text-[11px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
                         v{manifest.version}
@@ -705,9 +733,9 @@ export function PluginsSettingsTab() {
                           color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)',
                           background: 'color-mix(in srgb, #d97706, var(--surface-2) 88%)',
                         }}
-                        title={plugin.liabilityAcceptedAt ? `Liability accepted at ${plugin.liabilityAcceptedAt}` : 'Installed with liability acknowledgement'}
+                        title={plugin.liabilityAcceptedAt ? formatLiabilityAcceptedAtTitle(_, plugin.liabilityAcceptedAt) : _(msg`Installed with liability acknowledgement`)}
                       >
-                        Unverified Source (User Approved)
+                        <Trans>Unverified Source (User Approved)</Trans>
                       </div>
                     )}
                     {manifest.description && (
@@ -721,12 +749,12 @@ export function PluginsSettingsTab() {
 
                   <div className="flex items-center gap-1.5 shrink-0 self-center">
                     {isBuiltin && (
-                      <Tooltip content="Built-in plugin" wrapperClassName="flex items-center">
+                      <Tooltip content={_(msg`Built-in plugin`)} wrapperClassName="flex items-center">
                         <ShieldCheck className="h-4 w-4 shrink-0 block" style={{ color: builtinShieldIconColor }} />
                       </Tooltip>
                     )}
                     {isOraVerifiedBuiltin ? (
-                      <Tooltip content="Officially verified by ORA" wrapperClassName="flex items-center">
+                      <Tooltip content={_(msg`Officially verified by ORA`)} wrapperClassName="flex items-center">
                         <CheckCircle2 className="h-4 w-4 shrink-0 block" style={{ color: 'color-mix(in srgb, #d97706, var(--text-strong) 18%)' }} />
                       </Tooltip>
                     ) : null}
@@ -740,7 +768,7 @@ export function PluginsSettingsTab() {
                         style={{ color: '#fca5a5' }}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
-                        Remove
+                        <Trans>Remove</Trans>
                       </Button>
                     )}
                   </div>
@@ -759,7 +787,7 @@ export function PluginsSettingsTab() {
             className="text-xs underline-offset-2 hover:underline"
             style={{ color: 'var(--text-faint, var(--text-muted))' }}
           >
-            Plugin Creation Studio
+            <Trans>Plugin Creation Studio</Trans>
           </button>
         </div>
       )}

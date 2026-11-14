@@ -1,4 +1,8 @@
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg, plural } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { Trans } from '@lingui/react/macro';
 import { CopyPlus } from 'lucide-react';
 import { Button, Card, CardHeader, Spinner } from '@/components/atoms';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
@@ -6,6 +10,24 @@ import { ScrollableNumberField } from '@/components/ui/scrollableNumberField';
 import { MiniStepperField } from '@/components/ui/miniStepperField';
 import type { ArrangePrecisionMode } from '@/components/controls/ArrangePanel';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
+
+type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
+
+function formatPreviewBadge(translate: Translate, previewCount: number): string {
+  return translate(msg`+${previewCount} preview`);
+}
+
+function formatAxisCountLabel(translate: Translate, axis: string): string {
+  return translate(msg`${axis} array count`);
+}
+
+function formatAxisGapLabel(translate: Translate, axis: string): string {
+  return translate(msg`${axis} array gap`);
+}
+
+function formatConfirmDuplicateLabel(translate: Translate, count: number): string {
+  return translate(msg`Confirm Duplicate (${plural(count, { one: '# new', other: '# new' })})`);
+}
 
 export type DuplicateLayoutMode = 'auto' | 'array';
 
@@ -64,6 +86,7 @@ export function DuplicatePanel({
   previewCount,
   isApplying = false,
 }: DuplicatePanelProps) {
+  const { _ } = useLingui();
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
   const hasSelection = !!activeModelName;
   const panelDisabled = !hasSelection || isApplying;
@@ -150,14 +173,14 @@ export function DuplicatePanel({
         left={(
           <>
             <PanelCollapseToggle expanded={expanded} onToggle={() => setExpanded((prev) => !prev)} />
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Duplicate</h3>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Duplicate</Trans></h3>
           </>
         )}
         right={(
           <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
             <CopyPlus className="w-3 h-3" style={{ color: 'var(--accent)' }} />
             <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-              {isHighPrecisionFillMode ? 'SAT fill' : `+${previewCount} preview`}
+              {isHighPrecisionFillMode ? _(msg`SAT fill`) : formatPreviewBadge(_, previewCount)}
             </span>
           </div>
         )}
@@ -167,12 +190,12 @@ export function DuplicatePanel({
         <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
           <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
             <div className="text-xs font-medium truncate text-center" style={{ color: 'var(--text-strong)' }}>
-              {activeModelName ?? 'Select a model first'}
+              {activeModelName ?? _(msg`Select a model first`)}
             </div>
           </div>
 
           <div className="rounded-md border p-2" style={panelDisabled ? accentCardStyleDisabled : accentCardStyle}>
-            <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout Mode</div>
+            <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}><Trans>Layout Mode</Trans></div>
             <div className="grid grid-cols-2 gap-1 min-w-0">
               <Button
                 variant="secondary"
@@ -182,7 +205,7 @@ export function DuplicatePanel({
                 disabled={panelDisabled}
                 style={panelDisabled ? undefined : (layoutMode === 'auto' ? activeModeStyle : undefined)}
               >
-                Auto Layout 
+                <Trans>Auto Layout</Trans>
               </Button>
               <Button
                 variant="secondary"
@@ -192,14 +215,14 @@ export function DuplicatePanel({
                 disabled={panelDisabled}
                 style={panelDisabled ? undefined : (layoutMode === 'array' ? activeModeStyle : undefined)}
               >
-                Array
+                <Trans>Array</Trans>
               </Button>
             </div>
           </div>
 
           {layoutMode === 'auto' && (
             <div className="rounded-md border p-2" style={panelDisabled ? accentCardStyleDisabled : accentCardStyle}>
-              <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Precision Mode</div>
+              <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}><Trans>Precision Mode</Trans></div>
               <div className="grid grid-cols-2 gap-1 min-w-0">
                 <Button
                   variant="secondary"
@@ -208,9 +231,9 @@ export function DuplicatePanel({
                   onClick={() => onPrecisionModeChange('standard')}
                   disabled={panelDisabled}
                   style={panelDisabled ? undefined : (precisionMode === 'standard' ? activeModeStyle : undefined)}
-                  title="Current duplicate auto-layout algorithm"
+                  title={_(msg`Current duplicate auto-layout algorithm`)}
                 >
-                  Standard
+                  <Trans>Standard</Trans>
                 </Button>
                 <Button
                   variant="secondary"
@@ -219,9 +242,9 @@ export function DuplicatePanel({
                   onClick={() => onPrecisionModeChange('high_precision')}
                   disabled={panelDisabled}
                   style={panelDisabled ? undefined : (precisionMode === 'high_precision' ? activeModeStyle : undefined)}
-                  title="Use SAT-based fill-plate packing"
+                  title={_(msg`Use SAT-based fill-plate packing`)}
                 >
-                  High-Precision
+                  <Trans>High-Precision</Trans>
                 </Button>
               </div>
             </div>
@@ -231,7 +254,7 @@ export function DuplicatePanel({
             <>
               {precisionMode !== 'high_precision' && (
                 <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
-                  <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Total Copies</label>
+                  <label className="ui-meta" style={{ color: 'var(--text-muted)' }}><Trans>Total Copies</Trans></label>
                   <ScrollableNumberField
                     className="mt-1"
                     value={totalCopies}
@@ -240,15 +263,15 @@ export function DuplicatePanel({
                     max={128}
                     step={1}
                     disabled={panelDisabled}
-                    ariaLabel="Total copies"
-                    decreaseTitle="Decrease total copies"
-                    increaseTitle="Increase total copies"
+                    ariaLabel={_(msg`Total copies`)}
+                    decreaseTitle={_(msg`Decrease total copies`)}
+                    increaseTitle={_(msg`Increase total copies`)}
                   />
                 </div>
               )}
 
               <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
-                <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange Distance</label>
+                <label className="ui-meta" style={{ color: 'var(--text-muted)' }}><Trans>Arrange Distance</Trans></label>
                 <ScrollableNumberField
                   className="mt-1"
                   value={spacingMm}
@@ -258,9 +281,9 @@ export function DuplicatePanel({
                   step={0.1}
                   unit="mm"
                   disabled={panelDisabled}
-                  ariaLabel="Arrange distance"
-                  decreaseTitle="Decrease spacing"
-                  increaseTitle="Increase spacing"
+                  ariaLabel={_(msg`Arrange distance`)}
+                  decreaseTitle={_(msg`Decrease spacing`)}
+                  increaseTitle={_(msg`Increase spacing`)}
                 />
               </div>
             </>
@@ -268,8 +291,8 @@ export function DuplicatePanel({
             <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
               <div className="grid grid-cols-[24px_minmax(0,1fr)_minmax(0,1fr)] gap-1 items-center text-[10px] uppercase tracking-wide mb-1" style={{ color: 'var(--text-muted)' }}>
                 <span />
-                <span className="text-center">Count</span>
-                <span className="text-center">Gap</span>
+                <span className="text-center"><Trans>Count</Trans></span>
+                <span className="text-center"><Trans>Gap</Trans></span>
               </div>
 
               {([
@@ -285,7 +308,7 @@ export function DuplicatePanel({
                     min={1}
                     max={32}
                     disabled={panelDisabled}
-                    ariaLabel={`${axis} array count`}
+                    ariaLabel={formatAxisCountLabel(_, axis)}
                   />
                   <MiniStepperField
                     value={gapValue}
@@ -293,7 +316,7 @@ export function DuplicatePanel({
                     min={-120}
                     max={120}
                     disabled={panelDisabled}
-                    ariaLabel={`${axis} array gap`}
+                    ariaLabel={formatAxisGapLabel(_, axis)}
                   />
                 </div>
               ))}
@@ -309,21 +332,21 @@ export function DuplicatePanel({
             style={isFillPlateDisabled ? disabledButtonStyle : undefined}
             title={
               layoutMode !== 'auto'
-                ? 'Fill Plate is available in Auto layout mode'
+                ? _(msg`Fill Plate is available in Auto layout mode`)
                 : (!hasSelection
-                  ? 'Select a model to fill the plate'
+                  ? _(msg`Select a model to fill the plate`)
                   : (precisionMode === 'high_precision'
-                    ? 'Compute SAT-packed duplicates that fit on the plate'
-                    : 'Set copies to fill current plate capacity'))
+                    ? _(msg`Compute SAT-packed duplicates that fit on the plate`)
+                    : _(msg`Set copies to fill current plate capacity`)))
             }
           >
             {isApplying && isHighPrecisionFillMode ? (
               <span className="inline-flex items-center gap-1.5">
                 <Spinner />
-                Filling Plate…
+                <Trans>Filling Plate…</Trans>
               </span>
             ) : (
-              'Fill Plate'
+              _(msg`Fill Plate`)
             )}
           </Button>
 
@@ -335,15 +358,15 @@ export function DuplicatePanel({
               className="w-full !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
               disabled={isConfirmDuplicateDisabled}
               style={isConfirmDuplicateDisabled ? disabledButtonStyle : undefined}
-              title={!hasSelection ? 'Select a model to duplicate' : 'Generate duplicates from preview'}
+              title={!hasSelection ? _(msg`Select a model to duplicate`) : _(msg`Generate duplicates from preview`)}
             >
               {isApplying ? (
                 <span className="inline-flex items-center gap-1.5">
                   <Spinner />
-                  Duplicating…
+                  <Trans>Duplicating…</Trans>
                 </span>
               ) : (
-                `Confirm Duplicate (${Math.max(0, previewCount)} new)`
+                formatConfirmDuplicateLabel(_, Math.max(0, previewCount))
               )}
             </Button>
           )}

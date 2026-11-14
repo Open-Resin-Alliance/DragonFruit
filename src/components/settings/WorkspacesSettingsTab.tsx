@@ -1,6 +1,9 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
@@ -21,6 +24,7 @@ export function WorkspacesSettingsTab({
   view3dSettings,
   onView3dSettingsChange,
 }: WorkspacesSettingsTabProps) {
+  const { _ } = useLingui();
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const isBuildVolumeManagedByPrinter = Boolean(activePrinterProfile);
@@ -50,10 +54,10 @@ export function WorkspacesSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              3D View
+              <Trans>3D View</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Build volume boundaries and display resolution hints used across the workspace.
+              <Trans>Build volume boundaries and display resolution hints used across the workspace.</Trans>
             </p>
           </div>
         </div>
@@ -62,23 +66,23 @@ export function WorkspacesSettingsTab({
           {isBuildVolumeManagedByPrinter ? (
             <div className="rounded-md border px-2 py-1.5" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 94%)' }}>
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Bounding box dimensions are handled by the selected printer profile (<span style={{ color: 'var(--text-strong)' }}>{activePrinterProfile?.name}</span>).
+                <Trans>Bounding box dimensions are handled by the selected printer profile (<span style={{ color: 'var(--text-strong)' }}>{activePrinterProfile?.name}</span>).</Trans>
               </div>
             </div>
           ) : (
             <>
               <SettingRow
                 bordered
-                label="Enable build volume bounds"
-                description="Shows a faint printer volume outline and enables out-of-bounds checks."
+                label={_(msg`Enable build volume bounds`)}
+                description={_(msg`Shows a faint printer volume outline and enables out-of-bounds checks.`)}
               >
                 <SegmentedControl
-                  label="Enable build volume bounds"
+                  label={_(msg`Enable build volume bounds`)}
                   value={view3dSettings.enabled ? 'on' : 'off'}
                   onChange={(next) => patchView3dSettings({ enabled: next === 'on' })}
                   options={[
-                    { value: 'off', label: 'OFF' },
-                    { value: 'on', label: 'ON' },
+                    { value: 'off', label: _(msg`OFF`) },
+                    { value: 'on', label: _(msg`ON`) },
                   ]}
                 />
               </SettingRow>
@@ -87,7 +91,7 @@ export function WorkspacesSettingsTab({
                 <>
                   <div className="mt-2 grid grid-cols-2 gap-2">
             <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              Build Width (mm)
+              <Trans>Build Width (mm)</Trans>
               <NumberInput
                 min={10}
                 step={1}
@@ -99,7 +103,7 @@ export function WorkspacesSettingsTab({
             </label>
 
             <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              Build Depth (mm)
+              <Trans>Build Depth (mm)</Trans>
               <NumberInput
                 min={10}
                 step={1}
@@ -111,7 +115,7 @@ export function WorkspacesSettingsTab({
             </label>
 
             <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              Max Z Height (mm)
+              <Trans>Max Z Height (mm)</Trans>
               <NumberInput
                 min={10}
                 step={1}
@@ -123,7 +127,7 @@ export function WorkspacesSettingsTab({
             </label>
 
             <div className="rounded-md border px-2 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Build Volume</div>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}><Trans>Build Volume</Trans></div>
               <div className="mt-0.5 text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 {Math.round(view3dSettings.widthMm)} × {Math.round(view3dSettings.depthMm)} × {Math.round(view3dSettings.maxZMm)} mm
               </div>
@@ -132,22 +136,22 @@ export function WorkspacesSettingsTab({
             <SettingRow
               bordered
               className="col-span-2"
-              label="Build volume origin"
-              description="Choose where XYZ 0,0,0 is located for the printer volume."
+              label={_(msg`Build volume origin`)}
+              description={_(msg`Choose where XYZ 0,0,0 is located for the printer volume.`)}
             >
               <SegmentedControl
-                label="Build volume origin"
+                label={_(msg`Build volume origin`)}
                 value={view3dSettings.originMode}
                 onChange={(next) => patchView3dSettings({ originMode: next })}
                 options={[
-                  { value: 'center', label: 'Center' },
-                  { value: 'front_left', label: 'Front-left corner' },
+                  { value: 'center', label: _(msg`Center`) },
+                  { value: 'front_left', label: _(msg`Front-left corner`) },
                 ]}
               />
             </SettingRow>
 
             <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              Screen Width (px)
+              <Trans>Screen Width (px)</Trans>
               <NumberInput
                 min={320}
                 step={1}
@@ -159,7 +163,7 @@ export function WorkspacesSettingsTab({
             </label>
 
             <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              Screen Height (px)
+              <Trans>Screen Height (px)</Trans>
               <NumberInput
                 min={200}
                 step={1}
@@ -178,16 +182,16 @@ export function WorkspacesSettingsTab({
           <SettingRow
             bordered
             className="mt-2"
-            label="Show out-of-bounds warnings"
-            description="Warn when any visible model extends beyond the configured build volume."
+            label={_(msg`Show out-of-bounds warnings`)}
+            description={_(msg`Warn when any visible model extends beyond the configured build volume.`)}
           >
             <SegmentedControl
-              label="Show out-of-bounds warnings"
+              label={_(msg`Show out-of-bounds warnings`)}
               value={view3dSettings.showViolationWarning ? 'on' : 'off'}
               onChange={(next) => patchView3dSettings({ showViolationWarning: next === 'on' })}
               options={[
-                { value: 'off', label: 'OFF' },
-                { value: 'on', label: 'ON' },
+                { value: 'off', label: _(msg`OFF`) },
+                { value: 'on', label: _(msg`ON`) },
               ]}
             />
           </SettingRow>
@@ -195,16 +199,16 @@ export function WorkspacesSettingsTab({
           <SettingRow
             bordered
             className="mt-2"
-            label="Show model bounding boxes"
-            description="Debug overlay: draws world-space bounds for each visible model (red if out-of-bounds)."
+            label={_(msg`Show model bounding boxes`)}
+            description={_(msg`Debug overlay: draws world-space bounds for each visible model (red if out-of-bounds).`)}
           >
             <SegmentedControl
-              label="Show model bounding boxes"
+              label={_(msg`Show model bounding boxes`)}
               value={view3dSettings.showModelBoundingBoxes ? 'on' : 'off'}
               onChange={(next) => patchView3dSettings({ showModelBoundingBoxes: next === 'on' })}
               options={[
-                { value: 'off', label: 'OFF' },
-                { value: 'on', label: 'ON' },
+                { value: 'off', label: _(msg`OFF`) },
+                { value: 'on', label: _(msg`ON`) },
               ]}
             />
           </SettingRow>
@@ -212,16 +216,16 @@ export function WorkspacesSettingsTab({
           <SettingRow
             bordered
             className="mt-2"
-            label="Show slice SAT bounding mesh"
-            description="SAT debug overlay for nesting and diagnostics."
+            label={_(msg`Show slice SAT bounding mesh`)}
+            description={_(msg`SAT debug overlay for nesting and diagnostics.`)}
           >
             <SegmentedControl
-              label="Show slice SAT bounding mesh"
+              label={_(msg`Show slice SAT bounding mesh`)}
               value={view3dSettings.showSliceSatBoundingMesh ? 'on' : 'off'}
               onChange={(next) => patchView3dSettings({ showSliceSatBoundingMesh: next === 'on' })}
               options={[
-                { value: 'off', label: 'OFF' },
-                { value: 'on', label: 'ON' },
+                { value: 'off', label: _(msg`OFF`) },
+                { value: 'on', label: _(msg`ON`) },
               ]}
             />
           </SettingRow>
@@ -230,16 +234,16 @@ export function WorkspacesSettingsTab({
             <SettingRow
               bordered
               className="mt-2"
-              label="SAT debug scope"
-              description="Show SAT mesh on the active model only, or on all visible models."
+              label={_(msg`SAT debug scope`)}
+              description={_(msg`Show SAT mesh on the active model only, or on all visible models.`)}
             >
               <SegmentedControl
-                label="SAT debug scope"
+                label={_(msg`SAT debug scope`)}
                 value={view3dSettings.showSliceSatBoundingMeshForAllModels ? 'all' : 'active'}
                 onChange={(next) => patchView3dSettings({ showSliceSatBoundingMeshForAllModels: next === 'all' })}
                 options={[
-                  { value: 'active', label: 'ACTIVE ONLY' },
-                  { value: 'all', label: 'ALL MODELS' },
+                  { value: 'active', label: _(msg`ACTIVE ONLY`) },
+                  { value: 'all', label: _(msg`ALL MODELS`) },
                 ]}
               />
             </SettingRow>
@@ -250,16 +254,16 @@ export function WorkspacesSettingsTab({
               <SettingRow
                 bordered
                 className="mt-2"
-                label="SAT mode"
-                description="Choose accurate convex-hull SAT for nesting, or experimental slice-derived SAT for diagnostics."
+                label={_(msg`SAT mode`)}
+                description={_(msg`Choose accurate convex-hull SAT for nesting, or experimental slice-derived SAT for diagnostics.`)}
               >
                 <SegmentedControl
-                  label="SAT mode"
+                  label={_(msg`SAT mode`)}
                   value={view3dSettings.sliceSatBoundingMeshMode}
                   onChange={(next) => patchView3dSettings({ sliceSatBoundingMeshMode: next })}
                   options={[
-                    { value: 'accurate_hull', label: 'Accurate Hull-based SAT' },
-                    { value: 'experimental_slice', label: 'Experimental Slice-based SAT' },
+                    { value: 'accurate_hull', label: _(msg`Accurate Hull-based SAT`) },
+                    { value: 'experimental_slice', label: _(msg`Experimental Slice-based SAT`) },
                   ]}
                 />
               </SettingRow>
@@ -268,16 +272,16 @@ export function WorkspacesSettingsTab({
                 <SettingRow
                   bordered
                   className="mt-2"
-                  label="Experimental slice display"
-                  description="Pick how the experimental slice-derived SAT is visualized."
+                  label={_(msg`Experimental slice display`)}
+                  description={_(msg`Pick how the experimental slice-derived SAT is visualized.`)}
                 >
                   <SegmentedControl
-                    label="Experimental slice display"
+                    label={_(msg`Experimental slice display`)}
                     value={view3dSettings.experimentalSliceSatBoundingMeshRenderMode}
                     onChange={(next) => patchView3dSettings({ experimentalSliceSatBoundingMeshRenderMode: next })}
                     options={[
-                      { value: 'shaded', label: 'Shaded' },
-                      { value: 'wireframe', label: 'Wireframe' },
+                      { value: 'shaded', label: _(msg`Shaded`) },
+                      { value: 'wireframe', label: _(msg`Wireframe`) },
                     ]}
                   />
                 </SettingRow>

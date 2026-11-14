@@ -2,7 +2,9 @@
 
 import React, { useEffect, useState } from 'react';
 import { useLingui } from '@lingui/react';
+import type { MessageDescriptor } from '@lingui/core';
 import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import { GeneralSettingsTab } from '@/components/settings/GeneralSettingsTab';
 import { useLocale } from '@/components/I18nClientProvider';
 import contributors from '@/components/settings/contributors.json';
@@ -340,6 +342,24 @@ function TabDescription({ text }: { text: string }) {
       </Tooltip>
     </span>
   );
+}
+
+type TranslateFn = (descriptor: MessageDescriptor) => string;
+
+function formatExportThemeError(translate: TranslateFn, message: string): string {
+  return translate(msg`Failed to export theme profile. ${message}`);
+}
+
+function formatImportThemeError(translate: TranslateFn, message: string): string {
+  return translate(msg`Failed to import theme profile. ${message}`);
+}
+
+function formatChannelBuildLabel(translate: TranslateFn, channel: string): string {
+  return translate(msg`${channel} Build`);
+}
+
+function formatVersionBadgeLabel(translate: TranslateFn, version: string): string {
+  return translate(msg`Version ${version}`);
 }
 
 export function SettingsModal({
@@ -702,11 +722,11 @@ export function SettingsModal({
 
       window.URL.revokeObjectURL(blobUrl);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown export error';
-      window.alert(`Failed to export theme profile. ${message}`);
+      const message = error instanceof Error ? error.message : _(msg`Unknown export error`);
+      window.alert(formatExportThemeError(_, message));
     }
     })();
-  }, [draftThemeColors, draftThemePreference, draftThemePreset, getThemeExportName]);
+  }, [_, draftThemeColors, draftThemePreference, draftThemePreset, getThemeExportName]);
 
   const handleImportTheme = React.useCallback(async (file?: File) => {
     try {
@@ -731,13 +751,13 @@ export function SettingsModal({
       setDraftThemeProfiles(nextProfiles);
       setThemeDraftFromProfile(createdProfile.id, nextProfiles);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown import error';
+      const message = error instanceof Error ? error.message : _(msg`Unknown import error`);
       if (message.toLowerCase().includes('cancel')) return;
       if (typeof window !== 'undefined') {
-        window.alert(`Failed to import theme profile. ${message}`);
+        window.alert(formatImportThemeError(_, message));
       }
     }
-  }, [draftThemeProfiles, setThemeDraftFromProfile]);
+  }, [_, draftThemeProfiles, setThemeDraftFromProfile]);
 
   const handleCreateCustomThemeFromPreset = React.useCallback(() => {
     const previousPreset = draftThemePreset;
@@ -1321,10 +1341,10 @@ export function SettingsModal({
   const usesInternalTabScrollLayout = isAboutTab || activeTab === 'hotkeys' || activeTab === 'updates';
   const isBetaBuildChannel = DRAGONFRUIT_BUILD_CHANNEL.includes('beta');
   const buildStatusLabel = isBetaBuildChannel
-    ? 'BETA VERSION'
+    ? _(msg`BETA VERSION`)
     : DRAGONFRUIT_BUILD_CHANNEL === 'mainline'
-      ? 'Mainline Build'
-      : `${DRAGONFRUIT_BUILD_CHANNEL.toUpperCase()} Build`;
+      ? _(msg`Mainline Build`)
+      : formatChannelBuildLabel(_, DRAGONFRUIT_BUILD_CHANNEL.toUpperCase());
   const buildStatusStyle: React.CSSProperties = isBetaBuildChannel
     ? isLightTheme
       ? {
@@ -1372,16 +1392,16 @@ export function SettingsModal({
               <Settings2 className="h-4.5 w-4.5" style={{ color: 'var(--accent)' }} />
             </span>
             <div>
-              <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>Settings</h2>
+              <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Settings</Trans></h2>
               <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Customize DragonFruit behavior, visuals, and controls.
+                <Trans>Customize DragonFruit behavior, visuals, and controls.</Trans>
               </p>
             </div>
           </div>
           <IconButton
             variant="solid"
             size="sm"
-            aria-label="Close"
+            aria-label={_(msg`Close`)}
             onClick={handleCancel}
           >
             <X className="h-4 w-4" />
@@ -1593,6 +1613,7 @@ export function SettingsModal({
                         <div className="relative flex items-center justify-center">
                           <img
                             src="/dragonfruit_assets/branding/text_logo.svg"
+                            // i18n-ignore
                             alt="DragonFruit"
                             className="h-9 w-auto object-contain"
                             style={isLightTheme ? { filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.35))' } : undefined}
@@ -1604,7 +1625,7 @@ export function SettingsModal({
                               background: 'linear-gradient(135deg, #3b0764 0%, #991b1b 50%, #9a3412 100%)',
                             }}
                           >
-                            An Open Resin Alliance Project
+                            <Trans>An Open Resin Alliance Project</Trans>
                           </span>
                         </div>
 
@@ -1613,7 +1634,7 @@ export function SettingsModal({
                             <Tooltip
                               content={
                                 <span className="whitespace-pre-line">
-                                  Click to copy build info{DRAGONFRUIT_GIT_BUILD_LABEL ? `\n${DRAGONFRUIT_GIT_BUILD_LABEL}` : ''}
+                                  <Trans>Click to copy build info</Trans>{DRAGONFRUIT_GIT_BUILD_LABEL ? `\n${DRAGONFRUIT_GIT_BUILD_LABEL}` : ''}
                                 </span>
                               }
                             >
@@ -1631,7 +1652,7 @@ export function SettingsModal({
                                     : 'color-mix(in srgb, var(--surface-1), transparent 8%)',
                                 }}
                               >
-                                {copied ? '✓ Copied!' : `Version ${DRAGONFRUIT_VERSION}`}
+                                {copied ? _(msg`✓ Copied!`) : formatVersionBadgeLabel(_, DRAGONFRUIT_VERSION)}
                               </span>
                             </Tooltip>
                             <span
@@ -1646,7 +1667,7 @@ export function SettingsModal({
 
                       <div className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                         <h5 className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                          Team & Credits
+                          <Trans>Team & Credits</Trans>
                         </h5>
 
                         <div className="mt-2.5 space-y-2">
@@ -1727,6 +1748,7 @@ export function SettingsModal({
                   <div className="flex items-center gap-4 rounded-xl border px-4 py-3" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 52%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 94%)' }}>
                       <img
                         src={ORA_LOGO_DARK_URL}
+                        // i18n-ignore
                         alt="Open Resin Alliance"
                         className="h-14 w-auto object-contain shrink-0"
                         style={isLightTheme ? { filter: 'drop-shadow(0 1px 4px rgba(0,0,0,0.3))' } : undefined}
@@ -1755,6 +1777,7 @@ export function SettingsModal({
 
                         <div className="flex items-center justify-center gap-2 text-[12px]" style={{ color: 'var(--text-strong)' }}>
                           <ScrollText className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent)' }} />
+                          {/* i18n-ignore */}
                           <span className="font-mono tracking-tighter">AGPL-3.0-or-later</span>
                         </div>
                       </div>
@@ -1781,7 +1804,7 @@ export function SettingsModal({
             onClick={handleRestoreDefaults}
           >
             <RotateCcw className="h-4 w-4 shrink-0" />
-            Restore Defaults
+            <Trans>Restore Defaults</Trans>
           </Button>
 
           <div className="flex items-center gap-2">
@@ -1794,7 +1817,7 @@ export function SettingsModal({
               }}
               onClick={handleCancel}
             >
-              Cancel
+              <Trans>Cancel</Trans>
             </Button>
             <Button
               variant="primary"
@@ -1807,7 +1830,7 @@ export function SettingsModal({
               onClick={handleApply}
             >
               <Check className="h-4 w-4 shrink-0" />
-              Apply
+              <Trans>Apply</Trans>
             </Button>
           </div>
         </div>
@@ -1815,14 +1838,14 @@ export function SettingsModal({
 
       <StructuredDialogModal
         open={showRestoreDefaultsConfirm}
-        ariaLabel="Confirm restore defaults"
-        title="Restore Defaults?"
-        subtitle="This resets settings in this dialog to their default values."
+        ariaLabel={_(msg`Confirm restore defaults`)}
+        title={_(msg`Restore Defaults?`)}
+        subtitle={_(msg`This resets settings in this dialog to their default values.`)}
         icon={<RotateCcw className="h-4 w-4" />}
         iconTone="warning"
         zIndexClassName="z-[70]"
         maxWidthClassName="max-w-md"
-        closeAriaLabel="Close restore defaults confirmation"
+        closeAriaLabel={_(msg`Close restore defaults confirmation`)}
         onClose={handleCancelRestoreDefaults}
         actions={(
           <>
@@ -1831,7 +1854,7 @@ export function SettingsModal({
               size="md"
               onClick={handleCancelRestoreDefaults}
             >
-              Keep Current
+              <Trans>Keep Current</Trans>
             </Button>
             <Button
               variant="tinted-accent"
@@ -1840,26 +1863,26 @@ export function SettingsModal({
               onClick={handleConfirmRestoreDefaults}
             >
               <RotateCcw className="h-3.5 w-3.5" />
-              Restore Defaults
+              <Trans>Restore Defaults</Trans>
             </Button>
           </>
         )}
       >
         <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-          You can still review the changes before saving. Nothing is written until you click <strong>Apply</strong>.
+          <Trans>You can still review the changes before saving. Nothing is written until you click <strong>Apply</strong>.</Trans>
         </p>
       </StructuredDialogModal>
 
       <StructuredDialogModal
         open={showReloadPrompt}
-        ariaLabel="Apply experiments"
-        title="Apply Experiments"
-        subtitle="Experiment changes take effect after a restart."
+        ariaLabel={_(msg`Apply experiments`)}
+        title={_(msg`Apply Experiments`)}
+        subtitle={_(msg`Experiment changes take effect after a restart.`)}
         icon={<RotateCcw className="h-4 w-4" />}
         iconTone="warning"
         zIndexClassName="z-[80]"
         maxWidthClassName="max-w-md"
-        closeAriaLabel="Close restart prompt"
+        closeAriaLabel={_(msg`Close restart prompt`)}
         onClose={() => setShowReloadPrompt(false)}
         actions={(
           <>
@@ -1868,7 +1891,7 @@ export function SettingsModal({
               size="md"
               onClick={() => { setShowReloadPrompt(false); onClose(); }}
             >
-              Not Now
+              <Trans>Not Now</Trans>
             </Button>
             <Button
               variant="tinted-accent"
@@ -1877,25 +1900,25 @@ export function SettingsModal({
               onClick={reloadToApplyExperiments}
             >
               <RotateCcw className="h-3.5 w-3.5" />
-              Reload Now
+              <Trans>Reload Now</Trans>
             </Button>
           </>
         )}
       >
         <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-          Reload DragonFruit now to apply your experiment changes? Any unsaved changes to the current scene will be lost.
+          <Trans>Reload DragonFruit now to apply your experiment changes? Any unsaved changes to the current scene will be lost.</Trans>
         </p>
       </StructuredDialogModal>
 
       <StructuredDialogModal
         open={showThemeSaveConfirm && !isBuiltInThemePreset(draftThemePreset)}
-        ariaLabel="Confirm save custom theme"
-        title="Save Theme Changes?"
-        subtitle="This updates the selected custom theme profile."
+        ariaLabel={_(msg`Confirm save custom theme`)}
+        title={_(msg`Save Theme Changes?`)}
+        subtitle={_(msg`This updates the selected custom theme profile.`)}
         icon={<Save className="h-4 w-4" />}
         iconTone="accent"
         zIndexClassName="z-[72]"
-        closeAriaLabel="Close save theme confirmation"
+        closeAriaLabel={_(msg`Close save theme confirmation`)}
         onClose={handleCancelThemeSaveConfirm}
         actions={(
           <>
@@ -1904,7 +1927,7 @@ export function SettingsModal({
               size="md"
               onClick={handleCancelThemeSaveConfirm}
             >
-              Cancel
+              <Trans>Cancel</Trans>
             </Button>
             <Button
               variant="tinted-accent"
@@ -1913,25 +1936,25 @@ export function SettingsModal({
               onClick={handleConfirmSaveCurrentCustomTheme}
             >
               <Save className="h-3.5 w-3.5" />
-              Save Theme
+              <Trans>Save Theme</Trans>
             </Button>
           </>
         )}
       >
         <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-          Save <strong>{draftCustomThemeName.trim() || 'this custom theme'}</strong> with the current scheme and palette values?
+          <Trans>Save <strong>{draftCustomThemeName.trim() || _(msg`this custom theme`)}</strong> with the current scheme and palette values?</Trans>
         </p>
       </StructuredDialogModal>
 
       <StructuredDialogModal
         open={showThemeDeleteConfirm && !isBuiltInThemePreset(draftThemePreset)}
-        ariaLabel="Confirm delete custom theme"
-        title="Delete Custom Theme?"
-        subtitle="This action cannot be undone."
+        ariaLabel={_(msg`Confirm delete custom theme`)}
+        title={_(msg`Delete Custom Theme?`)}
+        subtitle={_(msg`This action cannot be undone.`)}
         icon={<AlertTriangle className="h-4 w-4" />}
         iconTone="danger"
         zIndexClassName="z-[73]"
-        closeAriaLabel="Close delete theme confirmation"
+        closeAriaLabel={_(msg`Close delete theme confirmation`)}
         onClose={handleCancelThemeDeleteConfirm}
         actions={(
           <>
@@ -1940,7 +1963,7 @@ export function SettingsModal({
               size="md"
               onClick={handleCancelThemeDeleteConfirm}
             >
-              Keep Theme
+              <Trans>Keep Theme</Trans>
             </Button>
             <Button
               variant="tinted-danger"
@@ -1949,25 +1972,25 @@ export function SettingsModal({
               onClick={handleConfirmDeleteCurrentCustomTheme}
             >
               <Trash2 className="h-3.5 w-3.5" />
-              Delete Theme
+              <Trans>Delete Theme</Trans>
             </Button>
           </>
         )}
       >
         <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-          Delete <strong>{draftCustomThemeName.trim() || 'this custom theme'}</strong>? DragonFruit will switch back to a built-in preset.
+          <Trans>Delete <strong>{draftCustomThemeName.trim() || _(msg`this custom theme`)}</strong>? DragonFruit will switch back to a built-in preset.</Trans>
         </p>
       </StructuredDialogModal>
 
       <StructuredDialogModal
         open={showThemeRenameDialog && !isBuiltInThemePreset(draftThemePreset)}
-        ariaLabel={isCreatingCustomThemeName ? 'Create custom theme' : 'Rename custom theme'}
-        title={isCreatingCustomThemeName ? 'Create Custom Theme' : 'Rename Custom Theme'}
-        subtitle={isCreatingCustomThemeName ? 'Choose a name for your new custom theme profile.' : 'Update the display name for this custom theme profile.'}
+        ariaLabel={isCreatingCustomThemeName ? _(msg`Create custom theme`) : _(msg`Rename custom theme`)}
+        title={isCreatingCustomThemeName ? _(msg`Create Custom Theme`) : _(msg`Rename Custom Theme`)}
+        subtitle={isCreatingCustomThemeName ? _(msg`Choose a name for your new custom theme profile.`) : _(msg`Update the display name for this custom theme profile.`)}
         icon={<Edit3 className="h-4 w-4" />}
         iconTone="accent"
         zIndexClassName="z-[74]"
-        closeAriaLabel={isCreatingCustomThemeName ? 'Close create custom theme dialog' : 'Close rename custom theme dialog'}
+        closeAriaLabel={isCreatingCustomThemeName ? _(msg`Close create custom theme dialog`) : _(msg`Close rename custom theme dialog`)}
         onClose={handleCancelThemeRenameDialog}
         actions={(
           <>
@@ -1976,7 +1999,7 @@ export function SettingsModal({
               size="md"
               onClick={handleCancelThemeRenameDialog}
             >
-              Cancel
+              <Trans>Cancel</Trans>
             </Button>
             <Button
               variant="tinted-accent"
@@ -1986,28 +2009,28 @@ export function SettingsModal({
               onClick={handleConfirmRenameCurrentCustomTheme}
             >
               <Check className="h-3.5 w-3.5" />
-              {isCreatingCustomThemeName ? 'Create' : 'Save Name'}
+              {isCreatingCustomThemeName ? _(msg`Create`) : _(msg`Save Name`)}
             </Button>
           </>
         )}
       >
         <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-            Theme name
+            <Trans>Theme name</Trans>
           </label>
           <input
             type="text"
             value={draftThemeRenameName}
             onChange={(event) => setDraftThemeRenameName(event.target.value)}
             className="ui-input h-9 w-full text-xs"
-            placeholder="Custom Theme"
+            placeholder={_(msg`Custom Theme`)}
           />
 
           {isCreatingCustomThemeName ? (
             <div className="space-y-2">
               <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Base preset
+                  <Trans>Base preset</Trans>
                 </label>
                 <div
                   className="inline-flex w-full rounded-md border p-1"
@@ -2034,7 +2057,7 @@ export function SettingsModal({
                             background: 'transparent',
                           }}
                       >
-                        {preset === 'dark' ? 'Dark' : 'Light'}
+                        {preset === 'dark' ? _(msg`Dark`) : _(msg`Light`)}
                       </button>
                     );
                   })}
@@ -2044,7 +2067,7 @@ export function SettingsModal({
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Primary branding
+                  <Trans>Primary branding</Trans>
                 </label>
                 <div className="flex items-center gap-1.5">
                   <ColorSwatchInput
@@ -2064,7 +2087,7 @@ export function SettingsModal({
 
               <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Secondary branding
+                  <Trans>Secondary branding</Trans>
                 </label>
                 <div className="flex items-center gap-1.5">
                   <ColorSwatchInput

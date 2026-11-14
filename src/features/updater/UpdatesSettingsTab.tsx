@@ -1,6 +1,9 @@
 'use client';
 
 import React, { useCallback } from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import { AlertTriangle, FlaskConical, Settings, ShieldCheck } from 'lucide-react';
 import { useIsLinux } from '@/hooks/usePlatform';
 import { UpdateCheckerSection } from '@/features/updater/UpdateCheckerSection';
@@ -23,6 +26,7 @@ export function UpdatesSettingsTab({
   channel,
   onChannelChange,
 }: UpdatesSettingsTabProps) {
+  const { _ } = useLingui();
   const isLinux = useIsLinux();
   const [showChannelSettings, setShowChannelSettings] = React.useState(false);
   const [pendingChannel, setPendingChannel] = React.useState<UpdateChannel>(channel);
@@ -69,8 +73,8 @@ export function UpdatesSettingsTab({
             tone="accent"
             onClick={() => setShowChannelSettings(true)}
             className="absolute right-3 top-3 hover:brightness-110"
-            aria-label="Release channel settings"
-            title="Release channel settings"
+            aria-label={_(msg`Release channel settings`)}
+            title={_(msg`Release channel settings`)}
           >
             <Settings className="h-4 w-4" />
           </IconButton>
@@ -81,9 +85,9 @@ export function UpdatesSettingsTab({
       </section>
       <StructuredDialogModal
         open={showChannelSettings}
-        ariaLabel="Release channel settings"
-        title="Release Channel"
-        subtitle="Choose which update feed to check for new versions."
+        ariaLabel={_(msg`Release channel settings`)}
+        title={_(msg`Release Channel`)}
+        subtitle={_(msg`Choose which update feed to check for new versions.`)}
         icon={<Settings className="h-5 w-5" style={{ color: 'var(--accent)' }} />}
         iconTone="neutral"
         onClose={() => setShowChannelSettings(false)}
@@ -95,7 +99,7 @@ export function UpdatesSettingsTab({
               size="md"
               onClick={() => setShowChannelSettings(false)}
             >
-              Cancel
+              <Trans>Cancel</Trans>
             </Button>
             <Button
               variant="secondary"
@@ -114,16 +118,16 @@ export function UpdatesSettingsTab({
               {isPendingDevSwitch ? (
                 <>
                   <FlaskConical className="w-3.5 h-3.5" />
-                  Switch to Previews
+                  <Trans>Switch to Previews</Trans>
                 </>
               ) : (
-                'Apply'
+                _(msg`Apply`)
               )}
             </Button>
           </>
         }
       >
-        <div className="grid gap-2.5" role="tablist" aria-label="Release channel">
+        <div className="grid gap-2.5" role="tablist" aria-label={_(msg`Release channel`)}>
           <Button
             variant="secondary"
             size="auto"
@@ -135,10 +139,10 @@ export function UpdatesSettingsTab({
           >
             <span className="inline-flex items-center gap-1.5 text-sm font-semibold leading-none">
               <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
-              Stable Builds
+              <Trans>Stable Builds</Trans>
             </span>
             <span className="text-xs font-normal leading-tight" style={{ color: 'var(--text-muted)' }}>
-              Recommended · Production
+              <Trans>Recommended · Production</Trans>
             </span>
           </Button>
           <Button
@@ -152,10 +156,10 @@ export function UpdatesSettingsTab({
           >
             <span className="inline-flex items-center gap-1.5 text-sm font-semibold leading-none">
               <FlaskConical className="h-3.5 w-3.5 shrink-0" />
-              Development Previews
+              <Trans>Development Previews</Trans>
             </span>
             <span className="text-xs font-normal leading-tight" style={{ color: 'var(--text-muted)' }}>
-              Early access · May be unstable
+              <Trans>Early access · May be unstable</Trans>
             </span>
           </Button>
         </div>
@@ -163,7 +167,9 @@ export function UpdatesSettingsTab({
           <div className="mt-3 rounded-md border px-3 py-2.5 flex gap-2.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 40%)', background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 90%)' }}>
             <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" style={{ color: '#f59e0b' }} />
             <div className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-              <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>Development Previews</span> are built from the <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>dev</span> branch for early testing. Expect bugs and breaking changes — switch back to Stable Builds at any time.
+              <Trans>
+                <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>Development Previews</span> are built from the <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>dev</span> branch for early testing. Expect bugs and breaking changes — switch back to Stable Builds at any time.
+              </Trans>
             </div>
           </div>
         )}

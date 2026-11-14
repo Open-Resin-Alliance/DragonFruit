@@ -1,6 +1,10 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg, plural } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { Trans } from '@lingui/react/macro';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { ArchiveRestore, FileArchive, X } from 'lucide-react';
 import { Button, IconButton } from '@/components/atoms';
@@ -8,6 +12,18 @@ import { getFileExtensionLower } from '@/utils/zipImport';
 import { SCENE_FILE_EXTENSIONS } from '@/features/plugins/pluginFileTypeExtensions';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import type { UnitFormat, Unit } from '@/utils/unitFormatting';
+
+type Translate = (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string;
+
+function formatToggleExtTitle(translate: Translate, allOfTypeSelected: boolean, label: string): string {
+  return allOfTypeSelected
+    ? translate(msg`Deselect all ${label} files`)
+    : translate(msg`Select all ${label} files`);
+}
+
+function formatImportFilesLabel(translate: Translate, count: number): string {
+  return translate(msg`Import ${plural(count, { one: '# file', other: '# files' })}`);
+}
 
 const MESH_EXTS = new Set(['.stl', '.obj', '.3mf']);
 const SCENE_EXTS = new Set(SCENE_FILE_EXTENSIONS.map((ext) => `.${ext}`));
@@ -85,6 +101,7 @@ export function ZipFilePickerModal({
   onConfirm,
   onCancel,
 }: ZipFilePickerModalProps) {
+  const { _ } = useLingui();
   const fmt = useLocaleFormat();
   const defaultSelectedIndices = React.useMemo(
     () => getDefaultSelectedIndices(files, category, defaultSelectionCategory),
@@ -181,16 +198,16 @@ export function ZipFilePickerModal({
   };
 
   const categoryLabel = category === 'mixed'
-    ? 'mesh and scene files'
-    : (category === 'mesh' ? 'mesh files' : 'scene files');
+    ? _(msg`mesh and scene files`)
+    : (category === 'mesh' ? _(msg`mesh files`) : _(msg`scene files`));
   const actionLabel = category === 'mixed'
-    ? 'Load Mesh / Import Scene'
-    : (category === 'mesh' ? 'Load Mesh' : 'Import Scene');
+    ? _(msg`Load Mesh / Import Scene`)
+    : (category === 'mesh' ? _(msg`Load Mesh`) : _(msg`Import Scene`));
   const defaultSelectionLabel = category === 'mixed'
     ? (defaultSelectionCategory === 'mesh'
-        ? 'Matching mesh files are selected by default.'
-        : 'Matching scene files are selected by default.')
-    : 'All files are selected by default.';
+        ? _(msg`Matching mesh files are selected by default.`)
+        : _(msg`Matching scene files are selected by default.`))
+    : _(msg`All files are selected by default.`);
 
   return (
     <div
@@ -208,7 +225,7 @@ export function ZipFilePickerModal({
         }}
         role="dialog"
         aria-modal="true"
-        aria-label="Select files from ZIP archive"
+        aria-label={_(msg`Select files from ZIP archive`)}
       >
         <div
           className="flex items-center justify-between gap-4 border-b px-5 py-4"
@@ -227,10 +244,10 @@ export function ZipFilePickerModal({
             </span>
             <div className="min-w-0 pr-2">
               <h2 className="text-base font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
-                Select Files from ZIP
+                <Trans>Select Files from ZIP</Trans>
               </h2>
               <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                DragonFruit found {categoryLabel} in this archive for {actionLabel}
+                <Trans>DragonFruit found {categoryLabel} in this archive for {actionLabel}</Trans>
               </p>
             </div>
           </div>
@@ -238,7 +255,7 @@ export function ZipFilePickerModal({
           <IconButton
             variant="surface"
             size="md"
-            aria-label="Cancel ZIP import"
+            aria-label={_(msg`Cancel ZIP import`)}
             onClick={onCancel}
           >
             <X className="w-4 h-4" />
@@ -247,7 +264,7 @@ export function ZipFilePickerModal({
 
         <div className="space-y-4 p-5">
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            Choose which files to import from this archive. {defaultSelectionLabel}
+            <Trans>Choose which files to import from this archive. {defaultSelectionLabel}</Trans>
           </p>
 
           <div
@@ -258,21 +275,21 @@ export function ZipFilePickerModal({
             }}
           >
             <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Archive
+              <Trans>Archive</Trans>
             </div>
             <div className="mt-1 truncate text-sm font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
               {zipName}
             </div>
             <div className="mt-2 flex items-center gap-3">
               <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                {selectedIndices.size} of {files.length} selected
+                <Trans>{selectedIndices.size} of {files.length} selected</Trans>
               </span>
             </div>
           </div>
 
           <div className="space-y-1.5 px-1">
             <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Quick select
+              <Trans>Quick select</Trans>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -288,9 +305,9 @@ export function ZipFilePickerModal({
                   color: allSelected ? 'var(--accent)' : 'var(--text-muted)',
                 }}
                 onClick={toggleAll}
-                title={allSelected ? 'Deselect all files' : 'Select all files'}
+                title={allSelected ? _(msg`Deselect all files`) : _(msg`Select all files`)}
               >
-                <span>ALL</span>
+                <span><Trans>ALL</Trans></span>
                 <span style={{ color: allSelected ? 'var(--text-strong)' : 'var(--text-muted)' }}>
                   {selectedIndices.size}/{files.length}
                 </span>
@@ -316,7 +333,7 @@ export function ZipFilePickerModal({
                       color: allOfTypeSelected ? group.color : 'var(--text-muted)',
                     }}
                     onClick={() => toggleExtension(group.indices)}
-                    title={allOfTypeSelected ? `Deselect all ${group.label} files` : `Select all ${group.label} files`}
+                    title={formatToggleExtTitle(_, allOfTypeSelected, group.label)}
                   >
                     <span>{group.label}</span>
                     <span style={{ color: hasAnySelected ? 'var(--text-strong)' : 'var(--text-muted)' }}>
@@ -385,7 +402,7 @@ export function ZipFilePickerModal({
               variant="secondary"
               onClick={onCancel}
             >
-              Cancel
+              <Trans>Cancel</Trans>
             </Button>
             <Button
               type="button"
@@ -410,8 +427,8 @@ export function ZipFilePickerModal({
             >
               <ArchiveRestore className="h-3.5 w-3.5" />
               {selectedIndices.size > 0
-                ? `Import ${selectedIndices.size} file${selectedIndices.size !== 1 ? 's' : ''}`
-                : 'Import'}
+                ? formatImportFilesLabel(_, selectedIndices.size)
+                : _(msg`Import`)}
             </Button>
           </div>
         </div>
