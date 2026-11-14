@@ -1,6 +1,8 @@
 import React from 'react';
 import { useLingui } from '@lingui/react';
+import type { MessageDescriptor } from '@lingui/core';
 import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import { Palette } from 'lucide-react';
 import { OrganicCutColorsSection } from '@/features/organicCut';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
@@ -9,83 +11,83 @@ import type { ThemeCustomColors, ThemePreference, ThemePreset, ThemeProfile } fr
 
 type ThemeColorField = {
 	key: keyof ThemeCustomColors;
-	label: string;
-	description: string;
+	label: MessageDescriptor;
+	description: MessageDescriptor;
 	placeholder: string;
 };
 
 type ThemeColorSection = {
 	id: string;
-	title: string;
-	description: string;
+	title: MessageDescriptor;
+	description: MessageDescriptor;
 	rows: ThemeColorField[];
 };
 
 const THEME_COLOR_SECTIONS: ThemeColorSection[] = [
 	{
 		id: 'foundation',
-		title: 'Foundation surfaces',
-		description: 'Core app backgrounds and panel surfaces.',
+		title: msg`Foundation surfaces`,
+		description: msg`Core app backgrounds and panel surfaces.`,
 		rows: [
-			{ key: 'background', label: 'App background', description: 'Outer app frame and page background.', placeholder: '#0b0f14' },
-			{ key: 'foreground', label: 'App foreground', description: 'Top-level body text fallback color.', placeholder: '#e6ebf2' },
-			{ key: 'surface0', label: 'Surface 0', description: 'Main modal and panel base surface.', placeholder: '#111216' },
-			{ key: 'surface1', label: 'Surface 1', description: 'Raised cards, tool panes, and section fills.', placeholder: '#1a1b21' },
-			{ key: 'surface2', label: 'Surface 2', description: 'Secondary tiles and inset controls.', placeholder: '#23252e' },
+			{ key: 'background', label: msg`App background`, description: msg`Outer app frame and page background.`, placeholder: '#0b0f14' },
+			{ key: 'foreground', label: msg`App foreground`, description: msg`Top-level body text fallback color.`, placeholder: '#e6ebf2' },
+			{ key: 'surface0', label: msg`Surface 0`, description: msg`Main modal and panel base surface.`, placeholder: '#111216' },
+			{ key: 'surface1', label: msg`Surface 1`, description: msg`Raised cards, tool panes, and section fills.`, placeholder: '#1a1b21' },
+			{ key: 'surface2', label: msg`Surface 2`, description: msg`Secondary tiles and inset controls.`, placeholder: '#23252e' },
 		],
 	},
 	{
 		id: 'content',
-		title: 'Content contrast',
-		description: 'Typography, borders, and neutral UI signals.',
+		title: msg`Content contrast`,
+		description: msg`Typography, borders, and neutral UI signals.`,
 		rows: [
-			{ key: 'textStrong', label: 'Text strong', description: 'Primary headings and high-contrast labels.', placeholder: '#f8f8fb' },
-			{ key: 'textMuted', label: 'Text muted', description: 'Supporting labels, hints, and metadata.', placeholder: '#c3c7cf' },
-			{ key: 'indicator', label: 'Indicator', description: 'Neutral dots, markers, and status indicators.', placeholder: '#c3c7cf' },
-			{ key: 'borderSubtle', label: 'Border subtle', description: 'Low-contrast panel and input outlines.', placeholder: '#272a33' },
-			{ key: 'borderStrong', label: 'Border strong', description: 'Higher-contrast structural dividers.', placeholder: '#353944' },
+			{ key: 'textStrong', label: msg`Text strong`, description: msg`Primary headings and high-contrast labels.`, placeholder: '#f8f8fb' },
+			{ key: 'textMuted', label: msg`Text muted`, description: msg`Supporting labels, hints, and metadata.`, placeholder: '#c3c7cf' },
+			{ key: 'indicator', label: msg`Indicator`, description: msg`Neutral dots, markers, and status indicators.`, placeholder: '#c3c7cf' },
+			{ key: 'borderSubtle', label: msg`Border subtle`, description: msg`Low-contrast panel and input outlines.`, placeholder: '#272a33' },
+			{ key: 'borderStrong', label: msg`Border strong`, description: msg`Higher-contrast structural dividers.`, placeholder: '#353944' },
 		],
 	},
 	{
 		id: 'brand-primary',
-		title: 'Primary brand accent',
-		description: 'Primary action styling, highlights, and key brand colors.',
+		title: msg`Primary brand accent`,
+		description: msg`Primary action styling, highlights, and key brand colors.`,
 		rows: [
-			{ key: 'accent', label: 'Accent', description: 'Primary highlight, active icons, and focus color.', placeholder: '#ec2a77' },
-			{ key: 'accentHover', label: 'Accent hover', description: 'Hover/pressed state for primary accent actions.', placeholder: '#d81d67' },
-			{ key: 'primaryButtonSurface', label: 'Primary button surface', description: 'Filled primary buttons and pills.', placeholder: '#c11f61' },
-			{ key: 'accentContrast', label: 'Accent contrast', description: 'Text/icons shown on primary accent fills.', placeholder: '#fff6ff' },
-			{ key: 'topbarAccent', label: 'Top bar accent', description: 'Glow and accent wash used by the app bar.', placeholder: '#ec2a77' },
+			{ key: 'accent', label: msg`Accent`, description: msg`Primary highlight, active icons, and focus color.`, placeholder: '#ec2a77' },
+			{ key: 'accentHover', label: msg`Accent hover`, description: msg`Hover/pressed state for primary accent actions.`, placeholder: '#d81d67' },
+			{ key: 'primaryButtonSurface', label: msg`Primary button surface`, description: msg`Filled primary buttons and pills.`, placeholder: '#c11f61' },
+			{ key: 'accentContrast', label: msg`Accent contrast`, description: msg`Text/icons shown on primary accent fills.`, placeholder: '#fff6ff' },
+			{ key: 'topbarAccent', label: msg`Top bar accent`, description: msg`Glow and accent wash used by the app bar.`, placeholder: '#ec2a77' },
 		],
 	},
 	{
 		id: 'brand-secondary',
-		title: 'Secondary brand accent',
-		description: 'Secondary action styling, complementary highlights, and secondary brand colors.',
+		title: msg`Secondary brand accent`,
+		description: msg`Secondary action styling, complementary highlights, and secondary brand colors.`,
 		rows: [
-			{ key: 'accentSecondary', label: 'Accent secondary', description: 'Secondary accent and approved-action color.', placeholder: '#baf72e' },
-			{ key: 'accentSecondaryHover', label: 'Secondary hover', description: 'Hover/pressed state for green actions.', placeholder: '#a6df29' },
-			{ key: 'secondaryButtonSurface', label: 'Secondary button surface', description: 'Filled secondary buttons and badges.', placeholder: '#9bcc26' },
-			{ key: 'accentSecondaryContrast', label: 'Secondary contrast', description: 'Text/icons shown on green fills.', placeholder: '#182106' },
+			{ key: 'accentSecondary', label: msg`Accent secondary`, description: msg`Secondary accent and approved-action color.`, placeholder: '#baf72e' },
+			{ key: 'accentSecondaryHover', label: msg`Secondary hover`, description: msg`Hover/pressed state for green actions.`, placeholder: '#a6df29' },
+			{ key: 'secondaryButtonSurface', label: msg`Secondary button surface`, description: msg`Filled secondary buttons and badges.`, placeholder: '#9bcc26' },
+			{ key: 'accentSecondaryContrast', label: msg`Secondary contrast`, description: msg`Text/icons shown on green fills.`, placeholder: '#182106' },
 		],
 	},
 	{
 		id: 'scene',
-		title: 'Scene accents',
-		description: '3D view gradient treatment and scene chrome.',
+		title: msg`Scene accents`,
+		description: msg`3D view gradient treatment and scene chrome.`,
 		rows: [
-			{ key: 'sceneGradientRadial', label: '3D radial glow', description: 'Radial color bloom in the scene backdrop.', placeholder: '#ff37aa' },
-			{ key: 'sceneGradientLinearStart', label: '3D gradient top', description: 'Top stop of the linear scene gradient.', placeholder: '#ff37aa' },
-			{ key: 'sceneGradientLinearMid', label: '3D gradient mid', description: 'Middle stop of the linear scene gradient.', placeholder: '#6f33ff' },
+			{ key: 'sceneGradientRadial', label: msg`3D radial glow`, description: msg`Radial color bloom in the scene backdrop.`, placeholder: '#ff37aa' },
+			{ key: 'sceneGradientLinearStart', label: msg`3D gradient top`, description: msg`Top stop of the linear scene gradient.`, placeholder: '#ff37aa' },
+			{ key: 'sceneGradientLinearMid', label: msg`3D gradient mid`, description: msg`Middle stop of the linear scene gradient.`, placeholder: '#6f33ff' },
 		],
 	},
 	{
 		id: 'status',
-		title: 'Semantic status colors',
-		description: 'Feedback colors for success and destructive actions.',
+		title: msg`Semantic status colors`,
+		description: msg`Feedback colors for success and destructive actions.`,
 		rows: [
-			{ key: 'success', label: 'Success', description: 'Success states, confirmations, and healthy signals.', placeholder: '#2eb67d' },
-			{ key: 'danger', label: 'Danger', description: 'Destructive actions, warnings, and errors.', placeholder: '#e45454' },
+			{ key: 'success', label: msg`Success`, description: msg`Success states, confirmations, and healthy signals.`, placeholder: '#2eb67d' },
+			{ key: 'danger', label: msg`Danger`, description: msg`Destructive actions, warnings, and errors.`, placeholder: '#e45454' },
 		],
 	},
 ];
@@ -93,8 +95,8 @@ const THEME_COLOR_SECTIONS: ThemeColorSection[] = [
 // Mesh selection/hover tint, on their own sub-tab: they are theme entries (so
 // presets can set them individually) rather than part of the core UI token set.
 const MESH_HIGHLIGHT_COLOR_FIELDS: ThemeColorField[] = [
-	{ key: 'meshSelectionColor', label: 'Selection color', description: 'Tint applied to selected models.', placeholder: '#ec2a77' },
-	{ key: 'meshHoverColor', label: 'Hover color', description: 'Tint applied to hovered models.', placeholder: '#ec2a77' },
+	{ key: 'meshSelectionColor', label: msg`Selection color`, description: msg`Tint applied to selected models.`, placeholder: '#ec2a77' },
+	{ key: 'meshHoverColor', label: msg`Hover color`, description: msg`Tint applied to hovered models.`, placeholder: '#ec2a77' },
 ];
 
 interface UISettingsTabProps {
@@ -226,12 +228,12 @@ export function UISettingsTab({
 				borderColor: 'var(--border-subtle)',
 				background: 'color-mix(in srgb, var(--surface-0), transparent 8%)',
 			}}
-			title={row.description}
+			title={_(row.description)}
 		>
 			<div className="grid grid-cols-[minmax(0,1fr)_10.75rem] items-center gap-2.5">
 				<div className="min-w-0">
 					<label className="block truncate text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-						{row.label}
+						{_(row.label)}
 					</label>
 				</div>
 				<div className="flex min-w-0 items-center gap-1.5">
@@ -277,10 +279,10 @@ export function UISettingsTab({
 					</span>
 					<div className="flex-1">
 						<h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-							Theme
+							<Trans>Theme</Trans>
 						</h3>
 						<p className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-							Preview is live. <span className="font-semibold">Apply</span> saves it.
+							<Trans>Preview is live. <span className="font-semibold">Apply</span> saves it.</Trans>
 						</p>
 					</div>
 				</div>
@@ -288,7 +290,7 @@ export function UISettingsTab({
 				<div className="grid gap-2 md:grid-cols-2">
 					<div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
 						<label className="mb-1 block text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-							Theme preset
+							<Trans>Theme preset</Trans>
 						</label>
 						<SelectDropdown<ThemePreset>
 							value={themePreset}
@@ -298,7 +300,7 @@ export function UISettingsTab({
 							menuClassName="max-w-[28rem]"
 							menuFooterDivider
 							menuFooterAction={{
-								label: '+ New Theme',
+								label: _(msg`+ New Theme`),
 								onClick: onCreateCustomThemeFromPreset,
 								tone: 'accent',
 							}}
@@ -307,15 +309,15 @@ export function UISettingsTab({
 
 					<div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', opacity: isBuiltInThemePreset ? 0.5 : 1 }}>
 						<label className="mb-1 block text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-							Color scheme
+							<Trans>Color scheme</Trans>
 						</label>
 						<Select
 							value={themePreference}
 							onChange={(event) => onThemePreferenceChange(event.target.value as ThemePreference)}
 							disabled={isBuiltInThemePreset}
 						>
-							<option value="dark">Dark</option>
-							<option value="light">Light</option>
+							<option value="dark">{_(msg`Dark`)}</option>
+							<option value="light">{_(msg`Light`)}</option>
 						</Select>
 					</div>
 				</div>
@@ -338,7 +340,7 @@ export function UISettingsTab({
 										size="auto"
 										className="!h-8 !px-2.5 !py-0 text-xs"
 									>
-										Import
+										<Trans>Import</Trans>
 									</Button>
 								</div>
 								<div className="ml-auto flex flex-wrap items-center gap-1.5">
@@ -350,9 +352,9 @@ export function UISettingsTab({
 										className="!h-8 !px-2.5 !py-0 text-xs"
 										style={isThemeResetDirty ? undefined : mutedActionStyle92}
 										disabled={!isThemeResetDirty}
-										title={isThemeResetDirty ? 'Reset current theme edits to selected preset values' : 'No theme changes to reset'}
+										title={isThemeResetDirty ? _(msg`Reset current theme edits to selected preset values`) : _(msg`No theme changes to reset`)}
 									>
-										Reset
+										<Trans>Reset</Trans>
 									</Button>
 								</div>
 							</>
@@ -367,9 +369,9 @@ export function UISettingsTab({
 										className="!h-8 !px-2.5 !py-0 text-xs"
 										style={isCustomThemeDirty ? accentSecondaryActionStyle92 : mutedActionStyle92}
 										disabled={!isCustomThemeDirty}
-										title={isCustomThemeDirty ? 'Save current custom theme changes' : 'No unsaved custom theme changes'}
+										title={isCustomThemeDirty ? _(msg`Save current custom theme changes`) : _(msg`No unsaved custom theme changes`)}
 									>
-										Save
+										<Trans>Save</Trans>
 									</Button>
 									<Button
 										type="button"
@@ -378,7 +380,7 @@ export function UISettingsTab({
 										size="auto"
 										className="!h-8 !px-2.5 !py-0 text-xs"
 									>
-										Rename
+										<Trans>Rename</Trans>
 									</Button>
 									<Button
 										type="button"
@@ -387,7 +389,7 @@ export function UISettingsTab({
 										size="auto"
 										className="!h-8 !px-2.5 !py-0 text-xs"
 									>
-										Export
+										<Trans>Export</Trans>
 									</Button>
 									<Button
 										type="button"
@@ -396,7 +398,7 @@ export function UISettingsTab({
 										size="auto"
 										className="!h-8 !px-2.5 !py-0 text-xs"
 									>
-										Import
+										<Trans>Import</Trans>
 									</Button>
 								</div>
 								<div className="ml-auto flex flex-wrap items-center gap-1.5">
@@ -408,9 +410,9 @@ export function UISettingsTab({
 										className="!h-8 !px-2.5 !py-0 text-xs"
 										style={isThemeResetDirty ? undefined : mutedActionStyle92}
 										disabled={!isThemeResetDirty}
-										title={isThemeResetDirty ? 'Reset current theme edits to selected preset values' : 'No theme changes to reset'}
+										title={isThemeResetDirty ? _(msg`Reset current theme edits to selected preset values`) : _(msg`No theme changes to reset`)}
 									>
-										Reset
+										<Trans>Reset</Trans>
 									</Button>
 									<Button
 										type="button"
@@ -420,7 +422,7 @@ export function UISettingsTab({
 										className="!h-8 !px-2.5 !py-0 text-xs"
 										style={dangerActionStyle92}
 									>
-										Delete
+										<Trans>Delete</Trans>
 									</Button>
 								</div>
 							</>
@@ -430,9 +432,9 @@ export function UISettingsTab({
 
 			<div className="flex items-center gap-1.5 border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
 				{([
-					{ id: 'general', title: 'General UI' },
-					{ id: 'mesh', title: 'Mesh Highlights' },
-					{ id: 'cut', title: 'Cutting Tool' },
+					{ id: 'general', title: msg`General UI` },
+					{ id: 'mesh', title: msg`Mesh Highlights` },
+					{ id: 'cut', title: msg`Cutting Tool` },
 				] as const).map((tab) => (
 					<button
 						key={tab.id}
@@ -443,7 +445,7 @@ export function UISettingsTab({
 							? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
 							: { color: 'var(--text-muted)' }}
 					>
-						{tab.title}
+						{_(tab.title)}
 					</button>
 				))}
 			</div>
@@ -461,10 +463,10 @@ export function UISettingsTab({
 					>
 						<div className="mb-2">
 							<h4 className="text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }}>
-								{section.title}
+								{_(section.title)}
 							</h4>
 							<p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-								{section.description}
+								{_(section.description)}
 							</p>
 						</div>
 						<div className="space-y-1.5">
@@ -485,10 +487,10 @@ export function UISettingsTab({
 				>
 					<div className="mb-2">
 						<h4 className="text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }}>
-							Mesh Highlights
+							<Trans>Mesh Highlights</Trans>
 						</h4>
 						<p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-							Selection and hover tint for models in the 3D view. Also editable from the Mesh tab, which mirrors these two theme colors.
+							<Trans>Selection and hover tint for models in the 3D view. Also editable from the Mesh tab, which mirrors these two theme colors.</Trans>
 						</p>
 					</div>
 					<div className="grid gap-1.5 md:grid-cols-2">

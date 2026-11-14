@@ -1,9 +1,20 @@
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { Trans } from '@lingui/react/macro';
 import { AlertTriangle, Trash2 } from 'lucide-react';
 import { BlockingOverlay, Button } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
 import { type HollowingPanelState } from '@/features/hollowing';
+
+function formatElapsedLabel(
+  translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string,
+  elapsed: string,
+): string {
+  return translate(msg`Elapsed: ${elapsed}`);
+}
 
 type PendingModifierResetAction = 'hollowing' | 'hole_punch' | 'clear_hollowing';
 
@@ -57,6 +68,7 @@ export function ModifierModals({
   unappliedModifierPrompt,
   unappliedHolePunchResolveRef,
 }: ModifierModalsProps) {
+  const { _ } = useLingui();
   // A blocking progress overlay: swallow Escape rather than let it through.
   useEscapeToClose(showModifierApplyBlockingOverlay, undefined);
 
@@ -69,12 +81,12 @@ export function ModifierModals({
     <>
       <StructuredDialogModal
         open={showUnappliedHolePunchModal}
-        ariaLabel="Unapplied model changes"
+        ariaLabel={_(msg`Unapplied model changes`)}
         title={unappliedModifierPrompt.title}
         subtitle={unappliedModifierPrompt.subtitle}
         icon={<AlertTriangle className="h-4 w-4" />}
         iconTone="warning"
-        closeAriaLabel="Close"
+        closeAriaLabel={_(msg`Close`)}
         onClose={() => unappliedHolePunchResolveRef.current?.('skip')}
         actions={(
           <>
@@ -82,14 +94,14 @@ export function ModifierModals({
               variant="secondary"
               onClick={() => unappliedHolePunchResolveRef.current?.('skip')}
             >
-              Continue Without
+              <Trans>Continue Without</Trans>
             </Button>
             <Button
               variant="tinted-accent"
               className="inline-flex items-center justify-center gap-1.5"
               onClick={() => unappliedHolePunchResolveRef.current?.('goto')}
             >
-              Go to Hollow Tool
+              <Trans>Go to Hollow Tool</Trans>
             </Button>
             {unappliedModifierPrompt.showApplyAll && (
               <Button
@@ -97,7 +109,7 @@ export function ModifierModals({
                 className="inline-flex items-center justify-center gap-1.5"
                 onClick={() => unappliedHolePunchResolveRef.current?.('apply')}
               >
-                Apply to All
+                <Trans>Apply to All</Trans>
               </Button>
             )}
           </>
@@ -118,12 +130,12 @@ export function ModifierModals({
 
       <StructuredDialogModal
         open={pendingModifierResetAction !== null}
-        ariaLabel="Confirm modifier reset"
-        title={isHollowingReset ? 'Remove Hollowing?' : 'Remove All Holes?'}
-        subtitle="This action can't be undone"
+        ariaLabel={_(msg`Confirm modifier reset`)}
+        title={isHollowingReset ? _(msg`Remove Hollowing?`) : _(msg`Remove All Holes?`)}
+        subtitle={_(msg`This action can't be undone`)}
         icon={<AlertTriangle className="h-4 w-4" />}
         iconTone="warning"
-        closeAriaLabel="Close reset confirmation"
+        closeAriaLabel={_(msg`Close reset confirmation`)}
         onClose={() => setPendingModifierResetAction(null)}
         actions={(
           <>
@@ -131,7 +143,7 @@ export function ModifierModals({
               variant="secondary"
               onClick={() => setPendingModifierResetAction(null)}
             >
-              Cancel
+              <Trans>Cancel</Trans>
             </Button>
             <Button
               variant="tinted-danger"
@@ -139,7 +151,7 @@ export function ModifierModals({
               onClick={handleConfirmModifierReset}
             >
               <Trash2 className="w-3.5 h-3.5" />
-              {isHollowingReset ? 'Remove Hollowing' : 'Remove All Holes'}
+              {isHollowingReset ? _(msg`Remove Hollowing`) : _(msg`Remove All Holes`)}
             </Button>
           </>
         )}
@@ -147,27 +159,27 @@ export function ModifierModals({
         <div className="space-y-2">
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
             {isHollowingReset
-              ? 'Are you sure you want to remove hollowing from this model?'
-              : 'Are you sure you want to remove all hole punches from this model?'}
+              ? _(msg`Are you sure you want to remove hollowing from this model?`)
+              : _(msg`Are you sure you want to remove all hole punches from this model?`)}
           </p>
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
             {pendingModifierResetAction === 'clear_hollowing'
-              ? 'The cavity and all holes will be removed.'
+              ? _(msg`The cavity and all holes will be removed.`)
               : pendingModifierResetAction === 'hollowing'
-                ? 'Your model will return to its solid version.'
-                : 'All holes on this model will be removed.'}
+                ? _(msg`Your model will return to its solid version.`)
+                : _(msg`All holes on this model will be removed.`)}
           </p>
         </div>
       </StructuredDialogModal>
 
       <StructuredDialogModal
         open={pendingBlockerResetState !== null}
-        ariaLabel="Confirm solid area reset"
-        title="Reset Solid Areas?"
-        subtitle="Solid areas will be lost"
+        ariaLabel={_(msg`Confirm solid area reset`)}
+        title={_(msg`Reset Solid Areas?`)}
+        subtitle={_(msg`Solid areas will be lost`)}
         icon={<AlertTriangle className="h-4 w-4" />}
         iconTone="warning"
-        closeAriaLabel="Close solid area reset confirmation"
+        closeAriaLabel={_(msg`Close solid area reset confirmation`)}
         onClose={() => setPendingBlockerResetState(null)}
         actions={(
           <>
@@ -175,7 +187,7 @@ export function ModifierModals({
               variant="secondary"
               onClick={() => setPendingBlockerResetState(null)}
             >
-              Cancel
+              <Trans>Cancel</Trans>
             </Button>
             <Button
               variant="tinted-danger"
@@ -183,17 +195,17 @@ export function ModifierModals({
               onClick={handleConfirmBlockerReset}
             >
               <Trash2 className="w-3.5 h-3.5" />
-              Reset Solid Areas
+              <Trans>Reset Solid Areas</Trans>
             </Button>
           </>
         )}
       >
         <div className="space-y-2">
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            Changing the voxel resolution or shell thickness will clear all solid areas.
+            <Trans>Changing the voxel resolution or shell thickness will clear all solid areas.</Trans>
           </p>
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            You will need to mark them again after the change.
+            <Trans>You will need to mark them again after the change.</Trans>
           </p>
         </div>
       </StructuredDialogModal>
@@ -202,7 +214,7 @@ export function ModifierModals({
         isOpen={pendingDestructiveTransform !== null}
         modelName={pendingDestructiveTransform?.modelName ?? null}
         supportCount={pendingDestructiveTransform?.supportCount ?? 0}
-        operationLabel={pendingDestructiveTransform?.operationLabel ?? 'Transform'}
+        operationLabel={pendingDestructiveTransform?.operationLabel ?? _(msg`Transform`)}
         onCancel={handleCancelDestructiveTransform}
         onConfirm={handleConfirmDestructiveTransform}
       />
@@ -212,7 +224,7 @@ export function ModifierModals({
           zIndexClassName="z-[121]"
           title={modifierApplyOverlayContent.title}
           details={modifierApplyOverlayContent.detailLines}
-          elapsed={`Elapsed: ${modifierApplyOverlayElapsedLabel}`}
+          elapsed={formatElapsedLabel(_, modifierApplyOverlayElapsedLabel)}
           footnote={modifierApplyProcessingLabel}
           progress={null}
           progressLabel={modifierApplyOverlayContent.title}

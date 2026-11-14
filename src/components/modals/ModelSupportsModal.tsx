@@ -99,15 +99,15 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
   const groupRows = React.useMemo(() => {
     // Roots first, then the support types in registry order, then knots.
     return [
-      { key: 'roots' as SupportCollectionKey, label: 'Roots', ids: groups.roots },
+      { key: 'roots' as SupportCollectionKey, label: _(msg`Roots`), ids: groups.roots },
       ...SUPPORT_STATE_TYPES.map((descriptor) => ({
         key: descriptor.location.key as SupportCollectionKey,
         label: descriptor.label,
         ids: groups[descriptor.location.key as SupportCollectionKey],
       })),
-      { key: 'knots' as SupportCollectionKey, label: 'Knots', ids: groups.knots },
+      { key: 'knots' as SupportCollectionKey, label: _(msg`Knots`), ids: groups.knots },
     ];
-  }, [groups]);
+  }, [_, groups]);
 
   const toggleGroup = React.useCallback((groupKey: string) => {
     setCollapsedGroups((prev) => ({

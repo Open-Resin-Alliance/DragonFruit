@@ -1,6 +1,10 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useLingui } from '@lingui/react';
+import type { MessageDescriptor } from '@lingui/core';
+import { msg, plural } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import {
   Check,
   ChevronDown,
@@ -128,13 +132,23 @@ const LEVEL_RANK: Record<LogLevelFilter | 'unknown', number> = {
 
 // ── Level styling ─────────────────────────────────────────────────────────────
 
-const LEVEL_META: Record<LogLevelFilter | 'unknown', { label: string; color: string; description: string }> = {
-  error:   { label: 'Error',   color: '#f87171', description: 'Only critical failures' },
-  warn:    { label: 'Warn',    color: '#fb923c', description: 'Warnings and errors' },
-  info:    { label: 'Info',    color: '#4ade80', description: 'Normal operational messages (recommended)' },
-  debug:   { label: 'Debug',   color: '#60a5fa', description: 'Verbose internal state' },
-  trace:   { label: 'Trace',   color: '#a78bfa', description: 'Maximum verbosity — may impact performance' },
-  unknown: { label: '?',       color: '#6b7280', description: '' },
+type TranslateFn = (descriptor: MessageDescriptor) => string;
+
+function formatVisibleLinesCount(translate: TranslateFn, count: number): string {
+  return translate(msg`${plural(count, { one: '# line', other: '# lines' })}`);
+}
+
+function formatFilteredLinesCount(translate: TranslateFn, count: number): string {
+  return translate(msg` (${count} filtered)`);
+}
+
+const LEVEL_META: Record<LogLevelFilter | 'unknown', { label: MessageDescriptor | null; color: string; description: MessageDescriptor | null }> = {
+  error:   { label: msg`Error`,   color: '#f87171', description: msg`Only critical failures` },
+  warn:    { label: msg`Warn`,    color: '#fb923c', description: msg`Warnings and errors` },
+  info:    { label: msg`Info`,    color: '#4ade80', description: msg`Normal operational messages (recommended)` },
+  debug:   { label: msg`Debug`,   color: '#60a5fa', description: msg`Verbose internal state` },
+  trace:   { label: msg`Trace`,   color: '#a78bfa', description: msg`Maximum verbosity — may impact performance` },
+  unknown: { label: null,         color: '#6b7280', description: null },
 };
 
 const LEVEL_OPTIONS: LogLevelFilter[] = ['error', 'warn', 'info', 'debug', 'trace'];
@@ -170,6 +184,7 @@ type LoggingSettingsTabProps = {
 };
 
 export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettingsTabProps) {
+  const { _ } = useLingui();
   const [logPath, setLogPath] = useState<string | null>(null);
   const [logPathError, setLogPathError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -192,11 +207,11 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
 
   useEffect(() => {
     if (!isTauri) {
-      setLogPath('<only available in desktop build>');
+      setLogPath(_(msg`<only available in desktop build>`));
       return;
     }
     resolveLogDirPath().then(setLogPath).catch((err) => setLogPathError(String(err)));
-  }, []);
+  }, [_]);
 
   // ── Polling ────────────────────────────────────────────────────────────────
 
@@ -274,11 +289,12 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
 
   // ── Filtered view ──────────────────────────────────────────────────────────
 
-  const visibleLines = lines.filter(
-    (l) => LEVEL_RANK[l.level] <= LEVEL_RANK[viewerFilter] && !(hideNoise && isNoiseLine(l)),
-  );
+  const visibleLines = lines.filter((l) => (
+    LEVEL_RANK[viewerFilter] >= LEVEL_RANK[l.level] && !(hideNoise && isNoiseLine(l))
+  ));
 
-  const { color: filterColor, label: filterLabel } = LEVEL_META[viewerFilter];
+  const { color: filterColor, label: filterLabelDescriptor } = LEVEL_META[viewerFilter];
+  const filterLabel = filterLabelDescriptor ? _(filterLabelDescriptor) : '?';
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -298,10 +314,9 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
             <ScrollText className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Log File</h3>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Log File</Trans></h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              DragonFruit writes structured logs to a platform-specific directory.
-              Share this file when reporting startup or network issues.
+              <Trans>DragonFruit writes structured logs to a platform-specific directory. Share this file when reporting startup or network issues.</Trans>
             </p>
           </div>
         </div>
@@ -315,7 +330,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
               <span className="text-xs" style={{ color: '#f87171' }}>{logPathError}</span>
             ) : logPath === null ? (
               <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                <Spinner size="xs" />Resolving path…
+                <Spinner size="xs" /><Trans>Resolving path…</Trans>
               </span>
             ) : (
               <span className="block text-xs font-mono truncate select-all" style={{ color: 'var(--text-strong)' }} title={logPath}>
@@ -325,24 +340,24 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
           </div>
 
           <div className="flex border-l" style={{ borderColor: 'var(--border-subtle)' }}>
-            <button type="button" onClick={handleCopy} disabled={!logPath} title="Copy path"
+            <button type="button" onClick={handleCopy} disabled={!logPath} title={_(msg`Copy path`)}
               className="inline-flex items-center justify-center px-3 transition-colors duration-150"
               style={{ color: copied ? 'var(--accent)' : 'var(--text-muted)' }}>
               {copied ? <Check className="h-3.5 w-3.5" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
             </button>
             {isTauri && (
               <>
-                <button type="button" onClick={handleOpen} disabled={!logPath || opening} title="Open in text editor"
+                <button type="button" onClick={handleOpen} disabled={!logPath || opening} title={_(msg`Open in text editor`)}
                   className="inline-flex items-center justify-center px-3 border-l transition-colors duration-150"
                   style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
                   {opening ? <Spinner size="sm" /> : <ExternalLink className="h-3.5 w-3.5" />}
                 </button>
-                <button type="button" onClick={handleReveal} disabled={!logPath || revealing} title="Reveal in file manager"
+                <button type="button" onClick={handleReveal} disabled={!logPath || revealing} title={_(msg`Reveal in file manager`)}
                   className="inline-flex items-center justify-center px-3 border-l transition-colors duration-150"
                   style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
                   {revealing ? <Spinner size="sm" /> : <FolderOpen className="h-3.5 w-3.5" />}
                 </button>
-                <button type="button" onClick={handleDelete} disabled={deleting} title="Delete log file"
+                <button type="button" onClick={handleDelete} disabled={deleting} title={_(msg`Delete log file`)}
                   className="inline-flex items-center justify-center px-3 border-l transition-colors duration-150"
                   style={{ borderColor: 'var(--border-subtle)', color: deleting ? 'var(--text-muted)' : '#f87171' }}>
                   {deleting ? <Spinner size="sm" /> : <Trash2 className="h-3.5 w-3.5" />}
@@ -376,9 +391,9 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
             <Filter className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--accent)' }} />
           </span>
           <div className="flex-1">
-            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Minimum Log Level</h3>
+            <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Minimum Log Level</Trans></h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Controls the least-significant event written to the log file. Changes apply immediately and persist across restarts.
+              <Trans>Controls the least-significant event written to the log file. Changes apply immediately and persist across restarts.</Trans>
             </p>
           </div>
         </div>
@@ -401,8 +416,8 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
                 <span className="inline-flex h-2 w-2 rounded-full flex-shrink-0"
                   style={{ background: color, boxShadow: active ? `0 0 6px ${color}` : 'none' }} />
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }}>{label}</span>
-                  <span className="block text-xs" style={{ color: 'var(--text-muted)' }}>{description}</span>
+                  <span className="block text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }}>{label ? _(label) : '?'}</span>
+                  <span className="block text-xs" style={{ color: 'var(--text-muted)' }}>{description ? _(description) : ''}</span>
                 </span>
                 {active && <Check className="h-3.5 w-3.5 flex-shrink-0" style={{ color }} />}
               </button>
@@ -430,10 +445,10 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
                 boxShadow: isLive ? '0 0 5px #4ade80' : 'none',
               }}
             />
-            <span className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>Live Log</span>
+            <span className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}><Trans>Live Log</Trans></span>
             <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              {visibleLines.length} line{visibleLines.length !== 1 ? 's' : ''}
-              {lines.length !== visibleLines.length && ` (${lines.length - visibleLines.length} filtered)`}
+              {formatVisibleLinesCount(_, visibleLines.length)}
+              {lines.length !== visibleLines.length && formatFilteredLinesCount(_, lines.length - visibleLines.length)}
             </span>
           </span>
 
@@ -441,7 +456,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
           <button
             type="button"
             onClick={() => setHideNoise((v) => !v)}
-            title={hideNoise ? 'Show low-level transport noise (tungstenite, reqwest…)' : 'Hide transport noise'}
+            title={hideNoise ? _(msg`Show low-level transport noise (tungstenite, reqwest…)`) : _(msg`Hide transport noise`)}
             className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors duration-150"
             style={{
               borderColor: 'var(--border-subtle)',
@@ -449,7 +464,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
               background: hideNoise ? 'transparent' : 'color-mix(in srgb, #fb923c, var(--surface-0) 88%)',
             }}
           >
-            {hideNoise ? 'noise hidden' : 'noise shown'}
+            {hideNoise ? _(msg`noise hidden`) : _(msg`noise shown`)}
           </button>
 
           {/* Filter dropdown */}
@@ -488,7 +503,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
                       }}
                     >
                       <span className="h-1.5 w-1.5 rounded-full flex-shrink-0" style={{ background: color }} />
-                      {label}
+                      {label ? _(label) : '?'}
                       {active && <Check className="ml-auto h-3 w-3" style={{ color }} />}
                     </button>
                   );
@@ -501,7 +516,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
           <button
             type="button"
             onClick={() => setIsLive((l) => !l)}
-            title={isLive ? 'Pause polling' : 'Resume polling'}
+            title={isLive ? _(msg`Pause polling`) : _(msg`Resume polling`)}
             className="inline-flex items-center justify-center rounded-md border px-2 py-1 transition-colors duration-150"
             style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
           >
@@ -513,7 +528,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
             <button
               type="button"
               onClick={fetchLines}
-              title="Refresh now"
+              title={_(msg`Refresh now`)}
               className="inline-flex items-center justify-center rounded-md border px-2 py-1 transition-colors duration-150"
               style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
             >
@@ -525,7 +540,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
           <button
             type="button"
             onClick={handleClearViewer}
-            title="Clear viewer"
+            title={_(msg`Clear viewer`)}
             className="inline-flex items-center justify-center rounded-md border px-2 py-1 transition-colors duration-150"
             style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
           >
@@ -547,10 +562,10 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
           {loadError ? (
             <span style={{ color: '#f87171' }}>{loadError}</span>
           ) : !isTauri ? (
-            <span style={{ color: '#6b7280' }}>Log viewer only available in the desktop build.</span>
+            <span style={{ color: '#6b7280' }}><Trans>Log viewer only available in the desktop build.</Trans></span>
           ) : visibleLines.length === 0 ? (
             <span style={{ color: '#4b5563' }}>
-              {lines.length === 0 ? 'No log entries yet.' : 'All lines filtered out.'}
+              {lines.length === 0 ? _(msg`No log entries yet.`) : _(msg`All lines filtered out.`)}
             </span>
           ) : (
             visibleLines.map((line, i) => (
@@ -570,8 +585,7 @@ export function LoggingSettingsTab({ logLevel, onLogLevelChange }: LoggingSettin
       >
         <Info className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" style={{ color: 'var(--accent)' }} />
         <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
-          The minimum log level applies <strong style={{ color: 'var(--text-strong)' }}>immediately</strong> and is
-          also saved for next launch. The viewer filter and noise suppression are local-only — they do not affect what is written to disk.
+          <Trans>The minimum log level applies <strong style={{ color: 'var(--text-strong)' }}>immediately</strong> and is also saved for next launch. The viewer filter and noise suppression are local-only — they do not affect what is written to disk.</Trans>
         </p>
       </div>
     </div>

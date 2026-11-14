@@ -2,13 +2,24 @@
 
 import React from 'react';
 import { useLingui } from '@lingui/react';
-import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { msg, plural } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import { Cpu, ImageIcon, Trash2, Zap } from 'lucide-react';
 import { SegmentedControl, SettingRow } from '@/components/atoms';
 import type { SlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import { cleanupAllPrintTempArtifacts, cleanupStalePrintTempArtifacts } from '@/features/slicing/tauri/nativeSlicerBridge';
 
 const SLICING_ENGINE_CRATE = 'dragonfruit-slicing-engine';
+type TranslateFn = (descriptor: MessageDescriptor) => string;
+
+function formatCleanedStaleAlert(translate: TranslateFn, count: number): string {
+  return translate(msg`Cleaned ${plural(count, { one: '# temp file', other: '# temp files' })} older than 1 hour.`);
+}
+
+function formatCleanedAllAlert(translate: TranslateFn, count: number): string {
+  return translate(msg`Cleaned ${plural(count, { one: '# temp file', other: '# temp files' })}.`);
+}
 
 
 export type SlicingThumbnailRenderSettings = {
@@ -84,10 +95,10 @@ export function PerformanceSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Slicing Engine
+              <Trans>Slicing Engine</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Native Rust slicing via the DragonFruit engine.
+              <Trans>Native Rust slicing via the DragonFruit engine.</Trans>
             </p>
           </div>
         </div>
@@ -95,11 +106,11 @@ export function PerformanceSettingsTab({
         <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
             <div>
-              <div style={{ color: 'var(--text-muted)' }}>Crate</div>
+              <div style={{ color: 'var(--text-muted)' }}><Trans>Crate</Trans></div>
               <div className="font-semibold" style={{ color: 'var(--text-strong)' }}>{SLICING_ENGINE_CRATE}</div>
             </div>
             <div>
-              <div style={{ color: 'var(--text-muted)' }}>Version</div>
+              <div style={{ color: 'var(--text-muted)' }}><Trans>Version</Trans></div>
               <div className="font-semibold" style={{ color: 'var(--text-strong)' }}>{engineVersion ?? '-'}</div>
             </div>
           </div>
@@ -125,10 +136,10 @@ export function PerformanceSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Thumbnail Rendering
+              <Trans>Thumbnail Rendering</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Configure what appears in generated export/slice thumbnails.
+              <Trans>Configure what appears in generated export/slice thumbnails.</Trans>
             </p>
           </div>
         </div>
@@ -201,10 +212,10 @@ export function PerformanceSettingsTab({
             </span>
             <div className="flex-1">
               <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                PNG Compression
+                <Trans>PNG Compression</Trans>
               </h3>
               <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                Enable or disable PNG compression for PNG-based formats.
+                <Trans>Enable or disable PNG compression for PNG-based formats.</Trans>
               </p>
             </div>
           </div>
@@ -255,10 +266,10 @@ export function PerformanceSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Temp File Cleanup
+              <Trans>Temp File Cleanup</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Free disk space by removing temporary slice files.
+              <Trans>Free disk space by removing temporary slice files.</Trans>
             </p>
           </div>
         </div>
@@ -269,10 +280,10 @@ export function PerformanceSettingsTab({
             onClick={async () => {
               try {
                 const removed = await cleanupStalePrintTempArtifacts(60 * 60);
-                alert(`Cleaned ${removed} temp file(s) older than 1 hour.`);
+                alert(formatCleanedStaleAlert(_, removed));
               } catch (error) {
                 console.error('[Cleanup] Failed:', error);
-                alert('Cleanup failed. See console for details.');
+                alert(_(msg`Cleanup failed. See console for details.`));
               }
             }}
             className="w-full rounded-md border p-2.5 text-left transition-all hover:border-[var(--accent)] hover:bg-[color-mix(in_srgb,var(--accent),var(--surface-0)_92%)]"
@@ -282,23 +293,23 @@ export function PerformanceSettingsTab({
             }}
           >
             <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Clean Stale Files
+              <Trans>Clean Stale Files</Trans>
             </div>
             <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Remove temp files older than 1 hour
+              <Trans>Remove temp files older than 1 hour</Trans>
             </div>
           </button>
 
           <button
             type="button"
             onClick={async () => {
-              if (!confirm('Delete ALL temporary slice files? This cannot be undone.')) return;
+              if (!confirm(_(msg`Delete ALL temporary slice files? This cannot be undone.`))) return;
               try {
                 const removed = await cleanupAllPrintTempArtifacts();
-                alert(`Cleaned ${removed} temp file(s).`);
+                alert(formatCleanedAllAlert(_, removed));
               } catch (error) {
                 console.error('[Cleanup] Failed:', error);
-                alert('Cleanup failed. See console for details.');
+                alert(_(msg`Cleanup failed. See console for details.`));
               }
             }}
             className="w-full rounded-md border p-2.5 text-left transition-all hover:border-red-500/50 hover:bg-red-500/5"
@@ -308,10 +319,10 @@ export function PerformanceSettingsTab({
             }}
           >
             <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Clean All Files
+              <Trans>Clean All Files</Trans>
             </div>
             <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Emergency cleanup: delete all temp slices
+              <Trans>Emergency cleanup: delete all temp slices</Trans>
             </div>
           </button>
         </div>

@@ -2,6 +2,9 @@
 
 import React from 'react';
 import { useLingui } from '@lingui/react';
+import type { MessageDescriptor } from '@lingui/core';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
 import type { SupportMode } from '@/supports/types';
 import { Camera as CameraIcon, Hand as HandIcon } from 'lucide-react';
 import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
@@ -38,11 +41,21 @@ interface CameraSettingsTabProps {
   onHigherContrastModelEdgesChange?: (value: boolean) => void;
 }
 
-const workspaceMeta: Array<{ key: SupportMode; label: string; hint: string }> = [
-  { key: 'prepare', label: 'Prepare', hint: 'Model prep and transform workflows' },
-  { key: 'analysis', label: 'Analysis', hint: 'Island diagnostics and inspection tools' },
-  { key: 'support', label: 'Support', hint: 'Support placement and editing workspace' },
-  { key: 'export', label: 'Export', hint: 'Final output and export pipeline' },
+type TranslateFn = (descriptor: MessageDescriptor) => string;
+
+function formatWorkspaceDefaultCameraLabel(translate: TranslateFn, workspaceLabel: string): string {
+  return translate(msg`${workspaceLabel} default camera`);
+}
+
+function formatAlternateGestureDescription(translate: TranslateFn, targetAction: string): string {
+  return translate(msg`Hold this key to temporarily switch two-finger drag to ${targetAction}.`);
+}
+
+const workspaceMeta: Array<{ key: SupportMode; label: MessageDescriptor; hint: MessageDescriptor }> = [
+  { key: 'prepare', label: msg`Prepare`, hint: msg`Model prep and transform workflows` },
+  { key: 'analysis', label: msg`Analysis`, hint: msg`Island diagnostics and inspection tools` },
+  { key: 'support', label: msg`Support`, hint: msg`Support placement and editing workspace` },
+  { key: 'export', label: msg`Export`, hint: msg`Final output and export pipeline` },
 ];
 
 export function CameraSettingsTab({
@@ -75,6 +88,10 @@ export function CameraSettingsTab({
   const usingGlobalScope = cameraScope === 'global';
   const usingWorkspaceScope = cameraScope === 'workspace';
 
+  const activeWorkspaceMeta = workspaceMeta.find((workspace) => workspace.key === activeWorkspace);
+  const activeWorkspaceLabel = activeWorkspaceMeta ? _(activeWorkspaceMeta.label) : '';
+  const activeWorkspaceHint = activeWorkspaceMeta ? _(activeWorkspaceMeta.hint) : undefined;
+
   return (
     <div className="space-y-3">
       <section
@@ -96,10 +113,10 @@ export function CameraSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Camera Defaults
+              <Trans>Camera Defaults</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Global camera projection mode and navigation behavior.
+              <Trans>Global camera projection mode and navigation behavior.</Trans>
             </p>
           </div>
         </div>
@@ -107,16 +124,16 @@ export function CameraSettingsTab({
         <SettingRow
           bordered
           className="mt-3"
-          label="Camera scope"
-          description="Choose one global projection mode for every workspace, or set projection defaults per workspace."
+          label={_(msg`Camera scope`)}
+          description={_(msg`Choose one global projection mode for every workspace, or set projection defaults per workspace.`)}
         >
           <SegmentedControl
-            label="Camera scope"
+            label={_(msg`Camera scope`)}
             value={cameraScope}
             onChange={(next) => onCameraScopeChange(next as CameraScopeMode)}
             options={[
-              { value: 'global', label: 'Global' },
-              { value: 'workspace', label: 'Workspace' },
+              { value: 'global', label: _(msg`Global`) },
+              { value: 'workspace', label: _(msg`Workspace`) },
             ]}
           />
         </SettingRow>
@@ -125,16 +142,16 @@ export function CameraSettingsTab({
           <div className="mt-2 space-y-1.5">
             <SettingRow
               bordered
-              label="Projection mode"
-              description="Use one projection mode everywhere when global scope is active."
+              label={_(msg`Projection mode`)}
+              description={_(msg`Use one projection mode everywhere when global scope is active.`)}
             >
               <SegmentedControl
-                label="Projection mode"
+                label={_(msg`Projection mode`)}
                 value={cameraProjectionMode}
                 onChange={(next) => onCameraProjectionModeChange(next as CameraProjectionMode)}
                 options={[
-                  { value: 'orthographic', label: 'Ortho' },
-                  { value: 'perspective', label: 'Perspective' },
+                  { value: 'orthographic', label: _(msg`Ortho`) },
+                  { value: 'perspective', label: _(msg`Perspective`) },
                 ]}
               />
             </SettingRow>
@@ -143,7 +160,7 @@ export function CameraSettingsTab({
               <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                 <div className="space-y-0.5">
                   <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
-                    <span>Field of view</span>
+                    <span><Trans>Field of view</Trans></span>
                     <span style={{ color: 'var(--text-strong)' }}>{perspectiveFov}°</span>
                   </label>
                   <input
@@ -165,35 +182,35 @@ export function CameraSettingsTab({
           <div className="mt-2 space-y-1.5">
             <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Workspace camera defaults
+                <Trans>Workspace camera defaults</Trans>
               </div>
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Pick the default projection mode used when you enter each workspace.
+                <Trans>Pick the default projection mode used when you enter each workspace.</Trans>
               </div>
 
               <div className="mt-2">
                 <SegmentedControl<SupportMode>
-                  label="Workspace camera defaults"
+                  label={_(msg`Workspace camera defaults`)}
                   fullWidth
                   value={activeWorkspace}
                   onChange={(next) => setActiveWorkspace(next)}
-                  options={workspaceMeta.map((workspace) => ({ value: workspace.key, label: workspace.label }))}
+                  options={workspaceMeta.map((workspace) => ({ value: workspace.key, label: _(workspace.label) }))}
                 />
               </div>
             </div>
 
             <SettingRow
               bordered
-              label={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
-              description={workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.hint}
+              label={formatWorkspaceDefaultCameraLabel(_, activeWorkspaceLabel)}
+              description={activeWorkspaceHint}
             >
               <SegmentedControl
-                label={`${workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera`}
+                label={formatWorkspaceDefaultCameraLabel(_, activeWorkspaceLabel)}
                 value={workspaceCameraDefaults[activeWorkspace]}
                 onChange={(next) => onWorkspaceCameraModeChange(activeWorkspace, next as CameraProjectionMode)}
                 options={[
-                  { value: 'orthographic', label: 'Ortho' },
-                  { value: 'perspective', label: 'Perspective' },
+                  { value: 'orthographic', label: _(msg`Ortho`) },
+                  { value: 'perspective', label: _(msg`Perspective`) },
                 ]}
               />
             </SettingRow>
@@ -203,20 +220,20 @@ export function CameraSettingsTab({
         <SettingRow
           bordered
           className="mt-2"
-          label="Camera feel"
-          description="Controls smoothing and movement acceleration while orbiting, panning, and zooming."
+          label={_(msg`Camera feel`)}
+          description={_(msg`Controls smoothing and movement acceleration while orbiting, panning, and zooming.`)}
         >
           <SelectDropdown<CameraFeelPreset>
             value={cameraFeelPreset}
             options={[
-              { value: 'raw', label: 'Raw' },
-              { value: 'precise', label: 'Precise' },
-              { value: 'balanced', label: 'Balanced' },
-              { value: 'fast', label: 'Fast' },
+              { value: 'raw', label: _(msg`Raw`) },
+              { value: 'precise', label: _(msg`Precise`) },
+              { value: 'balanced', label: _(msg`Balanced`) },
+              { value: 'fast', label: _(msg`Fast`) },
             ]}
             onChange={(next) => onCameraFeelPresetChange(next)}
-            ariaLabel="Camera feel"
-            title="Camera feel"
+            ariaLabel={_(msg`Camera feel`)}
+            title={_(msg`Camera feel`)}
             className="w-36"
             menuAlign="right"
           />
@@ -243,10 +260,10 @@ export function CameraSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Higher Contrast Model Edges
+              <Trans>Higher Contrast Model Edges</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Overlay black edge lines on model geometry to improve shape definition.
+              <Trans>Overlay black edge lines on model geometry to improve shape definition.</Trans>
             </p>
           </div>
         </div>
@@ -254,16 +271,16 @@ export function CameraSettingsTab({
         <SettingRow
           bordered
           className="mt-3"
-          label="Edge lines"
-          description="Draws black outlines along hard edges of the model for better visual clarity."
+          label={_(msg`Edge lines`)}
+          description={_(msg`Draws black outlines along hard edges of the model for better visual clarity.`)}
         >
           <SegmentedControl
-            label="Edge lines"
+            label={_(msg`Edge lines`)}
             value={higherContrastModelEdges ? 'on' : 'off'}
             onChange={(next) => onHigherContrastModelEdgesChange?.(next === 'on')}
             options={[
-              { value: 'off', label: 'OFF' },
-              { value: 'on', label: 'ON' },
+              { value: 'off', label: _(msg`OFF`) },
+              { value: 'on', label: _(msg`ON`) },
             ]}
           />
         </SettingRow>
@@ -288,10 +305,10 @@ export function CameraSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Trackpad Navigation
+              <Trans>Trackpad Navigation</Trans>
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Configure two-finger gestures and alternate modifier behavior.
+              <Trans>Configure two-finger gestures and alternate modifier behavior.</Trans>
             </p>
           </div>
         </div>
@@ -299,19 +316,19 @@ export function CameraSettingsTab({
         <div className="mt-3 space-y-1.5">
           <SettingRow
             bordered
-            label="Trackpad navigation mode"
-            description="What a two-finger drag does. Pinch-to-zoom still works either way."
+            label={_(msg`Trackpad navigation mode`)}
+            description={_(msg`What a two-finger drag does. Pinch-to-zoom still works either way.`)}
           >
             <SelectDropdown<CameraTrackpadPrimaryAction>
               value={cameraTrackpadPrimaryAction}
               options={[
-                { value: 'off', label: 'Off' },
-                { value: 'pan', label: 'Pan' },
-                { value: 'orbit', label: 'Orbit' },
+                { value: 'off', label: _(msg`Off`) },
+                { value: 'pan', label: _(msg`Pan`) },
+                { value: 'orbit', label: _(msg`Orbit`) },
               ]}
               onChange={(next) => onCameraTrackpadPrimaryActionChange(next)}
-              ariaLabel="Trackpad navigation mode"
-              title="Trackpad navigation mode"
+              ariaLabel={_(msg`Trackpad navigation mode`)}
+              title={_(msg`Trackpad navigation mode`)}
               className="w-36"
               menuAlign="right"
             />
@@ -321,32 +338,35 @@ export function CameraSettingsTab({
             <>
               <SettingRow
                 bordered
-                label="Alternate gesture modifier"
-                description={`Hold this key to temporarily switch two-finger drag to ${cameraTrackpadPrimaryAction === 'pan' ? 'orbit' : 'pan'}.`}
+                label={_(msg`Alternate gesture modifier`)}
+                description={formatAlternateGestureDescription(
+                  _,
+                  cameraTrackpadPrimaryAction === 'pan' ? _(msg`orbit`) : _(msg`pan`),
+                )}
               >
                 <SegmentedControl
-                  label="Alternate gesture modifier"
+                  label={_(msg`Alternate gesture modifier`)}
                   value={cameraTrackpadModifierKey}
                   onChange={(next) => onCameraTrackpadModifierKeyChange(next as CameraTrackpadModifierKey)}
                   options={[
-                    { value: 'alt', label: 'Option' },
-                    { value: 'shift', label: 'Shift' },
+                    { value: 'alt', label: _(msg`Option`) },
+                    { value: 'shift', label: _(msg`Shift`) },
                   ]}
                 />
               </SettingRow>
 
               <div className="rounded-md border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                 <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Trackpad acceleration
+                  <Trans>Trackpad acceleration</Trans>
                 </div>
                 <div className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Tune movement speed for two-finger pan/orbit gestures.
+                  <Trans>Tune movement speed for two-finger pan/orbit gestures.</Trans>
                 </div>
 
                 <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
                   <div className="space-y-0.5">
                     <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
-                      <span>Pan acceleration</span>
+                      <span><Trans>Pan acceleration</Trans></span>
                       <span style={{ color: 'var(--text-strong)' }}>{fmt.quantity(cameraTrackpadPanAcceleration, 2, 'times')}</span>
                     </label>
                     <input
@@ -362,7 +382,7 @@ export function CameraSettingsTab({
 
                   <div className="space-y-0.5">
                     <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
-                      <span>Orbit acceleration</span>
+                      <span><Trans>Orbit acceleration</Trans></span>
                       <span style={{ color: 'var(--text-strong)' }}>{fmt.quantity(cameraTrackpadOrbitAcceleration, 2, 'times')}</span>
                     </label>
                     <input
@@ -378,7 +398,7 @@ export function CameraSettingsTab({
 
                   <div className="space-y-0.5">
                     <label className="text-xs flex justify-between" style={{ color: 'var(--text-muted)' }}>
-                      <span>Zoom acceleration</span>
+                      <span><Trans>Zoom acceleration</Trans></span>
                       <span style={{ color: 'var(--text-strong)' }}>{fmt.quantity(cameraTrackpadZoomAcceleration, 2, 'times')}</span>
                     </label>
                     <input
