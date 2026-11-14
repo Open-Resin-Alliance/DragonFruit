@@ -24,6 +24,7 @@ files with the wrong exposure or the wrong size.
 | `buildSliceJobManifestNodes` | The `slicer`, `printer`, `material`, `effective` and `models` nodes of a manifest. Shared by the native manifest and the JS fallback's. |
 | `resolveSliceRasterSettings` | Raster grid, X-packing (only for formats whose definition declares `bitdepth-packed-x`), mirroring and layer height. |
 | `resolveSliceLayerCount` | Layer count and tallest object height for a scene, clipped to the printer's build height. |
+| `resolveBottomCompensationLayers` | Which layers the bottom contour compensation covers, as `{ layers, fadeLayers }`, from the bottom and transition layers in the merged metadata, read the way the encoders read them. |
 | `mergeMetadataOverridesIntoMetadata` | Writes the settings mode and the material's per-format settings (from the format plugin's local-settings adapter) into the metadata. |
 | `SLICER_IDENTITY` | The `slicer` node: the app's name, and its version when `NEXT_PUBLIC_APP_VERSION` is set. |
 
@@ -60,6 +61,49 @@ resolves the request once before mesh preparation and `assembleSliceJob` resolve
 the same function and input. `aaOnSupports` is undefined without a request, and only the
 orchestrator falls back to the performance setting there, because that one is read from browser
 storage.
+
+## Bottom contour compensation
+
+`assembleSliceJob` copies the material's `bottomOutlineCompensationMm` and
+`bottomHoleCompensationMm` into the job unchanged (`0` when absent) and sets
+`bottomCompensationLayers` and `bottomCompensationFadeLayers` with
+`resolveBottomCompensationLayers(metadataJson, outputFormat, materialProfile.bottomCompensationFade)`:
+
+- fade on (the material default): `layers` is the bottom layer count and
+  `fadeLayers` the transition layer count, so the compensation is full on the
+  bottom layers and steps down through the transition layers;
+- fade off: `layers` is bottom plus transition and `fadeLayers` is `0`, full
+  strength on both, then a hard stop.
+
+The engine applies the compensation by those counts (see
+[API Reference](slicing-engine/api.md)) and reads nothing about bottom or
+transition layers itself, so the counts have to be the ones the encoder writes
+into the print file:
+
+- It reads the **merged** metadata, after `mergeMetadataOverridesIntoMetadata`,
+  so the material's stored per-format settings, or the format plugin's defaults
+  when none are stored, decide it, exactly as they decide the file's header.
+- For each of `bottomLayerCount` and `transitionLayerCount` it takes the first
+  number found in `<format>.<key>`, `export.<format>.<key>`, then
+  `material.<key>`, the order the GOO and CTB encoders read them in (`goo.transitionLayerCount`,
+  `ctb.transitionLayerCount`, `lumen.transitionLayerCount`; Anycubic's
+  `material.transitionLayerCount`). A format that records no transition layers,
+  such as NanoDLP, has the bottom layers alone and no fade either way.
+- The counts are resolved whether or not the compensation is on; a job with both
+  distances at `0` slices as before.
+
+The native bridge clamps the distances to ±2 mm and rounds the layer counts
+(`SLICE_JOB_LIMITS` in `sliceJobLimits.ts`). A new format whose plugin stores its
+transition layers anywhere else must either use one of those paths or the
+compensation will stop at the bottom layers.
+
+```ts
+resolveBottomCompensationLayers(
+  JSON.stringify({ material: { bottomLayerCount: 6 }, goo: { transitionLayerCount: 4 } }),
+  '.goo',
+  true,
+); // { layers: 6, fadeLayers: 4 }; with false, { layers: 10, fadeLayers: 0 }
+```
 
 ## Example
 
@@ -102,7 +146,7 @@ const job = assembleSliceJob({
 ## Tests
 
 - `src/features/slicing/__tests__/appSliceJobGolden.test.ts` pins the exact job the real
-  orchestrator hands the native slicer, for eight printers, three materials and three panel setups.
+  orchestrator hands the native slicer, for eight printers, four materials (one with bottom compensation on) and three panel setups.
   When a change to the job is intended, regenerate with `UPDATE_SLICE_JOB_GOLDEN=1` and review the
   diff of `fixtures/appSliceJobs.golden.json` like code.
 - `src/features/slicing/__tests__/sliceJobAssembly.test.ts` checks that `assembleSliceJob` alone,
@@ -111,6 +155,10 @@ const job = assembleSliceJob({
   `slice run --job` with the one the app hands the native slicer, every field and the whole metadata,
   for four anti-aliasing choices. Only the mesh transport, the model triangle count, the thumbnail
   and the output path are left out.
+- `src/features/slicing/__tests__/bottomCompensation.test.ts` checks the bottom
+  compensation end to end: off by default with the fade on, clamped in the store
+  and at the bridge, the full and fading layer counts per format with the fade on
+  and off, and the same four fields from `scene slice`.
 - `src/features/slicing/__tests__/sliceAntiAliasing.test.ts` pins the anti-aliasing decision for
   every printer, auto preset and eight overrides; regenerate with `UPDATE_SLICE_AA_GOLDEN=1` and
   review the diff of `fixtures/sliceAntiAliasing.golden.json` like code.

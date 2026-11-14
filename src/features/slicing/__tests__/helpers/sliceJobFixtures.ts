@@ -70,7 +70,13 @@ export const PRINTERS: PrinterFixture[] = [
   bundleFixture('Saturn 4 Ultra 16K bundle (declared build volume)', 'scripts/bench/printers/saturn_4_ultra_16k-bundle.json'),
 ];
 
-export type MaterialFixture = { label: string; ditherEnabled: boolean; perFormatSettings?: boolean };
+export type MaterialFixture = {
+  label: string;
+  ditherEnabled: boolean;
+  perFormatSettings?: boolean;
+  /** Bottom contour compensation on (fading, the default), with transition layers stored per format. */
+  bottomCompensation?: boolean;
+};
 
 // Dithering on and off, because the panel bit depth decides it differently for
 // each; and per-format settings stored on the material, because for GOO, CTB and
@@ -80,6 +86,7 @@ export const MATERIALS: MaterialFixture[] = [
   { label: 'dithering on', ditherEnabled: true },
   { label: 'dithering off', ditherEnabled: false },
   { label: 'per-format settings stored', ditherEnabled: false, perFormatSettings: true },
+  { label: 'bottom compensation', ditherEnabled: false, bottomCompensation: true },
 ];
 
 /**
@@ -111,6 +118,16 @@ export function material(fixture: MaterialFixture): MaterialProfile {
     antiAliasingSettings: { ditherEnabled, ditherBitDepth: 4, ditherDeviceGamma: 2.2 },
     ...(fixture.perFormatSettings
       ? { localSettingsByOutput: { '.goo': stored, '.ctb': stored, '.lumen': stored } }
+      : {}),
+    ...(fixture.bottomCompensation
+      ? {
+        bottomOutlineCompensationMm: -0.12,
+        bottomHoleCompensationMm: -0.05,
+        localSettingsByOutput: Object.fromEntries(['.goo', '.ctb', '.lumen'].map((format) => [
+          format,
+          { ...stored, transitionLayerCount: 3 },
+        ])),
+      }
       : {}),
   } as MaterialProfile;
 }

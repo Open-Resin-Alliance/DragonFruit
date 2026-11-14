@@ -129,6 +129,10 @@ payload the app hands the native slicer (`toNativeMetadataPayload`), without the
 mesh, which still comes from the input file. Every field comes from the file,
 the layer count included; a zero `model_triangle_count` means the input's
 count. It cannot be combined with the job flags. `scene slice` uses it.
+The bottom contour compensation travels as `bottom_outline_compensation_mm`,
+`bottom_hole_compensation_mm`, `bottom_compensation_layers` and
+`bottom_compensation_fade_layers`; a job without them slices with the
+compensation off.
 
 **Key flags for `slice run`** (without `--job`):
 - `--layer-height 0.05` — layer step (mm)
@@ -139,6 +143,13 @@ count. It cannot be combined with the job flags. `scene slice` uses it.
 - `--png-compression balanced` — fastest / balanced / smallest / optimal
 - `--anti-aliasing Off` — Off / 2x / 4x / 8x
 - `--mirror-x`, `--mirror-y` — mirror axes
+- `--bottom-outline-compensation-mm 0.0`, `--bottom-hole-compensation-mm 0.0` —
+  bottom contour compensation in mm (negative removes material: outlines
+  shrink, holes open); `0` is off
+- `--bottom-compensation-layers 0` — how many layers from the plate get it in
+  full
+- `--bottom-compensation-fade-layers 0` — how many layers after those it fades
+  out over in equal steps (`0` stops it dead)
 - `--metadata-json '{}'` — opaque metadata passthrough
 
 **Example:**
@@ -201,7 +212,10 @@ app-exported bundle), the printer and material go through the profile store the
 way the app adds them, and the job fields plus `metadata_json` come from
 `assembleSliceJob` (see [Slice Job Assembly](../dev/slice-job-assembly.md)):
 format version, X-packing, build plate, layer height, dithering, anti-aliasing,
-and the material's exposure and per-format settings. The material is `--material`, else
+the material's bottom contour compensation (`bottomOutlineCompensationMm`,
+`bottomHoleCompensationMm`, over the bottom and transition layers, fading through
+the transition layers unless `bottomCompensationFade` is `false`), and the
+material's exposure and per-format settings. The material is `--material`, else
 the bundle's first material, else the app's default for a new material.
 `--layer-height`, `--build-width-mm`, `--build-depth-mm` and `--dither*` override
 the material and printer. Without `--printer`, `slice run` gets raw engine

@@ -33,6 +33,14 @@ export type NativeSolidSliceJobEnvelope = {
   zBlurSigma?: number;
   aaOnSupports: boolean;
   minimumAaAlphaPercent: number;
+  /** Bottom contour compensation for outlines, in mm; negative shrinks them. */
+  bottomOutlineCompensationMm?: number;
+  /** Bottom contour compensation for holes, in mm; negative opens them. */
+  bottomHoleCompensationMm?: number;
+  /** Layers from the plate with the full bottom compensation. */
+  bottomCompensationLayers?: number;
+  /** Layers after those the bottom compensation fades out over. */
+  bottomCompensationFadeLayers?: number;
   mirrorX: boolean;
   mirrorY: boolean;
   zBlendLookBack?: number;
@@ -91,6 +99,10 @@ type NativeSolidSliceMetadataPayload = {
   z_blur_sigma: number;
   aa_on_supports: boolean;
   minimum_aa_alpha_percent: number;
+  bottom_outline_compensation_mm: number;
+  bottom_hole_compensation_mm: number;
+  bottom_compensation_layers: number;
+  bottom_compensation_fade_layers: number;
   mirror_x: boolean;
   mirror_y: boolean;
   z_blend_look_back?: number;
@@ -196,6 +208,10 @@ export function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): Nativ
     z_blur_sigma: clampSliceJobNumber('zBlurSigma', job.zBlurSigma),
     aa_on_supports: job.aaOnSupports,
     minimum_aa_alpha_percent: clampSliceJobNumber('minimumAaAlphaPercent', job.minimumAaAlphaPercent),
+    bottom_outline_compensation_mm: clampSliceJobNumber('bottomOutlineCompensationMm', job.bottomOutlineCompensationMm),
+    bottom_hole_compensation_mm: clampSliceJobNumber('bottomHoleCompensationMm', job.bottomHoleCompensationMm),
+    bottom_compensation_layers: clampSliceJobNumber('bottomCompensationLayers', job.bottomCompensationLayers),
+    bottom_compensation_fade_layers: clampSliceJobNumber('bottomCompensationFadeLayers', job.bottomCompensationFadeLayers),
     mirror_x: job.mirrorX,
     mirror_y: job.mirrorY,
     z_blend_look_back: clampSliceJobNumber('zBlendLookBack', job.zBlendLookBack),

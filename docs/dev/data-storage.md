@@ -83,6 +83,16 @@ updateMaterialProfile(customMaterial.id, {
 
 Support Adjustments remain available under Auto AA presets (including Balanced and Smooth): `src/features/slicing/components/SlicingPanel.tsx` uses the material/session `aaOnSupports` setting even without Override Auto. Tip Compensation Offset Mode is shown as a disabled Automatic selector while Override Auto is off; `src/features/slicing/resolveEffectiveAaSettings.ts` then computes the Auto offset regardless of a stored Disabled or Manual choice. Turning Override Auto back on restores that saved choice, with Compensation Distance (mm) editable only in Manual mode. No existing profile data is migrated, and the other custom AA controls remain gated.
 
+`MaterialProfile.bottomOutlineCompensationMm` and `MaterialProfile.bottomHoleCompensationMm` (the material's bottom contour compensation, in mm) and `MaterialProfile.bottomCompensationFade` (whether it fades out through the transition layers) also live in the `dragonfruit-profiles-v1` material envelope. Every path that reads a material in (hydration, `addMaterialProfile`, `updateMaterialProfile`, printer bundle and material imports, official templates and plugin material presets) defaults a missing or non-numeric distance to `0` (off) and clamps the rest to ±`BOTTOM_COMPENSATION_LIMIT_MM` (2 mm), and defaults a missing or non-boolean fade to `true`, so profiles saved before the fields existed load with the compensation off and the fade on. They are core fields, not per-format plugin settings: `MaterialBottomCompensationSection` in `src/components/settings/profileFormAtoms.tsx` edits them for every printer (a **Compensation** tab when the format's plugin replaces the stock material editor). `assembleSliceJob` carries them into the slice job (see [Slice Job Assembly](slice-job-assembly.md)).
+
+```ts
+updateMaterialProfile(customMaterial.id, {
+  bottomOutlineCompensationMm: -0.1, // outlines shrink by 0.1 mm on the bottom layers
+  bottomHoleCompensationMm: -0.05,   // holes open by 0.05 mm
+  bottomCompensationFade: false,     // full on the transition layers too, then stop
+});
+```
+
 ## Slicing and printing keys
 
 | Key                                                 | Medium                        | Purpose                                                                |

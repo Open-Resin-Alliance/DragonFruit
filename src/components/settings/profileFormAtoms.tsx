@@ -9,6 +9,8 @@ import { MouseTooltip } from '@/components/ui/MouseTooltip';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { Trans } from '@lingui/react/macro';
+import { msg } from '@lingui/core/macro';
+import { useLingui } from '@lingui/react';
 import {
     DEFAULT_CUSTOM_CURVE,
     DEFAULT_SAVED_CURVES,
@@ -17,6 +19,7 @@ import {
     type SavedCurve,
 } from '@/features/slicing/components/LutCurveEditor';
 import {
+    BOTTOM_COMPENSATION_LIMIT_MM,
     DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
     type MaterialAntiAliasingSettings,
     type MaterialProfile,
@@ -368,7 +371,7 @@ export function LabeledNumberInput({ label, helpText, tag, color, disabled = fal
                     value={localValue}
                     title={title}
                     onChange={(event) => {
-                        if (event.target.value.includes('-')) return;
+                        if (min >= 0 && event.target.value.includes('-')) return;
                         setLocalValue(event.target.value);
                     }}
                     onFocus={() => setIsFocused(true)}
@@ -1083,6 +1086,65 @@ export function MaterialProfileFormSections({ draft, onChange, printerProfiles, 
                 </div>
             </div>
         </>
+    );
+}
+
+// ─── MaterialBottomCompensationSection ──────────────────────────────────────
+
+type MaterialBottomCompensationSectionProps = {
+    draft: MaterialDraft;
+    onChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
+};
+
+function clampBottomCompensationMm(value: number): number {
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(-BOTTOM_COMPENSATION_LIMIT_MM, Math.min(BOTTOM_COMPENSATION_LIMIT_MM, value));
+}
+
+/**
+ * The material's bottom contour compensation. Core material settings, so the
+ * section shows for every printer, including formats whose plugin replaces the
+ * stock material editor.
+ */
+export function MaterialBottomCompensationSection({ draft, onChange }: MaterialBottomCompensationSectionProps) {
+    const { _ } = useLingui();
+    return (
+        <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+            <div className="ui-meta font-semibold uppercase tracking-wide mb-1">
+                <Trans>Bottom Compensation</Trans>
+            </div>
+            <div className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
+                <Trans>Moves the edges of the bottom and transition layers to counter elephant&apos;s foot. Negative removes material, positive adds it, 0 turns it off.</Trans>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+                <LabeledNumberInput
+                    label={_(msg`Bottom outline compensation (mm)`)}
+                    helpText={_(msg`Moves the outer edges of the bottom and transition layers. Negative removes material (outlines shrink), positive adds it (outlines grow). An island inside a hole counts as an outline.`)}
+                    min={-BOTTOM_COMPENSATION_LIMIT_MM}
+                    max={BOTTOM_COMPENSATION_LIMIT_MM}
+                    step={0.01}
+                    precision={2}
+                    value={draft.bottomOutlineCompensationMm ?? 0}
+                    onChange={(value) => onChange((prev) => ({ ...prev, bottomOutlineCompensationMm: clampBottomCompensationMm(value) }))}
+                />
+                <LabeledNumberInput
+                    label={_(msg`Bottom hole compensation (mm)`)}
+                    helpText={_(msg`Moves the edges of holes in the bottom and transition layers. Negative removes material (holes open), positive adds it (holes close).`)}
+                    min={-BOTTOM_COMPENSATION_LIMIT_MM}
+                    max={BOTTOM_COMPENSATION_LIMIT_MM}
+                    step={0.01}
+                    precision={2}
+                    value={draft.bottomHoleCompensationMm ?? 0}
+                    onChange={(value) => onChange((prev) => ({ ...prev, bottomHoleCompensationMm: clampBottomCompensationMm(value) }))}
+                />
+                <LabeledToggleInput
+                    label={_(msg`Fade through transition layers`)}
+                    helpText={_(msg`On: full compensation on the bottom layers, then less on each transition layer as the exposure drops, reaching none once the exposure is back to normal. Off: full compensation on the bottom and transition layers, then none.`)}
+                    checked={draft.bottomCompensationFade ?? true}
+                    onChange={(value) => onChange((prev) => ({ ...prev, bottomCompensationFade: value }))}
+                />
+            </div>
+        </div>
     );
 }
 
@@ -2951,6 +3013,10 @@ export function ReplacementMaterialEditorShell({
                     />
                 </>
             );
+        }
+
+        if (tabId === 'compensation') {
+            return <MaterialBottomCompensationSection draft={draft} onChange={onDraftChange} />;
         }
 
         if (tabId === 'anti-aliasing') {

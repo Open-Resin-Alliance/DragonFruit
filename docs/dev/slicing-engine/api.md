@@ -38,6 +38,9 @@ Important fields:
 - build volume: `build_width_mm`, `build_depth_mm`
 - output selection: `output_format`
 - AA controls: `anti_aliasing_level`, `minimum_aa_alpha_percent`, `aa_on_supports`
+- bottom contour compensation: `bottom_outline_compensation_mm`,
+  `bottom_hole_compensation_mm`, `bottom_compensation_layers`,
+  `bottom_compensation_fade_layers` (all default `0`, off)
 - transforms: `mirror_x`, `mirror_y`
 - encode hints: `png_compression_strategy`, `container_compression_level`
 - metadata passthrough: `metadata_json`
@@ -58,6 +61,37 @@ tank. `SliceJobV3::tank_for_triangle(index)` is the per-triangle check.
 
 The intended pipeline is one framebuffer/RLE stream per tank per layer; the
 partition is the first step there, and encoders gain the per-tank streams next.
+
+### Bottom contour compensation
+
+Moves the contours of the layers nearest the build plate to counter "elephant's
+foot", the flare that long bottom exposures give every edge on the plate:
+
+- `bottom_outline_compensation_mm` moves outer outlines, `bottom_hole_compensation_mm`
+  moves holes. Negative removes material (outlines shrink, holes open), positive
+  adds it. An island standing inside a hole counts as an outline. The two are
+  independent.
+- The first `bottom_compensation_layers` layers (`0`-based layer index below the
+  count) get both distances in full. The next `bottom_compensation_fade_layers`
+  layers get a share that drops in equal steps, following the transition
+  exposure, which the GOO and CTB encoders ramp from the bottom exposure to
+  reach the normal exposure on the last transition layer: fading layer `k` of
+  `n` (`k` from 1) gets `1 - k / n` of each distance, so the last one gets none.
+  Every later layer gets none. A fade of `0` is a hard stop after the full-strength layers.
+- `0` turns a distance off; a job with both at `0` or no covered layers is
+  sliced exactly as before.
+- The distance is in millimetres and is exact on each axis for non-square
+  pixels: `SliceJobV3::bottom_compensation_for_layer(layer)` turns the job into a
+  `compensation::ContourCompensation` with the job's X and Y pixel pitch, or
+  `None` when the layer is not compensated.
+- The engine does not read print settings out of `metadata_json`, so the caller
+  resolves both counts from the bottom and transition layers the format's encoder
+  reads: with the material's fade on (the default), the bottom layers are full
+  strength and the transition layers fade; with it off, both are full strength
+  and the fade is `0` (see [Slice Job Assembly](../slice-job-assembly.md)).
+
+The pass itself is in `rust/dragonfruit-slicing-engine/src/compensation.rs` (`compensate_mask`, `compensate_rle`);
+[Pipeline](pipeline.md) says where it runs.
 
 ### Physical-width rasterization rule
 

@@ -2904,8 +2904,44 @@ fn rasterize_layer_with_stats_impl(
 
 /// Rasterize one layer into an 8-bit grayscale mask (`0` or `255`), optionally
 /// bypassing AA for support/raft geometry when model/support split metadata is
-/// provided in `job.model_triangle_count`.
+/// provided in `job.model_triangle_count`. Bottom layers get the job's contour
+/// compensation (see [`crate::compensation`]).
 pub fn rasterize_layer_with_stats(
+    job: &SliceJobV3,
+    triangles: &[Triangle],
+    layer_indices: &[usize],
+    layer_index: u32,
+    compute_area_stats: bool,
+) -> (Vec<u8>, LayerAreaStatsV3) {
+    let (mut mask, stats) = rasterize_layer_with_stats_uncompensated(
+        job,
+        triangles,
+        layer_indices,
+        layer_index,
+        compute_area_stats,
+    );
+    let Some(comp) = job.bottom_compensation_for_layer(layer_index) else {
+        return (mask, stats);
+    };
+    let width = job.effective_render_width_px() as usize;
+    let height = job.source_height_px as usize;
+    crate::compensation::compensate_mask(&mut mask, width, height, &comp);
+    let stats = recompute_layer_stats_from_mask(
+        &mask,
+        width,
+        height,
+        bottom_pixel_area_mm2(job),
+        compute_area_stats,
+    );
+    (mask, stats)
+}
+
+fn bottom_pixel_area_mm2(job: &SliceJobV3) -> f64 {
+    ((job.build_width_mm as f64) / (job.effective_render_width_px().max(1) as f64))
+        * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64))
+}
+
+fn rasterize_layer_with_stats_uncompensated(
     job: &SliceJobV3,
     triangles: &[Triangle],
     layer_indices: &[usize],
@@ -2998,8 +3034,40 @@ pub fn rasterize_layer(
 /// the dominant 40-56 MB allocation at 8 K resolution for CTB and other
 /// formats that do not need PNG. When `compute_area_stats` is true, a binary
 /// stats mask is captured and 8-connected component analysis is applied.
-#[allow(unused_assignments)]
+///
+/// Bottom layers get the job's contour compensation (see [`crate::compensation`]).
 pub fn rasterize_layer_rle(
+    job: &SliceJobV3,
+    triangles: &[Triangle],
+    layer_indices: &[usize],
+    layer_index: u32,
+    compute_area_stats: bool,
+) -> (Vec<crate::rle::RleRun>, LayerAreaStatsV3) {
+    let (runs, stats) = rasterize_layer_rle_uncompensated(
+        job,
+        triangles,
+        layer_indices,
+        layer_index,
+        compute_area_stats,
+    );
+    let Some(comp) = job.bottom_compensation_for_layer(layer_index) else {
+        return (runs, stats);
+    };
+    let width = job.effective_render_width_px() as usize;
+    let height = job.source_height_px as usize;
+    let runs = crate::compensation::compensate_rle(&runs, width, height, &comp);
+    let stats = recompute_layer_stats_from_rle(
+        &runs,
+        width,
+        height,
+        bottom_pixel_area_mm2(job),
+        compute_area_stats,
+    );
+    (runs, stats)
+}
+
+#[allow(unused_assignments)]
+fn rasterize_layer_rle_uncompensated(
     job: &SliceJobV3,
     triangles: &[Triangle],
     layer_indices: &[usize],
@@ -3019,7 +3087,7 @@ pub fn rasterize_layer_rle(
     }
 
     if supports_should_bypass_aa(job, triangles.len()) {
-        let (mask, stats) = rasterize_layer_with_stats(
+        let (mask, stats) = rasterize_layer_with_stats_uncompensated(
             job,
             triangles,
             layer_indices,
@@ -3527,6 +3595,35 @@ pub fn rasterize_layer_rle_block(
 
     let full_width = job.effective_render_width_px() as usize;
     let height = job.source_height_px as usize;
+
+    // Contour compensation needs the whole layer (a contour can cross the window
+    // edge), so compensated bottom layers are rasterized full-width and cropped.
+    if job.bottom_compensation_for_layer(layer_index).is_some() {
+        let start = (block.start_col as usize).min(full_width);
+        let end = (start + block.width as usize).min(full_width);
+        let (runs, _) =
+            rasterize_layer_rle(job, triangles, layer_indices, layer_index, false);
+        let window = crate::rle::crop_rle_columns(
+            &runs,
+            full_width as u32,
+            start as u32,
+            (full_width - end) as u32,
+        );
+        let mut stats = recompute_layer_stats_from_rle(
+            &window,
+            end - start,
+            height,
+            bottom_pixel_area_mm2(job),
+            compute_area_stats,
+        );
+        if stats.total_solid_pixels > 0 {
+            // x-extents in absolute frame columns, like the uncompensated block path
+            stats.min_x += start as i32;
+            stats.max_x += start as i32;
+        }
+        return (window, stats);
+    }
+
     let wstart = (block.start_col as usize).min(full_width);
     let wend = wstart
         .saturating_add(block.width as usize)
@@ -4728,6 +4825,68 @@ mod tests {
             out.extend_from_slice(&verts[a]);
             out.extend_from_slice(&verts[b]);
             out.extend_from_slice(&verts[c]);
+        }
+    }
+
+    #[test]
+    fn bottom_compensation_applies_to_bottom_layers_only_on_every_path() {
+        // 256 x 256 px on 100 x 100 mm: 0.390625 mm per pixel. A 50 mm box, 0.8 mm
+        // outline compensation = 2 px per side on the first two layers only. Each path
+        // (full mask, RLE, column blocks) is compared with itself uncompensated.
+        let mut job = job_for_single_layer();
+        job.total_layers = 4;
+        job.bottom_outline_compensation_mm = -0.8;
+        job.bottom_compensation_layers = 2;
+        let mut uncompensated = job.clone();
+        uncompensated.bottom_compensation_layers = 0;
+        let mut triangle_input = Vec::new();
+        push_box_triangles(&mut triangle_input, 0.0, 0.0, 0.0, 4.0, 50.0, 50.0);
+        let mut triangles = parse_triangles(&triangle_input);
+        project_triangles_inplace(&mut triangles, &job);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        // Lit bounding box (x0, y0, x1, y1) of a `w`-wide mask.
+        let bbox = |mask: &[u8], w: usize| {
+            let (mut b, mut any) = ((usize::MAX, usize::MAX, 0, 0), false);
+            for (i, _) in mask.iter().enumerate().filter(|(_, v)| **v >= 128) {
+                let (x, y) = (i % w, i / w);
+                b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+                any = true;
+            }
+            assert!(any, "layer has lit pixels");
+            b
+        };
+        let blocks = |j: &SliceJobV3, layer: u32| {
+            let (l, _) = rasterize_layer_rle_block(
+                j, &triangles, &indices, layer, false, crate::rle::make_rle_block(0, 128),
+            );
+            let (r, _) = rasterize_layer_rle_block(
+                j, &triangles, &indices, layer, false, crate::rle::make_rle_block(128, 128),
+            );
+            let (l, r) = (
+                crate::rle::expand_rle_to_mask(&l, 128 * 256),
+                crate::rle::expand_rle_to_mask(&r, 128 * 256),
+            );
+            let mut full = vec![0u8; 256 * 256];
+            for y in 0..256 {
+                full[y * 256..y * 256 + 128].copy_from_slice(&l[y * 128..(y + 1) * 128]);
+                full[y * 256 + 128..(y + 1) * 256].copy_from_slice(&r[y * 128..(y + 1) * 128]);
+            }
+            bbox(&full, 256)
+        };
+        let rle = |j: &SliceJobV3, layer: u32| {
+            let (runs, _) = rasterize_layer_rle(j, &triangles, &indices, layer, false);
+            bbox(&crate::rle::expand_rle_to_mask(&runs, 256 * 256), 256)
+        };
+        let mask = |j: &SliceJobV3, layer: u32| bbox(&rasterize_layer(j, &triangles, &indices, layer), 256);
+
+        for layer in 0..3u32 {
+            let paths: [(&str, &dyn Fn(&SliceJobV3, u32) -> (usize, usize, usize, usize)); 3] =
+                [("mask", &mask), ("rle", &rle), ("blocks", &blocks)];
+            for (name, path) in paths {
+                let b = path(&uncompensated, layer);
+                let expected = if layer < 2 { (b.0 + 2, b.1 + 2, b.2 - 2, b.3 - 2) } else { b };
+                assert_eq!(path(&job, layer), expected, "{name} path, layer {layer}");
+            }
         }
     }
 

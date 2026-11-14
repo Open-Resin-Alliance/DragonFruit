@@ -1473,6 +1473,10 @@ mod tests {
         let job: SliceJobV3 = serde_json::from_str(job_json).unwrap();
         assert_eq!(job.format_version, None);
         assert!(job.minimum_aa_alpha_percent >= 0.0);
+        assert_eq!(job.bottom_outline_compensation_mm, 0.0, "bottom compensation is off by default");
+        assert_eq!(job.bottom_hole_compensation_mm, 0.0);
+        assert_eq!(job.bottom_compensation_layers, 0);
+        assert_eq!(job.bottom_compensation_fade_layers, 0);
     }
 
     // -- Slice job from the app's payload --
@@ -1487,6 +1491,8 @@ mod tests {
         "blur_brush_sigma_x": 0.5, "blur_brush_sigma_y": 0.5,
         "z_blur_radius_layers": 1, "z_blur_kernel": "box", "z_blur_sigma": 0.5,
         "aa_on_supports": false, "minimum_aa_alpha_percent": 35,
+        "bottom_outline_compensation_mm": -0.12, "bottom_hole_compensation_mm": -0.05,
+        "bottom_compensation_layers": 7, "bottom_compensation_fade_layers": 3,
         "mirror_x": true, "mirror_y": false,
         "z_blend_look_back": 5, "z_blend_minimum_alpha_percent": 35, "z_blend_max_alpha_percent": 90,
         "z_blend_custom_lut": [0, 120, 255], "zaa_kernel": "perturb", "zaa_pattern": "halton",
@@ -1510,6 +1516,10 @@ mod tests {
         assert_eq!(job.zaa_pattern.as_deref(), Some("halton"));
         assert_eq!(job.container_compression_level, 3);
         assert_eq!(job.total_layers, 123, "the payload's layer count wins");
+        assert!((job.bottom_outline_compensation_mm + 0.12).abs() < 1e-6);
+        assert!((job.bottom_hole_compensation_mm + 0.05).abs() < 1e-6);
+        assert_eq!(job.bottom_compensation_layers, 7);
+        assert_eq!(job.bottom_compensation_fade_layers, 3);
         assert!(job.mirror_x);
         assert_eq!(job.metadata_json, "{\"version\":2}");
         assert_eq!(job.triangles_xyz.len(), 18);

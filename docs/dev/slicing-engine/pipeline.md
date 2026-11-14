@@ -62,6 +62,25 @@ This path is still bounded/cancelable and useful for encoders not exposing paral
 - AA on => subscanline coverage accumulation to grayscale
 - output is row-major `Vec<RleRun>`
 
+**Bottom contour compensation** runs inside rasterization, so every raster path
+gets it: `rasterize_layer_rle` and `rasterize_layer_with_stats` rasterize the
+layer, then, for a layer `SliceJobV3::bottom_compensation_for_layer` covers (at full strength,
+or at its share of a fade over the transition layers), move
+its contours with `compensation::compensate_rle` / `compensate_mask` and
+recompute the layer's area stats. That is before everything that works on the
+rasterized layer: XY blur, Z blur and 3DAA, LUTs, dithering and the support
+merge all see the compensated layer. The layer stays in runs: each row's solid
+spans are joined into regions with a union-find, a walk over the regions gives
+each one its nesting depth (outline or hole), and "within d mm" is the spans
+dilated by a circle in mm (an ellipse in non-square pixels), row by row and in
+parallel. When the outline and hole distances are equal every edge moves the same
+way, so the nesting depths are skipped. The cost follows the number of spans, not
+pixels: a full-plate 16K layer takes about 1 to 2 ms, and only the bottom and
+transition layers pay it. The column-block path (`rasterize_layer_rle_block`)
+cannot classify a contour from a window that cuts through it, so a compensated
+layer is rasterized full-width, compensated, and cropped to the block; other
+layers keep the windowed path.
+
 ## 8) O(num_runs) PNG encode details
 
 Encode functions in `encode.rs` operate from runs directly:
