@@ -23,6 +23,8 @@
 //!
 //! 1. Spans are joined into regions across rows with a union-find (solid connects 8-ways,
 //!    background 4-ways), and a breadth-first walk over the regions gives each its depth.
+//!    When both distances are equal every edge moves the same way, so this step is
+//!    skipped.
 //! 2. "Within `d` mm of set S" is S dilated by an ellipse of radius `d` (a circle in mm):
 //!    for each row offset `dy` the spans of row `y + dy` widen by the largest whole number
 //!    of pixels `k` with `(k·px)² + (dy·py)² <= d²`, and the widened spans are merged.
@@ -30,7 +32,7 @@
 //!    clear or fill, and the row is written back as runs.
 //!
 //! Step 1 is linear in the number of spans; steps 2 and 3 run row by row in parallel.
-//! Memory is a few bytes per span, not per pixel.
+//! Spans are kept in flat arrays indexed by row, so memory is a few bytes per span.
 
 use rayon::prelude::*;
 
@@ -63,6 +65,36 @@ type Span = (u32, u32);
 /// Non-zero pixels `[start, end)` of one value within a row.
 type ValueRun = (u32, u32, u8);
 
+/// Items grouped by row in one flat array: row `y` is `items[start[y]..start[y + 1]]`.
+struct Rows<T> {
+    items: Vec<T>,
+    start: Vec<u32>,
+}
+
+impl<T> Rows<T> {
+    fn with_capacity(rows: usize, items: usize) -> Self {
+        let mut start = Vec::with_capacity(rows + 1);
+        start.push(0);
+        Self {
+            items: Vec::with_capacity(items),
+            start,
+        }
+    }
+
+    /// Close the current row.
+    fn end_row(&mut self) {
+        self.start.push(self.items.len() as u32);
+    }
+
+    fn len(&self) -> usize {
+        self.start.len() - 1
+    }
+
+    fn row(&self, y: usize) -> &[T] {
+        &self.items[self.start[y] as usize..self.start[y + 1] as usize]
+    }
+}
+
 /// Compensate a full-frame, row-major RLE layer. Returns the input unchanged when there
 /// is nothing to do.
 pub fn compensate_rle(
@@ -79,8 +111,8 @@ pub fn compensate_rle(
         return runs.to_vec();
     };
     let mut rle = RleAccum::new();
-    for (row, change) in rows.iter().zip(&changes) {
-        emit_row(row, change, width as u32, &mut rle);
+    for y in 0..height {
+        emit_row(rows.row(y), changes.row(y), width as u32, &mut rle);
     }
     rle.finish()
 }
@@ -90,164 +122,231 @@ pub fn compensate_mask(mask: &mut [u8], width: usize, height: usize, comp: &Cont
     if comp.is_noop() || width == 0 || height == 0 {
         return;
     }
-    let rows: Vec<Vec<ValueRun>> = mask[..width * height]
-        .par_chunks(width)
-        .map(rows_from_mask_row)
-        .collect();
+    let mut rows = Rows::with_capacity(height, height * 4);
+    for row in mask[..width * height].chunks(width) {
+        let mut x = 0u32;
+        for run in row.chunk_by(|a, b| a == b) {
+            let n = run.len() as u32;
+            if run[0] != 0 {
+                rows.items.push((x, x + n, run[0]));
+            }
+            x += n;
+        }
+        rows.end_row();
+    }
     let Some(changes) = compensate_rows(&rows, width as u32, comp) else {
         return;
     };
-    for (y, change) in changes.iter().enumerate() {
-        for &(s, e, v) in change {
+    for y in 0..height {
+        for &(s, e, v) in changes.row(y) {
             mask[y * width + s as usize..y * width + e as usize].fill(v);
         }
     }
 }
 
-fn rows_from_rle(runs: &[RleRun], width: usize, height: usize) -> Vec<Vec<ValueRun>> {
+fn rows_from_rle(runs: &[RleRun], width: usize, height: usize) -> Rows<ValueRun> {
     let total = width * height;
-    let mut rows = vec![Vec::new(); height];
+    let mut rows = Rows::with_capacity(height, runs.len());
     let mut pos = 0usize;
     for run in runs {
         let len = run.length as usize;
+        let end = (pos + len).min(total);
         if run.value != 0 {
-            let end = (pos + len).min(total);
             let mut p = pos;
             while p < end {
                 let y = p / width;
+                while rows.len() < y {
+                    rows.end_row();
+                }
                 let row_end = ((y + 1) * width).min(end);
-                rows[y].push((
-                    (p - y * width) as u32,
-                    (row_end - y * width) as u32,
-                    run.value,
-                ));
+                rows.items
+                    .push(((p - y * width) as u32, (row_end - y * width) as u32, run.value));
                 p = row_end;
             }
         }
-        pos += len;
+        pos = end;
         if pos >= total {
             break;
         }
     }
+    while rows.len() < height {
+        rows.end_row();
+    }
     rows
 }
 
-fn rows_from_mask_row(row: &[u8]) -> Vec<ValueRun> {
-    let mut out = Vec::new();
-    let mut x = 0u32;
-    for run in row.chunk_by(|a, b| a == b) {
-        let n = run.len() as u32;
-        if run[0] != 0 {
-            out.push((x, x + n, run[0]));
-        }
-        x += n;
-    }
-    out
-}
-
 /// The spans to clear (value 0) and fill (value 255) in every row, sorted and disjoint
-/// within each row, or `None` when the layer has no solid pixel.
+/// within each row, or `None` when nothing changes.
 fn compensate_rows(
-    rows: &[Vec<ValueRun>],
+    rows: &Rows<ValueRun>,
     width: u32,
     comp: &ContourCompensation,
-) -> Option<Vec<Vec<ValueRun>>> {
-    let solid: Vec<Vec<Span>> = rows.par_iter().map(|r| solid_spans(r)).collect();
-    if solid.iter().all(|s| s.is_empty()) {
+) -> Option<Rows<ValueRun>> {
+    let height = rows.len();
+    let solid = solid_spans(rows);
+    if solid.items.is_empty() {
         return None;
     }
-    let sets = DepthSets::new(&solid, width);
     let (px, py) = (comp.pitch_x_mm as f64, comp.pitch_y_mm as f64);
     let outline = Ellipse::new(comp.outline_mm, px, py);
     let hole = Ellipse::new(comp.hole_mm, px, py);
-    let height = rows.len();
 
-    let changes: Vec<Vec<ValueRun>> = (0..height)
+    // Equal distances move every edge the same way: removal is the solid within the
+    // distance of any background, addition the background within it of any solid. That
+    // is the classified result with every case merged, so the depths are not needed.
+    let uniform = comp.outline_mm == comp.hole_mm;
+    let background = if uniform { Some(background_spans(&solid, width)) } else { None };
+    let sets = if uniform { None } else { Some(DepthSets::new(&solid, width)) };
+
+    let per_row: Vec<Vec<ValueRun>> = (0..height)
         .into_par_iter()
-        .map(|y| {
-            let mut remove: Vec<Span> = Vec::new();
-            let mut add: Vec<Span> = Vec::new();
-            for (mm, disc, is_outline) in [
-                (comp.outline_mm, &outline, true),
-                (comp.hole_mm, &hole, false),
-            ] {
-                if mm < 0.0 {
-                    // A solid pixel at depth 1 (mod 4) has its outline against background
-                    // at depth 0 (mod 4) and its holes against depth 2 (mod 4); a solid
-                    // at depth 3 (mod 4) the other way round.
-                    let (near_sa, near_sb) = if is_outline {
-                        (&sets.bg_a, &sets.bg_b)
-                    } else {
-                        (&sets.bg_b, &sets.bg_a)
-                    };
-                    if !sets.solid_a[y].is_empty() {
-                        remove.extend(intersect(&sets.solid_a[y], &disc.dilate(near_sa, y, width)));
-                    }
-                    if !sets.solid_b[y].is_empty() {
-                        remove.extend(intersect(&sets.solid_b[y], &disc.dilate(near_sb, y, width)));
-                    }
+        .with_min_len(32)
+        .map_init(Scratch::default, |scratch, y| {
+            scratch.remove.clear();
+            scratch.add.clear();
+            if let Some(bg) = &background {
+                let mm = comp.outline_mm;
+                if mm < 0.0 && !solid.row(y).is_empty() {
+                    outline.dilate(bg, y, width, &mut scratch.dilated);
+                    intersect_into(solid.row(y), &scratch.dilated, &mut scratch.remove);
                 } else if mm > 0.0 {
-                    // Background at depth 0 (mod 4) is outside the depth-1 solids (their
-                    // outline) and is a hole of the depth-3 (mod 4) solids.
-                    let (near_a, near_b) = if is_outline {
-                        (&sets.solid_a, &sets.solid_b)
-                    } else {
-                        (&sets.solid_b, &sets.solid_a)
-                    };
-                    add.extend(intersect(&sets.bg_a[y], &disc.dilate(near_a, y, width)));
-                    add.extend(intersect(&sets.bg_b[y], &disc.dilate(near_b, y, width)));
+                    outline.dilate(&solid, y, width, &mut scratch.dilated);
+                    intersect_into(bg.row(y), &scratch.dilated, &mut scratch.add);
                 }
+            } else if let Some(sets) = &sets {
+                for (mm, disc, is_outline) in
+                    [(comp.outline_mm, &outline, true), (comp.hole_mm, &hole, false)]
+                {
+                    if mm < 0.0 {
+                        // A solid pixel at depth 1 (mod 4) has its outline against
+                        // background at depth 0 (mod 4) and its holes against depth 2
+                        // (mod 4); a solid at depth 3 (mod 4) the other way round.
+                        let (near_sa, near_sb) = if is_outline {
+                            (&sets.bg_a, &sets.bg_b)
+                        } else {
+                            (&sets.bg_b, &sets.bg_a)
+                        };
+                        for (target, near) in [(&sets.solid_a, near_sa), (&sets.solid_b, near_sb)] {
+                            if !target.row(y).is_empty() {
+                                disc.dilate(near, y, width, &mut scratch.dilated);
+                                intersect_into(target.row(y), &scratch.dilated, &mut scratch.remove);
+                            }
+                        }
+                    } else if mm > 0.0 {
+                        // Background at depth 0 (mod 4) is outside the depth-1 solids
+                        // (their outline) and is a hole of the depth-3 (mod 4) solids.
+                        let (near_a, near_b) = if is_outline {
+                            (&sets.solid_a, &sets.solid_b)
+                        } else {
+                            (&sets.solid_b, &sets.solid_a)
+                        };
+                        for (target, near) in [(&sets.bg_a, near_a), (&sets.bg_b, near_b)] {
+                            if !target.row(y).is_empty() {
+                                disc.dilate(near, y, width, &mut scratch.dilated);
+                                intersect_into(target.row(y), &scratch.dilated, &mut scratch.add);
+                            }
+                        }
+                    }
+                }
+            }
+            if scratch.remove.is_empty() && scratch.add.is_empty() {
+                return Vec::new();
             }
             // Removals only touch solid pixels and additions only background, so the two
             // lists never overlap.
-            let mut change: Vec<ValueRun> = merge(remove)
-                .into_iter()
-                .map(|(s, e)| (s, e, 0))
-                .chain(merge(add).into_iter().map(|(s, e)| (s, e, 255)))
-                .collect();
+            merge_in_place(&mut scratch.remove);
+            merge_in_place(&mut scratch.add);
+            let mut change: Vec<ValueRun> = Vec::with_capacity(scratch.remove.len() + scratch.add.len());
+            change.extend(scratch.remove.iter().map(|&(s, e)| (s, e, 0)));
+            change.extend(scratch.add.iter().map(|&(s, e)| (s, e, 255)));
             change.sort_unstable_by_key(|c| c.0);
             change
         })
         .collect();
-    if changes.iter().all(|c| c.is_empty()) {
+
+    let total: usize = per_row.iter().map(Vec::len).sum();
+    if total == 0 {
         return None;
+    }
+    let mut changes = Rows::with_capacity(height, total);
+    for row in per_row {
+        changes.items.extend(row);
+        changes.end_row();
     }
     Some(changes)
 }
 
-fn solid_spans(row: &[ValueRun]) -> Vec<Span> {
-    let mut out: Vec<Span> = Vec::new();
-    for &(s, e, v) in row {
-        if v < SOLID_THRESHOLD {
-            continue;
+/// Buffers reused across the rows one worker thread handles.
+#[derive(Default)]
+struct Scratch {
+    dilated: Vec<Span>,
+    remove: Vec<Span>,
+    add: Vec<Span>,
+}
+
+fn solid_spans(rows: &Rows<ValueRun>) -> Rows<Span> {
+    let mut out: Rows<Span> = Rows::with_capacity(rows.len(), rows.items.len());
+    for y in 0..rows.len() {
+        let first = out.items.len();
+        for &(s, e, v) in rows.row(y) {
+            if v < SOLID_THRESHOLD {
+                continue;
+            }
+            // Join a run to the previous one only within the same row.
+            let joins = out.items.len() > first && out.items.last().is_some_and(|l| l.1 == s);
+            if joins {
+                if let Some(last) = out.items.last_mut() {
+                    last.1 = e;
+                }
+            } else {
+                out.items.push((s, e));
+            }
         }
-        match out.last_mut() {
-            Some(last) if last.1 == s => last.1 = e,
-            _ => out.push((s, e)),
-        }
+        out.end_row();
     }
     out
 }
 
-/// Sort spans and merge the ones that overlap or touch.
-fn merge(mut spans: Vec<Span>) -> Vec<Span> {
+/// The background of every row: the gaps between its solid spans.
+fn background_spans(solid: &Rows<Span>, width: u32) -> Rows<Span> {
+    let mut out = Rows::with_capacity(solid.len(), solid.items.len() + solid.len());
+    for y in 0..solid.len() {
+        let mut x = 0u32;
+        for &(s, e) in solid.row(y) {
+            if s > x {
+                out.items.push((x, s));
+            }
+            x = e;
+        }
+        if x < width {
+            out.items.push((x, width));
+        }
+        out.end_row();
+    }
+    out
+}
+
+/// Sort spans and merge the ones that overlap or touch, in place.
+fn merge_in_place(spans: &mut Vec<Span>) {
     if spans.len() < 2 {
-        return spans;
+        return;
     }
     spans.sort_unstable_by_key(|s| s.0);
-    let mut out: Vec<Span> = Vec::with_capacity(spans.len());
-    for (s, e) in spans {
-        match out.last_mut() {
-            Some(last) if s <= last.1 => last.1 = last.1.max(e),
-            _ => out.push((s, e)),
+    let mut w = 0usize;
+    for r in 1..spans.len() {
+        let (s, e) = spans[r];
+        if s <= spans[w].1 {
+            spans[w].1 = spans[w].1.max(e);
+        } else {
+            w += 1;
+            spans[w] = (s, e);
         }
     }
-    out
+    spans.truncate(w + 1);
 }
 
-/// Pixels in both sorted, disjoint span lists.
-fn intersect(a: &[Span], b: &[Span]) -> Vec<Span> {
-    let mut out = Vec::new();
+/// Append the pixels in both sorted, disjoint span lists to `out`.
+fn intersect_into(a: &[Span], b: &[Span], out: &mut Vec<Span>) {
     let (mut i, mut j) = (0, 0);
     while i < a.len() && j < b.len() {
         let s = a[i].0.max(b[j].0);
@@ -261,7 +360,6 @@ fn intersect(a: &[Span], b: &[Span]) -> Vec<Span> {
             j += 1;
         }
     }
-    out
 }
 
 /// Write one row: the original runs, with `change` (sorted, disjoint) painted over them.
@@ -336,19 +434,19 @@ impl Ellipse {
         Self { offsets }
     }
 
-    /// Row `y` of `set` dilated by the ellipse: sorted, disjoint spans.
-    fn dilate(&self, set: &[Vec<Span>], y: usize, width: u32) -> Vec<Span> {
-        let mut spans = Vec::new();
+    /// Row `y` of `set` dilated by the ellipse, into `out` (sorted, disjoint spans).
+    fn dilate(&self, set: &Rows<Span>, y: usize, width: u32, out: &mut Vec<Span>) {
+        out.clear();
         for &(dy, k) in &self.offsets {
             let yy = y as i64 + dy;
             if yy < 0 || yy >= set.len() as i64 {
                 continue;
             }
-            for &(s, e) in &set[yy as usize] {
-                spans.push((s.saturating_sub(k), e.saturating_add(k).min(width)));
+            for &(s, e) in set.row(yy as usize) {
+                out.push((s.saturating_sub(k), e.saturating_add(k).min(width)));
             }
         }
-        merge(spans)
+        merge_in_place(out);
     }
 }
 
@@ -363,50 +461,39 @@ struct Segment {
 /// The spans of each row split by nesting depth (mod 4): background at depth 0 and 2,
 /// solid at depth 1 and 3.
 struct DepthSets {
-    bg_a: Vec<Vec<Span>>,
-    bg_b: Vec<Vec<Span>>,
-    solid_a: Vec<Vec<Span>>,
-    solid_b: Vec<Vec<Span>>,
+    bg_a: Rows<Span>,
+    bg_b: Rows<Span>,
+    solid_a: Rows<Span>,
+    solid_b: Rows<Span>,
 }
 
 impl DepthSets {
-    fn new(solid: &[Vec<Span>], width: u32) -> Self {
+    fn new(solid: &Rows<Span>, width: u32) -> Self {
         let height = solid.len();
         // Every row as alternating background / solid segments.
-        let mut segs: Vec<Segment> = Vec::new();
+        let mut segs: Vec<Segment> = Vec::with_capacity(2 * solid.items.len() + height);
         let mut row_start: Vec<usize> = Vec::with_capacity(height + 1);
-        for row in solid {
+        for y in 0..height {
             row_start.push(segs.len());
             let mut x = 0u32;
-            for &(s, e) in row {
+            for &(s, e) in solid.row(y) {
                 if s > x {
-                    segs.push(Segment {
-                        start: x,
-                        end: s,
-                        solid: false,
-                    });
+                    segs.push(Segment { start: x, end: s, solid: false });
                 }
-                segs.push(Segment {
-                    start: s,
-                    end: e,
-                    solid: true,
-                });
+                segs.push(Segment { start: s, end: e, solid: true });
                 x = e;
             }
             if x < width {
-                segs.push(Segment {
-                    start: x,
-                    end: width,
-                    solid: false,
-                });
+                segs.push(Segment { start: x, end: width, solid: false });
             }
         }
         row_start.push(segs.len());
 
         // Regions: union-find over segments. `edges` joins background and solid regions
         // that share a pixel edge.
-        let mut parent: Vec<u32> = (0..segs.len() as u32).collect();
-        let mut edges: Vec<(u32, u32)> = Vec::new();
+        let n = segs.len();
+        let mut parent: Vec<u32> = (0..n as u32).collect();
+        let mut edges: Vec<(u32, u32)> = Vec::with_capacity(2 * n);
         for y in 0..height {
             let row = row_start[y]..row_start[y + 1];
             for i in row.start + 1..row.end {
@@ -438,41 +525,40 @@ impl DepthSets {
                 }
             }
         }
-        let region: Vec<u32> = (0..segs.len() as u32)
-            .map(|i| find(&mut parent, i))
-            .collect();
-
-        // Region graph, then depth = breadth-first distance from the outside.
-        let n = segs.len();
-        let mut degree = vec![0u32; n + 1];
-        for &(a, b) in &edges {
-            degree[region[a as usize] as usize] += 1;
-            degree[region[b as usize] as usize] += 1;
+        for i in 0..n as u32 {
+            let r = find(&mut parent, i);
+            parent[i as usize] = r;
         }
-        let mut offset = vec![0usize; n + 1];
+        let region = parent;
+
+        // Region graph (compressed adjacency), then depth = breadth-first distance from
+        // the outside.
+        let mut offset = vec![0u32; n + 1];
+        for &(a, b) in &edges {
+            offset[region[a as usize] as usize + 1] += 1;
+            offset[region[b as usize] as usize + 1] += 1;
+        }
         for r in 0..n {
-            offset[r + 1] = offset[r] + degree[r] as usize;
+            offset[r + 1] += offset[r];
         }
         let mut fill = offset.clone();
-        let mut adjacent = vec![0u32; offset[n]];
+        let mut adjacent = vec![0u32; offset[n] as usize];
         for &(a, b) in &edges {
             let (ra, rb) = (region[a as usize], region[b as usize]);
-            adjacent[fill[ra as usize]] = rb;
+            adjacent[fill[ra as usize] as usize] = rb;
             fill[ra as usize] += 1;
-            adjacent[fill[rb as usize]] = ra;
+            adjacent[fill[rb as usize] as usize] = ra;
             fill[rb as usize] += 1;
         }
+        drop(edges);
 
         let mut depth = vec![u32::MAX; n];
-        let mut queue: std::collections::VecDeque<u32> = std::collections::VecDeque::new();
-        let seed = |seg: usize,
-                    d: u32,
-                    depth: &mut Vec<u32>,
-                    queue: &mut std::collections::VecDeque<u32>| {
+        let mut queue: Vec<u32> = Vec::new();
+        let seed = |seg: usize, d: u32, depth: &mut Vec<u32>, queue: &mut Vec<u32>| {
             let r = region[seg] as usize;
             if depth[r] == u32::MAX {
                 depth[r] = d;
-                queue.push_back(r as u32);
+                queue.push(r as u32);
             }
         };
         // Background touching the frame edge is the outside.
@@ -498,21 +584,26 @@ impl DepthSets {
                 }
             }
         }
-        while let Some(r) = queue.pop_front() {
-            let d = depth[r as usize] + 1;
-            for &next in &adjacent[offset[r as usize]..offset[r as usize + 1]] {
+        // Breadth-first: `queue` only grows, `head` walks it.
+        let mut head = 0;
+        while head < queue.len() {
+            let r = queue[head] as usize;
+            head += 1;
+            let d = depth[r] + 1;
+            for &next in &adjacent[offset[r] as usize..offset[r + 1] as usize] {
                 if depth[next as usize] == u32::MAX {
                     depth[next as usize] = d;
-                    queue.push_back(next);
+                    queue.push(next);
                 }
             }
         }
 
+        let cap = segs.len();
         let mut sets = Self {
-            bg_a: vec![Vec::new(); height],
-            bg_b: vec![Vec::new(); height],
-            solid_a: vec![Vec::new(); height],
-            solid_b: vec![Vec::new(); height],
+            bg_a: Rows::with_capacity(height, cap / 2),
+            bg_b: Rows::with_capacity(height, cap / 8),
+            solid_a: Rows::with_capacity(height, cap / 2),
+            solid_b: Rows::with_capacity(height, cap / 8),
         };
         for y in 0..height {
             for i in row_start[y]..row_start[y + 1] {
@@ -527,8 +618,12 @@ impl DepthSets {
                     (true, 1) => &mut sets.solid_a,
                     (true, _) => &mut sets.solid_b,
                 };
-                target[y].push((s.start, s.end));
+                target.items.push((s.start, s.end));
             }
+            sets.bg_a.end_row();
+            sets.bg_b.end_row();
+            sets.solid_a.end_row();
+            sets.solid_b.end_row();
         }
         sets
     }
@@ -773,8 +868,8 @@ mod tests {
     #[test]
     fn matches_pixel_reference_on_random_shapes() {
         let (w, h) = (120usize, 90usize);
-        let mut changed = [false; 6];
-        for case in 0..24u64 {
+        let mut changed = [false; 8];
+        for case in 0..32u64 {
             let mut seed = case + 1;
             let mut m = vec![0u8; w * h];
             // Discs and boxes, alternately solid and empty, so regions nest and touch.
@@ -818,6 +913,9 @@ mod tests {
                 (0.1, 0.0),
                 (0.0, 0.07),
                 (0.06, -0.09),
+                // Equal distances take the path that skips the depths.
+                (-0.1, -0.1),
+                (0.08, 0.08),
             ];
             let (o, hm) = settings[case as usize % settings.len()];
             let c = comp(o, hm);
