@@ -19,20 +19,25 @@
 //! outer outline where it borders background at depth `d - 1`, and a hole where it
 //! borders background at depth `d + 1`.
 //!
-//! Work is confined to the layer's lit bounding box (plus the compensation distance),
-//! and at most one layer is compensated at a time, which bounds memory to a few bytes
-//! per pixel of that box.
+//! The layer is never expanded to pixels. Each row is a list of spans read from the RLE:
+//!
+//! 1. Spans are joined into regions across rows with a union-find (solid connects 8-ways,
+//!    background 4-ways), and a breadth-first walk over the regions gives each its depth.
+//! 2. "Within `d` mm of set S" is S dilated by an ellipse of radius `d` (a circle in mm):
+//!    for each row offset `dy` the spans of row `y + dy` widen by the largest whole number
+//!    of pixels `k` with `(k·px)² + (dy·py)² <= d²`, and the widened spans are merged.
+//! 3. Intersecting that with the spans of the regions it applies to gives the pixels to
+//!    clear or fill, and the row is written back as runs.
+//!
+//! Step 1 is linear in the number of spans; steps 2 and 3 run row by row in parallel.
+//! Memory is a few bytes per span, not per pixel.
 
-use std::collections::VecDeque;
-use std::sync::Mutex;
+use rayon::prelude::*;
 
 use crate::rle::{RleAccum, RleRun};
 
 /// Pixels at or above this value count as solid when finding contours.
 const SOLID_THRESHOLD: u8 = 128;
-
-/// Serializes compensation so only one layer's working buffers exist at a time.
-static COMPENSATION_LOCK: Mutex<()> = Mutex::new(());
 
 /// Distances and pixel pitch for one layer's compensation.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,24 +55,13 @@ impl ContourCompensation {
     pub fn is_noop(&self) -> bool {
         self.outline_mm == 0.0 && self.hole_mm == 0.0
     }
-
-    fn margin_px(&self) -> (usize, usize) {
-        let reach = self.outline_mm.abs().max(self.hole_mm.abs());
-        (
-            (reach / self.pitch_x_mm.max(1e-6)).ceil() as usize + 2,
-            (reach / self.pitch_y_mm.max(1e-6)).ceil() as usize + 2,
-        )
-    }
 }
 
-/// A rectangular window of the frame.
-#[derive(Debug, Clone, Copy)]
-struct Window {
-    x0: usize,
-    y0: usize,
-    w: usize,
-    h: usize,
-}
+/// Half-open pixel span `[start, end)` within a row.
+type Span = (u32, u32);
+
+/// Non-zero pixels `[start, end)` of one value within a row.
+type ValueRun = (u32, u32, u8);
 
 /// Compensate a full-frame, row-major RLE layer. Returns the input unchanged when there
 /// is nothing to do.
@@ -80,13 +74,15 @@ pub fn compensate_rle(
     if comp.is_noop() || width == 0 || height == 0 {
         return runs.to_vec();
     }
-    let Some(window) = lit_window_from_rle(runs, width, height, comp) else {
+    let rows = rows_from_rle(runs, width, height);
+    let Some(changes) = compensate_rows(&rows, width as u32, comp) else {
         return runs.to_vec();
     };
-    let mut values = vec![0u8; window.w * window.h];
-    fill_window_from_rle(runs, width, &window, &mut values);
-    compensate_window(&mut values, &window, comp);
-    encode_window_to_rle(&values, &window, width, height)
+    let mut rle = RleAccum::new();
+    for (row, change) in rows.iter().zip(&changes) {
+        emit_row(row, change, width as u32, &mut rle);
+    }
+    rle.finish()
 }
 
 /// Compensate a full-frame, row-major 8-bit mask in place.
@@ -94,376 +90,463 @@ pub fn compensate_mask(mask: &mut [u8], width: usize, height: usize, comp: &Cont
     if comp.is_noop() || width == 0 || height == 0 {
         return;
     }
-    let Some(window) = lit_window_from_mask(mask, width, height, comp) else {
+    let rows: Vec<Vec<ValueRun>> = mask[..width * height]
+        .par_chunks(width)
+        .map(rows_from_mask_row)
+        .collect();
+    let Some(changes) = compensate_rows(&rows, width as u32, comp) else {
         return;
     };
-    let mut values = vec![0u8; window.w * window.h];
-    for row in 0..window.h {
-        let src = (window.y0 + row) * width + window.x0;
-        values[row * window.w..(row + 1) * window.w].copy_from_slice(&mask[src..src + window.w]);
-    }
-    compensate_window(&mut values, &window, comp);
-    for row in 0..window.h {
-        let dst = (window.y0 + row) * width + window.x0;
-        mask[dst..dst + window.w].copy_from_slice(&values[row * window.w..(row + 1) * window.w]);
-    }
-}
-
-fn padded_window(
-    (min_x, min_y, max_x, max_y): (usize, usize, usize, usize),
-    width: usize,
-    height: usize,
-    comp: &ContourCompensation,
-) -> Window {
-    let (mx, my) = comp.margin_px();
-    let x0 = min_x.saturating_sub(mx);
-    let y0 = min_y.saturating_sub(my);
-    let x1 = (max_x + mx + 1).min(width);
-    let y1 = (max_y + my + 1).min(height);
-    Window {
-        x0,
-        y0,
-        w: x1 - x0,
-        h: y1 - y0,
-    }
-}
-
-fn lit_window_from_rle(
-    runs: &[RleRun],
-    width: usize,
-    height: usize,
-    comp: &ContourCompensation,
-) -> Option<Window> {
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (usize::MAX, usize::MAX, 0, 0);
-    let mut pos = 0usize;
-    for run in runs {
-        let len = run.length as usize;
-        if run.value >= SOLID_THRESHOLD && len > 0 {
-            let (first, last) = (pos, pos + len - 1);
-            let (fy, ly) = (first / width, last / width);
-            min_y = min_y.min(fy);
-            max_y = max_y.max(ly);
-            if fy == ly {
-                min_x = min_x.min(first % width);
-                max_x = max_x.max(last % width);
-            } else {
-                min_x = 0;
-                max_x = width - 1;
-            }
-        }
-        pos += len;
-    }
-    (min_y != usize::MAX).then(|| padded_window((min_x, min_y, max_x, max_y), width, height, comp))
-}
-
-fn lit_window_from_mask(
-    mask: &[u8],
-    width: usize,
-    height: usize,
-    comp: &ContourCompensation,
-) -> Option<Window> {
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (usize::MAX, usize::MAX, 0, 0);
-    for y in 0..height {
-        let row = &mask[y * width..(y + 1) * width];
-        if let Some(first) = row.iter().position(|&v| v >= SOLID_THRESHOLD) {
-            let last = row
-                .iter()
-                .rposition(|&v| v >= SOLID_THRESHOLD)
-                .unwrap_or(first);
-            min_x = min_x.min(first);
-            max_x = max_x.max(last);
-            min_y = min_y.min(y);
-            max_y = y;
+    for (y, change) in changes.iter().enumerate() {
+        for &(s, e, v) in change {
+            mask[y * width + s as usize..y * width + e as usize].fill(v);
         }
     }
-    (min_y != usize::MAX).then(|| padded_window((min_x, min_y, max_x, max_y), width, height, comp))
 }
 
-fn fill_window_from_rle(runs: &[RleRun], width: usize, window: &Window, values: &mut [u8]) {
+fn rows_from_rle(runs: &[RleRun], width: usize, height: usize) -> Vec<Vec<ValueRun>> {
+    let total = width * height;
+    let mut rows = vec![Vec::new(); height];
     let mut pos = 0usize;
     for run in runs {
         let len = run.length as usize;
         if run.value != 0 {
+            let end = (pos + len).min(total);
             let mut p = pos;
-            let end = pos + len;
             while p < end {
                 let y = p / width;
                 let row_end = ((y + 1) * width).min(end);
-                if y >= window.y0 && y < window.y0 + window.h {
-                    let a = (p % width).max(window.x0);
-                    let b = (row_end - y * width).min(window.x0 + window.w);
-                    if a < b {
-                        let base = (y - window.y0) * window.w;
-                        values[base + a - window.x0..base + b - window.x0].fill(run.value);
-                    }
-                }
+                rows[y].push((
+                    (p - y * width) as u32,
+                    (row_end - y * width) as u32,
+                    run.value,
+                ));
                 p = row_end;
             }
         }
         pos += len;
-    }
-}
-
-fn encode_window_to_rle(
-    values: &[u8],
-    window: &Window,
-    width: usize,
-    height: usize,
-) -> Vec<RleRun> {
-    let mut rle = RleAccum::new();
-    rle.push_run((window.y0 * width) as u32, 0);
-    for row in 0..window.h {
-        rle.push_run(window.x0 as u32, 0);
-        for run in values[row * window.w..(row + 1) * window.w].chunk_by(|a, b| a == b) {
-            rle.push_run(run.len() as u32, run[0]);
-        }
-        rle.push_run((width - window.x0 - window.w) as u32, 0);
-    }
-    rle.push_run(((height - window.y0 - window.h) * width) as u32, 0);
-    rle.finish()
-}
-
-/// Nesting depth of every pixel in the window: even depths are background (0 = connected
-/// to the window edge), odd depths are solid. Solid regions connect 8-ways and background
-/// 4-ways, so the two never cross each other.
-fn nesting_depths(solid: &[bool], w: usize, h: usize) -> Vec<u8> {
-    const UNSET: u8 = u8::MAX;
-    let mut depth = vec![UNSET; w * h];
-    let mut current: VecDeque<usize> = VecDeque::new();
-    let mut next: VecDeque<usize> = VecDeque::new();
-    for x in 0..w {
-        current.push_back(x);
-        current.push_back((h - 1) * w + x);
-    }
-    for y in 0..h {
-        current.push_back(y * w);
-        current.push_back(y * w + w - 1);
-    }
-    current.retain(|&i| !solid[i]);
-    for &i in &current {
-        depth[i] = 0;
-    }
-    if current.is_empty() {
-        // Solid touches every window edge: treat the whole edge as the outside.
-        for &i in &(0..w).chain((0..h).map(|y| y * w)).collect::<Vec<_>>() {
-            if depth[i] == UNSET {
-                depth[i] = 1;
-                current.push_back(i);
-            }
+        if pos >= total {
+            break;
         }
     }
-    let mut level = if current.iter().all(|&i| !solid[i]) {
-        0u8
-    } else {
-        1u8
-    };
-    while !current.is_empty() {
-        let region_is_solid = level % 2 == 1;
-        while let Some(i) = current.pop_front() {
-            let (x, y) = (i % w, i / w);
-            let mut visit = |nx: usize, ny: usize, diagonal: bool| {
-                let j = ny * w + nx;
-                if depth[j] != UNSET {
-                    return;
-                }
-                if solid[j] == region_is_solid {
-                    if diagonal && !region_is_solid {
-                        return; // background only connects 4-ways
-                    }
-                    depth[j] = level;
-                    current.push_back(j);
-                } else if !diagonal || !region_is_solid {
-                    // first contact with the next region inward
-                    depth[j] = level.saturating_add(1);
-                    next.push_back(j);
-                } else {
-                    // a solid region touching background only diagonally is not a contact
-                }
-            };
-            for (dx, dy, diag) in [
-                (-1i32, 0i32, false),
-                (1, 0, false),
-                (0, -1, false),
-                (0, 1, false),
-                (-1, -1, true),
-                (1, -1, true),
-                (-1, 1, true),
-                (1, 1, true),
+    rows
+}
+
+fn rows_from_mask_row(row: &[u8]) -> Vec<ValueRun> {
+    let mut out = Vec::new();
+    let mut x = 0u32;
+    for run in row.chunk_by(|a, b| a == b) {
+        let n = run.len() as u32;
+        if run[0] != 0 {
+            out.push((x, x + n, run[0]));
+        }
+        x += n;
+    }
+    out
+}
+
+/// The spans to clear (value 0) and fill (value 255) in every row, sorted and disjoint
+/// within each row, or `None` when the layer has no solid pixel.
+fn compensate_rows(
+    rows: &[Vec<ValueRun>],
+    width: u32,
+    comp: &ContourCompensation,
+) -> Option<Vec<Vec<ValueRun>>> {
+    let solid: Vec<Vec<Span>> = rows.par_iter().map(|r| solid_spans(r)).collect();
+    if solid.iter().all(|s| s.is_empty()) {
+        return None;
+    }
+    let sets = DepthSets::new(&solid, width);
+    let (px, py) = (comp.pitch_x_mm as f64, comp.pitch_y_mm as f64);
+    let outline = Ellipse::new(comp.outline_mm, px, py);
+    let hole = Ellipse::new(comp.hole_mm, px, py);
+    let height = rows.len();
+
+    let changes: Vec<Vec<ValueRun>> = (0..height)
+        .into_par_iter()
+        .map(|y| {
+            let mut remove: Vec<Span> = Vec::new();
+            let mut add: Vec<Span> = Vec::new();
+            for (mm, disc, is_outline) in [
+                (comp.outline_mm, &outline, true),
+                (comp.hole_mm, &hole, false),
             ] {
-                let (nx, ny) = (x as i32 + dx, y as i32 + dy);
-                if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
-                    visit(nx as usize, ny as usize, diag);
+                if mm < 0.0 {
+                    // A solid pixel at depth 1 (mod 4) has its outline against background
+                    // at depth 0 (mod 4) and its holes against depth 2 (mod 4); a solid
+                    // at depth 3 (mod 4) the other way round.
+                    let (near_sa, near_sb) = if is_outline {
+                        (&sets.bg_a, &sets.bg_b)
+                    } else {
+                        (&sets.bg_b, &sets.bg_a)
+                    };
+                    if !sets.solid_a[y].is_empty() {
+                        remove.extend(intersect(&sets.solid_a[y], &disc.dilate(near_sa, y, width)));
+                    }
+                    if !sets.solid_b[y].is_empty() {
+                        remove.extend(intersect(&sets.solid_b[y], &disc.dilate(near_sb, y, width)));
+                    }
+                } else if mm > 0.0 {
+                    // Background at depth 0 (mod 4) is outside the depth-1 solids (their
+                    // outline) and is a hole of the depth-3 (mod 4) solids.
+                    let (near_a, near_b) = if is_outline {
+                        (&sets.solid_a, &sets.solid_b)
+                    } else {
+                        (&sets.solid_b, &sets.solid_a)
+                    };
+                    add.extend(intersect(&sets.bg_a[y], &disc.dilate(near_a, y, width)));
+                    add.extend(intersect(&sets.bg_b[y], &disc.dilate(near_b, y, width)));
                 }
             }
-        }
-        std::mem::swap(&mut current, &mut next);
-        level = level.saturating_add(1);
+            // Removals only touch solid pixels and additions only background, so the two
+            // lists never overlap.
+            let mut change: Vec<ValueRun> = merge(remove)
+                .into_iter()
+                .map(|(s, e)| (s, e, 0))
+                .chain(merge(add).into_iter().map(|(s, e)| (s, e, 255)))
+                .collect();
+            change.sort_unstable_by_key(|c| c.0);
+            change
+        })
+        .collect();
+    if changes.iter().all(|c| c.is_empty()) {
+        return None;
     }
-    // Anything never reached (cannot happen for a connected window) stays background.
-    for d in depth.iter_mut() {
-        if *d == UNSET {
-            *d = 0;
-        }
-    }
-    depth
+    Some(changes)
 }
 
-/// Squared distance (mm^2) from every pixel centre to the nearest pixel in `set`, by the
-/// separable exact Euclidean distance transform (Felzenszwalb & Huttenlocher), with the
-/// real pixel pitch on each axis.
-fn squared_distance_to(set: &[bool], w: usize, h: usize, px: f32, py: f32) -> Vec<f32> {
-    let inf = f32::INFINITY;
-    let mut out = vec![inf; w * h];
-    let n = w.max(h);
-    let (mut f, mut d, mut v, mut z) = (
-        vec![0f32; n],
-        vec![0f32; n],
-        vec![0usize; n],
-        vec![0f32; n + 1],
-    );
-    for y in 0..h {
-        for x in 0..w {
-            f[x] = if set[y * w + x] { 0.0 } else { inf };
+fn solid_spans(row: &[ValueRun]) -> Vec<Span> {
+    let mut out: Vec<Span> = Vec::new();
+    for &(s, e, v) in row {
+        if v < SOLID_THRESHOLD {
+            continue;
         }
-        distance_1d(&f[..w], px, &mut d[..w], &mut v, &mut z);
-        out[y * w..(y + 1) * w].copy_from_slice(&d[..w]);
-    }
-    for x in 0..w {
-        for y in 0..h {
-            f[y] = out[y * w + x];
-        }
-        distance_1d(&f[..h], py, &mut d[..h], &mut v, &mut z);
-        for y in 0..h {
-            out[y * w + x] = d[y];
+        match out.last_mut() {
+            Some(last) if last.1 == s => last.1 = e,
+            _ => out.push((s, e)),
         }
     }
     out
 }
 
-/// One-dimensional squared distance transform of `f` with sample spacing `s`.
-fn distance_1d(f: &[f32], s: f32, d: &mut [f32], v: &mut [usize], z: &mut [f32]) {
-    let n = f.len();
-    let first = match f.iter().position(|x| x.is_finite()) {
-        Some(i) => i,
-        None => {
-            d.fill(f32::INFINITY);
-            return;
-        }
-    };
-    let pos = |i: usize| i as f32 * s;
-    let mut k = 0usize;
-    v[0] = first;
-    z[0] = f32::NEG_INFINITY;
-    z[1] = f32::INFINITY;
-    for q in first + 1..n {
-        if !f[q].is_finite() {
-            continue;
-        }
-        loop {
-            let p = v[k];
-            let sq =
-                ((f[q] + pos(q) * pos(q)) - (f[p] + pos(p) * pos(p))) / (2.0 * (pos(q) - pos(p)));
-            if sq <= z[k] && k > 0 {
-                k -= 1;
-                continue;
-            }
-            if sq <= z[k] {
-                // k == 0: q replaces the first parabola
-                v[0] = q;
-                z[0] = f32::NEG_INFINITY;
-                z[1] = f32::INFINITY;
-                break;
-            }
-            k += 1;
-            v[k] = q;
-            z[k] = sq;
-            z[k + 1] = f32::INFINITY;
-            break;
+/// Sort spans and merge the ones that overlap or touch.
+fn merge(mut spans: Vec<Span>) -> Vec<Span> {
+    if spans.len() < 2 {
+        return spans;
+    }
+    spans.sort_unstable_by_key(|s| s.0);
+    let mut out: Vec<Span> = Vec::with_capacity(spans.len());
+    for (s, e) in spans {
+        match out.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => out.push((s, e)),
         }
     }
-    k = 0;
-    for q in 0..n {
-        while z[k + 1] < pos(q) {
-            k += 1;
+    out
+}
+
+/// Pixels in both sorted, disjoint span lists.
+fn intersect(a: &[Span], b: &[Span]) -> Vec<Span> {
+    let mut out = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        let s = a[i].0.max(b[j].0);
+        let e = a[i].1.min(b[j].1);
+        if s < e {
+            out.push((s, e));
         }
-        let dq = pos(q) - pos(v[k]);
-        d[q] = dq * dq + f[v[k]];
+        if a[i].1 < b[j].1 {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    out
+}
+
+/// Write one row: the original runs, with `change` (sorted, disjoint) painted over them.
+fn emit_row(orig: &[ValueRun], change: &[ValueRun], width: u32, rle: &mut RleAccum) {
+    let mut oi = 0usize;
+    let mut x = 0u32;
+    for &(s, e, v) in change {
+        emit_original(orig, &mut oi, x, s, rle);
+        rle.push_run(e - s, v);
+        x = e;
+    }
+    emit_original(orig, &mut oi, x, width, rle);
+}
+
+/// Write the original pixels `[from, to)` of a row; `oi` walks `orig` forward.
+fn emit_original(orig: &[ValueRun], oi: &mut usize, from: u32, to: u32, rle: &mut RleAccum) {
+    let mut p = from;
+    while p < to {
+        while *oi < orig.len() && orig[*oi].1 <= p {
+            *oi += 1;
+        }
+        match orig.get(*oi) {
+            Some(&(s, e, v)) if s < to => {
+                if s > p {
+                    rle.push_run(s - p, 0);
+                    p = s;
+                }
+                let end = e.min(to);
+                rle.push_run(end - p, v);
+                p = end;
+            }
+            _ => {
+                rle.push_run(to - p, 0);
+                p = to;
+            }
+        }
     }
 }
 
-fn compensate_window(values: &mut [u8], window: &Window, comp: &ContourCompensation) {
-    let _guard = COMPENSATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let (w, h) = (window.w, window.h);
-    let solid: Vec<bool> = values.iter().map(|&v| v >= SOLID_THRESHOLD).collect();
-    let depth = nesting_depths(&solid, w, h);
-    let (px, py) = (comp.pitch_x_mm, comp.pitch_y_mm);
+/// An ellipse in pixels that is a circle of `mm` radius in millimetres: for each row
+/// offset, how far a span widens.
+struct Ellipse {
+    /// `(dy, k)`: spans of row `y + dy` widen by `k` pixels on each side.
+    offsets: Vec<(i64, u32)>,
+}
 
-    // Background at depth 0, 4, 8, ... is "set A", at 2, 6, 10, ... "set B". A solid pixel
-    // at depth 1 (mod 4) has its outline against A and its holes against B; at depth 3
-    // (mod 4) the other way round. Likewise for solid sets when adding material.
-    let background_a: Vec<bool> = (0..w * h).map(|i| !solid[i] && depth[i] % 4 == 0).collect();
-    let background_b: Vec<bool> = (0..w * h).map(|i| !solid[i] && depth[i] % 4 == 2).collect();
-    let solid_a: Vec<bool> = (0..w * h).map(|i| solid[i] && depth[i] % 4 == 1).collect();
-    let solid_b: Vec<bool> = (0..w * h).map(|i| solid[i] && depth[i] % 4 == 3).collect();
-
-    let removes = |mm: f32| mm < 0.0;
-    let reach2 = |mm: f32| mm * mm * (1.0 + 1e-4);
-
-    // Removal: solid pixels within the distance of their own outline / hole background.
-    let mut remove = vec![false; w * h];
-    for (mm, outline) in [(comp.outline_mm, true), (comp.hole_mm, false)] {
-        if !removes(mm) {
-            continue;
-        }
-        let (r2, da, db) = (
-            reach2(mm),
-            squared_distance_to(&background_a, w, h, px, py),
-            squared_distance_to(&background_b, w, h, px, py),
-        );
-        for i in 0..w * h {
-            if !solid[i] {
-                continue;
-            }
-            let in_a_side = depth[i] % 4 == 1;
-            let dist = if in_a_side == outline { da[i] } else { db[i] };
-            if dist <= r2 {
-                remove[i] = true;
+impl Ellipse {
+    fn new(mm: f32, px: f64, py: f64) -> Self {
+        let mut offsets = Vec::new();
+        if mm != 0.0 && px > 0.0 && py > 0.0 {
+            // A pixel is reached when its centre is within the distance; the small
+            // allowance keeps pixels lying exactly on the circle.
+            let r2 = (mm * mm * (1.0 + 1e-4)) as f64;
+            let reach = |rem: f64| {
+                let mut k = (rem.max(0.0).sqrt() / px).floor() as u32;
+                while ((k + 1) as f64 * px).powi(2) <= rem {
+                    k += 1;
+                }
+                while k > 0 && (k as f64 * px).powi(2) > rem {
+                    k -= 1;
+                }
+                k
+            };
+            let max_dy = (r2.sqrt() / py).floor() as i64 + 1;
+            for dy in -max_dy..=max_dy {
+                let rem = r2 - (dy as f64 * py).powi(2);
+                if rem >= 0.0 {
+                    offsets.push((dy, reach(rem)));
+                }
             }
         }
+        Self { offsets }
     }
 
-    // Addition: background pixels within the distance of the solid region whose outline /
-    // hole they belong to.
-    let mut add = vec![false; w * h];
-    for (mm, outline) in [(comp.outline_mm, true), (comp.hole_mm, false)] {
-        if mm <= 0.0 {
-            continue;
-        }
-        let (r2, sa, sb) = (
-            reach2(mm),
-            squared_distance_to(&solid_a, w, h, px, py),
-            squared_distance_to(&solid_b, w, h, px, py),
-        );
-        for i in 0..w * h {
-            if solid[i] {
+    /// Row `y` of `set` dilated by the ellipse: sorted, disjoint spans.
+    fn dilate(&self, set: &[Vec<Span>], y: usize, width: u32) -> Vec<Span> {
+        let mut spans = Vec::new();
+        for &(dy, k) in &self.offsets {
+            let yy = y as i64 + dy;
+            if yy < 0 || yy >= set.len() as i64 {
                 continue;
             }
-            // Background at depth 0 (mod 4) is outside the depth-1 solids (their outline)
-            // and is a hole of the depth-3 (mod 4) solids.
-            let a_depth = depth[i] % 4 == 0;
-            let dist = if a_depth == outline { sa[i] } else { sb[i] };
-            if dist <= r2 {
-                add[i] = true;
+            for &(s, e) in &set[yy as usize] {
+                spans.push((s.saturating_sub(k), e.saturating_add(k).min(width)));
             }
         }
+        merge(spans)
     }
+}
 
-    for i in 0..w * h {
-        if remove[i] {
-            values[i] = 0;
-        } else if add[i] {
-            values[i] = 255;
+/// One row segment: a maximal solid or background span. The segments of a row cover it.
+#[derive(Clone, Copy)]
+struct Segment {
+    start: u32,
+    end: u32,
+    solid: bool,
+}
+
+/// The spans of each row split by nesting depth (mod 4): background at depth 0 and 2,
+/// solid at depth 1 and 3.
+struct DepthSets {
+    bg_a: Vec<Vec<Span>>,
+    bg_b: Vec<Vec<Span>>,
+    solid_a: Vec<Vec<Span>>,
+    solid_b: Vec<Vec<Span>>,
+}
+
+impl DepthSets {
+    fn new(solid: &[Vec<Span>], width: u32) -> Self {
+        let height = solid.len();
+        // Every row as alternating background / solid segments.
+        let mut segs: Vec<Segment> = Vec::new();
+        let mut row_start: Vec<usize> = Vec::with_capacity(height + 1);
+        for row in solid {
+            row_start.push(segs.len());
+            let mut x = 0u32;
+            for &(s, e) in row {
+                if s > x {
+                    segs.push(Segment {
+                        start: x,
+                        end: s,
+                        solid: false,
+                    });
+                }
+                segs.push(Segment {
+                    start: s,
+                    end: e,
+                    solid: true,
+                });
+                x = e;
+            }
+            if x < width {
+                segs.push(Segment {
+                    start: x,
+                    end: width,
+                    solid: false,
+                });
+            }
         }
+        row_start.push(segs.len());
+
+        // Regions: union-find over segments. `edges` joins background and solid regions
+        // that share a pixel edge.
+        let mut parent: Vec<u32> = (0..segs.len() as u32).collect();
+        let mut edges: Vec<(u32, u32)> = Vec::new();
+        for y in 0..height {
+            let row = row_start[y]..row_start[y + 1];
+            for i in row.start + 1..row.end {
+                edges.push(((i - 1) as u32, i as u32));
+            }
+            if y == 0 {
+                continue;
+            }
+            let prev = row_start[y - 1]..row_start[y];
+            let mut j0 = prev.start;
+            for i in row {
+                let c = segs[i];
+                while j0 < prev.end && segs[j0].end < c.start {
+                    j0 += 1;
+                }
+                let mut j = j0;
+                while j < prev.end && segs[j].start <= c.end {
+                    let t = segs[j];
+                    let shares_edge = t.start < c.end && c.start < t.end;
+                    if t.solid == c.solid {
+                        // Solid touching at a corner is one region; background is not.
+                        if c.solid || shares_edge {
+                            union(&mut parent, i as u32, j as u32);
+                        }
+                    } else if shares_edge {
+                        edges.push((i as u32, j as u32));
+                    }
+                    j += 1;
+                }
+            }
+        }
+        let region: Vec<u32> = (0..segs.len() as u32)
+            .map(|i| find(&mut parent, i))
+            .collect();
+
+        // Region graph, then depth = breadth-first distance from the outside.
+        let n = segs.len();
+        let mut degree = vec![0u32; n + 1];
+        for &(a, b) in &edges {
+            degree[region[a as usize] as usize] += 1;
+            degree[region[b as usize] as usize] += 1;
+        }
+        let mut offset = vec![0usize; n + 1];
+        for r in 0..n {
+            offset[r + 1] = offset[r] + degree[r] as usize;
+        }
+        let mut fill = offset.clone();
+        let mut adjacent = vec![0u32; offset[n]];
+        for &(a, b) in &edges {
+            let (ra, rb) = (region[a as usize], region[b as usize]);
+            adjacent[fill[ra as usize]] = rb;
+            fill[ra as usize] += 1;
+            adjacent[fill[rb as usize]] = ra;
+            fill[rb as usize] += 1;
+        }
+
+        let mut depth = vec![u32::MAX; n];
+        let mut queue: std::collections::VecDeque<u32> = std::collections::VecDeque::new();
+        let seed = |seg: usize,
+                    d: u32,
+                    depth: &mut Vec<u32>,
+                    queue: &mut std::collections::VecDeque<u32>| {
+            let r = region[seg] as usize;
+            if depth[r] == u32::MAX {
+                depth[r] = d;
+                queue.push_back(r as u32);
+            }
+        };
+        // Background touching the frame edge is the outside.
+        for y in 0..height {
+            let row = row_start[y]..row_start[y + 1];
+            let edge_row = y == 0 || y + 1 == height;
+            for i in row.clone() {
+                let first_or_last = i == row.start || i + 1 == row.end;
+                if !segs[i].solid && (edge_row || first_or_last) {
+                    seed(i, 0, &mut depth, &mut queue);
+                }
+            }
+        }
+        if queue.is_empty() {
+            // Solid on every edge pixel: the solid on the top row and left column is the
+            // outermost region.
+            for y in 0..height {
+                let first = row_start[y];
+                for (k, s) in segs[first..row_start[y + 1]].iter().enumerate() {
+                    if y == 0 || s.start == 0 {
+                        seed(first + k, 1, &mut depth, &mut queue);
+                    }
+                }
+            }
+        }
+        while let Some(r) = queue.pop_front() {
+            let d = depth[r as usize] + 1;
+            for &next in &adjacent[offset[r as usize]..offset[r as usize + 1]] {
+                if depth[next as usize] == u32::MAX {
+                    depth[next as usize] = d;
+                    queue.push_back(next);
+                }
+            }
+        }
+
+        let mut sets = Self {
+            bg_a: vec![Vec::new(); height],
+            bg_b: vec![Vec::new(); height],
+            solid_a: vec![Vec::new(); height],
+            solid_b: vec![Vec::new(); height],
+        };
+        for y in 0..height {
+            for i in row_start[y]..row_start[y + 1] {
+                let s = segs[i];
+                let d = match depth[region[i] as usize] {
+                    u32::MAX => 0,
+                    d => d,
+                };
+                let target = match (s.solid, d % 4) {
+                    (false, 0) => &mut sets.bg_a,
+                    (false, _) => &mut sets.bg_b,
+                    (true, 1) => &mut sets.solid_a,
+                    (true, _) => &mut sets.solid_b,
+                };
+                target[y].push((s.start, s.end));
+            }
+        }
+        sets
+    }
+}
+
+fn find(parent: &mut [u32], mut i: u32) -> u32 {
+    while parent[i as usize] != i {
+        let up = parent[parent[i as usize] as usize];
+        parent[i as usize] = up;
+        i = up;
+    }
+    i
+}
+
+fn union(parent: &mut [u32], a: u32, b: u32) {
+    let (ra, rb) = (find(parent, a), find(parent, b));
+    if ra != rb {
+        parent[ra.max(rb) as usize] = ra.min(rb);
     }
 }
 
@@ -584,5 +667,170 @@ mod tests {
             value: 0,
         }];
         assert_eq!(compensate_rle(&empty, W, H, &comp(-0.2, -0.2)), empty);
+    }
+
+    /// Pixel-by-pixel reference: nesting depth by flood fill, distance by checking every
+    /// pixel in reach.
+    fn reference(mask: &[u8], w: usize, h: usize, c: &ContourCompensation) -> Vec<u8> {
+        let solid: Vec<bool> = mask.iter().map(|&v| v >= SOLID_THRESHOLD).collect();
+        let mut depth = vec![u32::MAX; w * h];
+        let mut queue = std::collections::VecDeque::new();
+        for y in 0..h {
+            for x in 0..w {
+                let i = y * w + x;
+                if (x == 0 || y == 0 || x + 1 == w || y + 1 == h) && !solid[i] {
+                    depth[i] = 0;
+                    queue.push_back(i);
+                }
+            }
+        }
+        // Flood each region at its depth before stepping into the next one.
+        let mut next = std::collections::VecDeque::new();
+        let mut level = 0u32;
+        while !queue.is_empty() {
+            while let Some(i) = queue.pop_front() {
+                let (x, y) = ((i % w) as i64, (i / w) as i64);
+                for (dx, dy) in [
+                    (-1, 0),
+                    (1, 0),
+                    (0, -1),
+                    (0, 1),
+                    (-1, -1),
+                    (1, -1),
+                    (-1, 1),
+                    (1, 1),
+                ] {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                        continue;
+                    }
+                    let j = ny as usize * w + nx as usize;
+                    let diagonal = dx != 0 && dy != 0;
+                    if depth[j] != u32::MAX || (diagonal && !solid[i] && solid[j] == solid[i]) {
+                        continue;
+                    }
+                    if diagonal && solid[i] && !solid[j] {
+                        continue;
+                    }
+                    if solid[j] == solid[i] {
+                        depth[j] = level;
+                        queue.push_back(j);
+                    } else {
+                        depth[j] = level + 1;
+                        next.push_back(j);
+                    }
+                }
+            }
+            std::mem::swap(&mut queue, &mut next);
+            level += 1;
+        }
+        let within = |i: usize, mm: f32, target: &dyn Fn(usize) -> bool| {
+            let r2 = (mm * mm * (1.0 + 1e-4)) as f64;
+            let (px, py) = (c.pitch_x_mm as f64, c.pitch_y_mm as f64);
+            let (x, y) = ((i % w) as i64, (i / w) as i64);
+            let (rx, ry) = ((r2.sqrt() / px) as i64 + 1, (r2.sqrt() / py) as i64 + 1);
+            for yy in (y - ry).max(0)..=(y + ry).min(h as i64 - 1) {
+                for xx in (x - rx).max(0)..=(x + rx).min(w as i64 - 1) {
+                    let d2 = ((xx - x) as f64 * px).powi(2) + ((yy - y) as f64 * py).powi(2);
+                    if d2 <= r2 && target(yy as usize * w + xx as usize) {
+                        return true;
+                    }
+                }
+            }
+            false
+        };
+        let mut out = mask.to_vec();
+        for i in 0..w * h {
+            let d = depth[i];
+            for (mm, outline) in [(c.outline_mm, true), (c.hole_mm, false)] {
+                if solid[i] && mm < 0.0 {
+                    // the background this pixel's outline (or hole) faces
+                    let want = if outline { d - 1 } else { d + 1 };
+                    if within(i, mm, &|j| !solid[j] && depth[j] % 4 == want % 4) {
+                        out[i] = 0;
+                    }
+                }
+                if !solid[i] && mm > 0.0 && out[i] != 255 {
+                    // the solid whose outline (or hole) this background pixel is
+                    let want = if outline { d + 1 } else { d.wrapping_sub(1) };
+                    if within(i, mm, &|j| solid[j] && depth[j] % 4 == want % 4) {
+                        out[i] = 255;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Small deterministic pseudo-random generator for test shapes.
+    fn lcg(seed: &mut u64) -> u64 {
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        *seed >> 33
+    }
+
+    #[test]
+    fn matches_pixel_reference_on_random_shapes() {
+        let (w, h) = (120usize, 90usize);
+        let mut changed = [false; 6];
+        for case in 0..24u64 {
+            let mut seed = case + 1;
+            let mut m = vec![0u8; w * h];
+            // Discs and boxes, alternately solid and empty, so regions nest and touch.
+            // Groups of a solid, a hole inside it and an island inside the hole (each
+            // nudged off centre), plus loose shapes that overlap and cut into them.
+            let mut shapes: Vec<(i64, i64, i64, u8)> = Vec::new();
+            for _ in 0..3 {
+                let cx = (lcg(&mut seed) % w as u64) as i64;
+                let cy = (lcg(&mut seed) % h as u64) as i64;
+                let r = 18 + (lcg(&mut seed) % 14) as i64;
+                let mut nudge = || (lcg(&mut seed) % 5) as i64 - 2;
+                shapes.push((cx, cy, r, 255));
+                shapes.push((cx + nudge(), cy + nudge(), r * 3 / 5, 0));
+                shapes.push((cx + nudge(), cy + nudge(), r / 4, 255));
+            }
+            for k in 0..4 {
+                let cx = (lcg(&mut seed) % w as u64) as i64;
+                let cy = (lcg(&mut seed) % h as u64) as i64;
+                let r = 3 + (lcg(&mut seed) % 12) as i64;
+                shapes.push((cx, cy, r, if k % 2 == 0 { 0 } else { 255 }));
+            }
+            for (cx, cy, r, v) in shapes {
+                let disc = lcg(&mut seed) & 1 == 0;
+                for y in 0..h as i64 {
+                    for x in 0..w as i64 {
+                        let inside = if disc {
+                            (x - cx).pow(2) + (y - cy).pow(2) <= r * r
+                        } else {
+                            (x - cx).abs() <= r && (y - cy).abs() <= r / 2
+                        };
+                        if inside {
+                            m[y as usize * w + x as usize] = v;
+                        }
+                    }
+                }
+            }
+            let settings = [
+                (-0.1, 0.0),
+                (0.0, -0.1),
+                (-0.08, -0.12),
+                (0.1, 0.0),
+                (0.0, 0.07),
+                (0.06, -0.09),
+            ];
+            let (o, hm) = settings[case as usize % settings.len()];
+            let c = comp(o, hm);
+            let mut got = m.clone();
+            compensate_mask(&mut got, w, h, &c);
+            if got != m {
+                changed[case as usize % settings.len()] = true;
+            }
+            assert_eq!(got, reference(&m, w, h, &c), "case {case} ({o}, {hm})");
+        }
+        assert!(
+            changed.iter().all(|&c| c),
+            "every setting moved something: {changed:?}"
+        );
     }
 }
