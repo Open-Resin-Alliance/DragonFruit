@@ -1,0 +1,11 @@
+# Cargo crate dependencies required by this plugin's Rust slicing encoder.
+# All dependencies (serde, serde_json, rayon, crc32fast, png, base64, crossbeam-channel)
+# are already provided by dragonfruit-slicing-engine/Cargo.toml.
+
+[dependencies]
+
+[optional-dependencies]
+
+[features]
+
+[notes]
