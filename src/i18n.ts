@@ -1,7 +1,7 @@
 import { i18n } from "@lingui/core";
 import { messages as enMessages } from "./locales/en.js";
 
-export const SUPPORTED_LOCALES = ["en", "es", "de", "fr", "sk", "cs"] as const;
+export const SUPPORTED_LOCALES = ["en", "es", "de", "fr", "sk", "cs", "pt"] as const;
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
 
 // Native-language labels for the language switcher.
@@ -12,6 +12,7 @@ export const LOCALE_LABELS: Record<Locale, string> = {
   fr: "Français",
   sk: "Slovenčina",
   cs: "Čeština",
+  pt: "Português (BR)",
 };
 
 const STORAGE_KEY = "dragonfruit.locale";
