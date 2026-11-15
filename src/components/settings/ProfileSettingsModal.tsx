@@ -98,6 +98,7 @@ import {
   type RemoteMaterialProfile,
 } from '@/features/plugins/remoteMaterialUiUtils';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
+import { stripFamilyPrefix } from '@/utils/materialLabel';
 import {
   RESIN_FAMILY_COLOR,
   RESIN_FAMILY_OPTIONS,
@@ -6159,7 +6160,7 @@ export function ProfileSettingsModal({
                         >
                           <div className="flex-1 min-w-0 px-2.5 py-1.5">
                             <div className="flex items-center justify-between gap-2">
-                              <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{preset.name.replace(/^Siraya Tech\s*-\s*/i, '')}</span>
+                              <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>{stripFamilyPrefix(preset.name.replace(/^Siraya Tech\s*-\s*/i, ''), resinFamilyLabel)}</span>
                               <div className="shrink-0 flex items-center gap-1.5">
                                 {showFamily && !isAlreadyAdded && !isSelected && (
                                   <span
