@@ -14,6 +14,8 @@ export type PrintingPanelStackProps = {
   estimatedPrintTimeLabel: React.ComponentProps<typeof PrintingPanel>['estimatedPrintTimeLabel'];
   estimatedVolumeMlLabel: React.ComponentProps<typeof PrintingPanel>['estimatedVolumeLabel'];
   canDownloadPrintArtifact: boolean;
+  /** Whether the active format's slices are files at all; hides every file-shaped action. */
+  fileExportable: boolean;
   canSendToPrinter: boolean;
   printingSendBusy: boolean;
   printingSendStatusText: string | null;
@@ -37,6 +39,7 @@ export function PrintingPanelStack({
   estimatedPrintTimeLabel,
   estimatedVolumeMlLabel,
   canDownloadPrintArtifact,
+  fileExportable,
   canSendToPrinter,
   printingSendBusy,
   printingSendStatusText,
@@ -63,6 +66,7 @@ export function PrintingPanelStack({
         estimatedPrintTimeLabel={estimatedPrintTimeLabel}
         estimatedVolumeLabel={estimatedVolumeMlLabel}
         canDownload={canDownloadPrintArtifact}
+        fileExportable={fileExportable}
         canSendToPrinter={canSendToPrinter}
         sendBusy={printingSendBusy}
         sendStatusText={printingSendStatusText}
@@ -75,7 +79,7 @@ export function PrintingPanelStack({
         onDownload={handleDownloadPrintArtifact}
         onSendToPrinter={handleSendToPrinter}
         onCancelSendToPrinter={handleCancelSendToPrinter}
-        canSendToUvTools={getSavedUvToolsSettings().enabled}
+        canSendToUvTools={fileExportable && getSavedUvToolsSettings().enabled}
         onSendToUvTools={() => {
           const fp = completedSaveDestinationPath;
           if (!fp) return;

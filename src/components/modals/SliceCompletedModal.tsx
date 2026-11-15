@@ -16,6 +16,11 @@ type SliceCompletedModalProps = {
   slicingTimeMs: number | null;
   /** When set, replaces the Close button with Open UVTools + Open Directory. */
   onOpenInUvTools?: (filePath: string) => void;
+  /**
+   * Whether this format's slices are files a user can be handed. False hides every file
+   * action — the dialog has no location to show and nothing to reveal.
+   */
+  fileExportable?: boolean;
 };
 
 export function SliceCompletedModal({
@@ -24,6 +29,7 @@ export function SliceCompletedModal({
   filePath,
   slicingTimeMs,
   onOpenInUvTools,
+  fileExportable = true,
 }: SliceCompletedModalProps) {
   const { _ } = useLingui();
   const fmt = useLocaleFormat();
@@ -66,7 +72,11 @@ export function SliceCompletedModal({
       closeAriaLabel={_(msg`Close slicing finished modal`)}
       onClose={onClose}
       onBackdropClick={onClose}
-      actions={onOpenInUvTools ? (
+      actions={!fileExportable ? (
+        <Button variant="secondary" onClick={onClose}>
+          <Trans>Close</Trans>
+        </Button>
+      ) : onOpenInUvTools ? (
         <>
           <Button
             variant="tinted-accent"
@@ -104,21 +114,23 @@ export function SliceCompletedModal({
         </>
       )}
     >
-      <div
-        className="rounded-lg border p-3 space-y-2"
-        style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
-      >
-        <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-          <Trans>File Location</Trans>
-        </div>
+      {fileExportable && (
         <div
-          className="text-sm font-mono break-all"
-          style={{ color: 'var(--text-strong)' }}
-          title={filePath || undefined}
+          className="rounded-lg border p-3 space-y-2"
+          style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
         >
-          {filePath ?? '—'}
+          <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+            <Trans>File Location</Trans>
+          </div>
+          <div
+            className="text-sm font-mono break-all"
+            style={{ color: 'var(--text-strong)' }}
+            title={filePath || undefined}
+          >
+            {filePath ?? '—'}
+          </div>
         </div>
-      </div>
+      )}
 
       {slicingTimeMs !== null && (
         <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>

@@ -17,6 +17,11 @@ type PrintingPanelProps = {
   estimatedPrintTimeLabel: string;
   estimatedVolumeLabel: string;
   canDownload: boolean;
+  /**
+   * Whether this format's slices are files a user can be handed. False hides the export
+   * action entirely — a format that only ships to a machine has nothing to keep.
+   */
+  fileExportable?: boolean;
   canSendToPrinter: boolean;
   sendBusy: boolean;
   sendStatusText: string | null;
@@ -48,6 +53,7 @@ export function PrintingPanel({
   estimatedPrintTimeLabel,
   estimatedVolumeLabel,
   canDownload,
+  fileExportable = true,
   canSendToPrinter,
   sendBusy,
   sendStatusText,
@@ -139,8 +145,9 @@ export function PrintingPanel({
         </div>
 
         <div className="grid grid-cols-1 gap-2">
-          {/* Export to file — hidden when this slice was already saved to file */}
-          {sliceIntent !== 'file' && (
+          {/* Export to file — hidden when this slice was already saved to file, and for a
+              format whose slices are never handed to the user as files */}
+          {fileExportable && sliceIntent !== 'file' && (
             <Button
               variant="accent"
               className="!h-9 inline-flex items-center justify-center gap-1.5"
@@ -154,7 +161,7 @@ export function PrintingPanel({
           )}
 
           {/* Saved path — shown when slice intent was 'file' */}
-          {sliceIntent === 'file' && (
+          {fileExportable && sliceIntent === 'file' && (
             <div
               className="rounded-md border p-2.5 space-y-0.5"
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}

@@ -39,7 +39,7 @@ import {
   type SliceExportArtifact,
   type SliceExportResult,
 } from '@/features/slicing/sliceExportOrchestrator';
-import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { outputFormatIsFileExportable, resolveOutputFileExtension, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import {
@@ -957,6 +957,12 @@ export function SlicingPanel({
     getPrinterReachabilityServerSnapshot,
   );
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  /**
+   * The format's own answer to "is there a file to keep". A format that only ever ships to a
+   * machine has nothing to save, so every save-shaped affordance — the file action, the
+   * UVTools handoff, the per-plate batch — is absent rather than disabled.
+   */
+  const canExportFile = outputFormatIsFileExportable(activePrinterProfile?.display.outputFormat);
   const networkUiAdapter = useMemo(
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
     [activePrinterProfile?.networkSupport],
@@ -1245,7 +1251,7 @@ export function SlicingPanel({
    * whatever the selector last said — the button then reads and slices like a single run, which
    * is what a one-bed scene is.
    */
-  const effectiveSlicePlateScope: SlicePlateScope = singlePlate ? 'current_plate' : slicePlateScope;
+  const effectiveSlicePlateScope: SlicePlateScope = singlePlate || !canExportFile ? 'current_plate' : slicePlateScope;
   /** The models the slice covers: one plate's, or every visible one. */
   const plateModelIdSet = useMemo(
     () => (activePlateSliceScope ? new Set(activePlateSliceScope.modelIds) : null),
@@ -1296,15 +1302,23 @@ export function SlicingPanel({
   const isShiftHeld = useKeyPressed('shift');
 
   const uvToolsSettings = useMemo(() => getSavedUvToolsSettings(), []);
-  const canUvTools = uvToolsSettings.enabled;
+  // UVTools is handed a file, so it needs one this format is willing to write.
+  const canUvTools = uvToolsSettings.enabled && canExportFile;
+
+  /** Where a slice goes when the intent it wanted is not on offer. */
+  const fallbackSliceIntent = useMemo<SliceIntent>(() => {
+    if (canExportFile) return 'file';
+    return canUpload ? 'upload' : 'preview';
+  }, [canExportFile, canUpload]);
 
   const effectiveSliceIntent = useMemo<SliceIntent>(() => {
     if (isShiftHeld) return 'preview';
-    if (sliceIntent === 'upload' && !canUpload) return 'file';
-    if (sliceIntent === 'print' && !canPrint) return 'file';
-    if (sliceIntent === 'uvtools' && !canUvTools) return 'file';
+    if (sliceIntent === 'file' && !canExportFile) return fallbackSliceIntent;
+    if (sliceIntent === 'uvtools' && !canUvTools) return fallbackSliceIntent;
+    if (sliceIntent === 'upload' && !canUpload) return fallbackSliceIntent;
+    if (sliceIntent === 'print' && !canPrint) return fallbackSliceIntent;
     return sliceIntent;
-  }, [canPrint, canUpload, canUvTools, isShiftHeld, sliceIntent]);
+  }, [canExportFile, canPrint, canUpload, canUvTools, fallbackSliceIntent, isShiftHeld, sliceIntent]);
   // 'preview' is always available regardless of network state
   // A slice is a plate's output, so it is named for the plate: its own name, or — in a
   // one-bed scene whose bed has no name — the first model standing on it, which is the
@@ -2656,8 +2670,9 @@ export function SlicingPanel({
 
           {/* Which plates the slice covers: one file for the bed being worked on, or a zip
               with one file per bed. Only worth offering when more than one bed holds
-              something — an empty bed is not a choice. */}
-          {!singlePlate && (
+              something — an empty bed is not a choice — and only for a format whose slices
+              are files a user can be handed. */}
+          {!singlePlate && canExportFile && (
             <div
               className="rounded-md border p-2"
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
@@ -2684,10 +2699,16 @@ export function SlicingPanel({
             const isDisabled = isSlicingZip || !activePrinterProfile || !materialProfileForSlicing || models.length === 0;
             type IconType = React.FC<{ className?: string }>;
             const intentOptions: { key: SliceIntent; label: string; Icon: IconType; enabled: boolean; menuOnly?: boolean }[] = [
-              { key: 'file',    label: _(msg`Slice to File`),   Icon: Download as IconType, enabled: true },
+              // File-shaped actions exist only for a format that produces a file. The rest of
+              // the list is the format's network job and is unaffected.
+              ...(canExportFile
+                ? [{ key: 'file' as SliceIntent, label: _(msg`Slice to File`), Icon: Download as IconType, enabled: true }]
+                : []),
               { key: 'upload',  label: _(msg`Slice & Upload`),  Icon: Printer  as IconType, enabled: canUpload },
               { key: 'print',   label: _(msg`Slice & Print`),   Icon: Play     as IconType, enabled: canPrint },
-              { key: 'uvtools', label: _(msg`Send to UVTools`), Icon: ExternalLink as IconType, enabled: canUvTools },
+              ...(canUvTools
+                ? [{ key: 'uvtools' as SliceIntent, label: _(msg`Send to UVTools`), Icon: ExternalLink as IconType, enabled: true }]
+                : []),
               { key: 'preview', label: _(msg`Just Slice`),      Icon: Cpu      as IconType, enabled: true, menuOnly: true },
             ];
             const current = intentOptions.find((o) => o.key === effectiveSliceIntent) ?? intentOptions[0]!;
