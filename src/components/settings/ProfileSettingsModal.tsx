@@ -72,6 +72,7 @@ import {
   getAvailableSettingsModeOptions,
   resolveOutputFormatVersion,
   resolveOutputSettingsMode,
+  printerPresetNeedsInitialSetup,
 } from '@/features/slicing/formats/registry';
 import {
   getSideloadedOutputFormatsSnapshot,
@@ -3786,9 +3787,9 @@ export function ProfileSettingsModal({
 
     const handleToggle = () => {
       if (isAlreadyAdded) return;
-      // Variant families AND network-detect presets (e.g. Athena) open the
-      // Initial Setup flow.
-      if (isFamilyPreset || Boolean(preset.modelVariantDetectPath)) {
+      // Variant families, network-detect presets (e.g. Athena) and network-only
+      // formats (no exportable file) open the Initial Setup flow.
+      if (printerPresetNeedsInitialSetup(preset)) {
         setVariantChooserPreset(preset);
         return;
       }
