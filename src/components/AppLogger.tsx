@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { startMainThreadHeartbeat } from "@/utils/debug/mainThreadHeartbeat";
 import { logStartupHeader } from "@/utils/debug/startupHeader";
 import { startWebviewHeartbeat } from "@/utils/debug/webviewHeartbeat";
+import { startPerfProbes } from "@/utils/debug/perfProbes";
 import { logToNativeFile } from "@/utils/nativeLog";
 
 /**
@@ -35,12 +36,14 @@ export function AppLogger() {
 
     const stopHeartbeat = startMainThreadHeartbeat();
     const stopWebviewHeartbeat = startWebviewHeartbeat();
+    const stopPerfProbes = startPerfProbes();
 
     if (!isTauri) {
       logStartupHeader((message) => console.info(message));
       return () => {
         stopHeartbeat();
         stopWebviewHeartbeat();
+        stopPerfProbes();
       };
     }
 
@@ -86,6 +89,7 @@ export function AppLogger() {
       stopForwarding();
       stopHeartbeat();
       stopWebviewHeartbeat();
+      stopPerfProbes();
     };
   }, []);
 
