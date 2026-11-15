@@ -2603,7 +2603,7 @@ export default function Home() {
       hoveredCategoryForVisual: supportRendererDebug?.hoveredCategoryForVisual ?? null,
       hoveredIdForVisual: supportRendererDebug?.hoveredIdForVisual ?? null,
     };
-  }, [bracePlacementSnapshot, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId, transformDebugTick]);
+  }, [bracePlacementSnapshot, scene.activeModelId, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId, transformDebugTick]);
 
   // Reads the live stores directly: Home's subscribed snapshot is an empty
   // stub in support mode (trackSupportCollectionsInHome), so counting from it
@@ -3540,9 +3540,11 @@ export default function Home() {
       cancelled = true;
     };
   }, [
+    activePlateModelIds,
     getOrComputeBaseResinMl,
     resinEstimateComputationSignature,
     resinEstimateRefreshTick,
+    sceneResinModels,
     shouldEstimateResinInBackground,
     supportAndRaftResinMl,
     visibleResinModels,
@@ -6464,6 +6466,7 @@ export default function Home() {
   }, [
     arrangeSpacingMm,
     closeEditorContextMenu,
+    editorContextMenuSupportTarget,
     editorContextMenuTargetIds,
     liveSelectedBodies,
     multiTankMaterialChoices,
@@ -8258,7 +8261,7 @@ export default function Home() {
 
     // Select all visible models for export workspace tinting
     scene.setSelectedModelIds(visibleIds);
-  }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId, getVisibleModelIdsWithUnappliedHoles, applyAllHolePunchProgress, resolveUnappliedModifier]);
+  }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId, scene.setSelectedModelIds, getVisibleModelIdsWithUnappliedHoles, applyAllHolePunchProgress, resolveUnappliedModifier]);
 
 
   // Advance the "Apply to All" queue once the current model's bake settles.
@@ -9222,6 +9225,7 @@ export default function Home() {
   }, [
     applySelectionPositionUpdates,
     commitPendingSelectionPositionHistory,
+    getPendingSelectionStartEntries,
     getSelectionTargetIds,
     getSelectionTransformEntries,
     islands,
@@ -9473,7 +9477,7 @@ export default function Home() {
 
     isScaleGestureRef.current = operation === 'scale';
     return true;
-  }, [captureTransformSupportSnapshot, disableSnapForManualZMove, getSelectionTargetIds, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, scene.models, scene.selectedModelIds, scene.setModelsAutoLift]);
+  }, [captureTransformSupportSnapshot, disableSnapForManualZMove, getSelectionTargetIds, isModelPlateLocked, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, scene.models, scene.selectedModelIds, scene.setModelsAutoLift]);
 
   const ensurePendingTransformHistoryForActiveModel = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
     if (!scene.activeModelId || !scene.activeModel) return;
@@ -9972,6 +9976,7 @@ export default function Home() {
     scene.models,
     scene.mode,
     scene.plateOffsetFor,
+    scene.plateOrdering,
     scene.plates,
     scene.view3dSettings.depthMm,
     scene.view3dSettings.originMode,
