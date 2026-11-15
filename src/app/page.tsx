@@ -345,7 +345,10 @@ import { matchSceneMaterialsToTanks, resolveTankMaterialProfiles } from '@/featu
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import { sliceProfileFingerprint } from '@/features/printing/slicedPlates';
 import { useSlicedPlatePreviewLoading, useSlicedPlates } from '@/features/printing/useSlicedPlates';
-import { resolveOutputFileExtension } from '@/features/slicing/formats/registry';
+import {
+  outputFormatIsFileExportable,
+  resolveOutputFileExtension,
+} from '@/features/slicing/formats/registry';
 import {
   cleanupStalePrintTempArtifacts,
   deletePrintTempArtifactPath,
@@ -3591,7 +3594,10 @@ export default function Home() {
     return formatApproxPrintTimeLabel(_, totalSec);
   }, [_, activeMaterialProfile, printingPreviewTotalLayers]);
 
-  const canDownloadPrintArtifact = Boolean(printingArtifact);
+  // A network-only format still produces an artifact for the uploader, but the
+  // file is not something the user can use: keep the download action hidden.
+  const canDownloadPrintArtifact = Boolean(printingArtifact)
+    && outputFormatIsFileExportable(activePrinterProfile?.display.outputFormat);
   const activeNetworkUiAdapter = React.useMemo(
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
     // The registry, not just the mode string: a package installed this session

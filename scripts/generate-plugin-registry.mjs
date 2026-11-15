@@ -162,41 +162,128 @@ function enforceFormatsJsonConsistency(pluginId, formatsMetadata) {
       }
 }
 
-// Resolve one dependency value. A plain value is a semver spec; an inline table
-// with `path` points into the plugin's own checkout, which is how a plugin whose
-// encoder needs a crate that is not on crates.io declares it. Returns either the
-// version string or `{ path, absolute }`, and throws on anything else.
-function parseDependencyValue(rawValue, key, pluginId, tomlDir) {
-      const cleanValue = rawValue.trim();
+function stripQuotes(value) {
+      const trimmed = value.trim();
+      if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+            (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+            return trimmed.slice(1, -1);
+      }
+      return trimmed;
+}
 
-      const pathTable = cleanValue.match(/^\{\s*path\s*=\s*(.+?)\s*,?\s*\}$/);
-      if (pathTable) {
-            let declared = pathTable[1].trim();
-            if ((declared.startsWith('"') && declared.endsWith('"')) ||
-                  (declared.startsWith("'") && declared.endsWith("'"))) {
-                  declared = declared.slice(1, -1);
+// Split an inline table body on the commas that are not inside a string or a
+// nested array/table, so `features = ["a", "b"], version = "1"` yields two parts.
+function splitInlineTableEntries(body) {
+      const parts = [];
+      let depth = 0;
+      let quote = null;
+      let current = '';
+
+      for (const char of body) {
+            if (quote) {
+                  current += char;
+                  if (char === quote) quote = null;
+                  continue;
             }
-            if (!declared) {
-                  throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" has an empty path`);
+            if (char === '"' || char === "'") {
+                  quote = char;
+                  current += char;
+                  continue;
             }
-            return { path: declared, absolute: path.resolve(tomlDir, declared) };
+            if (char === '[' || char === '{') depth += 1;
+            if (char === ']' || char === '}') depth -= 1;
+            if (char === ',' && depth === 0) {
+                  parts.push(current);
+                  current = '';
+                  continue;
+            }
+            current += char;
       }
 
-      if (cleanValue.startsWith('{')) {
-            throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" is an inline table this registry understands only as { path = "..." }`);
+      if (current.trim()) parts.push(current);
+      return parts.map((part) => part.trim()).filter(Boolean);
+}
+
+// Parse a `features = ["a", "b"]` value into its feature names.
+function parseFeatureList(rawValue, key, pluginId) {
+      const trimmed = rawValue.trim();
+      const listMatch = trimmed.match(/^\[(.*)\]$/);
+      if (!listMatch) {
+            throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" inline table field "features" must be an array like ["getrandom"]`);
       }
 
-      let versionValue = cleanValue;
-      if ((versionValue.startsWith('"') && versionValue.endsWith('"')) ||
-            (versionValue.startsWith("'") && versionValue.endsWith("'"))) {
-            versionValue = versionValue.slice(1, -1);
+      const features = splitInlineTableEntries(listMatch[1]).map(stripQuotes);
+      if (features.some((feature) => !/^[A-Za-z0-9_.+/-]+$/.test(feature))) {
+            throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" inline table field "features" contains an invalid feature name in ${trimmed}`);
       }
 
+      return features;
+}
+
+function validateSemver(versionValue, key, pluginId) {
       if (!/^(?:\^|~|>=|<=|>|<|=)?[\d.x*]+/.test(versionValue.trim())) {
             throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" version "${versionValue}" is not valid semver`);
       }
+      return versionValue.trim();
+}
 
-      return versionValue;
+// Resolve one dependency value. A plain value is a semver spec. An inline table
+// either points into the plugin's own checkout with `path` - how a plugin whose
+// encoder needs a crate that is not on crates.io declares it - or carries a
+// crates.io `version` with optional `features`, because Cargo features cannot be
+// spelled in the plain-string form. Returns the version string, `{ path, absolute }`
+// or `{ version, features }`, and throws on anything else.
+function parseDependencyValue(rawValue, key, pluginId, tomlDir) {
+      const cleanValue = rawValue.trim();
+
+      if (cleanValue.startsWith('{')) {
+            if (!cleanValue.endsWith('}')) {
+                  throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" inline table is missing its closing "}"`);
+            }
+
+            const fields = {};
+            for (const entry of splitInlineTableEntries(cleanValue.slice(1, -1))) {
+                  const fieldMatch = entry.match(/^([a-zA-Z0-9_-]+)\s*=\s*(.+)$/);
+                  if (!fieldMatch) {
+                        throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" inline table entry "${entry}" is not a key = value pair`);
+                  }
+                  const [, fieldKey, fieldValue] = fieldMatch;
+                  if (fields[fieldKey] !== undefined) {
+                        throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" inline table repeats field "${fieldKey}"`);
+                  }
+                  fields[fieldKey] = fieldValue.trim();
+            }
+
+            const unsupported = Object.keys(fields).filter((field) => field !== 'path' && field !== 'version' && field !== 'features');
+            if (unsupported.length > 0) {
+                  throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" inline table field(s) ${unsupported.map((field) => `"${field}"`).join(', ')} are not supported; this registry understands { path = "..." } and { version = "...", features = ["..."] }`);
+            }
+
+            if (fields.path !== undefined && fields.version !== undefined) {
+                  throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" inline table cannot carry both "path" and "version"`);
+            }
+
+            if (fields.path !== undefined) {
+                  if (fields.features !== undefined) {
+                        throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" inline table cannot add "features" to a "path" dependency; declare the version-and-features form instead`);
+                  }
+                  const declared = stripQuotes(fields.path);
+                  if (!declared) {
+                        throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" has an empty path`);
+                  }
+                  return { path: declared, absolute: path.resolve(tomlDir, declared) };
+            }
+
+            if (fields.version !== undefined) {
+                  const version = validateSemver(stripQuotes(fields.version), key, pluginId);
+                  const features = fields.features === undefined ? [] : parseFeatureList(fields.features, key, pluginId);
+                  return { version, features };
+            }
+
+            throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" inline table must declare "path" or "version"; this registry understands { path = "..." } and { version = "...", features = ["..."] }`);
+      }
+
+      return validateSemver(stripQuotes(cleanValue), key, pluginId);
 }
 
 // Parse requiredCrates.toml format: simple TOML-like sections
@@ -243,8 +330,28 @@ function parseRequiredCratesToml(tomlContent, pluginId, tomlDir) {
       return result;
 }
 
+function isPathDep(spec) {
+      return typeof spec === 'object' && typeof spec.path === 'string';
+}
+
+function isVersionTableDep(spec) {
+      return typeof spec === 'object' && typeof spec.version === 'string';
+}
+
+// One dependency identity, so two plugins declaring the same crate are compared on
+// what cargo would actually resolve rather than on how the line was spelled.
+function cargoDepKey(spec) {
+      if (typeof spec === 'string') return `version:${spec}`;
+      if (isPathDep(spec)) return `path:${spec.absolute}`;
+      const features = [...spec.features].sort().join(',');
+      return `version:${spec.version}|features:${features}`;
+}
+
 function describeCargoDep(spec) {
-      return typeof spec === 'string' ? `version ${spec}` : `path ${spec.path}`;
+      if (typeof spec === 'string') return `version ${spec}`;
+      if (isPathDep(spec)) return `path ${spec.path}`;
+      const features = spec.features.length > 0 ? ` with features [${spec.features.join(', ')}]` : '';
+      return `version ${spec.version}${features}`;
 }
 
 // Enforce strict version conflict detection across all plugins
@@ -264,7 +371,7 @@ async function enforceCargoDepConsistency(discovered) {
                   // A version is resolved by cargo; a path is resolved here, so a path
                   // that points nowhere has to fail now rather than as a cargo error in
                   // a build that names the engine rather than the plugin that asked.
-                  if (typeof cleanSpec === 'object') {
+                  if (isPathDep(cleanSpec)) {
                         const exists = await fs.access(cleanSpec.absolute).then(() => true).catch(() => false);
                         if (!exists) {
                               throw new Error(
@@ -279,9 +386,7 @@ async function enforceCargoDepConsistency(discovered) {
                         continue;
                   }
 
-                  if (typeof allCrateDeps[crate] !== typeof cleanSpec
-                        || (typeof cleanSpec === 'string' && allCrateDeps[crate] !== cleanSpec)
-                        || (typeof cleanSpec === 'object' && allCrateDeps[crate].absolute !== cleanSpec.absolute)) {
+                  if (cargoDepKey(allCrateDeps[crate]) !== cargoDepKey(cleanSpec)) {
                         throw new Error(
                               `[plugin-registry] Cargo crate conflict: "${crate}" is required differently: plugin "${crateOrigins[crate]}" wants ${describeCargoDep(allCrateDeps[crate])}, plugin "${plugin.id}" wants ${describeCargoDep(cleanSpec)}. Plugins must coordinate on one source.`,
                         );
@@ -292,14 +397,28 @@ async function enforceCargoDepConsistency(discovered) {
       return allCrateDeps;
 }
 
+// A dependency as TOML spells it inside `[dependencies]`.
+function formatCargoDepForManifest(spec, engineDir) {
+      if (typeof spec === 'string') return `"${spec}"`;
+      if (isPathDep(spec)) {
+            // A plugin-relative path is rewritten against the engine crate, which is
+            // the manifest cargo will actually read it from.
+            const relative = path.relative(engineDir, spec.absolute).split(path.sep).join('/');
+            return `{ path = "${relative}" }`;
+      }
+      if (spec.features.length === 0) return `{ version = "${spec.version}" }`;
+      const features = spec.features.map((feature) => `"${feature}"`).join(', ');
+      return `{ version = "${spec.version}", features = [${features}] }`;
+}
+
 // A dependency as the audit file spells it. The per-plugin section repeats what the
 // plugin declared; the merged section has to show the path the manifest actually
 // carries, which is relative to the engine crate.
 function formatCargoDepForAudit(spec, { asMerged = false } = {}) {
       if (typeof spec === 'string') return `"${spec}"`;
+      if (isVersionTableDep(spec)) return formatCargoDepForManifest(spec, slicerEngineDir);
       if (!asMerged) return `{ path = "${spec.path}" }`;
-      const relative = path.relative(slicerEngineDir, spec.absolute).split(path.sep).join('/');
-      return `{ path = "${relative}" }`;
+      return formatCargoDepForManifest(spec, slicerEngineDir);
 }
 
 // Build cargo audit file for transparency
@@ -376,16 +495,7 @@ async function mergePluginCratesIntoCargoToml(mergedCargoDeps) {
       const newDeps = [];
       for (const [crate, spec] of Object.entries(mergedCargoDeps)) {
             if (existingDeps.has(crate)) continue;
-
-            if (typeof spec === 'string') {
-                  newDeps.push(`${crate} = "${spec}"`);
-                  continue;
-            }
-
-            // A plugin-relative path is rewritten against the engine crate, which is
-            // the manifest cargo will actually read it from.
-            const relative = path.relative(engineDir, spec.absolute).split(path.sep).join('/');
-            newDeps.push(`${crate} = { path = "${relative}" }`);
+            newDeps.push(`${crate} = ${formatCargoDepForManifest(spec, engineDir)}`);
       }
 
       // Append new deps if any

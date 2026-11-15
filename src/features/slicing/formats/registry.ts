@@ -76,6 +76,21 @@ export function outputFormatSupportsMultiTank(
   return definition?.supportsMultiTank === true;
 }
 
+/**
+ * Whether the sliced artifact for this format is something a user can keep.
+ *
+ * Formats backed by a device that only accepts network delivery answer false:
+ * the bytes still exist for the uploader, but there is nothing to save.
+ */
+export function outputFormatIsFileExportable(
+  outputFormat: PrinterOutputFormat | string | null | undefined,
+): boolean {
+  if (!outputFormat) return true;
+  const definition = resolveBuiltinPluginSlicingFormat(outputFormat as PrinterOutputFormat)
+    ?? resolveSideloadedSlicingFormat(outputFormat as PrinterOutputFormat);
+  return definition?.fileExportable !== false;
+}
+
 export function outputFormatUsesPngLayers(outputFormat: PrinterOutputFormat | string | null | undefined): boolean {
   if (!outputFormat) return true;
   const format = outputFormat as PrinterOutputFormat;
