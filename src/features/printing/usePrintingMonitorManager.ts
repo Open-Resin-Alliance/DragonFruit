@@ -51,6 +51,7 @@ const REACHABILITY_PROBE_TIMEOUT_MS = 7_500;
 const DEFAULT_WEBCAM_TIMEOUT_COOLDOWN_MS = 20_000;
 const DEFAULT_WEBCAM_FAILURE_COOLDOWN_MS = 8_000;
 const DEFAULT_WEBCAM_MAX_CONSECUTIVE_TIMEOUTS = 3;
+const DEFAULT_WEBCAM_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_RTSP_DEBUG_POLL_MS = 4_000;
 
 /**
@@ -258,6 +259,8 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
   const printingMonitorWebcamReadinessTokenRef = React.useRef(0);
 
   const printingMonitorWebcamReadinessTimeoutRef = React.useRef<number | null>(null);
+
+  const printingMonitorPreviousWebcamUrlRef = React.useRef<string | null>(null);
 
   const printingMonitorStartFocusDeviceIdRef = React.useRef<string | null>(null);
 
@@ -607,6 +610,23 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
   const printingMonitorWebcamStatusPresentation = React.useMemo(() => {
     const rawMessage = (printingMonitorWebcamInfo?.message ?? 'No webcam feed reported yet.').trim();
     const messageLower = rawMessage.toLowerCase();
+    const reason = printingMonitorWebcamInfo?.unavailableReason ?? null;
+
+    if (reason === 'camera-disabled') {
+      return {
+        tone: 'warning' as const,
+        title: 'Camera Disabled',
+        description: rawMessage,
+      };
+    }
+
+    if (reason === 'unsupported') {
+      return {
+        tone: 'neutral' as const,
+        title: 'Webcam Not Available',
+        description: rawMessage,
+      };
+    }
 
     if (messageLower.includes('stream limit') || messageLower.includes('simultaneous')) {
       return {
@@ -629,7 +649,7 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
       title: 'Webcam Not Ready',
       description: rawMessage,
     };
-  }, [printingMonitorWebcamInfo?.message]);
+  }, [printingMonitorWebcamInfo?.message, printingMonitorWebcamInfo?.unavailableReason]);
 
   const printingMonitorWebcamDisplayPresentation = React.useMemo(() => {
     if (printingMonitorWebcamLoadError) {
@@ -658,6 +678,14 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
   const printingMonitorWebcamTimeoutCooldownMs = printingMonitorUiPolicy?.webcamTimeoutCooldownMs ?? DEFAULT_WEBCAM_TIMEOUT_COOLDOWN_MS;
 
   const printingMonitorWebcamFailureCooldownMs = printingMonitorUiPolicy?.webcamFailureCooldownMs ?? DEFAULT_WEBCAM_FAILURE_COOLDOWN_MS;
+
+  // Snapshot links refresh once per request; a streaming link keeps its own
+  // cadence and leaves this unset. Clamp so a plugin cannot ask for a request
+  // loop faster than the monitor can render.
+  const printingMonitorWebcamPollIntervalMs = Math.max(
+    250,
+    printingMonitorUiPolicy?.webcamPollIntervalMs ?? DEFAULT_WEBCAM_POLL_INTERVAL_MS,
+  );
 
   const printingMonitorWebcamCanResetStreamSlot = React.useMemo(() => {
     if (!printingMonitorSupportsWebcamStreamSlotReset) return false;
@@ -827,15 +855,26 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
     const currentRaw = printingMonitorSnapshot?.currentLayer;
     const totalNumeric = Number(totalRaw);
     const currentNumeric = Number(currentRaw);
-    if (!Number.isFinite(totalNumeric) || !Number.isFinite(currentNumeric)) return null;
+    if (Number.isFinite(totalNumeric) && Number.isFinite(currentNumeric)) {
+      const total = Math.max(0, Math.round(totalNumeric));
+      const current = Math.max(0, Math.round(currentNumeric));
+      if (total > 0) {
+        const completedLayers = Math.max(0, Math.min(total, current - 1));
+        return (completedLayers / total) * 100;
+      }
+    }
 
-    const total = Math.max(0, Math.round(totalNumeric));
-    const current = Math.max(0, Math.round(currentNumeric));
-    if (total <= 0) return null;
-
-    const completedLayers = Math.max(0, Math.min(total, current - 1));
-    return (completedLayers / total) * 100;
-  }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.currentLayer, printingMonitorSnapshot?.totalLayers]);
+    // Links that report progress as a ratio rather than a layer counter (the
+    // printer may not expose layers at all) use their own measure.
+    const reported = Number(printingMonitorSnapshot?.progressPct);
+    if (Number.isFinite(reported)) return Math.max(0, Math.min(100, reported));
+    return null;
+  }, [
+    printingMonitorHasActivePrint,
+    printingMonitorSnapshot?.currentLayer,
+    printingMonitorSnapshot?.progressPct,
+    printingMonitorSnapshot?.totalLayers,
+  ]);
 
   const printingMonitorDisplayCurrentLayer = React.useMemo(() => {
     if (!printingMonitorHasActivePrint) return null;
@@ -865,8 +904,22 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
       if (selectedPlate?.materialProfileName) return selectedPlate.materialProfileName;
     }
 
+    // A link with no plate enumeration has no job metadata to borrow a profile
+    // name from; the printer's own material report is then the only truth.
+    const reportedName = printingMonitorSnapshot?.materialName?.trim();
+    if (reportedName) return reportedName;
+    const reportedCode = printingMonitorSnapshot?.materialCode?.trim();
+    if (reportedCode) return reportedCode;
+
     return '—';
-  }, [printingMonitorHasActivePrint, printingMonitorPlateId, printingMonitorRecentPlates, printingMonitorSelectedPlateId]);
+  }, [
+    printingMonitorHasActivePrint,
+    printingMonitorPlateId,
+    printingMonitorRecentPlates,
+    printingMonitorSelectedPlateId,
+    printingMonitorSnapshot?.materialCode,
+    printingMonitorSnapshot?.materialName,
+  ]);
 
   const isPrintingMonitorSelectedPrinterOfflineRaw = React.useMemo(() => {
     const monitorHost = (monitoringDevice?.ipAddress || activePrinterProfile?.network?.ipAddress || '').trim();
@@ -2054,7 +2107,7 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
     void pollWebcamInfo();
     const intervalId = window.setInterval(() => {
       void pollWebcamInfo();
-    }, 5_000);
+    }, printingMonitorWebcamPollIntervalMs);
 
     return () => {
       cancelled = true;
@@ -2069,6 +2122,7 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
     printingMonitorHasCamera,
     printingMonitoringAdapter,
     printingMonitorModalOpen,
+    printingMonitorWebcamPollIntervalMs,
     printingMonitorWebcamRefreshNonce,
   ]);
 
@@ -2111,6 +2165,20 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
   }, [printingMonitorHasActivePrint, printingMonitorThumbnailCacheKey, printingMonitorThumbnailUrl]);
 
   React.useEffect(() => {
+    const previousUrl = printingMonitorPreviousWebcamUrlRef.current;
+    printingMonitorPreviousWebcamUrlRef.current = printingMonitorWebcamUrl;
+
+    // A snapshot link hands back a fresh `data:` URL per frame. The previous
+    // frame is still painted, so keeping the loaded state avoids flashing the
+    // loading overlay once a second; every other URL change is a new source.
+    const isInlineSnapshotSwap = Boolean(
+      previousUrl
+      && printingMonitorWebcamUrl
+      && /^data:/i.test(previousUrl)
+      && /^data:/i.test(printingMonitorWebcamUrl),
+    );
+    if (isInlineSnapshotSwap) return;
+
     printingMonitorWebcamReadinessTokenRef.current += 1;
     if (printingMonitorWebcamReadinessTimeoutRef.current != null) {
       window.clearTimeout(printingMonitorWebcamReadinessTimeoutRef.current);
@@ -2121,6 +2189,15 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
   }, [printingMonitorWebcamUrl]);
 
   React.useEffect(() => {
+    const previousUrl = printingMonitorPreviousWebcamUrlRef.current;
+    if (
+      previousUrl
+      && printingMonitorWebcamUrl
+      && /^data:/i.test(previousUrl)
+      && /^data:/i.test(printingMonitorWebcamUrl)
+    ) {
+      return;
+    }
     setPrintingMonitorWebcamAspectRatio(null);
   }, [printingMonitorWebcamUrl]);
 
