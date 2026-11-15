@@ -39,7 +39,12 @@ import {
   type SliceExportArtifact,
   type SliceExportResult,
 } from '@/features/slicing/sliceExportOrchestrator';
-import { outputFormatIsFileExportable, resolveOutputFileExtension, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import {
+  outputFormatIsFileExportable,
+  printerPresetRequiresNetworkConnection,
+  resolveOutputFileExtension,
+  resolveSlicingFormatDefinition,
+} from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import {
@@ -842,6 +847,9 @@ export function SlicingPanel({
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [aaMode, setAaMode] = useState<'Off' | 'Blur' | '3DAA'>(resolveInitialAaMode);
   const [showOutOfBoundsWarningModal, setShowOutOfBoundsWarningModal] = useState(false);
+  /** A network-only printer that is offline cannot upload or print; the run needs a choice first. */
+  const [showPrinterNotConnectedModal, setShowPrinterNotConnectedModal] = useState(false);
+  const printerNotConnectedResolveRef = useRef<((proceed: boolean) => void) | null>(null);
   /** How many of a batch's files are already on disk, so the user can be asked before writing. */
   const [overwriteCollisionCount, setOverwriteCollisionCount] = useState(0);
   const overwriteWarningResolveRef = useRef<((proceed: boolean) => void) | null>(null);
@@ -963,6 +971,16 @@ export function SlicingPanel({
    * UVTools handoff, the per-plate batch — is absent rather than disabled.
    */
   const canExportFile = outputFormatIsFileExportable(activePrinterProfile?.display.outputFormat);
+  /**
+   * Whether this printer's format only exists to be delivered to the machine. Such a profile has
+   * no file to fall back to, so the network job is the whole point of it — and when it is
+   * offline there is nothing for the slice to do unless the user asks for a plain preview.
+   */
+  const printerRequiresNetworkConnection = useMemo(
+    () => printerPresetRequiresNetworkConnection(activePrinterProfile),
+    [activePrinterProfile],
+  );
+  const isPrinterConnected = activePrinterProfile?.networkConnection?.connected === true;
   const networkUiAdapter = useMemo(
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
     [activePrinterProfile?.networkSupport],
@@ -1279,6 +1297,23 @@ export function SlicingPanel({
     overwriteWarningResolveRef.current = resolve;
     setOverwriteCollisionCount(collisions);
   }), []);
+  /**
+   * Asked when the printer cannot take the run. True means "slice it anyway, as a plain
+   * preview" — the one thing a disconnected network-only printer can still do locally.
+   */
+  const requestPrinterConnectedConfirmation = useCallback(() => {
+    printerNotConnectedResolveRef.current?.(false);
+    const { promise, resolve } = Promise.withResolvers<boolean>();
+    printerNotConnectedResolveRef.current = resolve;
+    setShowPrinterNotConnectedModal(true);
+    return promise;
+  }, []);
+  const settlePrinterNotConnectedConfirmation = useCallback((proceed: boolean) => {
+    const resolve = printerNotConnectedResolveRef.current;
+    printerNotConnectedResolveRef.current = null;
+    setShowPrinterNotConnectedModal(false);
+    resolve?.(proceed);
+  }, []);
   const settleOverwriteConfirmation = useCallback((proceed: boolean) => {
     const resolve = overwriteWarningResolveRef.current;
     overwriteWarningResolveRef.current = null;
@@ -1297,6 +1332,8 @@ export function SlicingPanel({
     outOfBoundsWarningResolveRef.current = null;
     overwriteWarningResolveRef.current?.(false);
     overwriteWarningResolveRef.current = null;
+    printerNotConnectedResolveRef.current?.(false);
+    printerNotConnectedResolveRef.current = null;
   }, []);
   const activePrinterProfileId = (activePrinterProfile?.id ?? '').trim();
   const isShiftHeld = useKeyPressed('shift');
@@ -1872,7 +1909,16 @@ export function SlicingPanel({
 
     // A batch writes files into the folder it picked: the intent menus are the single-plate
     // flow's, and none of them means "all of them at once".
-    const intentForRun: SliceIntent = batch ? 'file' : effectiveSliceIntent;
+    let intentForRun: SliceIntent = batch ? 'file' : effectiveSliceIntent;
+
+    // A network-only printer that is not connected can neither upload nor print, and this
+    // format has no file to fall back to - so every run, preview included, ends with nothing
+    // the user can use. Say so before the work is spent, and offer the one thing that still
+    // works: a plain slice, kept as a preview.
+    if (!batch && printerRequiresNetworkConnection && !isPrinterConnected) {
+      if (!(await requestPrinterConnectedConfirmation())) return false;
+      intentForRun = 'preview';
+    }
 
     // The name the slice is written under, also offered in the save dialog so the two agree.
     const outputBaseName = scopeFilenameBase ?? sliceFilenameBase;
@@ -1907,7 +1953,9 @@ export function SlicingPanel({
     setShowSlicingModal(true);
     setSlicingModalStage('running');
     onSlicingBusyChange?.(true);
-    onSliceIntentChanged?.(effectiveSliceIntent);
+    // Report what this run actually is: a preview chosen in the not-connected dialog is a
+    // preview everywhere downstream, whatever the menu still remembers.
+    onSliceIntentChanged?.(intentForRun);
     onSliceRunStarted?.(scope ? { plateId: scope.plateId } : undefined);
 
     // Fire scene save concurrently — it's best-effort and independent of mesh preparation.
@@ -3099,6 +3147,47 @@ export function SlicingPanel({
         </div>,
         document.body,
       )}
+
+      <StructuredDialogModal
+        open={showPrinterNotConnectedModal}
+        ariaLabel={_(msg`Printer not connected`)}
+        title={<Trans>Printer Not Connected</Trans>}
+        subtitle={activePrinterProfile?.name}
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        onClose={() => settlePrinterNotConnectedConfirmation(false)}
+        onBackdropClick={() => settlePrinterNotConnectedConfirmation(false)}
+        actions={(
+          <>
+            <Button
+              variant="tinted-accent"
+              className="!h-9 text-xs font-semibold"
+              onClick={() => {
+                settlePrinterNotConnectedConfirmation(false);
+                openProfileSettingsModal('printer', { openNetworkSettings: true });
+              }}
+            >
+              <Trans>Open Settings...</Trans>
+            </Button>
+            <Button
+              variant="tinted-warning"
+              className="!h-9 text-xs font-semibold"
+              onClick={() => settlePrinterNotConnectedConfirmation(true)}
+            >
+              <Trans>Just Slice</Trans>
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>This printer works over the network only. Connect it to upload or print.</Trans>
+        </p>
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>Just Slice runs a preview on this computer and does not send anything to the printer.</Trans>
+        </p>
+      </StructuredDialogModal>
 
       <StructuredDialogModal
         open={showOutOfBoundsWarningModal}

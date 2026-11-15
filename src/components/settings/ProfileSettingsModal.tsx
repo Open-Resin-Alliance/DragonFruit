@@ -73,6 +73,7 @@ import {
   resolveOutputFormatVersion,
   resolveOutputSettingsMode,
   printerPresetNeedsInitialSetup,
+  printerPresetRequiresNetworkConnection,
 } from '@/features/slicing/formats/registry';
 import {
   getSideloadedOutputFormatsSnapshot,
@@ -1848,6 +1849,16 @@ export function ProfileSettingsModal({
     && !shouldShowRemoteMaterialSelectedPrinterOfflineState,
   );
   const shouldShowRemoteMaterialsPanel = shouldUseRemoteOnDeviceMaterials || shouldShowRemoteMaterialSelectedPrinterOfflineState;
+  /**
+   * A format that only ever ships to the machine has no file to fall back to, so while its
+   * printer is offline nothing here can reach it. Said once at the top of the surface — this is
+   * a header, not a gate: every profile below stays editable.
+   */
+  const showPrinterRequiresNetworkNotice = Boolean(
+    selectedPrinter
+    && printerPresetRequiresNetworkConnection(selectedPrinter)
+    && selectedPrinter.networkConnection?.connected !== true,
+  );
 
   const primaryEditFields = effectiveNetworkUiAdapter.primaryEditFields;
   const basicEditSections = effectiveNetworkUiAdapter.basicSections;
@@ -4635,6 +4646,7 @@ export function ProfileSettingsModal({
             }}
           >
             <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-strong)' }}>
@@ -4742,6 +4754,38 @@ export function ProfileSettingsModal({
             </div>
 
             <div className="p-3 flex flex-col gap-3 flex-1 min-h-0">
+              {showPrinterRequiresNetworkNotice && (
+                // Below the header, above the profile card: the constraint is
+                // about the printer this section is bound to.
+                <div
+                  className="flex items-center gap-2.5 rounded-md border px-3 py-2"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 72%)',
+                    background: 'color-mix(in srgb, #d97706, var(--surface-1) 94%)',
+                  }}
+                >
+                  <AlertTriangle className="h-5 w-5 shrink-0" style={{ color: '#d97706' }} />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>
+                      {_(msg`Printer not connected`)}
+                    </div>
+                    <div className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                      {_(msg`This printer works over the network only. Connect it to upload or print.`)}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={handleOpenNetworkSettings}
+                    variant="secondary"
+                    size="auto"
+                    className="!h-7 !px-2.5 !py-0 text-[11px] inline-flex items-center justify-center gap-1 rounded-md shrink-0"
+                    style={accentSecondaryActionStyle93}
+                  >
+                    <Search className="w-3.5 h-3.5" />
+                    {_(msg`Connect Now`)}
+                  </Button>
+                </div>
+              )}
               {shouldUseRemoteOnDeviceMaterials ? (
                 <>
                   <div className="rounded-md border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
