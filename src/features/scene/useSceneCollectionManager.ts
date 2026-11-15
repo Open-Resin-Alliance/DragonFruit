@@ -3014,7 +3014,9 @@ export function useSceneCollectionManager(options?: {
         return;
       }
 
-      accelerateGeometry(geometry);
+      if (!(geometry as THREE.BufferGeometry & { boundsTree?: unknown }).boundsTree) {
+        accelerateGeometry(geometry);
+      }
 
       if (deferredAccelerationQueueRef.current.length === 0) {
         deferredAccelerationProcessingRef.current = false;
@@ -4287,6 +4289,8 @@ export function useSceneCollectionManager(options?: {
       m.id === id
         ? {
             ...m,
+            sourcePath: null,
+            originalRef: undefined,
             geometry: nextGeometry,
             polygonCount,
             ...(options?.transformAfter ? { transform: cloneTransform(options.transformAfter) } : {}),
@@ -4504,6 +4508,8 @@ export function useSceneCollectionManager(options?: {
         m.id === sourceId
           ? {
               ...m,
+              sourcePath: null,
+              originalRef: undefined,
               geometry: part0,
               polygonCount: countTriangles(part0.geometry),
               transform: {

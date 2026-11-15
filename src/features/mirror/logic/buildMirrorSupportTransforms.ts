@@ -15,11 +15,12 @@ export interface MirrorSupportTransforms {
 }
 
 // Reflects a model's transform across a world-space axis through the model's
-// world-space bbox center. Works for any axis, including Z.
+// world-space bbox center (or an explicit world-space pivot override). Works for any axis, including Z.
 export function reflectTransformAcrossWorldAxis(
   current: ModelTransform,
   modelLocalBboxCenter: THREE.Vector3,
   axis: MirrorAxis,
+  worldPivotOverride?: THREE.Vector3,
 ): ModelTransform {
   const beforeMatrix = new THREE.Matrix4().compose(
     current.position.clone(),
@@ -27,7 +28,9 @@ export function reflectTransformAcrossWorldAxis(
     current.scale.clone(),
   );
 
-  const pivotWorld = modelLocalBboxCenter.clone().applyMatrix4(beforeMatrix);
+  const pivotWorld = worldPivotOverride
+    ? worldPivotOverride.clone()
+    : modelLocalBboxCenter.clone().applyMatrix4(beforeMatrix);
 
   const reflect = new THREE.Matrix4().identity();
   const reflectElements = reflect.elements;
@@ -58,11 +61,12 @@ export function buildMirrorSupportTransforms(args: {
   current: ModelTransform;
   modelLocalBboxCenter: THREE.Vector3;
   axis: MirrorAxis;
+  worldPivotOverride?: THREE.Vector3;
 }): MirrorSupportTransforms | null {
-  const { current, modelLocalBboxCenter, axis } = args;
+  const { current, modelLocalBboxCenter, axis, worldPivotOverride } = args;
   if (axis === 'z') return null;
 
-  const after = reflectTransformAcrossWorldAxis(current, modelLocalBboxCenter, axis);
+  const after = reflectTransformAcrossWorldAxis(current, modelLocalBboxCenter, axis, worldPivotOverride);
   return {
     before: {
       position: current.position.clone(),

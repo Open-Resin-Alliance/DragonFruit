@@ -7446,6 +7446,7 @@ export default function Home() {
     layerHeightMm: slicing.layerHeightMm,
     supportTips,
     plateZ: 0,
+    modelId: scene.activeModel?.id,
     sourcePath: scene.activeModel?.sourcePath,
     activeTab: scene.mode,
     hasRaft: getRaftSettingsForModel(scene.activeModel?.id).bottomMode !== 'off',
@@ -7460,6 +7461,8 @@ export default function Home() {
 
   // 5. Supports
   const supports = useSupportInteractionManager({ mode: scene.mode });
+
+  const finalizeMirrorSessionRef = React.useRef<() => void>(() => {});
 
   const handleModeChange = React.useCallback((nextMode: typeof scene.mode) => {
     if (scene.models.length === 0 && nextMode !== 'prepare') {
@@ -7476,8 +7479,12 @@ export default function Home() {
       setShowPrintingResliceModal(true);
       return;
     }
+    if (scene.mode === 'prepare' && nextMode !== 'prepare') {
+      suppressTransformPersistenceCycles(10);
+      finalizeMirrorSessionRef.current();
+    }
     scene.setMode(nextMode);
-  }, [hasSlicedPlate, isActiveSliceStale, scene]);
+  }, [hasSlicedPlate, isActiveSliceStale, scene, suppressTransformPersistenceCycles]);
 
   const handleAddPrinterFromOnboarding = React.useCallback(() => {
     openProfileSettingsModal('printer', { openPrinterLibrary: true });
@@ -8027,7 +8034,6 @@ export default function Home() {
     handleFillPlateDuplicate,
   } = arrange;
 
-  const finalizeMirrorSessionRef = React.useRef<() => void>(() => {});
   const setTransformModeWithMirrorFinalize = React.useCallback((nextMode: TransformMode) => {
     if (transformMgr.transformMode === 'mirror' && nextMode !== 'mirror') {
       suppressTransformPersistenceCycles(10);
@@ -8051,6 +8057,10 @@ export default function Home() {
       if (isAppMode(origin.appMode) && origin.appMode !== scene.mode) {
         // The workspace switch must not put back the workspace's remembered tool over this one.
         historyOriginToolPendingRef.current = isTransformMode(origin.transformMode);
+        if (scene.mode === 'prepare' && origin.appMode !== 'prepare') {
+          suppressTransformPersistenceCycles(10);
+          finalizeMirrorSessionRef.current();
+        }
         scene.setMode(origin.appMode);
       }
       if (isTransformMode(origin.transformMode) && origin.transformMode !== transformMgr.transformMode) {

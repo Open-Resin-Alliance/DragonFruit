@@ -3,12 +3,14 @@ import * as THREE from 'three';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import type { MirrorAxis } from '@/features/mirror/types';
 import { bakeWithFlips } from '@/features/mirror/logic/bakeWithFlips';
+import { swapNonIndexedAttributeWinding } from '@/features/mirror/logic/bakeMirrorIntoGeometry';
 import {
   buildMirrorSupportTransforms,
   reflectTransformAcrossWorldAxis,
 } from '@/features/mirror/logic/buildMirrorSupportTransforms';
 import { getSnapshot as getSupportSnapshot, transformSupportsForModel } from '@/supports/state';
 import type { SupportState } from '@/supports/types';
+import { computePreciseModelWorldBounds } from '@/utils/modelBounds';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -57,6 +59,12 @@ export function useMirrorManager({
   requestDestructiveTransformSupportDeletionWithContinuation,
 }: UseMirrorManagerOptions): UseMirrorManagerResult {
   const mirrorSessionRef = React.useRef<MirrorSession | null>(null);
+  const latestModelsRef = React.useRef(scene.models);
+  const activeModelIdRef = React.useRef(scene.activeModelId);
+  React.useLayoutEffect(() => {
+    latestModelsRef.current = scene.models;
+    activeModelIdRef.current = scene.activeModelId;
+  }, [scene.models, scene.activeModelId]);
   const mirrorPrevToolActiveRef = React.useRef(false);
   const mirrorLocalOriginRef = React.useRef(new THREE.Vector3(0, 0, 0));
   // Tracks a pending deferred bake so we can cancel/flush it on mode switch.
@@ -93,13 +101,19 @@ export function useMirrorManager({
     finalizedTransform: ModelTransform,
     axisLabel: string,
   ) => {
-    scene.replaceModelGeometry(session.modelId, baked, mirrorModelLabel(axisLabel), {
+    const replaced = scene.replaceModelGeometry(session.modelId, baked, mirrorModelLabel(axisLabel), {
       // Z deletes the supports up front, behind its own confirmation.
       includeSupportState: !session.flips.z,
       transformAfter: finalizedTransform,
       historyBefore: { transform: session.initialTransform, supportState: session.initialSupportState },
     });
-    syncTransformManagerToTransform(finalizedTransform);
+    if (!replaced) {
+      baked.dispose();
+      return;
+    }
+    if (activeModelIdRef.current === session.modelId) {
+      syncTransformManagerToTransform(finalizedTransform);
+    }
   }, [scene, syncTransformManagerToTransform]);
 
   const finalizeMirrorSession = React.useCallback(() => {
@@ -261,9 +275,7 @@ export function useMirrorManager({
       };
 
       // Reconstruct a Three.js geometry from the worker-returned arrays.
-      // We avoid a full geometry.clone() – only the modified arrays were
-      // copied; all other attributes (UV, vertex colour, etc.) are shared
-      // by reference from the source (safe since they are never modified).
+      // Clone extra BufferAttributes so baked geometries do not alias source instances.
       const baked = new THREE.BufferGeometry();
       baked.setAttribute('position', new THREE.BufferAttribute(bp, posItemSize));
       if (bn) {
@@ -274,10 +286,20 @@ export function useMirrorManager({
       if (bi) {
         baked.setIndex(new THREE.BufferAttribute(bi, 1));
       }
+      for (const g of source.groups) {
+        baked.addGroup(g.start, g.count, g.materialIndex);
+      }
       const srcAttrs = source.attributes;
       for (const name of Object.keys(srcAttrs)) {
         if (name !== 'position' && name !== 'normal') {
-          baked.setAttribute(name, srcAttrs[name] as THREE.BufferAttribute);
+          const attr = srcAttrs[name];
+          if (!bi && axes.length % 2 === 1 && attr instanceof THREE.BufferAttribute) {
+            const cloned = attr.clone();
+            swapNonIndexedAttributeWinding(cloned);
+            baked.setAttribute(name, cloned);
+          } else {
+            baked.setAttribute(name, attr instanceof THREE.BufferAttribute ? attr.clone() : attr);
+          }
         }
       }
       baked.computeBoundingBox();
@@ -318,46 +340,72 @@ export function useMirrorManager({
     }
   }, [mirrorToolActive, flushPendingBake]);
 
+  React.useEffect(() => () => {
+    if (pendingBakeTimerRef.current !== null) {
+      clearTimeout(pendingBakeTimerRef.current);
+      pendingBakeTimerRef.current = null;
+    }
+    if (pendingBakeWorkerRef.current) {
+      pendingBakeWorkerRef.current.terminate();
+      pendingBakeWorkerRef.current = null;
+    }
+  }, []);
+
   const handleMirror = React.useCallback((axis: MirrorAxis) => {
     const modelId = scene.activeModelId;
     if (!modelId) return;
-    const model = scene.models.find((m) => m.id === modelId);
-    if (!model) return;
+    if (!latestModelsRef.current.some((m) => m.id === modelId)) return;
 
-    if (!mirrorSessionRef.current || mirrorSessionRef.current.modelId !== modelId) {
-      // Finalize any prior session that was for a different model first.
-      if (mirrorSessionRef.current) flushPendingBake();
-      mirrorSessionRef.current = {
-        modelId,
-        flips: { x: false, y: false, z: false },
-        initialTransform: {
-          position: model.transform.position.clone(),
-          rotation: model.transform.rotation.clone(),
-          scale: model.transform.scale.clone(),
-        },
-        previewTransform: {
-          position: model.transform.position.clone(),
-          rotation: model.transform.rotation.clone(),
-          scale: model.transform.scale.clone(),
-        },
-        initialGeometry: model.geometry,
-        initialSupportState: getSupportSnapshot(),
-      };
+    // Finalize any prior session that was for a different model first.
+    if (mirrorSessionRef.current && mirrorSessionRef.current.modelId !== modelId) {
+      flushPendingBake();
     }
 
-    const session = mirrorSessionRef.current;
-    if (!session) return;
-
     const performMirror = () => {
+      const liveModel = latestModelsRef.current.find((m) => m.id === modelId);
+      if (!liveModel) return;
+
+      const hadActiveSession = mirrorSessionRef.current !== null && mirrorSessionRef.current.modelId === modelId;
+      if (!hadActiveSession) {
+        if (mirrorSessionRef.current) flushPendingBake();
+        mirrorSessionRef.current = {
+          modelId,
+          flips: { x: false, y: false, z: false },
+          initialTransform: {
+            position: liveModel.transform.position.clone(),
+            rotation: liveModel.transform.rotation.clone(),
+            scale: liveModel.transform.scale.clone(),
+          },
+          previewTransform: {
+            position: liveModel.transform.position.clone(),
+            rotation: liveModel.transform.rotation.clone(),
+            scale: liveModel.transform.scale.clone(),
+          },
+          initialGeometry: liveModel.geometry,
+          initialSupportState: getSupportSnapshot(),
+        };
+      }
+
+      const session = mirrorSessionRef.current;
+      if (!session) return;
+
+      const baseTransform = hadActiveSession ? session.previewTransform : liveModel.transform;
+
       session.flips[axis] = !session.flips[axis];
 
       // Reflect the model's transform across the world-space axis through the
-      // model's world bbox center. This produces a true world-space mirror
-      // regardless of the model's existing rotation.
+      // model's tight vertex-level world bbox center. This produces a true
+      // world-space mirror regardless of the model's existing rotation/asymmetry.
+      const worldPivot = computePreciseModelWorldBounds(
+        liveModel.geometry,
+        baseTransform,
+      ).getCenter(new THREE.Vector3());
+
       const nextTransform = reflectTransformAcrossWorldAxis(
-        model.transform,
+        baseTransform,
         mirrorLocalOriginRef.current,
         axis,
+        worldPivot,
       );
       session.previewTransform = {
         position: nextTransform.position.clone(),
@@ -369,9 +417,10 @@ export function useMirrorManager({
       // supports up-front via the destructive modal.
       if (axis !== 'z') {
         const supportTransforms = buildMirrorSupportTransforms({
-          current: model.transform,
+          current: baseTransform,
           modelLocalBboxCenter: mirrorLocalOriginRef.current.clone(),
           axis,
+          worldPivotOverride: worldPivot,
         });
         if (supportTransforms) {
           transformSupportsForModel(modelId, supportTransforms.before, supportTransforms.after);

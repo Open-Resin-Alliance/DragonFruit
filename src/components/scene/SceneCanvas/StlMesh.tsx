@@ -765,6 +765,7 @@ function StlMeshComponent({
    */
   React.useEffect(() => {
     if ((mode !== 'prepare' && mode !== 'support') || !isActiveModel) return;
+    if (transform && transform.scale.x * transform.scale.y * transform.scale.z < 0) return;
     const mesh = internalMeshRef.current;
     if (!mesh) return;
 

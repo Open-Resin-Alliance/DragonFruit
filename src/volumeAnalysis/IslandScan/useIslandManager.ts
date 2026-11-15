@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { runIslandScan, runScanlineScan, type ScanResults } from './ScanOrchestrator';
 import { runIslandScanNative } from './nativeIslandScan';
@@ -60,6 +60,9 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
   const [voxelShowMerged, setVoxelShowMerged] = useState<boolean>(true);
   const [voxelShowTerritory, setVoxelShowTerritory] = useState<boolean>(false);
 
+  const scanEpochRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   // Helper to prepare geometry for scanning
   const prepareTransformedGeom = useCallback(() => {
     if (!geom) return null;
@@ -87,9 +90,28 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
       new THREE.Vector3(transform.scale.x, transform.scale.y, transform.scale.z)
     );
     transformedGeom.applyMatrix4(matrix);
-    transformedGeom.computeBoundingBox();
 
-    return transformedGeom;
+    const soup = transformedGeom.index ? transformedGeom.toNonIndexed() : transformedGeom;
+    if (soup !== transformedGeom) {
+      transformedGeom.dispose();
+    }
+
+    if (matrix.determinant() < 0) {
+      const posAttr = soup.getAttribute('position') as THREE.BufferAttribute;
+      const positions = posAttr.array as Float32Array;
+      for (let i = 0; i + 8 < positions.length; i += 9) {
+        for (let k = 0; k < 3; k++) {
+          const tmp = positions[i + 3 + k];
+          positions[i + 3 + k] = positions[i + 6 + k];
+          positions[i + 6 + k] = tmp;
+        }
+      }
+      posAttr.needsUpdate = true;
+    }
+
+    soup.computeBoundingBox();
+
+    return soup;
   }, [geom, transform]);
 
   const onRunIslandScan = useCallback(async () => {
@@ -97,8 +119,13 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
     const transformedGeom = prepareTransformedGeom();
     if (!transformedGeom) return;
 
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const epoch = ++scanEpochRef.current;
+
     setScanning(true);
-    const transformedBBox = transformedGeom.boundingBox!;
+    const transformedBBox = transformedGeom.boundingBox!.clone();
     setScanBBox(transformedBBox);
 
     setScanProgress({ done: 0, total: Math.max(0, Math.ceil((transformedBBox.max.z - transformedBBox.min.z) / layerHeightMm)) });
@@ -116,11 +143,25 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
           overlap_neighborhood_px: overlapNeighborhoodPx,
           useSurfaceContiguity,
         },
-        (done, total, phase, phaseNumber, phaseCount) => setScanProgress({ done, total, phase, phaseNumber, phaseCount })
+        (done, total, phase, phaseNumber, phaseCount) => {
+          if (scanEpochRef.current !== epoch) return;
+          setScanProgress({ done, total, phase, phaseNumber, phaseCount });
+        },
+        controller.signal,
       );
+      if (scanEpochRef.current !== epoch || controller.signal.aborted) return;
       setScanData(res);
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return;
+      throw err;
     } finally {
-      setScanning(false);
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+      transformedGeom.dispose();
+      if (scanEpochRef.current === epoch) {
+        setScanning(false);
+      }
     }
   }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx, useSurfaceContiguity]);
 
@@ -129,8 +170,13 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
     const transformedGeom = prepareTransformedGeom();
     if (!transformedGeom) return;
 
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const epoch = ++scanEpochRef.current;
+
     setScanning(true);
-    const transformedBBox = transformedGeom.boundingBox!;
+    const transformedBBox = transformedGeom.boundingBox!.clone();
     setScanBBox(transformedBBox);
 
     setScanProgress({ done: 0, total: Math.max(0, Math.ceil((transformedBBox.max.z - transformedBBox.min.z) / layerHeightMm)) });
@@ -149,13 +195,27 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
           overlap_neighborhood_px: overlapNeighborhoodPx,
           useSurfaceContiguity,
         },
-        (done, total, phase, phaseNumber, phaseCount) => setScanProgress({ done, total, phase, phaseNumber, phaseCount })
+        (done, total, phase, phaseNumber, phaseCount) => {
+          if (scanEpochRef.current !== epoch) return;
+          setScanProgress({ done, total, phase, phaseNumber, phaseCount });
+        },
+        controller.signal,
       );
+      if (scanEpochRef.current !== epoch || controller.signal.aborted) return;
       const endTime = performance.now();
       console.log(`Scanline Scan took ${(endTime - startTime).toFixed(2)}ms`);
       setScanData(res);
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return;
+      throw err;
     } finally {
-      setScanning(false);
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+      transformedGeom.dispose();
+      if (scanEpochRef.current === epoch) {
+        setScanning(false);
+      }
     }
   }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx, useSurfaceContiguity]);
 
@@ -164,8 +224,12 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
     const transformedGeom = prepareTransformedGeom();
     if (!transformedGeom) return;
 
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    const epoch = ++scanEpochRef.current;
+
     setScanning(true);
-    const transformedBBox = transformedGeom.boundingBox!;
+    const transformedBBox = transformedGeom.boundingBox!.clone();
     setScanBBox(transformedBBox);
 
     const numLayers = Math.max(0, Math.ceil((transformedBBox.max.z - transformedBBox.min.z) / layerHeightMm));
@@ -184,13 +248,20 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
           min_overlap_px: minOverlapPx,
           overlap_neighborhood_px: overlapNeighborhoodPx,
         },
-        (done: number, total: number) => setScanProgress({ done, total, phase: 'Slicing' })
+        (done: number, total: number) => {
+          if (scanEpochRef.current !== epoch) return;
+          setScanProgress({ done, total, phase: 'Slicing' });
+        }
       );
+      if (scanEpochRef.current !== epoch) return;
       const endTime = performance.now();
       console.log(`Native Island Scan took ${(endTime - startTime).toFixed(2)}ms`);
       setScanData(res);
     } finally {
-      setScanning(false);
+      transformedGeom.dispose();
+      if (scanEpochRef.current === epoch) {
+        setScanning(false);
+      }
     }
   }, [geom, prepareTransformedGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minIslandAreaMm2, minOverlapPx, overlapNeighborhoodPx]);
 
@@ -226,10 +297,61 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
 
   // Clear scan data (e.g. on rotation)
   const clearScanData = useCallback(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    scanEpochRef.current += 1;
     setScanData(null);
+    setScanBBox(null);
+    setScanning(false);
+    setScanProgress(null);
     setOverlayEnabled(false);
     setVoxelEnabled(false);
     setSelectedIslandId(null);
+  }, []);
+
+  const prevInvalidationRef = useRef<{
+    geometry: THREE.BufferGeometry | null;
+    uuid: string;
+    px: number; py: number; pz: number;
+    rx: number; ry: number; rz: number;
+    sx: number; sy: number; sz: number;
+  } | null>(null);
+
+  const curGeometry = geom?.geometry ?? null;
+  const curUuid = curGeometry?.uuid ?? '';
+  const px = transform.position.x;
+  const py = transform.position.y;
+  const pz = transform.position.z;
+  const rx = transform.rotation.x;
+  const ry = transform.rotation.y;
+  const rz = transform.rotation.z;
+  const sx = transform.scale.x;
+  const sy = transform.scale.y;
+  const sz = transform.scale.z;
+
+  useEffect(() => {
+    const next = { geometry: curGeometry, uuid: curUuid, px, py, pz, rx, ry, rz, sx, sy, sz };
+    const prev = prevInvalidationRef.current;
+    prevInvalidationRef.current = next;
+    if (!prev) {
+      return;
+    }
+    if (
+      prev.geometry === next.geometry &&
+      prev.uuid === next.uuid &&
+      prev.px === next.px && prev.py === next.py && prev.pz === next.pz &&
+      prev.rx === next.rx && prev.ry === next.ry && prev.rz === next.rz &&
+      prev.sx === next.sx && prev.sy === next.sy && prev.sz === next.sz
+    ) {
+      return;
+    }
+    clearScanData();
+  }, [curGeometry, curUuid, px, py, pz, rx, ry, rz, sx, sy, sz, clearScanData]);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
   }, []);
 
   return {

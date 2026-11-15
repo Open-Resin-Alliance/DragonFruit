@@ -173,6 +173,8 @@ export interface UseIslandsInput {
   supportTips: THREE.Vector3[];
   /** Build-plate plane Z (world mm). */
   plateZ?: number;
+  /** Unique scene model id so duplicated models with matching sourcePath do not share cache entries. */
+  modelId?: string | null;
   /** File path of the loaded model. */
   sourcePath?: string | null;
   /** True when the print gets a raft under it. The stability report then
@@ -185,6 +187,39 @@ export interface UseIslandsInput {
 }
 
 export type UseIslandsReturn = ReturnType<typeof useIslands>;
+
+type CachedScan = {
+  voxel: DetectedIsland[];
+  minima: DetectedIsland[];
+  overhang: DetectedIsland[];
+  toppleCoverage: boolean;
+  dragTotalMm3: number;
+};
+
+type CombinedNativeScanResult = {
+  voxelIslands: Array<{
+    id: string;
+    contact: { x: number; y: number; z: number };
+    baseZ: number;
+    areaMm2?: number;
+    layerSpan: [number, number];
+    contactVoxels?: number[];
+  }>;
+  minimaIslands: Array<{
+    position: { x: number; y: number; z: number };
+    vertexIndex?: number;
+    seedTriangleId?: number;
+  }>;
+  overhangIslands: OverhangRegion[];
+  stability?: PoseStabilityWire | null;
+};
+
+function hasTauriRuntime(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ != null
+  );
+}
 
 /**
  * Times a derived computation and reports the slow ones to the app log.
@@ -210,7 +245,7 @@ const SLOW_STEP_MS = 150;
 async function reportSlowStep(label: string, elapsedMs: number): Promise<void> {
   const message = `[Islands] step=${label} ms=${Math.round(elapsedMs)}`;
   console.log(message);
-  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+  if (!hasTauriRuntime()) return;
   try {
     const { info } = await import('@tauri-apps/plugin-log');
     await info(message);
@@ -219,7 +254,7 @@ async function reportSlowStep(label: string, elapsedMs: number): Promise<void> {
   }
 }
 
-export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, sourcePath, activeTab, hasRaft = false }: UseIslandsInput) {
+export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, modelId, sourcePath, activeTab, hasRaft = false }: UseIslandsInput) {
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number; phase?: string; phaseNumber?: number; phaseCount?: number } | null>(null);
   const [voxelIslands, setVoxelIslands] = useState<DetectedIsland[]>([]);
@@ -326,6 +361,15 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       try {
         soup.computeBoundingBox();
         const positions = (soup.getAttribute('position').array as Float32Array).slice();
+        if (matrix.determinant() < 0) {
+          for (let i = 0; i + 8 < positions.length; i += 9) {
+            for (let k = 0; k < 3; k++) {
+              const tmp = positions[i + 3 + k];
+              positions[i + 3 + k] = positions[i + 6 + k];
+              positions[i + 6 + k] = tmp;
+            }
+          }
+        }
         const bbox = soup.boundingBox!.clone();
         return { positions, bbox };
       } finally {
@@ -346,7 +390,9 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     transform.rotation.x, transform.rotation.y, transform.rotation.z,
     transform.scale.x, transform.scale.y, transform.scale.z,
   ].map((v) => v.toFixed(3)).join(',');
-  const cacheKey = sourcePath ? `${sourcePath}|${transformKey}` : null;
+  const cacheKey = geom
+    ? `${modelId ?? sourcePath ?? ''}|${geom.geometry?.uuid ?? ''}|${transformKey}`
+    : null;
 
 
 
@@ -361,289 +407,224 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     // Clear any progress left by a previous model's scan — the modal must
     // not show the old "layer X of Y" until this scan reports its own.
     setScanProgress(null);
-    const epoch = scanEpochRef.current;
-    // Yield immediately so React can flush the "scanning" state and show
-    // the progress modal before we start expensive synchronous work.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    let usedSideload = false;
-    let mappedOverhangs: DetectedIsland[] = [];
+    const epoch = ++scanEpochRef.current;
 
-    // Overhang classification (mesh-normal) — independent of the slice path.
-    // Catches shallow slopes the growth detector can't see (rotated-cube
-    // undersides, 11°–45° surfaces). Non-fatal if the command is unavailable
-    // (plain-browser context).
-    if (sourcePath && geom) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { listen } = await import('@tauri-apps/api/event');
-
-        if (!geom.geometry.boundingBox) {
-          geom.geometry.computeBoundingBox();
-        }
-        const bb = geom.geometry.boundingBox!;
-        const center = bb.getCenter(new THREE.Vector3());
-
-        const matrix = new THREE.Matrix4().compose(
-          transform.position.clone(),
-          quaternionFromGlobalEuler(transform.rotation),
-          transform.scale.clone(),
-        );
-
-        const matrixElements = Array.from(matrix.elements);
-        const centerCoords = [center.x, center.y, center.z];
-
-        // Overhang is classified on the exact soup the overlay draws, so its
-        // triangle ids index `geom.geometry`. Staging it also keeps the mesh
-        // off the JSON path: the command reads raw f32 bytes.
-        let world: { positions: Float32Array; bbox: THREE.Box3 } | null = null;
-        try {
-          world = prepareWorldGeom();
-        } catch (err) {
-          console.warn('[Islands] world soup prep failed; overhang will use the file mesh', err);
-        }
-        if (world) {
-          const { positions } = world;
-          await invoke(
-            'stage_mesh_binary_set',
-            new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
-            { headers: { 'Content-Type': 'application/octet-stream' } },
-          );
-        }
-
-        // The combined Rust scan emits phase progress — wire it into the
-        // progress modal so the bar moves immediately (the overhang pass runs
-        // inside the same command; no TS geometry round trip up front).
-        const unlisten = await listen<{ done: number; total: number }>(
-          'island-scan-progress',
-          (e) => {
-            if (scanEpochRef.current !== epoch) return;
-            setScanProgress({ done: e.payload.done, total: e.payload.total });
-          },
-        );
-
-        if (scanEpochRef.current !== epoch) return;
-        setScanProgress({ done: 0, total: 100 });
-
-        console.log(`[Islands] Sideloading combined island scan from path: ${sourcePath}`);
-        const combined = await invoke<{
-          voxelIslands: Array<{
-            id: string;
-            contact: { x: number; y: number; z: number };
-            baseZ: number;
-            areaMm2?: number;
-            layerSpan: [number, number];
-            contactVoxels?: number[];
-          }>;
-          minimaIslands: Array<{
-            position: { x: number; y: number; z: number };
-            vertexIndex?: number;
-            seedTriangleId?: number;
-          }>;
-          overhangIslands: OverhangRegion[];
-          stability?: PoseStabilityWire | null;
-        }>(
-          'scan_islands_from_path',
-          {
-            filePath: sourcePath,
-            matrix: matrixElements,
-            center: centerCoords,
-            layerHeightMm,
-            pxMm,
-            supportBufferMm: supportBufMm,
-            connectivity,
-            k: minimaK,
-            // Overhang classification runs inside the combined command on the
-            // already-loaded mesh (the self-support angle is a user knob).
-            overhangSelfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
-              ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
-            overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
-            overhangFromStaged: world !== null,
-            hasRaft,
-          },
-        ).finally(() => unlisten());
-
-        // The model may have been deleted/replaced while the command ran —
-        // discard results that belong to a superseded scan.
-        if (scanEpochRef.current !== epoch) return;
-
-        const voxelMapped: DetectedIsland[] = combined.voxelIslands
-          .filter((v) => (v.areaMm2 ?? 0) >= minAreaMm2)
-          .map((v) => ({
-            id: v.id,
-            source: 'voxel',
-            contact: new THREE.Vector3(v.contact.x, v.contact.y, v.contact.z),
-            baseZ: v.baseZ,
-            areaMm2: v.areaMm2,
-            layerSpan: v.layerSpan,
-            contactVoxels: v.contactVoxels && v.contactVoxels.length >= 2
-              ? { xy: new Float32Array(v.contactVoxels), z: null, count: v.contactVoxels.length / 2 }
-              : undefined,
-          }));
-        setVoxelIslands(voxelMapped);
-
-        const minimaMapped: DetectedIsland[] = combined.minimaIslands.map((m, i) => ({
-          id: `m${i}`,
-          source: 'minima',
-          contact: new THREE.Vector3(m.position.x, m.position.y, m.position.z),
-          baseZ: m.position.z,
-          vertexIndex: m.vertexIndex,
-          seedTriangleId: m.seedTriangleId,
+    const commitCombinedResult = (combined: CombinedNativeScanResult) => {
+      const voxelMapped: DetectedIsland[] = combined.voxelIslands
+        .filter((v) => (v.areaMm2 ?? 0) >= minAreaMm2)
+        .map((v) => ({
+          id: v.id,
+          source: 'voxel',
+          contact: new THREE.Vector3(v.contact.x, v.contact.y, v.contact.z),
+          baseZ: v.baseZ,
+          areaMm2: v.areaMm2,
+          layerSpan: v.layerSpan,
+          contactVoxels: v.contactVoxels && v.contactVoxels.length >= 2
+            ? { xy: new Float32Array(v.contactVoxels), z: null, count: v.contactVoxels.length / 2 }
+            : undefined,
         }));
-        setMinimaIslands(minimaMapped);
+      const minimaMapped: DetectedIsland[] = combined.minimaIslands.map((m, i) => ({
+        id: `m${i}`,
+        source: 'minima',
+        contact: new THREE.Vector3(m.position.x, m.position.y, m.position.z),
+        baseZ: m.position.z,
+        vertexIndex: m.vertexIndex,
+        seedTriangleId: m.seedTriangleId,
+      }));
+      const overhangMapped = (combined.overhangIslands ?? []).map(overhangRegionToIsland);
+      const topple = scanNeedsCoverage(combined.stability);
+      const drag = combined.stability?.dragMomentMm3 ?? 0;
 
-        // The command classified overhang on the staged soup, so the ids
-        // index exactly what the overlay draws; the stability report came
-        // back with the same pass. Nothing else to re-run here.
-        setToppleCoverage(scanNeedsCoverage(combined.stability));
-        setDragTotalMm3(combined.stability?.dragMomentMm3 ?? 0);
-        mappedOverhangs = (combined.overhangIslands ?? []).map(overhangRegionToIsland);
-        setOverhangIslands(mappedOverhangs);
+      setVoxelIslands(voxelMapped);
+      setMinimaIslands(minimaMapped);
+      setToppleCoverage(topple);
+      setDragTotalMm3(drag);
+      setOverhangIslands(overhangMapped);
 
-        // Cache the scan results for this model + transform
-        if (cacheKey) {
-          scanCacheRef.current.set(cacheKey, { voxel: voxelMapped, minima: minimaMapped, overhang: mappedOverhangs });
-        }
-
-        usedSideload = true;
-      } catch (err) {
-        console.warn('[Islands] Sideloaded Rust scan failed, falling back to client-side...', err);
+      if (cacheKey) {
+        scanCacheRef.current.set(cacheKey, {
+          voxel: voxelMapped,
+          minima: minimaMapped,
+          overhang: overhangMapped,
+          toppleCoverage: topple,
+          dragTotalMm3: drag,
+        });
       }
-    }
+    };
 
-    if (!usedSideload) {
-      // Mesh prep can throw on a stale/disposed geometry (model deleted or
-      // replaced mid-scan). It sits outside the scan's try/finally, so an
-      // uncaught throw would strand `scanning` true and freeze the
-      // auto-support busy chain. Guard it and cancel cleanly.
+    try {
+      // Yield immediately so React can flush the "scanning" state and show
+      // the progress modal before we start expensive synchronous work.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (scanEpochRef.current !== epoch) return;
+
       let world: { positions: Float32Array; bbox: THREE.Box3 } | null = null;
       try {
         world = prepareWorldGeom();
       } catch (err) {
-        console.warn('[Islands] mesh prep failed; cancelling scan', err);
-      }
-      if (!world) {
-        setScanning(false);
-        return;
+        console.warn('[Islands] mesh prep failed', err);
       }
 
-      // A pathless model (VOXL) has no file for the combined path, but the
-      // staged soup is exactly what that command needs. Run the whole native
-      // scan here first: voxel islands, minima and overhang in one pass, with
-      // no JSON geometry and no second mesh weld.
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { listen } = await import('@tauri-apps/api/event');
-        const unlisten = await listen<{ done: number; total: number }>(
-          'island-scan-progress',
-          (e) => {
+      const isTauri = hasTauriRuntime();
+      let usedNative = false;
+      let mappedOverhangs: DetectedIsland[] = [];
+      const overhangSelfSupportAngleDeg = getSettings().autoSupport?.overhangSelfSupportAngleDeg
+        ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG;
+
+      // Primary Native Path: stage in-memory world soup and run scan_islands_staged
+      // regardless of whether sourcePath is set (never re-parse unbaked disk meshes).
+      if (isTauri && world !== null) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const { listen } = await import('@tauri-apps/api/event');
+          const unlisten = await listen<{ done: number; total: number }>(
+            'island-scan-progress',
+            (e) => {
+              if (scanEpochRef.current !== epoch) return;
+              setScanProgress({ done: e.payload.done, total: e.payload.total });
+            },
+          );
+          try {
             if (scanEpochRef.current !== epoch) return;
-            setScanProgress({ done: e.payload.done, total: e.payload.total });
-          },
-        );
-        const { positions } = world;
-        await invoke(
-          'stage_mesh_binary_set',
-          new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
-          { headers: { 'Content-Type': 'application/octet-stream' } },
-        );
-        const combined = await invoke<{
-          voxelIslands: Array<{
-            id: string;
-            contact: { x: number; y: number; z: number };
-            baseZ: number;
-            areaMm2?: number;
-            layerSpan: [number, number];
-            contactVoxels?: number[];
-          }>;
-          minimaIslands: Array<{
-            position: { x: number; y: number; z: number };
-            vertexIndex?: number;
-            seedTriangleId?: number;
-          }>;
-          overhangIslands: OverhangRegion[];
-          stability?: PoseStabilityWire | null;
-        }>('scan_islands_staged', {
-          layerHeightMm,
-          pxMm,
-          supportBufferMm: supportBufMm,
-          connectivity,
-          k: minimaK,
-          overhangSelfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
-            ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
-          overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
-          hasRaft,
-        }).finally(() => unlisten());
-        if (scanEpochRef.current !== epoch) return;
+            setScanProgress({ done: 0, total: 100 });
 
-        const voxelMapped: DetectedIsland[] = combined.voxelIslands
-          .filter((v) => (v.areaMm2 ?? 0) >= minAreaMm2)
-          .map((v) => ({
-            id: v.id,
-            source: 'voxel',
-            contact: new THREE.Vector3(v.contact.x, v.contact.y, v.contact.z),
-            baseZ: v.baseZ,
-            areaMm2: v.areaMm2,
-            layerSpan: v.layerSpan,
-            contactVoxels: v.contactVoxels && v.contactVoxels.length >= 2
-              ? { xy: new Float32Array(v.contactVoxels), z: null, count: v.contactVoxels.length / 2 }
-              : undefined,
-          }));
-        const minimaMapped: DetectedIsland[] = combined.minimaIslands.map((m, i) => ({
-          id: `m${i}`,
-          source: 'minima',
-          contact: new THREE.Vector3(m.position.x, m.position.y, m.position.z),
-          baseZ: m.position.z,
-          vertexIndex: m.vertexIndex,
-          seedTriangleId: m.seedTriangleId,
-        }));
-        const overhangs = (combined.overhangIslands ?? []).map(overhangRegionToIsland);
-        setVoxelIslands(voxelMapped);
-        setMinimaIslands(minimaMapped);
-        setToppleCoverage(scanNeedsCoverage(combined.stability));
-        setDragTotalMm3(combined.stability?.dragMomentMm3 ?? 0);
-        setOverhangIslands(overhangs);
-        if (cacheKey) {
-          scanCacheRef.current.set(cacheKey, { voxel: voxelMapped, minima: minimaMapped, overhang: overhangs });
+            const { positions } = world;
+            await invoke(
+              'stage_mesh_binary_set',
+              new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
+              { headers: { 'Content-Type': 'application/octet-stream' } },
+            );
+            if (scanEpochRef.current !== epoch) return;
+
+            const combined = await invoke<CombinedNativeScanResult>('scan_islands_staged', {
+              layerHeightMm,
+              pxMm,
+              supportBufferMm: supportBufMm,
+              connectivity,
+              k: minimaK,
+              overhangSelfSupportAngleDeg,
+              overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
+              hasRaft,
+            });
+            if (scanEpochRef.current !== epoch) return;
+
+            commitCombinedResult(combined);
+            usedNative = true;
+          } finally {
+            await unlisten();
+          }
+        } catch (err) {
+          console.warn('[Islands] staged native scan failed; checking fallback', err);
         }
-        setScanning(false);
-        return;
-      } catch (err) {
-        console.warn('[Islands] staged native scan failed; using client-side detectors', err);
       }
 
-      // Last resort: the client-side detectors. Overhang still goes through
-      // the binary staged command below; only voxel/minima are JS here.
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { positions } = world;
-        await invoke(
-          'stage_mesh_binary_set',
-          new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
-          { headers: { 'Content-Type': 'application/octet-stream' } },
-        );
-        const scan = await invoke<OverhangScan>('scan_overhangs_staged', {
-          selfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
-            ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
-          pxMm: OVERHANG_FOOTPRINT_PX_MM,
-          label: sourcePath ?? null,
-          hasRaft,
-        });
+      // Sideload Fallback Path: ONLY if world soup prep returned null while sourcePath exists
+      if (!usedNative && isTauri && world === null && sourcePath && geom) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const { listen } = await import('@tauri-apps/api/event');
+
+          if (!geom.geometry.boundingBox) {
+            geom.geometry.computeBoundingBox();
+          }
+          const bb = geom.geometry.boundingBox!;
+          const center = bb.getCenter(new THREE.Vector3());
+
+          const matrix = new THREE.Matrix4().compose(
+            transform.position.clone(),
+            quaternionFromGlobalEuler(transform.rotation),
+            transform.scale.clone(),
+          );
+
+          const matrixElements = Array.from(matrix.elements);
+          const centerCoords = [center.x, center.y, center.z];
+
+          const unlisten = await listen<{ done: number; total: number }>(
+            'island-scan-progress',
+            (e) => {
+              if (scanEpochRef.current !== epoch) return;
+              setScanProgress({ done: e.payload.done, total: e.payload.total });
+            },
+          );
+          try {
+            if (scanEpochRef.current !== epoch) return;
+            setScanProgress({ done: 0, total: 100 });
+
+            console.log(`[Islands] Sideloading combined island scan from path: ${sourcePath}`);
+            const combined = await invoke<CombinedNativeScanResult>(
+              'scan_islands_from_path',
+              {
+                filePath: sourcePath,
+                matrix: matrixElements,
+                center: centerCoords,
+                layerHeightMm,
+                pxMm,
+                supportBufferMm: supportBufMm,
+                connectivity,
+                k: minimaK,
+                overhangSelfSupportAngleDeg,
+                overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
+                overhangFromStaged: false,
+                hasRaft,
+              },
+            );
+            if (scanEpochRef.current !== epoch) return;
+
+            commitCombinedResult(combined);
+            usedNative = true;
+          } finally {
+            await unlisten();
+          }
+        } catch (err) {
+          console.warn('[Islands] Sideloaded Rust scan failed', err);
+        }
+      }
+
+      // Client Fallback Path
+      if (!usedNative && world !== null) {
+        let topple = true;
+        let drag = 0;
+
+        if (isTauri) {
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const { positions } = world;
+            await invoke(
+              'stage_mesh_binary_set',
+              new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
+              { headers: { 'Content-Type': 'application/octet-stream' } },
+            );
+            const scan = await invoke<OverhangScan>('scan_overhangs_staged', {
+              selfSupportAngleDeg: overhangSelfSupportAngleDeg,
+              pxMm: OVERHANG_FOOTPRINT_PX_MM,
+              label: sourcePath ?? null,
+              hasRaft,
+            });
+            if (scanEpochRef.current !== epoch) return;
+            topple = scanNeedsCoverage(scan.stability);
+            drag = scan.stability?.dragMomentMm3 ?? 0;
+            mappedOverhangs = scan.regions.map(overhangRegionToIsland);
+            setToppleCoverage(topple);
+            setDragTotalMm3(drag);
+            setOverhangIslands(mappedOverhangs);
+          } catch (err) {
+            console.warn('[Islands] overhang scan failed (non-fatal)', err);
+            setToppleCoverage(true);
+            setDragTotalMm3(0);
+            setOverhangIslands([]);
+          }
+        } else {
+          setToppleCoverage(true);
+          setDragTotalMm3(0);
+          setOverhangIslands([]);
+        }
+
         if (scanEpochRef.current !== epoch) return;
-        setToppleCoverage(scanNeedsCoverage(scan.stability));
-        setDragTotalMm3(scan.stability?.dragMomentMm3 ?? 0);
-        mappedOverhangs = scan.regions.map(overhangRegionToIsland);
-        setOverhangIslands(mappedOverhangs);
-      } catch (err) {
-        console.warn('[Islands] overhang scan failed (non-fatal)', err);
-        setOverhangIslands([]);
-      }
+        setScanProgress({
+          done: 0,
+          total: Math.max(1, Math.ceil((world.bbox.max.z - world.bbox.min.z) / layerHeightMm)),
+        });
 
-      if (scanEpochRef.current !== epoch) return;
-      setScanProgress({
-        done: 0,
-        total: Math.max(1, Math.ceil((world.bbox.max.z - world.bbox.min.z) / layerHeightMm)),
-      });
-      try {
         const params: VoxelDetectParams = {
           pxMm,
           supportBufferMm: supportBufMm,
@@ -662,27 +643,31 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         if (scanEpochRef.current !== epoch) return;
         setVoxelIslands(voxel);
 
+        let minima: DetectedIsland[] = [];
         try {
-          const minima = await scanMeshMinima(world.positions, minimaK);
-          setMinimaIslands(minima);
-          // Cache the scan results for this model + transform
-          if (cacheKey) {
-            scanCacheRef.current.set(cacheKey, { voxel, minima, overhang: mappedOverhangs });
-          }
+          minima = await scanMeshMinima(world.positions, minimaK);
         } catch (err) {
           console.error('[Islands] mesh-minima scan failed', err);
-          setMinimaIslands([]);
-          if (cacheKey) {
-            scanCacheRef.current.set(cacheKey, { voxel, minima: [], overhang: mappedOverhangs });
-          }
+          minima = [];
         }
-      } finally {
+        if (scanEpochRef.current !== epoch) return;
+        setMinimaIslands(minima);
+        if (cacheKey) {
+          scanCacheRef.current.set(cacheKey, {
+            voxel,
+            minima,
+            overhang: mappedOverhangs,
+            toppleCoverage: topple,
+            dragTotalMm3: drag,
+          });
+        }
+      }
+    } finally {
+      if (scanEpochRef.current === epoch) {
         setScanning(false);
       }
-    } else {
-      setScanning(false);
     }
-  }, [geom, transform, sourcePath, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK, hasRaft]);
+  }, [geom, transform, modelId, sourcePath, cacheKey, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK, hasRaft]);
 
   // Pass 1: Proposed consolidation & classification
   const proposedConsolidated = useMemo(() => timed('proposedConsolidated', () => {
@@ -1019,60 +1004,54 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     setVoxelIslands([]);
     setMinimaIslands([]);
     setOverhangIslands([]);
+    setToppleCoverage(true);
+    setDragTotalMm3(0);
     setSelectedMarkerId(null);
   }, []);
 
-  // Per-model scan cache: (sourcePath + transform signature) → { voxel, minima, overhang }.
-  const scanCacheRef = useRef<Map<string, { voxel: DetectedIsland[]; minima: DetectedIsland[]; overhang: DetectedIsland[] }>>(new Map());
-  const prevSourcePathRef = useRef<string | null | undefined>(undefined);
-  // Bumped on every geom/transform change; an in-flight scan captures the
-  // epoch and discards its results if the model changed while it ran — a
-  // superseded scan must not commit the old model's islands.
+  // Per-model scan cache: (modelId/sourcePath + geometry uuid + transform signature) → CachedScan.
+  const scanCacheRef = useRef<Map<string, CachedScan>>(new Map());
+  const prevCacheKeyRef = useRef<string | null | undefined>(undefined);
+  // Bumped on every cacheKey change; an in-flight scan captures the
+  // epoch and discards its results if the model or transform changed while it ran.
   const scanEpochRef = useRef(0);
 
-  // On sourcePath change: restore from cache instead of clearing
+  // Unified restore/invalidate effect keyed on cacheKey (modelId + geometry.uuid + transform).
   useEffect(() => {
-    const prev = prevSourcePathRef.current;
-    prevSourcePathRef.current = sourcePath;
-    if (!sourcePath || prev === sourcePath) return;
-
-    const cached = cacheKey ? scanCacheRef.current.get(cacheKey) : undefined;
-    if (cached) {
-      setVoxelIslands(cached.voxel);
-      setMinimaIslands(cached.minima);
-      setOverhangIslands(cached.overhang ?? []);
-      setSelectedMarkerId(null);
+    const prev = prevCacheKeyRef.current;
+    if (prev === undefined) {
+      prevCacheKeyRef.current = cacheKey;
+      const cached = cacheKey ? scanCacheRef.current.get(cacheKey) : undefined;
+      if (cached) {
+        setVoxelIslands(cached.voxel);
+        setMinimaIslands(cached.minima);
+        setOverhangIslands(cached.overhang);
+        setToppleCoverage(cached.toppleCoverage);
+        setDragTotalMm3(cached.dragTotalMm3);
+        setSelectedMarkerId(null);
+      }
       return;
     }
 
-    // No cache entry — clear for new model
-    clear();
-  }, [sourcePath, cacheKey, clear]);
+    if (prev !== cacheKey) {
+      prevCacheKeyRef.current = cacheKey;
+      scanEpochRef.current += 1;
+      setScanning(false);
+      setScanProgress(null);
 
-  // On transform/geom change: always clear (scan is invalidated) and release
-  // the scanning flag — an in-flight scan belongs to the old model. If the
-  // old scan's async work throws on the stale geometry, its own cleanup never
-  // runs, and a stuck `scanning` freezes the auto-support busy chain (the
-  // deferred effect waits forever, `autoSupportDrivingScan` stays set, and
-  // the Generating/scanning modals stop appearing for the new model).
-  useEffect(() => {
-    scanEpochRef.current += 1;
-    clear();
-    setScanning(false);
-    setScanProgress(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    geom,
-    transform.position.x,
-    transform.position.y,
-    transform.position.z,
-    transform.rotation.x,
-    transform.rotation.y,
-    transform.rotation.z,
-    transform.scale.x,
-    transform.scale.y,
-    transform.scale.z,
-  ]);
+      const cached = cacheKey ? scanCacheRef.current.get(cacheKey) : undefined;
+      if (cached) {
+        setVoxelIslands(cached.voxel);
+        setMinimaIslands(cached.minima);
+        setOverhangIslands(cached.overhang);
+        setToppleCoverage(cached.toppleCoverage);
+        setDragTotalMm3(cached.dragTotalMm3);
+        setSelectedMarkerId(null);
+      } else {
+        clear();
+      }
+    }
+  }, [cacheKey, clear]);
 
   const selectNext = useCallback(() => {
     if (orderedIslands.length === 0) return;

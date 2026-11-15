@@ -69,18 +69,26 @@ function orchestratorPhaseNumber(phase: string): number {
 const YIELD_INTERVAL_LAYERS = 64;
 
 
+function createAbortError(message = 'Scan aborted'): Error {
+  const err = new Error(message);
+  err.name = 'AbortError';
+  return err;
+}
+
 export async function runIslandScan(
   geom: { geometry: THREE.BufferGeometry; bbox: THREE.Box3 },
   layerHeightMm: number,
   params: ScanParams,
   onProgress?: ScanProgressCallback,
+  signal?: AbortSignal,
 ): Promise<ScanResults> {
   return runScanInternal(
     geom,
     layerHeightMm,
     params,
     () => new Worker(new URL('@/volumeAnalysis/IslandScan/islandScan.worker.ts', import.meta.url), { type: 'module' }),
-    onProgress
+    onProgress,
+    signal,
   );
 }
 
@@ -89,13 +97,15 @@ export async function runScanlineScan(
   layerHeightMm: number,
   params: ScanParams,
   onProgress?: ScanProgressCallback,
+  signal?: AbortSignal,
 ): Promise<ScanResults> {
   return runScanInternal(
     geom,
     layerHeightMm,
     params,
     () => new Worker(new URL('@/volumeAnalysis/IslandScan/scanlineScan.worker.ts', import.meta.url), { type: 'module' }),
-    onProgress
+    onProgress,
+    signal,
   );
 }
 
@@ -105,7 +115,13 @@ async function runScanInternal(
   params: ScanParams,
   createWorker: () => Worker,
   onProgress?: ScanProgressCallback,
+  signal?: AbortSignal,
 ): Promise<ScanResults> {
+  const throwIfAborted = () => {
+    if (signal?.aborted) throw createAbortError();
+  };
+  throwIfAborted();
+
   const bb = geom.bbox;
   const minX = bb.min.x, maxX = bb.max.x;
   const minMaskY = -bb.max.y; // mask Y corresponds to -Y (horizontal plane is XY)
@@ -131,52 +147,161 @@ async function runScanInternal(
   const workerResults: Array<WorkerResult> = new Array(numLayers);
 
   const concurrency = Math.min(Math.max(2, (typeof navigator !== 'undefined' ? (navigator as any).hardwareConcurrency || 4 : 4)), numLayers || 1);
-  const workers: Worker[] = Array.from({ length: concurrency }, () => createWorker());
-
-  // Initialize workers with geometry
-  const positions = geom.geometry.getAttribute('position').array as Float32Array;
-  workers.forEach(w => w.postMessage({ type: 'init', positions }));
-
-  let nextIndex = 0;
-  let done = 0;
+  let workers: Worker[] = [];
+  const terminateWorkers = () => {
+    for (const w of workers) {
+      w.terminate();
+    }
+  };
 
   const reportProgress = createProgressThrottle();
-  console.time('Total Scan');
-  console.time('Slicing & Worker Dispatch');
 
-  await Promise.all(workers.map((w) => new Promise<void>((resolve) => {
-    const zOffset = geom.bbox.min.z;
-    const runNext = async () => {
-      if (nextIndex >= numLayers) { resolve(); return; }
-      const idx = nextIndex++;
+  try {
+    throwIfAborted();
+    workers = Array.from({ length: concurrency }, () => createWorker());
 
-      const zTopGeom = zOffset + (idx + 1) * layerHeightMm + 1e-6;
+    // Initialize workers with geometry
+    const positions = geom.geometry.getAttribute('position').array as Float32Array;
+    workers.forEach(w => w.postMessage({ type: 'init', positions }));
 
-      const onMessage = (e: MessageEvent) => {
-        const msg = e.data as any;
-        if (msg?.type !== 'done') return;
-        w.removeEventListener('message', onMessage);
+    let nextIndex = 0;
+    let done = 0;
 
-        // Store RLE masks directly
-        const { islandMaskRle, solidMaskRle, islandCount, islandLabelsRle, components, territoryLabelsRle } = msg.result;
+    console.time('Total Scan');
+    console.time('Slicing & Worker Dispatch');
 
-        workerResults[idx] = { islandMaskRle, solidMaskRle, islandCount, islandLabelsRle, components, territoryLabelsRle };
-        done++;
-        reportProgress(() => onProgress?.(done, numLayers, 'Slicing', orchestratorPhaseNumber('Slicing'), SCAN_PHASES.length));
-        runNext();
+    await new Promise<void>((resolveAll, rejectAll) => {
+      let settled = false;
+      const workerCleanups: Array<() => void> = [];
+      const cleanupAllWorkers = () => {
+        for (const cleanup of workerCleanups) {
+          cleanup();
+        }
       };
-      w.addEventListener('message', onMessage);
-      w.postMessage({
-        type: 'layer',
-        z: zTopGeom,
-        layerHeightMm,
-        gridRef,
-        opts: { px_mm: params.px_mm, support_buffer_mm: params.support_buffer_mm, connectivity: params.connectivity ?? 4 }
+      const cleanupAbort = () => {
+        if (signal) signal.removeEventListener('abort', onAbort);
+      };
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        cleanupAbort();
+        cleanupAllWorkers();
+        terminateWorkers();
+        rejectAll(createAbortError());
+      };
+      if (signal) {
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      Promise.all(workers.map((w) => new Promise<void>((resolve, reject) => {
+        const zOffset = geom.bbox.min.z;
+        let activeOnMessage: ((e: MessageEvent) => void) | null = null;
+        let workerSettled = false;
+
+        const cleanupWorkerListeners = () => {
+          if (activeOnMessage) {
+            w.removeEventListener('message', activeOnMessage);
+            activeOnMessage = null;
+          }
+          w.removeEventListener('error', onError);
+          w.removeEventListener('messageerror', onMessageError);
+        };
+        workerCleanups.push(cleanupWorkerListeners);
+
+        const finishWorker = () => {
+          if (workerSettled) return;
+          workerSettled = true;
+          cleanupWorkerListeners();
+          resolve();
+        };
+
+        const failWorker = (err: Error) => {
+          if (workerSettled) return;
+          workerSettled = true;
+          cleanupWorkerListeners();
+          terminateWorkers();
+          reject(err);
+        };
+
+        const onError = (event: ErrorEvent) => {
+          const detail = typeof event?.message === 'string' && event.message.length > 0
+            ? `: ${event.message}`
+            : '';
+          failWorker(new Error(`Island scan worker error${detail}`));
+        };
+
+        const onMessageError = () => {
+          failWorker(new Error('Island scan worker messageerror: failed to deserialize message'));
+        };
+
+        w.addEventListener('error', onError);
+        w.addEventListener('messageerror', onMessageError);
+
+        const runNext = () => {
+          if (workerSettled || settled || signal?.aborted) { finishWorker(); return; }
+          if (nextIndex >= numLayers) { finishWorker(); return; }
+          const idx = nextIndex++;
+
+          const zTopGeom = zOffset + (idx + 1) * layerHeightMm + 1e-6;
+
+          const onMessage = (e: MessageEvent) => {
+            const msg = e.data as any;
+            if (msg?.type !== 'done') return;
+            w.removeEventListener('message', onMessage);
+            if (activeOnMessage === onMessage) {
+              activeOnMessage = null;
+            }
+            if (workerSettled || settled || signal?.aborted) { finishWorker(); return; }
+
+            // Store RLE masks directly
+            const { islandMaskRle, solidMaskRle, islandCount, islandLabelsRle, components, territoryLabelsRle } = msg.result;
+
+            workerResults[idx] = { islandMaskRle, solidMaskRle, islandCount, islandLabelsRle, components, territoryLabelsRle };
+            done++;
+            reportProgress(() => onProgress?.(done, numLayers, 'Slicing', orchestratorPhaseNumber('Slicing'), SCAN_PHASES.length));
+            runNext();
+          };
+          activeOnMessage = onMessage;
+          w.addEventListener('message', onMessage);
+          try {
+            w.postMessage({
+              type: 'layer',
+              z: zTopGeom,
+              layerHeightMm,
+              gridRef,
+              opts: { px_mm: params.px_mm, support_buffer_mm: params.support_buffer_mm, connectivity: params.connectivity ?? 4 }
+            });
+          } catch (err) {
+            failWorker(err instanceof Error ? err : new Error(String(err)));
+          }
+        };
+        runNext();
+      }))).then(() => {
+        cleanupAllWorkers();
+        if (!settled) {
+          settled = true;
+          cleanupAbort();
+          resolveAll();
+        }
+      }, (err) => {
+        cleanupAllWorkers();
+        if (!settled) {
+          settled = true;
+          cleanupAbort();
+          rejectAll(err);
+        }
       });
-    };
-    runNext();
-  })));
-  workers.forEach(w => w.terminate());
+    });
+
+    terminateWorkers();
+    throwIfAborted();
+  } finally {
+    terminateWorkers();
+  }
 
   console.timeEnd('Slicing & Worker Dispatch');
 
@@ -191,8 +316,10 @@ async function runScanInternal(
   // Process layers sequentially to propagate island IDs
   for (let L = 0; L < numLayers; L++) {
     if (L % YIELD_INTERVAL_LAYERS === 0) {
+      throwIfAborted();
       reportProgress(() => onProgress?.(L, numLayers, 'Tracking islands', orchestratorPhaseNumber('Tracking islands'), SCAN_PHASES.length));
       await yieldToEventLoop();
+      throwIfAborted();
     }
     const workerResult = workerResults[L];
 
@@ -222,8 +349,10 @@ async function runScanInternal(
 
   for (let L = 0; L < numLayers; L++) {
     if (L % YIELD_INTERVAL_LAYERS === 0) {
+      throwIfAborted();
       reportProgress(() => onProgress?.(L, numLayers, 'Tracking territories', orchestratorPhaseNumber('Tracking territories'), SCAN_PHASES.length));
       await yieldToEventLoop();
+      throwIfAborted();
     }
     const workerResult = workerResults[L];
 
@@ -279,8 +408,10 @@ async function runScanInternal(
   // Optimized RLE iteration for firstHit/lastHit and baseLabels
   for (let L = 0; L < results.length; L++) {
     if (L % YIELD_INTERVAL_LAYERS === 0) {
+      throwIfAborted();
       reportProgress(() => onProgress?.(L, results.length, 'Compiling results', orchestratorPhaseNumber('Compiling results'), SCAN_PHASES.length));
       await yieldToEventLoop();
+      throwIfAborted();
     }
     const rleLabels = results[L].islandLabels;
     // Iterate RLE rows

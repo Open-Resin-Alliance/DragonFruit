@@ -355,6 +355,14 @@ fn load_and_transform_mesh(
             pos.z = z;
         }
     }
+    let det3 = matrix[0] * (matrix[5] * matrix[10] - matrix[6] * matrix[9])
+        - matrix[4] * (matrix[1] * matrix[10] - matrix[2] * matrix[9])
+        + matrix[8] * (matrix[1] * matrix[6] - matrix[2] * matrix[5]);
+    if det3 < 0.0 {
+        for tri in &mut mesh.triangles {
+            tri.swap(1, 2);
+        }
+    }
     let _ = center;
     Ok(mesh)
 }
@@ -1407,5 +1415,89 @@ mod tests {
         // Only the bottom outer tip is kept; the inner concavity tip is filtered.
         assert!(kept_minima.contains(&index_v4));
         assert!(!kept_minima.contains(&index_v17));
+    }
+
+    #[test]
+    fn test_load_and_transform_mesh_negative_det_flips_winding() {
+        let stl = "\
+solid tet
+  facet normal 0 0 -1
+    outer loop
+      vertex 0 0 0
+      vertex 0 2 0
+      vertex 2 0 0
+    endloop
+  endfacet
+  facet normal -1 0 0
+    outer loop
+      vertex 0 0 0
+      vertex 0 0 2
+      vertex 0 2 0
+    endloop
+  endfacet
+  facet normal 0 -1 0
+    outer loop
+      vertex 0 0 0
+      vertex 2 0 0
+      vertex 0 0 2
+    endloop
+  endfacet
+  facet normal 1 1 1
+    outer loop
+      vertex 2 0 0
+      vertex 0 2 0
+      vertex 0 0 2
+    endloop
+  endfacet
+endsolid tet
+";
+        let path = std::env::temp_dir().join(format!(
+            "df_mesh_minima_mirror_winding_{}.stl",
+            std::process::id()
+        ));
+        std::fs::write(&path, stl).expect("write temp STL");
+        let path_str = path.to_string_lossy().to_string();
+
+        // Column-major matrix with negative X scale (det3 = -1.0)
+        let matrix = [
+            -1.0, 0.0, 0.0, 0.0,
+             0.0, 1.0, 0.0, 0.0,
+             0.0, 0.0, 1.0, 0.0,
+             0.0, 0.0, 0.0, 1.0,
+        ];
+
+        let mesh = load_and_transform_mesh(&path_str, matrix, [0.0, 0.0, 0.0]);
+        let _ = std::fs::remove_file(&path);
+        let mesh = mesh.expect("load_and_transform_mesh should succeed");
+
+        let mut centroid = Vec3::ZERO;
+        for p in &mesh.positions {
+            centroid = centroid.add(*p);
+        }
+        let inv_n = 1.0 / (mesh.positions.len() as f32);
+        centroid = Vec3::new(centroid.x * inv_n, centroid.y * inv_n, centroid.z * inv_n);
+
+        for fi in 0..mesh.triangle_count() {
+            let tri = mesh.triangles[fi];
+            let a = mesh.positions[tri[0] as usize];
+            let b = mesh.positions[tri[1] as usize];
+            let c = mesh.positions[tri[2] as usize];
+            let face_center = Vec3::new(
+                (a.x + b.x + c.x) / 3.0,
+                (a.y + b.y + c.y) / 3.0,
+                (a.z + b.z + c.z) / 3.0,
+            );
+            let outward = Vec3::new(
+                face_center.x - centroid.x,
+                face_center.y - centroid.y,
+                face_center.z - centroid.z,
+            );
+            let normal = mesh.tri_normal(fi as u32);
+            let dot = normal.x * outward.x + normal.y * outward.y + normal.z * outward.z;
+            assert!(
+                dot > 0.0,
+                "triangle {fi} normal {normal:?} should point outward (dot={dot})"
+            );
+        }
     }
 }

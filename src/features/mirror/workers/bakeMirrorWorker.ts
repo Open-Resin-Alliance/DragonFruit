@@ -58,6 +58,19 @@ self.onmessage = (e: MessageEvent<BakeRequest>) => {
           positions[baseB + c] = tmp;
         }
       }
+      if (normals) {
+        const normStride = normItemSize * 3;
+        const normTriCount = Math.floor(normals.length / normStride);
+        for (let t = 0; t < normTriCount; t++) {
+          const nBaseA = t * normStride + normItemSize;
+          const nBaseB = nBaseA + normItemSize;
+          for (let c = 0; c < normItemSize; c++) {
+            const tmp = normals[nBaseA + c];
+            normals[nBaseA + c] = normals[nBaseB + c];
+            normals[nBaseB + c] = tmp;
+          }
+        }
+      }
     }
 
     // 3. Negate normals along this axis.
