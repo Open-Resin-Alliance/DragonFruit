@@ -1073,6 +1073,7 @@ fn cmd_rle_subtract(mask_a: &PathBuf, mask_b: &PathBuf, output: &PathBuf) -> Res
 // ===========================================================================
 
 /// Whole-process CPU seconds (user+system, aggregated across all threads).
+#[cfg(unix)]
 fn cpu_total_seconds() -> f64 {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
     if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
@@ -1087,6 +1088,7 @@ fn cpu_total_seconds() -> f64 {
 /// so it captures transient peaks without a sampler thread. CPU time aggregates
 /// all rayon worker threads, so cpu_percent can exceed 100% under parallelism.
 /// `samples` is the periodic RSS/CPU time series gathered during the run.
+#[cfg(unix)]
 fn capture_resources(
     wall_s: f64,
     samples: Vec<serde_json::Value>,
@@ -1126,6 +1128,22 @@ fn capture_resources(
         "sample_count": samples.len(),
         "samples": samples,
     })
+}
+
+/// getrusage is unix-only; Windows builds report CPU time as zero.
+#[cfg(not(unix))]
+fn cpu_total_seconds() -> f64 {
+    0.0
+}
+
+/// getrusage is unix-only; Windows builds report it like the unix failure path.
+#[cfg(not(unix))]
+fn capture_resources(
+    _wall_s: f64,
+    _samples: Vec<serde_json::Value>,
+    _sample_interval_ms: u64,
+) -> serde_json::Value {
+    serde_json::json!({ "error": "getrusage unavailable on this platform" })
 }
 
 /// Current resident set size from /proc/self/status (Linux). Returns None elsewhere.
