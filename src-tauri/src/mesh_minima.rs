@@ -446,10 +446,10 @@ pub async fn scan_voxel_islands_from_path(
         let num_layers = (model_height / layer_height_mm).ceil().max(0.0) as usize;
 
         // 5. Run island scan pipeline using streaming
-        let connectivity_enum = if connectivity == 8 {
-            Connectivity::Eight
-        } else {
+        let connectivity_enum = if connectivity == 4 {
             Connectivity::Four
+        } else {
+            Connectivity::Eight
         };
 
         let job = IslandScanJob {
@@ -722,7 +722,7 @@ fn scan_islands_from_mesh(
     let model_height = bbox.max.z as f64 - bbox.min.z as f64;
     let num_layers = (model_height / layer_height_mm).ceil().max(0.0) as usize;
 
-    let connectivity_enum = if connectivity == 8 { Connectivity::Eight } else { Connectivity::Four };
+    let connectivity_enum = if connectivity == 4 { Connectivity::Four } else { Connectivity::Eight };
 
     let job = IslandScanJob {
         px_mm,

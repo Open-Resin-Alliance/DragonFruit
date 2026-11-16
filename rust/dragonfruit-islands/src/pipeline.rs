@@ -47,10 +47,11 @@ pub fn run_island_scan(
         .collect();
 
     // Phase 2: Sequential island tracking
-    let mut tracker = IslandTracker::new(
+    let mut tracker = IslandTracker::with_connectivity(
         job.px_mm,
         job.min_overlap_px,
-        job.overlap_neighborhood_px,
+        job.effective_overlap_neighborhood_px(),
+        job.connectivity,
     );
     let mut island_labels_per_layer: Vec<RleLabels> = Vec::with_capacity(num_layers);
 
@@ -279,5 +280,149 @@ mod tests {
 
         // Should have the base island from layer 0, plus overhang candidates from layer 1
         assert!(result.islands.len() >= 1);
+    }
+
+    #[test]
+    fn nbr01_candidate_moat_chains_sloped_cantilever_across_layers() {
+        // B = 0.25 / 0.05 = 5 px; stepping 6 px/layer leaves a 5-px support moat
+        // between consecutive layers' candidate strips.
+        let w = 64;
+        let h = 4;
+        let px_mm = 0.05;
+        let support_buffer_mm = 0.25;
+
+        let mut masks = Vec::new();
+        for l in 0..5i32 {
+            let mut data = vec![0u8; (w * h) as usize];
+            let x_start = l * 6;
+            let x_end = x_start + 12;
+            for y in 1..3 {
+                for x in x_start..x_end {
+                    data[(y * w + x) as usize] = 1;
+                }
+            }
+            masks.push(rle_encode(&data, w, h));
+        }
+
+        let job = IslandScanJob {
+            px_mm,
+            support_buffer_mm,
+            connectivity: Connectivity::Eight,
+            min_island_area_mm2: 0.0001,
+            layer_height_mm: 0.05,
+            grid: GridRef {
+                origin_x: 0.0,
+                origin_z: 0.0,
+                width: w,
+                height: h,
+                px_mm,
+            },
+            num_layers: 5,
+            min_overlap_px: 1,
+            overlap_neighborhood_px: 1,
+            candidate_only: true,
+        };
+
+        let result = run_island_scan(&job, &masks, None);
+        assert_eq!(job.effective_overlap_neighborhood_px(), 6);
+        assert_eq!(
+            result.islands.len(),
+            1,
+            "expected 1 chained cantilever island, got {}",
+            result.islands.len(),
+        );
+        assert_eq!(result.islands[0].first_layer, 0);
+        assert_eq!(result.islands[0].last_layer, 4);
+
+        // In solid mode (candidate_only: false), two columns separated by a 4-px
+        // gap must stay separate instead of merging via inflated B + 1 = 6 neighborhood.
+        let mut col_data = vec![0u8; (w * h) as usize];
+        for y in 1..3 {
+            for x in 2..6 {
+                col_data[(y * w + x) as usize] = 1;
+            }
+            for x in 10..14 {
+                col_data[(y * w + x) as usize] = 1;
+            }
+        }
+        let col_mask = rle_encode(&col_data, w, h);
+        let solid_masks = vec![col_mask.clone(), col_mask.clone(), col_mask];
+        let solid_job = IslandScanJob {
+            num_layers: 3,
+            candidate_only: false,
+            ..job
+        };
+        assert_eq!(solid_job.effective_overlap_neighborhood_px(), 1);
+        let solid_result = run_island_scan(&solid_job, &solid_masks, None);
+        assert_eq!(solid_result.islands.len(), 2);
+    }
+
+    #[test]
+    fn nbr03_oblique_staircase_edge_unifies_under_eight_connectivity() {
+        let w = 24;
+        let h = 4;
+        // Layer 0: [0, 10) at row 1
+        let mut d0 = vec![0u8; (w * h) as usize];
+        for x in 0..10 {
+            d0[w as usize + x] = 1;
+        }
+        // Layer 1: [0, 10) at row 1 and [10, 20) at row 2 (diagonal corner at (9,1)-(10,2))
+        let mut d1 = d0.clone();
+        for x in 10..20 {
+            d1[2 * w as usize + x] = 1;
+        }
+        let m0 = rle_encode(&d0, w, h);
+        let m1 = rle_encode(&d1, w, h);
+
+        let base_job = IslandScanJob {
+            support_buffer_mm: 0.0,
+            overlap_neighborhood_px: 0,
+            num_layers: 2,
+            ..make_job(w, h, 2)
+        };
+
+        // Single-layer staircase: 2 islands under Four, 1 island under Eight
+        let single_four = run_island_scan(
+            &IslandScanJob {
+                num_layers: 1,
+                connectivity: Connectivity::Four,
+                ..base_job.clone()
+            },
+            &[m1.clone()],
+            None,
+        );
+        assert_eq!(single_four.islands.len(), 2);
+
+        let single_eight = run_island_scan(
+            &IslandScanJob {
+                num_layers: 1,
+                connectivity: Connectivity::Eight,
+                ..base_job.clone()
+            },
+            &[m1.clone()],
+            None,
+        );
+        assert_eq!(single_eight.islands.len(), 1);
+
+        // Multi-layer solid-mode: process_subsequent_layer must also respect Eight vs Four
+        let multi_four = run_island_scan(
+            &IslandScanJob {
+                connectivity: Connectivity::Four,
+                ..base_job.clone()
+            },
+            &[m0.clone(), m1.clone()],
+            None,
+        );
+        assert_eq!(multi_four.islands.len(), 2);
+
+        let multi_eight = run_island_scan(
+            &IslandScanJob {
+                connectivity: Connectivity::Eight,
+                ..base_job
+            },
+            &[m0, m1],
+            None,
+        );
+        assert_eq!(multi_eight.islands.len(), 1);
     }
 }

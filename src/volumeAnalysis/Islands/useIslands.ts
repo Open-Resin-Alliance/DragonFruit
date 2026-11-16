@@ -16,16 +16,16 @@ import { buildIslandInstances, VOXEL_DISC_RADIUS_FACTOR, type IslandVisual } fro
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
 import { scanMeshMinima } from './meshMinima';
 import { type DetectedIsland, type TipInfo, type OverhangRegion, type OverhangScan, type PoseStabilityWire, type Vec3Loop, SUPPORTED_RADIUS_MM } from './types';
-import { classifyIntersection } from './intersection';
+import { classifyIntersection, type ClassifiedIslands, type IntersectionStats } from './intersection';
 import { getSnapshot } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
 import { cellKey } from './spatialHashGrid2D';
 import {
   type VoxelFootprint,
   VoxelFootprintBuilder,
-  concatFootprints,
   footprintX,
   footprintY,
+  footprintZ,
   isEmptyFootprint,
 } from './voxelFootprint';
 
@@ -36,6 +36,119 @@ export { scanNeedsCoverage };
 const OVERHANG_SELF_SUPPORT_ANGLE_DEG = 45;
 /** Resolution of the projected-footprint masks emitted by the classifier. */
 const OVERHANG_FOOTPRINT_PX_MM = 0.25;
+
+export interface OverhangMergeOptions {
+  voxelPxMm?: number;
+  layerHeightMm?: number;
+  overhangPxMm?: number;
+}
+
+function gridBucketKey(bx: number, by: number): number | string {
+  if (Math.abs(bx) <= 30000 && Math.abs(by) <= 30000) {
+    return cellKey(bx, by);
+  }
+  return `${bx},${by}`;
+}
+
+interface RegionCoverIndex {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+  bucketSize: number;
+  head: Map<number | string, number> | null;
+  next: Int32Array | null;
+}
+
+function createRegionCoverIndex(region: DetectedIsland, bucketSize: number): RegionCoverIndex | null {
+  const vox = region.contactVoxels;
+  if (!vox || isEmptyFootprint(vox)) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  for (let i = 0; i < vox.count; i++) {
+    const px = footprintX(vox, i);
+    const py = footprintY(vox, i);
+    const pz = footprintZ(vox, i) ?? region.baseZ;
+    if (px < minX) minX = px;
+    if (py < minY) minY = py;
+    if (pz < minZ) minZ = pz;
+    if (px > maxX) maxX = px;
+    if (py > maxY) maxY = py;
+    if (pz > maxZ) maxZ = pz;
+  }
+  return {
+    minX,
+    maxX,
+    minY,
+    maxY,
+    minZ,
+    maxZ,
+    bucketSize: bucketSize > 1e-9 ? bucketSize : 1e-9,
+    head: null,
+    next: null,
+  };
+}
+
+function ensureRegionSpatialHash(region: DetectedIsland, idx: RegionCoverIndex): void {
+  if (idx.head !== null) return;
+  const vox = region.contactVoxels!;
+  const head = new Map<number | string, number>();
+  const next = new Int32Array(vox.count);
+  next.fill(-1);
+  const bs = idx.bucketSize;
+  for (let i = 0; i < vox.count; i++) {
+    const rx = footprintX(vox, i);
+    const ry = footprintY(vox, i);
+    const key = gridBucketKey(Math.floor(rx / bs), Math.floor(ry / bs));
+    const prev = head.get(key);
+    if (prev !== undefined) next[i] = prev;
+    head.set(key, i);
+  }
+  idx.head = head;
+  idx.next = next;
+}
+
+function pointCoveredByRegion(
+  region: DetectedIsland,
+  idx: RegionCoverIndex,
+  qx: number,
+  qy: number,
+  qz: number,
+  xyMargin2: number,
+  zMargin: number,
+): boolean {
+  if (!Number.isFinite(qx) || !Number.isFinite(qy) || !Number.isFinite(qz)) return false;
+  ensureRegionSpatialHash(region, idx);
+  const vox = region.contactVoxels!;
+  const head = idx.head!;
+  const next = idx.next!;
+  const bs = idx.bucketSize;
+  const bx = Math.floor(qx / bs);
+  const by = Math.floor(qy / bs);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      let i = head.get(gridBucketKey(bx + dx, by + dy));
+      while (i !== undefined && i !== -1) {
+        const rx = footprintX(vox, i);
+        const ry = footprintY(vox, i);
+        const ddx = rx - qx;
+        const ddy = ry - qy;
+        if (ddx * ddx + ddy * ddy <= xyMargin2) {
+          const rz = footprintZ(vox, i) ?? region.baseZ;
+          if (Math.abs(qz - rz) <= zMargin) return true;
+        }
+        i = next[i];
+      }
+    }
+  }
+  return false;
+}
 
 /**
  * Merge overhang regions into the classified island set. The slice-growth
@@ -48,22 +161,98 @@ const OVERHANG_FOOTPRINT_PX_MM = 0.25;
 export function mergeOverhangRegions(
   classified: DetectedIsland[],
   overhang: DetectedIsland[],
+  opts: OverhangMergeOptions = {},
 ): DetectedIsland[] {
   if (overhang.length === 0) return classified;
+  const voxelPxMm = opts.voxelPxMm ?? 0.05;
+  const layerHeightMm = opts.layerHeightMm ?? 0.05;
+  const overhangPxMm = opts.overhangPxMm ?? OVERHANG_FOOTPRINT_PX_MM;
+  const normalizedOpts: Required<OverhangMergeOptions> = {
+    voxelPxMm,
+    layerHeightMm,
+    overhangPxMm,
+  };
+  const xyMargin = overhangPxMm + voxelPxMm;
+  const regionIndices = overhang.map((o) => createRegionCoverIndex(o, xyMargin));
+
   const covered = new Set<string>();
   for (const v of classified) {
     if (v.source !== 'voxel') continue;
-    for (const o of overhang) {
-      if (overhangCoversVoxel(o, v)) {
+    for (let oi = 0; oi < overhang.length; oi++) {
+      if (overhangCoversVoxel(overhang[oi], v, normalizedOpts, regionIndices[oi])) {
         covered.add(v.id);
         break;
       }
     }
   }
-  const remaining = covered.size === 0
-    ? classified
-    : classified.filter((v) => !covered.has(v.id));
+
+  let remaining: DetectedIsland[];
+  if (covered.size === 0) {
+    remaining = classified;
+  } else {
+    remaining = [];
+    for (const item of classified) {
+      if (covered.has(item.id)) continue;
+      if (item.matchedWith && covered.has(item.matchedWith)) {
+        remaining.push({ ...item, class: 'minimaOnly', matchedWith: null });
+      } else {
+        remaining.push(item);
+      }
+    }
+  }
   return [...remaining, ...overhang];
+}
+
+export function mergeOverhangResults(
+  classifiedResult: ClassifiedIslands,
+  overhang: DetectedIsland[],
+  opts: OverhangMergeOptions = {},
+): ClassifiedIslands {
+  if (overhang.length === 0) return classifiedResult;
+  const islands = mergeOverhangRegions(classifiedResult.islands, overhang, opts);
+  let voxelTotal = 0;
+  let minimaTotal = 0;
+  let matched = 0;
+  let voxelOnly = 0;
+  let minimaOnly = 0;
+  const matchOffsets = classifiedResult.matchOffsetsMm;
+  let survivingOffsetSum = 0;
+  let survivingOffsetCount = 0;
+  for (const item of islands) {
+    if (item.source === 'voxel') {
+      voxelTotal++;
+      if (item.class === 'intersection') {
+        matched++;
+        const itemOffset = matchOffsets?.get(item.id);
+        if (itemOffset !== undefined) {
+          survivingOffsetSum += itemOffset;
+          survivingOffsetCount++;
+        }
+      } else if (item.class === 'voxelOnly') {
+        voxelOnly++;
+      }
+    } else if (item.source === 'minima') {
+      minimaTotal++;
+      if (item.class === 'minimaOnly') minimaOnly++;
+    }
+  }
+  const meanMatchOffsetMm =
+    matched === 0
+      ? 0
+      : survivingOffsetCount === matched
+        ? survivingOffsetSum / matched
+        : classifiedResult.stats.meanMatchOffsetMm;
+  const stats: IntersectionStats = {
+    voxelTotal,
+    minimaTotal,
+    matched,
+    voxelOnly,
+    minimaOnly,
+    minimaSupersetOfVoxel: voxelTotal > 0 && voxelOnly === 0,
+    voxelSupersetOfMinima: minimaTotal > 0 && minimaOnly === 0,
+    meanMatchOffsetMm,
+  };
+  return { islands, stats };
 }
 
 /**
@@ -119,33 +308,110 @@ export function overhangRegionToIsland(region: OverhangRegion, i: number): Detec
 }
 
 /**
- * True when a voxel island's contact sits inside an overhang region's
- * projected footprint and their areas are comparable — the same physical
- * surface detected by both detectors.
+ * True when a voxel island's contact or >= 50% of its footprint sits inside
+ * an overhang region's projected footprint within XY/Z grid margins and without
+ * exceeding the region area upper bound — the same physical surface detected
+ * by both detectors.
  */
-function overhangCoversVoxel(region: DetectedIsland, voxel: DetectedIsland): boolean {
+function overhangCoversVoxel(
+  region: DetectedIsland,
+  voxel: DetectedIsland,
+  opts: OverhangMergeOptions = {},
+  regionIndex?: RegionCoverIndex | null,
+): boolean {
   const vox = region.contactVoxels;
-  if (isEmptyFootprint(vox) || !vox) return false;
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (let i = 0; i < vox.count; i++) {
-    const px = footprintX(vox, i);
-    const py = footprintY(vox, i);
-    if (px < minX) minX = px;
-    if (py < minY) minY = py;
-    if (px > maxX) maxX = px;
-    if (py > maxY) maxY = py;
-  }
-  const cx = voxel.contact.x;
-  const cy = voxel.contact.y;
-  if (cx < minX || cx > maxX || cy < minY || cy > maxY) return false;
+  if (!vox || isEmptyFootprint(vox)) return false;
+
   const regionArea = region.areaMm2 ?? 0;
   const voxelArea = voxel.areaMm2 ?? 0;
-  if (regionArea <= 0) return false;
-  const ratio = voxelArea / regionArea;
-  return ratio >= 0.5 && ratio <= 2.0;
+  if (regionArea <= 0 || voxelArea > 2.0 * regionArea) return false;
+
+  const voxelPxMm = opts.voxelPxMm ?? 0.05;
+  const layerHeightMm = opts.layerHeightMm ?? 0.05;
+  const ohPxMm = opts.overhangPxMm ?? OVERHANG_FOOTPRINT_PX_MM;
+  const xyMargin = ohPxMm + voxelPxMm;
+  const xyMargin2 = xyMargin * xyMargin;
+  const zMargin = 2 * layerHeightMm + ohPxMm;
+
+  const idx = regionIndex !== undefined ? regionIndex : createRegionCoverIndex(region, xyMargin);
+  if (!idx) return false;
+
+  const { minX, maxX, minY, maxY, minZ, maxZ } = idx;
+  const cx = voxel.contact.x;
+  const cy = voxel.contact.y;
+  const cz = voxel.baseZ;
+  const clampedContactZ = Math.min(maxZ, Math.max(minZ, cz));
+  const contactInExpandedAabb =
+    cx >= minX - xyMargin &&
+    cx <= maxX + xyMargin &&
+    cy >= minY - xyMargin &&
+    cy <= maxY + xyMargin &&
+    Math.abs(cz - clampedContactZ) <= zMargin;
+
+  const voxFootprint = voxel.contactVoxels;
+  if (!voxFootprint || voxFootprint.count === 0) {
+    if (!contactInExpandedAabb) return false;
+    return pointCoveredByRegion(region, idx, cx, cy, cz, xyMargin2, zMargin);
+  }
+
+  if (!contactInExpandedAabb) {
+    if (voxFootprint.z === null && Math.abs(cz - clampedContactZ) > zMargin) {
+      return false;
+    }
+    const vCount = voxFootprint.count;
+    const needed = Math.ceil(vCount / 2);
+    let inAabbCount = 0;
+    for (let k = 0; k < vCount; k++) {
+      const fx = footprintX(voxFootprint, k);
+      const fy = footprintY(voxFootprint, k);
+      const fz = footprintZ(voxFootprint, k) ?? cz;
+      const clampedFz = Math.min(maxZ, Math.max(minZ, fz));
+      if (
+        fx >= minX - xyMargin &&
+        fx <= maxX + xyMargin &&
+        fy >= minY - xyMargin &&
+        fy <= maxY + xyMargin &&
+        Math.abs(fz - clampedFz) <= zMargin
+      ) {
+        inAabbCount++;
+        if (inAabbCount >= needed) break;
+      } else if (inAabbCount + (vCount - k - 1) < needed) {
+        return false;
+      }
+    }
+    if (inAabbCount < needed) return false;
+  }
+
+  if (contactInExpandedAabb && pointCoveredByRegion(region, idx, cx, cy, cz, xyMargin2, zMargin)) {
+    return true;
+  }
+
+  const vCount = voxFootprint.count;
+  const needed = Math.ceil(vCount / 2);
+  let coveredCount = 0;
+  for (let k = 0; k < vCount; k++) {
+    const fx = footprintX(voxFootprint, k);
+    const fy = footprintY(voxFootprint, k);
+    const fz = footprintZ(voxFootprint, k) ?? cz;
+    if (pointCoveredByRegion(region, idx, fx, fy, fz, xyMargin2, zMargin)) {
+      coveredCount++;
+      if (coveredCount >= needed) return true;
+    } else if (coveredCount + (vCount - k - 1) < needed) {
+      return false;
+    }
+  }
+  return coveredCount * 2 >= vCount;
+}
+
+export function resolveVoxelVisualType(
+  island: DetectedIsland | undefined,
+  consolidateVoxel: boolean,
+  contouredIds: ReadonlySet<string>,
+): number {
+  if (island?.source === 'overhang') return 0;
+  return consolidateVoxel && island && ((island.members?.length ?? 0) > 1 || contouredIds.has(island.id))
+    ? 3
+    : 0;
 }
 
 /**
@@ -293,7 +559,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   // Active settings states used in calculations
   const [pxMm, setPxMm] = useState(0.05);
   const [supportBufMm, setSupportBufMm] = useState(0.25);
-  const [connectivity, setConnectivity] = useState<4 | 8>(4);
+  const [connectivity, setConnectivity] = useState<4 | 8>(8);
   const [consolidateVoxel, setConsolidateVoxel] = useState<boolean>(false);
   const [consolidationDistance, setConsolidationDistance] = useState<number>(0.2);
   const [reduceIntersection, setReduceIntersection] = useState<boolean>(false);
@@ -310,7 +576,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   // Draft settings states bound to UI inputs
   const [draftPxMm, setDraftPxMm] = useState(0.05);
   const [draftSupportBufMm, setDraftSupportBufMm] = useState(0.25);
-  const [draftConnectivity, setDraftConnectivity] = useState<4 | 8>(4);
+  const [draftConnectivity, setDraftConnectivity] = useState<4 | 8>(8);
   const [draftConsolidateVoxel, setDraftConsolidateVoxel] = useState<boolean>(false);
   const [draftConsolidationDistance, setDraftConsolidationDistance] = useState<number>(0.2);
   const [draftReduceIntersection, setDraftReduceIntersection] = useState<boolean>(false);
@@ -672,8 +938,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   // Pass 1: Proposed consolidation & classification
   const proposedConsolidated = useMemo(() => timed('proposedConsolidated', () => {
     if (!consolidateVoxel) return voxelIslands;
-    return consolidateVoxelIslands(voxelIslands, consolidationDistance, pxMm);
-  }), [voxelIslands, consolidateVoxel, consolidationDistance, pxMm]);
+    return consolidateVoxelIslands(voxelIslands, consolidationDistance, pxMm, layerHeightMm);
+  }), [voxelIslands, consolidateVoxel, consolidationDistance, pxMm, layerHeightMm]);
 
   const proposedClassified = useMemo(() => {
     return classifyIntersection(proposedConsolidated, minimaIslands, {
@@ -716,13 +982,17 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   // region is dropped in favor of the surface-accurate region. Overhang
   // islands then flow through annotation, filtering, the list, and
   // auto-support candidate generation.
-  const mergedIslands = useMemo(
-    () => mergeOverhangRegions(classifiedResult.islands, overhangIslands),
-    [classifiedResult, overhangIslands],
+  const mergedResult = useMemo(
+    () => mergeOverhangResults(classifiedResult, overhangIslands, {
+      voxelPxMm: pxMm,
+      layerHeightMm,
+      overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
+    }),
+    [classifiedResult, overhangIslands, pxMm, layerHeightMm],
   );
 
-  const allIslands = mergedIslands;
-  const stats = classifiedResult.stats;
+  const allIslands = mergedResult.islands;
+  const stats = mergedResult.stats;
 
   const mappedSupportTips = useMemo<TipInfo[]>(() => {
     const state = getSnapshot();
@@ -915,7 +1185,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
 
       visuals.push({
         markerId: m.id,
-        type: consolidateVoxel ? 3 : 0,
+        type: resolveVoxelVisualType(island, consolidateVoxel, contouredIds),
         centerX: m.centerX,
         centerY: m.centerY,
         baseZ: m.baseZ,
@@ -943,11 +1213,11 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       const area = island?.areaMm2 ?? 0;
       const radius = scaleMarkersWithArea && area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
 
-      // 1. Blue voxel blob (type 3) when voxel-only display is enabled
+      // 1. Voxel footprint (type 0 default, or type 3 when consolidated/contoured)
       if (showVoxelOnly) {
         visuals.push({
           markerId: m.id,
-          type: 3,
+          type: resolveVoxelVisualType(island, consolidateVoxel, contouredIds),
           centerX: m.centerX,
           centerY: m.centerY,
           baseZ: m.baseZ,
@@ -976,6 +1246,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     minimaOnlyPucks,
     intersectionPucks,
     consolidateVoxel,
+    contouredIds,
     scaleMarkersWithArea,
     filterToggles,
     showVoxelOnly,
@@ -1143,7 +1414,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   const resetSettings = useCallback(() => {
     setDraftPxMm(0.05);
     setDraftSupportBufMm(0.25);
-    setDraftConnectivity(4);
+    setDraftConnectivity(8);
     setDraftConsolidateVoxel(false);
     setDraftConsolidationDistance(0.2);
     setDraftReduceIntersection(false);
@@ -1259,26 +1530,36 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   };
 }
 
-function dilateVoxelGrid(voxels: VoxelFootprint, pxMm: number, consolidationDistance: number): VoxelFootprint {
-  if (voxels.count === 0) return voxels;
+function dilateVoxelGrid(
+  voxels: VoxelFootprint,
+  pxMm: number,
+  consolidationDistance: number,
+  fallbackZ?: number,
+): VoxelFootprint {
+  if (voxels.count === 0 || pxMm <= 0) return voxels;
 
-  const gridSet = new Set<number>();
-  const originalCoords: { ix: number; iy: number }[] = [];
+  const anchorX = footprintX(voxels, 0);
+  const anchorY = footprintY(voxels, 0);
+  const preserveZ = voxels.z !== null || fallbackZ !== undefined;
+
+  const cellMinZ = new Map<number | string, number>();
+  const originalCoords: { ix: number; iy: number; key: number | string }[] = [];
 
   for (let i = 0; i < voxels.count; i++) {
-    const ix = Math.round(footprintX(voxels, i) / pxMm);
-    const iy = Math.round(footprintY(voxels, i) / pxMm);
-    const key = cellKey(ix, iy);
-    if (!gridSet.has(key)) {
-      gridSet.add(key);
-      originalCoords.push({ ix, iy });
+    const ix = Math.round((footprintX(voxels, i) - anchorX) / pxMm);
+    const iy = Math.round((footprintY(voxels, i) - anchorY) / pxMm);
+    const key = gridBucketKey(ix, iy);
+    const vz = preserveZ ? (footprintZ(voxels, i) ?? fallbackZ ?? 0) : 0;
+    const prevZ = cellMinZ.get(key);
+    if (prevZ === undefined) {
+      cellMinZ.set(key, vz);
+      originalCoords.push({ ix, iy, key });
+    } else if (preserveZ && vz < prevZ) {
+      cellMinZ.set(key, vz);
     }
   }
 
   const rPix = Math.max(1, Math.round(consolidationDistance / (2 * pxMm)));
-  const dilatedSet = new Set<number>();
-  const dilatedVoxels = new VoxelFootprintBuilder(originalCoords.length);
-
   const offsets: { dx: number; dy: number }[] = [];
   for (let dx = -rPix; dx <= rPix; dx++) {
     for (let dy = -rPix; dy <= rPix; dy++) {
@@ -1288,40 +1569,70 @@ function dilateVoxelGrid(voxels: VoxelFootprint, pxMm: number, consolidationDist
     }
   }
 
+  const dilatedMinZ = new Map<number | string, number>();
+  const dilatedCells: { nix: number; niy: number; key: number | string }[] = [];
+
   for (const coord of originalCoords) {
+    const coordZ = cellMinZ.get(coord.key)!;
     for (const offset of offsets) {
       const nix = coord.ix + offset.dx;
       const niy = coord.iy + offset.dy;
-      const nkey = cellKey(nix, niy);
-      if (!dilatedSet.has(nkey)) {
-        dilatedSet.add(nkey);
-        dilatedVoxels.push(nix * pxMm, niy * pxMm);
+      const nkey = gridBucketKey(nix, niy);
+      const prev = dilatedMinZ.get(nkey);
+      if (prev === undefined) {
+        dilatedMinZ.set(nkey, coordZ);
+        dilatedCells.push({ nix, niy, key: nkey });
+      } else if (preserveZ && coordZ < prev) {
+        dilatedMinZ.set(nkey, coordZ);
       }
     }
+  }
+
+  const dilatedVoxels = new VoxelFootprintBuilder(dilatedCells.length, preserveZ);
+  for (const cell of dilatedCells) {
+    dilatedVoxels.push(
+      anchorX + cell.nix * pxMm,
+      anchorY + cell.niy * pxMm,
+      preserveZ ? dilatedMinZ.get(cell.key) : undefined,
+    );
   }
 
   return dilatedVoxels.build();
 }
 
-export function consolidateVoxelIslands(islands: DetectedIsland[], epsilonMm: number, pxMm: number): DetectedIsland[] {
+export function consolidateVoxelIslands(
+  islands: DetectedIsland[],
+  epsilonMm: number,
+  pxMm: number,
+  layerHeightMm = 0.05,
+): DetectedIsland[] {
   const n = islands.length;
   if (n === 0) return [];
-  
+
   const minAreaForContour = 0.06; // mm² (resolution-invariant)
 
   if (n === 1) {
-    const single = { ...islands[0] };
-    if ((single.areaMm2 ?? 0) >= minAreaForContour && !isEmptyFootprint(single.contactVoxels)) {
-      const dilated = dilateVoxelGrid(single.contactVoxels!, pxMm, epsilonMm);
-      single.contactVoxels = dilated;
-      single.areaMm2 = dilated.count * pxMm * pxMm;
-    }
-    single.members = [{ ...islands[0] }];
-    return [single];
+    return [{ ...islands[0], members: [{ ...islands[0] }] }];
   }
 
   const eps2 = epsilonMm * epsilonMm;
+  const zTol = 2 * layerHeightMm + 1e-6;
+  const maxSpanMm = Math.max(epsilonMm, 3 * epsilonMm);
+
   const parent = Array.from({ length: n }, (_, i) => i);
+  const minX = new Float64Array(n);
+  const maxX = new Float64Array(n);
+  const minY = new Float64Array(n);
+  const maxY = new Float64Array(n);
+  const minZ = new Float64Array(n);
+  const maxZ = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const isl = islands[i];
+    minX[i] = maxX[i] = isl.contact.x;
+    minY[i] = maxY[i] = isl.contact.y;
+    minZ[i] = maxZ[i] = isl.baseZ;
+  }
+
   const find = (x: number): number => {
     let root = x;
     while (parent[root] !== root) root = parent[root];
@@ -1332,14 +1643,32 @@ export function consolidateVoxelIslands(islands: DetectedIsland[], epsilonMm: nu
     }
     return root;
   };
-  const union = (a: number, b: number): void => {
-    parent[find(a)] = find(b);
-  };
 
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      if (islands[i].contact.distanceToSquared(islands[j].contact) <= eps2) {
-        union(i, j);
+      if (Math.abs(islands[i].baseZ - islands[j].baseZ) > zTol) continue;
+      if (islands[i].contact.distanceToSquared(islands[j].contact) > eps2) continue;
+      const ri = find(i);
+      const rj = find(j);
+      if (ri === rj) continue;
+      const mMinX = Math.min(minX[ri], minX[rj]);
+      const mMaxX = Math.max(maxX[ri], maxX[rj]);
+      const mMinY = Math.min(minY[ri], minY[rj]);
+      const mMaxY = Math.max(maxY[ri], maxY[rj]);
+      const mMinZ = Math.min(minZ[ri], minZ[rj]);
+      const mMaxZ = Math.max(maxZ[ri], maxZ[rj]);
+      if (
+        (mMaxZ - mMinZ) <= zTol &&
+        (mMaxX - mMinX) <= maxSpanMm &&
+        (mMaxY - mMinY) <= maxSpanMm
+      ) {
+        parent[ri] = rj;
+        minX[rj] = mMinX;
+        maxX[rj] = mMaxX;
+        minY[rj] = mMinY;
+        maxY[rj] = mMaxY;
+        minZ[rj] = mMinZ;
+        maxZ[rj] = mMaxZ;
       }
     }
   }
@@ -1359,30 +1688,44 @@ export function consolidateVoxelIslands(islands: DetectedIsland[], epsilonMm: nu
   for (const members of byRoot.values()) {
     const hasCluster = members.some((m) => (m.areaMm2 ?? 0) >= minAreaForContour);
 
-    if (hasCluster) {
+    if (members.length >= 2 && hasCluster) {
       members.sort((a, b) => a.baseZ - b.baseZ);
       const lowest = members[0];
 
-      let sumX = 0, sumY = 0, totalArea = 0;
-      let minFirstLayer = Infinity, maxLastLayer = -Infinity;
-      const memberFootprints: VoxelFootprint[] = [];
+      let totalArea = 0;
+      let totalVoxels = 0;
+      let minFirstLayer = Infinity;
+      let maxLastLayer = -Infinity;
       for (const m of members) {
-        sumX += m.contact.x;
-        sumY += m.contact.y;
         totalArea += m.areaMm2 ?? 0;
         if (m.layerSpan) {
           minFirstLayer = Math.min(minFirstLayer, m.layerSpan[0]);
           maxLastLayer = Math.max(maxLastLayer, m.layerSpan[1]);
         }
         if (m.contactVoxels) {
-          memberFootprints.push(m.contactVoxels);
+          totalVoxels += m.contactVoxels.count;
         }
       }
 
-      const mergedFootprint = concatFootprints(memberFootprints);
-      const dilatedVoxels = mergedFootprint.count > 0
-        ? dilateVoxelGrid(mergedFootprint, pxMm, epsilonMm)
-        : undefined;
+      let dilatedVoxels: VoxelFootprint | undefined;
+      if (totalVoxels > 0) {
+        const mergedBuilder = new VoxelFootprintBuilder(totalVoxels, true);
+        for (const m of members) {
+          const fp = m.contactVoxels;
+          if (!fp || fp.count === 0) continue;
+          for (let k = 0; k < fp.count; k++) {
+            mergedBuilder.push(
+              footprintX(fp, k),
+              footprintY(fp, k),
+              footprintZ(fp, k) ?? m.baseZ,
+            );
+          }
+        }
+        const mergedFootprint = mergedBuilder.build();
+        if (mergedFootprint.count > 0) {
+          dilatedVoxels = dilateVoxelGrid(mergedFootprint, pxMm, epsilonMm, lowest.baseZ);
+        }
+      }
 
       const finalArea = (dilatedVoxels && dilatedVoxels.count > 0)
         ? dilatedVoxels.count * pxMm * pxMm

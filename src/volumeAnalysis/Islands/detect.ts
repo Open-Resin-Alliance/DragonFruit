@@ -21,6 +21,8 @@ export interface VoxelDetectParams {
   /** 3D cluster connectivity across layers: true = 26-conn (default), false = 6-conn. */
   diagonal3D?: boolean;
   minAreaMm2?: number;
+  /** @internal Test hook to bypass dense bitsets and force the sparse `Set<number>` flood path. */
+  _forceSparse?: boolean;
 }
 
 export interface VoxelDetectInput {
@@ -127,10 +129,12 @@ export async function detectVoxelIslands(
   );
 
   const gridRef: GridRef = { originX, originZ, width, height, px_mm: px };
+  const connectivity: 4 | 8 = params.connectivity ?? 8;
+  const bufferPx = Math.max(0, Math.round(params.supportBufferMm / px));
   const opts = {
     px_mm: px,
     support_buffer_mm: params.supportBufferMm,
-    connectivity: params.connectivity ?? 4,
+    connectivity,
   };
 
   await logToFile(`[Islands] phase=slice-start grid=${width}x${height} layers=${numLayers}`);
@@ -157,7 +161,7 @@ export async function detectVoxelIslands(
   // One bitset per layer that carries candidates; layers without any stay
   // null. The same layer/row/col packing as `codec.pack`, so the flood fill
   // reads the same keys either way.
-  const dense = activeLayers * layerWords * 4 <= MAX_DENSE_VOXEL_BYTES
+  const dense = !params._forceSparse && activeLayers * layerWords * 4 <= MAX_DENSE_VOXEL_BYTES
     ? new Array<Uint32Array | null>(numLayers).fill(null)
     : null;
   const sparse = dense ? null : new Set<number>();
@@ -210,8 +214,11 @@ export async function detectVoxelIslands(
     sparse,
     candidateCount,
     codec,
-    { originX, originZ, px, minZ, layerHeightMm },
-    params.diagonal3D !== false,
+    { originX, originZ, px, minZ, layerHeightMm, numLayers },
+    {
+      intraConnectivity: connectivity,
+      interLayerRadiusPx: params.diagonal3D === false ? 0 : bufferPx + 1,
+    },
     onProgress,
   );
   console.timeEnd('[Islands] 3D connected-components');
@@ -303,6 +310,12 @@ interface GridGeom {
   px: number;
   minZ: number;
   layerHeightMm: number;
+  numLayers: number;
+}
+
+interface BuildIslandsOptions {
+  intraConnectivity: 4 | 8;
+  interLayerRadiusPx: number;
 }
 
 /**
@@ -321,10 +334,11 @@ async function buildIslands(
   total: number,
   codec: GridCodec,
   geom: GridGeom,
-  diagonal: boolean,
+  options: BuildIslandsOptions,
   onProgress?: ScanProgressCallback,
 ): Promise<DetectedIsland[]> {
-  const offsets = neighbourOffsets(diagonal);
+  const intraOffsets = buildIntraOffsets(options.intraConnectivity);
+  const interOffsets = buildInterLayerOffsets(options.interLayerRadiusPx);
   const islands: DetectedIsland[] = [];
   let idx = 0;
   const reportProgress = createProgressThrottle();
@@ -386,6 +400,28 @@ async function buildIslands(
   if (dense) {
     const layerCells = codec.width * codec.height;
     const layerWords = Math.ceil(layerCells / 32);
+    const probeDenseLayer = (
+      bits: Uint32Array,
+      nl: number,
+      col: number,
+      row: number,
+      offsets: Int16Array,
+      stack: number[],
+    ) => {
+      const nlBase = nl * layerCells;
+      for (let o = 0; o < offsets.length; o += 2) {
+        const nc = col + offsets[o];
+        const nr = row + offsets[o + 1];
+        if (nc < 0 || nc >= codec.width || nr < 0 || nr >= codec.height) continue;
+        const index = nr * codec.width + nc;
+        const word = index >>> 5;
+        const mask = 1 << (index & 31);
+        if (bits[word] & mask) {
+          bits[word] &= ~mask;
+          stack.push(nlBase + index);
+        }
+      }
+    };
     let scanLayer = 0;
     let scanWord = 0;
     // Next unvisited voxel, in layer/row/col order. The cursor only moves
@@ -434,20 +470,14 @@ async function buildIslands(
         const rest = k - layer * layerCells;
         const row = Math.floor(rest / codec.width);
         const col = rest - row * codec.width;
-        for (let o = 0; o < offsets.length; o += 3) {
-          const nc = col + offsets[o];
-          const nr = row + offsets[o + 1];
-          const nl = layer + offsets[o + 2];
-          if (nc < 0 || nc >= codec.width || nr < 0 || nr >= codec.height || nl < 0 || nl >= dense.length) continue;
-          const bits = dense[nl];
-          if (!bits) continue;
-          const index = nr * codec.width + nc;
-          const word = index >>> 5;
-          const mask = 1 << (index & 31);
-          if (bits[word] & mask) {
-            bits[word] &= ~mask;
-            stack.push(nl * layerCells + index);
-          }
+        probeDenseLayer(dense[layer]!, layer, col, row, intraOffsets, stack);
+        if (layer > 0) {
+          const prevBits = dense[layer - 1];
+          if (prevBits) probeDenseLayer(prevBits, layer - 1, col, row, interOffsets, stack);
+        }
+        if (layer + 1 < dense.length) {
+          const nextBits = dense[layer + 1];
+          if (nextBits) probeDenseLayer(nextBits, layer + 1, col, row, interOffsets, stack);
         }
       }
       finishComponent(comp);
@@ -457,6 +487,25 @@ async function buildIslands(
   }
 
   const candidates = sparse!;
+  const probeSparseLayer = (
+    nl: number,
+    col: number,
+    row: number,
+    offsets: Int16Array,
+    stack: number[],
+  ) => {
+    for (let o = 0; o < offsets.length; o += 2) {
+      const nc = col + offsets[o];
+      const nr = row + offsets[o + 1];
+      if (nc < 0 || nc >= codec.width || nr < 0 || nr >= codec.height) continue;
+      const nk = codec.pack(nc, nr, nl);
+      // `delete` reports whether it was there, so claiming a neighbour is one
+      // hash lookup rather than the previous three.
+      if (candidates.delete(nk)) {
+        stack.push(nk);
+      }
+    }
+  };
   // `candidates` IS the unvisited set: each voxel is deleted as it is flooded,
   // so no second Set of the same boxed numbers has to exist beside it.
   // Deleting during iteration is well defined — entries removed before the
@@ -476,18 +525,9 @@ async function buildIslands(
       const col = codec.colOf(k);
       const row = codec.rowOf(k);
       const layer = codec.layerOf(k);
-      for (let o = 0; o < offsets.length; o += 3) {
-        const nc = col + offsets[o];
-        const nr = row + offsets[o + 1];
-        const nl = layer + offsets[o + 2];
-        if (nc < 0 || nc >= codec.width || nr < 0 || nr >= codec.height || nl < 0) continue;
-        const nk = codec.pack(nc, nr, nl);
-        // `delete` reports whether it was there, so claiming a neighbour is one
-        // hash lookup rather than the previous three.
-        if (candidates.delete(nk)) {
-          stack.push(nk);
-        }
-      }
+      probeSparseLayer(layer, col, row, intraOffsets, stack);
+      if (layer > 0) probeSparseLayer(layer - 1, col, row, interOffsets, stack);
+      if (layer + 1 < geom.numLayers) probeSparseLayer(layer + 1, col, row, interOffsets, stack);
     }
 
     finishComponent(comp);
@@ -532,31 +572,36 @@ function gridCodec(width: number, height: number): GridCodec {
   };
 }
 
-/** 6- or 26-connectivity neighbour offsets (excluding the origin). */
 /**
- * Neighbour deltas flattened into one array of triples, read by index.
- *
- * The obvious shape is an array of `[dc, dr, dl]` tuples, but the flood fill
- * destructures it once per neighbour per voxel — 26 array iterators per voxel
- * at 26-connectivity, each one an allocation. Sampling a scan of a tall model
- * put 8,090 samples in `operationNewArrayIterator` alone.
+ * Intra-layer (`dl = 0`) neighbour `(dc, dr)` offsets flattened into `Int16Array`.
  */
-function neighbourOffsets(diagonal: boolean): Int8Array {
-  if (!diagonal) {
-    return Int8Array.from([
-      1, 0, 0, -1, 0, 0,
-      0, 1, 0, 0, -1, 0,
-      0, 0, 1, 0, 0, -1,
-    ]);
+function buildIntraOffsets(connectivity: 4 | 8): Int16Array {
+  if (connectivity === 4) {
+    return Int16Array.from([1, 0, -1, 0, 0, 1, 0, -1]);
   }
+  return Int16Array.from([
+    1, 0, -1, 0, 0, 1, 0, -1,
+    1, 1, 1, -1, -1, 1, -1, -1,
+  ]);
+}
+
+/**
+ * Inter-layer (`dl = ±1`) Euclidean disk `(dc, dr)` offsets with
+ * `dc^2 + dr^2 <= radiusPx^2`, flattened into `Int16Array` (avoids `Int8Array` overflow when `R > 127`).
+ */
+function buildInterLayerOffsets(radiusPx: number): Int16Array {
+  const r = Number.isNaN(radiusPx) ? 0 : Math.max(0, Math.trunc(radiusPx));
+  if (r === 0) {
+    return Int16Array.from([0, 0]);
+  }
+  const rSq = r * r;
   const out: number[] = [];
-  for (let dc = -1; dc <= 1; dc++) {
-    for (let dr = -1; dr <= 1; dr++) {
-      for (let dl = -1; dl <= 1; dl++) {
-        if (dc === 0 && dr === 0 && dl === 0) continue;
-        out.push(dc, dr, dl);
+  for (let dr = -r; dr <= r; dr++) {
+    for (let dc = -r; dc <= r; dc++) {
+      if (dc * dc + dr * dr <= rSq) {
+        out.push(dc, dr);
       }
     }
   }
-  return Int8Array.from(out);
+  return Int16Array.from(out);
 }

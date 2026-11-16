@@ -47,7 +47,7 @@ export function scanLayer(
   // Label connected components of candidates
   const { labels, components } = rleLabelComponents(
     islandCandidates,
-    opts.connectivity ?? 4
+    opts.connectivity ?? 8
   );
 
   return { labels, components, solidMask: current };

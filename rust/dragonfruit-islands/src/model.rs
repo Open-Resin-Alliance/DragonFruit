@@ -28,6 +28,12 @@ pub enum Connectivity {
     Eight = 8,
 }
 
+impl Default for Connectivity {
+    fn default() -> Self {
+        Connectivity::Eight
+    }
+}
+
 // ---------------------------------------------------------------------------
 // RLE Value Objects
 // ---------------------------------------------------------------------------
@@ -380,6 +386,7 @@ impl GridRef {
 pub struct IslandScanJob {
     pub px_mm: f64,
     pub support_buffer_mm: f64,
+    #[serde(default)]
     pub connectivity: Connectivity,
     pub min_island_area_mm2: f64,
     pub layer_height_mm: f64,
@@ -394,6 +401,25 @@ pub struct IslandScanJob {
 impl IslandScanJob {
     pub fn support_buffer_px(&self) -> i32 {
         (self.support_buffer_mm / self.px_mm).round().max(0.0) as i32
+    }
+
+    /// Effective overlap neighborhood radius (in pixels) passed to `IslandTracker`.
+    ///
+    /// When `candidate_only` is `true`, unsupported candidates on layer `L` are
+    /// outside the support moat of radius `B = support_buffer_px()`, so
+    /// consecutive candidate strips on a sloped overhang sit at least `B + 1` px
+    /// apart; this returns `overlap_neighborhood_px.max(B + 1)` to chain them.
+    ///
+    /// When `candidate_only` is `false` (solid mode), consecutive solid slices
+    /// overlap directly without a support moat, so `overlap_neighborhood_px`
+    /// is NOT inflated to `B + 1` (preventing nearby columns from merging).
+    pub fn effective_overlap_neighborhood_px(&self) -> i32 {
+        if self.candidate_only {
+            let moat_radius = self.support_buffer_px() + 1;
+            self.overlap_neighborhood_px.max(moat_radius)
+        } else {
+            self.overlap_neighborhood_px.max(0)
+        }
     }
 }
 
@@ -536,5 +562,69 @@ mod tests {
         assert_eq!(b_then_a.last_layer, 5);
         assert_eq!(a_then_b.seed_voxel, expected_seed);
         assert_eq!(b_then_a.seed_voxel, expected_seed);
+    }
+
+    #[test]
+    fn connectivity_default_is_eight_and_explicit_four_preserved() {
+        assert_eq!(Connectivity::default(), Connectivity::Eight);
+        let four = Connectivity::Four;
+        assert_eq!(four, Connectivity::Four);
+    }
+
+    #[test]
+    fn job_serde_defaults_missing_connectivity_to_eight() {
+        let json = r#"{
+            "px_mm": 0.05,
+            "support_buffer_mm": 0.25,
+            "min_island_area_mm2": 0.02,
+            "layer_height_mm": 0.05,
+            "grid": { "origin_x": 0.0, "origin_z": 0.0, "width": 10, "height": 10, "px_mm": 0.05 },
+            "num_layers": 2,
+            "min_overlap_px": 1,
+            "overlap_neighborhood_px": 1
+        }"#;
+        let parsed: IslandScanJob = serde_json::from_str(json).expect("job JSON should deserialize");
+        assert_eq!(parsed.connectivity, Connectivity::Eight);
+        assert!(!parsed.candidate_only);
+        assert_eq!(parsed.effective_overlap_neighborhood_px(), 1);
+    }
+
+    #[test]
+    fn effective_overlap_neighborhood_only_inflates_for_candidate_only() {
+        let base_job = IslandScanJob {
+            px_mm: 0.05,
+            support_buffer_mm: 0.25, // B = 5
+            connectivity: Connectivity::default(),
+            min_island_area_mm2: 0.0001,
+            layer_height_mm: 0.05,
+            grid: GridRef {
+                origin_x: 0.0,
+                origin_z: 0.0,
+                width: 32,
+                height: 32,
+                px_mm: 0.05,
+            },
+            num_layers: 5,
+            min_overlap_px: 1,
+            overlap_neighborhood_px: 1,
+            candidate_only: false,
+        };
+
+        assert_eq!(base_job.support_buffer_px(), 5);
+        // Solid mode must NOT inflate overlap_neighborhood_px to B + 1
+        assert_eq!(base_job.effective_overlap_neighborhood_px(), 1);
+
+        let candidate_job = IslandScanJob {
+            candidate_only: true,
+            ..base_job.clone()
+        };
+        assert_eq!(candidate_job.effective_overlap_neighborhood_px(), 6);
+
+        let large_explicit = IslandScanJob {
+            candidate_only: true,
+            overlap_neighborhood_px: 10,
+            ..base_job
+        };
+        assert_eq!(large_explicit.effective_overlap_neighborhood_px(), 10);
     }
 }

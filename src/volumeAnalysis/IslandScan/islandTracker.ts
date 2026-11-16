@@ -14,25 +14,30 @@ type PendingMerge = {
   preMergeLabels: RleLabels; // Labels from layer BEFORE merge to track which candidate each pixel belonged to
 };
 
+export type IslandTrackerOptions = {
+  minOverlapPx?: number;
+  overlapNeighborhoodPx?: number;
+  connectivity?: 4 | 8;
+};
+
 export class IslandTracker {
   private islands: Map<number, Island> = new Map();
   private nextId: number = 1;
   private px_mm: number;
   private minOverlapPx: number;
   private overlapNeighborhoodPx: number;
+  private connectivity: 4 | 8;
   private pendingMerges: PendingMerge[] = [];
   private readonly MERGE_EVAL_WINDOW = 30; // Layers to wait before finalizing parent
 
   constructor(
     px_mm: number,
-    options?: {
-      minOverlapPx?: number;
-      overlapNeighborhoodPx?: number;
-    }
+    options?: IslandTrackerOptions
   ) {
     this.px_mm = px_mm;
     this.minOverlapPx = Math.max(1, options?.minOverlapPx ?? 1);
     this.overlapNeighborhoodPx = Math.max(0, options?.overlapNeighborhoodPx ?? 1);
+    this.connectivity = options?.connectivity ?? 8;
   }
 
   /**
@@ -231,26 +236,7 @@ export class IslandTracker {
    * Actually, we can just import rleLabelComponents from rle.ts
    */
   private rleLabelSolidComponents(solidMask: RleMask) {
-    // We need to import this, but circular dependency might be an issue if rle.ts imports types.ts
-    // Assuming rle.ts is pure.
-    // For now, let's assume we can use the one from rle.ts
-    // But wait, I can't import inside class. 
-    // I'll assume rleLabelComponents is available (imported at top).
-    // Wait, I didn't import it in the replacement content. I should add it.
-
-    // Actually, I can just use the imported one.
-    // But wait, rleLabelComponents returns { labels: RleLabels, components: ComponentInfo[] }
-    // RleLabels has rows with [start, len, id].
-    // So this is exactly what we need.
-
-    // Note: we use 8-connectivity for solid components usually? 
-    // Or 4? Standard is 4 for foreground, 8 for background, or vice versa.
-    // Let's stick to 4 for consistency with previous logic.
-
-    // Wait, I need to make sure I imported it.
-    // I will add the import to the top of the file.
-
-    return rleLabelComponents(solidMask, 4);
+    return rleLabelComponents(solidMask, this.connectivity);
   }
 
   /**
@@ -307,15 +293,21 @@ export class IslandTracker {
         const len = solidRow[i + 1];
         const end = start + len;
 
-        const searchStart = start - this.overlapNeighborhoodPx;
-        const searchEnd = end + this.overlapNeighborhoodPx;
-
-        const yStart = Math.max(0, y - this.overlapNeighborhoodPx);
-        const yEnd = Math.min(height - 1, y + this.overlapNeighborhoodPx);
+        const r = Number.isNaN(this.overlapNeighborhoodPx)
+          ? 0
+          : Math.max(0, Math.trunc(this.overlapNeighborhoodPx));
+        const rSq = r * r;
+        const yStart = Math.max(0, y - r);
+        const yEnd = Math.min(prevIslandLabels.height - 1, y + r);
 
         for (let py = yStart; py <= yEnd; py++) {
           const pRow = prevIslandLabels.rows[py];
-          if (pRow.length === 0) continue;
+          if (!pRow || pRow.length === 0) continue;
+
+          const dy = py - y;
+          const dx = Math.floor(Math.sqrt(rSq - dy * dy));
+          const searchStart = start - dx;
+          const searchEnd = end + dx;
 
           for (let j = 0; j < pRow.length; j += 3) {
             const pStart = pRow[j];

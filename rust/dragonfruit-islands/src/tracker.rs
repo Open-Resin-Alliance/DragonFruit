@@ -27,18 +27,34 @@ pub struct IslandTracker {
     px_mm: f64,
     min_overlap_px: i32,
     overlap_neighborhood_px: i32,
+    connectivity: Connectivity,
     pending_merges: Vec<PendingMerge>,
     merge_eval_window: u32,
 }
 
 impl IslandTracker {
     pub fn new(px_mm: f64, min_overlap_px: i32, overlap_neighborhood_px: i32) -> Self {
+        Self::with_connectivity(
+            px_mm,
+            min_overlap_px,
+            overlap_neighborhood_px,
+            Connectivity::Eight,
+        )
+    }
+
+    pub fn with_connectivity(
+        px_mm: f64,
+        min_overlap_px: i32,
+        overlap_neighborhood_px: i32,
+        connectivity: Connectivity,
+    ) -> Self {
         Self {
             islands: HashMap::new(),
             next_id: 1,
             px_mm,
             min_overlap_px: min_overlap_px.max(1),
             overlap_neighborhood_px: overlap_neighborhood_px.max(0),
+            connectivity,
             pending_merges: Vec::new(),
             merge_eval_window: 30,
         }
@@ -101,13 +117,17 @@ impl IslandTracker {
     ) -> RleLabels {
         // Label connected solid components
         let (solid_labels, solid_comps) =
-            rle_label_components(solid_mask, Connectivity::Four);
+            rle_label_components(solid_mask, self.connectivity);
 
         let mut solid_comp_to_island: HashMap<i32, IslandId> = HashMap::new();
 
         for component in &solid_comps {
-            let prev_id_overlaps =
-                self.find_overlapping_island_ids(component.id, &solid_labels, prev_island_labels);
+            let prev_id_overlaps = Self::count_overlapping_labels(
+                component.id,
+                &solid_labels,
+                prev_island_labels,
+                self.overlap_neighborhood_px,
+            );
 
             let mut prev_ids: HashSet<IslandId> = HashSet::new();
             for (&id, &count) in &prev_id_overlaps {
@@ -177,8 +197,12 @@ impl IslandTracker {
         let mut comp_to_island: HashMap<i32, IslandId> = HashMap::new();
 
         for component in current_components {
-            let prev_id_overlaps =
-                self.find_overlapping_island_ids(component.id, current_labels, prev_island_labels);
+            let prev_id_overlaps = Self::count_overlapping_labels(
+                component.id,
+                current_labels,
+                prev_island_labels,
+                self.overlap_neighborhood_px,
+            );
 
             let mut prev_ids: HashSet<IslandId> = HashSet::new();
             for (&id, &count) in &prev_id_overlaps {
@@ -408,21 +432,32 @@ impl IslandTracker {
     // Overlap detection
     // -----------------------------------------------------------------------
 
-    fn find_overlapping_island_ids(
-        &self,
+    /// Count overlapping previous-layer island pixels within a Euclidean L2
+    /// disk of radius `neighborhood` around every run belonging to `comp_id`.
+    fn count_overlapping_labels(
         comp_id: i32,
         solid_labels: &RleLabels,
         prev_island_labels: &RleLabels,
+        neighborhood: i32,
     ) -> HashMap<IslandId, u64> {
         let mut counts: HashMap<IslandId, u64> = HashMap::new();
-        let height = solid_labels.height;
-        let neighborhood = self.overlap_neighborhood_px;
+        if neighborhood < 0 || solid_labels.height <= 0 || prev_island_labels.height <= 0 {
+            return counts;
+        }
+
+        let r = neighborhood.max(0);
+        let rr = r as i64;
+        let height = solid_labels.height.min(solid_labels.rows.len() as i32);
+        let prev_height = prev_island_labels.height.min(prev_island_labels.rows.len() as i32);
 
         for y in 0..height {
             let solid_row = &solid_labels.rows[y as usize];
             if solid_row.is_empty() {
                 continue;
             }
+
+            let y_start = y.saturating_sub(r).max(0);
+            let y_end = y.saturating_add(r).min(prev_height - 1);
 
             for run in solid_row {
                 if run.id != comp_id {
@@ -431,17 +466,17 @@ impl IslandTracker {
 
                 let start = run.start;
                 let end = start + run.length;
-                let search_start = start - neighborhood;
-                let search_end = end + neighborhood;
-
-                let y_start = (y - neighborhood).max(0);
-                let y_end = (y + neighborhood).min(height - 1);
 
                 for py in y_start..=y_end {
                     let p_row = &prev_island_labels.rows[py as usize];
                     if p_row.is_empty() {
                         continue;
                     }
+
+                    let dy = (py - y) as i64;
+                    let dx = ((rr * rr - dy * dy) as f64).sqrt().floor() as i32;
+                    let search_start = start.saturating_sub(dx);
+                    let search_end = end.saturating_add(dx);
 
                     for p_run in p_row {
                         let p_start = p_run.start;
@@ -479,16 +514,17 @@ impl IslandTracker {
 
         // We need to iterate pending merges and find overlaps with pre-merge labels.
         // To avoid borrow conflicts, collect the overlap counts first.
+        let neighborhood = self.overlap_neighborhood_px;
         let updates: Vec<(usize, HashMap<IslandId, u64>)> = self
             .pending_merges
             .iter()
             .enumerate()
             .map(|(i, pending)| {
-                let overlaps = self.find_overlapping_island_ids_static(
+                let overlaps = Self::count_overlapping_labels(
                     comp_id,
                     solid_labels,
                     &pending.pre_merge_labels,
-                    self.overlap_neighborhood_px,
+                    neighborhood,
                 );
                 (i, overlaps)
             })
@@ -502,62 +538,6 @@ impl IslandTracker {
                 }
             }
         }
-    }
-
-    /// Static version of overlap detection that doesn't borrow self.
-    fn find_overlapping_island_ids_static(
-        &self,
-        comp_id: i32,
-        solid_labels: &RleLabels,
-        prev_island_labels: &RleLabels,
-        neighborhood: i32,
-    ) -> HashMap<IslandId, u64> {
-        let mut counts: HashMap<IslandId, u64> = HashMap::new();
-        let height = solid_labels.height;
-
-        for y in 0..height {
-            let solid_row = &solid_labels.rows[y as usize];
-            if solid_row.is_empty() {
-                continue;
-            }
-
-            for run in solid_row {
-                if run.id != comp_id {
-                    continue;
-                }
-
-                let start = run.start;
-                let end = start + run.length;
-                let search_start = start - neighborhood;
-                let search_end = end + neighborhood;
-
-                let y_start = (y - neighborhood).max(0);
-                let y_end = (y + neighborhood).min(height - 1);
-
-                for py in y_start..=y_end {
-                    let p_row = &prev_island_labels.rows[py as usize];
-                    for p_run in p_row {
-                        let p_start = p_run.start;
-                        let p_end = p_start + p_run.length;
-                        let p_id = p_run.id;
-
-                        let overlap_start = search_start.max(p_start);
-                        let overlap_end = search_end.min(p_end);
-
-                        if overlap_start < overlap_end && p_id > 0 {
-                            let overlap_px = (overlap_end - overlap_start) as u64;
-                            *counts.entry(IslandId(p_id as u32)).or_insert(0) += overlap_px;
-                        }
-
-                        if p_start >= search_end {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        counts
     }
 
     // -----------------------------------------------------------------------
@@ -737,6 +717,218 @@ mod tests {
             // Total = 3 islands.
             assert_eq!(islands.len(), 3);
         }
+    }
+
+    #[test]
+    fn nbr02_tracker_euclidean_disk_overlap_search() {
+        let w = 12;
+        let h = 12;
+        let mut tracker = IslandTracker::new(1.0, 1, 5);
+
+        // Layer 0: single pixel at (5, 5)
+        let mut d0 = vec![0u8; (w * h) as usize];
+        d0[(5 * w + 5) as usize] = 1;
+        let m0 = rle_encode(&d0, w, h);
+        let r0 = scan_layer(&m0, None, 1.0, 0.0, Connectivity::Eight);
+        let il0 = tracker.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask, true);
+
+        // Layer 1: (8, 9) at offset (+3, +4) [d^2=25 <= 25] and (1, 1) at offset (-4, -4) [d^2=32 > 25]
+        let mut d1 = vec![0u8; (w * h) as usize];
+        d1[(9 * w + 8) as usize] = 1;
+        d1[(1 * w + 1) as usize] = 1;
+        let m1 = rle_encode(&d1, w, h);
+        let r1 = scan_layer(&m1, Some(&m0), 1.0, 0.0, Connectivity::Eight);
+        let _il1 =
+            tracker.process_layer(1, &r1.labels, &r1.components, Some(&il0), &r1.solid_mask, true);
+
+        let islands = tracker.get_islands();
+        assert_eq!(islands.len(), 2);
+        let base = islands.iter().find(|i| i.first_layer == 0).unwrap();
+        let outside = islands.iter().find(|i| i.first_layer == 1).unwrap();
+        assert_eq!(base.last_layer, 1);
+        assert_eq!(outside.last_layer, 1);
+        let seed = outside.seed_voxel.expect("outside seed voxel present");
+        assert!((seed.x - 1.0).abs() < 1e-6 && (seed.y - 1.0).abs() < 1e-6);
+
+        // dy/dx asymmetry check: (dy=0, dx=5) overlaps r=5 while (dy=1, dx=5) [d^2=26>25] does NOT
+        let mut tracker_asym = IslandTracker::new(1.0, 1, 5);
+        let asym_l0 = tracker_asym.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask, true);
+        let mut d_asym = vec![0u8; (w * h) as usize];
+        d_asym[(5 * w + 10) as usize] = 1; // (10,5): dx=+5, dy=0 -> 25 <= 25 (continues)
+        d_asym[(6 * w + 0) as usize] = 1;  // (0,6): dx=-5, dy=+1 -> 26 > 25 (new island)
+        let m_asym = rle_encode(&d_asym, w, h);
+        let r_asym = scan_layer(&m_asym, Some(&m0), 1.0, 0.0, Connectivity::Eight);
+        let _il_asym = tracker_asym.process_layer(
+            1,
+            &r_asym.labels,
+            &r_asym.components,
+            Some(&asym_l0),
+            &r_asym.solid_mask,
+            true,
+        );
+        let asym_islands = tracker_asym.get_islands();
+        assert_eq!(asym_islands.len(), 2, "(0,5) hits while (-5,+1) misses Euclidean r=5");
+        let asym_outside = asym_islands.iter().find(|i| i.first_layer == 1).unwrap();
+        let asym_seed = asym_outside.seed_voxel.unwrap();
+        assert!((asym_seed.x - 0.0).abs() < 1e-6 && (asym_seed.y - 6.0).abs() < 1e-6);
+
+        // Mismatched prev_island_labels.height < solid_labels.height never panics
+        let small_prev_mask = rle_encode(&vec![1u8; 4 * 2], 4, 2);
+        let r_small = scan_layer(&small_prev_mask, None, 1.0, 0.0, Connectivity::Eight);
+        let mut t_mismatch = IslandTracker::new(1.0, 1, 2);
+        let il_small = t_mismatch.process_layer(
+            0,
+            &r_small.labels,
+            &r_small.components,
+            None,
+            &r_small.solid_mask,
+            true,
+        );
+        let tall_mask = rle_encode(&vec![1u8; 4 * 6], 4, 6);
+        let r_tall = scan_layer(&tall_mask, Some(&rle_encode(&vec![0u8; 4 * 6], 4, 6)), 1.0, 0.0, Connectivity::Eight);
+        let _ = t_mismatch.process_layer(
+            1,
+            &r_tall.labels,
+            &r_tall.components,
+            Some(&il_small),
+            &r_tall.solid_mask,
+            true,
+        );
+        assert_eq!(t_mismatch.get_islands().len(), 1);
+    }
+
+    #[test]
+    fn nbr03_tracker_default_new_uses_eight_connectivity_in_solid_mode() {
+        let w = 20;
+        let h = 4;
+        let mut tracker = IslandTracker::new(0.05, 1, 0);
+
+        // Layer 0: [0, 10) at row 1
+        let mut d0 = vec![0u8; (w * h) as usize];
+        for x in 0..10 {
+            d0[w as usize + x] = 1;
+        }
+        let m0 = rle_encode(&d0, w, h);
+        let r0 = scan_layer(&m0, None, 0.05, 0.0, Connectivity::Eight);
+        let il0 = tracker.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask, false);
+
+        // Layer 1: [0, 10) at row 1 AND [10, 20) at row 2 (diagonal corner at (9,1)-(10,2))
+        let mut d1 = d0;
+        for x in 10..20 {
+            d1[2 * w as usize + x] = 1;
+        }
+        let m1 = rle_encode(&d1, w, h);
+        let r1 = scan_layer(&m1, Some(&m0), 0.05, 0.0, Connectivity::Eight);
+        let _il1 =
+            tracker.process_layer(1, &r1.labels, &r1.components, Some(&il0), &r1.solid_mask, false);
+
+        let islands = tracker.get_islands();
+        assert_eq!(islands.len(), 1);
+        assert_eq!(islands[0].first_layer, 0);
+        assert_eq!(islands[0].last_layer, 1);
+    }
+
+    #[test]
+    fn nbr03_solid_mode_with_connectivity_respects_four_and_eight() {
+        let w = 20;
+        let h = 4;
+
+        let mut d0 = vec![0u8; (w * h) as usize];
+        for x in 0..10 {
+            d0[w as usize + x] = 1;
+        }
+        let m0 = rle_encode(&d0, w, h);
+
+        let mut d1 = d0;
+        for x in 10..20 {
+            d1[2 * w as usize + x] = 1;
+        }
+        let m1 = rle_encode(&d1, w, h);
+
+        for (conn, expected_islands) in [(Connectivity::Four, 2), (Connectivity::Eight, 1)] {
+            let mut tracker = IslandTracker::with_connectivity(0.05, 1, 0, conn);
+            let r0 = scan_layer(&m0, None, 0.05, 0.0, conn);
+            let il0 =
+                tracker.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask, false);
+            let r1 = scan_layer(&m1, Some(&m0), 0.05, 0.0, conn);
+            let _il1 = tracker.process_layer(
+                1,
+                &r1.labels,
+                &r1.components,
+                Some(&il0),
+                &r1.solid_mask,
+                false,
+            );
+            assert_eq!(tracker.get_islands().len(), expected_islands);
+        }
+    }
+
+    #[test]
+    fn nbr01_candidate_moat_chains_sloped_cantilever_across_layers() {
+        let w = 64;
+        let h = 4;
+        let px_mm = 0.05;
+        let support_buffer_mm = 0.25; // B = 5 -> moat radius = 6
+        let job = IslandScanJob {
+            px_mm,
+            support_buffer_mm,
+            connectivity: Connectivity::Eight,
+            min_island_area_mm2: 0.0001,
+            layer_height_mm: 0.05,
+            grid: GridRef {
+                origin_x: 0.0,
+                origin_z: 0.0,
+                width: w,
+                height: h,
+                px_mm,
+            },
+            num_layers: 5,
+            min_overlap_px: 1,
+            overlap_neighborhood_px: 1,
+            candidate_only: true,
+        };
+
+        let mut tracker = IslandTracker::with_connectivity(
+            job.px_mm,
+            job.min_overlap_px,
+            job.effective_overlap_neighborhood_px(),
+            job.connectivity,
+        );
+        let mut prev_mask: Option<RleMask> = None;
+        let mut prev_il: Option<RleLabels> = None;
+        for l in 0..5i32 {
+            let mut data = vec![0u8; (w * h) as usize];
+            let x_start = l * 6;
+            let x_end = x_start + 12;
+            for y in 1..3 {
+                for x in x_start..x_end {
+                    data[(y * w + x) as usize] = 1;
+                }
+            }
+            let mask = rle_encode(&data, w, h);
+            let r = scan_layer(
+                &mask,
+                prev_mask.as_ref(),
+                px_mm,
+                support_buffer_mm,
+                job.connectivity,
+            );
+            let il = tracker.process_layer(
+                l as u32,
+                &r.labels,
+                &r.components,
+                prev_il.as_ref(),
+                &r.solid_mask,
+                true,
+            );
+            prev_mask = Some(mask);
+            prev_il = Some(il);
+        }
+
+        let islands = tracker.get_islands();
+        assert_eq!(islands.len(), 1);
+        assert_eq!(islands[0].first_layer, 0);
+        assert_eq!(islands[0].last_layer, 4);
     }
 }
 

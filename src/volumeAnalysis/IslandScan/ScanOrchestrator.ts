@@ -273,7 +273,7 @@ async function runScanInternal(
               z: zTopGeom,
               layerHeightMm,
               gridRef,
-              opts: { px_mm: params.px_mm, support_buffer_mm: params.support_buffer_mm, connectivity: params.connectivity ?? 4 }
+              opts: { px_mm: params.px_mm, support_buffer_mm: params.support_buffer_mm, connectivity: params.connectivity ?? 8 }
             });
           } catch (err) {
             failWorker(err instanceof Error ? err : new Error(String(err)));
@@ -310,6 +310,7 @@ async function runScanInternal(
   const tracker = new IslandTracker(params.px_mm, {
     minOverlapPx: params.min_overlap_px,
     overlapNeighborhoodPx: params.overlap_neighborhood_px,
+    connectivity: params.connectivity ?? 8,
   });
   const islandLabelsPerLayer: RleLabels[] = new Array(numLayers);
 

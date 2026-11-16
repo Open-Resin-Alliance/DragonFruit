@@ -1,4 +1,5 @@
 import type { DetectedIsland } from './types';
+import { footprintBounds } from './voxelFootprint';
 
 /**
  * Classifies the two detector outputs against each other (Part C). Both sets are
@@ -37,6 +38,8 @@ export interface ClassifiedIslands {
   /** Copies of the inputs with `class` + `matchedWith` populated (voxel then minima). */
   islands: DetectedIsland[];
   stats: IntersectionStats;
+  /** Per-matched voxel island 3D offset before snapping `vi.contact` to `mj.contact`. */
+  readonly matchOffsetsMm?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -55,18 +58,45 @@ export function classifyIntersection(
 
   let matched = 0;
   let offsetSum = 0;
+  const matchOffsets = new Map<string, number>();
 
   for (const vi of v) {
     let bestIdx = -1;
     let bestD2 = Infinity;
+    const vox = vi.contactVoxels;
+    const hasFootprint = vox !== undefined && vox.count > 0;
+    const voxBounds = hasFootprint ? footprintBounds(vox) : null;
+
     for (let j = 0; j < m.length; j++) {
       if (minimaUsed[j]) continue;
       const mj = m[j];
       const dz = vi.baseZ - mj.baseZ;
       if (Math.abs(dz) > opts.zBandMm) continue;
-      const dx = vi.contact.x - mj.contact.x;
-      const dy = vi.contact.y - mj.contact.y;
-      const xy2 = dx * dx + dy * dy;
+      const mx = mj.contact.x;
+      const my = mj.contact.y;
+      let xy2: number;
+      if (hasFootprint && voxBounds) {
+        if (
+          mx < voxBounds.minX - opts.xyToleranceMm ||
+          mx > voxBounds.maxX + opts.xyToleranceMm ||
+          my < voxBounds.minY - opts.xyToleranceMm ||
+          my > voxBounds.maxY + opts.xyToleranceMm
+        ) {
+          continue;
+        }
+        xy2 = Infinity;
+        const xy = vox.xy;
+        for (let k = 0; k < vox.count; k++) {
+          const dx = xy[k * 2] - mx;
+          const dy = xy[k * 2 + 1] - my;
+          const p2 = dx * dx + dy * dy;
+          if (p2 < xy2) xy2 = p2;
+        }
+      } else {
+        const dx = vi.contact.x - mx;
+        const dy = vi.contact.y - my;
+        xy2 = dx * dx + dy * dy;
+      }
       if (xy2 > xyTol2) continue;
       const d2 = xy2 + dz * dz;
       if (d2 < bestD2) {
@@ -83,8 +113,11 @@ export function classifyIntersection(
       vi.matchedWith = mj.id;
       mj.matchedWith = vi.id;
       vi.contact = mj.contact.clone(); // Snap voxel island contact to matched mesh minimum coordinate
+      vi.baseZ = mj.baseZ;
+      const matchOffset = Math.sqrt(bestD2);
       matched++;
-      offsetSum += Math.sqrt(bestD2);
+      offsetSum += matchOffset;
+      matchOffsets.set(vi.id, matchOffset);
     } else {
       vi.class = 'voxelOnly';
       vi.matchedWith = null;
@@ -114,5 +147,5 @@ export function classifyIntersection(
     meanMatchOffsetMm: matched > 0 ? offsetSum / matched : 0,
   };
 
-  return { islands: [...v, ...m], stats };
+  return { islands: [...v, ...m], stats, matchOffsetsMm: matchOffsets };
 }

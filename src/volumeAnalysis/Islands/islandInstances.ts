@@ -1,4 +1,4 @@
-import { footprintX, footprintY, type VoxelFootprint } from './voxelFootprint';
+import { footprintX, footprintY, footprintZ, type VoxelFootprint } from './voxelFootprint';
 
 /**
  * One visible island: the point selection and camera focus key on, plus the
@@ -80,7 +80,7 @@ export function buildIslandInstances(
       for (let voxel = 0; voxel < footprint.count; voxel++, i++) {
         centerRadius[i * 4] = footprintX(footprint, voxel);
         centerRadius[i * 4 + 1] = footprintY(footprint, voxel);
-        centerRadius[i * 4 + 2] = visual.baseZ;
+        centerRadius[i * 4 + 2] = footprintZ(footprint, voxel) ?? visual.baseZ;
         centerRadius[i * 4 + 3] = voxelRadiusMm;
         meta[i * 2] = visual.markerId;
         meta[i * 2 + 1] = visual.type;

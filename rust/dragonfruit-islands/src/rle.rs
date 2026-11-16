@@ -57,28 +57,55 @@ pub fn rle_encode(data: &[u8], width: i32, height: i32) -> RleMask {
 /// Used to find "supported" regions: current layer pixels that overlap with
 /// the dilated previous layer.
 pub fn rle_intersect_dilated(a: &RleMask, b: &RleMask, buffer: i32) -> RleMask {
+    if a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0 {
+        return RleMask::empty(a.width.max(0), a.height.max(0));
+    }
+
     let width = a.width;
     let height = a.height;
+    let b_height = b.height.min(b.rows.len() as i32);
+    if b_height <= 0 {
+        return RleMask::empty(width, height);
+    }
+
+    let r = buffer.max(0);
+    let rr = r as i64;
     let mut result_rows = Vec::with_capacity(height as usize);
+    let valid_a_rows = height.min(a.rows.len() as i32);
 
     for y in 0..height {
+        if y >= valid_a_rows {
+            result_rows.push(Vec::new());
+            continue;
+        }
         let a_row = &a.rows[y as usize];
         if a_row.is_empty() {
             result_rows.push(Vec::new());
             continue;
         }
 
-        // Gather relevant B rows within [y - buffer, y + buffer]
-        let start_y = (y - buffer).max(0);
-        let end_y = (y + buffer).min(height - 1);
+        // Gather relevant B rows within Euclidean disk [y - r, y + r]
+        let start_y = y.saturating_sub(r).max(0);
+        let end_y = y.saturating_add(r).min(b_height - 1);
+        if start_y > end_y {
+            result_rows.push(Vec::new());
+            continue;
+        }
 
-        // Collect all dilated B intervals
+        // Collect all dilated B intervals using Euclidean L2 horizontal reach
         let mut b_intervals: Vec<(i32, i32)> = Vec::new();
         for by in start_y..=end_y {
+            if b.rows[by as usize].is_empty() {
+                continue;
+            }
+            let dy = (by - y) as i64;
+            let dx = ((rr * rr - dy * dy) as f64).sqrt().floor() as i32;
             for run in &b.rows[by as usize] {
-                let s = (run.start - buffer).max(0);
-                let e = (run.start + run.length + buffer).min(width);
-                b_intervals.push((s, e));
+                let s = run.start.saturating_sub(dx).max(0);
+                let e = (run.start + run.length).saturating_add(dx).min(width);
+                if s < e {
+                    b_intervals.push((s, e));
+                }
             }
         }
 
@@ -558,13 +585,53 @@ mod tests {
             width: w,
             height: h,
         };
-        // buffer=1: dilated B covers [4,7) across rows 0-2
+        // buffer=1 (Euclidean L2 disk): cross around (5, 1) — corners excluded.
         let result = rle_intersect_dilated(&a, &b, 1);
-        // All three rows should have a run [4, 3]
-        for row in &result.rows {
-            assert_eq!(row.len(), 1);
-            assert_eq!(row[0], RleRun { start: 4, length: 3 });
-        }
+        assert_eq!(result.rows[0], vec![RleRun { start: 5, length: 1 }]);
+        assert_eq!(result.rows[1], vec![RleRun { start: 4, length: 3 }]);
+        assert_eq!(result.rows[2], vec![RleRun { start: 5, length: 1 }]);
+    }
+
+    #[test]
+    fn nbr02_euclidean_disk_eliminates_diagonal_square_bias() {
+        let w = 8;
+        let h = 8;
+        // Support pixel at (0, 0)
+        let mut b_data = vec![0u8; (w * h) as usize];
+        b_data[0] = 1;
+        let b = rle_encode(&b_data, w, h);
+
+        // Candidate pixels at (3, 4) [3^2 + 4^2 = 25 <= 25] and (4, 4) [4^2 + 4^2 = 32 > 25]
+        let mut a_data = vec![0u8; (w * h) as usize];
+        a_data[(4 * w + 3) as usize] = 1;
+        a_data[(4 * w + 4) as usize] = 1;
+        let a = rle_encode(&a_data, w, h);
+
+        let supported = rle_intersect_dilated(&a, &b, 5);
+        let candidates = rle_subtract(&a, &supported);
+
+        let supported_px = decode(&supported);
+        let candidate_px = decode(&candidates);
+        assert_eq!(
+            supported_px[(4 * w + 3) as usize],
+            1,
+            "(3, 4) with r^2=25 must be supported"
+        );
+        assert_eq!(
+            supported_px[(4 * w + 4) as usize],
+            0,
+            "(4, 4) with r^2=32 must NOT be supported"
+        );
+        assert_eq!(
+            candidate_px[(4 * w + 3) as usize],
+            0,
+            "(3, 4) must not remain candidate"
+        );
+        assert_eq!(
+            candidate_px[(4 * w + 4) as usize],
+            1,
+            "(4, 4) must remain candidate"
+        );
     }
 
     #[test]
@@ -606,6 +673,29 @@ mod tests {
         // With 8-connectivity, these diagonal pixels form 1 component
         assert_eq!(comps.len(), 1);
         assert_eq!(comps[0].area_px, 3);
+    }
+
+    #[test]
+    fn nbr02_zero_negative_buffer_and_mismatched_mask_heights() {
+        let a = rle_encode(&[1, 0, 1, 0, 0, 1, 0, 1], 4, 2);
+        let b = rle_encode(&[1, 1, 0, 0, 0, 0, 0, 1], 4, 2);
+
+        // Zero and negative buffers perform exact identity intersection without dilation
+        assert_eq!(rle_intersect_dilated(&a, &b, 0), rle_encode(&[1, 0, 0, 0, 0, 0, 0, 1], 4, 2));
+        assert_eq!(rle_intersect_dilated(&a, &b, -2), rle_encode(&[1, 0, 0, 0, 0, 0, 0, 1], 4, 2));
+
+        // Mismatched mask heights & short rows vec never panic and only sample valid B rows
+        let tall_a = rle_encode(&vec![1u8; 4 * 5], 4, 5);
+        let short_b = RleMask {
+            rows: vec![vec![RleRun { start: 1, length: 1 }]],
+            width: 4,
+            height: 3, // rows.len() == 1 < height
+        };
+        let out_short = rle_intersect_dilated(&tall_a, &short_b, 1);
+        assert_eq!(out_short.height, 5);
+        assert_eq!(decode(&out_short)[0..4], [1, 1, 1, 0]);
+        assert_eq!(decode(&out_short)[4..8], [0, 1, 0, 0]);
+        assert_eq!(decode(&out_short)[8..20], [0u8; 12]);
     }
 
     #[test]

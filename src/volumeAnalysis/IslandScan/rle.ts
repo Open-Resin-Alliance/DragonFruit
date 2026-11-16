@@ -175,71 +175,66 @@ export function rleDecode(mask: RleMask): Uint8Array {
  * Used to find "Supported" regions.
  */
 export function rleIntersectDilated(a: RleMask, b: RleMask, buffer: number): RleMask {
-    const { width, height } = a;
-    const resultRows: RleRow[] = new Array(height);
+    if (a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0) {
+        const outWidth = Math.max(0, a.width);
+        const outHeight = Math.max(0, a.height);
+        return { rows: new Array<RleRow>(outHeight).fill(EMPTY_ROW), width: outWidth, height: outHeight };
+    }
 
-    // Optimization: Pre-calculate dilated bounds for B rows?
-    // Or just iterate.
+    const { width, height } = a;
+    const r = Number.isNaN(buffer) ? 0 : Math.max(0, Math.trunc(buffer));
+    const rSq = r * r;
+    const resultRows: RleRow[] = new Array(height);
 
     for (let y = 0; y < height; y++) {
         const aRow = a.rows[y];
-        if (aRow.length === 0) {
+        if (!aRow || aRow.length === 0) {
             resultRows[y] = EMPTY_ROW;
             continue;
         }
 
-        // Gather relevant rows from B (y +/- buffer)
-        // We treat B as if every run is expanded by 'buffer' in X and Y.
-        // So a run in B at 'by' covers Y range [by - buffer, by + buffer].
-        // Conversely, for current Y, we look at B rows in [y - buffer, y + buffer].
-
-        const relevantBRows: RleRow[] = [];
-        const startY = Math.max(0, y - buffer);
-        const endY = Math.min(height - 1, y + buffer);
+        // Gather intervals from B rows within Euclidean L2 radius r around y,
+        // expanding each span horizontally by dx = floor(sqrt(r^2 - dy^2)).
+        const startY = Math.max(0, y - r);
+        const endY = Math.min(b.height - 1, y + r);
+        const bIntervals: { start: number; end: number }[] = [];
 
         for (let by = startY; by <= endY; by++) {
-            if (b.rows[by].length > 0) {
-                relevantBRows.push(b.rows[by]);
+            const bRow = b.rows[by];
+            if (!bRow || bRow.length === 0) continue;
+
+            const dy = by - y;
+            const dx = Math.floor(Math.sqrt(rSq - dy * dy));
+
+            for (let i = 0; i < bRow.length; i += 2) {
+                const s = Math.max(0, bRow[i] - dx);
+                const e = Math.min(width, bRow[i] + bRow[i + 1] + dx);
+                if (s < e) {
+                    bIntervals.push({ start: s, end: e });
+                }
             }
         }
 
-        if (relevantBRows.length === 0) {
+        if (bIntervals.length === 0) {
             resultRows[y] = EMPTY_ROW;
             continue;
-        }
-
-        // Intersect 'aRow' with the union of 'relevantBRows' (dilated horizontally)
-        // We can merge relevantBRows into a single sorted list of intervals, merging overlaps,
-        // and expanding each by 'buffer'.
-
-        const bIntervals: { start: number, end: number }[] = [];
-        for (const bRow of relevantBRows) {
-            for (let i = 0; i < bRow.length; i += 2) {
-                // Dilate horizontally
-                bIntervals.push({
-                    start: Math.max(0, bRow[i] - buffer),
-                    end: Math.min(width, bRow[i] + bRow[i + 1] + buffer)
-                });
-            }
         }
 
         // Sort and merge B intervals
         bIntervals.sort((p, q) => p.start - q.start);
 
-        const mergedB: { start: number, end: number }[] = [];
-        if (bIntervals.length > 0) {
-            let curr = bIntervals[0];
-            for (let i = 1; i < bIntervals.length; i++) {
-                const next = bIntervals[i];
-                if (next.start <= curr.end) {
-                    curr.end = Math.max(curr.end, next.end);
-                } else {
-                    mergedB.push(curr);
-                    curr = next;
-                }
+        const mergedB: { start: number; end: number }[] = [];
+        let curr = bIntervals[0];
+        for (let i = 1; i < bIntervals.length; i++) {
+            const next = bIntervals[i];
+            if (next.start <= curr.end) {
+                curr.end = Math.max(curr.end, next.end);
+            } else {
+                mergedB.push(curr);
+                curr = next;
             }
-            mergedB.push(curr);
         }
+        mergedB.push(curr);
 
         // Now intersect aRow with mergedB
         const resSpans: number[] = [];
@@ -272,7 +267,7 @@ export function rleIntersectDilated(a: RleMask, b: RleMask, buffer: number): Rle
             }
         }
 
-        resultRows[y] = new Int32Array(resSpans);
+        resultRows[y] = resSpans.length === 0 ? EMPTY_ROW : new Int32Array(resSpans);
     }
 
     return { rows: resultRows, width, height };
@@ -341,7 +336,7 @@ export function rleSubtract(a: RleMask, b: RleMask): RleMask {
  * Connected Components Labeling on RLE Mask.
  * Returns labeled RLE and component info.
  */
-export function rleLabelComponents(mask: RleMask, connectivity: 4 | 8 = 4): { labels: RleLabels, components: ComponentInfo[] } {
+export function rleLabelComponents(mask: RleMask, connectivity: 4 | 8 = 8): { labels: RleLabels, components: ComponentInfo[] } {
     const { rows, width, height } = mask;
     const labelRows: RleLabelRow[] = new Array(height);
 

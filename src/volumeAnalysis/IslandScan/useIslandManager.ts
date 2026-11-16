@@ -29,7 +29,7 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
   // Scan Parameters
   const [pxMm, setPxMm] = useState<number>(0.10);
   const [supportBufMm, setSupportBufMm] = useState<number>(0.6);
-  const [connectivity, setConnectivity] = useState<4 | 8>(4);
+  const [connectivity, setConnectivity] = useState<4 | 8>(8);
   const [minIslandAreaMm2, setMinIslandAreaMm2] = useState<number>(0);
   const [minOverlapPx, setMinOverlapPx] = useState<number>(4);
   const [overlapNeighborhoodPx, setOverlapNeighborhoodPx] = useState<number>(1);
