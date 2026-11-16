@@ -613,8 +613,7 @@ pub async fn scan_voxel_islands_from_path(
             // Retrieve first layer's centroid (seed_voxel)
             if let Some(seed) = island.seed_voxel {
                 // Map pixel coordinates to world coordinates
-                let contact_x = ox + seed.x * px_mm + px_mm * 0.5;
-                let contact_y = -(oz + seed.y * px_mm);
+                let (contact_x, contact_y) = scan_result.grid.pixel_center_to_world_xy(seed.x, seed.y);
                 let contact_z = bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm;
                 let contact = snap_to_mesh(contact_x as f32, contact_y as f32, contact_z as f32);
 
@@ -635,8 +634,7 @@ pub async fn scan_voxel_islands_from_path(
             } else {
                 // Fallback to global centroid if seed_voxel is somehow missing
                 if let Some(c) = island.centroid {
-                    let contact_x = ox + c.x * px_mm + px_mm * 0.5;
-                    let contact_y = -(oz + c.y * px_mm);
+                    let (contact_x, contact_y) = scan_result.grid.pixel_center_to_world_xy(c.x, c.y);
                     let contact_z = bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm;
                     let contact =
                         snap_to_mesh(contact_x as f32, contact_y as f32, contact_z as f32);
@@ -783,37 +781,7 @@ fn scan_islands_from_mesh(
             // Base-layer footprints: one pass over the layers that are some
             // island's first layer, appending its pixels in the same world
             // frame as the contact.
-            let mut footprints: Vec<Vec<f32>> = vec![Vec::new(); scan_result.islands.len()];
-            {
-                let mut by_layer: Vec<Vec<(i32, usize)>> = vec![Vec::new(); num_layers];
-                for (idx, island) in scan_result.islands.iter().enumerate() {
-                    if let Some(slot) = by_layer.get_mut(island.first_layer as usize) {
-                        slot.push((island.id.0 as i32, idx));
-                    }
-                }
-                for (layer, entries) in by_layer.iter().enumerate() {
-                    if entries.is_empty() {
-                        continue;
-                    }
-                    let labels = &scan_result.island_labels_per_layer[layer];
-                    for (row, runs) in labels.rows.iter().enumerate() {
-                        for run in runs {
-                            if run.id <= 0 {
-                                continue;
-                            }
-                            let Some(&(_, idx)) = entries.iter().find(|(id, _)| *id == run.id) else {
-                                continue;
-                            };
-                            let y = -(oz + row as f64 * px_mm) as f32;
-                            let out = &mut footprints[idx];
-                            for col in run.start..run.start + run.length {
-                                out.push((ox + col as f64 * px_mm + px_mm * 0.5) as f32);
-                                out.push(y);
-                            }
-                        }
-                    }
-                }
-            }
+            let footprints = scan_result.extract_first_layer_footprints_world_f32();
 
             // ── Z-bucket index for surface-snapping projections ──────────
             let z_min = bbox.min.z;
@@ -845,15 +813,17 @@ fn scan_islands_from_mesh(
                 .zip(footprints.par_iter())
                 .map(|((idx, island), footprint)| {
                     let (contact_x, contact_y, contact_z) = if let Some(seed) = island.seed_voxel {
+                        let (cx, cy) = scan_result.grid.pixel_center_to_world_xy(seed.x, seed.y);
                         (
-                            (ox + seed.x * px_mm + px_mm * 0.5) as f32,
-                            (-(oz + seed.y * px_mm)) as f32,
+                            cx as f32,
+                            cy as f32,
                             (bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm) as f32,
                         )
                     } else if let Some(c) = island.centroid {
+                        let (cx, cy) = scan_result.grid.pixel_center_to_world_xy(c.x, c.y);
                         (
-                            (ox + c.x * px_mm + px_mm * 0.5) as f32,
-                            (-(oz + c.y * px_mm)) as f32,
+                            cx as f32,
+                            cy as f32,
                             (bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm) as f32,
                         )
                     } else {

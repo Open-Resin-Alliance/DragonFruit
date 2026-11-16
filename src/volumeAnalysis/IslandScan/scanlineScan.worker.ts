@@ -1,6 +1,6 @@
 import { type ScanLayerResult, type GridRef, VOXEL_OFFSET_X, VOXEL_OFFSET_Y, VOXEL_OFFSET_Z } from './ScanOrchestrator';
 import { type RleMask, candidateVoxelPairs, rleEncode } from './rle';
-import { rasterizeLoopsScanline as rasterizeLoopsToMask, rasterizeLoopsToExistingGridScanline as rasterizeLoopsToExistingGrid } from './scanline';
+import { rasterizeSegmentsScanline as rasterizeSegmentsToMask, rasterizeSegmentsToExistingGridScanline as rasterizeSegmentsToExistingGrid } from './scanline';
 import { type Connectivity, type RasterScanOptions, type Mask } from './types';
 import { scanLayer } from './island';
 import { BucketedSlicer } from '@/components/analysis/Slice2D';
@@ -31,7 +31,7 @@ export interface LayerMessage {
 export type ScanlineWorkerMessage = InitMessage | StartMessage | LayerMessage;
 
 function toMaskFromGridRef(ref: { originX: number; originZ: number; width: number; height: number; px_mm: number }): Mask {
-    return { data: new Uint8Array(ref.width * ref.height), width: ref.width, height: ref.height, originX: ref.originX, originZ: ref.originZ, px_mm: ref.px_mm } as Mask;
+    return { data: new Uint8Array(0), width: ref.width, height: ref.height, originX: ref.originX, originZ: ref.originZ, px_mm: ref.px_mm } as Mask;
 }
 
 export function dispatchScanlineWorkerMessage(
@@ -64,29 +64,22 @@ export function dispatchScanlineWorkerMessage(
         const zTop = msg.z;
         const zBot = msg.z - msg.layerHeightMm;
 
-        const loopsNow2 = slicer.slice(zTop);
-        const loopsPrev2 = slicer.slice(zBot);
+        const segsNow = slicer.sliceSegments(zTop);
+        const segsPrev = slicer.sliceSegments(zBot);
 
         const t1 = performance.now();
 
-        // Convert Vector2 to simple object for rasterizer
-        const loopsNow = loopsNow2.map(loop => loop.map(v => ({ x: v.x, y: v.y })));
-        const loopsPrev = loopsPrev2.map(loop => loop.map(v => ({ x: v.x, y: v.y })));
-
         let currentMask: Mask;
         if (msg.gridRef) {
-            currentMask = rasterizeLoopsToExistingGrid(loopsNow, toMaskFromGridRef(msg.gridRef));
+            currentMask = rasterizeSegmentsToExistingGrid(segsNow, toMaskFromGridRef(msg.gridRef));
         } else {
-            currentMask = rasterizeLoopsToMask(loopsNow, msg.opts.px_mm, 0);
+            currentMask = rasterizeSegmentsToMask(segsNow, msg.opts.px_mm, 0);
         }
 
         // Ensure prevMask matches currentMask dimensions
-        let prevMask: Mask | null = null;
-        if (loopsPrev) {
-            // Create a mask with same dimensions as currentMask
-            const pm = { ...currentMask, data: new Uint8Array(currentMask.width * currentMask.height) };
-            prevMask = rasterizeLoopsToExistingGrid(loopsPrev, pm);
-        }
+        const prevMask: Mask | null = segsPrev.length > 0
+            ? rasterizeSegmentsToExistingGrid(segsPrev, { ...currentMask, data: new Uint8Array(currentMask.width * currentMask.height) })
+            : null;
 
         const t2 = performance.now();
 

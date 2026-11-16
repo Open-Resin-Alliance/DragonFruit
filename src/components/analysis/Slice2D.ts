@@ -2,19 +2,167 @@
 
 import * as THREE from 'three';
 
-const EPS = 1e-6;
+const Z_TOL = 3e-5;
 
-function intersectEdge(p1: THREE.Vector3, p2: THREE.Vector3, y: number): THREE.Vector3 | null {
-  const y1 = p1.y, y2 = p2.y;
-  const dy = y2 - y1;
-  if (Math.abs(dy) < EPS) return null;
-  const t = (y - y1) / dy;
-  if (t < -EPS || t > 1 + EPS) return null;
-  return new THREE.Vector3(
-    THREE.MathUtils.lerp(p1.x, p2.x, t),
-    y,
-    THREE.MathUtils.lerp(p1.z, p2.z, t)
-  );
+export interface OrientedSegment2D {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  wind: number;
+}
+
+interface PtScratch {
+  x: number;
+  y: number;
+}
+
+function edgePlaneCrossingT(a: number, b: number, plane: number): number | null {
+  const d1 = a - plane;
+  const d2 = b - plane;
+  const crosses = (d1 <= 0 && d2 > 0) || (d2 <= 0 && d1 > 0);
+  if (!crosses) return null;
+  const denom = b - a;
+  if (Math.abs(denom) < 1e-12) return null;
+  return (plane - a) / denom;
+}
+
+function distinctPointPush(
+  pts: [PtScratch, PtScratch, PtScratch],
+  count: number,
+  x: number,
+  y: number,
+  eps = 1e-5,
+): number {
+  for (let i = 0; i < count; i++) {
+    if (Math.abs(x - pts[i].x) <= eps && Math.abs(y - pts[i].y) <= eps) {
+      return count;
+    }
+  }
+  if (count < 3) {
+    pts[count].x = x;
+    pts[count].y = y;
+    return count + 1;
+  }
+  return count;
+}
+
+function extractTriangleSegmentAtZ(
+  v0x: number,
+  v0y: number,
+  v0z: number,
+  v1x: number,
+  v1y: number,
+  v1z: number,
+  v2x: number,
+  v2y: number,
+  v2z: number,
+  zSlice: number,
+  pts: [PtScratch, PtScratch, PtScratch],
+): OrientedSegment2D | null {
+  const triMinZ = Math.min(v0z, v1z, v2z);
+  const triMaxZ = Math.max(v0z, v1z, v2z);
+  if (zSlice < triMinZ || zSlice >= triMaxZ) return null;
+
+  let count = 0;
+  const t01 = edgePlaneCrossingT(v0z, v1z, zSlice);
+  if (t01 !== null) {
+    count = distinctPointPush(pts, count, v0x + t01 * (v1x - v0x), -(v0y + t01 * (v1y - v0y)));
+  }
+  const t12 = edgePlaneCrossingT(v1z, v2z, zSlice);
+  if (t12 !== null) {
+    count = distinctPointPush(pts, count, v1x + t12 * (v2x - v1x), -(v1y + t12 * (v2y - v1y)));
+  }
+  const t20 = edgePlaneCrossingT(v2z, v0z, zSlice);
+  if (t20 !== null) {
+    count = distinctPointPush(pts, count, v2x + t20 * (v0x - v2x), -(v2y + t20 * (v0y - v2y)));
+  }
+  if (count < 2) return null;
+
+  let p0x = pts[0].x;
+  let p0y = pts[0].y;
+  let p1x = pts[1].x;
+  let p1y = pts[1].y;
+
+  const ux = v1x - v0x;
+  const uy = v1y - v0y;
+  const uz = v1z - v0z;
+  const vx = v2x - v0x;
+  const vy = v2y - v0y;
+  const vz = v2z - v0z;
+  const nx = uy * vz - uz * vy;
+  const ny = uz * vx - ux * vz;
+
+  // World direction n x +Z = (ny, -nx) projects into 2D (x, -y) as (ny, +nx).
+  if ((p1x - p0x) * ny + (p1y - p0y) * nx < 0) {
+    const tx = p0x;
+    const ty = p0y;
+    p0x = p1x;
+    p0y = p1y;
+    p1x = tx;
+    p1y = ty;
+  }
+
+  const wind = nx > 0 ? -1 : (nx < 0 ? 1 : 0);
+  return { x1: p0x, y1: p0y, x2: p1x, y2: p1y, wind };
+}
+
+function extractSegmentsFromPositions(
+  positions: Float32Array,
+  indices: Int32Array | null,
+  z: number,
+  skipHorizontal: boolean,
+): OrientedSegment2D[] {
+  const zSlice = z + 1e-5;
+  const segments: OrientedSegment2D[] = [];
+  const pts: [PtScratch, PtScratch, PtScratch] = [
+    { x: 0, y: 0 },
+    { x: 0, y: 0 },
+    { x: 0, y: 0 },
+  ];
+
+  if (indices === null) {
+    for (let i = 0; i + 8 < positions.length; i += 9) {
+      const seg = extractTriangleSegmentAtZ(
+        positions[i],
+        positions[i + 1],
+        positions[i + 2],
+        positions[i + 3],
+        positions[i + 4],
+        positions[i + 5],
+        positions[i + 6],
+        positions[i + 7],
+        positions[i + 8],
+        zSlice,
+        pts,
+      );
+      if (!seg) continue;
+      if (skipHorizontal && (seg.wind === 0 || Math.abs(seg.y2 - seg.y1) < 1e-8)) continue;
+      segments.push(seg);
+    }
+  } else {
+    for (let k = 0; k < indices.length; k++) {
+      const i = indices[k];
+      const seg = extractTriangleSegmentAtZ(
+        positions[i],
+        positions[i + 1],
+        positions[i + 2],
+        positions[i + 3],
+        positions[i + 4],
+        positions[i + 5],
+        positions[i + 6],
+        positions[i + 7],
+        positions[i + 8],
+        zSlice,
+        pts,
+      );
+      if (!seg) continue;
+      if (skipHorizontal && (seg.wind === 0 || Math.abs(seg.y2 - seg.y1) < 1e-8)) continue;
+      segments.push(seg);
+    }
+  }
+
+  return segments;
 }
 
 function key2(v: THREE.Vector2): string {
@@ -22,108 +170,243 @@ function key2(v: THREE.Vector2): string {
 }
 
 function buildLoops(segments: Array<[THREE.Vector2, THREE.Vector2]>): THREE.Vector2[][] {
-  const nextMap = new Map<string, THREE.Vector2[]>();
-  for (const [a, b] of segments) {
-    const ka = key2(a), kb = key2(b);
-    if (!nextMap.has(ka)) nextMap.set(ka, []);
-    if (!nextMap.has(kb)) nextMap.set(kb, []);
-    nextMap.get(ka)!.push(b);
-    nextMap.get(kb)!.push(a);
+  if (segments.length === 0) return [];
+  interface AdjEdge {
+    to: THREE.Vector2;
+    toKey: string;
+    idx: number;
   }
-  const visited = new Set<string>();
+  const outMap = new Map<string, AdjEdge[]>();
+  const undirMap = new Map<string, AdjEdge[]>();
+
+  for (let idx = 0; idx < segments.length; idx++) {
+    const [a, b] = segments[idx];
+    const ka = key2(a);
+    const kb = key2(b);
+    if (ka === kb) continue;
+
+    let outList = outMap.get(ka);
+    if (!outList) {
+      outList = [];
+      outMap.set(ka, outList);
+    }
+    outList.push({ to: b, toKey: kb, idx });
+
+    let ua = undirMap.get(ka);
+    if (!ua) {
+      ua = [];
+      undirMap.set(ka, ua);
+    }
+    ua.push({ to: b, toKey: kb, idx });
+
+    let ub = undirMap.get(kb);
+    if (!ub) {
+      ub = [];
+      undirMap.set(kb, ub);
+    }
+    ub.push({ to: a, toKey: ka, idx });
+  }
+
+  const used = new Uint8Array(segments.length);
   const loops: THREE.Vector2[][] = [];
-  for (const [k, neighbors] of nextMap) {
-    if (visited.has(k)) continue;
-    if (!neighbors.length) continue;
-    const start = new THREE.Vector2(parseFloat(k.split(':')[0]) / 1e5, parseFloat(k.split(':')[1]) / 1e5);
-    let current = start.clone();
-    const loop: THREE.Vector2[] = [start.clone()];
-    visited.add(k);
+
+  for (let startIdx = 0; startIdx < segments.length; startIdx++) {
+    if (used[startIdx]) continue;
+    const [startA, startB] = segments[startIdx];
+    const startKey = key2(startA);
+    const firstKey = key2(startB);
+    if (startKey === firstKey) {
+      used[startIdx] = 1;
+      continue;
+    }
+
+    used[startIdx] = 1;
+    const loop: THREE.Vector2[] = [startA.clone(), startB.clone()];
+    let curKey = firstKey;
     let guard = 0;
-    while (guard++ < 100000) {
-      const kn = key2(current);
-      const options = nextMap.get(kn) || [];
-      let next: THREE.Vector2 | null = null;
-      for (const cand of options) {
-        const kc = key2(cand);
-        if (!visited.has(kc) || (kc === key2(start) && loop.length > 2)) {
-          next = cand.clone();
-          break;
+
+    while (guard++ <= segments.length) {
+      if (curKey === startKey) break;
+
+      let chosen: AdjEdge | null = null;
+      const outOpts = outMap.get(curKey);
+      if (outOpts) {
+        for (let j = 0; j < outOpts.length; j++) {
+          const cand = outOpts[j];
+          if (used[cand.idx]) continue;
+          if (cand.toKey === startKey && loop.length >= 3) {
+            chosen = cand;
+            break;
+          }
+          if (!chosen && cand.toKey !== startKey) {
+            chosen = cand;
+          }
+        }
+        if (!chosen) {
+          for (let j = 0; j < outOpts.length; j++) {
+            if (!used[outOpts[j].idx]) {
+              chosen = outOpts[j];
+              break;
+            }
+          }
         }
       }
-      if (!next) break;
-      loop.push(next.clone());
-      const knext = key2(next);
-      if (knext === key2(start)) {
-        break; // closed
+
+      if (!chosen) {
+        const uOpts = undirMap.get(curKey);
+        if (uOpts) {
+          for (let j = 0; j < uOpts.length; j++) {
+            const cand = uOpts[j];
+            if (used[cand.idx]) continue;
+            if (cand.toKey === startKey && loop.length >= 3) {
+              chosen = cand;
+              break;
+            }
+            if (!chosen && cand.toKey !== startKey) {
+              chosen = cand;
+            }
+          }
+          if (!chosen) {
+            for (let j = 0; j < uOpts.length; j++) {
+              if (!used[uOpts[j].idx]) {
+                chosen = uOpts[j];
+                break;
+              }
+            }
+          }
+        }
       }
-      visited.add(knext);
-      current = next;
+
+      if (!chosen) break;
+      used[chosen.idx] = 1;
+      curKey = chosen.toKey;
+      if (curKey === startKey) {
+        break;
+      }
+      loop.push(chosen.to.clone());
     }
-    if (loop.length >= 3) loops.push(loop);
+
+    if (loop.length >= 3) {
+      loops.push(loop);
+    }
   }
+
   return loops;
 }
 
+function buildLoopsFromOriented(segments: OrientedSegment2D[]): THREE.Vector2[][] {
+  if (segments.length === 0) return [];
+  const pairs: Array<[THREE.Vector2, THREE.Vector2]> = new Array(segments.length);
+  for (let i = 0; i < segments.length; i++) {
+    const s = segments[i];
+    pairs[i] = [new THREE.Vector2(s.x1, s.y1), new THREE.Vector2(s.x2, s.y2)];
+  }
+  return buildLoops(pairs);
+}
+
 export function computeLoopsAtY(geometry: THREE.BufferGeometry, y: number): THREE.Vector2[][] {
-  const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
+  const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+  if (!pos || pos.count < 3) return [];
+  const index = geometry.getIndex();
+  const triCount = index ? Math.floor(index.count / 3) : Math.floor(pos.count / 3);
   const segments: Array<[THREE.Vector2, THREE.Vector2]> = [];
   // Nudge the slicing plane slightly upward to capture coplanar top faces as outlines
   const ySlice = y + 1e-5;
-  for (let i = 0; i < pos.count; i += 3) {
-    const v0 = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-    const v1 = new THREE.Vector3(pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1));
-    const v2 = new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2));
-    const vs = [v0, v1, v2];
-    const above = vs.map(v => v.y >= ySlice + 10 * EPS);
-    const below = vs.map(v => v.y <= ySlice - 10 * EPS);
-    if ((above[0] && above[1] && above[2]) || (below[0] && below[1] && below[2])) continue;
-    const points: THREE.Vector3[] = [];
-    const e01 = intersectEdge(v0, v1, ySlice); if (e01) points.push(e01);
-    const e12 = intersectEdge(v1, v2, ySlice); if (e12) points.push(e12);
-    const e20 = intersectEdge(v2, v0, ySlice); if (e20) points.push(e20);
-    if (points.length === 2) {
-      const a = new THREE.Vector2(points[0].x, -points[0].z);
-      const b = new THREE.Vector2(points[1].x, -points[1].z);
-      segments.push([a, b]);
+  const pts: [PtScratch, PtScratch, PtScratch] = [
+    { x: 0, y: 0 },
+    { x: 0, y: 0 },
+    { x: 0, y: 0 },
+  ];
+
+  for (let t = 0; t < triCount; t++) {
+    const i0 = index ? index.getX(t * 3) : t * 3;
+    const i1 = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+    const i2 = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+    if (i0 < 0 || i1 < 0 || i2 < 0 || i0 >= pos.count || i1 >= pos.count || i2 >= pos.count) continue;
+
+    const v0x = pos.getX(i0), v0y = pos.getY(i0), v0z = pos.getZ(i0);
+    const v1x = pos.getX(i1), v1y = pos.getY(i1), v1z = pos.getZ(i1);
+    const v2x = pos.getX(i2), v2y = pos.getY(i2), v2z = pos.getZ(i2);
+
+    const triMinY = Math.min(v0y, v1y, v2y);
+    const triMaxY = Math.max(v0y, v1y, v2y);
+    if (ySlice < triMinY || ySlice >= triMaxY) continue;
+
+    let count = 0;
+    const t01 = edgePlaneCrossingT(v0y, v1y, ySlice);
+    if (t01 !== null) {
+      count = distinctPointPush(pts, count, v0x + t01 * (v1x - v0x), -(v0z + t01 * (v1z - v0z)));
     }
+    const t12 = edgePlaneCrossingT(v1y, v2y, ySlice);
+    if (t12 !== null) {
+      count = distinctPointPush(pts, count, v1x + t12 * (v2x - v1x), -(v1z + t12 * (v2z - v1z)));
+    }
+    const t20 = edgePlaneCrossingT(v2y, v0y, ySlice);
+    if (t20 !== null) {
+      count = distinctPointPush(pts, count, v2x + t20 * (v0x - v2x), -(v2z + t20 * (v0z - v2z)));
+    }
+    if (count < 2) continue;
+
+    let p0x = pts[0].x;
+    let p0y = pts[0].y;
+    let p1x = pts[1].x;
+    let p1y = pts[1].y;
+
+    const ux = v1x - v0x, uy = v1y - v0y, uz = v1z - v0z;
+    const vx = v2x - v0x, vy = v2y - v0y, vz = v2z - v0z;
+    const nx = uy * vz - uz * vy;
+    const nz = ux * vy - uy * vx;
+    // n x +Y = (-nz, 0, nx) projects into 2D (x, -z) as (-nz, -nx).
+    if ((p1x - p0x) * -nz + (p1y - p0y) * -nx < 0) {
+      const tx = p0x;
+      const ty = p0y;
+      p0x = p1x;
+      p0y = p1y;
+      p1x = tx;
+      p1y = ty;
+    }
+
+    segments.push([new THREE.Vector2(p0x, p0y), new THREE.Vector2(p1x, p1y)]);
   }
   return buildLoops(segments);
 }
 
 // Slice at Z height (for Z-up coordinate system)
 export function computeLoopsAtZ(geometry: THREE.BufferGeometry, z: number): THREE.Vector2[][] {
-  const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
-  const segments: Array<[THREE.Vector2, THREE.Vector2]> = [];
+  const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+  if (!pos || pos.count < 3) return [];
+  const index = geometry.getIndex();
+  const triCount = index ? Math.floor(index.count / 3) : Math.floor(pos.count / 3);
   const zSlice = z + 1e-5;
+  const oriented: OrientedSegment2D[] = [];
+  const pts: [PtScratch, PtScratch, PtScratch] = [
+    { x: 0, y: 0 },
+    { x: 0, y: 0 },
+    { x: 0, y: 0 },
+  ];
 
-  function intersectEdgeZ(a: THREE.Vector3, b: THREE.Vector3): THREE.Vector3 | null {
-    const dz = b.z - a.z;
-    if (Math.abs(dz) < EPS) return null;
-    const t = (zSlice - a.z) / dz;
-    if (t < -EPS || t > 1 + EPS) return null;
-    return new THREE.Vector3(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), zSlice);
-  }
+  for (let t = 0; t < triCount; t++) {
+    const i0 = index ? index.getX(t * 3) : t * 3;
+    const i1 = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+    const i2 = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+    if (i0 < 0 || i1 < 0 || i2 < 0 || i0 >= pos.count || i1 >= pos.count || i2 >= pos.count) continue;
 
-  for (let i = 0; i < pos.count; i += 3) {
-    const v0 = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-    const v1 = new THREE.Vector3(pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1));
-    const v2 = new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2));
-    const vs = [v0, v1, v2];
-    const above = vs.map(v => v.z >= zSlice + 10 * EPS);
-    const below = vs.map(v => v.z <= zSlice - 10 * EPS);
-    if ((above[0] && above[1] && above[2]) || (below[0] && below[1] && below[2])) continue;
-    const points: THREE.Vector3[] = [];
-    const e01 = intersectEdgeZ(v0, v1); if (e01) points.push(e01);
-    const e12 = intersectEdgeZ(v1, v2); if (e12) points.push(e12);
-    const e20 = intersectEdgeZ(v2, v0); if (e20) points.push(e20);
-    if (points.length === 2) {
-      const a = new THREE.Vector2(points[0].x, -points[0].y);
-      const b = new THREE.Vector2(points[1].x, -points[1].y);
-      segments.push([a, b]);
-    }
+    const seg = extractTriangleSegmentAtZ(
+      pos.getX(i0),
+      pos.getY(i0),
+      pos.getZ(i0),
+      pos.getX(i1),
+      pos.getY(i1),
+      pos.getZ(i1),
+      pos.getX(i2),
+      pos.getY(i2),
+      pos.getZ(i2),
+      zSlice,
+      pts,
+    );
+    if (seg) oriented.push(seg);
   }
-  return buildLoops(segments);
+  return buildLoopsFromOriented(oriented);
 }
 
 export function polygonArea(loop: THREE.Vector2[]): number {
@@ -134,56 +417,31 @@ export function polygonArea(loop: THREE.Vector2[]): number {
   return Math.abs(area) * 0.5;
 }
 
+export function computeSegmentsFromPositions(positions: Float32Array, z: number): OrientedSegment2D[] {
+  return extractSegmentsFromPositions(positions, null, z, true);
+}
+
 export function computeLoopsFromPositions(positions: Float32Array, z: number): THREE.Vector2[][] {
-  const segments: Array<[THREE.Vector2, THREE.Vector2]> = [];
-  const zSlice = z + 1e-5;
-
-  function intersectEdgeZ(ax: number, ay: number, az: number, bx: number, by: number, bz: number): THREE.Vector3 | null {
-    const dz = bz - az;
-    if (Math.abs(dz) < EPS) return null;
-    const t = (zSlice - az) / dz;
-    if (t < -EPS || t > 1 + EPS) return null;
-    return new THREE.Vector3(ax + t * (bx - ax), ay + t * (by - ay), zSlice);
-  }
-
-  for (let i = 0; i < positions.length; i += 9) {
-    const v0x = positions[i], v0y = positions[i + 1], v0z = positions[i + 2];
-    const v1x = positions[i + 3], v1y = positions[i + 4], v1z = positions[i + 5];
-    const v2x = positions[i + 6], v2y = positions[i + 7], v2z = positions[i + 8];
-
-    const above0 = v0z >= zSlice + 10 * EPS;
-    const above1 = v1z >= zSlice + 10 * EPS;
-    const above2 = v2z >= zSlice + 10 * EPS;
-
-    const below0 = v0z <= zSlice - 10 * EPS;
-    const below1 = v1z <= zSlice - 10 * EPS;
-    const below2 = v2z <= zSlice - 10 * EPS;
-
-    if ((above0 && above1 && above2) || (below0 && below1 && below2)) continue;
-
-    const points: THREE.Vector3[] = [];
-    const e01 = intersectEdgeZ(v0x, v0y, v0z, v1x, v1y, v1z); if (e01) points.push(e01);
-    const e12 = intersectEdgeZ(v1x, v1y, v1z, v2x, v2y, v2z); if (e12) points.push(e12);
-    const e20 = intersectEdgeZ(v2x, v2y, v2z, v0x, v0y, v0z); if (e20) points.push(e20);
-
-    if (points.length === 2) {
-      const a = new THREE.Vector2(points[0].x, -points[0].y);
-      const b = new THREE.Vector2(points[1].x, -points[1].y);
-      segments.push([a, b]);
-    }
-  }
-  return buildLoops(segments);
+  return buildLoopsFromOriented(extractSegmentsFromPositions(positions, null, z, false));
 }
 
 export class BucketedSlicer {
   private positions: Float32Array;
   private buckets: Int32Array[];
   private minZ: number;
+  private maxZ: number;
   private bucketHeight: number;
 
   constructor(positions: Float32Array, bucketHeight = 5.0) {
     this.positions = positions;
     this.bucketHeight = bucketHeight;
+
+    if (positions.length < 9) {
+      this.minZ = 0;
+      this.maxZ = 0;
+      this.buckets = [];
+      return;
+    }
 
     // 1. Find Z bounds
     let minZ = Infinity;
@@ -194,13 +452,14 @@ export class BucketedSlicer {
       if (z > maxZ) maxZ = z;
     }
     this.minZ = minZ;
+    this.maxZ = maxZ;
 
     // 2. Initialize buckets
-    const numBuckets = Math.ceil((maxZ - minZ) / bucketHeight) + 1;
+    const numBuckets = Math.max(1, Math.ceil((maxZ - minZ) / bucketHeight) + 1);
     const tempBuckets: number[][] = Array.from({ length: numBuckets }, () => []);
 
-    // 3. Fill buckets
-    for (let i = 0; i < positions.length; i += 9) {
+    // 3. Fill buckets with Z_TOL boundary margin
+    for (let i = 0; i + 8 < positions.length; i += 9) {
       const z0 = positions[i + 2];
       const z1 = positions[i + 5];
       const z2 = positions[i + 8];
@@ -208,13 +467,11 @@ export class BucketedSlicer {
       const triMinZ = Math.min(z0, z1, z2);
       const triMaxZ = Math.max(z0, z1, z2);
 
-      const startBucket = Math.floor((triMinZ - minZ) / bucketHeight);
-      const endBucket = Math.floor((triMaxZ - minZ) / bucketHeight);
+      const startBucket = Math.max(0, Math.floor((triMinZ - Z_TOL - minZ) / bucketHeight));
+      const endBucket = Math.min(numBuckets - 1, Math.floor((triMaxZ + Z_TOL - minZ) / bucketHeight));
 
       for (let b = startBucket; b <= endBucket; b++) {
-        if (b >= 0 && b < numBuckets) {
-          tempBuckets[b].push(i); // Store triangle start index
-        }
+        tempBuckets[b].push(i); // Store triangle start index
       }
     }
 
@@ -222,50 +479,27 @@ export class BucketedSlicer {
     this.buckets = tempBuckets.map(b => new Int32Array(b));
   }
 
-  slice(z: number): THREE.Vector2[][] {
-    const bucketIdx = Math.floor((z - this.minZ) / this.bucketHeight);
-    if (bucketIdx < 0 || bucketIdx >= this.buckets.length) return [];
-
-    const indices = this.buckets[bucketIdx];
-    const segments: Array<[THREE.Vector2, THREE.Vector2]> = [];
+  private getBucketIndicesForZ(z: number): Int32Array | null {
     const zSlice = z + 1e-5;
-    const positions = this.positions;
-
-    function intersectEdgeZ(ax: number, ay: number, az: number, bx: number, by: number, bz: number): THREE.Vector3 | null {
-      const dz = bz - az;
-      if (Math.abs(dz) < EPS) return null;
-      const t = (zSlice - az) / dz;
-      if (t < -EPS || t > 1 + EPS) return null;
-      return new THREE.Vector3(ax + t * (bx - ax), ay + t * (by - ay), zSlice);
+    if (this.buckets.length === 0 || zSlice < this.minZ - Z_TOL || zSlice > this.maxZ + Z_TOL) {
+      return null;
     }
+    const bucketIdx = Math.min(
+      this.buckets.length - 1,
+      Math.max(0, Math.floor((zSlice - this.minZ) / this.bucketHeight)),
+    );
+    return this.buckets[bucketIdx];
+  }
 
-    for (let k = 0; k < indices.length; k++) {
-      const i = indices[k];
-      const v0x = positions[i], v0y = positions[i + 1], v0z = positions[i + 2];
-      const v1x = positions[i + 3], v1y = positions[i + 4], v1z = positions[i + 5];
-      const v2x = positions[i + 6], v2y = positions[i + 7], v2z = positions[i + 8];
+  sliceSegments(z: number): OrientedSegment2D[] {
+    const indices = this.getBucketIndicesForZ(z);
+    if (!indices || indices.length === 0) return [];
+    return extractSegmentsFromPositions(this.positions, indices, z, true);
+  }
 
-      const above0 = v0z >= zSlice + 10 * EPS;
-      const above1 = v1z >= zSlice + 10 * EPS;
-      const above2 = v2z >= zSlice + 10 * EPS;
-
-      const below0 = v0z <= zSlice - 10 * EPS;
-      const below1 = v1z <= zSlice - 10 * EPS;
-      const below2 = v2z <= zSlice - 10 * EPS;
-
-      if ((above0 && above1 && above2) || (below0 && below1 && below2)) continue;
-
-      const points: THREE.Vector3[] = [];
-      const e01 = intersectEdgeZ(v0x, v0y, v0z, v1x, v1y, v1z); if (e01) points.push(e01);
-      const e12 = intersectEdgeZ(v1x, v1y, v1z, v2x, v2y, v2z); if (e12) points.push(e12);
-      const e20 = intersectEdgeZ(v2x, v2y, v2z, v0x, v0y, v0z); if (e20) points.push(e20);
-
-      if (points.length === 2) {
-        const a = new THREE.Vector2(points[0].x, -points[0].y);
-        const b = new THREE.Vector2(points[1].x, -points[1].y);
-        segments.push([a, b]);
-      }
-    }
-    return buildLoops(segments);
+  slice(z: number): THREE.Vector2[][] {
+    const indices = this.getBucketIndicesForZ(z);
+    if (!indices || indices.length === 0) return [];
+    return buildLoopsFromOriented(extractSegmentsFromPositions(this.positions, indices, z, false));
   }
 }

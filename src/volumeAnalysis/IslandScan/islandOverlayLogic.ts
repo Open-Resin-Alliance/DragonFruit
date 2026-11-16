@@ -28,8 +28,8 @@ export type IslandMarker = {
  * - grid.height: Number of pixels in Y direction (rows)
  * 
  * CONVERSION:
- * - Grid column → World X: originX + col * px_mm
- * - Grid row → World Y: -(originZ + row * px_mm)  [negation undoes the -Y storage]
+ * - Grid column → World X: originX + (col + 0.5) * px_mm
+ * - Grid row → World Y: -(originZ + (row + 0.5) * px_mm)  [negation undoes the -Y storage]
  */
 export function computeIslandMarkers(
   scanResults: ScanResults,
@@ -109,8 +109,8 @@ export function computeIslandMarkers(
           // X: straightforward mapping from column with voxel offset
           const worldX = grid.originX + col * grid.px_mm + grid.px_mm * VOXEL_OFFSET_X;
           // Y: grid.originZ stores -Y, so negate to get back to +Y
-          // Subtract offset inside negation to shift Up (Positive Y)
-          const worldY = -(grid.originZ + rowIndex * grid.px_mm - grid.px_mm * VOXEL_OFFSET_Y);
+          // Add offset inside negation so pixel center sits at originZ + (row + 0.5) * px_mm
+          const worldY = -(grid.originZ + rowIndex * grid.px_mm + grid.px_mm * VOXEL_OFFSET_Y);
 
           sumX += worldX;
           sumY += worldY;
@@ -181,7 +181,7 @@ function buildIslandGeometry(
       for (let j = 0; j < len; j++) {
         const col = start + j;
         const worldX = grid.originX + col * grid.px_mm + grid.px_mm * VOXEL_OFFSET_X;
-        const worldY = -(grid.originZ + rowIndex * grid.px_mm - grid.px_mm * VOXEL_OFFSET_Y);
+        const worldY = -(grid.originZ + rowIndex * grid.px_mm + grid.px_mm * VOXEL_OFFSET_Y);
         pixels.push({ x: worldX, y: worldY });
       }
     }
@@ -461,9 +461,8 @@ export function computeSeedMarkers(
     // Convert grid coordinates to world coordinates
     // Matches logic in computeIslandMarkers for perfect alignment
     const worldX = grid.originX + col * grid.px_mm + grid.px_mm * VOXEL_OFFSET_X;
-    // Y: grid.originZ stores -Y, negation undoes it. Subtract offset inside negation to shift up.
-    // Note: computeIslandMarkers uses logic: `-(grid.originZ + rowIndex * grid.px_mm - grid.px_mm * VOXEL_OFFSET_Y)`
-    const worldY = -(grid.originZ + row * grid.px_mm - grid.px_mm * VOXEL_OFFSET_Y);
+    // Y: grid.originZ stores -Y, negation undoes it. Add offset inside negation for pixel center.
+    const worldY = -(grid.originZ + row * grid.px_mm + grid.px_mm * VOXEL_OFFSET_Y);
     const worldZ = bbox.min.z + layer * layerHeightMm + layerHeightMm / 2; // Center Z
 
     // Clone geometry and position
@@ -480,5 +479,6 @@ export function computeSeedMarkers(
     });
   }
 
+  boxGeometry.dispose();
   return markers;
 }

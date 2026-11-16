@@ -10,7 +10,7 @@ import type { Island, ComponentInfo } from './types';
 // 0.5 = Center of pixel.
 // Independent axis control requested.
 export const VOXEL_OFFSET_X = 0.5;
-export const VOXEL_OFFSET_Y = 0;
+export const VOXEL_OFFSET_Y = 0.5;
 export const VOXEL_OFFSET_Z = 0.5;
 
 export type GridRef = { originX: number; originZ: number; width: number; height: number; px_mm: number };

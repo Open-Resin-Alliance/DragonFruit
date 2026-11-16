@@ -11,7 +11,7 @@ import { VoxelFootprintBuilder } from './voxelFootprint';
 // Pixel-centre offsets — mirror ScanOrchestrator's VOXEL_OFFSET_{X,Y} so contact
 // points land in the same world frame as the legacy overlay.
 const VOXEL_OFFSET_X = 0.5;
-const VOXEL_OFFSET_Y = 0;
+const VOXEL_OFFSET_Y = 0.5;
 
 export interface VoxelDetectParams {
   pxMm: number;
@@ -361,7 +361,7 @@ async function buildIslands(
       const col = codec.colOf(k);
       const row = codec.rowOf(k);
       const vx = geom.originX + col * geom.px + geom.px * VOXEL_OFFSET_X;
-      const vy = -(geom.originZ + row * geom.px - geom.px * VOXEL_OFFSET_Y);
+      const vy = -(geom.originZ + row * geom.px + geom.px * VOXEL_OFFSET_Y);
       sumX += vx;
       sumY += vy;
       baseCount++;

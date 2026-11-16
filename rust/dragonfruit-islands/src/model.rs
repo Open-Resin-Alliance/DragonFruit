@@ -360,6 +360,18 @@ pub struct GridRef {
     pub px_mm: f64,
 }
 
+impl GridRef {
+    /// Map 0-based grid `(col, row)` coordinates to world `(x, y)` mm at pixel centers.
+    /// `origin_z` stores `-bbox_max_y` (`mask_y = -world_y`), so `+0.5 * px_mm` sits inside negation.
+    #[inline]
+    pub fn pixel_center_to_world_xy(&self, col: f64, row: f64) -> (f64, f64) {
+        (
+            self.origin_x + (col + 0.5) * self.px_mm,
+            -(self.origin_z + (row + 0.5) * self.px_mm),
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Island Scan Job (Value Object / Command)
 // ---------------------------------------------------------------------------
@@ -405,6 +417,45 @@ pub struct IslandScanResult {
     pub grid: GridRef,
     pub islands: Vec<Island>,
     pub island_labels_per_layer: Vec<RleLabels>,
+}
+
+impl IslandScanResult {
+    /// Extract flat `[x0, y0, x1, y1, ...]` world-mm base-layer pixel centers (`f32`) for each island.
+    pub fn extract_first_layer_footprints_world_f32(&self) -> Vec<Vec<f32>> {
+        let num_layers = self.island_labels_per_layer.len();
+        let mut footprints: Vec<Vec<f32>> = vec![Vec::new(); self.islands.len()];
+        let mut by_layer: Vec<Vec<(i32, usize)>> = vec![Vec::new(); num_layers];
+        for (idx, island) in self.islands.iter().enumerate() {
+            if let Some(slot) = by_layer.get_mut(island.first_layer as usize) {
+                slot.push((island.id.0 as i32, idx));
+            }
+        }
+        for (layer, entries) in by_layer.iter().enumerate() {
+            if entries.is_empty() {
+                continue;
+            }
+            let labels = &self.island_labels_per_layer[layer];
+            for (row, runs) in labels.rows.iter().enumerate() {
+                for run in runs {
+                    if run.id <= 0 {
+                        continue;
+                    }
+                    let Some(&(_, idx)) = entries.iter().find(|(id, _)| *id == run.id) else {
+                        continue;
+                    };
+                    let (_, y_f64) = self.grid.pixel_center_to_world_xy(0.0, row as f64);
+                    let y = y_f64 as f32;
+                    let out = &mut footprints[idx];
+                    for col in run.start..run.start + run.length {
+                        let (x_f64, _) = self.grid.pixel_center_to_world_xy(col as f64, row as f64);
+                        out.push(x_f64 as f32);
+                        out.push(y);
+                    }
+                }
+            }
+        }
+        footprints
+    }
 }
 
 #[cfg(test)]

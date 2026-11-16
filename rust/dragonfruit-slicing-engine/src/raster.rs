@@ -2902,6 +2902,174 @@ fn rasterize_layer_with_stats_impl(
     (mask, stats)
 }
 
+#[inline]
+fn cross_t_f64(az: f64, bz: f64, z: f64) -> Option<f64> {
+    let dz1 = az - z;
+    let dz2 = bz - z;
+    let crosses = (dz1 <= 0.0 && dz2 > 0.0) || (dz2 <= 0.0 && dz1 > 0.0);
+    if !crosses {
+        return None;
+    }
+    let denom = bz - az;
+    if denom.abs() < 1e-12 {
+        return None;
+    }
+    Some((z - az) / denom)
+}
+
+/// Rasterize triangle intersections at `z_slice` into coalesced inclusive
+/// `[start, end]` pixel spans per scanline row using oriented non-zero winding
+/// and defective-row matched-pair repair.
+///
+/// Pixel `(col, row)` center lies at grid coordinates `(col + 0.5, row + 0.5)`:
+///   `gx = (wx - origin_x) / px_mm`
+///   `gy = (flip_y ? -wy - origin_y : wy - origin_y) / px_mm`
+pub fn rasterize_triangles_at_z_nonzero_spans<F>(
+    triangles: &[&Triangle],
+    z_slice: f64,
+    origin_x: f64,
+    origin_y: f64,
+    px_mm: f64,
+    width: usize,
+    height: usize,
+    flip_y: bool,
+    mut on_row_spans: F,
+) where
+    F: FnMut(usize, &[(usize, usize)]),
+{
+    if width == 0
+        || height == 0
+        || px_mm <= 0.0
+        || !px_mm.is_finite()
+        || !z_slice.is_finite()
+        || triangles.is_empty()
+    {
+        return;
+    }
+
+    let inv_px = 1.0 / px_mm;
+    let mut segments = Vec::with_capacity(triangles.len());
+
+    for &tri in triangles {
+        let az = tri.a.z as f64;
+        let bz = tri.b.z as f64;
+        let cz = tri.c.z as f64;
+        let tri_min_z = az.min(bz).min(cz);
+        let tri_max_z = az.max(bz).max(cz);
+        if z_slice < tri_min_z || z_slice >= tri_max_z {
+            continue;
+        }
+
+        let mut pts = [(0.0f32, 0.0f32); 3];
+        let mut count = 0usize;
+
+        let mut push_edge =
+            |p1: crate::geometry::Vec3, p1z: f64, p2: crate::geometry::Vec3, p2z: f64| {
+                if let Some(t) = cross_t_f64(p1z, p2z, z_slice) {
+                    let p1x = p1.x as f64;
+                    let p1y = p1.y as f64;
+                    let wx = p1x + t * (p2.x as f64 - p1x);
+                    let wy = p1y + t * (p2.y as f64 - p1y);
+                    let gx = ((wx - origin_x) * inv_px) as f32;
+                    let gy = (if flip_y {
+                        (-wy - origin_y) * inv_px
+                    } else {
+                        (wy - origin_y) * inv_px
+                    }) as f32;
+                    distinct_points_push(&mut pts, &mut count, (gx, gy));
+                }
+            };
+
+        push_edge(tri.a, az, tri.b, bz);
+        push_edge(tri.b, bz, tri.c, cz);
+        push_edge(tri.c, cz, tri.a, az);
+
+        if count < 2 {
+            continue;
+        }
+
+        let dy = pts[1].1 - pts[0].1;
+        if dy.abs() < 1e-8 {
+            continue;
+        }
+
+        let wind = if tri.dir_y != 0.0 {
+            tri.fill_wind
+        } else {
+            let nx = (tri.b.y as f64 - tri.a.y as f64) * (tri.c.z as f64 - tri.a.z as f64)
+                - (tri.b.z as f64 - tri.a.z as f64) * (tri.c.y as f64 - tri.a.y as f64);
+            if nx == 0.0 {
+                continue;
+            }
+            if nx > 0.0 {
+                -1
+            } else {
+                1
+            }
+        };
+
+        segments.push(Segment {
+            x1: pts[0].0,
+            y1: pts[0].1,
+            dx_dy: (pts[1].0 - pts[0].0) / dy,
+            y_min: pts[0].1.min(pts[1].1),
+            y_max: pts[0].1.max(pts[1].1),
+            wind,
+        });
+    }
+
+    if segments.is_empty() {
+        return;
+    }
+
+    let Some(scanline_index) = build_scanline_segment_index(&segments, height, 1, 0.5) else {
+        return;
+    };
+
+    let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
+    let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
+    let mut prev_spans: Vec<RowSpan> = Vec::new();
+    let mut coalesced: Vec<(usize, usize)> = Vec::new();
+
+    for y in scanline_index.y_start..scanline_index.y_end_exclusive {
+        active_edges.retain(|edge| edge.end_exclusive > y);
+        let row_start = scanline_index.row_offsets[y];
+        let row_end = scanline_index.row_offsets[y + 1];
+        if row_start != row_end {
+            merge_active_edges_sorted(
+                &mut active_edges,
+                &scanline_index.starts[row_start..row_end],
+                &mut merge_scratch,
+            );
+        }
+        if active_edges.is_empty() {
+            prev_spans.clear();
+            continue;
+        }
+
+        let spans = build_row_spans_nonzero_ctx(&active_edges, width, true, Some(&prev_spans));
+        coalesced.clear();
+        for span in &spans {
+            if let Some(last) = coalesced.last_mut() {
+                if span.start <= last.1.saturating_add(1) {
+                    last.1 = last.1.max(span.end);
+                    continue;
+                }
+            }
+            coalesced.push((span.start, span.end));
+        }
+        if !coalesced.is_empty() {
+            on_row_spans(y, &coalesced);
+        }
+
+        prev_spans = spans;
+        for edge in &mut active_edges {
+            edge.x += edge.dx_dy;
+        }
+        restore_active_edges_sorted(&mut active_edges);
+    }
+}
+
 /// Rasterize one layer into an 8-bit grayscale mask (`0` or `255`), optionally
 /// bypassing AA for support/raft geometry when model/support split metadata is
 /// provided in `job.model_triangle_count`.
@@ -6751,5 +6919,127 @@ mod tests {
         assert_eq!(super::blur_radius_px(1), 1);
         assert_eq!(super::blur_radius_px(4), 4);
         assert_eq!(super::blur_radius_px(64), 64);
+    }
+
+    #[test]
+    fn rasterize_triangles_at_z_nonzero_spans_handles_exact_vertex_flip_y_and_fallback() {
+        // Y-asymmetric box [1, 5] x [1, 4] x [0, 4] with outward normals and a vertex
+        // sitting exactly on z_slice = 2.0 on both x=1 and x=5 walls.
+        let mut flat = Vec::new();
+        // Bottom z = 0 (-Z) and Top z = 4 (+Z)
+        flat.extend_from_slice(&[1.0, 1.0, 0.0, 1.0, 4.0, 0.0, 5.0, 4.0, 0.0]);
+        flat.extend_from_slice(&[1.0, 1.0, 0.0, 5.0, 4.0, 0.0, 5.0, 1.0, 0.0]);
+        flat.extend_from_slice(&[1.0, 1.0, 4.0, 5.0, 1.0, 4.0, 5.0, 4.0, 4.0]);
+        flat.extend_from_slice(&[1.0, 1.0, 4.0, 5.0, 4.0, 4.0, 1.0, 4.0, 4.0]);
+        // x = 1 wall (-X, indices 4..6) with vertex (1, 4, 2.0) directly on z_slice = 2.0
+        flat.extend_from_slice(&[1.0, 1.0, 0.0, 1.0, 1.0, 4.0, 1.0, 4.0, 2.0]);
+        flat.extend_from_slice(&[1.0, 1.0, 0.0, 1.0, 4.0, 2.0, 1.0, 4.0, 0.0]);
+        flat.extend_from_slice(&[1.0, 4.0, 2.0, 1.0, 1.0, 4.0, 1.0, 4.0, 4.0]);
+        // x = 5 wall (+X, indices 7..9) with vertex (5, 1, 2.0) directly on z_slice = 2.0
+        flat.extend_from_slice(&[5.0, 1.0, 2.0, 5.0, 1.0, 0.0, 5.0, 4.0, 0.0]);
+        flat.extend_from_slice(&[5.0, 1.0, 2.0, 5.0, 4.0, 0.0, 5.0, 4.0, 4.0]);
+        flat.extend_from_slice(&[5.0, 1.0, 2.0, 5.0, 4.0, 4.0, 5.0, 1.0, 4.0]);
+
+        let mut tris = parse_triangles(&flat);
+        // Keep precomputed dir_y/fill_wind on x=1 wall (indices 4..6) and force
+        // dir_y = 0.0 f64 fallback on x=5 wall (indices 7..9) so both must agree in winding sign.
+        for t in &mut tris[7..] {
+            t.dir_y = 0.0;
+            t.fill_wind = 0;
+        }
+        assert!(tris[4].dir_y != 0.0 && tris[5].dir_y != 0.0 && tris[6].dir_y != 0.0);
+        let tri_refs: Vec<&_> = tris.iter().collect();
+
+        // flip_y = true with origin_y = -10.0 -> wy in [1, 4] maps to -wy in [-4, -1], rows 6..9
+        let mut flipped_rows = Vec::new();
+        super::rasterize_triangles_at_z_nonzero_spans(
+            &tri_refs,
+            2.0,
+            0.0,
+            -10.0,
+            1.0,
+            10,
+            10,
+            true,
+            |row, spans| flipped_rows.push((row, spans.to_vec())),
+        );
+        assert_eq!(
+            flipped_rows,
+            (6..9).map(|r| (r, vec![(1, 4)])).collect::<Vec<_>>()
+        );
+
+        // flip_y = false with origin_y = 0.0 -> wy in [1, 4] maps to rows 1..4 (distinct from flip_y = true)
+        let mut unflipped_rows = Vec::new();
+        super::rasterize_triangles_at_z_nonzero_spans(
+            &tri_refs,
+            2.0,
+            0.0,
+            0.0,
+            1.0,
+            10,
+            10,
+            false,
+            |row, spans| unflipped_rows.push((row, spans.to_vec())),
+        );
+        assert_eq!(
+            unflipped_rows,
+            (1..4).map(|r| (r, vec![(1, 4)])).collect::<Vec<_>>()
+        );
+        assert_ne!(flipped_rows, unflipped_rows);
+
+        // Half-open top boundary: z_slice == tri_max_z (4.0) must produce 0 spans,
+        // while z_slice == tri_min_z (0.0) must produce full coverage.
+        let mut top_rows = Vec::new();
+        super::rasterize_triangles_at_z_nonzero_spans(
+            &tri_refs,
+            4.0,
+            0.0,
+            -10.0,
+            1.0,
+            10,
+            10,
+            true,
+            |row, spans| top_rows.push((row, spans.to_vec())),
+        );
+        assert!(top_rows.is_empty());
+
+        let mut bottom_rows = Vec::new();
+        super::rasterize_triangles_at_z_nonzero_spans(
+            &tri_refs,
+            0.0,
+            0.0,
+            -10.0,
+            1.0,
+            10,
+            10,
+            true,
+            |row, spans| bottom_rows.push((row, spans.to_vec())),
+        );
+        assert_eq!(bottom_rows, flipped_rows);
+
+        // Empty / invalid parameter guards must never panic or invoke callback
+        let mut bad_calls = 0usize;
+        for (tris_in, z_in, px_in, w_in, h_in) in [
+            (&[][..], 2.0, 1.0, 10, 10),
+            (&tri_refs[..], 2.0, 1.0, 0, 10),
+            (&tri_refs[..], 2.0, 1.0, 10, 0),
+            (&tri_refs[..], 2.0, 0.0, 10, 10),
+            (&tri_refs[..], 2.0, -1.0, 10, 10),
+            (&tri_refs[..], 2.0, f64::NAN, 10, 10),
+            (&tri_refs[..], f64::NAN, 1.0, 10, 10),
+        ] {
+            super::rasterize_triangles_at_z_nonzero_spans(
+                tris_in,
+                z_in,
+                0.0,
+                -10.0,
+                px_in,
+                w_in,
+                h_in,
+                true,
+                |_, _| bad_calls += 1,
+            );
+        }
+        assert_eq!(bad_calls, 0);
     }
 }

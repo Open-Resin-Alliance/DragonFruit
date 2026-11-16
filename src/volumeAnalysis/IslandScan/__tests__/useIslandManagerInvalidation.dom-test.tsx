@@ -369,9 +369,9 @@ test('MIR-04: IslandVoxelVisualization renders outer group at origin (0,0,0) whe
         totalAreaMm2: 1,
         perLayerAreaMm2: new Map([[0, 1]]),
         childIds: [],
-        centroidSumX: 25,
-        centroidSumY: -15,
-        centroidSumZ: 0,
+        centroidSumX: 25.5,
+        centroidSumY: -15.5,
+        centroidSumZ: 0.25,
         centroidCount: 1,
       },
     ],
@@ -415,8 +415,9 @@ test('MIR-04: IslandVoxelVisualization renders outer group at origin (0,0,0) whe
     assert.ok(geometry, '<mesh> must receive generated BufferGeometry');
     geometry.computeBoundingBox();
     const center = geometry.boundingBox!.getCenter(new THREE.Vector3());
-    assert.ok(Math.abs(center.x - 25) < 1e-4, `expected mesh X center near 25, got ${center.x}`);
-    assert.ok(Math.abs(center.y - -15) < 1e-4, `expected mesh Y center near -15, got ${center.y}`);
+    assert.ok(Math.abs(center.x - 25.5) < 1e-4, `expected mesh X center near 25.5, got ${center.x}`);
+    assert.ok(Math.abs(center.y - -15.5) < 1e-4, `expected mesh Y center near -15.5, got ${center.y}`);
+    assert.ok(Math.abs(center.z - 0.25) < 1e-4, `expected mesh Z center near 0.25, got ${center.z}`);
   } finally {
     await act(async () => {
       root.unmount();

@@ -1,6 +1,11 @@
 
 import * as THREE from 'three';
-import type { RleLabels } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
+import {
+    VOXEL_OFFSET_X,
+    VOXEL_OFFSET_Y,
+    VOXEL_OFFSET_Z,
+    type RleLabels,
+} from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
 
 /**
  * Generates a greedy mesh directly from RLE data.
@@ -35,16 +40,10 @@ export function generateMeshFromRLE(
     const halfSize = px_mm / 2;
     const halfHeight = layerHeightMm / 2;
 
-    // Y-direction is negated in original visualizer: -(originZ + row * px_mm - offset)
-    // We'll stick to that logic.
-    // originZ + row*px_mm is "World Z" in Scan terms, which maps to "World Y" in THREE.js terms usually.
-    // Let's replicate the exact coordinate logic from IslandVoxelVisualization.tsx:
-    // const worldX = originX + col * px_mm + px_mm * VOXEL_OFFSET_X;
-    // const worldY = -(originZ + row * px_mm - px_mm * VOXEL_OFFSET_Y);
-    // const layerZ = zOffset + layer * layerHeightMm + layerHeightMm * VOXEL_OFFSET_Z;
-    // We assume offsets are 0.0 or handled elsewhere for simplicity if passed in grid?
-    // The original code had VOXEL_OFFSET_X/Y/Z imported; all three are zero
-    // here, so the offset terms above drop out of the formulas.
+    // Pixel centers in world space:
+    // const worldX = originX + (col + VOXEL_OFFSET_X) * px_mm;
+    // const worldY = -(originZ + (row + VOXEL_OFFSET_Y) * px_mm);
+    // const layerZ = zOffset + (layer + VOXEL_OFFSET_Z) * layerHeightMm;
 
     const commitGeometry = () => {
         if (vertexCount === 0) return;
@@ -180,8 +179,7 @@ export function generateMeshFromRLE(
     };
 
     for (let l = startLayer; l <= endLayer; l++) {
-        const layerZ = zOffset + l * layerHeightMm; // Center Z of layer? No, existing code used layerZ as center usually?
-        // Existing: z + halfHeight is top.
+        const layerZ = zOffset + (l + VOXEL_OFFSET_Z) * layerHeightMm;
 
         // Group segments by row for this layer
         const currentSegmentsByRow: { [row: number]: { start: number, end: number }[] } = {};
@@ -219,23 +217,8 @@ export function generateMeshFromRLE(
                 // Left Face (-X)
                 {
                     const col = start;
-                    const wx = originX + col * px_mm;
-                    const wy = -(originZ + y * px_mm); // Center Y
-
-                    // const v0 = [wx, wy - halfSize, layerZ - halfHeight]; // Not used
-                    // const v1 = [wx, wy + halfSize, layerZ - halfHeight]; // Not used
-                    // const v2 = [wx, wy + halfSize, layerZ + halfHeight]; // Not used
-                    // const v3 = [wx, wy - halfSize, layerZ + halfHeight]; // Not used
-
-                    // Normal (-1, 0, 0)
-                    // v0 (bottom-left), v1 (top-left), v2 (top-right), v3 (bottom-right)?
-                    // Standard quad order: BL, TL, TR, BR?
-                    // Let's use logic from visualizer:
-                    // v0 = [x-h, y-h, z-h]
-                    // v1 = [x-h, y+h, z-h] ...
-                    // Wait, X is variable here. Left face is at x - halfSize.
-                    // For RLE start, x is center of pixel 'start'.
-                    // Left edge is at x - halfSize.
+                    const wx = originX + (col + VOXEL_OFFSET_X) * px_mm;
+                    const wy = -(originZ + (y + VOXEL_OFFSET_Y) * px_mm); // Center Y
 
                     // Correct coords for Left Face:
                     const lx = wx - halfSize; // Left edge
@@ -244,75 +227,42 @@ export function generateMeshFromRLE(
                     const bz = layerZ - halfHeight; // Bottom (-Z)
                     const tz = layerZ + halfHeight; // Top (+Z)
 
-                    // check visualizer: v0, v1, v2, v3
-                    // v0 = [x-h, y-h, z-h]
-                    // v1 = [x-h, y+h, z-h]
-                    // v2 = [x-h, y+h, z+h]
-                    // v3 = [x-h, y-h, z+h]
                     addQuad([lx, by, bz], [lx, by, tz], [lx, ty, tz], [lx, ty, bz]);
                 }
 
                 // Right Face (+X)
                 {
                     const col = end - 1; // Last pixel index
-                    const wx = originX + col * px_mm;
-                    const wy = -(originZ + y * px_mm);
+                    const wx = originX + (col + VOXEL_OFFSET_X) * px_mm;
+                    const wy = -(originZ + (y + VOXEL_OFFSET_Y) * px_mm);
                     const rx = wx + halfSize; // Right edge
                     const by = wy - halfSize;
                     const ty = wy + halfSize;
                     const bz = layerZ - halfHeight;
                     const tz = layerZ + halfHeight;
 
-                    // v0 = [x+h, y-h, z-h]
-                    // v1 = [x+h, y-h, z+h] (Wait, visualizer order?)
-                    // Right face visualizer:
-                    // v0 = [x+h, y-h, z-h]
-                    // v1 = [x+h, y-h, z+h]
-                    // v2 = [x+h, y+h, z+h]
-                    // v3 = [x+h, y+h, z-h]
-                    // My quad expects CCW?
                     addQuad([rx, by, bz], [rx, ty, bz], [rx, ty, tz], [rx, by, tz]);
                 }
 
                 // --- Y FACES (Front/Back) ---
-                // Front (+Y): Row y+1? Or y-1?
-                // Visualizer: Front (+Y) is y + voxelSize. originZ is top-left usually? 
-                // Wy = -(originZ + row). So +Row is -Y.
-                // Visualizer: "Front Face (+Y)" checks `y + voxelSize`. 
-                // If Wy decreases as Row increases, then +Y is Row-1.
-                // Let's stick to visualizer logic:
-                // Front (+Y) -> Check neighbors.
-                // If Wy = -originZ - row*px.
-                // +Y refers to smaller row index (y-1).
+                // Wy = -(originZ + (y + VOXEL_OFFSET_Y) * px_mm). So +Row is -Y, and +Y is row y-1.
 
                 // Front (+Y) - Neighbor is row y-1
                 {
                     const exposed = computeExposedRanges(start, end, frontNeighbors);
                     for (const r of exposed) {
-                        // r.start to r.end are exposed pixels.
-                        // Generate a single quad for this strip.
-                        // const len = r.end - r.start; // Not used
                         const startCol = r.start;
                         const endCol = r.end - 1;
 
-                        // X coords
-                        const x1 = (originX + startCol * px_mm) - halfSize;
-                        const x2 = (originX + endCol * px_mm) + halfSize;
+                        const x1 = (originX + (startCol + VOXEL_OFFSET_X) * px_mm) - halfSize;
+                        const x2 = (originX + (endCol + VOXEL_OFFSET_X) * px_mm) + halfSize;
 
-                        // Y coord (Front face is 'Top' of pixel in Y)
-                        // wy = -(originZ + y...)
-                        // Front (+Y side) is wy + halfSize.
-                        const wy = -(originZ + y * px_mm);
+                        const wy = -(originZ + (y + VOXEL_OFFSET_Y) * px_mm);
                         const fy = wy + halfSize;
 
                         const bz = layerZ - halfHeight;
                         const tz = layerZ + halfHeight;
 
-                        // Visualizer Front (+Y):
-                        // v0 = [x-h, y+h, z-h]
-                        // v1 = [x+h, y+h, z-h]
-                        // v2 = [x+h, y+h, z+h]
-                        // v3 = [x-h, y+h, z+h]
                         addQuad([x1, fy, bz], [x1, fy, tz], [x2, fy, tz], [x2, fy, bz]);
                     }
                 }
@@ -324,20 +274,15 @@ export function generateMeshFromRLE(
                         const startCol = r.start;
                         const endCol = r.end - 1;
 
-                        const x1 = (originX + startCol * px_mm) - halfSize;
-                        const x2 = (originX + endCol * px_mm) + halfSize;
+                        const x1 = (originX + (startCol + VOXEL_OFFSET_X) * px_mm) - halfSize;
+                        const x2 = (originX + (endCol + VOXEL_OFFSET_X) * px_mm) + halfSize;
 
-                        const wy = -(originZ + y * px_mm);
+                        const wy = -(originZ + (y + VOXEL_OFFSET_Y) * px_mm);
                         const by = wy - halfSize; // Back (-Y side)
 
                         const bz = layerZ - halfHeight;
                         const tz = layerZ + halfHeight;
 
-                        // Visualizer Back (-Y):
-                        // v0 = [x-h, y-h, z-h]
-                        // v1 = [x-h, y-h, z+h]
-                        // v2 = [x+h, y-h, z+h]
-                        // v3 = [x+h, y-h, z-h]
                         addQuad([x1, by, bz], [x2, by, bz], [x2, by, tz], [x1, by, tz]);
                     }
                 }
@@ -351,20 +296,15 @@ export function generateMeshFromRLE(
                         const startCol = r.start;
                         const endCol = r.end - 1;
 
-                        const x1 = (originX + startCol * px_mm) - halfSize;
-                        const x2 = (originX + endCol * px_mm) + halfSize;
+                        const x1 = (originX + (startCol + VOXEL_OFFSET_X) * px_mm) - halfSize;
+                        const x2 = (originX + (endCol + VOXEL_OFFSET_X) * px_mm) + halfSize;
 
-                        const wy = -(originZ + y * px_mm);
+                        const wy = -(originZ + (y + VOXEL_OFFSET_Y) * px_mm);
                         const by = wy - halfSize;
                         const ty = wy + halfSize;
 
                         const tz = layerZ + halfHeight; // Top face Z
 
-                        // Visualizer Top (+Z):
-                        // v0 = [x-h, y-h, z+h]
-                        // v1 = [x-h, y+h, z+h]
-                        // v2 = [x+h, y+h, z+h]
-                        // v3 = [x+h, y-h, z+h]
                         addQuad([x1, by, tz], [x2, by, tz], [x2, ty, tz], [x1, ty, tz]);
                     }
                 }
@@ -376,20 +316,15 @@ export function generateMeshFromRLE(
                         const startCol = r.start;
                         const endCol = r.end - 1;
 
-                        const x1 = (originX + startCol * px_mm) - halfSize;
-                        const x2 = (originX + endCol * px_mm) + halfSize;
+                        const x1 = (originX + (startCol + VOXEL_OFFSET_X) * px_mm) - halfSize;
+                        const x2 = (originX + (endCol + VOXEL_OFFSET_X) * px_mm) + halfSize;
 
-                        const wy = -(originZ + y * px_mm);
+                        const wy = -(originZ + (y + VOXEL_OFFSET_Y) * px_mm);
                         const by = wy - halfSize;
                         const ty = wy + halfSize;
 
                         const bz = layerZ - halfHeight; // Bottom face Z
 
-                        // Visualizer Bottom (-Z):
-                        // v0 = [x-h, y-h, z-h]
-                        // v1 = [x+h, y-h, z-h]
-                        // v2 = [x+h, y+h, z-h]
-                        // v3 = [x-h, y+h, z-h]
                         addQuad([x1, by, bz], [x1, ty, bz], [x2, ty, bz], [x2, by, bz]);
                     }
                 }
