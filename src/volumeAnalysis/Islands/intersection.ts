@@ -38,49 +38,68 @@ export interface ClassifiedIslands {
   /** Copies of the inputs with `class` + `matchedWith` populated (voxel then minima). */
   islands: DetectedIsland[];
   stats: IntersectionStats;
-  /** Per-matched voxel island 3D offset before snapping `vi.contact` to `mj.contact`. */
-  readonly matchOffsetsMm?: ReadonlyMap<string, number>;
+}
+
+interface CandidatePair {
+  vIdx: number;
+  mIdx: number;
+  rank: number;
+  d2: number;
 }
 
 /**
- * Greedy nearest-neighbour matching (n is small, so O(voxel·minima) is fine).
- * Each voxel island claims the closest unused minima within tolerance.
+ * Global shortest-distance matching with many-to-one coincident grouping.
+ *
+ * Pass 1 sorts all valid `(vIdx, mIdx)` pairs by `(distSq, rank, vIdx, mIdx)`
+ * where `rank = vi.isDetached ? 0 : 1` and locks 1-to-1 primary matches.
+ * Pass 2 attaches remaining minima within tolerance of an already-matched
+ * voxel island onto `vi.subApexes` as plain `{ x, y, z }` points.
  */
 export function classifyIntersection(
   voxel: DetectedIsland[],
   minima: DetectedIsland[],
   opts: IntersectionOptions,
 ): ClassifiedIslands {
-  const v = voxel.map((i) => ({ ...i }));
+  const v = voxel.map((i) => {
+    const copy = { ...i };
+    delete copy.subApexes;
+    return copy;
+  });
   const m = minima.map((i) => ({ ...i }));
   const xyTol2 = opts.xyToleranceMm * opts.xyToleranceMm;
-  const minimaUsed = new Array(m.length).fill(false);
 
-  let matched = 0;
-  let offsetSum = 0;
-  const matchOffsets = new Map<string, number>();
-
-  for (const vi of v) {
-    let bestIdx = -1;
-    let bestD2 = Infinity;
+  const vBounds = v.map((vi) => {
     const vox = vi.contactVoxels;
-    const hasFootprint = vox !== undefined && vox.count > 0;
-    const voxBounds = hasFootprint ? footprintBounds(vox) : null;
+    return vox !== undefined && vox.count > 0 ? footprintBounds(vox) : null;
+  });
+
+  const pairs: CandidatePair[] = [];
+  for (let i = 0; i < v.length; i++) {
+    const vi = v[i];
+    if (!Number.isFinite(vi.baseZ)) continue;
+    const vox = vi.contactVoxels;
+    const bounds = vBounds[i];
+    const rank = vi.isDetached ? 0 : 1;
+    const rawZ = Number.isFinite(vi.rawBaseZ) ? (vi.rawBaseZ as number) : vi.baseZ;
 
     for (let j = 0; j < m.length; j++) {
-      if (minimaUsed[j]) continue;
       const mj = m[j];
-      const dz = vi.baseZ - mj.baseZ;
-      if (Math.abs(dz) > opts.zBandMm) continue;
       const mx = mj.contact.x;
       const my = mj.contact.y;
+      if (!Number.isFinite(mx) || !Number.isFinite(my) || !Number.isFinite(mj.baseZ)) continue;
+
+      const dzBase = vi.baseZ - mj.baseZ;
+      const dzRaw = rawZ - mj.baseZ;
+      const dz = Math.abs(dzRaw) < Math.abs(dzBase) ? dzRaw : dzBase;
+      if (!(Math.abs(dz) <= opts.zBandMm)) continue;
+
       let xy2: number;
-      if (hasFootprint && voxBounds) {
+      if (vox !== undefined && vox.count > 0 && bounds) {
         if (
-          mx < voxBounds.minX - opts.xyToleranceMm ||
-          mx > voxBounds.maxX + opts.xyToleranceMm ||
-          my < voxBounds.minY - opts.xyToleranceMm ||
-          my > voxBounds.maxY + opts.xyToleranceMm
+          mx < bounds.minX - opts.xyToleranceMm ||
+          mx > bounds.maxX + opts.xyToleranceMm ||
+          my < bounds.minY - opts.xyToleranceMm ||
+          my > bounds.maxY + opts.xyToleranceMm
         ) {
           continue;
         }
@@ -97,35 +116,73 @@ export function classifyIntersection(
         const dy = vi.contact.y - my;
         xy2 = dx * dx + dy * dy;
       }
-      if (xy2 > xyTol2) continue;
+      if (!(xy2 <= xyTol2)) continue;
       const d2 = xy2 + dz * dz;
-      if (d2 < bestD2) {
-        bestD2 = d2;
-        bestIdx = j;
-      }
-    }
-
-    if (bestIdx >= 0) {
-      const mj = m[bestIdx];
-      minimaUsed[bestIdx] = true;
-      vi.class = 'intersection';
-      mj.class = 'intersection';
-      vi.matchedWith = mj.id;
-      mj.matchedWith = vi.id;
-      vi.contact = mj.contact.clone(); // Snap voxel island contact to matched mesh minimum coordinate
-      vi.baseZ = mj.baseZ;
-      const matchOffset = Math.sqrt(bestD2);
-      matched++;
-      offsetSum += matchOffset;
-      matchOffsets.set(vi.id, matchOffset);
-    } else {
-      vi.class = 'voxelOnly';
-      vi.matchedWith = null;
+      if (!Number.isFinite(d2)) continue;
+      pairs.push({ vIdx: i, mIdx: j, rank, d2 });
     }
   }
 
+  pairs.sort((a, b) => (a.d2 - b.d2) || (a.rank - b.rank) || (a.vIdx - b.vIdx) || (a.mIdx - b.mIdx));
+
+  const voxelMatched = new Array<boolean>(v.length).fill(false);
+  const matchedMinimaIndices = new Set<number>();
+  let matched = 0;
+  let offsetSum = 0;
+
+  // Pass 1: 1-to-1 primary anchor match sorted globally by shortest distance.
+  for (const pair of pairs) {
+    if (voxelMatched[pair.vIdx] || matchedMinimaIndices.has(pair.mIdx)) continue;
+    const vi = v[pair.vIdx];
+    const mj = m[pair.mIdx];
+    voxelMatched[pair.vIdx] = true;
+    matchedMinimaIndices.add(pair.mIdx);
+
+    vi.class = 'intersection';
+    mj.class = 'intersection';
+    vi.matchedWith = mj.id;
+    mj.matchedWith = vi.id;
+
+    const oldBaseZ = vi.baseZ;
+    const zDelta = mj.baseZ - oldBaseZ;
+    vi.contact = mj.contact.clone(); // Snap voxel island contact to matched mesh minimum coordinate
+    vi.baseZ = mj.baseZ;
+    if (vi.contactVoxels && vi.contactVoxels.z !== null && zDelta !== 0) {
+      const shiftedZ = new Float32Array(vi.contactVoxels.z);
+      for (let k = 0; k < vi.contactVoxels.count; k++) {
+        shiftedZ[k] += zDelta;
+      }
+      vi.contactVoxels = {
+        xy: vi.contactVoxels.xy,
+        z: shiftedZ,
+        count: vi.contactVoxels.count,
+      };
+    }
+
+    matched++;
+    offsetSum += Math.sqrt(pair.d2);
+  }
+
+  // Pass 2: Many-to-one coincident grouping for extra minima near an already-matched voxel base.
+  for (const pair of pairs) {
+    if (matchedMinimaIndices.has(pair.mIdx) || !voxelMatched[pair.vIdx]) continue;
+    const vi = v[pair.vIdx];
+    const mj = m[pair.mIdx];
+    matchedMinimaIndices.add(pair.mIdx);
+    mj.class = 'intersection';
+    mj.matchedWith = vi.id;
+    if (!vi.subApexes) vi.subApexes = [];
+    vi.subApexes.push({ x: mj.contact.x, y: mj.contact.y, z: mj.contact.z });
+  }
+
+  for (let i = 0; i < v.length; i++) {
+    if (!voxelMatched[i]) {
+      v[i].class = 'voxelOnly';
+      v[i].matchedWith = null;
+    }
+  }
   for (let j = 0; j < m.length; j++) {
-    if (!minimaUsed[j]) {
+    if (!matchedMinimaIndices.has(j)) {
       m[j].class = 'minimaOnly';
       m[j].matchedWith = null;
     }
@@ -134,7 +191,7 @@ export function classifyIntersection(
   const voxelTotal = v.length;
   const minimaTotal = m.length;
   const voxelOnly = voxelTotal - matched;
-  const minimaOnly = minimaTotal - matched;
+  const minimaOnly = minimaTotal - matchedMinimaIndices.size;
 
   const stats: IntersectionStats = {
     voxelTotal,
@@ -147,5 +204,5 @@ export function classifyIntersection(
     meanMatchOffsetMm: matched > 0 ? offsetSum / matched : 0,
   };
 
-  return { islands: [...v, ...m], stats, matchOffsetsMm: matchOffsets };
+  return { islands: [...v, ...m], stats };
 }

@@ -175,31 +175,36 @@ export function mergeOverhangRegions(
   const xyMargin = overhangPxMm + voxelPxMm;
   const regionIndices = overhang.map((o) => createRegionCoverIndex(o, xyMargin));
 
-  const covered = new Set<string>();
-  for (const v of classified) {
-    if (v.source !== 'voxel') continue;
-    for (let oi = 0; oi < overhang.length; oi++) {
-      if (overhangCoversVoxel(overhang[oi], v, normalizedOpts, regionIndices[oi])) {
-        covered.add(v.id);
-        break;
+  const remaining: DetectedIsland[] = [];
+  for (const item of classified) {
+    let coveringOverhangId: string | undefined;
+    if (item.source === 'voxel' || item.source === 'minima') {
+      for (let oi = 0; oi < overhang.length; oi++) {
+        if (overhangCoversVoxel(overhang[oi], item, normalizedOpts, regionIndices[oi])) {
+          coveringOverhangId = overhang[oi].id;
+          break;
+        }
       }
+    }
+
+    // Protect all isDetached voxel islands and all intersection islands;
+    // yield only covered non-detached, non-intersection CantileverFringe voxel islands.
+    if (
+      coveringOverhangId !== undefined &&
+      item.source === 'voxel' &&
+      !item.isDetached &&
+      item.class !== 'intersection'
+    ) {
+      continue;
+    }
+
+    if (coveringOverhangId !== undefined) {
+      remaining.push({ ...item, coveredByOverhangId: coveringOverhangId });
+    } else {
+      remaining.push(item);
     }
   }
 
-  let remaining: DetectedIsland[];
-  if (covered.size === 0) {
-    remaining = classified;
-  } else {
-    remaining = [];
-    for (const item of classified) {
-      if (covered.has(item.id)) continue;
-      if (item.matchedWith && covered.has(item.matchedWith)) {
-        remaining.push({ ...item, class: 'minimaOnly', matchedWith: null });
-      } else {
-        remaining.push(item);
-      }
-    }
-  }
   return [...remaining, ...overhang];
 }
 
@@ -215,19 +220,11 @@ export function mergeOverhangResults(
   let matched = 0;
   let voxelOnly = 0;
   let minimaOnly = 0;
-  const matchOffsets = classifiedResult.matchOffsetsMm;
-  let survivingOffsetSum = 0;
-  let survivingOffsetCount = 0;
   for (const item of islands) {
     if (item.source === 'voxel') {
       voxelTotal++;
       if (item.class === 'intersection') {
         matched++;
-        const itemOffset = matchOffsets?.get(item.id);
-        if (itemOffset !== undefined) {
-          survivingOffsetSum += itemOffset;
-          survivingOffsetCount++;
-        }
       } else if (item.class === 'voxelOnly') {
         voxelOnly++;
       }
@@ -237,11 +234,7 @@ export function mergeOverhangResults(
     }
   }
   const meanMatchOffsetMm =
-    matched === 0
-      ? 0
-      : survivingOffsetCount === matched
-        ? survivingOffsetSum / matched
-        : classifiedResult.stats.meanMatchOffsetMm;
+    matched === 0 ? 0 : classifiedResult.stats.meanMatchOffsetMm;
   const stats: IntersectionStats = {
     voxelTotal,
     minimaTotal,
@@ -467,7 +460,11 @@ type CombinedNativeScanResult = {
     id: string;
     contact: { x: number; y: number; z: number };
     baseZ: number;
+    rawBaseZ?: number;
     areaMm2?: number;
+    peakAreaMm2?: number;
+    maxAreaMm2?: number;
+    isDetached?: boolean;
     layerSpan: [number, number];
     contactVoxels?: number[];
   }>;
@@ -648,6 +645,40 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     }
   }, [geom, transform]);
 
+  /**
+   * Build pre-TRS local triangle-soup positions + TRS matrix + local center
+   * so Rust welds at `1e-6` in pose-invariant local space before applying
+   * `translate(-center) -> matrix` + `det3 < 0` winding flip.
+   */
+  const prepareLocalGeom = useCallback((): {
+    positions: Float32Array;
+    matrix: number[];
+    center: [number, number, number];
+  } | null => {
+    if (!geom) return null;
+    const g = geom.geometry;
+    const bb = g.boundingBox ?? new THREE.Box3().setFromBufferAttribute(g.getAttribute('position') as THREE.BufferAttribute);
+    const center = bb.getCenter(new THREE.Vector3());
+    const matrix = new THREE.Matrix4().compose(
+      transform.position.clone(),
+      quaternionFromGlobalEuler(transform.rotation),
+      transform.scale.clone(),
+    );
+    const soup = g.index ? g.toNonIndexed() : g;
+    try {
+      const positions = (soup.getAttribute('position').array as Float32Array).slice();
+      return {
+        positions,
+        matrix: Array.from(matrix.elements),
+        center: [center.x, center.y, center.z],
+      };
+    } finally {
+      if (soup !== g) {
+        soup.dispose();
+      }
+    }
+  }, [geom, transform]);
+
   // World-space transform signature for the scan cache. Island coordinates are
   // world-space, so a cached scan is only valid for the transform it was made
   // under; rotating/repositioning the model must invalidate it.
@@ -677,13 +708,19 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
 
     const commitCombinedResult = (combined: CombinedNativeScanResult) => {
       const voxelMapped: DetectedIsland[] = combined.voxelIslands
-        .filter((v) => (v.areaMm2 ?? 0) >= minAreaMm2)
+        .filter((v) => {
+          const peak = v.peakAreaMm2 ?? v.maxAreaMm2 ?? v.areaMm2 ?? 0;
+          return (v.isDetached && peak > 0) || peak >= minAreaMm2;
+        })
         .map((v) => ({
           id: v.id,
           source: 'voxel',
           contact: new THREE.Vector3(v.contact.x, v.contact.y, v.contact.z),
           baseZ: v.baseZ,
+          rawBaseZ: v.rawBaseZ,
           areaMm2: v.areaMm2,
+          peakAreaMm2: v.peakAreaMm2 ?? v.maxAreaMm2,
+          isDetached: v.isDetached,
           layerSpan: v.layerSpan,
           contactVoxels: v.contactVoxels && v.contactVoxels.length >= 2
             ? { xy: new Float32Array(v.contactVoxels), z: null, count: v.contactVoxels.length / 2 }
@@ -724,22 +761,28 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       await new Promise((resolve) => setTimeout(resolve, 0));
       if (scanEpochRef.current !== epoch) return;
 
-      let world: { positions: Float32Array; bbox: THREE.Box3 } | null = null;
-      try {
-        world = prepareWorldGeom();
-      } catch (err) {
-        console.warn('[Islands] mesh prep failed', err);
+      const isTauri = hasTauriRuntime();
+      let local: {
+        positions: Float32Array;
+        matrix: number[];
+        center: [number, number, number];
+      } | null = null;
+      if (isTauri) {
+        try {
+          local = prepareLocalGeom();
+        } catch (err) {
+          console.warn('[Islands] local mesh prep failed', err);
+        }
       }
 
-      const isTauri = hasTauriRuntime();
       let usedNative = false;
       let mappedOverhangs: DetectedIsland[] = [];
       const overhangSelfSupportAngleDeg = getSettings().autoSupport?.overhangSelfSupportAngleDeg
         ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG;
 
-      // Primary Native Path: stage in-memory world soup and run scan_islands_staged
-      // regardless of whether sourcePath is set (never re-parse unbaked disk meshes).
-      if (isTauri && world !== null) {
+      // Primary Native Path: stage pre-TRS local soup + matrix/center so Rust welds
+      // in pose-invariant local space before transforming.
+      if (isTauri && local !== null) {
         try {
           const { invoke } = await import('@tauri-apps/api/core');
           const { listen } = await import('@tauri-apps/api/event');
@@ -754,7 +797,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             if (scanEpochRef.current !== epoch) return;
             setScanProgress({ done: 0, total: 100 });
 
-            const { positions } = world;
+            const { positions } = local;
             await invoke(
               'stage_mesh_binary_set',
               new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
@@ -771,6 +814,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
               overhangSelfSupportAngleDeg,
               overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
               hasRaft,
+              matrix: local.matrix,
+              center: local.center,
             });
             if (scanEpochRef.current !== epoch) return;
 
@@ -784,8 +829,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         }
       }
 
-      // Sideload Fallback Path: ONLY if world soup prep returned null while sourcePath exists
-      if (!usedNative && isTauri && world === null && sourcePath && geom) {
+      // Sideload Fallback Path: ONLY if local soup prep returned null while sourcePath exists
+      if (!usedNative && isTauri && local === null && sourcePath && geom) {
         try {
           const { invoke } = await import('@tauri-apps/api/core');
           const { listen } = await import('@tauri-apps/api/event');
@@ -847,6 +892,14 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       }
 
       // Client Fallback Path
+      let world: { positions: Float32Array; bbox: THREE.Box3 } | null = null;
+      if (!usedNative) {
+        try {
+          world = prepareWorldGeom();
+        } catch (err) {
+          console.warn('[Islands] mesh prep failed', err);
+        }
+      }
       if (!usedNative && world !== null) {
         let topple = true;
         let drag = 0;
@@ -860,6 +913,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
               new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
               { headers: { 'Content-Type': 'application/octet-stream' } },
             );
+            if (scanEpochRef.current !== epoch) return;
             const scan = await invoke<OverhangScan>('scan_overhangs_staged', {
               selfSupportAngleDeg: overhangSelfSupportAngleDeg,
               pxMm: OVERHANG_FOOTPRINT_PX_MM,
@@ -933,7 +987,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         setScanning(false);
       }
     }
-  }, [geom, transform, modelId, sourcePath, cacheKey, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK, hasRaft]);
+  }, [geom, transform, modelId, sourcePath, cacheKey, prepareLocalGeom, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK, hasRaft]);
 
   // Pass 1: Proposed consolidation & classification
   const proposedConsolidated = useMemo(() => timed('proposedConsolidated', () => {
@@ -941,12 +995,14 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     return consolidateVoxelIslands(voxelIslands, consolidationDistance, pxMm, layerHeightMm);
   }), [voxelIslands, consolidateVoxel, consolidationDistance, pxMm, layerHeightMm]);
 
+  const zBandMm = Math.max(2 * layerHeightMm, 0.10);
+
   const proposedClassified = useMemo(() => {
     return classifyIntersection(proposedConsolidated, minimaIslands, {
       xyToleranceMm: 0.5,
-      zBandMm: layerHeightMm,
+      zBandMm,
     });
-  }, [proposedConsolidated, minimaIslands, layerHeightMm]);
+  }, [proposedConsolidated, minimaIslands, zBandMm]);
 
   // Determine contoured IDs based on proposed list
   const contouredIds = useMemo(() => timed('contouredIds', () => {
@@ -972,9 +1028,9 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   const classifiedResult = useMemo(() => timed('classifiedResult', () => {
     return classifyIntersection(finalVoxelIslands, minimaIslands, {
       xyToleranceMm: 0.5,
-      zBandMm: layerHeightMm,
+      zBandMm,
     });
-  }), [finalVoxelIslands, minimaIslands, layerHeightMm]);
+  }), [finalVoxelIslands, minimaIslands, zBandMm]);
 
   // Merge overhang regions into the classified set (dedupe + inclusion):
   // the mesh-normal classifier and the slice-growth detector flag the same

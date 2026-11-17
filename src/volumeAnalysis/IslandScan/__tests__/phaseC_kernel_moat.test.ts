@@ -54,67 +54,11 @@ function concatPositions(...parts: Float32Array[]): Float32Array {
   return out;
 }
 
-/**
- * Build a closed, watertight anchored sloped-overhang polyhedron extruded along Y in [minY, maxY].
- * Profile in XZ (CCW):
- *   P0(0, 0) -> P1(anchorWidth, 0) -> P2(anchorWidth, overhangStartZ)
- *   -> P3(anchorWidth + runX, overhangEndZ) -> P4(anchorWidth + runX, topZ) -> P5(0, topZ)
- */
-function buildAnchoredOverhangMesh(
-  anchorWidth: number,
-  overhangStartZ: number,
-  overhangEndZ: number,
-  runX: number,
-  topZ: number,
-  minY: number,
-  maxY: number,
-): Float32Array {
-  const pts: Array<[number, number]> = [
-    [0, 0],
-    [anchorWidth, 0],
-    [anchorWidth, overhangStartZ],
-    [anchorWidth + runX, overhangEndZ],
-    [anchorWidth + runX, topZ],
-    [0, topZ],
-  ];
-
-  const tris: number[] = [];
-  const pushTri = (a: [number, number, number], b: [number, number, number], c: [number, number, number]) => {
-    tris.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
-  };
-
-  // Front (-Y, y = minY) and back (+Y, y = maxY) faces split into 4 CCW XZ triangles
-  const capIndices: Array<[number, number, number]> = [
-    [0, 1, 2],
-    [0, 2, 5],
-    [2, 3, 4],
-    [2, 4, 5],
-  ];
-  for (const [i0, i1, i2] of capIndices) {
-    const [x0, z0] = pts[i0];
-    const [x1, z1] = pts[i1];
-    const [x2, z2] = pts[i2];
-    pushTri([x0, minY, z0], [x1, minY, z1], [x2, minY, z2]);
-    pushTri([x0, maxY, z0], [x2, maxY, z2], [x1, maxY, z1]);
-  }
-
-  // Side quads for each perimeter edge
-  for (let i = 0; i < pts.length; i++) {
-    const [x0, z0] = pts[i];
-    const [x1, z1] = pts[(i + 1) % pts.length];
-    const a0: [number, number, number] = [x0, minY, z0];
-    const a1: [number, number, number] = [x0, maxY, z0];
-    const b0: [number, number, number] = [x1, minY, z1];
-    const b1: [number, number, number] = [x1, maxY, z1];
-    pushTri(a0, a1, b1);
-    pushTri(a0, b1, b0);
-  }
-
-  return new Float32Array(tris);
-}
-
-async function withInlineWorker<T>(fn: () => Promise<T>): Promise<T> {
+async function withInlineWorker<T>(
+  fn: (sentMessages: unknown[]) => Promise<T>,
+): Promise<T> {
   const origWorker = (globalThis as { Worker?: unknown }).Worker;
+  const sentMessages: unknown[] = [];
   class InlineScanlineWorker {
     private listeners = new Set<(e: MessageEvent) => void>();
     addEventListener(_type: string, cb: (e: MessageEvent) => void) {
@@ -124,6 +68,7 @@ async function withInlineWorker<T>(fn: () => Promise<T>): Promise<T> {
       this.listeners.delete(cb);
     }
     postMessage(msg: unknown) {
+      sentMessages.push(msg);
       dispatchScanlineWorkerMessage(msg as Parameters<typeof dispatchScanlineWorkerMessage>[0], (payload) => {
         const evt = { data: payload } as MessageEvent;
         for (const cb of [...this.listeners]) cb(evt);
@@ -133,7 +78,7 @@ async function withInlineWorker<T>(fn: () => Promise<T>): Promise<T> {
   }
   (globalThis as { Worker?: unknown }).Worker = InlineScanlineWorker;
   try {
-    return await fn();
+    return await fn(sentMessages);
   } finally {
     (globalThis as { Worker?: unknown }).Worker = origWorker;
   }
@@ -199,98 +144,68 @@ test('NBR-02: rleIntersectDilated uses Euclidean L2 disk and guards non-positive
   assert.equal(mismatched.slice(30).reduce((s, v) => s + v, 0), 0, 'rows 3..9 uncovered');
 });
 
-test('NBR-01: detectVoxelIslands chains sloped multi-layer overhang across bufferPx, respects diagonal3D and connectivity', async () => {
-  await withInlineWorker(async () => {
-    // pxMm=0.05, supportBufferMm=0.25 -> bufferPx=5, layerHeightMm=0.05.
-    // Overhang steps 6 px/layer (0.30 mm/layer) from Z=0.20 to Z=0.50 across 6 layers (L=4..9).
-    const overhangPositions = buildAnchoredOverhangMesh(0.50, 0.20, 0.50, 1.80, 1.00, 0.0, 1.0);
-    const overhangBbox = new THREE.Box3(
+test('C2 rollback: detectVoxelIslands restores 26/6-conn without indiscriminate B+1 moat bridging while keeping connectivity=8 default', async () => {
+  await withInlineWorker(async (sentMessages) => {
+    // Two disconnected floating boxes on adjacent layers separated by a 5 px XY gap:
+    // pxMm=0.05, supportBufferMm=0.25 -> bufferPx=5, B+1=6.
+    // Box A: x=[0.00, 0.20] (cols 0..3), z=[0.20, 0.25] (L=4)
+    // Box B: x=[0.45, 0.65] (cols 9..12), z=[0.25, 0.30] (L=5)
+    // Distance between col 3 and col 9 is 6 px (<= B+1), so 7b25979d1's 3D-BFS merged them;
+    // accb8b002 rollback keeps them separate (2 islands).
+    const splitPositions = concatPositions(
+      buildBoxPositions(0.00, 0.20, 0.00, 0.20, 0.20, 0.25),
+      buildBoxPositions(0.45, 0.65, 0.00, 0.20, 0.25, 0.30),
+    );
+    const splitBbox = new THREE.Box3(
       new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(2.30, 1.00, 1.00),
+      new THREE.Vector3(0.65, 0.20, 0.30),
     );
 
-    const chained = await detectVoxelIslands(
-      { positions: overhangPositions, bbox: overhangBbox },
+    const separateIslands = await detectVoxelIslands(
+      { positions: splitPositions, bbox: splitBbox },
       0.05,
       { pxMm: 0.05, supportBufferMm: 0.25, minAreaMm2: 0.01 },
     );
-    assert.equal(chained.length, 1, '6-layer sloped overhang stepping 6 px/layer must chain into 1 island');
-    const span = chained[0].layerSpan!;
-    assert.ok(span[1] - span[0] >= 3, `expected layerSpan >= 3, got [${span[0]}, ${span[1]}]`);
-    assert.equal(span[0], 4);
-    assert.equal(span[1], 9);
+    assert.equal(separateIslands.length, 2, 'disconnected floating boxes separated by B+1 gap must remain 2 islands');
 
-    // diagonal3D: false disables lateral inter-layer linking (interLayerRadiusPx = 0) -> shatters into 6 islands
-    const unchained = await detectVoxelIslands(
-      { positions: overhangPositions, bbox: overhangBbox },
-      0.05,
-      { pxMm: 0.05, supportBufferMm: 0.25, diagonal3D: false, minAreaMm2: 0.01 },
+    // Verify default connectivity=8 and explicit connectivity=4 are forwarded to scanLayer workers
+    const defaultLayerMsgs = sentMessages.filter(
+      (m): m is { type: string; opts: { connectivity: 4 | 8 } } =>
+        typeof m === 'object' && m !== null && (m as { type?: string }).type === 'layer',
     );
-    assert.equal(unchained.length, 6, 'diagonal3D=false must shatter 6 px/layer overhang into 6 single-layer islands');
-    for (const isl of unchained) {
-      assert.equal(isl.layerSpan![0], isl.layerSpan![1]);
-    }
+    assert.ok(defaultLayerMsgs.length > 0);
+    assert.equal(defaultLayerMsgs[0].opts.connectivity, 8, 'default detectVoxelIslands connectivity must remain 8');
 
-    // Large bufferPx > 127 (Int16Array check, avoiding Int8Array wrap-around):
-    // pxMm=0.002, supportBufferMm=0.26 -> bufferPx=130, interLayerRadiusPx=131.
-    // Overhang steps 131 px/layer (0.262 mm/layer) across 2 layers (Z=0.05..0.15).
-    const largeBufPositions = buildAnchoredOverhangMesh(0.02, 0.05, 0.15, 0.524, 0.20, 0.0, 0.02);
-    const largeBufBbox = new THREE.Box3(
+    // Diagonal 3D connectivity across layers (L=4 and L=5 sharing a 3D corner):
+    // 26-conn (default) merges into 1 island, 6-conn (diagonal3D: false) separates into 2 islands.
+    const diag3dPositions = concatPositions(
+      buildBoxPositions(0.00, 0.05, 0.00, 0.05, 0.20, 0.25),
+      buildBoxPositions(0.05, 0.10, 0.05, 0.10, 0.25, 0.30),
+    );
+    const diag3dBbox = new THREE.Box3(
       new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0.544, 0.02, 0.20),
+      new THREE.Vector3(0.10, 0.10, 0.30),
     );
-    const largeBufIslands = await detectVoxelIslands(
-      { positions: largeBufPositions, bbox: largeBufBbox },
-      0.05,
-      { pxMm: 0.002, supportBufferMm: 0.26, minAreaMm2: 0.00001 },
-    );
-    assert.equal(largeBufIslands.length, 1, 'bufferPx=130 (>127) must chain without Int8Array overflow');
-    assert.ok(largeBufIslands[0].layerSpan![1] - largeBufIslands[0].layerSpan![0] >= 1);
 
-    // connectivity default (8) vs explicit 8 vs explicit 4 on diagonally touching tabs at L=4 (Z=0.22..0.35)
-    const diagPositions = concatPositions(
-      buildBoxPositions(0.00, 0.10, 0.00, 0.10, 0.00, 0.50),
-      buildBoxPositions(0.50, 0.70, 0.60, 0.80, 0.22, 0.35),
-      buildBoxPositions(0.70, 0.90, 0.40, 0.60, 0.22, 0.35),
-    );
-    const diagBbox = new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1.0, 1.0, 0.5));
-
-    const defaultConn = await detectVoxelIslands(
-      { positions: diagPositions, bbox: diagBbox },
+    const conn26 = await detectVoxelIslands(
+      { positions: diag3dPositions, bbox: diag3dBbox },
       0.05,
-      { pxMm: 0.05, supportBufferMm: 0, minAreaMm2: 0.01 },
+      { pxMm: 0.05, supportBufferMm: 0, minAreaMm2: 0.001 },
     );
-    assert.equal(defaultConn.length, 1, 'detectVoxelIslands default connectivity must be 8 (merges diagonal tabs)');
+    assert.equal(conn26.length, 1, 'default diagonal3D merges corner-touching layers via 26-conn');
 
-    const explicit8 = await detectVoxelIslands(
-      { positions: diagPositions, bbox: diagBbox },
+    sentMessages.length = 0;
+    const conn6 = await detectVoxelIslands(
+      { positions: diag3dPositions, bbox: diag3dBbox },
       0.05,
-      { pxMm: 0.05, supportBufferMm: 0, connectivity: 8, minAreaMm2: 0.01 },
+      { pxMm: 0.05, supportBufferMm: 0, connectivity: 4, diagonal3D: false, minAreaMm2: 0.001 },
     );
-    assert.equal(explicit8.length, 1, 'explicit connectivity=8 merges diagonal tabs');
-
-    const explicit4 = await detectVoxelIslands(
-      { positions: diagPositions, bbox: diagBbox },
-      0.05,
-      { pxMm: 0.05, supportBufferMm: 0, connectivity: 4, minAreaMm2: 0.01 },
+    assert.equal(conn6.length, 2, 'diagonal3D=false separates corner-touching layers via 6-conn');
+    const explicit4Msgs = sentMessages.filter(
+      (m): m is { type: string; opts: { connectivity: 4 | 8 } } =>
+        typeof m === 'object' && m !== null && (m as { type?: string }).type === 'layer',
     );
-    assert.equal(explicit4.length, 2, 'explicit connectivity=4 separates diagonal tabs into 2 islands');
-
-    // Sparse Set<number> flood-fill fallback parity for NBR-01 moat and diagonal3D toggle
-    const sparseChained = await detectVoxelIslands(
-      { positions: overhangPositions, bbox: overhangBbox },
-      0.05,
-      { pxMm: 0.05, supportBufferMm: 0.25, minAreaMm2: 0.01, _forceSparse: true },
-    );
-    assert.equal(sparseChained.length, 1, 'sparse fallback must chain sloped cantilever across B+1 moat');
-    assert.deepEqual(sparseChained[0].layerSpan, [4, 9]);
-
-    const sparseUnchained = await detectVoxelIslands(
-      { positions: overhangPositions, bbox: overhangBbox },
-      0.05,
-      { pxMm: 0.05, supportBufferMm: 0.25, diagonal3D: false, minAreaMm2: 0.01, _forceSparse: true },
-    );
-    assert.equal(sparseUnchained.length, 6, 'sparse fallback honors diagonal3D=false');
+    assert.equal(explicit4Msgs[0].opts.connectivity, 4, 'explicit connectivity=4 forwarded to scanLayer');
   });
 });
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import { act, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import * as THREE from 'three';
@@ -9,6 +9,9 @@ import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { renderWithProviders, settle } from '@/utils/__tests__/helpers/renderDom';
 import { disposeEventLoopChannel } from '@/utils/yieldToEventLoop';
 import { useIslands, type UseIslandsInput, type UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
+import { dispatchScanlineWorkerMessage } from '@/volumeAnalysis/IslandScan/scanlineScan.worker';
+
+after(() => disposeEventLoopChannel());
 
 function createOutwardTetrahedronGeometry(): GeometryWithBounds {
   // Asymmetric watertight tetrahedron with outward CCW winding
@@ -56,6 +59,11 @@ function makeTransform(scaleX = 1) {
 interface TauriCapture {
   commands: string[];
   stagedPositions: Float32Array[];
+  scanStagedArgs: Array<{
+    matrix?: number[];
+    center?: [number, number, number];
+    [key: string]: unknown;
+  }>;
   uninstall: () => void;
 }
 
@@ -64,7 +72,10 @@ type MockScanResult = {
     id: string;
     contact: { x: number; y: number; z: number };
     baseZ: number;
+    rawBaseZ?: number;
     areaMm2: number;
+    peakAreaMm2?: number;
+    isDetached?: boolean;
     layerSpan: [number, number];
   }>;
   minimaIslands: Array<{ position: { x: number; y: number; z: number } }>;
@@ -84,10 +95,12 @@ type MockScanResult = {
 };
 
 function installTauriMock(options?: {
-  onScanStaged?: () => MockScanResult | Promise<MockScanResult>;
+  onScanStaged?: (args: Record<string, unknown>) => MockScanResult | Promise<MockScanResult>;
+  onScanOverhangsStaged?: () => unknown;
 }): TauriCapture {
   const commands: string[] = [];
   const stagedPositions: Float32Array[] = [];
+  const scanStagedArgs: TauriCapture['scanStagedArgs'] = [];
   let nextCallbackId = 1;
   const win = window as unknown as Record<string, unknown>;
   const prevInternals = win.__TAURI_INTERNALS__;
@@ -104,9 +117,19 @@ function installTauriMock(options?: {
         stagedPositions.push(new Float32Array(copy.buffer, copy.byteOffset, copy.byteLength / 4));
         return null;
       }
+      if (cmd === 'scan_overhangs_staged') {
+        if (options?.onScanOverhangsStaged) {
+          return options.onScanOverhangsStaged();
+        }
+        return { regions: [], stability: null };
+      }
       if (cmd === 'scan_islands_staged' || cmd === 'scan_islands_from_path') {
+        const argObj = (args ?? {}) as Record<string, unknown>;
+        if (cmd === 'scan_islands_staged') {
+          scanStagedArgs.push(argObj as TauriCapture['scanStagedArgs'][number]);
+        }
         if (options?.onScanStaged) {
-          return options.onScanStaged();
+          return options.onScanStaged(argObj);
         }
         return {
           voxelIslands: [
@@ -140,6 +163,7 @@ function installTauriMock(options?: {
   return {
     commands,
     stagedPositions,
+    scanStagedArgs,
     uninstall: () => {
       if (prevInternals === undefined) delete win.__TAURI_INTERNALS__;
       else win.__TAURI_INTERNALS__ = prevInternals;
@@ -161,7 +185,22 @@ function IslandsHarness({
   return null;
 }
 
-test('MIR-01 & MIR-06a: sourcePath + geom stages winding-corrected world soup and invokes scan_islands_staged', async () => {
+function soupBounds(positions: Float32Array): { min: [number, number, number]; max: [number, number, number] } {
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let i = 0; i + 2 < positions.length; i += 3) {
+    const x = positions[i], y = positions[i + 1], z = positions[i + 2];
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    if (z > maxZ) maxZ = z;
+  }
+  return { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] };
+}
+
+test('MIR-01 & MIR-01b: sourcePath + geom stages pre-TRS local soup + matrix/center and invokes scan_islands_staged', async () => {
   const tauri = installTauriMock();
   const geom = createOutwardTetrahedronGeometry();
   let latest: UseIslandsReturn | null = null;
@@ -201,14 +240,205 @@ test('MIR-01 & MIR-06a: sourcePath + geom stages winding-corrected world soup an
     assert.equal(tauri.stagedPositions.length, 1);
     const staged = tauri.stagedPositions[0];
     assert.equal(staged.length, 4 * 9);
+    // Pre-TRS local soup stays in local [0, 4]^3 space with original outward CCW winding
+    assert.deepEqual(soupBounds(staged), { min: [0, 0, 0], max: [4, 4, 4] });
     assert.ok(
       signedVolume(staged) > 0,
-      `expected positive signed volume (outward normals) under det < 0, got ${signedVolume(staged)}`,
+      `expected positive local signed volume before Rust TRS flip, got ${signedVolume(staged)}`,
+    );
+    assert.equal(tauri.scanStagedArgs.length, 1);
+    assert.deepEqual(tauri.scanStagedArgs[0].center, [2, 2, 2]);
+    assert.deepEqual(
+      tauri.scanStagedArgs[0].matrix?.map((v) => v + 0),
+      [
+        -1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+      ],
     );
     assert.equal(latest!.scanning, false);
     assert.equal(latest!.voxelIslands.length, 1);
     assert.equal(latest!.toppleCoverage, false);
     assert.equal(latest!.dragTotalMm3, 42.5);
+  } finally {
+    await tree?.unmount();
+    geom.geometry.dispose();
+    tauri.uninstall();
+  }
+});
+
+test('MIR-01b fallback: when scan_islands_staged rejects, re-stages world winding-flipped soup before scan_overhangs_staged', async () => {
+  const origWorker = (globalThis as { Worker?: unknown }).Worker;
+  const OrigURL = globalThis.URL;
+  class InlineScanlineWorker {
+    private listeners = new Set<(e: MessageEvent) => void>();
+    addEventListener(_type: string, cb: (e: MessageEvent) => void) {
+      this.listeners.add(cb);
+    }
+    removeEventListener(_type: string, cb: (e: MessageEvent) => void) {
+      this.listeners.delete(cb);
+    }
+    postMessage(msg: unknown) {
+      dispatchScanlineWorkerMessage(msg as Parameters<typeof dispatchScanlineWorkerMessage>[0], (payload) => {
+        const evt = { data: payload } as MessageEvent;
+        for (const cb of [...this.listeners]) cb(evt);
+      });
+    }
+    terminate() {}
+  }
+  class FallbackURL extends OrigURL {
+    constructor(url: string | URL, base?: string | URL) {
+      super(url, base ?? 'http://localhost:3005/');
+    }
+  }
+  (globalThis as { Worker?: unknown }).Worker = InlineScanlineWorker;
+  globalThis.URL = FallbackURL as unknown as typeof URL;
+
+  const tauri = installTauriMock({
+    onScanStaged: () => {
+      throw new Error('simulated native staged scan failure');
+    },
+  });
+  const geom = createOutwardTetrahedronGeometry();
+  let latest: UseIslandsReturn | null = null;
+  let tree: Awaited<ReturnType<typeof renderWithProviders>> | null = null;
+
+  try {
+    tree = await renderWithProviders(
+      <IslandsHarness
+        input={{
+          geom,
+          transform: makeTransform(-1),
+          layerHeightMm: 0.25,
+          supportTips: [],
+          plateZ: 0,
+          modelId: 'fallback-model',
+          sourcePath: 'C:\\models\\tet.stl',
+        }}
+        onHook={(v) => {
+          latest = v;
+        }}
+      />,
+    );
+
+    await act(async () => {
+      await latest!.onRunScan();
+    });
+    await settle(40);
+
+    const firstStageIdx = tauri.commands.indexOf('stage_mesh_binary_set');
+    const scanIslandsIdx = tauri.commands.indexOf('scan_islands_staged');
+    const secondStageIdx = tauri.commands.indexOf('stage_mesh_binary_set', firstStageIdx + 1);
+    const scanOverhangsIdx = tauri.commands.indexOf('scan_overhangs_staged');
+
+    assert.ok(firstStageIdx >= 0 && scanIslandsIdx > firstStageIdx);
+    assert.ok(secondStageIdx > scanIslandsIdx, 'must re-stage soup after scan_islands_staged rejects');
+    assert.ok(scanOverhangsIdx > secondStageIdx, 'must re-stage world soup BEFORE scan_overhangs_staged');
+    assert.equal(tauri.stagedPositions.length, 2);
+
+    // First stage: local pre-TRS soup [0..4]^3; second stage: centered/scaled/flipped world soup [-2..2]^3
+    assert.deepEqual(soupBounds(tauri.stagedPositions[0]), { min: [0, 0, 0], max: [4, 4, 4] });
+    assert.deepEqual(soupBounds(tauri.stagedPositions[1]), { min: [-2, -2, -2], max: [2, 2, 2] });
+    assert.ok(signedVolume(tauri.stagedPositions[1]) > 0, 're-staged world soup preserves outward winding under det < 0');
+  } finally {
+    await tree?.unmount();
+    geom.geometry.dispose();
+    disposeEventLoopChannel();
+    tauri.uninstall();
+    globalThis.URL = OrigURL;
+    (globalThis as { Worker?: unknown }).Worker = origWorker;
+  }
+});
+
+test('C2 native mapping: propagates rawBaseZ/peakAreaMm2/isDetached, keeps isDetached below minAreaMm2, and uses dynamic zBandMm', async () => {
+  const tauri = installTauriMock({
+    onScanStaged: () => ({
+      voxelIslands: [
+        {
+          id: 'v-detached',
+          contact: { x: 0, y: 0, z: 1.25 },
+          baseZ: 1.25,
+          rawBaseZ: 1.00,
+          areaMm2: 0.005,
+          peakAreaMm2: 0.005,
+          isDetached: true,
+          layerSpan: [20, 20],
+        },
+        {
+          id: 'v-fringe-peak',
+          contact: { x: 5, y: 5, z: 3.0 },
+          baseZ: 3.0,
+          rawBaseZ: 3.0,
+          areaMm2: 0.005,
+          peakAreaMm2: 0.05,
+          isDetached: false,
+          layerSpan: [60, 62],
+        },
+        {
+          id: 'v-speck',
+          contact: { x: 10, y: 10, z: 6.0 },
+          baseZ: 6.0,
+          rawBaseZ: 6.0,
+          areaMm2: 0.005,
+          peakAreaMm2: 0.01,
+          isDetached: false,
+          layerSpan: [120, 120],
+        },
+      ],
+      // Minimum at z=1.08: |rawBaseZ 1.00 - 1.08| = 0.08 <= max(2*0.05, 0.10) = 0.10
+      // (while old layerHeightMm=0.05 zBandMm or baseZ=1.25 missed it).
+      minimaIslands: [{ position: { x: 0, y: 0, z: 1.08 } }],
+      overhangIslands: [],
+      stability: {
+        bearingAreaMm2: 10,
+        bearingEdges: 4,
+        centroidDepthMm: 2,
+        contactDepthMm: 2,
+        dragMomentMm3: 10,
+        marginMm: 1,
+        adhesionRatio: 1000,
+        pushDirDeg: 0,
+        dragTopMm: 5,
+        bearingIsRaft: false,
+      },
+    }),
+  });
+  const geom = createOutwardTetrahedronGeometry();
+  let latest: UseIslandsReturn | null = null;
+  let tree: Awaited<ReturnType<typeof renderWithProviders>> | null = null;
+
+  try {
+    tree = await renderWithProviders(
+      <IslandsHarness
+        input={{
+          geom,
+          transform: makeTransform(1),
+          layerHeightMm: 0.05,
+          supportTips: [],
+          plateZ: 0,
+          modelId: 'c2-meta-model',
+          sourcePath: 'C:\\models\\tet.stl',
+        }}
+        onHook={(v) => {
+          latest = v;
+        }}
+      />,
+    );
+
+    await act(async () => {
+      await latest!.onRunScan();
+    });
+    await settle(20);
+
+    const ids = latest!.voxelIslands.map((v) => v.id);
+    assert.deepEqual(ids, ['v-detached', 'v-fringe-peak'], 'keeps detached tip and peakAreaMm2 >= minAreaMm2 while culling tiny fringe');
+    assert.equal(latest!.voxelIslands[0].isDetached, true);
+    assert.equal(latest!.voxelIslands[0].rawBaseZ, 1.00);
+    assert.equal(latest!.voxelIslands[1].peakAreaMm2, 0.05);
+    assert.equal(latest!.stats.matched, 1, 'v-detached matches m0 via rawBaseZ + max(2h, 0.10) zBandMm');
+    const matched = latest!.filteredIslands.find((i) => i.id === 'v-detached');
+    assert.equal(matched?.class, 'intersection');
   } finally {
     await tree?.unmount();
     geom.geometry.dispose();
@@ -544,5 +774,123 @@ test('hasTauriRuntime treats window.__TAURI_INTERNALS__ = undefined as non-Tauri
     emptyGeom.geometry.dispose();
     if (hadOwn) win.__TAURI_INTERNALS__ = prev;
     else delete win.__TAURI_INTERNALS__;
+  }
+});
+
+test('fallback stage_mesh_binary_set aborts before scan_overhangs_staged when superseded and filter prefers peakAreaMm2', async () => {
+  let stageCall = 0;
+  let resolveFallbackStage!: () => void;
+  let overhangCalls = 0;
+  const win = window as unknown as Record<string, unknown>;
+  const prevInternals = win.__TAURI_INTERNALS__;
+  const prevEventInternals = win.__TAURI_EVENT_PLUGIN_INTERNALS__;
+  let nextCallbackId = 1;
+
+  win.__TAURI_INTERNALS__ = {
+    invoke: async (cmd: string) => {
+      if (cmd === 'plugin:event|listen') return nextCallbackId;
+      if (cmd === 'plugin:event|unlisten') return null;
+      if (cmd === 'stage_mesh_binary_set') {
+        stageCall += 1;
+        if (stageCall === 2) {
+          return new Promise<null>((resolve) => {
+            resolveFallbackStage = () => resolve(null);
+          });
+        }
+        return null;
+      }
+      if (cmd === 'scan_overhangs_staged') {
+        overhangCalls += 1;
+        return { regions: [], stability: null };
+      }
+      if (cmd === 'scan_islands_staged') {
+        if (stageCall === 1) {
+          throw new Error('force fallback on first scan');
+        }
+        return {
+          voxelIslands: [
+            {
+              id: 'v-zero-peak',
+              contact: { x: 0, y: 0, z: 1 },
+              baseZ: 1,
+              areaMm2: 1,
+              peakAreaMm2: 0,
+              maxAreaMm2: 1,
+              isDetached: true,
+              layerSpan: [1, 1],
+            },
+            {
+              id: 'v-valid-peak',
+              contact: { x: 2, y: 0, z: 1 },
+              baseZ: 1,
+              areaMm2: 0.005,
+              peakAreaMm2: 0.005,
+              maxAreaMm2: 0,
+              isDetached: true,
+              layerSpan: [1, 1],
+            },
+          ],
+          minimaIslands: [],
+          overhangIslands: [],
+          stability: null,
+        };
+      }
+      throw new Error(`Unexpected command: ${cmd}`);
+    },
+    transformCallback: () => nextCallbackId++,
+    unregisterCallback: () => {},
+  };
+  win.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+
+  const geom = createOutwardTetrahedronGeometry();
+  let latest: UseIslandsReturn | null = null;
+  let tree: Awaited<ReturnType<typeof renderWithProviders>> | null = null;
+
+  try {
+    tree = await renderWithProviders(
+      <IslandsHarness
+        input={{
+          geom,
+          transform: makeTransform(1),
+          layerHeightMm: 0.05,
+          supportTips: [],
+          plateZ: 0,
+          modelId: 'fallback-epoch-model',
+          sourcePath: 'C:\\models\\tet.stl',
+        }}
+        onHook={(v) => {
+          latest = v;
+        }}
+      />,
+    );
+
+    let firstScan!: Promise<void>;
+    act(() => {
+      firstScan = latest!.onRunScan();
+    });
+    await settle(25);
+    assert.equal(stageCall, 2, 'first scan suspended inside fallback stage_mesh_binary_set');
+
+    await act(async () => {
+      await latest!.onRunScan();
+    });
+    assert.deepEqual(
+      latest!.voxelIslands.map((v) => v.id),
+      ['v-valid-peak'],
+      'isDetached filter must prefer peakAreaMm2 over maxAreaMm2',
+    );
+
+    await act(async () => {
+      resolveFallbackStage();
+      await firstScan;
+    });
+    assert.equal(overhangCalls, 0, 'superseded fallback scan must abort before scan_overhangs_staged');
+  } finally {
+    await tree?.unmount();
+    geom.geometry.dispose();
+    if (prevInternals === undefined) delete win.__TAURI_INTERNALS__;
+    else win.__TAURI_INTERNALS__ = prevInternals;
+    if (prevEventInternals === undefined) delete win.__TAURI_EVENT_PLUGIN_INTERNALS__;
+    else win.__TAURI_EVENT_PLUGIN_INTERNALS__ = prevEventInternals;
   }
 });

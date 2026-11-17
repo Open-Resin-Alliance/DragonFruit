@@ -27,6 +27,7 @@ pub struct IslandTracker {
     px_mm: f64,
     min_overlap_px: i32,
     overlap_neighborhood_px: i32,
+    cantilever_neighborhood_px: i32,
     connectivity: Connectivity,
     pending_merges: Vec<PendingMerge>,
     merge_eval_window: u32,
@@ -48,12 +49,29 @@ impl IslandTracker {
         overlap_neighborhood_px: i32,
         connectivity: Connectivity,
     ) -> Self {
+        Self::with_candidate_reach(
+            px_mm,
+            min_overlap_px,
+            overlap_neighborhood_px,
+            overlap_neighborhood_px,
+            connectivity,
+        )
+    }
+
+    pub fn with_candidate_reach(
+        px_mm: f64,
+        min_overlap_px: i32,
+        overlap_neighborhood_px: i32,
+        cantilever_neighborhood_px: i32,
+        connectivity: Connectivity,
+    ) -> Self {
         Self {
             islands: HashMap::new(),
             next_id: 1,
             px_mm,
             min_overlap_px: min_overlap_px.max(1),
             overlap_neighborhood_px: overlap_neighborhood_px.max(0),
+            cantilever_neighborhood_px: cantilever_neighborhood_px.max(0),
             connectivity,
             pending_merges: Vec::new(),
             merge_eval_window: 30,
@@ -194,14 +212,33 @@ impl IslandTracker {
         width: i32,
         height: i32,
     ) -> RleLabels {
+        // Snapshot Active status at the start of the layer so same-layer saddle merges
+        // cannot prematurely mark a split sibling Complete before its continuing branch runs.
+        let active_at_layer_start: HashSet<IslandId> = self
+            .islands
+            .iter()
+            .filter(|(_, island)| island.status == IslandStatus::Active)
+            .map(|(&id, _)| id)
+            .collect();
+
         let mut comp_to_island: HashMap<i32, IslandId> = HashMap::new();
+        let mut continuations: Vec<(IslandId, f64, &ComponentInfo)> = Vec::new();
+        let mut merges: Vec<(IslandId, HashSet<IslandId>, f64, &ComponentInfo)> = Vec::new();
 
         for component in current_components {
+            let area_mm2 = component.area_px as f64 * self.px_mm * self.px_mm;
+
+            if component.is_detached {
+                let assigned_id = self.create_new_island(layer_index, area_mm2, Some(component));
+                comp_to_island.insert(component.id, assigned_id);
+                continue;
+            }
+
             let prev_id_overlaps = Self::count_overlapping_labels(
                 component.id,
                 current_labels,
                 prev_island_labels,
-                self.overlap_neighborhood_px,
+                self.cantilever_neighborhood_px,
             );
 
             let mut prev_ids: HashSet<IslandId> = HashSet::new();
@@ -211,51 +248,87 @@ impl IslandTracker {
                 }
             }
 
-            // Filter for active islands
+            // Filter for active islands using start-of-layer snapshot
             let active_prev_ids: HashSet<IslandId> = prev_ids
                 .iter()
                 .copied()
-                .filter(|id| {
-                    self.islands
-                        .get(id)
-                        .map_or(false, |i| i.status == IslandStatus::Active)
-                })
+                .filter(|id| active_at_layer_start.contains(id))
                 .collect();
 
-            let area_mm2 = component.area_px as f64 * self.px_mm * self.px_mm;
-
-            let assigned_id = if active_prev_ids.is_empty() {
+            if active_prev_ids.is_empty() {
                 if !prev_ids.is_empty() {
                     // Overlaps only non-active islands — resolve to parent chain.
                     // Pick the smallest id for determinism (HashSet order is not).
                     let first = *prev_ids.iter().min_by_key(|id| id.0).unwrap();
                     let target = self.resolve_parent(first);
-                    self.update_island(target, layer_index, area_mm2, Some(component));
-                    target
+                    comp_to_island.insert(component.id, target);
+                    continuations.push((target, area_mm2, component));
                 } else {
-                    self.create_new_island(layer_index, area_mm2, Some(component))
+                    let assigned_id =
+                        self.create_new_island(layer_index, area_mm2, Some(component));
+                    comp_to_island.insert(component.id, assigned_id);
                 }
             } else if active_prev_ids.len() == 1 {
-                let id = *active_prev_ids.iter().next().unwrap();
-                self.update_island(id, layer_index, area_mm2, Some(component));
-                id
+                let target = *active_prev_ids.iter().next().unwrap();
+                comp_to_island.insert(component.id, target);
+                continuations.push((target, area_mm2, component));
             } else {
-                // Merge: resolve all to ultimate parents
+                // Direct saddle completion in candidate mode (no PendingMerge placeholders):
+                // resolve parents and pick deterministic surviving ancestor min by
+                // (first_layer, id.0). Final sibling completion is deferred until after all
+                // continuations and merges on this layer have been recorded.
                 let resolved: HashSet<IslandId> = active_prev_ids
                     .iter()
                     .map(|&id| self.resolve_parent(id))
                     .collect();
-                self.merge_islands(layer_index, &resolved, prev_island_labels, area_mm2, Some(component))
-            };
+                let ancestor = *resolved
+                    .iter()
+                    .min_by_key(|id| {
+                        let first_layer = self.islands.get(id).map_or(u32::MAX, |i| i.first_layer);
+                        (first_layer, id.0)
+                    })
+                    .unwrap();
 
-            comp_to_island.insert(component.id, assigned_id);
-
-            // Track overlaps for pending merges
-            self.track_pending_merge_overlaps(component.id, current_labels, prev_island_labels);
+                comp_to_island.insert(component.id, ancestor);
+                merges.push((ancestor, resolved, area_mm2, component));
+            }
         }
 
-        // Check and finalize pending merges
-        self.evaluate_pending_merges(layer_index);
+        let mut updated_this_layer: HashSet<IslandId> = HashSet::new();
+        let mut absorbed_this_layer: HashSet<IslandId> = HashSet::new();
+
+        for (target, area_mm2, component) in continuations {
+            self.update_island(target, layer_index, area_mm2, Some(component));
+            updated_this_layer.insert(target);
+        }
+
+        for (ancestor, resolved, area_mm2, component) in merges {
+            if resolved.len() > 1 {
+                if let Some(island) = self.islands.get_mut(&ancestor) {
+                    island.has_saddle_merged = true;
+                }
+                for &id in &resolved {
+                    if id != ancestor {
+                        absorbed_this_layer.insert(id);
+                    }
+                }
+            }
+            self.update_island(ancestor, layer_index, area_mm2, Some(component));
+            updated_this_layer.insert(ancestor);
+        }
+
+        for id in absorbed_this_layer {
+            if !updated_this_layer.contains(&id) {
+                if let Some(island) = self.islands.get_mut(&id) {
+                    island.has_saddle_merged = true;
+                    island.status = IslandStatus::Complete;
+                    island.parent_id = None;
+                    if layer_index > 0 {
+                        island.last_layer = layer_index - 1;
+                    }
+                }
+            }
+        }
 
         self.map_labels_to_islands(current_labels, &comp_to_island, width, height)
     }
@@ -618,8 +691,6 @@ impl IslandTracker {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::*;
-    use crate::rle::*;
     use crate::tracker::*;
     use crate::rle::rle_encode;
     use crate::scan::scan_layer;
@@ -737,7 +808,11 @@ mod tests {
         d1[(9 * w + 8) as usize] = 1;
         d1[(1 * w + 1) as usize] = 1;
         let m1 = rle_encode(&d1, w, h);
-        let r1 = scan_layer(&m1, Some(&m0), 1.0, 0.0, Connectivity::Eight);
+        let mut r1 = scan_layer(&m1, Some(&m0), 1.0, 0.0, Connectivity::Eight);
+        // Exercise CantileverFringe L2 overlap reach directly on synthetic non-detached components
+        for c in &mut r1.components {
+            c.is_detached = false;
+        }
         let _il1 =
             tracker.process_layer(1, &r1.labels, &r1.components, Some(&il0), &r1.solid_mask, true);
 
@@ -757,7 +832,10 @@ mod tests {
         d_asym[(5 * w + 10) as usize] = 1; // (10,5): dx=+5, dy=0 -> 25 <= 25 (continues)
         d_asym[(6 * w + 0) as usize] = 1;  // (0,6): dx=-5, dy=+1 -> 26 > 25 (new island)
         let m_asym = rle_encode(&d_asym, w, h);
-        let r_asym = scan_layer(&m_asym, Some(&m0), 1.0, 0.0, Connectivity::Eight);
+        let mut r_asym = scan_layer(&m_asym, Some(&m0), 1.0, 0.0, Connectivity::Eight);
+        for c in &mut r_asym.components {
+            c.is_detached = false;
+        }
         let _il_asym = tracker_asym.process_layer(
             1,
             &r_asym.labels,
@@ -785,7 +863,10 @@ mod tests {
             true,
         );
         let tall_mask = rle_encode(&vec![1u8; 4 * 6], 4, 6);
-        let r_tall = scan_layer(&tall_mask, Some(&rle_encode(&vec![0u8; 4 * 6], 4, 6)), 1.0, 0.0, Connectivity::Eight);
+        let mut r_tall = scan_layer(&tall_mask, Some(&rle_encode(&vec![0u8; 4 * 6], 4, 6)), 1.0, 0.0, Connectivity::Eight);
+        for c in &mut r_tall.components {
+            c.is_detached = false;
+        }
         let _ = t_mismatch.process_layer(
             1,
             &r_tall.labels,
@@ -888,10 +969,11 @@ mod tests {
             candidate_only: true,
         };
 
-        let mut tracker = IslandTracker::with_connectivity(
+        let mut tracker = IslandTracker::with_candidate_reach(
             job.px_mm,
             job.min_overlap_px,
-            job.effective_overlap_neighborhood_px(),
+            job.overlap_neighborhood_px,
+            job.cantilever_overlap_neighborhood_px(),
             job.connectivity,
         );
         let mut prev_mask: Option<RleMask> = None;
@@ -929,6 +1011,238 @@ mod tests {
         assert_eq!(islands.len(), 1);
         assert_eq!(islands[0].first_layer, 0);
         assert_eq!(islands[0].last_layer, 4);
+    }
+
+    #[test]
+    fn c2_detached_needle_within_cantilever_reach_is_not_absorbed_by_neighbor() {
+        let w = 24;
+        let h = 24;
+        let px_mm = 0.05;
+        let support_buffer_mm = 0.25; // B = 5 -> cantilever reach = 6
+
+        let mut d0 = vec![0u8; (w * h) as usize];
+        for y in 2..4 {
+            for x in 4..8 {
+                d0[(y * w + x) as usize] = 1;
+            }
+        }
+        let m0 = rle_encode(&d0, w, h);
+        let m1 = m0.clone(); // Layer 1 wall straight up -> C_1 empty
+
+        // Layer 2: attached cantilever steps out to y=4..10 (C_2 at y=9, 6px from y=3)
+        let mut d2 = d0.clone();
+        for y in 4..10 {
+            for x in 4..8 {
+                d2[(y * w + x) as usize] = 1;
+            }
+        }
+        let m2 = rle_encode(&d2, w, h);
+
+        // Layer 3: detached needle at y=15..17 (6px from y=9 -> outside B=5, inside B+1=6)
+        let mut d3 = d2.clone();
+        for y in 15..17 {
+            for x in 4..8 {
+                d3[(y * w + x) as usize] = 1;
+            }
+        }
+        let m3 = rle_encode(&d3, w, h);
+
+        let mut tracker = IslandTracker::with_connectivity(px_mm, 1, 6, Connectivity::Eight);
+        let mut prev_mask: Option<RleMask> = None;
+        let mut prev_il: Option<RleLabels> = None;
+        for (l, m) in [m0, m1, m2, m3].iter().enumerate() {
+            let r = scan_layer(m, prev_mask.as_ref(), px_mm, support_buffer_mm, Connectivity::Eight);
+            let il = tracker.process_layer(
+                l as u32,
+                &r.labels,
+                &r.components,
+                prev_il.as_ref(),
+                &r.solid_mask,
+                true,
+            );
+            prev_mask = Some(m.clone());
+            prev_il = Some(il);
+        }
+
+        let islands = tracker.get_islands();
+        assert_eq!(
+            islands.len(),
+            3,
+            "expected wall(L0), cantilever(L2), and detached needle(L3); got {:?}",
+            islands.iter().map(|i| (i.id.0, i.first_layer, i.last_layer)).collect::<Vec<_>>()
+        );
+        let cantilever = islands.iter().find(|i| i.first_layer == 2).unwrap();
+        let needle = islands.iter().find(|i| i.first_layer == 3).unwrap();
+        assert!(!cantilever.is_detached);
+        assert!(needle.is_detached);
+    }
+
+    #[test]
+    fn c2_candidate_same_layer_split_and_saddle_merge_is_order_invariant() {
+        let w = 16;
+        let h = 12;
+        let px_mm = 0.05;
+
+        let build_to_layer_1 = || {
+            let mut tracker = IslandTracker::with_connectivity(px_mm, 1, 1, Connectivity::Four);
+
+            // Layer 0: island A at x=2..4, y=4..6 (4px)
+            let mut d0 = vec![0u8; (w * h) as usize];
+            for y in 4..6 {
+                for x in 2..4 {
+                    d0[(y * w + x) as usize] = 1;
+                }
+            }
+            let m0 = rle_encode(&d0, w, h);
+            let r0 = scan_layer(&m0, None, px_mm, 0.0, Connectivity::Four);
+            let il0 = tracker.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask, true);
+
+            // Layer 1: A continues at x=4..5, y=4..6; B starts at x=8..10, y=4..6
+            let mut d1 = d0.clone();
+            for y in 4..6 {
+                d1[(y * w + 4) as usize] = 1;
+                for x in 8..10 {
+                    d1[(y * w + x) as usize] = 1;
+                }
+            }
+            let m1 = rle_encode(&d1, w, h);
+            let r1 = scan_layer(&m1, Some(&m0), px_mm, 0.0, Connectivity::Four);
+            let il1 = tracker.process_layer(1, &r1.labels, &r1.components, Some(&il0), &r1.solid_mask, true);
+            (tracker, d1, m1, il1)
+        };
+
+        // Layer 2 synthetic components:
+        // - C_branch (id=1): x=9..11, y=2..4 -> overlaps ONLY B (within neighborhood 1)
+        // - C_merge  (id=2): x=4..9,  y=6..8 -> overlaps BOTH A and B (within neighborhood 1)
+        let mut l2_grid = vec![0i32; (w * h) as usize];
+        for y in 2..4 {
+            for x in 9..11 {
+                l2_grid[(y * w + x) as usize] = 1;
+            }
+        }
+        for y in 6..8 {
+            for x in 4..9 {
+                l2_grid[(y * w + x) as usize] = 2;
+            }
+        }
+        let mut l2_rows = Vec::with_capacity(h as usize);
+        for y in 0..h as usize {
+            let mut spans = Vec::new();
+            let row_off = y * w as usize;
+            let mut run_start: i32 = -1;
+            let mut cur_id: i32 = 0;
+            for x in 0..w as usize {
+                let id = l2_grid[row_off + x];
+                if id != cur_id {
+                    if cur_id > 0 {
+                        spans.push(RleLabelRun {
+                            start: run_start,
+                            length: x as i32 - run_start,
+                            id: cur_id,
+                        });
+                    }
+                    cur_id = id;
+                    run_start = x as i32;
+                }
+            }
+            if cur_id > 0 {
+                spans.push(RleLabelRun {
+                    start: run_start,
+                    length: w - run_start,
+                    id: cur_id,
+                });
+            }
+            l2_rows.push(spans);
+        }
+        let l2_labels = RleLabels {
+            rows: l2_rows,
+            width: w,
+            height: h,
+        };
+        let c_branch = ComponentInfo {
+            id: 1,
+            label: 1,
+            area_px: 4,
+            size: 4,
+            centroid_sum_x: 38.0,
+            centroid_sum_y: 10.0,
+            is_detached: false,
+        };
+        let c_merge = ComponentInfo {
+            id: 2,
+            label: 2,
+            area_px: 10,
+            size: 10,
+            centroid_sum_x: 60.0,
+            centroid_sum_y: 65.0,
+            is_detached: false,
+        };
+        let empty_solid = RleMask {
+            rows: vec![Vec::new(); h as usize],
+            width: w,
+            height: h,
+        };
+
+        let run_order = |comps: Vec<ComponentInfo>| {
+            let (mut tracker, d1, _m1, il1) = build_to_layer_1();
+            let il2 = tracker.process_layer(2, &l2_labels, &comps, Some(&il1), &empty_solid, true);
+
+            let islands_l2 = tracker.get_islands();
+            let a_l2 = islands_l2.iter().find(|i| i.first_layer == 0).unwrap().clone();
+            let b_l2 = islands_l2.iter().find(|i| i.first_layer == 1).unwrap().clone();
+
+            assert_eq!(a_l2.status, IslandStatus::Active);
+            assert_eq!(a_l2.last_layer, 2);
+            assert!(a_l2.has_saddle_merged);
+            assert_eq!(
+                b_l2.status,
+                IslandStatus::Active,
+                "split sibling B continuing via C_branch must stay Active"
+            );
+            assert_eq!(
+                b_l2.last_layer, 2,
+                "split sibling B with layer-2 labels must not rewind last_layer < 2"
+            );
+
+            // Layer 3: C_branch continues upward at x=10..12, y=1..3 (overlaps C_branch in il2)
+            let mut d3 = d1;
+            for y in 2..4 {
+                for x in 9..11 {
+                    d3[(y * w + x) as usize] = 1;
+                }
+            }
+            for y in 6..8 {
+                for x in 4..9 {
+                    d3[(y * w + x) as usize] = 1;
+                }
+            }
+            let m2 = rle_encode(&d3, w, h);
+            let mut d3_next = d3.clone();
+            for y in 1..3 {
+                for x in 10..12 {
+                    d3_next[(y * w + x) as usize] = 1;
+                }
+            }
+            let m3 = rle_encode(&d3_next, w, h);
+            let r3 = scan_layer(&m3, Some(&m2), px_mm, 0.0, Connectivity::Four);
+            let _il3 = tracker.process_layer(3, &r3.labels, &r3.components, Some(&il2), &r3.solid_mask, true);
+
+            let islands_l3 = tracker.get_islands();
+            let b_l3 = islands_l3.iter().find(|i| i.first_layer == 1).unwrap().clone();
+            assert_eq!(b_l3.status, IslandStatus::Active);
+            assert_eq!(b_l3.last_layer, 3);
+            (il2.rows, b_l2, b_l3)
+        };
+
+        let (rows_branch_first, b_l2_bf, b_l3_bf) = run_order(vec![c_branch.clone(), c_merge.clone()]);
+        let (rows_merge_first, b_l2_mf, b_l3_mf) = run_order(vec![c_merge, c_branch]);
+
+        assert_eq!(rows_branch_first, rows_merge_first);
+        assert_eq!(b_l2_bf.last_layer, b_l2_mf.last_layer);
+        assert_eq!(b_l2_bf.status, b_l2_mf.status);
+        assert_eq!(b_l2_bf.has_saddle_merged, b_l2_mf.has_saddle_merged);
+        assert_eq!(b_l2_bf.pre_merge_max_area_mm2, b_l2_mf.pre_merge_max_area_mm2);
+        assert_eq!(b_l3_bf.last_layer, b_l3_mf.last_layer);
     }
 }
 

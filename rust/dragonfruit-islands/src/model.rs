@@ -117,6 +117,8 @@ pub struct ComponentInfo {
     pub size: i32,
     pub centroid_sum_x: f64,
     pub centroid_sum_y: f64,
+    #[serde(default)]
+    pub is_detached: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +175,12 @@ pub struct Island {
     pub volume_mm3: Option<f64>,
     pub max_area_mm2: Option<f64>,
     pub max_area_layer: Option<u32>,
+    #[serde(default)]
+    pub is_detached: bool,
+    #[serde(default)]
+    pub pre_merge_max_area_mm2: Option<f64>,
+    #[serde(skip)]
+    pub(crate) has_saddle_merged: bool,
     pub is_merged_placeholder: bool,
     pub centroid_sum_x: f64,
     pub centroid_sum_y: f64,
@@ -257,6 +265,9 @@ impl Island {
             volume_mm3: None,
             max_area_mm2: Some(area_mm2),
             max_area_layer: Some(layer),
+            is_detached: comp.map_or(layer == 0, |c| c.is_detached),
+            pre_merge_max_area_mm2: Some(area_mm2),
+            has_saddle_merged: false,
             is_merged_placeholder: false,
             centroid_sum_x,
             centroid_sum_y,
@@ -295,6 +306,21 @@ impl Island {
         if self.max_area_mm2.map_or(true, |m| layer_area > m) {
             self.max_area_mm2 = Some(layer_area);
             self.max_area_layer = Some(layer);
+        }
+        if !self.has_saddle_merged
+            && self
+                .pre_merge_max_area_mm2
+                .map_or(true, |m| layer_area > m)
+        {
+            self.pre_merge_max_area_mm2 = Some(layer_area);
+        }
+
+        if layer < prev_first_layer {
+            self.is_detached = comp.map_or(layer == 0, |c| c.is_detached);
+        } else if layer == prev_first_layer {
+            if let Some(c) = comp {
+                self.is_detached = self.is_detached || c.is_detached;
+            }
         }
 
         if let Some(c) = comp {
@@ -403,23 +429,16 @@ impl IslandScanJob {
         (self.support_buffer_mm / self.px_mm).round().max(0.0) as i32
     }
 
-    /// Effective overlap neighborhood radius (in pixels) passed to `IslandTracker`.
+    /// Overlap neighborhood radius (in pixels) passed to `IslandTracker` for
+    /// `CantileverFringe` candidate tracking (`candidate_only == true`).
     ///
-    /// When `candidate_only` is `true`, unsupported candidates on layer `L` are
-    /// outside the support moat of radius `B = support_buffer_px()`, so
-    /// consecutive candidate strips on a sloped overhang sit at least `B + 1` px
-    /// apart; this returns `overlap_neighborhood_px.max(B + 1)` to chain them.
-    ///
-    /// When `candidate_only` is `false` (solid mode), consecutive solid slices
-    /// overlap directly without a support moat, so `overlap_neighborhood_px`
-    /// is NOT inflated to `B + 1` (preventing nearby columns from merging).
-    pub fn effective_overlap_neighborhood_px(&self) -> i32 {
-        if self.candidate_only {
-            let moat_radius = self.support_buffer_px() + 1;
-            self.overlap_neighborhood_px.max(moat_radius)
-        } else {
-            self.overlap_neighborhood_px.max(0)
-        }
+    /// Unsupported candidates on layer `L` are outside the support moat of
+    /// radius `B = support_buffer_px()`, so consecutive candidate strips on a
+    /// sloped overhang sit at least `B + 1` px apart; this returns
+    /// `overlap_neighborhood_px.max(B + 1)` without inflating solid-mode reach.
+    pub fn cantilever_overlap_neighborhood_px(&self) -> i32 {
+        self.overlap_neighborhood_px
+            .max(self.support_buffer_px() + 1)
     }
 }
 
@@ -496,6 +515,7 @@ mod tests {
             size,
             centroid_sum_x: cx * size as f64,
             centroid_sum_y: cy * size as f64,
+            is_detached: false,
         }
     }
 
@@ -586,11 +606,12 @@ mod tests {
         let parsed: IslandScanJob = serde_json::from_str(json).expect("job JSON should deserialize");
         assert_eq!(parsed.connectivity, Connectivity::Eight);
         assert!(!parsed.candidate_only);
-        assert_eq!(parsed.effective_overlap_neighborhood_px(), 1);
+        assert_eq!(parsed.overlap_neighborhood_px, 1);
+        assert_eq!(parsed.cantilever_overlap_neighborhood_px(), 6);
     }
 
     #[test]
-    fn effective_overlap_neighborhood_only_inflates_for_candidate_only() {
+    fn cantilever_overlap_neighborhood_bounds_moat_reach() {
         let base_job = IslandScanJob {
             px_mm: 0.05,
             support_buffer_mm: 0.25, // B = 5
@@ -611,20 +632,45 @@ mod tests {
         };
 
         assert_eq!(base_job.support_buffer_px(), 5);
-        // Solid mode must NOT inflate overlap_neighborhood_px to B + 1
-        assert_eq!(base_job.effective_overlap_neighborhood_px(), 1);
-
-        let candidate_job = IslandScanJob {
-            candidate_only: true,
-            ..base_job.clone()
-        };
-        assert_eq!(candidate_job.effective_overlap_neighborhood_px(), 6);
+        // Solid-mode neighborhood remains uninflated while cantilever reach uses max(B + 1)
+        assert_eq!(base_job.overlap_neighborhood_px, 1);
+        assert_eq!(base_job.cantilever_overlap_neighborhood_px(), 6);
 
         let large_explicit = IslandScanJob {
-            candidate_only: true,
             overlap_neighborhood_px: 10,
             ..base_job
         };
-        assert_eq!(large_explicit.effective_overlap_neighborhood_px(), 10);
+        assert_eq!(large_explicit.cantilever_overlap_neighborhood_px(), 10);
+    }
+
+    #[test]
+    fn island_tracks_is_detached_and_pre_merge_max_area() {
+        let mut c0 = comp(1, 2, 1.0, 1.0);
+        c0.is_detached = true;
+        let mut c1 = comp(2, 5, 2.0, 2.0);
+        c1.is_detached = false;
+        let mut c2 = comp(3, 20, 3.0, 3.0);
+        c2.is_detached = false;
+
+        let mut island = Island::new(IslandId(1), 4, 0.01, Some(&c0));
+        assert!(island.is_detached);
+        assert_eq!(island.pre_merge_max_area_mm2, Some(0.01));
+
+        // Upper-layer growth keeps birth is_detached and updates pre_merge_max_area_mm2
+        island.update(5, 0.04, Some(&c1));
+        assert!(island.is_detached);
+        assert_eq!(island.pre_merge_max_area_mm2, Some(0.04));
+
+        // Once saddle-merged, pre_merge_max_area_mm2 freezes while max_area_mm2 advances
+        island.has_saddle_merged = true;
+        island.update(6, 0.50, Some(&c2));
+        assert_eq!(island.pre_merge_max_area_mm2, Some(0.04));
+        assert_eq!(island.max_area_mm2, Some(0.50));
+
+        // Lower birth layer updates is_detached
+        let mut c_lower = comp(4, 1, 0.5, 0.5);
+        c_lower.is_detached = false;
+        island.update(2, 0.02, Some(&c_lower));
+        assert!(!island.is_detached);
     }
 }

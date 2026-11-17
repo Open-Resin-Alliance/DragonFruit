@@ -172,21 +172,25 @@ test('merge keeps huge voxel island overlapping a small overhang ledge (NBR-05)'
   assert.ok(ids.includes('o-ledge'));
 });
 
-test('merge clears dangling matchedWith on surviving minima and mergeOverhangResults updates stats (NBR-05)', () => {
+test('C2: merge protects intersection and isDetached islands, yields only CantileverFringe, and annotates coveredByOverhangId on voxel & minima', () => {
   const classifiedResult: ClassifiedIslands = {
     islands: [
       voxelIsland('v0', 0, 0, 6.53, 10, { class: 'intersection', matchedWith: 'm0' }),
+      voxelIsland('v-detached', 2, 2, 6.53, 0.5, { class: 'voxelOnly', matchedWith: null, isDetached: true }),
+      voxelIsland('v-fringe', -2, -2, 6.53, 1.0, { class: 'voxelOnly', matchedWith: null, isDetached: false }),
       voxelIsland('v1', 50, 50, 12, 2, { class: 'voxelOnly', matchedWith: null }),
       minimaIsland('m0', 0, 0, 6.53, { class: 'intersection', matchedWith: 'v0' }),
+      minimaIsland('m-only-cov', 4, 4, 6.53, { class: 'minimaOnly', matchedWith: null }),
+      minimaIsland('m-only-far', 50, 50, 12, { class: 'minimaOnly', matchedWith: null }),
     ],
     stats: {
-      voxelTotal: 2,
-      minimaTotal: 1,
+      voxelTotal: 4,
+      minimaTotal: 3,
       matched: 1,
-      voxelOnly: 1,
-      minimaOnly: 0,
+      voxelOnly: 3,
+      minimaOnly: 2,
       minimaSupersetOfVoxel: false,
-      voxelSupersetOfMinima: true,
+      voxelSupersetOfMinima: false,
       meanMatchOffsetMm: 0.1,
     },
   };
@@ -198,21 +202,33 @@ test('merge clears dangling matchedWith on surviving minima and mergeOverhangRes
     overhangPxMm: 0.25,
   });
 
+  const v0 = merged.islands.find((i) => i.id === 'v0')!;
+  const vDetached = merged.islands.find((i) => i.id === 'v-detached')!;
   const m0 = merged.islands.find((i) => i.id === 'm0')!;
-  assert.equal(m0.class, 'minimaOnly');
-  assert.equal(m0.matchedWith, null);
-  assert.equal(merged.islands.some((i) => i.id === 'v0'), false);
+  const mCov = merged.islands.find((i) => i.id === 'm-only-cov')!;
+  const mFar = merged.islands.find((i) => i.id === 'm-only-far')!;
+
+  assert.equal(v0.class, 'intersection', 'intersection voxel must survive overhang merge');
+  assert.equal(v0.matchedWith, 'm0');
+  assert.equal(v0.coveredByOverhangId, 'o0');
+  assert.equal(vDetached.coveredByOverhangId, 'o0', 'isDetached voxel survives with coveredByOverhangId');
+  assert.equal(merged.islands.some((i) => i.id === 'v-fringe'), false, 'CantileverFringe yields to overhang');
   assert.equal(merged.islands.some((i) => i.id === 'v1'), true);
+  assert.equal(m0.class, 'intersection', 'matched minima must NOT demote to minimaOnly');
+  assert.equal(m0.matchedWith, 'v0');
+  assert.equal(m0.coveredByOverhangId, 'o0', 'minima receives non-destructive coveredByOverhangId');
+  assert.equal(mCov.coveredByOverhangId, 'o0', 'minimaOnly inside overhang receives coveredByOverhangId');
+  assert.equal(mFar.coveredByOverhangId, undefined);
   assert.equal(merged.islands.some((i) => i.id === 'o0'), true);
   assert.deepEqual(merged.stats, {
-    voxelTotal: 1,
-    minimaTotal: 1,
-    matched: 0,
-    voxelOnly: 1,
-    minimaOnly: 1,
+    voxelTotal: 3,
+    minimaTotal: 3,
+    matched: 1,
+    voxelOnly: 2,
+    minimaOnly: 2,
     minimaSupersetOfVoxel: false,
     voxelSupersetOfMinima: false,
-    meanMatchOffsetMm: 0,
+    meanMatchOffsetMm: 0.1,
   });
 });
 
@@ -260,12 +276,12 @@ test('merge is a no-op without overhang regions', () => {
   assert.equal(mergeOverhangRegions(classified, []), classified, 'same array reference');
 });
 
-test('mergeOverhangResults recomputes exact meanMatchOffsetMm when partial intersection voxels drop and keeps <50%-covered C-shape', () => {
-  const vDropped = voxelIsland('v-drop', 0, 0, 6.53, 10);
+test('mergeOverhangResults preserves covered intersections with exact meanMatchOffsetMm and keeps <50%-covered C-shape', () => {
+  const vCoveredInter = voxelIsland('v-inter', 0, 0, 6.53, 10);
   const vKept = voxelIsland('v-kept', 50, 50, 12.0, 2);
-  const mDropped = minimaIsland('m-drop', 0.02, 0, 6.53);
+  const mCoveredInter = minimaIsland('m-inter', 0.02, 0, 6.53);
   const mKept = minimaIsland('m-kept', 50.4, 50.0, 12.0);
-  const classifiedResult = classifyIntersection([vDropped, vKept], [mDropped, mKept], {
+  const classifiedResult = classifyIntersection([vCoveredInter, vKept], [mCoveredInter, mKept], {
     xyToleranceMm: 0.5,
     zBandMm: 0.2,
   });
@@ -278,11 +294,15 @@ test('mergeOverhangResults recomputes exact meanMatchOffsetMm when partial inter
     layerHeightMm: 0.05,
     overhangPxMm: 0.25,
   });
-  assert.equal(merged.stats.matched, 1);
+  assert.equal(merged.stats.matched, 2);
   assert.ok(
-    Math.abs(merged.stats.meanMatchOffsetMm - 0.4) < 1e-5,
-    `expected surviving match offset 0.40 mm, got ${merged.stats.meanMatchOffsetMm}`,
+    Math.abs(merged.stats.meanMatchOffsetMm - 0.21) < 1e-5,
+    `expected preserved match offset 0.21 mm, got ${merged.stats.meanMatchOffsetMm}`,
   );
+  assert.equal(merged.islands.find((i) => i.id === 'v-inter')?.coveredByOverhangId, 'o0');
+  assert.equal(merged.islands.find((i) => i.id === 'm-inter')?.coveredByOverhangId, 'o0');
+  assert.equal(merged.islands.find((i) => i.id === 'v-kept')?.coveredByOverhangId, undefined);
+  assert.equal(merged.islands.find((i) => i.id === 'm-kept')?.coveredByOverhangId, undefined);
 
   // C-shape with centroid outside overhang and only 1/5 pixels overlapping (<50%) must survive
   const cPartial: DetectedIsland = {

@@ -329,21 +329,32 @@ fn load_and_transform_mesh(
         (norm_min.y + norm_max.y) * 0.5,
         (norm_min.z + norm_max.z) * 0.5,
     );
-    for pos in &mut mesh.positions {
-        pos.x -= norm_center.x;
-        pos.y -= norm_center.y;
-        pos.z -= norm_center.z;
+    apply_transform_and_winding(
+        &mut mesh,
+        matrix,
+        Some([norm_center.x, norm_center.y, norm_center.z]),
+    );
+    let _ = center;
+    Ok(mesh)
+}
+
+fn apply_transform_and_winding(
+    mesh: &mut IndexedMesh,
+    matrix: [f32; 16],
+    center: Option<[f32; 3]>,
+) {
+    if let Some(c) = center {
+        for pos in &mut mesh.positions {
+            pos.x -= c[0];
+            pos.y -= c[1];
+            pos.z -= c[2];
+        }
     }
-    // Finally apply the scene matrix (position/rotation/scale).
     for pos in &mut mesh.positions {
-        let x =
-            matrix[0] * pos.x + matrix[4] * pos.y + matrix[8] * pos.z + matrix[12];
-        let y =
-            matrix[1] * pos.x + matrix[5] * pos.y + matrix[9] * pos.z + matrix[13];
-        let z =
-            matrix[2] * pos.x + matrix[6] * pos.y + matrix[10] * pos.z + matrix[14];
-        let w =
-            matrix[3] * pos.x + matrix[7] * pos.y + matrix[11] * pos.z + matrix[15];
+        let x = matrix[0] * pos.x + matrix[4] * pos.y + matrix[8] * pos.z + matrix[12];
+        let y = matrix[1] * pos.x + matrix[5] * pos.y + matrix[9] * pos.z + matrix[13];
+        let z = matrix[2] * pos.x + matrix[6] * pos.y + matrix[10] * pos.z + matrix[14];
+        let w = matrix[3] * pos.x + matrix[7] * pos.y + matrix[11] * pos.z + matrix[15];
 
         if w.abs() > 1e-6 {
             pos.x = x / w;
@@ -363,8 +374,25 @@ fn load_and_transform_mesh(
             tri.swap(1, 2);
         }
     }
-    let _ = center;
-    Ok(mesh)
+}
+
+fn build_staged_mesh(
+    soup: &[f32],
+    matrix: Option<[f32; 16]>,
+    center: Option<[f32; 3]>,
+) -> IndexedMesh {
+    // Pose-invariant 1e-6 weld in local space before TRS so rotation never splits seams.
+    let mut mesh = IndexedMesh::from_triangle_soup(soup, 1e-6);
+    if let Some(m) = matrix {
+        apply_transform_and_winding(&mut mesh, m, center);
+    } else if let Some(c) = center {
+        for pos in &mut mesh.positions {
+            pos.x -= c[0];
+            pos.y -= c[1];
+            pos.z -= c[2];
+        }
+    }
+    mesh
 }
 
 #[tauri::command]
@@ -400,7 +428,13 @@ pub struct VoxelIsland {
     pub source: String,
     pub contact: Vec3,
     pub base_z: f64,
+    #[serde(default)]
+    pub raw_base_z: f64,
     pub area_mm2: f32,
+    #[serde(default)]
+    pub peak_area_mm2: f64,
+    #[serde(default)]
+    pub is_detached: bool,
     pub layer_span: [u32; 2],
     /// Base-layer contact pixels, flat `[x, y, …]` in world millimetres.
     ///
@@ -410,6 +444,36 @@ pub struct VoxelIsland {
     /// the same per-layer labels the island itself came from.
     #[serde(default)]
     pub contact_voxels: Vec<f32>,
+}
+
+fn build_voxel_island_from_scan(
+    idx: usize,
+    island: &dragonfruit_islands::model::Island,
+    contact: Vec3,
+    raw_base_z: f64,
+    contact_voxels: Vec<f32>,
+) -> VoxelIsland {
+    let base_area_mm2 = island
+        .per_layer_area_mm2
+        .get(&island.first_layer)
+        .copied()
+        .unwrap_or(island.total_area_mm2);
+    let peak_area_mm2 = island
+        .pre_merge_max_area_mm2
+        .or(island.max_area_mm2)
+        .unwrap_or(base_area_mm2);
+    VoxelIsland {
+        id: format!("v{}", idx),
+        source: "voxel".to_string(),
+        contact,
+        base_z: contact.z as f64,
+        raw_base_z,
+        area_mm2: base_area_mm2 as f32,
+        peak_area_mm2,
+        is_detached: island.is_detached,
+        layer_span: [island.first_layer, island.last_layer],
+        contact_voxels,
+    }
 }
 
 #[tauri::command]
@@ -617,20 +681,13 @@ pub async fn scan_voxel_islands_from_path(
                 let contact_z = bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm;
                 let contact = snap_to_mesh(contact_x as f32, contact_y as f32, contact_z as f32);
 
-                voxel_islands.push(VoxelIsland {
-                    id: format!("v{}", idx),
-                    source: "voxel".to_string(),
+                voxel_islands.push(build_voxel_island_from_scan(
+                    idx,
+                    island,
                     contact,
-                    base_z: contact_z,
-                    // Contact footprint = base-layer area, not accumulated area.
-                    area_mm2: island
-                        .per_layer_area_mm2
-                        .get(&island.first_layer)
-                        .copied()
-                        .unwrap_or(island.total_area_mm2) as f32,
-                    layer_span: [island.first_layer, island.last_layer],
-                    contact_voxels: Vec::new(),
-                });
+                    contact_z,
+                    Vec::new(),
+                ));
             } else {
                 // Fallback to global centroid if seed_voxel is somehow missing
                 if let Some(c) = island.centroid {
@@ -639,19 +696,13 @@ pub async fn scan_voxel_islands_from_path(
                     let contact =
                         snap_to_mesh(contact_x as f32, contact_y as f32, contact_z as f32);
 
-                    voxel_islands.push(VoxelIsland {
-                        id: format!("v{}", idx),
-                        source: "voxel".to_string(),
+                    voxel_islands.push(build_voxel_island_from_scan(
+                        idx,
+                        island,
                         contact,
-                        base_z: contact_z,
-                        area_mm2: island
-                            .per_layer_area_mm2
-                            .get(&island.first_layer)
-                            .copied()
-                            .unwrap_or(island.total_area_mm2) as f32,
-                        layer_span: [island.first_layer, island.last_layer],
-                        contact_voxels: Vec::new(),
-                    });
+                        contact_z,
+                        Vec::new(),
+                    ));
                 }
             }
         }
@@ -812,43 +863,36 @@ fn scan_islands_from_mesh(
                 .enumerate()
                 .zip(footprints.par_iter())
                 .map(|((idx, island), footprint)| {
-                    let (contact_x, contact_y, contact_z) = if let Some(seed) = island.seed_voxel {
+                    let (contact_x, contact_y, raw_base_z) = if let Some(seed) = island.seed_voxel {
                         let (cx, cy) = scan_result.grid.pixel_center_to_world_xy(seed.x, seed.y);
                         (
                             cx as f32,
                             cy as f32,
-                            (bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm) as f32,
+                            bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm,
                         )
                     } else if let Some(c) = island.centroid {
                         let (cx, cy) = scan_result.grid.pixel_center_to_world_xy(c.x, c.y);
                         (
                             cx as f32,
                             cy as f32,
-                            (bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm) as f32,
+                            bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm,
                         )
                     } else {
-                        (0.0_f32, 0.0_f32, 0.0_f32)
+                        (0.0_f32, 0.0_f32, 0.0_f64)
                     };
 
                     let contact = snap_to_surface(
-                        contact_x, contact_y, contact_z,
+                        contact_x, contact_y, raw_base_z as f32,
                         epsilon, &z_buckets, z_min, z_range, num_buckets, &mesh,
                     );
 
-                    VoxelIsland {
-                        id: format!("v{}", idx),
-                        source: "voxel".to_string(),
+                    build_voxel_island_from_scan(
+                        idx,
+                        island,
                         contact,
-                        base_z: contact_z as f64,
-                        // Contact footprint = base-layer area, not accumulated area.
-                        area_mm2: island
-                            .per_layer_area_mm2
-                            .get(&island.first_layer)
-                            .copied()
-                            .unwrap_or(island.total_area_mm2) as f32,
-                        layer_span: [island.first_layer, island.last_layer],
-                        contact_voxels: footprint.clone(),
-                    }
+                        raw_base_z,
+                        footprint.clone(),
+                    )
                 })
                 .collect();
             log::info!(
@@ -973,11 +1017,12 @@ pub async fn scan_islands_from_path(
     .map_err(|e| format!("Combined island scan panicked: {e}"))?
 }
 
-/// Combined island scan against the staged world-space triangle soup.
+/// Combined island scan against the staged triangle soup.
 ///
-/// This is the pathless-model entrypoint (a VOXL has no source file): the
-/// frontend stages exactly the positions it renders, so every returned
-/// `triangleId` indexes the rendered geometry. It consumes the staged buffer.
+/// When `matrix` (and optional `center`) are provided, the frontend stages the
+/// pre-transform local soup so we weld at `1e-6` in pose-invariant local space
+/// before applying `translate(-center) -> matrix` + `det3 < 0` winding flip.
+/// Every returned `triangleId` still indexes `0..T` of the rendered geometry.
 #[tauri::command]
 pub async fn scan_islands_staged(
     app: crate::DragonFruitAppHandle,
@@ -989,6 +1034,8 @@ pub async fn scan_islands_staged(
     overhang_self_support_angle_deg: Option<f32>,
     overhang_px_mm: Option<f32>,
     has_raft: Option<bool>,
+    matrix: Option<[f32; 16]>,
+    center: Option<[f32; 3]>,
 ) -> Result<CombinedIslandScanResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let bytes = crate::staged_mesh()
@@ -1003,7 +1050,7 @@ pub async fn scan_islands_staged(
                 soup.len()
             ));
         }
-        let mesh = IndexedMesh::from_triangle_soup(&soup, 1e-5);
+        let mesh = build_staged_mesh(&soup, matrix, center);
         scan_islands_from_mesh(
             app,
             mesh,
@@ -1468,6 +1515,121 @@ endsolid tet
                 dot > 0.0,
                 "triangle {fi} normal {normal:?} should point outward (dot={dot})"
             );
+        }
+    }
+
+    #[test]
+    fn c2_voxel_island_base_z_matches_snapped_contact_z() {
+        // Single horizontal triangle (+Z normal) at z = 0.06, snapped from raw_contact_z = 0.10
+        let soup = vec![
+            -1.0_f32, -1.0, 0.06,
+             1.0, -1.0, 0.06,
+             0.0,  1.0, 0.06,
+        ];
+        let mesh = IndexedMesh::from_triangle_soup(&soup, 1e-6);
+        let z_buckets = vec![vec![0_u32]];
+        let raw_contact_z = 0.10_f64;
+        let contact = snap_to_surface(
+            0.0,
+            0.0,
+            raw_contact_z as f32,
+            0.075,
+            &z_buckets,
+            0.0,
+            1.0,
+            1,
+            &mesh,
+        );
+        assert!((contact.z - 0.06).abs() < 1e-5, "snap_to_surface should hit z=0.06, got {}", contact.z);
+
+        let mut c0 = dragonfruit_islands::model::ComponentInfo {
+            id: 1,
+            label: 1,
+            area_px: 10,
+            size: 10,
+            centroid_sum_x: 0.0,
+            centroid_sum_y: 0.0,
+            is_detached: true,
+        };
+        let mut island = dragonfruit_islands::model::Island::new(
+            dragonfruit_islands::model::IslandId(1),
+            2,
+            0.025,
+            Some(&c0),
+        );
+        c0.is_detached = false;
+        island.update(3, 0.08, Some(&c0));
+        island.max_area_mm2 = Some(0.50);
+
+        let vi = build_voxel_island_from_scan(0, &island, contact, raw_contact_z, Vec::new());
+        assert!(
+            (vi.base_z - vi.contact.z as f64).abs() < 1e-6,
+            "Snapping Paradox: base_z ({}) != contact.z ({})",
+            vi.base_z,
+            vi.contact.z
+        );
+        assert!((vi.raw_base_z - raw_contact_z).abs() < 1e-9);
+        assert!(vi.is_detached);
+        assert!((vi.peak_area_mm2 - 0.08).abs() < 1e-9);
+
+        let json = serde_json::to_value(&vi).expect("serialize VoxelIsland");
+        assert!(json.get("rawBaseZ").is_some());
+        assert!(json.get("isDetached").is_some());
+        assert!(json.get("peakAreaMm2").is_some());
+    }
+
+    #[test]
+    fn c2_pose_invariant_local_weld_and_negative_det_flip() {
+        // Local tetrahedron with a 7e-7*diag micro-seam on one shared vertex that
+        // must weld identically under local 1e-6 before TRS rotation/translation/mirroring.
+        let soup = vec![
+            // Base
+            0.0_f32, 0.0, 0.0,   0.0, 2.0, 0.0,   2.0, 0.0, 0.0,
+            // Side 1 (v0 shifted by 5e-7 in local space)
+            5e-7, 0.0, 0.0,      0.0, 0.0, 2.0,   0.0, 2.0, 0.0,
+            // Side 2
+            0.0, 0.0, 0.0,       2.0, 0.0, 0.0,   0.0, 0.0, 2.0,
+            // Hypotenuse
+            2.0, 0.0, 0.0,       0.0, 2.0, 0.0,   0.0, 0.0, 2.0,
+        ];
+
+        let local_ref = build_staged_mesh(&soup, None, None);
+        assert_eq!(local_ref.vertex_count(), 4);
+        assert_eq!(local_ref.triangle_count(), 4);
+
+        // Rotate by 37 deg around Z, mirror X (det3 < 0), and translate far from origin.
+        let angle = 37.0_f32.to_radians();
+        let (s, c) = angle.sin_cos();
+        let matrix = [
+            -c,  -s, 0.0, 0.0,
+            -s,   c, 0.0, 0.0,
+             0.0, 0.0, 1.0, 0.0,
+            123.45, -67.89, 10.0, 1.0,
+        ];
+        let transformed = build_staged_mesh(&soup, Some(matrix), Some([0.5, 0.5, 0.5]));
+        assert_eq!(transformed.vertex_count(), local_ref.vertex_count());
+        assert_eq!(transformed.triangle_count(), local_ref.triangle_count());
+        for (ti, tri) in transformed.triangles.iter().enumerate() {
+            let ref_tri = local_ref.triangles[ti];
+            assert_eq!(*tri, [ref_tri[0], ref_tri[2], ref_tri[1]]);
+        }
+
+        // Verify outward normals after det3 < 0 winding flip
+        let mut centroid = Vec3::ZERO;
+        for p in &transformed.positions {
+            centroid = centroid.add(*p);
+        }
+        let inv_n = 1.0 / (transformed.positions.len() as f32);
+        centroid = Vec3::new(centroid.x * inv_n, centroid.y * inv_n, centroid.z * inv_n);
+        for fi in 0..transformed.triangle_count() {
+            let tri = transformed.triangles[fi];
+            let a = transformed.positions[tri[0] as usize];
+            let b = transformed.positions[tri[1] as usize];
+            let c = transformed.positions[tri[2] as usize];
+            let face_center = Vec3::new((a.x + b.x + c.x) / 3.0, (a.y + b.y + c.y) / 3.0, (a.z + b.z + c.z) / 3.0);
+            let outward = face_center.sub(centroid);
+            let normal = transformed.tri_normal(fi as u32);
+            assert!(normal.dot(outward) > 0.0, "face {fi} normal must point outward");
         }
     }
 }
