@@ -1,5 +1,12 @@
 import { createProgressThrottle, yieldToEventLoop } from '@/utils/yieldToEventLoop';
 import type { ScanProgressCallback } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
+import {
+  EMPTY_ROW,
+  packCandidateLayerRuns,
+  rleLabelComponents,
+  type RleMask,
+  type RleRow,
+} from '@/volumeAnalysis/IslandScan/rle';
 import * as THREE from 'three';
 import { type DetectedIsland } from './types';
 import { VoxelFootprintBuilder } from './voxelFootprint';
@@ -38,52 +45,51 @@ interface GridRef {
   px_mm: number;
 }
 
-/**
- * Rebuilt voxel island detection.
- *
- * THE FIX: an island is a 3D-connected cluster of the *unsupported* scanLayer
- * candidates only (current − dilate(prev_below)). Candidates never include the
- * supported bulk, so a cluster terminates as soon as the region becomes
- * supported — it can never climb to a top surface (the legacy bug).
- *
- * PERFORMANCE: slicing + per-layer candidate extraction run on the **scanline
- * worker pool** — the same fast RLE engine the Analysis-tab voxel rescan uses
- * (scanlineScan.worker.ts). We only collect each layer's candidate labels, then
- * run 3D connected-components (26-conn by default) on the union of candidate
- * voxels. (An earlier draft ran the point-in-polygon rasterizer on the main
- * thread — far slower; replaced.)
- */
+interface CandidateLayerPayload {
+  runs: Int32Array;
+  detached: Uint8Array;
+}
+
+interface LayerComponentMeta {
+  id: number;
+  areaPx: number;
+  isDetached: boolean;
+  headRunIdx: number;
+  tailRunIdx: number;
+}
+
+interface TrackedIsland {
+  id: number;
+  firstLayer: number;
+  lastLayer: number;
+  status: 'active' | 'complete';
+  parentId: number | null;
+  hasSaddleMerged: boolean;
+  baseAreaMm2: number;
+  lastLayerAreaMm2: number;
+  maxAreaMm2: number;
+  preMergeMaxAreaMm2: number;
+  isDetached: boolean;
+  birthSumX: number;
+  birthSumY: number;
+  birthCount: number;
+  contactVoxels: VoxelFootprintBuilder;
+}
+
 /**
  * The scan's phases, in order. The count travels with every progress report so
- * the UI can render "2 of 3" without hard-coding a number that differs between
+ * the UI can render "2 of 2" without hard-coding a number that differs between
  * the two scan paths.
  */
-const PHASES = ['Slicing', 'Collecting voxels', 'Connecting islands'] as const;
+const PHASES = ['Slicing', 'Connecting islands'] as const;
 
 function phaseNumber(phase: string): number {
   const index = PHASES.indexOf(phase as typeof PHASES[number]);
   return index < 0 ? 1 : index + 1;
 }
 
-/** Layers processed between yields while unioning candidate voxels. */
+/** Layers processed between yields while tracking per-layer components. */
 const YIELD_INTERVAL_LAYERS = 64;
-
-/** Voxels flooded between yields while building components. */
-const YIELD_INTERVAL_VOXELS = 200_000;
-
-/**
- * Largest dense candidate mask this scan will allocate, in bytes.
- *
- * The candidate set is a bitset over each layer that carries unsupported
- * voxels. That is one bit per grid cell, against a `Set<number>` entry per
- * candidate voxel (~30-50 bytes each), so the bitset is both faster to build
- * and far smaller for the dense candidate regions a scan actually produces.
- * The cap keeps a pathological bbox (a tall model at a fine pixel pitch) from
- * asking for gigabytes; past it the candidates stay a Set, which is slower but
- * proportional to the candidates rather than to the grid.
- */
-const MAX_DENSE_VOXEL_BYTES = 512 * 1024 * 1024;
-
 
 /**
  * Writes to the app log file, not just the devtools console.
@@ -144,100 +150,477 @@ export async function detectVoxelIslands(
     opts,
     onProgress,
   );
+  console.timeEnd('[Islands] slice + candidate extraction');
 
-  // Union of all unsupported candidate voxels.
-  const reportProgress = createProgressThrottle();
-  const codec = gridCodec(width, height);
-  const layerCells = width * height;
-  const layerWords = Math.ceil(layerCells / 32);
-  let activeLayers = 0;
-  for (let L = 0; L < numLayers; L++) {
-    if (candidateLayers[L]?.length) activeLayers += 1;
+  const supportBufferPx = Math.max(0, Math.round(params.supportBufferMm / px));
+  const r = supportBufferPx + 1;
+  const reachRSq =
+    params.diagonal3D === false && supportBufferPx === 0
+      ? 0
+      : params.diagonal3D !== false
+        ? Math.max(r * r, 2)
+        : r * r;
+  const maxDy = Math.floor(Math.sqrt(reachRSq));
+  const dxByDy = new Int32Array(maxDy + 1);
+  for (let dy = 0; dy <= maxDy; dy++) {
+    dxByDy[dy] = Math.floor(Math.sqrt(reachRSq - dy * dy));
   }
-  // One bitset per layer that carries candidates; layers without any stay
-  // null. The same layer/row/col packing as `codec.pack`, so the flood fill
-  // reads the same keys either way.
-  const dense = activeLayers * layerWords * 4 <= MAX_DENSE_VOXEL_BYTES
-    ? new Array<Uint32Array | null>(numLayers).fill(null)
-    : null;
-  const sparse = dense ? null : new Set<number>();
-  let candidateCount = 0;
+
+  await logToFile('[Islands] phase=track-start');
+  console.time('[Islands] bottom-up tracking');
+
+  const islands = new Map<number, TrackedIsland>();
+  let nextIslandId = 1;
+
+  const resolveParent = (startId: number): number => {
+    let current = startId;
+    const visited = new Set<number>();
+    for (;;) {
+      if (visited.has(current)) break;
+      visited.add(current);
+      const isl = islands.get(current);
+      if (!isl || isl.parentId === null) break;
+      current = isl.parentId;
+    }
+    return current;
+  };
+
+  const createNewIsland = (layer: number, areaMm2: number, areaPx: number, isDetached: boolean): TrackedIsland => {
+    const id = nextIslandId++;
+    const island: TrackedIsland = {
+      id,
+      firstLayer: layer,
+      lastLayer: layer,
+      status: 'active',
+      parentId: null,
+      hasSaddleMerged: false,
+      baseAreaMm2: areaMm2,
+      lastLayerAreaMm2: areaMm2,
+      maxAreaMm2: areaMm2,
+      preMergeMaxAreaMm2: areaMm2,
+      isDetached,
+      birthSumX: 0,
+      birthSumY: 0,
+      birthCount: 0,
+      contactVoxels: new VoxelFootprintBuilder(Math.min(Math.max(1, areaPx), 1024)),
+    };
+    islands.set(id, island);
+    return island;
+  };
+
+  const updateIsland = (id: number, layer: number, areaMm2: number): void => {
+    const isl = islands.get(id);
+    if (!isl) return;
+
+    if (layer === isl.lastLayer) {
+      isl.lastLayerAreaMm2 += areaMm2;
+    } else {
+      if (layer > isl.lastLayer) {
+        isl.lastLayer = layer;
+      }
+      isl.lastLayerAreaMm2 = areaMm2;
+    }
+
+    const layerArea = isl.lastLayerAreaMm2;
+    if (layerArea > isl.maxAreaMm2) {
+      isl.maxAreaMm2 = layerArea;
+    }
+    if (!isl.hasSaddleMerged && layerArea > isl.preMergeMaxAreaMm2) {
+      isl.preMergeMaxAreaMm2 = layerArea;
+    }
+  };
+
+  const reportProgress = createProgressThrottle();
+  let prevIslandRows: Array<Int32Array | null> | null = null;
+  let candidateRunCount = 0;
+
   for (let L = 0; L < numLayers; L++) {
     if (L % YIELD_INTERVAL_LAYERS === 0) {
-      reportProgress(() => onProgress?.(L, numLayers, 'Collecting voxels', phaseNumber('Collecting voxels'), PHASES.length));
+      reportProgress(() => onProgress?.(L, numLayers, 'Connecting islands', phaseNumber('Connecting islands'), PHASES.length));
       await yieldToEventLoop();
     }
-    // The workers already extracted these; see `candidateVoxelPairs`. This used
-    // to walk every layer's label RLE here, on the thread that has to keep the
-    // UI alive.
-    const pairs = candidateLayers[L];
-    if (!pairs) continue;
-    // Drop the pair array as soon as it is consumed: the flood fill's own
-    // structures are built while this closure is still in scope.
+
+    const layerPayload = candidateLayers[L];
     candidateLayers[L] = undefined;
-    if (dense) {
-      const bits = (dense[L] ??= new Uint32Array(layerWords));
-      for (let i = 0; i < pairs.length; i += 2) {
-        const index = pairs[i + 1] * width + pairs[i];
-        const word = index >>> 5;
-        const mask = 1 << (index & 31);
-        if ((bits[word] & mask) === 0) {
-          bits[word] |= mask;
-          candidateCount += 1;
-        }
+    if (!layerPayload || layerPayload.runs.length === 0) {
+      prevIslandRows = null;
+      continue;
+    }
+
+    const { runs, detached } = layerPayload;
+    const numRuns = runs.length >>> 2;
+    candidateRunCount += numRuns;
+
+    const nextRunIdx = new Int32Array(numRuns).fill(-1);
+    const compMap = new Map<number, LayerComponentMeta>();
+    for (let ri = 0; ri < numRuns; ri++) {
+      const off = ri << 2;
+      const y = runs[off];
+      const len = runs[off + 2];
+      const compId = runs[off + 3];
+      if (compId <= 0 || len <= 0 || y < 0 || y >= height) continue;
+
+      const existing = compMap.get(compId);
+      if (existing) {
+        existing.areaPx += len;
+        nextRunIdx[existing.tailRunIdx] = ri;
+        existing.tailRunIdx = ri;
+      } else {
+        compMap.set(compId, {
+          id: compId,
+          areaPx: len,
+          isDetached: L === 0 ? true : Boolean(detached[compId]),
+          headRunIdx: ri,
+          tailRunIdx: ri,
+        });
+      }
+    }
+
+    if (compMap.size === 0) {
+      prevIslandRows = null;
+      continue;
+    }
+
+    const components = Array.from(compMap.values()).sort((a, b) => a.id - b.id);
+    const compToIsland = new Map<number, number>();
+    const birthCompToIsland = new Map<number, TrackedIsland>();
+
+    if (L === 0 || prevIslandRows === null) {
+      for (const comp of components) {
+        const areaMm2 = comp.areaPx * px * px;
+        const isDetached = L === 0 ? true : comp.isDetached;
+        const isl = createNewIsland(L, areaMm2, comp.areaPx, isDetached);
+        compToIsland.set(comp.id, isl.id);
+        birthCompToIsland.set(comp.id, isl);
       }
     } else {
-      for (let i = 0; i < pairs.length; i += 2) {
-        sparse!.add(codec.pack(pairs[i], pairs[i + 1], L));
+      const activeAtLayerStart = new Set<number>();
+      for (const isl of islands.values()) {
+        if (isl.status === 'active') {
+          activeAtLayerStart.add(isl.id);
+        }
       }
-      candidateCount = sparse!.size;
+
+      const continuations: Array<{ target: number; areaMm2: number }> = [];
+      const merges: Array<{ ancestor: number; resolved: Set<number>; areaMm2: number }> = [];
+
+      for (const comp of components) {
+        const areaMm2 = comp.areaPx * px * px;
+        if (comp.isDetached) {
+          const isl = createNewIsland(L, areaMm2, comp.areaPx, true);
+          compToIsland.set(comp.id, isl.id);
+          birthCompToIsland.set(comp.id, isl);
+          continue;
+        }
+
+        const prevIds = new Set<number>();
+        for (let ri = comp.headRunIdx; ri !== -1; ri = nextRunIdx[ri]) {
+          const off = ri << 2;
+          const y = runs[off];
+          const start = runs[off + 1];
+          const end = start + runs[off + 2];
+          const pyStart = Math.max(0, y - maxDy);
+          const pyEnd = Math.min(height - 1, y + maxDy);
+
+          for (let py = pyStart; py <= pyEnd; py++) {
+            const pRow = prevIslandRows[py];
+            if (!pRow) continue;
+            const dx = dxByDy[Math.abs(py - y)];
+            const searchStart = start - dx;
+            const searchEnd = end + dx;
+
+            for (let j = 0; j < pRow.length; j += 3) {
+              const pStart = pRow[j];
+              if (pStart >= searchEnd) break;
+              const pEnd = pStart + pRow[j + 1];
+              const pId = pRow[j + 2];
+              if (pEnd > searchStart && pId > 0) {
+                prevIds.add(pId);
+              }
+            }
+          }
+        }
+
+        const activePrevIds = new Set<number>();
+        for (const id of prevIds) {
+          if (activeAtLayerStart.has(id)) {
+            activePrevIds.add(id);
+          }
+        }
+
+        if (activePrevIds.size === 0) {
+          if (prevIds.size > 0) {
+            let minPrev = Infinity;
+            for (const id of prevIds) {
+              if (id < minPrev) minPrev = id;
+            }
+            const target = resolveParent(minPrev);
+            compToIsland.set(comp.id, target);
+            continuations.push({ target, areaMm2 });
+          } else {
+            const isl = createNewIsland(L, areaMm2, comp.areaPx, false);
+            compToIsland.set(comp.id, isl.id);
+            birthCompToIsland.set(comp.id, isl);
+          }
+        } else if (activePrevIds.size === 1) {
+          const target = activePrevIds.values().next().value as number;
+          compToIsland.set(comp.id, target);
+          continuations.push({ target, areaMm2 });
+        } else {
+          const resolved = new Set<number>();
+          for (const id of activePrevIds) {
+            resolved.add(resolveParent(id));
+          }
+          let ancestor = Infinity;
+          let ancestorFirstLayer = Infinity;
+          for (const id of resolved) {
+            const firstLayer = islands.get(id)?.firstLayer ?? Infinity;
+            if (
+              firstLayer < ancestorFirstLayer ||
+              (firstLayer === ancestorFirstLayer && id < ancestor)
+            ) {
+              ancestorFirstLayer = firstLayer;
+              ancestor = id;
+            }
+          }
+          compToIsland.set(comp.id, ancestor);
+          merges.push({ ancestor, resolved, areaMm2 });
+        }
+      }
+
+      const updatedThisLayer = new Set<number>();
+      const absorbedThisLayer = new Set<number>();
+
+      for (const { target, areaMm2 } of continuations) {
+        updateIsland(target, L, areaMm2);
+        updatedThisLayer.add(target);
+      }
+
+      for (const { ancestor, resolved, areaMm2 } of merges) {
+        if (resolved.size > 1) {
+          const ancIsl = islands.get(ancestor);
+          if (ancIsl) {
+            // Freeze preMergeMaxAreaMm2 before recording the merged layer's area.
+            ancIsl.hasSaddleMerged = true;
+          }
+          for (const id of resolved) {
+            if (id !== ancestor) {
+              absorbedThisLayer.add(id);
+            }
+          }
+        }
+        updateIsland(ancestor, L, areaMm2);
+        updatedThisLayer.add(ancestor);
+      }
+
+      for (const id of absorbedThisLayer) {
+        if (!updatedThisLayer.has(id)) {
+          const isl = islands.get(id);
+          if (isl) {
+            isl.hasSaddleMerged = true;
+            isl.status = 'complete';
+            isl.parentId = null;
+            if (L > 0) {
+              isl.lastLayer = L - 1;
+            }
+          }
+        }
+      }
     }
+
+    prevIslandRows = buildPrevIslandRowsAndBirthFootprints(
+      runs,
+      height,
+      originX,
+      originZ,
+      px,
+      compToIsland,
+      birthCompToIsland,
+    );
   }
-  console.timeEnd('[Islands] slice + candidate extraction');
-  console.log(`[Islands] candidate (unsupported) voxels: ${candidateCount.toLocaleString()}`);
 
-  // Release the per-layer payloads before the flood fill. The union above is
-  // their last reader, but the binding stays in scope for the rest of the
-  // function, so without this they are still reachable — and therefore still
-  // resident — while the 3D walk builds its own structures on top. These are
-  // flat pair arrays now, not the per-row `Int32Array` sets they used to be.
   candidateLayers.length = 0;
+  prevIslandRows = null;
+  console.timeEnd('[Islands] bottom-up tracking');
+  console.log(`[Islands] candidate (unsupported) runs: ${candidateRunCount.toLocaleString()}`);
 
-  await logToFile('[Islands] phase=flood-start');
-  console.time('[Islands] 3D connected-components');
-  const allIslands = await buildIslands(
-    dense,
-    sparse,
-    candidateCount,
-    codec,
-    { originX, originZ, px, minZ, layerHeightMm },
-    params.diagonal3D !== false,
-    onProgress,
-  );
-  console.timeEnd('[Islands] 3D connected-components');
-  const result = allIslands.filter(
-    (island) => (island.areaMm2 ?? 0) >= (params.minAreaMm2 ?? 0.02)
-  );
+  const minAreaMm2 = params.minAreaMm2 ?? 0.02;
+  const result: DetectedIsland[] = [];
+  let idx = 0;
+
+  for (const isl of islands.values()) {
+    const effectiveArea = isl.preMergeMaxAreaMm2 ?? isl.maxAreaMm2;
+    const keep = (isl.isDetached && isl.maxAreaMm2 > 0) || effectiveArea >= minAreaMm2;
+    if (!keep) continue;
+
+    const contactX = isl.birthCount > 0 ? isl.birthSumX / isl.birthCount : originX;
+    const contactY = isl.birthCount > 0 ? isl.birthSumY / isl.birthCount : -originZ;
+    const baseZ = minZ + isl.firstLayer * layerHeightMm;
+
+    result.push({
+      id: `v${idx++}`,
+      source: 'voxel',
+      contact: new THREE.Vector3(contactX, contactY, baseZ),
+      baseZ,
+      rawBaseZ: baseZ,
+      areaMm2: isl.baseAreaMm2,
+      peakAreaMm2: isl.preMergeMaxAreaMm2 ?? isl.maxAreaMm2,
+      isDetached: isl.isDetached,
+      layerSpan: [isl.firstLayer, isl.lastLayer],
+      contactVoxels: isl.contactVoxels.build(),
+    });
+  }
 
   let footprintBytes = 0;
-  for (const island of allIslands) {
+  for (const island of result) {
     if (island.contactVoxels) {
       footprintBytes += island.contactVoxels.xy.byteLength
         + (island.contactVoxels.z?.byteLength ?? 0);
     }
   }
   await logToFile(
-    `[Islands] phase=flood-done islands=${allIslands.length} kept=${result.length} `
+    `[Islands] phase=track-done islands=${islands.size} kept=${result.length} `
     + `footprintMiB=${(footprintBytes / 1048576).toFixed(1)}`,
   );
-  console.log(`[Islands] islands detected (pre-filter): ${allIslands.length}, post-filter: ${result.length}`);
+  console.log(`[Islands] islands detected (pre-filter): ${islands.size}, post-filter: ${result.length}`);
   return result;
+}
+
+function buildPrevIslandRowsAndBirthFootprints(
+  runs: Int32Array,
+  height: number,
+  originX: number,
+  originZ: number,
+  px: number,
+  compToIsland: Map<number, number>,
+  birthCompToIsland: Map<number, TrackedIsland>,
+): Array<Int32Array | null> | null {
+  const rowLists: Array<number[] | null> = new Array(height).fill(null);
+  const rowNeedsSort = new Uint8Array(height);
+  const rowLastStart = new Int32Array(height).fill(-1);
+  let hasAnyRows = false;
+
+  for (let off = 0; off < runs.length; off += 4) {
+    const y = runs[off];
+    const start = runs[off + 1];
+    const len = runs[off + 2];
+    const compId = runs[off + 3];
+    if (compId <= 0 || len <= 0 || y < 0 || y >= height) continue;
+
+    const islandId = compToIsland.get(compId) ?? 0;
+    if (islandId > 0) {
+      hasAnyRows = true;
+      let list = rowLists[y];
+      if (!list) {
+        list = [];
+        rowLists[y] = list;
+      }
+      if (start < rowLastStart[y]) {
+        rowNeedsSort[y] = 1;
+      }
+      rowLastStart[y] = start;
+      list.push(start, len, islandId);
+    }
+
+    const birthIsl = birthCompToIsland.get(compId);
+    if (birthIsl) {
+      const vy = -(originZ + y * px + px * VOXEL_OFFSET_Y);
+      for (let c = 0; c < len; c++) {
+        const vx = originX + (start + c) * px + px * VOXEL_OFFSET_X;
+        birthIsl.birthSumX += vx;
+        birthIsl.birthSumY += vy;
+        birthIsl.birthCount += 1;
+        birthIsl.contactVoxels.push(vx, vy);
+      }
+    }
+  }
+
+  if (!hasAnyRows) return null;
+
+  const out: Array<Int32Array | null> = new Array(height).fill(null);
+  for (let y = 0; y < height; y++) {
+    const list = rowLists[y];
+    if (!list) continue;
+    if (rowNeedsSort[y]) {
+      const triplets: Array<[number, number, number]> = [];
+      for (let i = 0; i < list.length; i += 3) {
+        triplets.push([list[i], list[i + 1], list[i + 2]]);
+      }
+      triplets.sort((a, b) => a[0] - b[0]);
+      const sorted = new Int32Array(triplets.length * 3);
+      for (let i = 0; i < triplets.length; i++) {
+        sorted[i * 3] = triplets[i][0];
+        sorted[i * 3 + 1] = triplets[i][1];
+        sorted[i * 3 + 2] = triplets[i][2];
+      }
+      out[y] = sorted;
+    } else {
+      out[y] = new Int32Array(list);
+    }
+  }
+  return out;
+}
+
+/** Fallback adapter when a mock worker supplies only legacy `candidatePairs` without `candidateRuns`. */
+function packLegacyCandidatePairs(
+  pairs: Int32Array,
+  width: number,
+  height: number,
+  connectivity: 4 | 8,
+): CandidateLayerPayload {
+  if (pairs.length === 0 || width <= 0 || height <= 0) {
+    return { runs: new Int32Array(0), detached: new Uint8Array(0) };
+  }
+
+  const rowCols: Array<number[] | null> = new Array(height).fill(null);
+  for (let i = 0; i + 1 < pairs.length; i += 2) {
+    const col = pairs[i];
+    const row = pairs[i + 1];
+    if (col < 0 || col >= width || row < 0 || row >= height) continue;
+    let list = rowCols[row];
+    if (!list) {
+      list = [];
+      rowCols[row] = list;
+    }
+    list.push(col);
+  }
+
+  const rows: RleRow[] = new Array(height);
+  for (let y = 0; y < height; y++) {
+    const cols = rowCols[y];
+    if (!cols || cols.length === 0) {
+      rows[y] = EMPTY_ROW;
+      continue;
+    }
+    cols.sort((a, b) => a - b);
+    const spans: number[] = [];
+    let runStart = cols[0];
+    let runEnd = runStart + 1;
+    for (let i = 1; i < cols.length; i++) {
+      const c = cols[i];
+      if (c < runEnd) continue;
+      if (c === runEnd) {
+        runEnd = c + 1;
+      } else {
+        spans.push(runStart, runEnd - runStart);
+        runStart = c;
+        runEnd = c + 1;
+      }
+    }
+    spans.push(runStart, runEnd - runStart);
+    rows[y] = new Int32Array(spans);
+  }
+
+  const mask: RleMask = { rows, width, height };
+  const { labels, components } = rleLabelComponents(mask, connectivity);
+  const { candidateRuns, componentDetached } = packCandidateLayerRuns(labels, components);
+  return { runs: candidateRuns, detached: componentDetached };
 }
 
 /**
  * Slice every layer on the scanline worker pool and return each layer's
- * candidate (unsupported) RLE labels. Mirrors ScanOrchestrator.runScanInternal's
- * dispatch — concurrency = hardwareConcurrency — but keeps only res.labels.
+ * compact packed candidate runs (`[y, start, length, compId, ...]`) and
+ * per-component detached flags.
  */
 async function sliceCandidateLayers(
   positions: Float32Array,
@@ -247,8 +630,8 @@ async function sliceCandidateLayers(
   layerHeightMm: number,
   opts: { px_mm: number; support_buffer_mm: number; connectivity: 4 | 8 },
   onProgress?: ScanProgressCallback,
-): Promise<(Int32Array | undefined)[]> {
-  const candidateLayers: (Int32Array | undefined)[] = new Array(numLayers);
+): Promise<(CandidateLayerPayload | undefined)[]> {
+  const candidateLayers: (CandidateLayerPayload | undefined)[] = new Array(numLayers);
 
   const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
   const concurrency = Math.min(Math.max(2, cores), numLayers);
@@ -277,10 +660,32 @@ async function sliceCandidateLayers(
             const zTop = minZ + (idx + 1) * layerHeightMm + 1e-6;
 
             const onMessage = (e: MessageEvent) => {
-              const msg = e.data as { type?: string; result?: { candidatePairs: Int32Array } };
+              const msg = e.data as {
+                type?: string;
+                result?: {
+                  candidatePairs?: Int32Array;
+                  candidateRuns?: Int32Array;
+                  componentDetached?: Uint8Array;
+                };
+              };
               if (msg?.type !== 'done') return;
               w.removeEventListener('message', onMessage);
-              candidateLayers[idx] = msg.result!.candidatePairs;
+              const res = msg.result;
+              if (res?.candidateRuns instanceof Int32Array) {
+                candidateLayers[idx] = {
+                  runs: res.candidateRuns,
+                  detached: res.componentDetached instanceof Uint8Array ? res.componentDetached : new Uint8Array(0),
+                };
+              } else if (res?.candidatePairs instanceof Int32Array) {
+                candidateLayers[idx] = packLegacyCandidatePairs(
+                  res.candidatePairs,
+                  gridRef.width,
+                  gridRef.height,
+                  opts.connectivity,
+                );
+              } else {
+                candidateLayers[idx] = { runs: new Int32Array(0), detached: new Uint8Array(0) };
+              }
               done++;
               reportSliceProgress(() => onProgress?.(done, numLayers, 'Slicing', phaseNumber('Slicing'), PHASES.length));
               runNext();
@@ -295,268 +700,4 @@ async function sliceCandidateLayers(
 
   workers.forEach((w) => w.terminate());
   return candidateLayers;
-}
-
-interface GridGeom {
-  originX: number;
-  originZ: number;
-  px: number;
-  minZ: number;
-  layerHeightMm: number;
-}
-
-/**
- * 3D connected components over the candidate voxel set → contact-region islands.
- *
- * Candidates arrive either as one bitset per layer that has any (the normal
- * path) or as a `Set` when the grid at this resolution would make the bitsets
- * too large. Both walks claim a voxel by clearing it, so the store is consumed
- * and must not be read afterwards. The bitset path never hashes or boxes a
- * voxel: claiming a neighbour is one word read and write, and finding the next
- * component is a scan over 32 candidates at a time.
- */
-async function buildIslands(
-  dense: (Uint32Array | null)[] | null,
-  sparse: Set<number> | null,
-  total: number,
-  codec: GridCodec,
-  geom: GridGeom,
-  diagonal: boolean,
-  onProgress?: ScanProgressCallback,
-): Promise<DetectedIsland[]> {
-  const offsets = neighbourOffsets(diagonal);
-  const islands: DetectedIsland[] = [];
-  let idx = 0;
-  const reportProgress = createProgressThrottle();
-  let flooded = 0;
-  let sinceYield = 0;
-
-  // Yielding between components rather than inside a flood keeps the walk
-  // itself untouched; a single component can still be large, so this bounds
-  // responsiveness by the largest island, not by the whole model.
-  const yieldForProgress = async () => {
-    if (sinceYield < YIELD_INTERVAL_VOXELS) return;
-    sinceYield = 0;
-    reportProgress(() => onProgress?.(flooded, total, 'Connecting islands', phaseNumber('Connecting islands'), PHASES.length));
-    await yieldToEventLoop();
-  };
-
-  const finishComponent = (comp: number[]) => {
-    // Lowest-layer footprint defines the contact point (where support attaches).
-    let minLayer = Infinity;
-    let maxLayer = -Infinity;
-    for (const k of comp) {
-      const layer = codec.layerOf(k);
-      if (layer < minLayer) minLayer = layer;
-      if (layer > maxLayer) maxLayer = layer;
-    }
-
-    let sumX = 0;
-    let sumY = 0;
-    let baseCount = 0;
-    const contactVoxels = new VoxelFootprintBuilder(Math.min(comp.length, 1024));
-    for (const k of comp) {
-      const layer = codec.layerOf(k);
-      if (layer !== minLayer) continue;
-      const col = codec.colOf(k);
-      const row = codec.rowOf(k);
-      const vx = geom.originX + col * geom.px + geom.px * VOXEL_OFFSET_X;
-      const vy = -(geom.originZ + row * geom.px + geom.px * VOXEL_OFFSET_Y);
-      sumX += vx;
-      sumY += vy;
-      baseCount++;
-      contactVoxels.push(vx, vy);
-    }
-
-    const contactX = sumX / baseCount;
-    const contactY = sumY / baseCount;
-    const baseZ = geom.minZ + minLayer * geom.layerHeightMm;
-
-    islands.push({
-      id: `v${idx++}`,
-      source: 'voxel',
-      contact: new THREE.Vector3(contactX, contactY, baseZ),
-      baseZ,
-      areaMm2: baseCount * geom.px * geom.px,
-      layerSpan: [minLayer, maxLayer],
-      contactVoxels: contactVoxels.build(),
-    });
-  };
-
-  if (dense) {
-    const layerCells = codec.width * codec.height;
-    const layerWords = Math.ceil(layerCells / 32);
-    let scanLayer = 0;
-    let scanWord = 0;
-    // Next unvisited voxel, in layer/row/col order. The cursor only moves
-    // forward; a flood can only clear bits, never set one, so an unvisited
-    // voxel behind it cannot appear.
-    const nextStart = (): number => {
-      while (scanLayer < dense.length) {
-        const bits = dense[scanLayer];
-        if (!bits) {
-          scanLayer += 1;
-          scanWord = 0;
-          continue;
-        }
-        while (scanWord < layerWords) {
-          const word = bits[scanWord];
-          if (word !== 0) {
-            return scanLayer * layerCells + scanWord * 32 + (31 - Math.clz32(word & -word));
-          }
-          scanWord += 1;
-        }
-        scanLayer += 1;
-        scanWord = 0;
-      }
-      return -1;
-    };
-
-    for (;;) {
-      const startKey = nextStart();
-      if (startKey < 0) break;
-      await yieldForProgress();
-
-      const comp: number[] = [];
-      const stack = [startKey];
-      {
-        const layer = Math.floor(startKey / layerCells);
-        const rest = startKey - layer * layerCells;
-        const bits = dense[layer]!;
-        bits[rest >>> 5] &= ~(1 << (rest & 31));
-      }
-      while (stack.length) {
-        const k = stack.pop()!;
-        comp.push(k);
-        flooded++;
-        sinceYield++;
-        const layer = Math.floor(k / layerCells);
-        const rest = k - layer * layerCells;
-        const row = Math.floor(rest / codec.width);
-        const col = rest - row * codec.width;
-        for (let o = 0; o < offsets.length; o += 3) {
-          const nc = col + offsets[o];
-          const nr = row + offsets[o + 1];
-          const nl = layer + offsets[o + 2];
-          if (nc < 0 || nc >= codec.width || nr < 0 || nr >= codec.height || nl < 0 || nl >= dense.length) continue;
-          const bits = dense[nl];
-          if (!bits) continue;
-          const index = nr * codec.width + nc;
-          const word = index >>> 5;
-          const mask = 1 << (index & 31);
-          if (bits[word] & mask) {
-            bits[word] &= ~mask;
-            stack.push(nl * layerCells + index);
-          }
-        }
-      }
-      finishComponent(comp);
-    }
-
-    return islands;
-  }
-
-  const candidates = sparse!;
-  // `candidates` IS the unvisited set: each voxel is deleted as it is flooded,
-  // so no second Set of the same boxed numbers has to exist beside it.
-  // Deleting during iteration is well defined — entries removed before the
-  // iterator reaches them are skipped, which is exactly the "already visited"
-  // check this used to perform.
-  for (const startKey of candidates) {
-    await yieldForProgress();
-
-    const comp: number[] = [];
-    const stack = [startKey];
-    candidates.delete(startKey);
-    while (stack.length) {
-      const k = stack.pop()!;
-      comp.push(k);
-      flooded++;
-      sinceYield++;
-      const col = codec.colOf(k);
-      const row = codec.rowOf(k);
-      const layer = codec.layerOf(k);
-      for (let o = 0; o < offsets.length; o += 3) {
-        const nc = col + offsets[o];
-        const nr = row + offsets[o + 1];
-        const nl = layer + offsets[o + 2];
-        if (nc < 0 || nc >= codec.width || nr < 0 || nr >= codec.height || nl < 0) continue;
-        const nk = codec.pack(nc, nr, nl);
-        // `delete` reports whether it was there, so claiming a neighbour is one
-        // hash lookup rather than the previous three.
-        if (candidates.delete(nk)) {
-          stack.push(nk);
-        }
-      }
-    }
-
-    finishComponent(comp);
-  }
-
-  return islands;
-}
-
-interface GridCodec {
-  width: number;
-  height: number;
-  pack: (col: number, row: number, layer: number) => number;
-  unpack: (key: number) => { col: number; row: number; layer: number };
-  /**
-   * Component accessors, for the hot loops.
-   *
-   * `unpack` returns a fresh object, and the flood fill calls it once per voxel
-   * as it walks plus twice more per voxel in the passes that follow — around
-   * thirty million throwaway objects for a ten-million-voxel scan, all of it
-   * allocation and collection for three numbers.
-   */
-  colOf: (key: number) => number;
-  rowOf: (key: number) => number;
-  layerOf: (key: number) => number;
-}
-
-function gridCodec(width: number, height: number): GridCodec {
-  return {
-    width,
-    height,
-    pack: (col, row, layer) => (layer * height + row) * width + col,
-    unpack: (key) => {
-      const col = key % width;
-      const rest = (key - col) / width;
-      const row = rest % height;
-      const layer = (rest - row) / height;
-      return { col, row, layer };
-    },
-    colOf: (key) => key % width,
-    rowOf: (key) => Math.floor(key / width) % height,
-    layerOf: (key) => Math.floor(key / (width * height)),
-  };
-}
-
-/** 6- or 26-connectivity neighbour offsets (excluding the origin). */
-/**
- * Neighbour deltas flattened into one array of triples, read by index.
- *
- * The obvious shape is an array of `[dc, dr, dl]` tuples, but the flood fill
- * destructures it once per neighbour per voxel — 26 array iterators per voxel
- * at 26-connectivity, each one an allocation. Sampling a scan of a tall model
- * put 8,090 samples in `operationNewArrayIterator` alone.
- */
-function neighbourOffsets(diagonal: boolean): Int8Array {
-  if (!diagonal) {
-    return Int8Array.from([
-      1, 0, 0, -1, 0, 0,
-      0, 1, 0, 0, -1, 0,
-      0, 0, 1, 0, 0, -1,
-    ]);
-  }
-  const out: number[] = [];
-  for (let dc = -1; dc <= 1; dc++) {
-    for (let dr = -1; dr <= 1; dr++) {
-      for (let dl = -1; dl <= 1; dl++) {
-        if (dc === 0 && dr === 0 && dl === 0) continue;
-        out.push(dc, dr, dl);
-      }
-    }
-  }
-  return Int8Array.from(out);
 }

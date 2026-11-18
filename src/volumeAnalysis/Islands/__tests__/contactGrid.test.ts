@@ -130,10 +130,16 @@ test('MED-07b: scanlineScan.worker honours candidatesOnly for detect.ts and full
   const candResult = candidateResponses[0].payload.result;
   assert.ok(candResult.candidatePairs instanceof Int32Array, 'candidatePairs is an Int32Array');
   assert.ok((candResult.candidatePairs as Int32Array).length > 0, 'unsupported bottom layer produces candidate pairs');
+  assert.ok(candResult.candidateRuns instanceof Int32Array, 'candidateRuns is an Int32Array');
+  assert.ok(candResult.componentDetached instanceof Uint8Array, 'componentDetached is a Uint8Array');
   assert.deepEqual(
     candidateResponses[0].transfer,
-    [(candResult.candidatePairs as Int32Array).buffer],
-    'transfers candidatePairs ArrayBuffer zero-copy',
+    [
+      (candResult.candidatePairs as Int32Array).buffer,
+      (candResult.candidateRuns as Int32Array).buffer,
+      (candResult.componentDetached as Uint8Array).buffer,
+    ],
+    'transfers candidatePairs, candidateRuns, and componentDetached ArrayBuffers zero-copy',
   );
   assert.equal('solidMaskRle' in candResult, false, 'omits solidMaskRle on candidatesOnly fast path');
   assert.equal('islandLabelsRle' in candResult, false, 'omits islandLabelsRle on candidatesOnly fast path');

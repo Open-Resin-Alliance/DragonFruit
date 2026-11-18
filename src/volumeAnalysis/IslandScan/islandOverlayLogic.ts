@@ -66,10 +66,9 @@ export function computeIslandMarkers(
   // Iterate actual islands directly so that every detected island
   // (including those that start above other geometry) can get a marker.
   for (const island of islands) {
-    // Only show markers for leaf islands (no children). Parent islands often
-    // represent merged volumes and their lower boundaries are not true
-    // unsupported bases.
-    if (island.childIds && island.childIds.length > 0) continue;
+    // Skip temporary merged placeholders; surviving merged parents retain their
+    // true unsupported base at compBase[label] ?? island.firstLayer.
+    if (island.isMergedPlaceholder) continue;
 
     const label = island.id;
     const range = islandLayerRanges.get(label);

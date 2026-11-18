@@ -1,5 +1,5 @@
 import { type ScanLayerResult, type GridRef, VOXEL_OFFSET_X, VOXEL_OFFSET_Y, VOXEL_OFFSET_Z } from './ScanOrchestrator';
-import { type RleMask, candidateVoxelPairs, rleEncode } from './rle';
+import { type RleMask, candidateVoxelPairs, packCandidateLayerRuns, rleEncode } from './rle';
 import { rasterizeSegmentsScanline as rasterizeSegmentsToMask, rasterizeSegmentsToExistingGridScanline as rasterizeSegmentsToExistingGrid } from './scanline';
 import { type Connectivity, type RasterScanOptions, type Mask } from './types';
 import { scanLayer } from './island';
@@ -99,17 +99,18 @@ export function dispatchScanlineWorkerMessage(
         }
 
         if (msg.candidatesOnly) {
-            // Only the candidate voxels go back. The RLE, the solid mask, the
+            // Only the candidate voxels/runs go back. The RLE, the solid mask, the
             // components and the grid all describe this layer to a caller that only
             // wants these, and cloning them per layer on the receiving thread was
-            // most of a scan's wall clock. See `candidateVoxelPairs`.
+            // most of a scan's wall clock. See `candidateVoxelPairs` & `packCandidateLayerRuns`.
             const candidatePairs = candidateVoxelPairs(res.labels);
+            const { candidateRuns, componentDetached } = packCandidateLayerRuns(res.labels, res.components);
             post(
                 {
                     type: 'done',
-                    result: { candidatePairs },
+                    result: { candidatePairs, candidateRuns, componentDetached },
                 },
-                [candidatePairs.buffer],
+                [candidatePairs.buffer, candidateRuns.buffer, componentDetached.buffer],
             );
         } else {
             post({

@@ -2,6 +2,7 @@ import { type RasterScanOptions, type ComponentInfo } from './types';
 import {
   type RleMask,
   type RleLabels,
+  markDetachedAndRescueCandidates,
   rleIntersectDilated,
   rleSubtract,
   rleLabelComponents
@@ -28,6 +29,7 @@ export function scanLayer(
   opts: RasterScanOptions
 ): { labels: RleLabels; components: ComponentInfo[]; solidMask: RleMask } {
 
+  const connectivity = opts.connectivity ?? 8;
   let islandCandidates: RleMask;
 
   if (!prev) {
@@ -47,8 +49,23 @@ export function scanLayer(
   // Label connected components of candidates
   const { labels, components } = rleLabelComponents(
     islandCandidates,
-    opts.connectivity ?? 8
+    connectivity
   );
+
+  if (!prev) {
+    for (const comp of components) {
+      comp.isDetached = true;
+    }
+  } else {
+    markDetachedAndRescueCandidates(
+      current,
+      prev,
+      islandCandidates,
+      labels,
+      components,
+      connectivity
+    );
+  }
 
   return { labels, components, solidMask: current };
 }

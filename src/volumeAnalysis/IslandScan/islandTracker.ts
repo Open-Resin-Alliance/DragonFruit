@@ -17,6 +17,7 @@ type PendingMerge = {
 export type IslandTrackerOptions = {
   minOverlapPx?: number;
   overlapNeighborhoodPx?: number;
+  radiusPx?: number;
   connectivity?: 4 | 8;
 };
 
@@ -28,6 +29,7 @@ export class IslandTracker {
   private overlapNeighborhoodPx: number;
   private connectivity: 4 | 8;
   private pendingMerges: PendingMerge[] = [];
+  private groundedIslands: Set<number> = new Set();
   private readonly MERGE_EVAL_WINDOW = 30; // Layers to wait before finalizing parent
 
   constructor(
@@ -36,7 +38,7 @@ export class IslandTracker {
   ) {
     this.px_mm = px_mm;
     this.minOverlapPx = Math.max(1, options?.minOverlapPx ?? 1);
-    this.overlapNeighborhoodPx = Math.max(0, options?.overlapNeighborhoodPx ?? 1);
+    this.overlapNeighborhoodPx = Math.max(0, options?.overlapNeighborhoodPx ?? options?.radiusPx ?? 1);
     this.connectivity = options?.connectivity ?? 8;
   }
 
@@ -78,6 +80,9 @@ export class IslandTracker {
       for (const comp of currentComponents) {
         const areaMm2 = comp.area_px * this.px_mm * this.px_mm;
         const assignedId = this.createNewIsland(layerIndex, areaMm2, comp);
+        if (layerIndex === 0) {
+          this.groundedIslands.add(assignedId);
+        }
         componentIdToIslandId.set(comp.id, assignedId);
       }
 
@@ -99,18 +104,26 @@ export class IslandTracker {
 
     } else {
       // Subsequent layers: label solid pixels based on previous layer overlap
-      // 1. Identify connected solid components in current layer
-      // We need to run Connected Components on solidMask to group pixels
-      // (Note: 'currentLabels' only contains UNSUPPORTED pixels, but we need to track ALL solid pixels)
-
-      // We can use the same RLE connected components logic on solidMask
       const { labels: solidLabels, components: solidComps } = this.rleLabelSolidComponents(solidMask);
       const solidRowSpans = this.rowSpansByComponent(solidLabels);
 
-      const solidCompIdToIslandId = new Map<number, number>();
+      const activeAtLayerStart = new Set<number>();
+      for (const [id, island] of this.islands) {
+        if (island.status === 'active') {
+          activeAtLayerStart.add(id);
+        }
+      }
 
-      for (const component of solidComps) {
-        // Find which previous island IDs this component overlaps with
+      type SolidCompInput = {
+        compIdx: number;
+        areaMm2: number;
+        prevIds: Set<number>;
+        activePrevIds: Set<number>;
+      };
+
+      const compInputs: SolidCompInput[] = [];
+      for (let compIdx = 0; compIdx < solidComps.length; compIdx++) {
+        const component = solidComps[compIdx];
         const prevIdOverlapCounts = this.findOverlappingIslandIdsRle(
           component.id,
           solidLabels,
@@ -125,83 +138,240 @@ export class IslandTracker {
           }
         }
 
-        // Filter for active islands
+        // Filter for active islands (resolving finalized placeholders / indirect chains)
         const activePrevIds = new Set<number>();
         for (const id of prevIds) {
-          const island = this.islands.get(id);
-          if (island && island.status === 'active') {
+          const resolved = this.resolveParent(id);
+          if (activeAtLayerStart.has(resolved)) {
             activePrevIds.add(id);
           }
         }
 
-        // Helper to resolve to ultimate parent (top of the chain) if needed.
-        const resolveParent = (startId: number): number => {
-          let currentId = startId;
-          const visited = new Set<number>();
-          while (true) {
-            if (visited.has(currentId)) break; // Cycle protection
-            visited.add(currentId);
-            const isl = this.islands.get(currentId);
-            if (!isl || isl.parentId === undefined) break;
-            currentId = isl.parentId;
-          }
-          return currentId;
-        };
-
         const areaMm2 = component.area_px * this.px_mm * this.px_mm;
-        let assignedId: number;
+        compInputs.push({ compIdx, areaMm2, prevIds, activePrevIds });
+      }
 
-        if (activePrevIds.size === 0) {
-          if (prevIds.size > 0) {
-            // Overlaps only islands that are not currently active (e.g. completed parents
-            // or placeholders). Treat this as continuation of the underlying body instead
-            // of starting a brand new island.
+      const solidCompIdToIslandId = new Map<number, number>();
+      const updatedThisLayer = new Set<number>();
 
-            // Helper to resolve to ultimate parent (top of the chain) if needed.
-            const resolveParent = (startId: number): number => {
-              let currentId = startId;
-              const visited = new Set<number>();
-              while (true) {
-                if (visited.has(currentId)) break;
-                visited.add(currentId);
-                const isl = this.islands.get(currentId);
-                if (!isl || isl.parentId === undefined) break;
-                currentId = isl.parentId;
+      // Fixpoint pre-flush: finalize any open PendingMerge participating in a genuine multi-target merge
+      while (true) {
+        const toFlush = new Set<number>();
+        for (const input of compInputs) {
+          if (input.activePrevIds.size >= 2) {
+            const resolved = new Set<number>();
+            for (const id of input.activePrevIds) {
+              resolved.add(this.resolveParent(id));
+            }
+            if (resolved.size >= 2) {
+              for (const pending of this.pendingMerges) {
+                if (resolved.has(pending.mergedIslandId)) {
+                  toFlush.add(pending.mergedIslandId);
+                }
               }
-              return currentId;
-            };
+            }
+          }
+        }
+        if (toFlush.size === 0) break;
 
-            // Pick one representative underlying island (first from prevIds) and
-            // resolve to its parent chain.
-            const firstPrevId = prevIds.values().next().value as number;
-            const targetId = resolveParent(firstPrevId);
-
-            assignedId = targetId;
-            this.updateIsland(assignedId, layerIndex, areaMm2, component);
+        for (let i = 0; i < this.pendingMerges.length; ) {
+          if (toFlush.has(this.pendingMerges[i].mergedIslandId)) {
+            const [flushed] = this.pendingMerges.splice(i, 1);
+            const mergedId = flushed.mergedIslandId;
+            const parentId = this.finalizePendingMerge(flushed);
+            if (activeAtLayerStart.has(mergedId)) {
+              activeAtLayerStart.add(parentId);
+            }
+            if (updatedThisLayer.has(mergedId)) {
+              updatedThisLayer.add(parentId);
+            }
           } else {
-            // Truly no overlap with any previous island: start a new island.
-            assignedId = this.createNewIsland(layerIndex, areaMm2, component);
+            i++;
           }
-        } else if (activePrevIds.size === 1) {
-          // Continuation
-          assignedId = Array.from(activePrevIds)[0];
-          this.updateIsland(assignedId, layerIndex, areaMm2, component);
+        }
+      }
+
+      // Pass 1: create new islands immediately; classify continuations vs merges
+      const continuations: Array<{ compIdx: number; target: number; areaMm2: number }> = [];
+      const merges: Array<{ compIdx: number; resolved: Set<number>; areaMm2: number }> = [];
+
+      for (const input of compInputs) {
+        const component = solidComps[input.compIdx];
+        if (input.activePrevIds.size === 0) {
+          if (input.prevIds.size === 0) {
+            const assignedId = this.createNewIsland(layerIndex, input.areaMm2, component);
+            updatedThisLayer.add(assignedId);
+            solidCompIdToIslandId.set(component.id, assignedId);
+          } else {
+            let firstPrevId = Infinity;
+            for (const id of input.prevIds) {
+              if (id < firstPrevId) firstPrevId = id;
+            }
+            const target = this.resolveParent(firstPrevId);
+            continuations.push({ compIdx: input.compIdx, target, areaMm2: input.areaMm2 });
+          }
         } else {
-          // Merge
-          const resolvedIds = new Set<number>();
-          for (const id of activePrevIds) {
-            // New Robust Logic: Always resolve to the ultimate root.
-            // This handles cases where 'id' is a placeholder that points to a parent,
-            // OR if 'id' is a child that somehow stayed active.
-            resolvedIds.add(resolveParent(id));
+          const resolved = new Set<number>();
+          for (const id of input.activePrevIds) {
+            resolved.add(this.resolveParent(id));
+          }
+          if (resolved.size === 1) {
+            const target = resolved.values().next().value as number;
+            continuations.push({ compIdx: input.compIdx, target, areaMm2: input.areaMm2 });
+          } else {
+            merges.push({ compIdx: input.compIdx, resolved, areaMm2: input.areaMm2 });
+          }
+        }
+      }
+
+      // Pass 2a: execute ALL continuations first
+      for (const cont of continuations) {
+        const component = solidComps[cont.compIdx];
+        this.updateIsland(cont.target, layerIndex, cont.areaMm2, component);
+        updatedThisLayer.add(cont.target);
+        solidCompIdToIslandId.set(component.id, cont.target);
+      }
+
+      // Pass 2b: execute merges (preserving islands updated on this layer)
+      for (const merge of merges) {
+        const component = solidComps[merge.compIdx];
+        let resolved = new Set<number>();
+        for (const id of merge.resolved) {
+          resolved.add(this.resolveParent(id));
+        }
+
+        if (resolved.size >= 2) {
+          while (true) {
+            const toFlush = new Set<number>();
+            for (const pending of this.pendingMerges) {
+              if (resolved.has(pending.mergedIslandId)) {
+                toFlush.add(pending.mergedIslandId);
+              }
+            }
+            if (toFlush.size === 0) break;
+
+            for (let i = 0; i < this.pendingMerges.length; ) {
+              if (toFlush.has(this.pendingMerges[i].mergedIslandId)) {
+                const [flushed] = this.pendingMerges.splice(i, 1);
+                for (const comp of solidComps) {
+                  const overlaps = this.findOverlappingIslandIdsRle(
+                    comp.id,
+                    solidLabels,
+                    flushed.preMergeLabels,
+                    solidRowSpans.get(comp.id)
+                  );
+                  for (const [id, count] of overlaps) {
+                    if (!flushed.overlapCounts.has(id)) continue;
+                    flushed.overlapCounts.set(id, (flushed.overlapCounts.get(id) ?? 0) + count);
+                  }
+                }
+                const mergedId = flushed.mergedIslandId;
+                const parentId = this.finalizePendingMerge(flushed);
+                if (updatedThisLayer.has(mergedId)) {
+                  updatedThisLayer.add(parentId);
+                }
+                for (const [cid, mappedId] of solidCompIdToIslandId) {
+                  if (mappedId === mergedId) {
+                    solidCompIdToIslandId.set(cid, parentId);
+                  }
+                }
+              } else {
+                i++;
+              }
+            }
+
+            const nextResolved = new Set<number>();
+            for (const id of resolved) {
+              nextResolved.add(this.resolveParent(id));
+            }
+            resolved = nextResolved;
+            if (resolved.size < 2) break;
+          }
+        }
+
+        let assignedId: number;
+        if (resolved.size === 1) {
+          assignedId = resolved.values().next().value as number;
+          this.updateIsland(assignedId, layerIndex, merge.areaMm2, component);
+          updatedThisLayer.add(assignedId);
+        } else {
+          const sortedResolved = Array.from(resolved).sort((a, b) => a - b);
+          const grounded: number[] = [];
+          const ungrounded: number[] = [];
+          for (const id of sortedResolved) {
+            if (this.groundedIslands.has(id)) {
+              grounded.push(id);
+            } else {
+              ungrounded.push(id);
+            }
           }
 
-          assignedId = this.mergeIslands(layerIndex, resolvedIds, prevIslandLabels, areaMm2, component);
+          if (grounded.length === 1) {
+            const gp = grounded[0];
+            const gpIsland = this.islands.get(gp);
+            for (const uid of ungrounded) {
+              const uIsland = this.islands.get(uid);
+              if (uIsland) {
+                uIsland.parentId = gp;
+                if (!updatedThisLayer.has(uid) && !uIsland.perLayerAreaMm2.has(layerIndex)) {
+                  uIsland.status = 'complete';
+                  if (layerIndex > 0) {
+                    uIsland.lastLayer = layerIndex - 1;
+                  }
+                }
+              }
+              if (gpIsland && !gpIsland.childIds.includes(uid)) {
+                gpIsland.childIds.push(uid);
+              }
+            }
+            assignedId = gp;
+            this.updateIsland(gp, layerIndex, merge.areaMm2, component);
+            updatedThisLayer.add(gp);
+          } else if (grounded.length >= 2) {
+            assignedId = this.mergeIslands(
+              layerIndex,
+              new Set(grounded),
+              prevIslandLabels,
+              merge.areaMm2,
+              component,
+              updatedThisLayer
+            );
+            this.groundedIslands.add(assignedId);
+            updatedThisLayer.add(assignedId);
+            const mergedIsland = this.islands.get(assignedId);
+            for (const uid of ungrounded) {
+              const uIsland = this.islands.get(uid);
+              if (uIsland) {
+                uIsland.parentId = assignedId;
+                if (!updatedThisLayer.has(uid) && !uIsland.perLayerAreaMm2.has(layerIndex)) {
+                  uIsland.status = 'complete';
+                  if (layerIndex > 0) {
+                    uIsland.lastLayer = layerIndex - 1;
+                  }
+                }
+              }
+              if (mergedIsland && !mergedIsland.childIds.includes(uid)) {
+                mergedIsland.childIds.push(uid);
+              }
+            }
+          } else {
+            assignedId = this.mergeIslands(
+              layerIndex,
+              resolved,
+              prevIslandLabels,
+              merge.areaMm2,
+              component,
+              updatedThisLayer
+            );
+            updatedThisLayer.add(assignedId);
+          }
         }
 
         solidCompIdToIslandId.set(component.id, assignedId);
+      }
 
-        // Track overlaps for pending merges
+      // Track overlaps for pending merges after all component assignments
+      for (const component of solidComps) {
         this.trackPendingMergeOverlapsRle(layerIndex, component.id, solidLabels, prevIslandLabels);
       }
 
@@ -392,16 +562,30 @@ export class IslandTracker {
     return id;
   }
 
+  private resolveParent(startId: number): number {
+    let currentId = startId;
+    const visited = new Set<number>();
+    while (true) {
+      if (visited.has(currentId)) break; // Cycle protection
+      visited.add(currentId);
+      const isl = this.islands.get(currentId);
+      if (!isl || isl.parentId === undefined) break;
+      currentId = isl.parentId;
+    }
+    return currentId;
+  }
+
   private updateIsland(id: number, layerIndex: number, areaMm2: number, comp?: ComponentInfo): void {
     const island = this.islands.get(id);
     if (!island) return;
 
-    island.lastLayer = layerIndex;
+    island.lastLayer = Math.max(island.lastLayer, layerIndex);
     island.totalAreaMm2 += areaMm2;
-    island.perLayerAreaMm2.set(layerIndex, areaMm2);
+    const layerArea = (island.perLayerAreaMm2.get(layerIndex) ?? 0) + areaMm2;
+    island.perLayerAreaMm2.set(layerIndex, layerArea);
 
-    if (!island.maxAreaMm2 || areaMm2 > island.maxAreaMm2) {
-      island.maxAreaMm2 = areaMm2;
+    if (island.maxAreaMm2 === undefined || layerArea > island.maxAreaMm2) {
+      island.maxAreaMm2 = layerArea;
       island.maxAreaLayer = layerIndex;
     }
 
@@ -431,24 +615,35 @@ export class IslandTracker {
     prevIds: Set<number>,
     prevIslandLabels: RleLabels,
     areaMm2: number,
-    comp?: ComponentInfo
+    comp: ComponentInfo | undefined,
+    updatedThisLayer: Set<number>
   ): number {
-    // ... (logic mostly same, but preMergeLabels is now RleLabels)
-
-    // Store copy of prevIslandLabels
-    // Deep copy RLE labels
+    // Deep copy pre-merge labels, remapping any finalized/parented IDs to current roots
     const preMergeLabels: RleLabels = {
       width: prevIslandLabels.width,
       height: prevIslandLabels.height,
-      rows: prevIslandLabels.rows.map(row => new Int32Array(row))
+      rows: prevIslandLabels.rows.map(row => {
+        const copy = new Int32Array(row.length);
+        for (let i = 0; i < row.length; i += 3) {
+          copy[i] = row[i];
+          copy[i + 1] = row[i + 1];
+          const rawId = row[i + 2];
+          copy[i + 2] = rawId > 0 ? this.resolveParent(rawId) : rawId;
+        }
+        return copy;
+      })
     };
 
-    // Mark merging islands as complete
+    // Mark merging islands as complete (unless already updated on this layer)
     for (const id of prevIds) {
+      if (updatedThisLayer.has(id)) continue;
       const island = this.islands.get(id);
       if (island) {
+        if (island.perLayerAreaMm2.has(layerIndex)) continue;
         island.status = 'complete';
-        island.lastLayer = layerIndex - 1;
+        if (layerIndex > 0) {
+          island.lastLayer = layerIndex - 1;
+        }
       }
     }
 
@@ -459,7 +654,7 @@ export class IslandTracker {
 
     const pending: PendingMerge = {
       mergeLayer: layerIndex,
-      candidateIds: Array.from(prevIds),
+      candidateIds: Array.from(prevIds).sort((a, b) => a - b),
       mergedIslandId: mergedId,
       overlapCounts: new Map(),
       preMergeLabels: preMergeLabels,
@@ -471,87 +666,131 @@ export class IslandTracker {
     return mergedId;
   }
 
-  private evaluatePendingMerges(currentLayer: number): void {
-    // ... (same logic as before, just updating parent/child relationships) ...
-    // Copy-paste the logic from previous file but ensure types match
-
-    const toFinalize: number[] = [];
-
-    for (let i = 0; i < this.pendingMerges.length; i++) {
-      const pending = this.pendingMerges[i];
-      const layersSinceMerge = currentLayer - pending.mergeLayer;
-
-      if (layersSinceMerge >= this.MERGE_EVAL_WINDOW) {
-        let parentId = 0;
-        let maxOverlap = -1;
-        for (const [id, count] of pending.overlapCounts) {
-          if (count > maxOverlap) {
-            maxOverlap = count;
-            parentId = id;
-          }
-        }
-
-        // Update relationships
-        for (const candidateId of pending.candidateIds) {
-          if (candidateId !== parentId) {
-            const child = this.islands.get(candidateId);
-            if (child) child.parentId = parentId;
-          }
-        }
-
-        const mergedIsland = this.islands.get(pending.mergedIslandId);
-        if (mergedIsland) mergedIsland.parentId = parentId;
-
-        const parent = this.islands.get(parentId);
-        if (parent && mergedIsland) {
-          for (const candidateId of pending.candidateIds) {
-            if (candidateId !== parentId && !parent.childIds.includes(candidateId)) {
-              parent.childIds.push(candidateId);
-            }
-          }
-          if (!parent.childIds.includes(pending.mergedIslandId)) {
-            parent.childIds.push(pending.mergedIslandId);
-          }
-
-          parent.lastLayer = mergedIsland.lastLayer;
-          parent.status = mergedIsland.status;
-
-          for (const [layer, areaMm2] of mergedIsland.perLayerAreaMm2) {
-            parent.perLayerAreaMm2.set(layer, areaMm2);
-            parent.totalAreaMm2 += areaMm2;
-            if (!parent.maxAreaMm2 || areaMm2 > parent.maxAreaMm2) {
-              parent.maxAreaMm2 = areaMm2;
-              parent.maxAreaLayer = layer;
-            }
-          }
-
-          // Merge Centroid Data
-          if (mergedIsland.centroidCount > 0) {
-            parent.centroidSumX += mergedIsland.centroidSumX;
-            parent.centroidSumY += mergedIsland.centroidSumY;
-            parent.centroidSumZ += mergedIsland.centroidSumZ;
-            parent.centroidCount += mergedIsland.centroidCount;
-          }
-
-          // Merge Terminal Centroid - Parent adopts Child's terminal centroid?
-          // No, Parent continues to grow. Child stops.
-          // The mergedIsland is technically "Active" at this layer, so its centroid IS the terminal one for the placeholder.
-          // But the Parent (Container) will keep updating.
-          // However, if the Parent was "complete" and is re-awakened?
-          // Actually, we just need to ensure the Parent's lastLayerCentroid reflects the CURRENT layer's activity.
-          // Since mergedIsland represents the current layer's addition, we update Parent's lastLayerCentroid to match mergedIsland's.
-          if (mergedIsland.lastLayerCentroid) {
-            parent.lastLayerCentroid = { ...mergedIsland.lastLayerCentroid };
-          }
-        }
-
-        toFinalize.push(i);
+  private finalizePendingMerge(pending: PendingMerge): number {
+    const resolvedCounts = new Map<number, number>();
+    for (const [rawId, count] of pending.overlapCounts) {
+      const resolved = this.resolveParent(rawId);
+      const isl = this.islands.get(resolved);
+      if (isl && !isl.isMergedPlaceholder) {
+        resolvedCounts.set(resolved, (resolvedCounts.get(resolved) ?? 0) + count);
       }
     }
 
-    for (let i = toFinalize.length - 1; i >= 0; i--) {
-      this.pendingMerges.splice(toFinalize[i], 1);
+    let hasGrounded = false;
+    for (const id of resolvedCounts.keys()) {
+      if (this.groundedIslands.has(id)) {
+        hasGrounded = true;
+        break;
+      }
     }
+
+    let parentId = 0;
+    let maxOverlap = -1;
+    for (const [id, count] of resolvedCounts) {
+      if (hasGrounded && !this.groundedIslands.has(id)) continue;
+      if (count > maxOverlap || (count === maxOverlap && id < parentId)) {
+        maxOverlap = count;
+        parentId = id;
+      }
+    }
+
+    if (parentId === 0) {
+      for (const cid of pending.candidateIds) {
+        const resolved = this.resolveParent(cid);
+        const isl = this.islands.get(resolved);
+        if (isl && !isl.isMergedPlaceholder) {
+          parentId = resolved;
+          break;
+        }
+      }
+    }
+
+    // Update candidate relationships
+    for (const candidateId of pending.candidateIds) {
+      if (candidateId !== parentId) {
+        const child = this.islands.get(candidateId);
+        if (child) child.parentId = parentId;
+      }
+    }
+
+    // Reparent any existing islands whose parent was the merged placeholder
+    for (const island of this.islands.values()) {
+      if (island.parentId === pending.mergedIslandId && island.id !== parentId) {
+        island.parentId = parentId;
+      }
+    }
+
+    const mergedIsland = this.islands.get(pending.mergedIslandId);
+    const mergedWasActive = mergedIsland ? mergedIsland.status === 'active' : false;
+    if (mergedIsland) {
+      mergedIsland.parentId = parentId;
+      mergedIsland.status = 'complete';
+    }
+
+    const parent = this.islands.get(parentId);
+    if (parent && mergedIsland) {
+      for (const candidateId of pending.candidateIds) {
+        if (candidateId !== parentId && !parent.childIds.includes(candidateId)) {
+          parent.childIds.push(candidateId);
+        }
+      }
+      if (!parent.childIds.includes(pending.mergedIslandId)) {
+        parent.childIds.push(pending.mergedIslandId);
+      }
+      for (const childId of mergedIsland.childIds) {
+        if (childId !== parentId && !parent.childIds.includes(childId)) {
+          parent.childIds.push(childId);
+        }
+      }
+
+      const prevParentLastLayer = parent.lastLayer;
+      parent.lastLayer = Math.max(parent.lastLayer, mergedIsland.lastLayer);
+      parent.status = (mergedWasActive || parent.status === 'active') ? 'active' : 'complete';
+
+      for (const [layer, areaMm2] of mergedIsland.perLayerAreaMm2) {
+        parent.lastLayer = Math.max(parent.lastLayer, layer);
+        const layerArea = (parent.perLayerAreaMm2.get(layer) ?? 0) + areaMm2;
+        parent.perLayerAreaMm2.set(layer, layerArea);
+        parent.totalAreaMm2 += areaMm2;
+        if (parent.maxAreaMm2 === undefined || layerArea > parent.maxAreaMm2) {
+          parent.maxAreaMm2 = layerArea;
+          parent.maxAreaLayer = layer;
+        }
+      }
+
+      // Merge Centroid Data
+      if (mergedIsland.centroidCount > 0) {
+        parent.centroidSumX += mergedIsland.centroidSumX;
+        parent.centroidSumY += mergedIsland.centroidSumY;
+        parent.centroidSumZ += mergedIsland.centroidSumZ;
+        parent.centroidCount += mergedIsland.centroidCount;
+      }
+
+      if (mergedIsland.lastLayer >= prevParentLastLayer && mergedIsland.lastLayerCentroid) {
+        parent.lastLayerCentroid = { ...mergedIsland.lastLayerCentroid };
+      }
+    }
+
+    if (
+      this.groundedIslands.has(pending.mergedIslandId) ||
+      pending.candidateIds.some((cid) => this.groundedIslands.has(cid))
+    ) {
+      this.groundedIslands.add(parentId);
+    }
+
+    return parentId;
+  }
+
+  private evaluatePendingMerges(currentLayer: number): void {
+    const remaining: PendingMerge[] = [];
+    for (const pending of this.pendingMerges) {
+      if (currentLayer - pending.mergeLayer >= this.MERGE_EVAL_WINDOW) {
+        this.finalizePendingMerge(pending);
+      } else {
+        remaining.push(pending);
+      }
+    }
+    this.pendingMerges = remaining;
   }
 
   getIslands(): Island[] {
@@ -568,8 +807,12 @@ export class IslandTracker {
     return islands;
   }
 
-  finalizeIslands(finalLayer: number): void {
-    // No-op
+  finalizeIslands(_finalLayer: number): void {
+    const pending = this.pendingMerges;
+    this.pendingMerges = [];
+    for (const p of pending) {
+      this.finalizePendingMerge(p);
+    }
   }
 }
 

@@ -31,6 +31,7 @@ pub struct IslandTracker {
     connectivity: Connectivity,
     pending_merges: Vec<PendingMerge>,
     merge_eval_window: u32,
+    grounded_islands: HashSet<IslandId>,
 }
 
 impl IslandTracker {
@@ -75,6 +76,7 @@ impl IslandTracker {
             connectivity,
             pending_merges: Vec::new(),
             merge_eval_window: 30,
+            grounded_islands: HashSet::new(),
         }
     }
 
@@ -117,6 +119,9 @@ impl IslandTracker {
         for comp in current_components {
             let area_mm2 = comp.area_px as f64 * self.px_mm * self.px_mm;
             let island_id = self.create_new_island(layer_index, area_mm2, Some(comp));
+            if layer_index == 0 {
+                self.grounded_islands.insert(island_id);
+            }
             comp_to_island.insert(comp.id, island_id);
         }
 
@@ -133,13 +138,27 @@ impl IslandTracker {
         width: i32,
         height: i32,
     ) -> RleLabels {
-        // Label connected solid components
+        // 1. Label connected solid components & snapshot Active islands at layer entry
         let (solid_labels, solid_comps) =
             rle_label_components(solid_mask, self.connectivity);
 
-        let mut solid_comp_to_island: HashMap<i32, IslandId> = HashMap::new();
+        let mut active_at_layer_start: HashSet<IslandId> = self
+            .islands
+            .iter()
+            .filter(|(_, island)| island.status == IslandStatus::Active)
+            .map(|(&id, _)| id)
+            .collect();
 
-        for component in &solid_comps {
+        // 2. Collect initial prev_ids & active_prev_ids without mutating island state
+        struct SolidCompInput {
+            comp_idx: usize,
+            area_mm2: f64,
+            prev_ids: HashSet<IslandId>,
+            active_prev_ids: HashSet<IslandId>,
+        }
+
+        let mut comp_inputs: Vec<SolidCompInput> = Vec::with_capacity(solid_comps.len());
+        for (comp_idx, component) in solid_comps.iter().enumerate() {
             let prev_id_overlaps = Self::count_overlapping_labels(
                 component.id,
                 &solid_labels,
@@ -154,46 +173,259 @@ impl IslandTracker {
                 }
             }
 
-            // Filter for active islands
+            // Filter for active islands (resolving finalized placeholders / indirect chains)
             let active_prev_ids: HashSet<IslandId> = prev_ids
                 .iter()
                 .copied()
-                .filter(|id| {
-                    self.islands
-                        .get(id)
-                        .map_or(false, |i| i.status == IslandStatus::Active)
-                })
+                .filter(|id| active_at_layer_start.contains(&self.resolve_parent(*id)))
                 .collect();
 
             let area_mm2 = component.area_px as f64 * self.px_mm * self.px_mm;
+            comp_inputs.push(SolidCompInput {
+                comp_idx,
+                area_mm2,
+                prev_ids,
+                active_prev_ids,
+            });
+        }
 
-            let assigned_id = if active_prev_ids.is_empty() {
-                if !prev_ids.is_empty() {
+        let mut solid_comp_to_island: HashMap<i32, IslandId> = HashMap::new();
+        let mut updated_this_layer: HashSet<IslandId> = HashSet::new();
+
+        // 3. Fixpoint pre-flush: finalize any open PendingMerge whose placeholder participates
+        // directly or indirectly in a genuine multi-target merge (resolved.len() >= 2).
+        loop {
+            let mut to_flush: HashSet<IslandId> = HashSet::new();
+            for input in &comp_inputs {
+                if input.active_prev_ids.len() >= 2 {
+                    let resolved: HashSet<IslandId> = input
+                        .active_prev_ids
+                        .iter()
+                        .map(|&id| self.resolve_parent(id))
+                        .collect();
+                    if resolved.len() >= 2 {
+                        for pending in &self.pending_merges {
+                            if resolved.contains(&pending.merged_island_id) {
+                                to_flush.insert(pending.merged_island_id);
+                            }
+                        }
+                    }
+                }
+            }
+            if to_flush.is_empty() {
+                break;
+            }
+            let mut i = 0;
+            while i < self.pending_merges.len() {
+                if to_flush.contains(&self.pending_merges[i].merged_island_id) {
+                    let p = self.pending_merges.remove(i);
+                    let merged_id = p.merged_island_id;
+                    let parent_id = self.finalize_pending_merge(p);
+                    if active_at_layer_start.contains(&merged_id) {
+                        active_at_layer_start.insert(parent_id);
+                    }
+                    if updated_this_layer.contains(&merged_id) {
+                        updated_this_layer.insert(parent_id);
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        // 4. Pass 1: create new islands immediately; classify continuations vs merges
+        let mut continuations: Vec<(usize, IslandId, f64)> = Vec::new();
+        let mut merges: Vec<(usize, HashSet<IslandId>, f64)> = Vec::new();
+
+        for input in &comp_inputs {
+            let component = &solid_comps[input.comp_idx];
+            if input.active_prev_ids.is_empty() {
+                if input.prev_ids.is_empty() {
+                    let new_id =
+                        self.create_new_island(layer_index, input.area_mm2, Some(component));
+                    updated_this_layer.insert(new_id);
+                    solid_comp_to_island.insert(component.id, new_id);
+                } else {
                     // Overlaps only non-active islands — resolve to parent chain.
                     // Pick the smallest id for determinism (HashSet order is not).
-                    let first = *prev_ids.iter().min_by_key(|id| id.0).unwrap();
+                    let first = *input.prev_ids.iter().min_by_key(|id| id.0).unwrap();
                     let target = self.resolve_parent(first);
-                    self.update_island(target, layer_index, area_mm2, Some(component));
-                    target
-                } else {
-                    self.create_new_island(layer_index, area_mm2, Some(component))
+                    continuations.push((input.comp_idx, target, input.area_mm2));
                 }
-            } else if active_prev_ids.len() == 1 {
-                let id = *active_prev_ids.iter().next().unwrap();
-                self.update_island(id, layer_index, area_mm2, Some(component));
-                id
             } else {
-                // Merge: resolve all to ultimate parents
-                let resolved: HashSet<IslandId> = active_prev_ids
+                let resolved: HashSet<IslandId> = input
+                    .active_prev_ids
                     .iter()
                     .map(|&id| self.resolve_parent(id))
                     .collect();
-                self.merge_islands(layer_index, &resolved, prev_island_labels, area_mm2, Some(component))
+                if resolved.len() == 1 {
+                    let target = *resolved.iter().next().unwrap();
+                    continuations.push((input.comp_idx, target, input.area_mm2));
+                } else {
+                    merges.push((input.comp_idx, resolved, input.area_mm2));
+                }
+            }
+        }
+
+        // 5. Pass 2a: execute ALL continuations first
+        for (comp_idx, target, area_mm2) in continuations {
+            let component = &solid_comps[comp_idx];
+            self.update_island(target, layer_index, area_mm2, Some(component));
+            updated_this_layer.insert(target);
+            solid_comp_to_island.insert(component.id, target);
+        }
+
+        // 6. Pass 2b: execute merges (preserving islands updated on this layer)
+        for (comp_idx, orig_resolved, area_mm2) in merges {
+            let component = &solid_comps[comp_idx];
+            let mut resolved: HashSet<IslandId> = orig_resolved
+                .iter()
+                .map(|&id| self.resolve_parent(id))
+                .collect();
+
+            if resolved.len() >= 2 {
+                loop {
+                    let mut to_flush: HashSet<IslandId> = HashSet::new();
+                    for pending in &self.pending_merges {
+                        if resolved.contains(&pending.merged_island_id) {
+                            to_flush.insert(pending.merged_island_id);
+                        }
+                    }
+                    if to_flush.is_empty() {
+                        break;
+                    }
+                    let mut i = 0;
+                    while i < self.pending_merges.len() {
+                        if to_flush.contains(&self.pending_merges[i].merged_island_id) {
+                            let mut p = self.pending_merges.remove(i);
+                            for comp in &solid_comps {
+                                let overlaps = Self::count_overlapping_labels(
+                                    comp.id,
+                                    &solid_labels,
+                                    &p.pre_merge_labels,
+                                    self.overlap_neighborhood_px,
+                                );
+                                for (id, count) in overlaps {
+                                    if p.overlap_counts.contains_key(&id) {
+                                        *p.overlap_counts.entry(id).or_insert(0) += count;
+                                    }
+                                }
+                            }
+                            let merged_id = p.merged_island_id;
+                            let parent_id = self.finalize_pending_merge(p);
+                            if updated_this_layer.contains(&merged_id) {
+                                updated_this_layer.insert(parent_id);
+                            }
+                            for mapped in solid_comp_to_island.values_mut() {
+                                if *mapped == merged_id {
+                                    *mapped = parent_id;
+                                }
+                            }
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    resolved = resolved
+                        .iter()
+                        .map(|&id| self.resolve_parent(id))
+                        .collect();
+                    if resolved.len() < 2 {
+                        break;
+                    }
+                }
+            }
+
+            let assigned_id = if resolved.len() == 1 {
+                let target = *resolved.iter().next().unwrap();
+                self.update_island(target, layer_index, area_mm2, Some(component));
+                updated_this_layer.insert(target);
+                target
+            } else {
+                let mut sorted_resolved: Vec<IslandId> = resolved.iter().copied().collect();
+                sorted_resolved.sort_by_key(|id| id.0);
+                let mut grounded: Vec<IslandId> = Vec::new();
+                let mut ungrounded: Vec<IslandId> = Vec::new();
+                for id in sorted_resolved {
+                    if self.grounded_islands.contains(&id) {
+                        grounded.push(id);
+                    } else {
+                        ungrounded.push(id);
+                    }
+                }
+
+                if grounded.len() == 1 {
+                    let gp = grounded[0];
+                    for uid in &ungrounded {
+                        if let Some(u) = self.islands.get_mut(uid) {
+                            u.parent_id = Some(gp);
+                            if !updated_this_layer.contains(uid)
+                                && !u.per_layer_area_mm2.contains_key(&layer_index)
+                            {
+                                u.status = IslandStatus::Complete;
+                                if layer_index > 0 {
+                                    u.last_layer = layer_index - 1;
+                                }
+                            }
+                        }
+                        if let Some(g) = self.islands.get_mut(&gp) {
+                            if !g.child_ids.contains(uid) {
+                                g.child_ids.push(*uid);
+                            }
+                        }
+                    }
+                    self.update_island(gp, layer_index, area_mm2, Some(component));
+                    updated_this_layer.insert(gp);
+                    gp
+                } else if grounded.len() >= 2 {
+                    let grounded_set: HashSet<IslandId> = grounded.iter().copied().collect();
+                    let merged_id = self.merge_islands(
+                        layer_index,
+                        &grounded_set,
+                        prev_island_labels,
+                        area_mm2,
+                        Some(component),
+                        &updated_this_layer,
+                    );
+                    self.grounded_islands.insert(merged_id);
+                    updated_this_layer.insert(merged_id);
+                    for uid in &ungrounded {
+                        if let Some(u) = self.islands.get_mut(uid) {
+                            u.parent_id = Some(merged_id);
+                            if !updated_this_layer.contains(uid)
+                                && !u.per_layer_area_mm2.contains_key(&layer_index)
+                            {
+                                u.status = IslandStatus::Complete;
+                                if layer_index > 0 {
+                                    u.last_layer = layer_index - 1;
+                                }
+                            }
+                        }
+                        if let Some(m) = self.islands.get_mut(&merged_id) {
+                            if !m.child_ids.contains(uid) {
+                                m.child_ids.push(*uid);
+                            }
+                        }
+                    }
+                    merged_id
+                } else {
+                    let merged_id = self.merge_islands(
+                        layer_index,
+                        &resolved,
+                        prev_island_labels,
+                        area_mm2,
+                        Some(component),
+                        &updated_this_layer,
+                    );
+                    updated_this_layer.insert(merged_id);
+                    merged_id
+                }
             };
 
             solid_comp_to_island.insert(component.id, assigned_id);
+        }
 
-            // Track overlaps for pending merges
+        // Track overlaps for pending merges after all component assignments
+        for component in &solid_comps {
             self.track_pending_merge_overlaps(component.id, &solid_labels, prev_island_labels);
         }
 
@@ -369,21 +601,43 @@ impl IslandTracker {
         prev_island_labels: &RleLabels,
         area_mm2: f64,
         comp: Option<&ComponentInfo>,
+        updated_this_layer: &HashSet<IslandId>,
     ) -> IslandId {
-        // Deep copy pre-merge labels
+        // Deep copy pre-merge labels, remapping any finalized/parented IDs to current roots
         let pre_merge_labels = RleLabels {
             width: prev_island_labels.width,
             height: prev_island_labels.height,
             rows: prev_island_labels
                 .rows
                 .iter()
-                .map(|row| row.clone())
+                .map(|row| {
+                    row.iter()
+                        .map(|run| {
+                            if run.id > 0 {
+                                let resolved = self.resolve_parent(IslandId(run.id as u32));
+                                RleLabelRun {
+                                    start: run.start,
+                                    length: run.length,
+                                    id: resolved.0 as i32,
+                                }
+                            } else {
+                                run.clone()
+                            }
+                        })
+                        .collect()
+                })
                 .collect(),
         };
 
-        // Mark merging islands as complete
+        // Mark merging islands as complete (unless already updated on this layer)
         for &id in prev_ids {
+            if updated_this_layer.contains(&id) {
+                continue;
+            }
             if let Some(island) = self.islands.get_mut(&id) {
+                if island.per_layer_area_mm2.contains_key(&layer) {
+                    continue;
+                }
                 island.status = IslandStatus::Complete;
                 if layer > 0 {
                     island.last_layer = layer - 1;
@@ -418,85 +672,149 @@ impl IslandTracker {
         merged_id
     }
 
-    fn evaluate_pending_merges(&mut self, current_layer: u32) {
-        let mut to_finalize = Vec::new();
-
-        for (i, pending) in self.pending_merges.iter().enumerate() {
-            if current_layer.saturating_sub(pending.merge_layer) >= self.merge_eval_window {
-                to_finalize.push(i);
+    fn finalize_pending_merge(&mut self, pending: PendingMerge) -> IslandId {
+        // Determine parent = non-placeholder candidate with highest overlap count.
+        // Ties break deterministically by smallest id.0.
+        let mut resolved_counts: HashMap<IslandId, u64> = HashMap::new();
+        for (&raw_id, &count) in &pending.overlap_counts {
+            let resolved = self.resolve_parent(raw_id);
+            let is_placeholder = self
+                .islands
+                .get(&resolved)
+                .map_or(true, |i| i.is_merged_placeholder);
+            if !is_placeholder {
+                *resolved_counts.entry(resolved).or_insert(0) += count;
             }
         }
 
-        // Process in reverse to preserve indices
-        for &i in to_finalize.iter().rev() {
-            let pending = self.pending_merges.remove(i);
+        let has_grounded = resolved_counts
+            .keys()
+            .any(|id| self.grounded_islands.contains(id));
 
-            // Determine parent = candidate with highest overlap count.
-            // Ties (equal overlap) prefer the smallest id so the choice is
-            // deterministic across processes (HashMap iteration order is not).
-            let parent_id = pending
-                .overlap_counts
-                .iter()
-                .max_by(|(id_a, count_a), (id_b, count_b)| {
-                    count_a
-                        .cmp(count_b)
-                        .then_with(|| id_b.0.cmp(&id_a.0))
-                })
-                .map(|(&id, _)| id)
-                .unwrap_or(IslandId(0));
+        let parent_id = resolved_counts
+            .iter()
+            .filter(|(id, _)| !has_grounded || self.grounded_islands.contains(id))
+            .max_by(|(id_a, count_a), (id_b, count_b)| {
+                count_a
+                    .cmp(count_b)
+                    .then_with(|| id_b.0.cmp(&id_a.0))
+            })
+            .map(|(&id, _)| id)
+            .unwrap_or_else(|| {
+                pending
+                    .candidate_ids
+                    .iter()
+                    .map(|&cid| self.resolve_parent(cid))
+                    .find(|id| {
+                        self.islands
+                            .get(id)
+                            .map_or(false, |i| !i.is_merged_placeholder)
+                    })
+                    .unwrap_or(IslandId(0))
+            });
 
-            // Set parent on non-parent candidates
+        // Set parent on non-parent candidates
+        for &candidate_id in &pending.candidate_ids {
+            if candidate_id != parent_id {
+                if let Some(child) = self.islands.get_mut(&candidate_id) {
+                    child.parent_id = Some(parent_id);
+                }
+            }
+        }
+
+        // Reparent any existing islands whose parent was the merged placeholder
+        for island in self.islands.values_mut() {
+            if island.parent_id == Some(pending.merged_island_id) && island.id != parent_id {
+                island.parent_id = Some(parent_id);
+            }
+        }
+
+        // Read merged active state BEFORE completing the placeholder
+        let merged_was_active = if let Some(merged) = self.islands.get_mut(&pending.merged_island_id) {
+            let was_active = merged.status == IslandStatus::Active;
+            merged.parent_id = Some(parent_id);
+            merged.status = IslandStatus::Complete;
+            was_active
+        } else {
+            false
+        };
+
+        // Merge data into parent
+        let merged_data = self.islands.get(&pending.merged_island_id).cloned();
+
+        if let (Some(parent), Some(merged)) =
+            (self.islands.get_mut(&parent_id), merged_data.as_ref())
+        {
             for &candidate_id in &pending.candidate_ids {
-                if candidate_id != parent_id {
-                    if let Some(child) = self.islands.get_mut(&candidate_id) {
-                        child.parent_id = Some(parent_id);
-                    }
+                if candidate_id != parent_id && !parent.child_ids.contains(&candidate_id) {
+                    parent.child_ids.push(candidate_id);
+                }
+            }
+            if !parent.child_ids.contains(&pending.merged_island_id) {
+                parent.child_ids.push(pending.merged_island_id);
+            }
+            for &child_id in &merged.child_ids {
+                if child_id != parent_id && !parent.child_ids.contains(&child_id) {
+                    parent.child_ids.push(child_id);
                 }
             }
 
-            // Set parent on merged placeholder
-            if let Some(merged) = self.islands.get_mut(&pending.merged_island_id) {
-                merged.parent_id = Some(parent_id);
+            let prev_parent_last_layer = parent.last_layer;
+            parent.last_layer = parent.last_layer.max(merged.last_layer);
+            parent.status = if merged_was_active || parent.status == IslandStatus::Active {
+                IslandStatus::Active
+            } else {
+                IslandStatus::Complete
+            };
+
+            for (&layer, &area_mm2) in &merged.per_layer_area_mm2 {
+                parent.last_layer = parent.last_layer.max(layer);
+                let entry = parent.per_layer_area_mm2.entry(layer).or_insert(0.0);
+                *entry += area_mm2;
+                let layer_area = *entry;
+                parent.total_area_mm2 += area_mm2;
+                if parent.max_area_mm2.map_or(true, |m| layer_area > m) {
+                    parent.max_area_mm2 = Some(layer_area);
+                    parent.max_area_layer = Some(layer);
+                }
             }
 
-            // Merge data into parent
-            // We need to clone merged island data before borrowing parent mutably
-            let merged_data = self.islands.get(&pending.merged_island_id).cloned();
+            if merged.centroid_count > 0 {
+                parent.centroid_sum_x += merged.centroid_sum_x;
+                parent.centroid_sum_y += merged.centroid_sum_y;
+                parent.centroid_sum_z += merged.centroid_sum_z;
+                parent.centroid_count += merged.centroid_count;
+            }
 
-            if let (Some(parent), Some(merged)) =
-                (self.islands.get_mut(&parent_id), merged_data.as_ref())
-            {
-                for &candidate_id in &pending.candidate_ids {
-                    if candidate_id != parent_id && !parent.child_ids.contains(&candidate_id) {
-                        parent.child_ids.push(candidate_id);
-                    }
-                }
-                if !parent.child_ids.contains(&pending.merged_island_id) {
-                    parent.child_ids.push(pending.merged_island_id);
-                }
-
-                parent.last_layer = merged.last_layer;
-                parent.status = merged.status;
-
-                for (&layer, &area_mm2) in &merged.per_layer_area_mm2 {
-                    parent.per_layer_area_mm2.insert(layer, area_mm2);
-                    parent.total_area_mm2 += area_mm2;
-                    if parent.max_area_mm2.map_or(true, |m| area_mm2 > m) {
-                        parent.max_area_mm2 = Some(area_mm2);
-                        parent.max_area_layer = Some(layer);
-                    }
-                }
-
-                if merged.centroid_count > 0 {
-                    parent.centroid_sum_x += merged.centroid_sum_x;
-                    parent.centroid_sum_y += merged.centroid_sum_y;
-                    parent.centroid_sum_z += merged.centroid_sum_z;
-                    parent.centroid_count += merged.centroid_count;
-                }
-
+            if merged.last_layer >= prev_parent_last_layer {
                 if let Some(ref llc) = merged.last_layer_centroid {
                     parent.last_layer_centroid = Some(*llc);
                 }
+            }
+        }
+
+        if self.grounded_islands.contains(&pending.merged_island_id)
+            || pending
+                .candidate_ids
+                .iter()
+                .any(|cid| self.grounded_islands.contains(cid))
+        {
+            self.grounded_islands.insert(parent_id);
+        }
+
+        parent_id
+    }
+
+    fn evaluate_pending_merges(&mut self, current_layer: u32) {
+        let mut i = 0;
+        while i < self.pending_merges.len() {
+            if current_layer.saturating_sub(self.pending_merges[i].merge_layer)
+                >= self.merge_eval_window
+            {
+                let pending = self.pending_merges.remove(i);
+                self.finalize_pending_merge(pending);
+            } else {
+                i += 1;
             }
         }
     }
@@ -681,7 +999,10 @@ impl IslandTracker {
     }
 
     pub fn finalize_islands(&mut self, _final_layer: u32) {
-        // No-op (matches TS)
+        let pending = std::mem::take(&mut self.pending_merges);
+        for p in pending {
+            self.finalize_pending_merge(p);
+        }
     }
 }
 
@@ -1243,6 +1564,659 @@ mod tests {
         assert_eq!(b_l2_bf.has_saddle_merged, b_l2_mf.has_saddle_merged);
         assert_eq!(b_l2_bf.pre_merge_max_area_mm2, b_l2_mf.pre_merge_max_area_mm2);
         assert_eq!(b_l3_bf.last_layer, b_l3_mf.last_layer);
+    }
+
+    fn paint_box(buf: &mut [u8], w: i32, x0: i32, x1: i32, y0: i32, y1: i32) {
+        for y in y0..y1 {
+            for x in x0..x1 {
+                buf[(y * w + x) as usize] = 1;
+            }
+        }
+    }
+
+    fn run_solid_masks(masks: &[RleMask], finalize: bool) -> (IslandTracker, Vec<RleLabels>) {
+        let mut tracker = IslandTracker::new(0.1, 1, 1);
+        let mut prev_mask: Option<RleMask> = None;
+        let mut prev_il: Option<RleLabels> = None;
+        let mut out_labels = Vec::with_capacity(masks.len());
+
+        for (l, mask) in masks.iter().enumerate() {
+            let r = scan_layer(mask, prev_mask.as_ref(), 0.1, 0.1, Connectivity::Eight);
+            let il = tracker.process_layer(
+                l as u32,
+                &r.labels,
+                &r.components,
+                prev_il.as_ref(),
+                &r.solid_mask,
+                false,
+            );
+            prev_mask = Some(mask.clone());
+            prev_il = Some(il.clone());
+            out_labels.push(il);
+        }
+        if finalize && !masks.is_empty() {
+            tracker.finalize_islands((masks.len() - 1) as u32);
+        }
+        (tracker, out_labels)
+    }
+
+    #[test]
+    fn fld05_grounded_body_immediately_absorbs_hanging_fold_without_pending_merge() {
+        let w = 24;
+        let h = 12;
+        let num_layers = 36usize;
+        let mut masks = Vec::with_capacity(num_layers);
+
+        // L0: small grounded body at x=2..4, y=2..4 (4 px)
+        let mut d0 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d0, w, 2, 4, 2, 4);
+        masks.push(rle_encode(&d0, w, h));
+
+        // L1: grounded body + huge hanging fold at x=10..20, y=2..8 (60 px)
+        let mut d1 = d0.clone();
+        paint_box(&mut d1, w, 10, 20, 2, 8);
+        masks.push(rle_encode(&d1, w, h));
+
+        // L2..35: upper overhang connects body and fold, heavily leaning over fold's XY footprint
+        let mut d_upper = vec![0u8; (w * h) as usize];
+        paint_box(&mut d_upper, w, 2, 20, 3, 4);
+        paint_box(&mut d_upper, w, 10, 20, 2, 8);
+        let m_upper = rle_encode(&d_upper, w, h);
+        for _ in 2..num_layers {
+            masks.push(m_upper.clone());
+        }
+
+        let (mut tracker, labels) = run_solid_masks(&masks, true);
+        let islands = tracker.get_islands();
+
+        assert!(
+            islands.iter().all(|i| !i.is_merged_placeholder),
+            "grounded+ungrounded merge must not open a PendingMerge placeholder"
+        );
+        let body = islands.iter().find(|i| i.first_layer == 0).unwrap();
+        let fold = islands.iter().find(|i| i.first_layer == 1).unwrap();
+
+        assert_eq!(body.status, IslandStatus::Active);
+        assert_eq!(body.last_layer, 35);
+        assert_eq!(body.parent_id, None);
+        assert!(body.child_ids.contains(&fold.id));
+
+        assert_eq!(fold.status, IslandStatus::Complete);
+        assert_eq!(fold.last_layer, 1);
+        assert_eq!(fold.parent_id, Some(body.id));
+
+        for (l, il) in labels.iter().enumerate().skip(2) {
+            let ids: Vec<i32> = il.rows.iter().flat_map(|r| r.iter().map(|run| run.id)).collect();
+            assert!(!ids.is_empty() && ids.iter().all(|&id| id == body.id.0 as i32), "layer {l} had {:?}", ids);
+        }
+    }
+
+    #[test]
+    fn fld05_two_grounded_bodies_absorb_fold_and_reparent_on_finalize() {
+        let w = 24;
+        let h = 10;
+        let num_layers = 10usize;
+        let mut masks = Vec::with_capacity(num_layers);
+
+        // L0: two grounded pillars G1 (x=1..4) and G2 (x=15..19)
+        let mut d0 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d0, w, 1, 4, 2, 6);
+        paint_box(&mut d0, w, 15, 19, 2, 6);
+        masks.push(rle_encode(&d0, w, h));
+
+        // L1: G1, G2, plus hanging fold F (x=7..12)
+        let mut d1 = d0.clone();
+        paint_box(&mut d1, w, 7, 12, 2, 6);
+        masks.push(rle_encode(&d1, w, h));
+
+        // L2..9: all three connect into one bar
+        let mut d_bar = vec![0u8; (w * h) as usize];
+        paint_box(&mut d_bar, w, 1, 19, 2, 6);
+        let m_bar = rle_encode(&d_bar, w, h);
+        for _ in 2..num_layers {
+            masks.push(m_bar.clone());
+        }
+
+        // Before finalize: F must already be Complete and reparented to the grounded placeholder
+        let (mut pre_fin, _) = run_solid_masks(&masks, false);
+        let pre_islands = pre_fin.get_islands();
+        let pre_fold = pre_islands.iter().find(|i| i.first_layer == 1 && !i.is_merged_placeholder).unwrap();
+        let placeholder = pre_islands.iter().find(|i| i.is_merged_placeholder).unwrap();
+        assert_eq!(pre_fold.status, IslandStatus::Complete);
+        assert_eq!(pre_fold.last_layer, 1);
+        assert_eq!(pre_fold.parent_id, Some(placeholder.id));
+
+        // After finalize: F must be reparented directly to the winning grounded pillar (G2 has more px)
+        pre_fin.finalize_islands((num_layers - 1) as u32);
+        let post_islands = pre_fin.get_islands();
+        let winner = post_islands
+            .iter()
+            .find(|i| i.first_layer == 0 && i.parent_id.is_none())
+            .unwrap();
+        let other_grounded = post_islands
+            .iter()
+            .find(|i| i.first_layer == 0 && i.id != winner.id)
+            .unwrap();
+        let fold = post_islands.iter().find(|i| i.id == pre_fold.id).unwrap();
+        let post_placeholder = post_islands.iter().find(|i| i.id == placeholder.id).unwrap();
+
+        assert_eq!(post_placeholder.status, IslandStatus::Complete);
+        assert_eq!(post_placeholder.parent_id, Some(winner.id));
+        assert_eq!(fold.parent_id, Some(winner.id));
+        assert_eq!(other_grounded.parent_id, Some(winner.id));
+        assert!(winner.child_ids.contains(&fold.id));
+        assert!(winner.child_ids.contains(&other_grounded.id));
+    }
+
+    #[test]
+    fn fld05_floating_first_layer_with_none_prev_at_l_gt_0_remains_ungrounded() {
+        let w = 24;
+        let h = 10;
+        let mut tracker = IslandTracker::new(0.1, 1, 1);
+
+        // First call at layer_index = 1 with prev_island_labels = None (floating mesh)
+        let mut d1 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d1, w, 1, 3, 2, 4);   // small A (4 px)
+        paint_box(&mut d1, w, 10, 18, 2, 6); // large B (32 px)
+        let m1 = rle_encode(&d1, w, h);
+        let r1 = scan_layer(&m1, None, 0.1, 0.1, Connectivity::Eight);
+        let il1 = tracker.process_layer(1, &r1.labels, &r1.components, None, &r1.solid_mask, false);
+
+        // Merge at layer 2 over both footprints -> should open PendingMerge (not grounded immunity)
+        let mut d2 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d2, w, 1, 18, 2, 6);
+        let m2 = rle_encode(&d2, w, h);
+        let r2 = scan_layer(&m2, Some(&m1), 0.1, 0.1, Connectivity::Eight);
+        let _il2 = tracker.process_layer(2, &r2.labels, &r2.components, Some(&il1), &r2.solid_mask, false);
+
+        let islands = tracker.get_islands();
+        assert!(
+            islands.iter().any(|i| i.is_merged_placeholder),
+            "layer_index > 0 floating islands must remain ungrounded and use PendingMerge"
+        );
+    }
+
+    #[test]
+    fn fld05_floating_post_window_placeholder_complete_and_single_parent_resolves_at_31_plus() {
+        use crate::pipeline::postprocess_with_mode;
+
+        let w = 20;
+        let h = 10;
+        let num_layers = 36usize;
+        let mut masks = Vec::with_capacity(num_layers);
+
+        // L0 empty so L1 islands are ungrounded
+        masks.push(rle_encode(&vec![0u8; (w * h) as usize], w, h));
+
+        // L1: floating A (x=1..7, y=2..6 = 24 px) and B (x=12..14, y=2..4 = 4 px)
+        let mut d1 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d1, w, 1, 7, 2, 6);
+        paint_box(&mut d1, w, 12, 14, 2, 4);
+        masks.push(rle_encode(&d1, w, h));
+
+        // L2..35: merged bar spanning A and B
+        let mut d_bar = vec![0u8; (w * h) as usize];
+        paint_box(&mut d_bar, w, 1, 14, 2, 6);
+        let m_bar = rle_encode(&d_bar, w, h);
+        for _ in 2..num_layers {
+            masks.push(m_bar.clone());
+        }
+
+        let (mut tracker, labels) = run_solid_masks(&masks, false);
+        let islands = tracker.get_islands();
+        let placeholder = islands.iter().find(|i| i.is_merged_placeholder).unwrap();
+        let winner = islands
+            .iter()
+            .find(|i| !i.is_merged_placeholder && i.parent_id.is_none())
+            .unwrap();
+
+        assert_eq!(placeholder.status, IslandStatus::Complete);
+        assert_eq!(placeholder.parent_id, Some(winner.id));
+        assert_eq!(winner.status, IslandStatus::Active);
+        assert_eq!(winner.last_layer, 35);
+        for l in 33..=35u32 {
+            assert!(
+                winner.per_layer_area_mm2.contains_key(&l),
+                "winner must receive post-window layer {l} area"
+            );
+        }
+
+        let winner_id = winner.id;
+        let grid = GridRef {
+            origin_x: 0.0,
+            origin_z: 0.0,
+            width: w,
+            height: h,
+            px_mm: 0.1,
+        };
+        let res = postprocess_with_mode(grid, islands, labels, 0.1, 0.0001, false);
+        let post_winner = res.islands.iter().find(|i| i.id == winner_id).unwrap();
+        assert_eq!(post_winner.last_layer, 35);
+        assert!(post_winner.volume_mm3.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn fld05_chained_floating_merges_within_window_flush_placeholder_and_remap_pre_merge() {
+        use crate::pipeline::postprocess_with_mode;
+
+        let w = 24;
+        let h = 10;
+        let num_layers = 37usize;
+        let mut masks = Vec::with_capacity(num_layers);
+
+        // L0 empty
+        masks.push(rle_encode(&vec![0u8; (w * h) as usize], w, h));
+
+        // L1: A (x=1..7, y=2..6 = 24px), B (x=9..11, y=2..4 = 4px), C (x=16..20, y=2..5 = 12px)
+        let mut d1 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d1, w, 1, 7, 2, 6);
+        paint_box(&mut d1, w, 9, 11, 2, 4);
+        paint_box(&mut d1, w, 16, 20, 2, 5);
+        masks.push(rle_encode(&d1, w, h));
+
+        // L2..4: A+B merge into P1 (x=1..11, y=2..6), C separate (x=16..20, y=2..5)
+        let mut d2 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d2, w, 1, 11, 2, 6);
+        paint_box(&mut d2, w, 16, 20, 2, 5);
+        let m2 = rle_encode(&d2, w, h);
+        for _ in 2..=4 {
+            masks.push(m2.clone());
+        }
+
+        // L5..36: P1 merges with C (< 30 layers after L2 merge!)
+        let mut d5 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d5, w, 1, 20, 2, 6);
+        let m5 = rle_encode(&d5, w, h);
+        for _ in 5..num_layers {
+            masks.push(m5.clone());
+        }
+
+        let (mut tracker, labels) = run_solid_masks(&masks, true);
+        let islands = tracker.get_islands();
+
+        let placeholders: Vec<&Island> = islands.iter().filter(|i| i.is_merged_placeholder).collect();
+        assert_eq!(placeholders.len(), 2);
+        for p in &placeholders {
+            assert_eq!(p.status, IslandStatus::Complete);
+            let pid = p.parent_id.expect("placeholder must have parent");
+            let parent = islands.iter().find(|i| i.id == pid).unwrap();
+            assert!(
+                !parent.is_merged_placeholder,
+                "placeholder {} must never win election as parent of {}",
+                pid.0, p.id.0
+            );
+        }
+
+        // A had 24 px vs B's 4 px and C's 12 px, so A must be the sole surviving root
+        let roots: Vec<&Island> = islands
+            .iter()
+            .filter(|i| !i.is_merged_placeholder && i.parent_id.is_none())
+            .collect();
+        assert_eq!(roots.len(), 1);
+        let winner = roots[0];
+        let winner_id = winner.id;
+        assert_eq!(winner.last_layer, 36);
+        assert_eq!(winner.status, IslandStatus::Active);
+        assert!(winner.per_layer_area_mm2.get(&1).copied().unwrap_or(0.0) > 0.20); // A (24*0.01 = 0.24)
+
+        let grid = GridRef {
+            origin_x: 0.0,
+            origin_z: 0.0,
+            width: w,
+            height: h,
+            px_mm: 0.1,
+        };
+        let res = postprocess_with_mode(grid, islands, labels, 0.1, 0.0001, false);
+        assert_eq!(res.islands.len(), 3); // A, B, C (no placeholders)
+        let post_winner = res.islands.iter().find(|i| i.id == winner_id).unwrap();
+        assert_eq!(post_winner.last_layer, 36);
+        // Every layer >= 2 must have solid pixels mapped to winner (not dropped to 0)
+        for (l, il) in res.island_labels_per_layer.iter().enumerate().skip(5) {
+            let px: i32 = il.rows.iter().flat_map(|r| r.iter().filter(|run| run.id == winner_id.0 as i32).map(|run| run.length)).sum();
+            assert!(px > 0, "layer {l} lost pixels after postprocess");
+        }
+    }
+
+    #[test]
+    fn fld05_top_30_finalize_islands_resolves_open_merges() {
+        use crate::pipeline::postprocess_with_mode;
+
+        let w = 20;
+        let h = 10;
+        let num_layers = 11usize; // L0..10 (< 30 layers after merge at L2)
+        let mut masks = Vec::with_capacity(num_layers);
+
+        masks.push(rle_encode(&vec![0u8; (w * h) as usize], w, h));
+
+        let mut d1 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d1, w, 1, 7, 2, 6);   // A: 24 px
+        paint_box(&mut d1, w, 12, 14, 2, 4); // B: 4 px
+        masks.push(rle_encode(&d1, w, h));
+
+        let mut d_bar = vec![0u8; (w * h) as usize];
+        paint_box(&mut d_bar, w, 1, 14, 2, 6);
+        let m_bar = rle_encode(&d_bar, w, h);
+        for _ in 2..num_layers {
+            masks.push(m_bar.clone());
+        }
+
+        let (mut tracker, labels) = run_solid_masks(&masks, true);
+        let islands = tracker.get_islands();
+        let placeholder = islands.iter().find(|i| i.is_merged_placeholder).unwrap();
+        let winner = islands
+            .iter()
+            .find(|i| !i.is_merged_placeholder && i.parent_id.is_none())
+            .unwrap();
+
+        assert_eq!(placeholder.status, IslandStatus::Complete);
+        assert_eq!(placeholder.parent_id, Some(winner.id));
+        assert_eq!(winner.last_layer, 10);
+
+        let winner_id = winner.id;
+        let grid = GridRef {
+            origin_x: 0.0,
+            origin_z: 0.0,
+            width: w,
+            height: h,
+            px_mm: 0.1,
+        };
+        let res = postprocess_with_mode(grid, islands, labels, 0.1, 0.0001, false);
+        let post_winner = res.islands.iter().find(|i| i.id == winner_id).unwrap();
+        assert_eq!(post_winner.last_layer, 10);
+        assert!(post_winner.volume_mm3.unwrap() > 0.0);
+        for (l, il) in res.island_labels_per_layer.iter().enumerate().skip(2) {
+            let any_winner = il.rows.iter().any(|r| r.iter().any(|run| run.id == winner_id.0 as i32));
+            assert!(any_winner, "layer {l} must retain winner label after postprocess");
+        }
+    }
+
+    #[test]
+    fn phase_d_indirect_placeholder_reference_flushes_pending_merge_before_next_merge() {
+        use crate::pipeline::postprocess_with_mode;
+
+        let w = 44;
+        let h = 14;
+        let num_layers = 11usize;
+        let mut masks = Vec::with_capacity(num_layers);
+
+        // L0: three grounded pillars G1 (x=9..14, y=8..12 = 20px), G2 (x=18..22, y=8..12 = 16px), G3 (x=26..32, y=1..5 = 24px)
+        let mut d0 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d0, w, 9, 14, 8, 12);
+        paint_box(&mut d0, w, 18, 22, 8, 12);
+        paint_box(&mut d0, w, 26, 32, 1, 5);
+        masks.push(rle_encode(&d0, w, h));
+
+        // L1: G1, G2, G3 + ungrounded U (x=1..5, y=1..12 = 44px)
+        let mut d1 = d0.clone();
+        paint_box(&mut d1, w, 1, 5, 1, 12);
+        masks.push(rle_encode(&d1, w, h));
+
+        // L2: comp_branch continues U at top-left (x=1..5, y=1..4 = 12px);
+        // G3 continues at top-right (x=26..32, y=1..5 = 24px);
+        // comp_merge connects U, G1, G2 at bottom (x=1..22, y=8..12 = 84px) -> creates P1, sets U.parent_id = P1
+        let mut d2 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d2, w, 1, 5, 1, 4);
+        paint_box(&mut d2, w, 26, 32, 1, 5);
+        paint_box(&mut d2, w, 1, 22, 8, 12);
+        masks.push(rle_encode(&d2, w, h));
+
+        // L3..10: comp_ug3 merges {U (comp_branch), G3} at top (x=1..32, y=1..5 = 124px);
+        // comp_p1 continues P1 at bottom (x=9..22, y=8..12 = 52px)
+        let mut d3 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d3, w, 1, 32, 1, 5);
+        paint_box(&mut d3, w, 9, 22, 8, 12);
+        let m3 = rle_encode(&d3, w, h);
+        for _ in 3..num_layers {
+            masks.push(m3.clone());
+        }
+
+        // Run through L3 and inspect state BEFORE finalize_islands
+        let (mut t_l3, _) = run_solid_masks(&masks[..=3], false);
+        let isl_l3 = t_l3.get_islands();
+        let u_l3 = isl_l3.iter().find(|i| i.first_layer == 1 && !i.is_merged_placeholder).unwrap();
+        let g1_l3 = isl_l3
+            .iter()
+            .filter(|i| i.first_layer == 0 && !i.is_merged_placeholder)
+            .find(|i| i.per_layer_area_mm2.get(&0).copied().unwrap_or(0.0) > 0.18 && i.per_layer_area_mm2.get(&0).copied().unwrap_or(0.0) < 0.22)
+            .unwrap();
+        let p1_l3 = isl_l3
+            .iter()
+            .find(|i| i.is_merged_placeholder && i.first_layer == 2)
+            .unwrap();
+
+        assert_eq!(
+            p1_l3.status,
+            IslandStatus::Complete,
+            "P1 must flush before {{U, G3}} merge on L=3"
+        );
+        assert_eq!(
+            p1_l3.parent_id,
+            Some(g1_l3.id),
+            "P1 must finalize to G1 (not None or 0)"
+        );
+        assert_eq!(g1_l3.status, IslandStatus::Active);
+        assert_eq!(g1_l3.last_layer, 3);
+        assert_eq!(u_l3.status, IslandStatus::Active);
+        assert_eq!(u_l3.last_layer, 2);
+        assert_eq!(u_l3.parent_id, Some(g1_l3.id));
+
+        // Full run + finalize_islands: verify zero double-counting, no parentId=0, exact summed area
+        let expected_px: usize = [
+            20 + 16 + 24,       // L0
+            20 + 16 + 24 + 44,  // L1
+            12 + 24 + 84,       // L2
+        ]
+        .iter()
+        .sum::<usize>()
+            + (num_layers - 3) * (124 + 52);
+        let expected_area_mm2 = expected_px as f64 * 0.1 * 0.1;
+
+        let (mut tracker, labels) = run_solid_masks(&masks, true);
+        let islands = tracker.get_islands();
+        for p in islands.iter().filter(|i| i.is_merged_placeholder) {
+            assert_eq!(p.status, IslandStatus::Complete);
+            let pid = p.parent_id.expect("placeholder must have parent_id");
+            assert_ne!(pid, IslandId(0), "parent_id must never be 0");
+            let parent = islands.iter().find(|i| i.id == pid).unwrap();
+            assert!(!parent.is_merged_placeholder);
+        }
+
+        let actual_area_mm2: f64 = islands
+            .iter()
+            .filter(|i| !i.is_merged_placeholder)
+            .map(|i| i.total_area_mm2)
+            .sum();
+        assert!(
+            (actual_area_mm2 - expected_area_mm2).abs() < 1e-6,
+            "summed non-placeholder area {} must equal exact solid area {}",
+            actual_area_mm2,
+            expected_area_mm2
+        );
+
+        let grid = GridRef {
+            origin_x: 0.0,
+            origin_z: 0.0,
+            width: w,
+            height: h,
+            px_mm: 0.1,
+        };
+        let res = postprocess_with_mode(grid, islands, labels, 0.1, 0.0001, false);
+        assert!(res.islands.iter().all(|i| !i.is_merged_placeholder));
+    }
+
+    #[test]
+    fn phase_d_collapse_u_and_p1_to_single_target_does_not_flush_p1_prematurely() {
+        let w = 28;
+        let h = 12;
+        let mut masks = Vec::with_capacity(4);
+
+        // L0: G1 (x=12..16, y=6..10) and G2 (x=19..22, y=6..10)
+        let mut d0 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d0, w, 12, 16, 6, 10);
+        paint_box(&mut d0, w, 19, 22, 6, 10);
+        masks.push(rle_encode(&d0, w, h));
+
+        // L1: G1, G2 + U (x=1..9, y=1..7)
+        let mut d1 = d0.clone();
+        paint_box(&mut d1, w, 1, 9, 1, 7);
+        masks.push(rle_encode(&d1, w, h));
+
+        // L2: comp_branch continues U (x=1..4, y=1..3); comp_merge connects {U, G1, G2} (x=7..22, y=5..10) -> P1, U.parent_id = P1
+        let mut d2 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d2, w, 1, 4, 1, 3);
+        paint_box(&mut d2, w, 7, 22, 5, 10);
+        masks.push(rle_encode(&d2, w, h));
+
+        // L3: single bridge overlapping both U and P1 -> resolves to {P1} (len == 1)
+        let mut d3 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d3, w, 1, 22, 1, 10);
+        masks.push(rle_encode(&d3, w, h));
+
+        let (mut tracker, _) = run_solid_masks(&masks, false);
+        let islands = tracker.get_islands();
+        let p1 = islands
+            .iter()
+            .find(|i| i.is_merged_placeholder && i.first_layer == 2)
+            .unwrap();
+        assert_eq!(
+            p1.status,
+            IslandStatus::Active,
+            "{{U, P1}} collapsing to {{P1}} must NOT prematurely flush P1"
+        );
+        assert_eq!(p1.parent_id, None);
+        assert_eq!(p1.last_layer, 3);
+    }
+
+    #[test]
+    fn phase_d_same_layer_split_and_flush_preserves_winner_last_layer_and_volume() {
+        use crate::pipeline::postprocess_with_mode;
+
+        let w = 32;
+        let h = 12;
+        let mut masks = Vec::with_capacity(4);
+
+        // L0: empty (all L1 islands ungrounded)
+        masks.push(rle_encode(&vec![0u8; (w * h) as usize], w, h));
+
+        // L1: A (x=1..7, y=2..8 = 36px), B (x=10..12, y=6..8 = 4px), C (x=18..28, y=6..10 = 40px)
+        let mut d1 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d1, w, 1, 7, 2, 8);
+        paint_box(&mut d1, w, 10, 12, 6, 8);
+        paint_box(&mut d1, w, 18, 28, 6, 10);
+        masks.push(rle_encode(&d1, w, h));
+
+        // L2: {A, B} merge -> P1 (x=1..15, y=2..8); C continues (x=18..28, y=6..10)
+        let mut d2 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d2, w, 1, 15, 2, 8);
+        paint_box(&mut d2, w, 18, 28, 6, 10);
+        masks.push(rle_encode(&d2, w, h));
+
+        // L3: comp_1 continues P1 (x=1..6, y=2..4 = 10px);
+        // comp_2 flushes P1 -> A and merges {A, C} (x=12..28, y=6..10 = 64px, heavily overlapping C)
+        let mut d3 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d3, w, 1, 6, 2, 4);
+        paint_box(&mut d3, w, 12, 28, 6, 10);
+        masks.push(rle_encode(&d3, w, h));
+
+        let (mut tracker, labels) = run_solid_masks(&masks, true);
+        let islands = tracker.get_islands();
+
+        // A started at L1 with 36px (area 0.36 at L1)
+        let a = islands
+            .iter()
+            .find(|i| {
+                i.first_layer == 1
+                    && !i.is_merged_placeholder
+                    && (i.per_layer_area_mm2.get(&1).copied().unwrap_or(0.0) - 0.36).abs() < 1e-9
+            })
+            .unwrap();
+        assert_eq!(a.last_layer, 3, "A.last_layer must stay 3 after same-layer split + flush");
+        assert!(a.per_layer_area_mm2.contains_key(&3));
+        assert_eq!(
+            a.last_layer,
+            *a.per_layer_area_mm2.keys().max().unwrap(),
+            "last_layer must match max(per_layer_area_mm2.keys)"
+        );
+
+        let a_id = a.id;
+        let grid = GridRef {
+            origin_x: 0.0,
+            origin_z: 0.0,
+            width: w,
+            height: h,
+            px_mm: 0.1,
+        };
+        let res = postprocess_with_mode(grid, islands, labels, 0.1, 0.0001, false);
+        let post_a = res.islands.iter().find(|i| i.id == a_id).unwrap();
+        assert_eq!(post_a.last_layer, 3);
+        let expected_a_vol = post_a.per_layer_area_mm2.values().sum::<f64>() * 0.1;
+        assert!((post_a.volume_mm3.unwrap() - expected_a_vol).abs() < 1e-9);
+    }
+
+    #[test]
+    fn phase_d_same_layer_sibling_split_keeps_continuing_branch_active() {
+        let w = 24;
+        let h = 12;
+        let mut masks = Vec::with_capacity(3);
+
+        // L0: A (x=1..5, y=2..6 = 16px), B (x=10..15, y=2..10 = 40px), C (x=18..22, y=7..10 = 12px)
+        let mut d0 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d0, w, 1, 5, 2, 6);
+        paint_box(&mut d0, w, 10, 15, 2, 10);
+        paint_box(&mut d0, w, 18, 22, 7, 10);
+        masks.push(rle_encode(&d0, w, h));
+
+        // L1: comp_merge at TOP (x=1..15, y=2..5) bridges {A, B};
+        // comp_branch at BOTTOM (x=10..15, y=7..10) continues {B}; C continues at (x=18..22, y=7..10)
+        let mut d1 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d1, w, 1, 15, 2, 5);
+        paint_box(&mut d1, w, 10, 15, 7, 10);
+        paint_box(&mut d1, w, 18, 22, 7, 10);
+        masks.push(rle_encode(&d1, w, h));
+
+        let (mut t_l1, _) = run_solid_masks(&masks[..=1], false);
+        let isl_l1 = t_l1.get_islands();
+        let b_l1 = isl_l1
+            .iter()
+            .find(|i| {
+                i.first_layer == 0
+                    && !i.is_merged_placeholder
+                    && (i.per_layer_area_mm2.get(&0).copied().unwrap_or(0.0) - 0.40).abs() < 1e-9
+            })
+            .unwrap();
+        let a_l1 = isl_l1
+            .iter()
+            .find(|i| {
+                i.first_layer == 0
+                    && !i.is_merged_placeholder
+                    && (i.per_layer_area_mm2.get(&0).copied().unwrap_or(0.0) - 0.16).abs() < 1e-9
+            })
+            .unwrap();
+
+        assert_eq!(
+            b_l1.status,
+            IslandStatus::Active,
+            "sibling B continuing on L=1 must stay Active even when {{A, B}} merges"
+        );
+        assert_eq!(b_l1.last_layer, 1);
+        assert_eq!(a_l1.status, IslandStatus::Complete);
+        assert_eq!(a_l1.last_layer, 0);
+
+        // L2: bridge {B, C} at (x=10..22, y=7..10) + continue P1 at (x=1..15, y=2..5)
+        let mut d2 = vec![0u8; (w * h) as usize];
+        paint_box(&mut d2, w, 1, 15, 2, 5);
+        paint_box(&mut d2, w, 10, 22, 7, 10);
+        masks.push(rle_encode(&d2, w, h));
+
+        let (mut t_l2, _) = run_solid_masks(&masks, false);
+        let isl_l2 = t_l2.get_islands();
+        let placeholders_l2: Vec<&Island> =
+            isl_l2.iter().filter(|i| i.is_merged_placeholder).collect();
+        assert_eq!(
+            placeholders_l2.len(),
+            2,
+            "L=2 bridge between active branch B and C must open second PendingMerge"
+        );
     }
 }
 
