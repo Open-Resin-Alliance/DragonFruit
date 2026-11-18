@@ -8,7 +8,7 @@ msgstr ""
 "Language: es\n"
 "Project-Id-Version: dragonfruit\n"
 "Report-Msgid-Bugs-To: \n"
-"PO-Revision-Date: 2026-10-21 13:12\n"
+"PO-Revision-Date: 2026-11-18 02:31\n"
 "Last-Translator: \n"
 "Language-Team: Spanish\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
@@ -274,11 +274,11 @@ msgstr ""
 
 #: src/components/layout/EmptySceneState.tsx:569
 msgid "Import scene"
-msgstr ""
+msgstr "Importar Escena"
 
 #: src/components/layout/TopBar.tsx:906
 msgid "Import Scene…"
-msgstr ""
+msgstr "Importar Escena..."
 
 #: src/components/layout/EmptySceneState.tsx:454
 msgid "Importing your file…"
