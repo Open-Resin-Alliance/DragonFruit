@@ -37,6 +37,7 @@ export interface IslandInstances {
   /** `(markerId, type)` per instance. */
   meta: Float32Array;
   count: number;
+  layerHeightMm?: number;
 }
 
 export const EMPTY_ISLAND_INSTANCES: IslandInstances = {
@@ -62,6 +63,7 @@ export const VOXEL_DISC_RADIUS_FACTOR = 0.75;
 export function buildIslandInstances(
   visuals: readonly IslandVisual[],
   voxelRadiusMm: number,
+  layerHeightMm?: number,
 ): IslandInstances {
   let count = 0;
   for (const visual of visuals) {
@@ -96,5 +98,7 @@ export function buildIslandInstances(
     }
   }
 
-  return { centerRadius, meta, count };
+  return layerHeightMm !== undefined && Number.isFinite(layerHeightMm) && layerHeightMm > 0
+    ? { centerRadius, meta, count, layerHeightMm }
+    : { centerRadius, meta, count };
 }

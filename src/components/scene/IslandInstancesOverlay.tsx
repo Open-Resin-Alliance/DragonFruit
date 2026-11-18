@@ -36,9 +36,10 @@ interface IslandInstancesOverlayProps {
   instances: IslandInstances;
   selectedIslandId?: number | null;
   opacity?: number;
+  layerHeightMm?: number;
 }
 
-const VERTEX_SHADER = `
+export const VERTEX_SHADER = `
   #include <clipping_planes_pars_vertex>
 
   attribute vec4 aCenterRadius; // x, y, z (world mm), disc radius (mm)
@@ -47,6 +48,9 @@ const VERTEX_SHADER = `
   uniform float uSelectedIslandId;
   uniform vec2 uViewportPx;     // drawing buffer size, device pixels
   uniform float uMinScreenRadiusPx;
+  uniform float uMinPinScreenRadiusPx;
+  uniform float uDepthBiasMm;
+  uniform float uPinExtraBiasMm;
 
   varying vec2 vDisc;
   varying float vMarkerId;
@@ -86,18 +90,31 @@ const VERTEX_SHADER = `
     vec4 probeClip = projectionMatrix * viewMatrix * modelMatrix * vec4(center + cameraRight * radius, 1.0);
     vec2 centerNdc = centerClip.xy / centerClip.w;
     vec2 probeNdc = probeClip.xy / probeClip.w;
-    float radiusPx = length(probeNdc - centerNdc) * 0.5 * uViewportPx.y;
-    float grow = max(1.0, uMinScreenRadiusPx / max(radiusPx, 1e-6));
+    float radiusPx = length((probeNdc - centerNdc) * 0.5 * uViewportPx);
+    float isPin = step(1.5, vType) * (1.0 - step(2.5, vType));
+    float minRadiusPx = mix(uMinScreenRadiusPx, uMinPinScreenRadiusPx, isPin);
+    float grow = max(1.0, minRadiusPx / max(radiusPx, 1e-6));
 
     vec4 worldPos = modelMatrix * vec4(center + vec3(position.xy * radius * grow, 0.0), 1.0);
     vec4 mvPosition = viewMatrix * worldPos;
-    gl_Position = projectionMatrix * mvPosition;
 
     #include <clipping_planes_vertex>
+
+    #ifdef OCCLUDED_PASS
+    gl_Position = projectionMatrix * mvPosition;
+    #else
+    float totalBiasMm = uDepthBiasMm + isPin * uPinExtraBiasMm;
+    float appliedBiasMm = projectionMatrix[2][3] != 0.0
+      ? clamp(totalBiasMm, 0.0, 0.25 * abs(mvPosition.z))
+      : totalBiasMm;
+    vec4 biasedMv = mvPosition;
+    biasedMv.z += appliedBiasMm;
+    gl_Position = projectionMatrix * biasedMv;
+    #endif
   }
 `;
 
-const FRAGMENT_SHADER = `
+export const FRAGMENT_SHADER = `
   #include <clipping_planes_pars_fragment>
 
   uniform float uOpacity;
@@ -114,7 +131,7 @@ const FRAGMENT_SHADER = `
   const vec3 COLOR_VOXEL = vec3(0.53, 0.81, 0.98);
   const vec3 COLOR_MINIMA = vec3(0.0, 1.0, 0.0);
   const vec3 COLOR_INTERSECTION = vec3(1.0, 0.0, 0.0);
-  const vec3 COLOR_CONSOLIDATED = vec3(0.53, 0.81, 0.98);
+  const vec3 COLOR_CONSOLIDATED = vec3(0.20, 0.92, 0.82);
   const vec3 COLOR_SELECTED_OCCLUDED = vec3(1.0, 0.4, 0.0);
   const vec3 COLOR_SELECTED_VISIBLE = vec3(1.0, 1.0, 0.0);
   const vec3 COLOR_HOVERED = vec3(0.0, 1.0, 1.0);
@@ -144,7 +161,9 @@ const FRAGMENT_SHADER = `
     } else if (vType > 2.5) {
       color = COLOR_CONSOLIDATED;
     } else if (vType > 1.5) {
-      color = COLOR_INTERSECTION;
+      float pxWidth = clamp(length(vec2(dFdx(dist), dFdy(dist))), 0.02, 0.32);
+      float haloMix = smoothstep(1.0 - edge - pxWidth, 1.0 - edge, dist);
+      color = mix(COLOR_INTERSECTION, vec3(0.08, 0.02, 0.02), haloMix);
     } else if (vType > 0.5) {
       color = COLOR_MINIMA;
     } else {
@@ -166,7 +185,15 @@ const FRAGMENT_SHADER = `
  * its own antialiasing to resolve, while staying small enough that islands keep
  * reading as their detected area where they are big enough to.
  */
-const MIN_SCREEN_RADIUS_CSS_PX = 2;
+export const MIN_SCREEN_RADIUS_CSS_PX = 2;
+export const MIN_PIN_SCREEN_RADIUS_CSS_PX = 3.5;
+export const PIN_EXTRA_DEPTH_BIAS_MM = 0.03;
+export const CONSOLIDATED_VOXEL_COLOR_RGB = [0.20, 0.92, 0.82] as const;
+
+export function computeInstanceDepthBiasMm(layerHeightMm = 0.05): number {
+  const h = Number.isFinite(layerHeightMm) && layerHeightMm > 0 ? layerHeightMm : 0.05;
+  return Math.max(0.08, 1.6 * h);
+}
 
 /** World bounds of the whole instance set, so frustum culling can drop it. */
 function instanceBounds(instances: IslandInstances): THREE.Sphere {
@@ -204,9 +231,12 @@ export function IslandInstancesOverlay({
   instances,
   selectedIslandId,
   opacity = 0.9,
+  layerHeightMm,
 }: IslandInstancesOverlayProps) {
   const gl = useThree((state) => state.gl);
   const hoveredIslandId = useHoveredIslandId();
+  const effectiveLayerHeightMm = layerHeightMm ?? instances.layerHeightMm ?? 0.05;
+  const depthBiasMm = computeInstanceDepthBiasMm(effectiveLayerHeightMm);
 
   // The scene's shared planes: stable identity and length, so a scrub moves
   // their constants without recompiling these materials.
@@ -235,6 +265,9 @@ export function IslandInstancesOverlay({
       uHoveredIslandId: { value: hoveredIslandId ?? -1 },
       uViewportPx: { value: new THREE.Vector2(1, 1) },
       uMinScreenRadiusPx: { value: MIN_SCREEN_RADIUS_CSS_PX },
+      uMinPinScreenRadiusPx: { value: MIN_PIN_SCREEN_RADIUS_CSS_PX },
+      uDepthBiasMm: { value: depthBiasMm },
+      uPinExtraBiasMm: { value: PIN_EXTRA_DEPTH_BIAS_MM },
     }),
     // Mutated in place below; a stable identity keeps the materials compiled.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -247,6 +280,10 @@ export function IslandInstancesOverlay({
     uniforms.uHoveredIslandId.value = hoveredIslandId ?? -1;
   }, [uniforms, opacity, selectedIslandId, hoveredIslandId]);
 
+  useLayoutEffect(() => {
+    uniforms.uDepthBiasMm.value = depthBiasMm;
+  }, [uniforms, depthBiasMm]);
+
   // Device pixels, because that is what rasterization coverage is counted in.
   // The floor itself is expressed in CSS pixels so it renders the same size at
   // any device pixel ratio.
@@ -257,6 +294,7 @@ export function IslandInstancesOverlay({
     gl.getDrawingBufferSize(drawingBuffer);
     uniforms.uViewportPx.value.copy(drawingBuffer);
     uniforms.uMinScreenRadiusPx.value = MIN_SCREEN_RADIUS_CSS_PX * dpr;
+    uniforms.uMinPinScreenRadiusPx.value = MIN_PIN_SCREEN_RADIUS_CSS_PX * dpr;
   }, [gl, size, dpr, uniforms]);
 
   const timerRef = useRef(new THREE.Timer());

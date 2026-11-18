@@ -89,3 +89,26 @@ test('buildIslandInstances: footprints of several islands pack in order', () => 
     [0, 0, 5, 9],
   );
 });
+
+test('buildIslandInstances: preserves explicit positive layerHeightMm on non-empty buffer', () => {
+  const instances = buildIslandInstances([island()], VOXEL_RADIUS_MM, 0.1);
+  assert.equal(instances.count, 1);
+  assert.equal(instances.layerHeightMm, 0.1);
+});
+
+test('buildIslandInstances: empty input still returns EMPTY_ISLAND_INSTANCES even with layerHeightMm', () => {
+  const instances = buildIslandInstances([], VOXEL_RADIUS_MM, 0.1);
+  assert.equal(instances.count, 0);
+  assert.equal(instances, EMPTY_ISLAND_INSTANCES);
+  assert.equal(instances.layerHeightMm, undefined);
+});
+
+test('buildIslandInstances: omits layerHeightMm when omitted or non-finite/non-positive', () => {
+  const omitted = buildIslandInstances([island()], VOXEL_RADIUS_MM);
+  assert.equal('layerHeightMm' in omitted, false);
+
+  for (const invalid of [0, -0.05, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const out = buildIslandInstances([island()], VOXEL_RADIUS_MM, invalid);
+    assert.equal(out.layerHeightMm, undefined);
+  }
+});

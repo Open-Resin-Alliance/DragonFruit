@@ -6,8 +6,8 @@ import { detectVoxelIslands, type VoxelDetectParams } from './detect';
 import { contactEndpointsFor, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import {
   applyFilter,
-  DEFAULT_FILTER_TOGGLES,
-  type IslandFilterToggles,
+  DEFAULT_FILTER_TOGGLES, isIslandEffectivelySupported,
+  type IslandFilterOptions, type IslandFilterToggles,
 } from './filtering';
 import { annotateAndCountSupports, buildIslandContactGrid, scanNeedsCoverage } from './contactGrid';
 import { clusterWalkOrder } from './ordering';
@@ -1047,8 +1047,9 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     [classifiedResult, overhangIslands, pxMm, layerHeightMm],
   );
 
-  const allIslands = mergedResult.islands;
-  const stats = mergedResult.stats;
+  const displayResult = showOverhangs ? mergedResult : classifiedResult;
+  const allIslands = displayResult.islands;
+  const stats = displayResult.stats;
 
   const mappedSupportTips = useMemo<TipInfo[]>(() => {
     const state = getSnapshot();
@@ -1100,19 +1101,35 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     return annotateAndCountSupports(allIslands, islandContactGrid, mappedSupportTips, plateZ, areaPerSupport, layerHeightMm);
   }), [allIslands, islandContactGrid, mappedSupportTips, plateZ, areaPerSupport, layerHeightMm]);
 
+  const overhangContactGrid = useMemo(
+    () => (!showOverhangs && overhangIslands.length > 0 ? buildIslandContactGrid(overhangIslands) : null),
+    [showOverhangs, overhangIslands],
+  );
+
   const tableStats = useMemo(() => {
-    const voxelTotal = annotatedIslands.filter(i => i.class === 'voxelOnly' && i.source === 'voxel').length;
-    const voxelUnsupported = annotatedIslands.filter(i => i.class === 'voxelOnly' && i.source === 'voxel' && !i.supported && !i.grounded).length;
-    
-    const geomTotal = annotatedIslands.filter(i => i.class === 'minimaOnly' && i.source === 'minima').length;
-    const geomUnsupported = annotatedIslands.filter(i => i.class === 'minimaOnly' && i.source === 'minima' && !i.supported && !i.grounded).length;
-    
-    const coincidentTotal = annotatedIslands.filter(i => i.class === 'intersection' && i.source === 'voxel').length;
-    const coincidentUnsupported = annotatedIslands.filter(i => i.class === 'intersection' && i.source === 'voxel' && !i.supported && !i.grounded).length;
-    
+    const voxelItems = annotatedIslands.filter((i) => i.class === 'voxelOnly' && i.source === 'voxel');
+    const voxelTotal = voxelItems.length;
+    const voxelUnsupported = voxelItems.filter((i) => !i.grounded && !isIslandEffectivelySupported(i)).length;
+
+    const geomItems = annotatedIslands.filter((i) => i.class === 'minimaOnly' && i.source === 'minima');
+    const geomTotal = geomItems.length;
+    const geomUnsupported = geomItems.filter((i) => !i.grounded && !isIslandEffectivelySupported(i)).length;
+
+    const coincidentItems = annotatedIslands.filter((i) => i.class === 'intersection' && i.source === 'voxel');
+    const coincidentTotal = coincidentItems.length;
+    const coincidentUnsupported = coincidentItems.filter((i) => !i.grounded && !isIslandEffectivelySupported(i)).length;
+
+    const overhangAnnotated = showOverhangs
+      ? annotatedIslands.filter((i) => i.source === 'overhang')
+      : overhangContactGrid
+        ? annotateAndCountSupports(overhangIslands, overhangContactGrid, mappedSupportTips, plateZ, areaPerSupport, layerHeightMm)
+        : [];
+    const overhangTotal = overhangAnnotated.length;
+    const overhangUnsupported = overhangAnnotated.filter((i) => !i.grounded && !isIslandEffectivelySupported(i)).length;
+
     const allTotal = voxelTotal + geomTotal + coincidentTotal;
     const allUnsupported = voxelUnsupported + geomUnsupported + coincidentUnsupported;
-    
+
     return {
       voxelTotal,
       voxelUnsupported,
@@ -1122,15 +1139,23 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       coincidentUnsupported,
       allTotal,
       allUnsupported,
+      overhangTotal,
+      overhangUnsupported,
     };
-  }, [annotatedIslands]);
+  }, [annotatedIslands, showOverhangs, overhangContactGrid, overhangIslands, mappedSupportTips, plateZ, areaPerSupport, layerHeightMm]);
+
+  const filterOptions = useMemo<IslandFilterOptions>(
+    () => ({ contouredIds, consolidateVoxel, removeSupportedAreaClusters }),
+    [contouredIds, consolidateVoxel, removeSupportedAreaClusters],
+  );
 
   const filteredIslands = useMemo(() => {
-    return applyFilter(annotatedIslands.map((i) => ({ ...i })), filterToggles);
-  }, [annotatedIslands, filterToggles]);
+    return applyFilter(annotatedIslands.map((i) => ({ ...i })), filterToggles, filterOptions);
+  }, [annotatedIslands, filterToggles, filterOptions]);
 
   const displayedIslands = useMemo(() => {
     return filteredIslands.filter((island) => {
+      if (island.source === 'overhang') return false;
       if (island.class === 'voxelOnly' && island.source === 'voxel') {
         return showVoxelOnly;
       }
@@ -1141,70 +1166,38 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         // Only include the voxel version of the intersection to avoid duplicate navigation items
         return showIntersection && island.source === 'voxel';
       }
-      return true;
+      return false;
     });
   }, [filteredIslands, showVoxelOnly, showMinimaOnly, showIntersection]);
 
-  // Sort by numeric ID for predictable prev/next navigation.
-  const baseOrderedIslands = useMemo(() => {
-    return [...allIslands].sort((a, b) => {
-      const aNum = parseInt(a.id.replace(/^\D+/, ''), 10) || 0;
-      const bNum = parseInt(b.id.replace(/^\D+/, ''), 10) || 0;
-      return aNum - bNum;
-    });
-  }, [allIslands]);
+  // Sort by ascending baseZ (with deterministic tie-breakers) for predictable prev/next navigation.
+  const orderedIslands = useMemo(() => sortIslandsByBaseZ(displayedIslands), [displayedIslands]);
 
-  const orderedIslands = useMemo(() => {
-    const displayedSet = new Set(displayedIslands.map((i) => i.id));
-    return baseOrderedIslands.filter((i) => displayedSet.has(i.id));
-  }, [baseOrderedIslands, displayedIslands]);
-
-  // Per-source pucks for the IslandOverlay layers (blue voxel-only / green minima-only / red intersection).
-  // Retain supported voxel area blobs: keep them in the puck list so they remain visible in 3D,
-  // but still hide grounded ones if filterToggles.showPlateContact is false.
+  // Per-source pucks for the IslandOverlay layers (blue voxel-only / green minima-only / red intersection),
+  // derived strictly from filteredIslands so navigation, byMarkerId, and 3D stay in 1:1 sync.
   const voxelOnlyPucks = useMemo(
     () => buildIslandPucks(
-      showVoxelOnly 
-        ? annotatedIslands.filter((i) => {
-            // Overhang regions render as voxel-style pucks (class stays
-            // undefined; only genuine voxel islands must be voxelOnly).
-            if (i.source === 'overhang') {
-              if (i.grounded && !filterToggles.showPlateContact) return false;
-              return !i.supported;
-            }
-            if (i.source !== 'voxel' || i.class !== 'voxelOnly') return false;
-            if (i.grounded && !filterToggles.showPlateContact) return false;
-            
-            const isContoured = contouredIds.has(i.id);
-            if (isContoured) {
-              return !removeSupportedAreaClusters || !i.fullySupported;
-            } else {
-              return !i.supported;
-            }
-          })
-        : []
+      showVoxelOnly
+        ? filteredIslands.filter((i) => i.source === 'voxel' && i.class === 'voxelOnly')
+        : [],
     ),
-    [annotatedIslands, showVoxelOnly, filterToggles.showPlateContact, contouredIds, removeSupportedAreaClusters],
+    [filteredIslands, showVoxelOnly],
   );
   const minimaOnlyPucks = useMemo(
-    () => buildIslandPucks(showMinimaOnly ? filteredIslands.filter((i) => i.source === 'minima' && i.class === 'minimaOnly') : []),
+    () => buildIslandPucks(
+      showMinimaOnly
+        ? filteredIslands.filter((i) => i.source === 'minima' && i.class === 'minimaOnly')
+        : [],
+    ),
     [filteredIslands, showMinimaOnly],
   );
   const intersectionPucks = useMemo(
     () => buildIslandPucks(
-      annotatedIslands.filter((i) => {
-        if (i.class !== 'intersection' || i.source !== 'voxel') return false;
-        if (i.grounded && !filterToggles.showPlateContact) return false;
-        
-        const isContoured = contouredIds.has(i.id);
-        if (isContoured) {
-          return !removeSupportedAreaClusters || !i.fullySupported;
-        } else {
-          return !i.supported;
-        }
-      })
+      showIntersection
+        ? filteredIslands.filter((i) => i.source === 'voxel' && i.class === 'intersection')
+        : [],
     ),
-    [annotatedIslands, filterToggles.showPlateContact, contouredIds, removeSupportedAreaClusters],
+    [filteredIslands, showIntersection],
   );
 
   const byMarkerId = useMemo(() => {
@@ -1215,45 +1208,36 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     for (const [id, island] of minimaOnlyPucks.byMarkerId) {
       merged.set(id, island);
     }
-    if (showIntersection || showVoxelOnly) {
-      for (const [id, island] of intersectionPucks.byMarkerId) {
-        merged.set(id, island);
-      }
+    for (const [id, island] of intersectionPucks.byMarkerId) {
+      merged.set(id, island);
     }
     return merged;
-  }, [voxelOnlyPucks, minimaOnlyPucks, intersectionPucks, showIntersection, showVoxelOnly]);
+  }, [voxelOnlyPucks, minimaOnlyPucks, intersectionPucks]);
 
   // One entry per visible island, shared by the marker list (selection, camera
   // focus) and the instance buffer (rendering) so the two cannot drift apart.
   const islandVisuals = useMemo(() => timed('islandVisuals', () => {
-    const visuals: IslandVisual[] = [];
+    const footprintVisuals: IslandVisual[] = [];
+    const pinVisuals: IslandVisual[] = [];
 
     voxelOnlyPucks.markers.forEach(m => {
       const island = voxelOnlyPucks.byMarkerId.get(m.id);
       const area = island?.areaMm2 ?? 0;
-      const isOverhang = island?.source === 'overhang';
-      // Overhang regions are highlighted as surface meshes (see
-      // IslandOverhangOverlay); here they get a small centroid dot so
-      // selection/fly-to still works without a huge flat disc.
-      const radius = isOverhang
-        ? 0.1
-        : (scaleMarkersWithArea && area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1);
+      const radius = scaleMarkersWithArea && area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
 
-      visuals.push({
+      footprintVisuals.push({
         markerId: m.id,
         type: resolveVoxelVisualType(island, consolidateVoxel, contouredIds),
         centerX: m.centerX,
         centerY: m.centerY,
         baseZ: m.baseZ,
         radius,
-        // A footprint plate under an overhang would double-render the region
-        // the surface overlay already draws.
-        footprint: isOverhang ? null : island?.contactVoxels ?? null,
+        footprint: island?.contactVoxels ?? null,
       });
     });
 
     minimaOnlyPucks.markers.forEach(m => {
-      visuals.push({
+      pinVisuals.push({
         markerId: m.id,
         type: 1,
         centerX: m.centerX,
@@ -1271,7 +1255,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
 
       // 1. Voxel footprint (type 0 default, or type 3 when consolidated/contoured)
       if (showVoxelOnly) {
-        visuals.push({
+        footprintVisuals.push({
           markerId: m.id,
           type: resolveVoxelVisualType(island, consolidateVoxel, contouredIds),
           centerX: m.centerX,
@@ -1282,21 +1266,39 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         });
       }
 
-      // 2. Coincident red dot — only when showIntersection is enabled
-      if (showIntersection && island && (!island.supported || filterToggles.showAlreadySupported)) {
-        visuals.push({
-          markerId: m.id,
-          type: 2,
-          centerX: m.centerX,
-          centerY: m.centerY,
-          baseZ: m.baseZ,
-          radius: 0.1,
-          footprint: null,
-        });
+      // 2. Primary coincident red pin
+      pinVisuals.push({
+        markerId: m.id,
+        type: 2,
+        centerX: m.centerX,
+        centerY: m.centerY,
+        baseZ: m.baseZ,
+        radius: 0.1,
+        footprint: null,
+      });
+
+      // 3. Spaced sub-apex red pins for clustered/large intersection islands
+      if (island?.subApexes?.length && (consolidateVoxel || contouredIds.has(island.id) || area >= 0.06)) {
+        const spacedSubApexes = selectSpacedSubApexes(
+          { x: m.centerX, y: m.centerY, z: m.baseZ },
+          island.subApexes,
+          0.8,
+        );
+        for (const ap of spacedSubApexes) {
+          pinVisuals.push({
+            markerId: m.id,
+            type: 2,
+            centerX: ap.x,
+            centerY: ap.y,
+            baseZ: ap.z,
+            radius: 0.1,
+            footprint: null,
+          });
+        }
       }
     });
 
-    return visuals;
+    return [...footprintVisuals, ...pinVisuals];
   }), [
     voxelOnlyPucks,
     minimaOnlyPucks,
@@ -1304,28 +1306,78 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     consolidateVoxel,
     contouredIds,
     scaleMarkersWithArea,
-    filterToggles,
     showVoxelOnly,
-    showIntersection,
   ]);
 
-  const islandMarkers = useMemo<IslandMarker[]>(() => timed('islandMarkers', () => (
-    islandVisuals.map(v => ({
-      id: v.markerId,
-      islandId: v.markerId,
-      type: v.type,
-      centerX: v.centerX,
-      centerY: v.centerY,
-      baseZ: v.baseZ,
-      pixelCount: 1,
-      radius: v.radius,
-    }))
-  )), [islandVisuals]);
+  const islandMarkers = useMemo<IslandMarker[]>(() => timed('islandMarkers', () => {
+    const seen = new Set<number>();
+    const markers: IslandMarker[] = [];
+    for (const v of islandVisuals) {
+      if (seen.has(v.markerId)) continue;
+      seen.add(v.markerId);
+      markers.push({
+        id: v.markerId,
+        islandId: v.markerId,
+        type: v.type,
+        centerX: v.centerX,
+        centerY: v.centerY,
+        baseZ: v.baseZ,
+        pixelCount: 1,
+        radius: v.radius,
+      });
+    }
+    return markers;
+  }), [islandVisuals]);
 
   const islandInstances = useMemo(
-    () => timed('islandInstances', () => buildIslandInstances(islandVisuals, pxMm * VOXEL_DISC_RADIUS_FACTOR)),
-    [islandVisuals, pxMm],
+    () => timed('islandInstances', () => buildIslandInstances(islandVisuals, pxMm * VOXEL_DISC_RADIUS_FACTOR, layerHeightMm)),
+    [islandVisuals, pxMm, layerHeightMm],
   );
+
+  // Structural auto-support contract (E.2): decoupled from display/cluster UI
+  // toggles (consolidate, contour, removeSupportedAreaClusters, showOverhangs,
+  // layer visibility, and filterToggles).
+  const structuralMergedIslands = useMemo(() => {
+    if (!consolidateVoxel && showOverhangs) return null;
+    const rawClassified = consolidateVoxel
+      ? classifyIntersection(voxelIslands, minimaIslands, { xyToleranceMm: 0.5, zBandMm })
+      : classifiedResult;
+    return mergeOverhangResults(rawClassified, overhangIslands, {
+      voxelPxMm: pxMm,
+      layerHeightMm,
+      overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
+    }).islands;
+  }, [consolidateVoxel, showOverhangs, voxelIslands, minimaIslands, zBandMm, classifiedResult, overhangIslands, pxMm, layerHeightMm]);
+
+  const structuralContactGrid = useMemo(
+    () => (structuralMergedIslands ? buildIslandContactGrid(structuralMergedIslands) : null),
+    [structuralMergedIslands],
+  );
+
+  const structuralIslands = useMemo(() => {
+    if (!consolidateVoxel && showOverhangs) {
+      return applyFilter(annotatedIslands.map((i) => ({ ...i })), DEFAULT_FILTER_TOGGLES);
+    }
+    const annotated = annotateAndCountSupports(
+      structuralMergedIslands!,
+      structuralContactGrid!,
+      mappedSupportTips,
+      plateZ,
+      areaPerSupport,
+      layerHeightMm,
+    );
+    return applyFilter(annotated, DEFAULT_FILTER_TOGGLES);
+  }, [
+    consolidateVoxel,
+    showOverhangs,
+    annotatedIslands,
+    structuralMergedIslands,
+    structuralContactGrid,
+    mappedSupportTips,
+    plateZ,
+    areaPerSupport,
+    layerHeightMm,
+  ]);
 
   const clear = useCallback(() => {
     setVoxelIslands([]);
@@ -1495,6 +1547,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     dragTotalMm3,
     filteredIslands,
     orderedIslands,
+    structuralIslands,
     voxelOnlyPucks,
     minimaOnlyPucks,
     intersectionPucks,
@@ -1886,4 +1939,66 @@ export function determineContourThreshold(
   }
 
   return contouredIds;
+}
+
+const ISLAND_SOURCE_RANK: Record<DetectedIsland['source'], number> = {
+  voxel: 0,
+  minima: 1,
+  overhang: 2,
+};
+
+export function selectSpacedSubApexes(
+  primary: { x: number; y: number; z: number },
+  subApexes: ReadonlyArray<{ x: number; y: number; z: number }> | undefined,
+  minSpacingMm = 0.8,
+): Array<{ x: number; y: number; z: number }> {
+  if (!subApexes || subApexes.length === 0) return [];
+  const accepted: Array<{ x: number; y: number; z: number }> = [];
+  if (Number.isFinite(primary.x) && Number.isFinite(primary.y) && Number.isFinite(primary.z)) {
+    accepted.push(primary);
+  }
+  const safeSpacing = Number.isFinite(minSpacingMm) ? Math.max(0, minSpacingMm) : 0.8;
+  const minD2 = safeSpacing * safeSpacing;
+  const selected: Array<{ x: number; y: number; z: number }> = [];
+
+  for (const ap of subApexes) {
+    if (!Number.isFinite(ap.x) || !Number.isFinite(ap.y) || !Number.isFinite(ap.z)) continue;
+    let nearestD2 = Infinity;
+    for (const prev of accepted) {
+      const dx = ap.x - prev.x;
+      const dy = ap.y - prev.y;
+      const dz = ap.z - prev.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < nearestD2) nearestD2 = d2;
+    }
+    if (nearestD2 >= minD2) {
+      accepted.push(ap);
+      selected.push(ap);
+    }
+  }
+
+  return selected;
+}
+
+export function sortIslandsByBaseZ(islands: readonly DetectedIsland[]): DetectedIsland[] {
+  return [...islands].sort((a, b) => {
+    const aZ = Number.isFinite(a.baseZ) ? a.baseZ : a.contact.z;
+    const bZ = Number.isFinite(b.baseZ) ? b.baseZ : b.contact.z;
+    const aFin = Number.isFinite(aZ);
+    const bFin = Number.isFinite(bZ);
+    if (aFin && bFin) {
+      if (aZ !== bZ) return aZ - bZ;
+    } else if (aFin !== bFin) {
+      return aFin ? -1 : 1;
+    }
+
+    const srcDiff = (ISLAND_SOURCE_RANK[a.source] ?? 3) - (ISLAND_SOURCE_RANK[b.source] ?? 3);
+    if (srcDiff !== 0) return srcDiff;
+
+    const aNum = parseInt(a.id.replace(/^\D+/, ''), 10) || 0;
+    const bNum = parseInt(b.id.replace(/^\D+/, ''), 10) || 0;
+    if (aNum !== bNum) return aNum - bNum;
+
+    return a.id.localeCompare(b.id);
+  });
 }

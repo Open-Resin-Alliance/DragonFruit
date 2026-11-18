@@ -93,6 +93,33 @@ export function annotateFilterFlags(
   return islands;
 }
 
+export const MULTI_SUPPORT_AREA_THRESHOLD_MM2 = 0.5;
+
+export interface IslandFilterOptions {
+  contouredIds?: ReadonlySet<string>;
+  consolidateVoxel?: boolean;
+  removeSupportedAreaClusters?: boolean;
+}
+
+export function isIslandEffectivelySupported(island: DetectedIsland): boolean {
+  if ((island.areaMm2 ?? 0) > MULTI_SUPPORT_AREA_THRESHOLD_MM2) {
+    return island.fullySupported ?? Boolean(island.supported);
+  }
+  return Boolean(island.supported);
+}
+
+export function isIslandHiddenBySupport(
+  island: DetectedIsland,
+  toggles: IslandFilterToggles,
+  opts?: IslandFilterOptions,
+): boolean {
+  if (toggles.showAlreadySupported) return false;
+  if (Boolean(opts?.consolidateVoxel) && Boolean(opts?.contouredIds?.has(island.id))) {
+    return Boolean(opts?.removeSupportedAreaClusters) && Boolean(island.fullySupported ?? island.supported);
+  }
+  return isIslandEffectivelySupported(island);
+}
+
 /**
  * Apply the visibility toggles to produce the subset shown in 3D and in the
  * browser list. Default toggles hide both supported and plate-contact islands,
@@ -101,9 +128,10 @@ export function annotateFilterFlags(
 export function applyFilter(
   islands: DetectedIsland[],
   toggles: IslandFilterToggles,
+  opts?: IslandFilterOptions,
 ): DetectedIsland[] {
   return islands.filter((island) => {
-    if (island.supported && !toggles.showAlreadySupported) return false;
+    if (isIslandHiddenBySupport(island, toggles, opts)) return false;
     if (island.grounded && !toggles.showPlateContact) return false;
     return true;
   });

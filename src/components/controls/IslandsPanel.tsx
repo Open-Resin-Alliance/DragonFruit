@@ -98,10 +98,6 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
     setDraftConsolidateVoxel,
     draftConsolidationDistance,
     setDraftConsolidationDistance,
-    draftReduceIntersection,
-    setDraftReduceIntersection,
-    draftIntersectionThreshold,
-    setDraftIntersectionThreshold,
     draftScaleMarkersWithArea,
     setDraftScaleMarkersWithArea,
     draftEnableContourRegions,
@@ -117,18 +113,15 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
     applyingSettings,
   } = islands;
 
-  const totalDetected = tableStats?.allTotal ?? 0;
   const selectedIndex = React.useMemo(() => {
     if (selectedMarkerId === null) return -1;
     return orderedIslands.findIndex((i) => markerIdFor(i) === selectedMarkerId);
   }, [orderedIslands, selectedMarkerId]);
-  const currentIslandLabel = selectedIndex >= 0
-    ? orderedIslands[selectedIndex].id.replace(/^\D+/, '')
-    : null;
+  const currentIslandNumber = selectedIndex >= 0 ? selectedIndex + 1 : null;
 
   const computedBottomClearance = Math.max(140, Math.round(bottomClearancePx));
 
-  const hasData = totalDetected > 0;
+  const hasData = (tableStats?.allTotal ?? 0) > 0 || (tableStats?.overhangTotal ?? 0) > 0;
 
   return (
     <>
@@ -192,9 +185,9 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                 <div className="rounded-md border p-2" style={SECTION_CARD}>
                   <div className="grid grid-cols-3 gap-2">
                     {([
-                      { label: _(msg`Voxels`), key: 'voxel', color: ISLAND_LAYER_COLORS.voxel, count: tableStats?.voxelTotal ?? 0 },
-                      { label: _(msg`Minima`), key: 'geom', color: ISLAND_LAYER_COLORS.minima, count: tableStats?.geomTotal ?? 0 },
-                      { label: _(msg`Coincident`), key: 'coincident', color: ISLAND_LAYER_COLORS.intersection, count: tableStats?.coincidentTotal ?? 0 },
+                      { label: _(msg`Voxels`), key: 'voxel', color: ISLAND_LAYER_COLORS.voxel, unsupported: tableStats?.voxelUnsupported ?? 0, total: tableStats?.voxelTotal ?? 0 },
+                      { label: _(msg`Minima`), key: 'geom', color: ISLAND_LAYER_COLORS.minima, unsupported: tableStats?.geomUnsupported ?? 0, total: tableStats?.geomTotal ?? 0 },
+                      { label: _(msg`Coincident`), key: 'coincident', color: ISLAND_LAYER_COLORS.intersection, unsupported: tableStats?.coincidentUnsupported ?? 0, total: tableStats?.coincidentTotal ?? 0 },
                     ] as const).map(s => (
                       <div key={s.key} className="text-center min-w-0">
                         <div className="flex items-center justify-center gap-1 mb-0.5">
@@ -202,7 +195,12 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                           <span className="text-[9px] font-semibold uppercase tracking-wide truncate" style={{ color: 'var(--text-muted)' }}>{s.label}</span>
                         </div>
                         <div className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--text-strong)' }}>
-                          {s.count}
+                          {s.unsupported}
+                          {s.unsupported !== s.total && (
+                            <span className="text-[10px] font-normal ml-0.5" style={{ color: 'var(--text-muted)' }}>
+                              /{s.total}
+                            </span>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -227,7 +225,7 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
 
                     <div className="flex-1 text-center min-w-0">
                       <span className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--text-strong)' }}>
-                        {currentIslandLabel ?? orderedIslands.length}
+                        {currentIslandNumber ?? orderedIslands.length}
                       </span>
                       {selectedIndex >= 0 && (
                         <span className="text-[10px] ml-1" style={{ color: 'var(--text-muted)' }}>
@@ -457,28 +455,6 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
                       step={0.5}
                       min={1.0}
                       max={10.0}
-                      showStepper={false}
-                    />
-                    <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>{/* i18n-ignore: unit */}mm²</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Reduce intersections */}
-              <div className="space-y-1.5">
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input type="checkbox" checked={draftReduceIntersection} onChange={(e) => setDraftReduceIntersection(e.target.checked)} className="ui-checkbox !w-4 !h-4" />
-                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>{_(msg`Reduce intersections`)}</span>
-                </label>
-                {draftReduceIntersection && (
-                  <div className="relative">
-                    <NumberInput
-                      value={draftIntersectionThreshold}
-                      onChange={(v) => setDraftIntersectionThreshold(Math.max(0.1, Math.min(2.0, v)))}
-                      className="ui-input h-8 w-full px-2.5 text-xs sm:text-sm text-center no-spinners tabular-nums"
-                      step={0.1}
-                      min={0.1}
-                      max={2.0}
                       showStepper={false}
                     />
                     <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>{/* i18n-ignore: unit */}mm²</span>

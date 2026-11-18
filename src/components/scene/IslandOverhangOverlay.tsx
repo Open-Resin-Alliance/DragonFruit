@@ -14,6 +14,9 @@ import { steepFlatNeedsCoverage } from '@/supports/autoSupport/poseStability';
  * of our own: the model matrix positions the highlight with the model.
  */
 
+export const OVERHANG_OVERLAY_RENDER_ORDER = 995;
+export const OVERHANG_POLYGON_OFFSET = { factor: -1, units: -2 } as const;
+
 const OVERHANG_COLOR = '#ffa500';
 const OVERHANG_OPACITY = 0.4;
 /** ...and what a patch gets when the pose needs no topple coverage: visible
@@ -247,6 +250,9 @@ export function IslandOverhangOverlay({
       opacity: OVERHANG_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: OVERHANG_POLYGON_OFFSET.factor,
+      polygonOffsetUnits: OVERHANG_POLYGON_OFFSET.units,
     });
     applyOverhangShader(material, true);
     return material;
@@ -258,6 +264,9 @@ export function IslandOverhangOverlay({
       opacity: MUTED_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: OVERHANG_POLYGON_OFFSET.factor,
+      polygonOffsetUnits: OVERHANG_POLYGON_OFFSET.units,
     });
     applyOverhangShader(material, true);
     return material;
@@ -270,6 +279,9 @@ export function IslandOverhangOverlay({
       opacity: OVERHANG_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: OVERHANG_POLYGON_OFFSET.factor,
+      polygonOffsetUnits: OVERHANG_POLYGON_OFFSET.units,
     });
     applyOverhangShader(material, false);
     return material;
@@ -314,17 +326,17 @@ export function IslandOverhangOverlay({
       userData={{ noStencil: true }}
     >
       {built.meshes.map((b) => (
-        <mesh key={b.id} geometry={b.geometry} renderOrder={1001} raycast={() => null}>
+        <mesh key={b.id} geometry={b.geometry} renderOrder={OVERHANG_OVERLAY_RENDER_ORDER} raycast={() => null}>
           <primitive object={formationMaterial} attach="material" />
         </mesh>
       ))}
       {built.toppleGeometry && (
-        <mesh geometry={built.toppleGeometry} renderOrder={1001} raycast={() => null}>
+        <mesh geometry={built.toppleGeometry} renderOrder={OVERHANG_OVERLAY_RENDER_ORDER} raycast={() => null}>
           <primitive object={toppleMaterial} attach="material" />
         </mesh>
       )}
       {built.mutedGeometry && (
-        <mesh geometry={built.mutedGeometry} renderOrder={1001} raycast={() => null}>
+        <mesh geometry={built.mutedGeometry} renderOrder={OVERHANG_OVERLAY_RENDER_ORDER} raycast={() => null}>
           <primitive object={mutedMaterial} attach="material" />
         </mesh>
       )}

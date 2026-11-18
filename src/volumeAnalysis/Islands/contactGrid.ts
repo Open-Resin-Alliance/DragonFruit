@@ -22,6 +22,21 @@ export interface IslandGridEntry {
   z: number;
 }
 
+function insertFinitePoint(
+  grid: SpatialHashGrid2D<IslandGridEntry>,
+  islandIndex: number,
+  point: { x: number; y: number; z: number },
+): void {
+  if (Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z)) {
+    grid.insert(point.x, point.y, {
+      islandIndex,
+      x: point.x,
+      y: point.y,
+      z: point.z,
+    });
+  }
+}
+
 /**
  * Indexes every contact voxel of every island for tip proximity queries.
  *
@@ -41,10 +56,15 @@ export function buildIslandContactGrid(islands: DetectedIsland[]): SpatialHashGr
         const vy = footprintY(footprint, i);
         const fz = footprintZ(footprint, i);
         const z = fz != null && Number.isFinite(fz) ? fz : island.contact.z;
-        grid.insert(vx, vy, { islandIndex, x: vx, y: vy, z });
+        insertFinitePoint(grid, islandIndex, { x: vx, y: vy, z });
       }
-    } else {
-      grid.insert(island.contact.x, island.contact.y, { islandIndex, x: island.contact.x, y: island.contact.y, z: island.contact.z });
+    }
+    insertFinitePoint(grid, islandIndex, island.contact);
+
+    if (island.subApexes && island.subApexes.length > 0) {
+      for (const apex of island.subApexes) {
+        insertFinitePoint(grid, islandIndex, apex);
+      }
     }
   });
   return grid;
@@ -78,7 +98,7 @@ export function annotateAndCountSupports(
       if (supportedIslandsThisTip.has(cand.islandIndex)) continue;
 
       const dz = Math.abs(tip.pos.z - cand.z);
-      if (dz > zTolerance) continue;
+      if (!(dz <= zTolerance)) continue;
 
       const dx = tip.pos.x - cand.x;
       const dy = tip.pos.y - cand.y;
