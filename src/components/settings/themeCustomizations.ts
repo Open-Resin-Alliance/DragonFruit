@@ -233,14 +233,13 @@ const ATLAS_3DSS_THEME_COLORS: ThemeCustomColors = {
   success: '#36ba78',
 };
 
-// The occasion theme: Prusa Research's own brand orange (#fd5000, the
-// `orange-light-9` token of their site's palette) as the only saturated colour
-// in the chrome. The neutrals are near-black rather than brown: the surface
+// The occasion theme: Prusa's punchy brand orange (#fc6200) as the only
+// saturated colour in the chrome. The neutrals are near-black rather than brown: the surface
 // ladder carries a trace of the accent's 37.8° hue (two points at most) so the
 // panels sit under the orange instead of fighting it, but not enough to read as
 // a tinted theme - a tinted ladder made the whole window look brown. The accent
-// reaches 5.9:1 on the background and 4.8:1 on surface 2, and the filled primary
-// button keeps a near-black label (5.0:1) instead of white. The secondary amber
+// reaches 6.5:1 on the background and 5.3:1 on surface 2, and the filled primary
+// button keeps a near-black label (5.5:1) instead of white. The secondary amber
 // (#ffb02e) carries the secondary button; the model highlight is the brand orange
 // itself, so a picked part reads as Prusa's own colour in the viewport rather
 // than as a second, duller warm tone.
@@ -255,21 +254,21 @@ const PRUSA_ORANGE_THEME_COLORS: ThemeCustomColors = {
   indicator: '#cec4bb',
   borderSubtle: '#2c2927',
   borderStrong: '#3d3935',
-  accent: '#fd5000',
-  accentHover: '#ff6a23',
-  primaryButtonSurface: '#e84700',
+  accent: '#fc6200',
+  accentHover: '#ff7d1f',
+  primaryButtonSurface: '#e85a00',
   accentContrast: '#1b0b02',
   accentSecondary: '#ffb02e',
   accentSecondaryHover: '#ffc35c',
   secondaryButtonSurface: '#ffb02e',
   accentSecondaryContrast: '#1e1400',
-  topbarAccent: '#fd5000',
+  topbarAccent: '#fc6200',
   // Backdrop runs ember: the plate's warm haze into the accent's orange.
   sceneGradientRadial: '#7a2f0f',
   sceneGradientLinearStart: '#2a1a12',
   sceneGradientLinearMid: '#b23c06',
-  meshSelectionColor: '#fd5000',
-  meshHoverColor: '#fd5000',
+  meshSelectionColor: '#fc6200',
+  meshHoverColor: '#fc6200',
   danger: '#e45454',
   success: '#2eb67d',
 };
