@@ -613,6 +613,7 @@ export function useExportThumbnailCapture({
         antialias: true,
         alpha: true,
         preserveDrawingBuffer: true,
+        powerPreference: 'high-performance',
       });
       captureRenderer.outputColorSpace = renderer.outputColorSpace;
       captureRenderer.toneMapping = renderer.toneMapping;

@@ -57,6 +57,34 @@ export function canBakeOcclusion(): boolean {
 }
 
 /**
+ * Whether the machine has a discrete GPU.
+ *
+ * AO is disabled without one: integrated-only machines render unoccluded rather
+ * than spending bake time. Cached for the session. A backend that predates the
+ * `ao_available` command resolves to `true`, so an older build keeps its CPU
+ * fallback instead of silently losing AO.
+ */
+let aoHardwareAvailability: Promise<boolean> | null = null;
+
+export function canBakeOcclusionAsync(): Promise<boolean> {
+  if (!canBakeOcclusion()) return Promise.resolve(false);
+  aoHardwareAvailability ??= invoke<boolean>('ao_available').catch(() => true);
+  return aoHardwareAvailability;
+}
+
+/**
+ * Geometries the hardware check skipped.
+ *
+ * The idle sweep treats "no `aBakedAo`" as "needs a bake"; without this it would
+ * re-queue every skipped geometry on every model change and re-run the check.
+ */
+const aoUnavailableGeometries = new WeakSet<THREE.BufferGeometry>();
+
+export function isOcclusionUnavailable(geometry: THREE.BufferGeometry): boolean {
+  return aoUnavailableGeometries.has(geometry);
+}
+
+/**
  * Bake one model's occlusion and return its per-vertex values, or `null` when
  * the native bake is unreachable (plain web build), the mesh has no usable
  * vertices, or the returned count does not line up with the geometry. Throws
@@ -75,6 +103,10 @@ export async function bakeOcclusionForGeometry(
   geometry: THREE.BufferGeometry,
 ): Promise<Float32Array | null> {
   if (!canBakeOcclusion()) return null;
+  if (!(await canBakeOcclusionAsync())) {
+    aoUnavailableGeometries.add(geometry);
+    return null;
+  }
 
   const positions = geometry.getAttribute('position');
   if (!positions) return null;

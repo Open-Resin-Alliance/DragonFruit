@@ -4514,6 +4514,7 @@ fn main() {
             mesh_minima::scan_voxel_islands_from_path,
             mesh_minima::scan_islands_from_path,
             ao_vertex::bake_vertex_occlusion,
+            ao_vertex::ao_available,
             overhang::scan_overhangs,
             export_mesh_file,
             save_print_file,

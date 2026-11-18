@@ -55,6 +55,7 @@
       {
         "label": "splashscreen",
         "url": "/splashscreen.html",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --force_high_performance_gpu",
         "width": 400,
         "height": 330,
         "center": true,
@@ -72,6 +73,7 @@
       {
         "label": "main",
         "create": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --force_high_performance_gpu",
         "visible": false,
         "theme": "Dark",
         "backgroundColor": "#0B0F14",
