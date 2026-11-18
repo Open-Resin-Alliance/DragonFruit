@@ -1,0 +1,15 @@
+name: Windows signing log
+description: >-
+  Print what the signing scripts wrote. Tauri discards the signer's stderr, so a
+  failed signing call says only "failed to run pwsh"; call this with
+  `if: always()` after the build. An absent log means the script never started.
+
+runs:
+  using: composite
+  steps:
+    - name: Show the signing log
+      shell: pwsh
+      run: |
+        $log = if ($env:DF_SIGN_LOG) { $env:DF_SIGN_LOG } else { Join-Path $env:RUNNER_TEMP 'dragonfruit-sign.log' }
+        if (Test-Path $log) { Get-Content $log } else { Write-Host 'the signing script never ran' }
+        if (Test-Path "$log.out") { Get-Content "$log.out" }
