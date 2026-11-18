@@ -4,6 +4,15 @@ The native Rust slicing backend for DragonFruit Desktop (Tauri), in `rust/dragon
 
 This crate is the production slicing engine that converts triangle geometry into printer-ready layer containers. Format output is dispatched through a plugin-driven encoder registry (currently `.nanodlp`, `.ctb`, `.goo`, and others).
 
+## What changed in v3.2.9
+
+Binary rasterization now samples pixel centers consistently on X and Y, removing
+the sideways coverage bias visible on circles and holes. Coverage AA keeps its
+fractional boundaries; valid closed thin spans are no longer discarded merely
+for being narrower than one pixel. Defective-row winding-leak containment stays
+enabled. Edge pixels and exported file hashes can intentionally change. See
+[Development Guide](development-guide.md) for the sampling contract and tests.
+
 ## What changed in v3.2
 
 v3.2 adds volumetric anti-aliasing, grayscale dithering, and a deeply reworked post-processing pipeline:
@@ -110,7 +119,6 @@ Plugin-owned encoders (Elegoo GOO, Anycubic, CTB, etc.) live in `encoders/genera
 | `DF_3DAA_POST_THREADS` | Override 3DAA post-processing thread count |
 | `DF_3DAA_POST_BUFFER_DEPTH` | Override post-worker pipeline depth (0 = sequential) |
 | `DF_3DAA_ENCODE_BUFFER_DEPTH` | Encode channel capacity (default 3 for RLE baseline) |
-| `DF_3DAA_XY_BLUR_RADIUS_SCALE` | Scale factor for XY blur radius (default 1.5) |
 | `DF_3DAA_Z_BLUR_CENTER_WEIGHT_SCALE` | Centre-weight damping for Z-blur Gaussian kernel (default 0.8) |
 | `DF_3DAA_RATE_LOG_EVERY` | Log encode throughput every N layers (0 = off) |
 | `DF_ZAA_PERTURBATION_MODE` | Perturbation pattern override (`uniform`, `halton`, `base2`) |
