@@ -546,6 +546,10 @@ fn accumulate_normal(acc: &mut [f32; 3], n: Vec3, area: f32) {
     acc[2] += n.z * area;
 }
 
+/// Base perimeter inset (mm) applied by the native scan before per-band
+/// expansion on the JS side, keeping narrow rims valid without collapsing.
+pub const SCAN_PERIMETER_BASE_INSET_MM: f32 = 0.10;
+
 fn build_region(
     mesh: &IndexedMesh,
     normal: &[Vec3],
@@ -603,7 +607,7 @@ fn build_region(
     }
 
     let footprint = build_footprint_mask(mesh, &triangle_ids, xy_min, xy_max, px_mm);
-    let perimeter_loops = build_perimeter_loops(mesh, &triangle_ids, 0.25);
+    let perimeter_loops = build_perimeter_loops(mesh, &triangle_ids, SCAN_PERIMETER_BASE_INSET_MM);
 
     // Area-weighted mean normal, normalized.
     let normal_len = (normal_acc[0] * normal_acc[0]
@@ -822,7 +826,7 @@ fn build_perimeter_loops(
     let mut out: Vec<Vec<[f32; 3]>> = Vec::new();
     for vs in loops {
         let n = vs.len();
-        // Per-edge interior direction (XY) toward opposite vertex
+        // Per-edge interior normal (XY), perpendicular to edge a->b pointing toward opposite vertex
         let mut edge_dirs: Vec<(f32, f32)> = Vec::with_capacity(n);
         for i in 0..n {
             let a = vs[i];
@@ -832,13 +836,24 @@ fn build_perimeter_loops(
                 let pa = mesh.positions[a as usize];
                 let pb = mesh.positions[b as usize];
                 let pc = mesh.positions[*opp as usize];
-                let mid_x = (pa.x + pb.x) * 0.5;
-                let mid_y = (pa.y + pb.y) * 0.5;
-                let dx = pc.x - mid_x;
-                let dy = pc.y - mid_y;
-                let len = (dx * dx + dy * dy).sqrt();
-                if len > 1e-6 {
-                    edge_dirs.push((dx / len, dy / len));
+                let ex = pb.x - pa.x;
+                let ey = pb.y - pa.y;
+                let elen = (ex * ex + ey * ey).sqrt();
+                if elen > 1e-6 {
+                    let mut nx = -ey / elen;
+                    let mut ny = ex / elen;
+                    let to_opp_x = pc.x - pa.x;
+                    let to_opp_y = pc.y - pa.y;
+                    let dot = nx * to_opp_x + ny * to_opp_y;
+                    if dot.abs() <= 1e-6 {
+                        edge_dirs.push((0.0, 0.0));
+                    } else {
+                        if dot < 0.0 {
+                            nx = -nx;
+                            ny = -ny;
+                        }
+                        edge_dirs.push((nx, ny));
+                    }
                 } else {
                     edge_dirs.push((0.0, 0.0));
                 }
@@ -892,17 +907,21 @@ fn build_perimeter_loops(
             };
             inset_loop.push([new_x, new_y, new_z]);
         }
-        // Validate: inset loop must still have area and not collapse.
-        // For narrow features (<0.5 mm) the inset can invert; fall back to raw.
+        // Validate: inset loop must still have area, preserve orientation, and not collapse.
+        // For narrow features the inset can invert; fall back to raw.
         let mut use_raw = false;
         if inset_mm > 1e-6 {
+            let mut raw_area2: f64 = 0.0;
             let mut area2: f64 = 0.0;
             for i in 0..n {
+                let ra = mesh.positions[vs[i] as usize];
+                let rb = mesh.positions[vs[(i + 1) % n] as usize];
+                raw_area2 += (ra.x as f64) * (rb.y as f64) - (rb.x as f64) * (ra.y as f64);
                 let a = inset_loop[i];
                 let b = inset_loop[(i + 1) % n];
                 area2 += (a[0] as f64) * (b[1] as f64) - (b[0] as f64) * (a[1] as f64);
             }
-            if area2.abs() < 1e-6 {
+            if area2.abs() < 1e-6 || (raw_area2 > 0.0 && area2 <= 0.0) || (raw_area2 < 0.0 && area2 >= 0.0) {
                 use_raw = true;
             } else {
                 // Check that inset points remain inside original ring (for outer).
@@ -2712,5 +2731,46 @@ mod tests {
             1,
             "nearby coplanar facets on the same sole should merge: {regions:?}"
         );
+    }
+
+    #[test]
+    fn narrow_overhang_rim_preserves_valid_inset_perimeter_loop() {
+        // Single watertight shell with a narrow 0.35 mm downward-facing flat rim
+        // (x in [0.0, 0.35], y in [0.0, 8.0], z = 10.0) attached above
+        // self-supporting vertical / 60-deg walls.
+        let section = [
+            (2.35, 0.0),  // 0: V-keel apex
+            (4.35, 3.5),  // 1: right keel shoulder (~60.3 deg > 45 deg)
+            (4.35, 14.0), // 2: top right
+            (0.0, 14.0),  // 3: top left
+            (0.0, 10.0),  // 4: narrow rim outer edge (underside 4->5 is -Z at z=10)
+            (0.35, 10.0), // 5: narrow rim inner corner
+            (0.35, 3.5),  // 6: left keel shoulder (~60.3 deg > 45 deg)
+        ];
+        let cap_tris = [
+            [0, 1, 6],
+            [6, 1, 2],
+            [6, 2, 5],
+            [5, 2, 3],
+            [5, 3, 4],
+        ];
+        let soup = manifold_prism(&section, &cap_tris, 8.0);
+        let (regions, _) = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false);
+        assert_eq!(regions.len(), 1, "single narrow rim overhang region: {regions:?}");
+        let region = &regions[0];
+        assert!(
+            !region.perimeter_loops.is_empty(),
+            "narrow 0.35 mm rim must preserve a non-empty perimeter loop"
+        );
+        for lp in &region.perimeter_loops {
+            assert!(!lp.is_empty());
+            for pt in lp {
+                assert!(
+                    pt[0] > 0.0 && pt[0] < 0.35 && pt[0] >= 0.05 && pt[0] <= 0.30,
+                    "loop point x={} must sit inset inside [0.05..0.30] (> 0.0 and < 0.35)",
+                    pt[0]
+                );
+            }
+        }
     }
 }

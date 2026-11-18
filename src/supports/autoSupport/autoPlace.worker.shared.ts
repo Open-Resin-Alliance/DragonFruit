@@ -114,6 +114,9 @@ export function serializeIsland(island: DetectedIsland): SerializedIsland {
     return {
         ...island,
         contact: { x: island.contact.x, y: island.contact.y, z: island.contact.z },
+        ...(island.subApexes
+            ? { subApexes: island.subApexes.map((p) => ({ x: p.x, y: p.y, z: p.z })) }
+            : {}),
     };
 }
 
@@ -338,6 +341,9 @@ export function runAutoPlaceRequest(
     const islands: DetectedIsland[] = payload.islands.map((island) => ({
         ...island,
         contact: new THREE.Vector3(island.contact.x, island.contact.y, island.contact.z),
+        ...(island.subApexes
+            ? { subApexes: island.subApexes.map((p) => ({ x: p.x, y: p.y, z: p.z })) }
+            : {}),
     }));
     return computeAutoSupportPlan(
         islands,

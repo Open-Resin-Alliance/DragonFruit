@@ -284,14 +284,13 @@ An experimental GPU path (wgpu compute shaders) was prototyped and removed becau
 
 ### Deterministic rasterization
 
-The rasterizer uses `IndexMap` (not `HashMap`) for polygon loop stitching. This preserves insertion order, matching JavaScript's `Map` iteration semantics. Without this, the same model produces different rasterized masks across runs due to non-deterministic iteration affecting edge-case loop construction at degenerate triangle intersections.
+Per-layer mask rasterization delegates to `rasterize_triangles_at_z_nonzero_spans` (deterministic non-zero winding scanline rasterizer in `dragonfruit-slicing-engine`), producing coalesced RLE spans with consistent orientation across runs.
 
 ## Dependencies
 
 | Crate | Purpose |
 |-------|---------|
-| `dragonfruit-slicing-engine` | Geometry types (`Vec3`, `Triangle`, `parse_triangles`) |
+| `dragonfruit-slicing-engine` | Geometry types (`Vec3`, `Triangle`, `parse_triangles`) and `rasterize_triangles_at_z_nonzero_spans` |
 | `serde` | Serialization for island types |
 | `rayon` | Parallel rasterization |
-| `indexmap` | Insertion-order map for deterministic loop stitching |
 | `clap` | CLI argument parsing for tooling binaries |

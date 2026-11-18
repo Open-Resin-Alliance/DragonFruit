@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import type { CandidatePoint } from './types';
 import type { AutoSupportSettings } from './settings';
@@ -5,8 +6,12 @@ import { SMALL_ISLAND_TIP_AREA_MM2, SUPPORT_RESTSTACK_DELTA_MM, influenceRadiusM
 import { footprintX, footprintY } from '../../volumeAnalysis/Islands/voxelFootprint';
 import { smallIslandTipDiameterMm } from './parameterSizing';
 import { TIP_COVERAGE_RADIUS_MM } from './coverage';
-import type * as THREE from 'three';
 import { isSupportBlockedContact } from './supportBlockers';
+
+const DOUBLE_SIDED_SURFACE_MATERIAL = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+const _dedupRaycaster = new THREE.Raycaster();
+const _dedupOrigin = new THREE.Vector3();
+const _dedupDownDir = new THREE.Vector3(0, 0, -1);
 
 /**
  * Convert detected islands into auto-support candidate points.
@@ -32,19 +37,20 @@ export function generateCandidates(
     // Filter
     // Note: grounded/plate-contact filtering is handled upstream by the
     // Islands panel's Plate toggle — filteredIslands already reflects it.
-    const eligible = islands.filter(island => {
-        // A minima is a sharp geometric feature that needs support regardless of
-        // size, and it carries no area of its own: the detector reports a vertex,
-        // not a footprint. The exemption reads the source for that reason. It
-        // used to also require `class === 'minimaOnly'`, which `classifyIntersection`
-        // rewrites to `intersection` for every minima a voxel island covers, so a
-        // covered minima fell through to the area test as "0 mm²" and was dropped
-        // whenever that voxel island was itself below the floor: a silent miss on
-        // a real minimum, with nothing in the report to show for it.
-        if (island.source === 'minima') return true;
+    const areaEligible = islands.filter(island => {
+        if (island.source === 'minima' || island.class === 'intersection' || Boolean(island.isDetached)) return true;
         const area = island.areaMm2 ?? 0;
         return area >= settings.minIslandAreaMm2;
     });
+
+    const presentVoxelIds = new Set<string>();
+    for (const isl of areaEligible) {
+        if (isl.source === 'voxel') presentVoxelIds.add(isl.id);
+    }
+
+    const eligible = areaEligible.filter(
+        (isl) => !(isl.source === 'minima' && isl.class === 'intersection' && isl.matchedWith != null && presentVoxelIds.has(isl.matchedWith)),
+    );
 
     // Map to candidates
     let candidates = eligible.flatMap(island => candidatesFromIsland(island));
@@ -114,50 +120,109 @@ export function candidateFromIsland(island: DetectedIsland): CandidatePoint {
 export function candidatesFromIsland(island: DetectedIsland): CandidatePoint[] {
     const base = candidateFromIsland(island);
     const voxels = island.contactVoxels;
-    if (!voxels || voxels.count === 0) return [base];
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (let i = 0; i < voxels.count; i++) {
-        const x = footprintX(voxels, i);
-        const y = footprintY(voxels, i);
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
+    let out: CandidatePoint[];
+    if (!voxels || voxels.count === 0) {
+        out = [base];
+    } else {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (let i = 0; i < voxels.count; i++) {
+            const x = footprintX(voxels, i);
+            const y = footprintY(voxels, i);
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+        const extX = maxX - minX;
+        const extY = maxY - minY;
+        const major = Math.max(extX, extY);
+        const minor = Math.min(extX, extY);
+        if (major <= ISLAND_SUB_HEAD_MM) {
+            out = island.class === 'intersection'
+                ? [base]
+                : [{
+                    ...base,
+                    tipPos: { x: (minX + maxX) / 2, y: (minY + maxY) / 2, z: island.contact.z },
+                }];
+        } else if (
+            major >= ISLAND_TWO_POINT_MIN_MM && major < ISLAND_TWO_POINT_MAX_MM &&
+            minor < ISLAND_TWO_POINT_MAX_WIDTH_MM
+        ) {
+            const alongX = extX >= extY;
+            const lo = alongX ? minX : minY;
+            const span = alongX ? extX : extY;
+            const fixed = alongX ? (minY + maxY) / 2 : (minX + maxX) / 2;
+            const halfArea = base.islandAreaMm2 / 2;
+            const pairTip = halfArea < SMALL_ISLAND_TIP_AREA_MM2 ? smallIslandTipDiameterMm() : undefined;
+            if (island.class === 'intersection') {
+                const t = (((alongX ? island.contact.x : island.contact.y) - lo) <= 0.5 * span) ? 0.75 : 0.25;
+                const along = lo + span * t;
+                out = [
+                    {
+                        ...base,
+                        id: `${island.id}-a`,
+                        tipPos: { x: island.contact.x, y: island.contact.y, z: island.contact.z },
+                        islandAreaMm2: halfArea,
+                        tipDiameterMm: pairTip,
+                    },
+                    {
+                        ...base,
+                        id: `${island.id}-b`,
+                        tipPos: alongX
+                            ? { x: along, y: fixed, z: island.contact.z }
+                            : { x: fixed, y: along, z: island.contact.z },
+                        islandAreaMm2: halfArea,
+                        tipDiameterMm: pairTip,
+                    },
+                ];
+            } else {
+                out = [0.25, 0.75].map((t, i) => {
+                    const along = lo + span * t;
+                    return {
+                        ...base,
+                        id: `${island.id}-${i === 0 ? 'a' : 'b'}`,
+                        tipPos: alongX
+                            ? { x: along, y: fixed, z: island.contact.z }
+                            : { x: fixed, y: along, z: island.contact.z },
+                        islandAreaMm2: halfArea,
+                        tipDiameterMm: pairTip,
+                    };
+                });
+            }
+        } else {
+            out = [base];
+        }
     }
-    const extX = maxX - minX;
-    const extY = maxY - minY;
-    const major = Math.max(extX, extY);
-    if (major <= ISLAND_SUB_HEAD_MM) {
-        return [{
-            ...base,
-            tipPos: { x: (minX + maxX) / 2, y: (minY + maxY) / 2, z: island.contact.z },
-        }];
-    }
-    const minor = Math.min(extX, extY);
-    if (
-        major >= ISLAND_TWO_POINT_MIN_MM && major < ISLAND_TWO_POINT_MAX_MM &&
-        minor < ISLAND_TWO_POINT_MAX_WIDTH_MM
-    ) {
-        const alongX = extX >= extY;
-        const lo = alongX ? minX : minY;
-        const span = alongX ? extX : extY;
-        const fixed = alongX ? (minY + maxY) / 2 : (minX + maxX) / 2;
-        const halfArea = base.islandAreaMm2 / 2;
-        const pairTip = halfArea < SMALL_ISLAND_TIP_AREA_MM2 ? smallIslandTipDiameterMm() : undefined;
-        return [0.25, 0.75].map((t, i) => {
-            const along = lo + span * t;
-            return {
+
+    if (island.subApexes && island.subApexes.length > 0) {
+        const acceptedPts = out.map((c) => ({ x: c.tipPos.x, y: c.tipPos.y, z: c.tipPos.z }));
+        const minSubDistSq = 0.8 * 0.8;
+        let subIdx = 0;
+        for (const ap of island.subApexes) {
+            if (!Number.isFinite(ap.x) || !Number.isFinite(ap.y) || !Number.isFinite(ap.z)) continue;
+            let tooClose = false;
+            for (const prev of acceptedPts) {
+                const dx = ap.x - prev.x;
+                const dy = ap.y - prev.y;
+                const dz = ap.z - prev.z;
+                if (dx * dx + dy * dy + dz * dz < minSubDistSq) {
+                    tooClose = true;
+                    break;
+                }
+            }
+            if (tooClose) continue;
+            out.push({
                 ...base,
-                id: `${island.id}-${i === 0 ? 'a' : 'b'}`,
-                tipPos: alongX
-                    ? { x: along, y: fixed, z: island.contact.z }
-                    : { x: fixed, y: along, z: island.contact.z },
-                islandAreaMm2: halfArea,
-                tipDiameterMm: pairTip,
-            };
-        });
+                id: `${island.id}-sub${subIdx++}`,
+                tipPos: { x: ap.x, y: ap.y, z: ap.z },
+                zHeight: ap.z,
+                tipDiameterMm: smallIslandTipDiameterMm(),
+            });
+            acceptedPts.push({ x: ap.x, y: ap.y, z: ap.z });
+        }
     }
-    return [base];
+
+    return out;
 }
 
 /**
@@ -192,6 +257,7 @@ function computePriority(
 export function deduplicateCandidates(
     candidates: CandidatePoint[],
     settings: AutoSupportSettings,
+    mesh?: THREE.Mesh,
 ): CandidatePoint[] {
     if (candidates.length <= 1) return candidates;
 
@@ -200,9 +266,12 @@ export function deduplicateCandidates(
     // The suppression disc widens with vertical separation (support influence
     // curve) — but never across the restack allowance, so staircase shelves
     // keep their own supports. Neighbor search spans the max grown radius.
-    const maxGate = baseRadius + (6.0 - TIP_COVERAGE_RADIUS_MM);
-    const cellSize = baseRadius;
+    const maxGate = Math.max(baseRadius, 0.6) + (6.0 - TIP_COVERAGE_RADIUS_MM);
+    const cellSize = Math.max(0.1, baseRadius);
     const cellRange = Math.max(1, Math.ceil(maxGate / cellSize));
+    const pairRadius = Math.max(baseRadius, 0.6);
+    const pairRadiusSq = pairRadius * pairRadius;
+    const baseRadiusSq = baseRadius * baseRadius;
 
     // Bucket the *retained* candidates by XY cell as they are kept. Only a
     // retained candidate can suppress a later one, so the index only ever
@@ -215,56 +284,117 @@ export function deduplicateCandidates(
     // interpolation allocated two strings a call. The offset keeps the key
     // positive and exact in a double for every grid a plate can hold
     // (±32768 cells at the tip radius).
+    const suppressedGrid = new Set<CandidatePoint>();
     const grid = new Map<number, CandidatePoint[]>();
+    const floorBelowCache = mesh ? new Map<CandidatePoint, number | null>() : null;
+
+    const getFloorBelowZ = (high: CandidatePoint): number | null => {
+        if (!mesh || !floorBelowCache) return null;
+        if (floorBelowCache.has(high)) return floorBelowCache.get(high)!;
+        _dedupOrigin.set(high.tipPos.x, high.tipPos.y, high.tipPos.z - 0.05);
+        _dedupRaycaster.near = 0;
+        _dedupRaycaster.far = SUPPORT_RESTSTACK_DELTA_MM + 0.05;
+        _dedupRaycaster.set(_dedupOrigin, _dedupDownDir);
+        const floorZ = _dedupRaycaster.intersectObject(mesh, false)[0]?.point.z ?? null;
+        floorBelowCache.set(high, floorZ);
+        return floorZ;
+    };
 
     const sorted = [...candidates].sort((a, b) => b.priority - a.priority);
     const retained: CandidatePoint[] = [];
 
-    for (const c of sorted) {
-        const cx = Math.round(c.tipPos.x / cellSize);
-        const cy = Math.round(c.tipPos.y / cellSize);
+    let originalMaterial: THREE.Material | THREE.Material[] | undefined;
+    if (mesh) {
+        originalMaterial = mesh.material;
+        mesh.material = DOUBLE_SIDED_SURFACE_MATERIAL;
+    }
 
-        let duplicate = false;
-        for (let dx = -cellRange; dx <= cellRange && !duplicate; dx++) {
-            for (let dy = -cellRange; dy <= cellRange && !duplicate; dy++) {
-                const bucket = grid.get((cx + dx + 0x8000) * 0x10000 + (cy + dy + 0x8000));
-                if (!bucket) continue;
-                for (const r of bucket) {
-                    const ddx = c.tipPos.x - r.tipPos.x;
-                    const ddy = c.tipPos.y - r.tipPos.y;
-                    const dz = Math.abs(c.tipPos.z - r.tipPos.z);
-                    // Discrete islands (voxel/minima/intersection) and near-base
-                    // overhang points (e.g. slightly sloped soles) use the flat
-                    // 3D ball only so higher-Z points on a sloped foot aren't
-                    // erased by the vertical influence-radius growth.
-                    if (c.source !== 'overhang' || r.source !== 'overhang' || (c.nearBase && r.nearBase)) {
-                        const ddz = c.tipPos.z - r.tipPos.z;
-                        if (ddx * ddx + ddy * ddy + ddz * ddz <= baseRadius * baseRadius) {
+    try {
+        for (const c of sorted) {
+            const cx = Math.round(c.tipPos.x / cellSize);
+            const cy = Math.round(c.tipPos.y / cellSize);
+
+            let duplicate = false;
+            const pendingEvictions: Array<{ item: CandidatePoint; bucket: CandidatePoint[] }> = [];
+            for (let dx = -cellRange; dx <= cellRange && !duplicate; dx++) {
+                for (let dy = -cellRange; dy <= cellRange && !duplicate; dy++) {
+                    const bucket = grid.get((cx + dx + 0x8000) * 0x10000 + (cy + dy + 0x8000));
+                    if (!bucket) continue;
+                    for (let bi = bucket.length - 1; bi >= 0; bi--) {
+                        const r = bucket[bi];
+                        const ddx = c.tipPos.x - r.tipPos.x;
+                        const ddy = c.tipPos.y - r.tipPos.y;
+                        const dz = Math.abs(c.tipPos.z - r.tipPos.z);
+                        const rDiscreteCOverhang = r.source !== 'overhang' && !r.gridPoint && c.source === 'overhang';
+                        const cDiscreteROverhang = c.source !== 'overhang' && !c.gridPoint && r.source === 'overhang';
+                        if (rDiscreteCOverhang || cDiscreteROverhang) {
+                            const ddz = c.tipPos.z - r.tipPos.z;
+                            if (ddx * ddx + ddy * ddy + ddz * ddz <= pairRadiusSq) {
+                                if (rDiscreteCOverhang) {
+                                    duplicate = true;
+                                    break;
+                                }
+                                // Defer bucket eviction until we know `c` itself survives all neighbor checks.
+                                pendingEvictions.push({ item: r, bucket });
+                            }
+                            continue;
+                        }
+                        // Discrete islands (voxel/minima/intersection) and near-base
+                        // overhang points (e.g. slightly sloped soles) use the flat
+                        // 3D ball only so higher-Z points on a sloped foot aren't
+                        // erased by the vertical influence-radius growth.
+                        if (c.source !== 'overhang' || r.source !== 'overhang' || (c.nearBase && r.nearBase)) {
+                            const ddz = c.tipPos.z - r.tipPos.z;
+                            if (ddx * ddx + ddy * ddy + ddz * ddz <= baseRadiusSq) {
+                                duplicate = true;
+                                break;
+                            }
+                            continue;
+                        }
+                        // Restack: vertically separated shelves never suppress
+                        // each other, however close in XY.
+                        if (dz > SUPPORT_RESTSTACK_DELTA_MM) continue;
+                        const gate = baseRadius
+                            + Math.max(0, influenceRadiusMm(dz) - TIP_COVERAGE_RADIUS_MM);
+                        if (ddx * ddx + ddy * ddy <= gate * gate) {
+                            if (mesh && dz > 0.5) {
+                                const low = c.tipPos.z <= r.tipPos.z ? c : r;
+                                const high = c.tipPos.z <= r.tipPos.z ? r : c;
+                                if (Math.abs(low.tipNormal.z) > 0.99 && Math.abs(high.tipNormal.z) > 0.99 && dz > 1.0) {
+                                    continue;
+                                }
+                                const floorZ = getFloorBelowZ(high);
+                                if (floorZ !== null && floorZ >= low.tipPos.z - 0.05) {
+                                    continue;
+                                }
+                            }
                             duplicate = true;
                             break;
                         }
-                        continue;
-                    }
-                    // Restack: vertically separated shelves never suppress
-                    // each other, however close in XY.
-                    if (dz > SUPPORT_RESTSTACK_DELTA_MM) continue;
-                    const gate = baseRadius
-                        + Math.max(0, influenceRadiusMm(dz) - TIP_COVERAGE_RADIUS_MM);
-                    if (ddx * ddx + ddy * ddy <= gate * gate) {
-                        duplicate = true;
-                        break;
                     }
                 }
             }
-        }
 
-        if (duplicate) continue;
-        retained.push(c);
-        const key = (cx + 0x8000) * 0x10000 + (cy + 0x8000);
-        const bucket = grid.get(key);
-        if (bucket) bucket.push(c);
-        else grid.set(key, [c]);
+            if (duplicate) continue;
+            for (const ev of pendingEvictions) {
+                suppressedGrid.add(ev.item);
+                const liveIdx = ev.bucket.indexOf(ev.item);
+                if (liveIdx !== -1) ev.bucket.splice(liveIdx, 1);
+            }
+            retained.push(c);
+            const key = (cx + 0x8000) * 0x10000 + (cy + 0x8000);
+            const bucket = grid.get(key);
+            if (bucket) bucket.push(c);
+            else grid.set(key, [c]);
+        }
+    } finally {
+        if (mesh && originalMaterial !== undefined) {
+            mesh.material = originalMaterial;
+        }
     }
 
-    return retained.sort((a, b) => b.priority - a.priority);
+    const finalRetained = suppressedGrid.size > 0
+        ? retained.filter((c) => !suppressedGrid.has(c))
+        : retained;
+    return finalRetained.sort((a, b) => b.priority - a.priority);
 }

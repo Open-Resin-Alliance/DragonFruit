@@ -13,6 +13,7 @@ import {
 import type { AutoSupportSettings } from './settings';
 import { applyContactTipCaps } from './contactTipCap';
 import { isSupportBlockedContact } from './supportBlockers';
+import { activeSizingBand } from './parameterSizing';
 
 const FOOTPRINT_TOLERANCE_MM = 0.25;
 
@@ -563,6 +564,138 @@ function faceNormalAt(
     return { x: normal.x, y: normal.y, z: normal.z };
 }
 
+export const SCAN_PERIMETER_BASE_INSET_MM = 0.10;
+
+export function computePerimeterInsetMm(bandTipDiameterMm: number): number {
+    return Math.min(0.25, Math.max(0.10, 0.5 * (Number.isFinite(bandTipDiameterMm) ? bandTipDiameterMm : 0.28) + 0.03));
+}
+
+function pointInPolygon2D(px: number, py: number, poly: Array<[number, number, number]>): boolean {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i][0];
+        const yi = poly[i][1];
+        const xj = poly[j][0];
+        const yj = poly[j][1];
+        const intersect = ((yi > py) !== (yj > py))
+            && (px < ((xj - xi) * (py - yi)) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+    }
+    return inside;
+}
+
+export function insetPolygonLoops2D(
+    loops: Array<Array<[number, number, number]>> | undefined,
+    extraInsetMm: number,
+): Array<Array<[number, number, number]>> | undefined {
+    if (!loops || loops.length === 0 || !(extraInsetMm > 1e-6)) return loops;
+    const maxDispSq = (3.0 * extraInsetMm) * (3.0 * extraInsetMm);
+    const out: Array<Array<[number, number, number]>> = [];
+
+    for (let li = 0; li < loops.length; li++) {
+        const loop = loops[li];
+        const n = loop.length;
+        if (n < 3) {
+            out.push(loop);
+            continue;
+        }
+        let depth = 0;
+        const sx = loop[0][0];
+        const sy = loop[0][1];
+        for (let lj = 0; lj < loops.length; lj++) {
+            if (lj === li || loops[lj].length < 3) continue;
+            if (pointInPolygon2D(sx, sy, loops[lj])) depth++;
+        }
+        const isHole = depth % 2 === 1;
+
+        let area2 = 0;
+        for (let i = 0; i < n; i++) {
+            const a = loop[i];
+            const b = loop[(i + 1) % n];
+            area2 += a[0] * b[1] - b[0] * a[1];
+        }
+        if (Math.abs(area2) < 1e-7) {
+            out.push(loop);
+            continue;
+        }
+        const ccw = area2 >= 0;
+        const sign = isHole ? (ccw ? -1 : 1) : (ccw ? 1 : -1);
+
+        const edgeNormals: Array<[number, number]> = new Array(n);
+        for (let i = 0; i < n; i++) {
+            const a = loop[i];
+            const b = loop[(i + 1) % n];
+            const dx = b[0] - a[0];
+            const dy = b[1] - a[1];
+            const len = Math.hypot(dx, dy);
+            edgeNormals[i] = len > 1e-9
+                ? [sign * (-dy / len), sign * (dx / len)]
+                : [0, 0];
+        }
+
+        const shifted: Array<[number, number, number]> = new Array(n);
+        let dispInvalid = false;
+        for (let i = 0; i < n; i++) {
+            const p = loop[i];
+            const nPrev = edgeNormals[(i + n - 1) % n];
+            const nNext = edgeNormals[i];
+            const bx = nPrev[0] + nNext[0];
+            const by = nPrev[1] + nNext[1];
+            const bLen = Math.hypot(bx, by);
+            let ox = 0;
+            let oy = 0;
+            if (bLen > 1e-9) {
+                ox = (bx / bLen) * extraInsetMm;
+                oy = (by / bLen) * extraInsetMm;
+            } else if (nNext[0] !== 0 || nNext[1] !== 0) {
+                ox = nNext[0] * extraInsetMm;
+                oy = nNext[1] * extraInsetMm;
+            } else if (nPrev[0] !== 0 || nPrev[1] !== 0) {
+                ox = nPrev[0] * extraInsetMm;
+                oy = nPrev[1] * extraInsetMm;
+            }
+            if (ox * ox + oy * oy > maxDispSq) {
+                dispInvalid = true;
+                break;
+            }
+            shifted[i] = [p[0] + ox, p[1] + oy, p[2]];
+        }
+        if (dispInvalid) {
+            out.push(loop);
+            continue;
+        }
+
+        let newArea2 = 0;
+        let totalOrigLen = 0;
+        let reversedOrigLen = 0;
+        for (let i = 0; i < n; i++) {
+            const a = loop[i];
+            const b = loop[(i + 1) % n];
+            const sa = shifted[i];
+            const sb = shifted[(i + 1) % n];
+            newArea2 += sa[0] * sb[1] - sb[0] * sa[1];
+            const odx = b[0] - a[0];
+            const ody = b[1] - a[1];
+            const olen = Math.hypot(odx, ody);
+            totalOrigLen += olen;
+            if (olen > 1e-9 && odx * (sb[0] - sa[0]) + ody * (sb[1] - sa[1]) <= 0) {
+                reversedOrigLen += olen;
+            }
+        }
+        const sameSign = (area2 > 0 && newArea2 > 0) || (area2 < 0 && newArea2 < 0);
+        const areaValid = isHole
+            ? Math.abs(newArea2) > Math.abs(area2)
+            : Math.abs(newArea2) < Math.abs(area2);
+        const majorityReversed = totalOrigLen > 0 && reversedOrigLen > 0.5 * totalOrigLen;
+        if (!sameSign || Math.abs(newArea2) < 1e-5 || !areaValid || majorityReversed) {
+            out.push(loop);
+        } else {
+            out.push(shifted);
+        }
+    }
+    return out;
+}
+
 export function generateGridCandidates(
     overhangIslands: DetectedIsland[],
     settings: AutoSupportSettings,
@@ -580,9 +713,15 @@ export function generateGridCandidates(
     modelMinZ?: number,
     /** Height (mm) of the base-overhang densification window above modelMinZ. */
     baseWindowMm?: number,
+    /** Discrete anchors (isDetached / intersection) already placed on these regions. */
+    pinnedIslands?: readonly DetectedIsland[],
 ): CandidatePoint[] {
     const baseSpacing = Math.sqrt(Math.max(settings.areaPerSupportMm2, 0.5));
     if (baseSpacing <= 0) return [];
+
+    const bandTipDia = activeSizingBand(settings).tipContactDiameterMm;
+    const targetInsetMm = computePerimeterInsetMm(bandTipDia);
+    const extraLoopInsetMm = Math.max(0, targetInsetMm - SCAN_PERIMETER_BASE_INSET_MM);
 
     const meshZ = (modelMinZ === undefined || baseWindowMm === undefined)
         ? meshWorldZBounds(mesh)
@@ -636,6 +775,7 @@ export function generateGridCandidates(
         // climbs the face, because a near-vertical patch has a thin XY
         // footprint whose cells map up its height.
         const anchorBandTop = steepFlatAnchorBandTop(island, slenderPart);
+        let emittedForRegion = 0;
 
         const emitPoint = (x: number, y: number, z: number, kind: 'grid' | 'fill', faceIndex?: number | null) => {
             if (z > anchorBandTop) return;
@@ -646,6 +786,7 @@ export function generateGridCandidates(
             // ring points carry the sampler's face for free; voxel-fallback
             // points resolve it with one raycast. Empty mask → no raycasts.
             if (modelId && mesh && isSupportBlockedContact(modelId, mesh, x, y, z, faceIndex)) return;
+            emittedForRegion++;
             candidates.push({
                 id: `${kind}-${island.id}-${x.toFixed(2)}-${y.toFixed(2)}`,
                 tipPos: { x, y, z },
@@ -671,7 +812,8 @@ export function generateGridCandidates(
         // spacing, then subsample evenly — never silently denser than the cap.
         const width = maxX - minX;
         const height = maxY - minY;
-        const inset = PERIMETER_CONTACT_INSET_MM;
+        const minDim = Math.min(width, height);
+        const inset = minDim < 1.0 ? Math.min(targetInsetMm, 0.25 * minDim) : PERIMETER_CONTACT_INSET_MM;
         const spanX = Math.max(0.5, width - 2 * inset);
         const spanY = Math.max(0.5, height - 2 * inset);
         let stride = 1;
@@ -700,6 +842,47 @@ export function generateGridCandidates(
         const spacingX = spanX / nx;
         const spacingY = spanY / ny;
 
+        const pinnedAnchors: Array<{ x: number; y: number; z: number }> = [];
+        if (pinnedIslands && pinnedIslands.length > 0) {
+            const regionMaxZ = island.maxZ ?? minZ;
+            const addPinAnchor = (x: number, y: number, z: number): void => {
+                if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
+                if (modelId && mesh && isSupportBlockedContact(modelId, mesh, x, y, z)) return;
+                pinnedAnchors.push({ x, y, z });
+            };
+            for (const p of pinnedIslands) {
+                if (p.coveredByOverhangId != null && p.coveredByOverhangId !== island.id) continue;
+                const matchedById = p.coveredByOverhangId === island.id;
+                const inBox = p.contact.x >= minX - 0.5
+                    && p.contact.x <= maxX + 0.5
+                    && p.contact.y >= minY - 0.5
+                    && p.contact.y <= maxY + 0.5
+                    && p.contact.z >= minZ - 0.5
+                    && p.contact.z <= regionMaxZ + 0.5;
+                if (!matchedById && !inBox) continue;
+                addPinAnchor(p.contact.x, p.contact.y, p.contact.z);
+                if (p.subApexes) {
+                    for (const ap of p.subApexes) {
+                        addPinAnchor(ap.x, ap.y, ap.z);
+                    }
+                }
+            }
+        }
+
+        const ringFloor = nearPlateFlat ? 0.75 : PERIMETER_SPACING_FLOOR_MM;
+        const ringSpacing = Math.max(ringFloor, spacing * PERIMETER_RING_FACTOR) * stride;
+        const anchorBackoffSq = Math.max(settings.tipInfluenceRadiusMm, 0.6 * ringSpacing) ** 2;
+        const isNearPinnedAnchor = (x: number, y: number, z: number): boolean => {
+            for (const a of pinnedAnchors) {
+                const dx = x - a.x;
+                const dy = y - a.y;
+                if (dx * dx + dy * dy <= anchorBackoffSq && Math.abs(z - a.z) <= 1.0) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
         // Grid infill — the lattice spans the region with integer rows and
         // columns (never cut off by a leftover margin), inset by the contact
         // radius so a support never hangs half its disc past the edge.
@@ -713,7 +896,7 @@ export function generateGridCandidates(
                     const x = minX + inset + i * spacingX;
                     const y = minY + inset + j * spacingY;
                     const s = surfaceAt(x, y);
-                    if (s) {
+                    if (s && !isNearPinnedAnchor(x, y, s.z)) {
                         const pt = { x, y, z: s.z };
                         lattice.push(pt);
                         emitPoint(x, y, s.z, 'grid', s.faceIndex);
@@ -721,15 +904,18 @@ export function generateGridCandidates(
                 }
             }
         }
-
+        // Pinned anchors are checked via Z-aware `isNearPinnedAnchor` below — never
+        // flatten them into the 2D `lattice`, which would strip Z-distant boundary points.
         // Boundary ring — deliberately TIGHTER than the infill (the edge
         // engages peel first) and deduped against the lattice at half the
         // ring spacing, so the outline is traced even on small regions where
         // every ring point sits within a lattice cell of some interior point.
-        const ringFloor = nearPlateFlat ? 0.75 : PERIMETER_SPACING_FLOOR_MM;
-        const ringSpacing = Math.max(ringFloor, spacing * PERIMETER_RING_FACTOR) * stride;
         const ringCoverageSq = (ringSpacing * 0.5) * (ringSpacing * 0.5);
-        const boundary: Array<{ x: number; y: number; z: number; faceIndex?: number }> = sampleBoundary2D(island.perimeterLoops, ringSpacing, surfaceAt)
+        const boundary: Array<{ x: number; y: number; z: number; faceIndex?: number }> = sampleBoundary2D(
+            insetPolygonLoops2D(island.perimeterLoops, extraLoopInsetMm),
+            ringSpacing,
+            surfaceAt,
+        )
             ?? buildBoundaryPoints(
                 eroded.count > 0 ? eroded : voxels,
                 ringSpacing,
@@ -746,11 +932,28 @@ export function generateGridCandidates(
                 }
             }
             if (covered) continue;
-            // The fallback boundary points carry a voxel Z and no face: sample
-            // the surface at their XY so the ring keeps the same per-cell Z and
-            // normal the lattice got.
-            const sampled = surfaceAt(b.x, b.y);
-            emitPoint(b.x, b.y, sampled?.z ?? b.z, 'fill', sampled?.faceIndex ?? b.faceIndex ?? null);
+            // Reuse faceIndex from sampleBoundary2D when already sampled; otherwise
+            // raycast voxel fallback points so the ring matches lattice Z and normal.
+            const sampled = b.faceIndex !== undefined
+                ? { z: b.z, faceIndex: b.faceIndex }
+                : surfaceAt(b.x, b.y);
+            if (!sampled) continue;
+            if (isNearPinnedAnchor(b.x, b.y, sampled.z)) continue;
+            emitPoint(b.x, b.y, sampled.z, 'fill', sampled.faceIndex ?? b.faceIndex ?? null);
+        }
+
+        if (emittedForRegion === 0) {
+            const fallbackSample = surfaceAt(island.contact.x, island.contact.y);
+            const fallbackZ = fallbackSample?.z ?? island.contact.z;
+            if (!isNearPinnedAnchor(island.contact.x, island.contact.y, fallbackZ)) {
+                emitPoint(
+                    island.contact.x,
+                    island.contact.y,
+                    fallbackZ,
+                    'fill',
+                    fallbackSample?.faceIndex ?? null,
+                );
+            }
         }
     }
 

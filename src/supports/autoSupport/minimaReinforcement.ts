@@ -49,6 +49,8 @@ export interface MinimaReinforcementPoint {
  * standalone trunks — they broaden the section's base, which is the entire
  * point, so they must not fan onto the tip support they ring.
  */
+const DOUBLE_SIDED_SURFACE_MATERIAL = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+
 export function computeMinimaReinforcementPoints(
     islands: DetectedIsland[],
     mesh: THREE.Mesh,
@@ -61,25 +63,32 @@ export function computeMinimaReinforcementPoints(
     const raycaster = new THREE.Raycaster();
     const origin = new THREE.Vector3();
     const up = new THREE.Vector3(0, 0, 1);
-    raycaster.far = maxRiseMm;
+    raycaster.near = 0;
+    raycaster.far = maxRiseMm + 0.02;
 
     const points: MinimaReinforcementPoint[] = [];
-    for (const island of islands) {
-        if (island.source !== 'minima' || island.class !== 'minimaOnly') continue;
-        const { x: cx, y: cy, z: cz } = island.contact;
-        for (let i = 0; i < MINIMA_RING_COUNT; i++) {
-            const angle = (i / MINIMA_RING_COUNT) * Math.PI * 2;
-            const x = cx + Math.cos(angle) * MINIMA_RING_RADIUS_MM;
-            const y = cy + Math.sin(angle) * MINIMA_RING_RADIUS_MM;
-            // Rising from the minima's own plane: every hit is at or above it,
-            // and `far` bounds the rise, so the band needs only its floor.
-            origin.set(x, y, cz);
-            raycaster.set(origin, up);
-            const hit = raycaster
-                .intersectObject(mesh, false)
-                .find((h) => h.point.z - cz >= MINIMA_RING_MIN_RISE_MM);
-            if (hit) points.push({ islandId: island.id, x, y, z: hit.point.z });
+    const originalMaterial = mesh.material;
+    mesh.material = DOUBLE_SIDED_SURFACE_MATERIAL;
+    try {
+        for (const island of islands) {
+            if (island.source !== 'minima' || island.class !== 'minimaOnly' || island.coveredByOverhangId != null) continue;
+            const { x: cx, y: cy, z: cz } = island.contact;
+            for (let i = 0; i < MINIMA_RING_COUNT; i++) {
+                const angle = (i / MINIMA_RING_COUNT) * Math.PI * 2;
+                const x = cx + Math.cos(angle) * MINIMA_RING_RADIUS_MM;
+                const y = cy + Math.sin(angle) * MINIMA_RING_RADIUS_MM;
+                // Inspect ONLY the first hit above (cz - 0.02): flat ceilings stop at hit[0]
+                // with rise ~ 0 and never tunnel through solid walls to upper overhangs.
+                origin.set(x, y, cz - 0.02);
+                raycaster.set(origin, up);
+                const firstHit = raycaster.intersectObject(mesh, false)[0];
+                if (firstHit && firstHit.point.z - cz >= MINIMA_RING_MIN_RISE_MM) {
+                    points.push({ islandId: island.id, x, y, z: firstHit.point.z });
+                }
+            }
         }
+    } finally {
+        mesh.material = originalMaterial;
     }
     return points;
 }

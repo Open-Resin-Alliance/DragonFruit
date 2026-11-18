@@ -95,7 +95,7 @@ type MockScanResult = {
 };
 
 function installTauriMock(options?: {
-  onScanStaged?: (args: Record<string, unknown>) => MockScanResult | Promise<MockScanResult>;
+  onScanStaged?: (args: Record<string, unknown>) => MockScanResult | Promise<MockScanResult>; /* i18n-ignore */
   onScanOverhangsStaged?: () => unknown;
 }): TauriCapture {
   const commands: string[] = [];
@@ -340,7 +340,7 @@ test('MIR-01b fallback: when scan_islands_staged rejects, re-stages world windin
     // First stage: local pre-TRS soup [0..4]^3; second stage: centered/scaled/flipped world soup [-2..2]^3
     assert.deepEqual(soupBounds(tauri.stagedPositions[0]), { min: [0, 0, 0], max: [4, 4, 4] });
     assert.deepEqual(soupBounds(tauri.stagedPositions[1]), { min: [-2, -2, -2], max: [2, 2, 2] });
-    assert.ok(signedVolume(tauri.stagedPositions[1]) > 0, 're-staged world soup preserves outward winding under det < 0');
+    assert.ok(signedVolume(tauri.stagedPositions[1]) > 0, 're-staged world soup preserves outward winding under det < 0'); /* i18n-ignore */
   } finally {
     await tree?.unmount();
     geom.geometry.dispose();

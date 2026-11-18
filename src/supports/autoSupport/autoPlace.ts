@@ -3082,6 +3082,16 @@ export function forestReportToText(report: ForestReport, autoSettings?: Partial<
 export type AutoPlaceProgress = { phase: string; done: number; total: number };
 export type AutoPlaceProgressCallback = (progress: AutoPlaceProgress) => void;
 
+export function isExemptFromSteepWallCull(
+    island: Pick<DetectedIsland, 'source' | 'class' | 'isDetached' | 'interior'>,
+): boolean {
+    return island.source === 'overhang'
+        || island.source === 'minima'
+        || island.class === 'intersection'
+        || Boolean(island.isDetached)
+        || Boolean(island.interior);
+}
+
 export function computeAutoSupportPlan(
     islands: DetectedIsland[],
     modelId: string,
@@ -3183,7 +3193,7 @@ export function computeAutoSupportPlan(
         const selfSupportDeg = autoSettings.overhangSelfSupportAngleDeg;
         const before = islands.length;
         islands = islands.filter((island) => {
-            if (island.source === 'overhang' || island.source === 'minima' || island.interior) return true;
+            if (isExemptFromSteepWallCull(island)) return true;
             // A hole-tolerant vertical ray is the right answer wherever it
             // hits; only when both rays miss (a side wall) does the nearest
             // triangle answer, so a punched ceiling is not mistaken for the
@@ -3336,6 +3346,7 @@ export function computeAutoSupportPlan(
                 poseStability?.thicknessMm ?? 0,
                 modelMinZ,
                 baseWindowMm,
+                islandsToCover.filter((i) => i.source !== 'overhang' && (i.isDetached || i.class === 'intersection')),
             )
                 .map((c): CandidatePoint => ({ ...c, modelId }));
         } catch (e) {
@@ -3371,7 +3382,7 @@ export function computeAutoSupportPlan(
     // ------------------------------------------------------------------
 
     const beforeDedup = candidates.length;
-    candidates = deduplicateCandidates(candidates, autoSettings);
+    candidates = deduplicateCandidates(candidates, autoSettings, resolvedMesh);
     const dedupedCandidates = candidates.length;
 
     console.log(LOG_PREFIX,
@@ -3785,7 +3796,7 @@ export function computeAutoSupportPlan(
     let gapFilledTrunks = 0;
     for (let pass = 0; pass < MAX_GAP_FILL_PASSES; pass++) {
         const tips = collectSupportTips(draft, modelId);
-        const gapCandidates = buildGapFillCandidates(overhangIslands, autoSettings, tips)
+        const gapCandidates = buildGapFillCandidates(overhangIslands, autoSettings, tips, 0.05, resolvedMesh)
             .map((c): CandidatePoint => ({ ...c, modelId }));
         if (gapCandidates.length === 0) break;
         applyContactTipCaps(gapCandidates, resolvedMesh, autoSettings.tipContactMarginScale, autoSettings);
@@ -3832,7 +3843,7 @@ export function computeAutoSupportPlan(
         // already-supported surfaces (redundant "floating" leaves).
         let fraction: number;
         if (island.contactVoxels && island.contactVoxels.count > 0) {
-            fraction = computeRegionCoverage(island, allTips, coverageRadiusForArea(area, SUPPORT_COVERAGE_RADIUS_MM));
+            fraction = computeRegionCoverage(island, allTips, coverageRadiusForArea(area, SUPPORT_COVERAGE_RADIUS_MM), resolvedMesh);
         } else {
             // No footprint (minima islands): centroid proximity fallback.
             let hit = false;
@@ -4043,6 +4054,7 @@ export function computeAutoSupportPlan(
     const OVERHANG_GRID_SPACING_MM = 2.5;
 
     let overhangSupportsPlaced = 0;
+    let detachedTipPositions: Array<{ x: number; y: number; z: number }> | null = null;
     // A coverage branch is a STUB off a trunk, never a bridge across the
     // island: the same reach a placement fan allows.
     const COVERAGE_STUB_REACH_MM = Math.max(MIN_LEAF_FAN_RADIUS_MM, autoSettings.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM);
@@ -4052,25 +4064,32 @@ export function computeAutoSupportPlan(
     for (const { hostTypeId, hostId, entity } of collectHostEntities(draft)) {
         // Stubs hang off this model's hosts only, like every other fan.
         if (entity.modelId !== modelId) continue;
-        const lastSeg = entity.segments[entity.segments.length - 1];
-        if (!lastSeg) continue;
-        const span = hostSegmentSpan(draft, entity, lastSeg);
-        const knotPos = span?.end ?? lastSeg.topJoint?.pos ?? entity.contactCone?.pos;
-        if (!knotPos) continue;
-        stubHosts.push({
-            hostTypeId,
-            hostId,
-            segmentId: lastSeg.id,
-            t: 1,
-            pos: knotPos,
-            diameter: lastSeg.diameter ?? 1.0,
-        });
+        if (entity.origin === NEAR_PLATE_ORIGIN) continue;
+        for (const seg of entity.segments) {
+            const span = hostSegmentSpan(draft, entity, seg);
+            if (!span) continue;
+            const ts = seg.topJoint ? [0.25, 0.5, 0.75, 1] : [0.25, 0.5, 0.75];
+            for (const t of ts) {
+                stubHosts.push({
+                    hostTypeId,
+                    hostId,
+                    segmentId: seg.id,
+                    t,
+                    pos: {
+                        x: span.start.x + (span.end.x - span.start.x) * t,
+                        y: span.start.y + (span.end.y - span.start.y) * t,
+                        z: span.start.z + (span.end.z - span.start.z) * t,
+                    },
+                    diameter: seg.diameter ?? 1.0,
+                });
+            }
+        }
     }
 
     for (const island of islands) {
-        // Overhang regions are gridded by the grid phase — this pass covers
-        // flat voxel islands only.
-        if (island.source === 'overhang') continue;
+        // Overhang regions and islands already covered by an overhang region are
+        // gridded by the grid phase — this pass covers remaining flat voxel islands only.
+        if (island.source === 'overhang' || island.coveredByOverhangId != null) continue;
 
         const area = island.areaMm2 ?? 0;
         const voxels = island.contactVoxels;
@@ -4130,16 +4149,55 @@ export function computeAutoSupportPlan(
                 // them is what produced 10–24 mm near-horizontal branches
                 // across the lattice.
                 let host: typeof stubHosts[number] | null = null;
-                let hostDist2 = COVERAGE_STUB_REACH_MM * COVERAGE_STUB_REACH_MM;
+                let hostScore = Infinity;
+                const reachSq = COVERAGE_STUB_REACH_MM * COVERAGE_STUB_REACH_MM;
                 for (const candidate of stubHosts) {
+                    const vHeadroom = cellZ - candidate.pos.z;
+                    // Leave room for the ~2.6 mm contact cone plus a rising shaft segment so
+                    // stub branches never attach level with their own cone base (0° wire).
+                    if (vHeadroom < 4.0) continue;
                     const dx = gx - candidate.pos.x;
                     const dy = gy - candidate.pos.y;
                     const d2 = dx * dx + dy * dy;
-                    if (d2 > hostDist2) continue;
-                    hostDist2 = d2;
+                    if (d2 > reachSq) continue;
+                    const score = d2 + vHeadroom * 0.25;
+                    if (score >= hostScore) continue;
+                    hostScore = score;
                     host = candidate;
                 }
-                if (!host) continue;
+                if (!host) {
+                    if (!island.isDetached) continue;
+                    detachedTipPositions ??= collectContactPositions(draft, modelId);
+                    const tooClose = detachedTipPositions.some(
+                        (tp) =>
+                            Math.hypot(tp.x - gx, tp.y - gy) <= 1.0 &&
+                            Math.abs(tp.z - cellZ) <= 1.0,
+                    );
+                    if (tooClose) continue;
+                    const bm: THREE.Mesh | undefined = resolvedMesh ?? undefined;
+                    const resolved = resolveSurfaceNormal({ x: gx, y: gy, z: cellZ }, bm);
+                    const standaloneCandidate: CandidatePoint = {
+                        id: `detached-plate-${island.id}-${r}-${c}`,
+                        tipPos: resolved.point,
+                        tipNormal: resolved.normal,
+                        modelId,
+                        source: 'voxel',
+                        islandAreaMm2: area / (rows * cols),
+                        zHeight: resolved.point.z,
+                        priority: 0,
+                        interior: island.interior,
+                    };
+                    if (bm) {
+                        applyContactTipCaps([standaloneCandidate], bm, autoSettings.tipContactMarginScale, autoSettings);
+                        preResolvedCandidates.add(standaloneCandidate);
+                    }
+                    const outcome = placeOne(standaloneCandidate);
+                    if (outcome !== 'reject') {
+                        overhangSupportsPlaced++;
+                        detachedTipPositions.push(resolved.point);
+                    }
+                    continue;
+                }
                 if (isHostAtAttachmentCapacity(host.hostTypeId, host.hostId, autoSettings.maxAttachmentsPerTrunk, draft)) continue;
 
                 try {
@@ -4185,8 +4243,19 @@ export function computeAutoSupportPlan(
                         },
                         band.shaftDiameterMm,
                         host.diameter,
-                        (attempt) => Boolean(attempt.supportData.error)
-                            || Boolean(bm && branchCollidesWithSDF(attempt.branch, bm)),
+                        (attempt) => {
+                            if (attempt.supportData.error) return true;
+                            if (bm && branchCollidesWithSDF(attempt.branch, bm)) return true;
+                            let prevZ = parentKnot.pos.z;
+                            const coneZ = attempt.branch.contactCone?.pos.z ?? resolved.point.z;
+                            for (const seg of attempt.branch.segments) {
+                                const bz = seg.bottomJoint?.pos.z ?? prevZ;
+                                const tz = seg.topJoint?.pos.z ?? coneZ;
+                                if (tz - bz < 0.5) return true;
+                                prevZ = tz;
+                            }
+                            return false;
+                        },
                         autoSettings,
                     );
                     if (!built) continue;
