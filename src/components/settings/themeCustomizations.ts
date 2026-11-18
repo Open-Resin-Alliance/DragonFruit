@@ -234,25 +234,27 @@ const ATLAS_3DSS_THEME_COLORS: ThemeCustomColors = {
 };
 
 // The occasion theme: Prusa Research's own brand orange (#fd5000, the
-// `orange-light-9` token of their site's palette) over a warm charcoal ladder
-// on the same 37.8° hue, so the neutrals read as one family with the accent
-// rather than as the default blue-greys with orange dropped in. The accent
-// reaches 5.8:1 on the background and 4.5:1 on surface 2, and the filled
-// primary button keeps a near-black label (5.0:1) instead of white. The
-// secondary amber (#ffb02e) carries the model highlight and the secondary
-// button; against the orange chrome it separates by hue and lightness rather
-// than by colour family, and its dark ink is 10.4:1.
+// `orange-light-9` token of their site's palette) as the only saturated colour
+// in the chrome. The neutrals are near-black rather than brown: the surface
+// ladder carries a trace of the accent's 37.8° hue (two points at most) so the
+// panels sit under the orange instead of fighting it, but not enough to read as
+// a tinted theme - a tinted ladder made the whole window look brown. The accent
+// reaches 5.9:1 on the background and 4.8:1 on surface 2, and the filled primary
+// button keeps a near-black label (5.0:1) instead of white. The secondary amber
+// (#ffb02e) carries the model highlight and the secondary button; against the
+// orange chrome it separates by hue and lightness rather than by colour family,
+// and its dark ink is 10.4:1.
 const PRUSA_ORANGE_THEME_COLORS: ThemeCustomColors = {
-  background: '#140f0c',
-  foreground: '#f7f1ec',
-  surface0: '#1b1512',
-  surface1: '#241c17',
-  surface2: '#2f2520',
-  textStrong: '#fbf6f1',
-  textMuted: '#d2c6bb',
-  indicator: '#d2c6bb',
-  borderSubtle: '#3a2d25',
-  borderStrong: '#4e3c31',
+  background: '#0c0b0b',
+  foreground: '#f5f0ec',
+  surface0: '#131211',
+  surface1: '#1a1817',
+  surface2: '#232120',
+  textStrong: '#faf6f2',
+  textMuted: '#cec4bb',
+  indicator: '#cec4bb',
+  borderSubtle: '#2c2927',
+  borderStrong: '#3d3935',
   accent: '#fd5000',
   accentHover: '#ff6a23',
   primaryButtonSurface: '#e84700',
