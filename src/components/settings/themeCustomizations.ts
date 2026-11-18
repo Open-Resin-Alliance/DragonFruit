@@ -241,9 +241,9 @@ const ATLAS_3DSS_THEME_COLORS: ThemeCustomColors = {
 // a tinted theme - a tinted ladder made the whole window look brown. The accent
 // reaches 5.9:1 on the background and 4.8:1 on surface 2, and the filled primary
 // button keeps a near-black label (5.0:1) instead of white. The secondary amber
-// (#ffb02e) carries the model highlight and the secondary button; against the
-// orange chrome it separates by hue and lightness rather than by colour family,
-// and its dark ink is 10.4:1.
+// (#ffb02e) carries the secondary button; the model highlight is the brand orange
+// itself, so a picked part reads as Prusa's own colour in the viewport rather
+// than as a second, duller warm tone.
 const PRUSA_ORANGE_THEME_COLORS: ThemeCustomColors = {
   background: '#0c0b0b',
   foreground: '#f5f0ec',
@@ -268,8 +268,8 @@ const PRUSA_ORANGE_THEME_COLORS: ThemeCustomColors = {
   sceneGradientRadial: '#7a2f0f',
   sceneGradientLinearStart: '#2a1a12',
   sceneGradientLinearMid: '#b23c06',
-  meshSelectionColor: '#ffb02e',
-  meshHoverColor: '#ffb02e',
+  meshSelectionColor: '#fd5000',
+  meshHoverColor: '#fd5000',
   danger: '#e45454',
   success: '#2eb67d',
 };
