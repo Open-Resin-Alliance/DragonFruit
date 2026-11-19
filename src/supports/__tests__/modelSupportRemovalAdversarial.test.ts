@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { modelCascadeSeeds, withoutModelSupports } from '../PlacementLogic/SupportModelLinker';
-import { removeSupportEntitiesForModels, resetStore } from '../state';
+import { getSnapshot, removeSupportEntitiesForModels, resetStore, setSnapshot } from '../state';
 import { IMPORT_PAYLOAD_COLLECTION_ORDER } from '../supportCollections';
 import { SUPPORT_TYPES } from '../supportTypeRegistry';
-import type { DragonfruitImportFormat } from '../types';
-import { idsOf, kickstandEntityId, knot, payloadOf, seg, storeIdsAfterRemoving, supportsOf } from './helpers/modelSupportFixtures';
+import type { DragonfruitImportFormat, SupportState } from '../types';
+import { idsOf, kickstandEntityId, knot, payloadOf, root, seg, storeIdsAfterLoading, storeIdsAfterRemoving, supportsOf } from './helpers/modelSupportFixtures';
 
 /**
  * Attempts to break a model removal: scenes the fixture in
@@ -63,7 +63,7 @@ describe('model removal: ownership that crosses models', () => {
 
         assert.deepEqual(idsOf(payload).braces, []);
         assert.ok(idsOf(payload).knots.includes('b-brace-start'), 'that knot rides a shaft nobody removed');
-        assert.deepEqual(idsOf(payload), storeIdsAfterRemoving(input, ['a']));
+        assert.deepEqual(storeIdsAfterLoading(payload), storeIdsAfterRemoving(input, ['a']));
     });
 
     it('takes a kickstand of the other model hosted on the removed shaft, wrapper and all', () => {
@@ -77,7 +77,7 @@ describe('model removal: ownership that crosses models', () => {
         const { payload } = remove(input, 'a');
 
         assert.deepEqual(payload.kickstands, []);
-        assert.deepEqual(idsOf(payload), storeIdsAfterRemoving(input, ['a']));
+        assert.deepEqual(storeIdsAfterLoading(payload), storeIdsAfterRemoving(input, ['a']));
     });
 
     it('follows a chain of branches across three models', () => {
@@ -92,7 +92,7 @@ describe('model removal: ownership that crosses models', () => {
         const { payload } = remove(input, 'a');
 
         assert.deepEqual(idsOf(payload).branches, []);
-        assert.deepEqual(idsOf(payload), storeIdsAfterRemoving(input, ['a']));
+        assert.deepEqual(storeIdsAfterLoading(payload), storeIdsAfterRemoving(input, ['a']));
     });
 
     it('survives a cycle of branches hanging off each other', () => {
@@ -148,7 +148,7 @@ describe('model removal: ids that fight the code', () => {
 
         const input = payloadOf(a, b);
 
-        assert.deepEqual(idsOf(remove(input, 'a').payload), storeIdsAfterRemoving(input, ['a']));
+        assert.deepEqual(storeIdsAfterLoading(remove(input, 'a').payload), storeIdsAfterRemoving(input, ['a']));
     });
 });
 
@@ -218,6 +218,20 @@ describe('model removal: files in odd shapes', () => {
         assert.equal(remove(input, 'a').payload, input);
     });
 
+    it('hands back a payload under a former collection key in the current format, even when nothing goes', () => {
+        const legacyKey = SUPPORT_TYPES.flatMap((d) => d.renamedFrom?.collectionKeys ?? [])[0];
+        if (!legacyKey) return;
+        const key = SUPPORT_TYPES.find((d) => d.renamedFrom?.collectionKeys?.includes(legacyKey))!.location.key;
+        const input = { ...payloadOf(supportsOf('b')), [legacyKey]: [{ id: 'old', modelId: 'b' }] } as DragonfruitImportFormat;
+        delete (input as unknown as Record<string, unknown>)[key];
+
+        const { payload, removed } = remove(input, 'a');
+
+        assert.equal(removed, 0);
+        assert.ok(!(legacyKey in payload));
+        assert.deepEqual((payload as unknown as Record<string, { id: string }[]>)[key].map((entity) => entity.id), ['old']);
+    });
+
     it('agrees with the store when a wrapper\'s knot differs from the one in `knots`', () => {
         const a = supportsOf('a');
         const b = supportsOf('b');
@@ -226,7 +240,7 @@ describe('model removal: files in odd shapes', () => {
 
         const input = payloadOf(a, b);
 
-        assert.deepEqual(idsOf(remove(input, 'a').payload), storeIdsAfterRemoving(input, ['a']));
+        assert.deepEqual(storeIdsAfterLoading(remove(input, 'a').payload), storeIdsAfterRemoving(input, ['a']));
     });
 });
 
@@ -273,21 +287,6 @@ describe('model removal: arguments', () => {
     });
 });
 
-/**
- * Ids per collection with kickstand wrappers opened, as the store holds them: a
- * CLI-written file keeps a kickstand's root and knot only inside the wrapper.
- */
-function unwrappedIdsOf(payload: DragonfruitImportFormat): Record<string, string[]> {
-    const ids = idsOf(payload);
-    for (const { root, hostKnot } of payload.kickstands ?? []) {
-        ids.roots.push(root.id);
-        ids.knots.push(hostKnot.id);
-    }
-    ids.roots = [...new Set(ids.roots)].sort();
-    ids.knots = [...new Set(ids.knots)].sort();
-    return ids;
-}
-
 /** Small seeded generator, so a failing scene comes back from its seed alone. */
 function mulberry32(seed: number) {
     return () => {
@@ -321,8 +320,10 @@ function randomScene(seed: number, modelCount = 4): DragonfruitImportFormat {
         const segment = id('seg');
         segments.push(segment);
         // Now and then a root stamped with the wrong model.
-        parts.roots.push({ id: rootId, modelId: random() < 0.1 ? pick(models) : modelId });
+        parts.roots.push(root(rootId, random() < 0.1 ? pick(models) : modelId));
         parts.trunks.push({ id: id('trunk'), modelId, rootId, segments: [seg(segment)] });
+        // Now and then a root nothing stands on.
+        if (random() < 0.3) parts.roots.push(root(id('root'), pick(models)));
     }
 
     for (let i = 0; i < 5 + random() * 30; i++) {
@@ -337,26 +338,26 @@ function randomScene(seed: number, modelCount = 4): DragonfruitImportFormat {
         } else if (roll < 0.55) {
             parts.braces.push({ id: id('brace'), modelId, startKnotId: newKnot(), endKnotId: newKnot() });
         } else if (roll < 0.65) {
-            parts.twigs.push({ id: id('twig'), modelId });
+            parts.twigs.push({ id: id('twig'), modelId, segments: [] });
         } else if (roll < 0.75) {
-            parts.sticks.push({ id: id('stick'), modelId });
+            parts.sticks.push({ id: id('stick'), modelId, segments: [] });
         } else if (roll < 0.85) {
-            parts.stumps.push({ id: id('stump'), modelId });
+            parts.stumps.push({ id: id('stump'), modelId, segments: [] });
         } else {
-            const root = { id: id('root'), modelId };
+            const kickstandRoot = root(id('root'), modelId);
             const hostKnot = knot(id('knot'), pick(segments));
             // The app also writes both into their own arrays, the CLI does not.
             if (random() < 0.5) {
-                parts.roots.push(root);
+                parts.roots.push(kickstandRoot);
                 parts.knots.push(hostKnot);
             }
             parts.kickstands.push({
-                root,
+                root: kickstandRoot,
                 hostKnot,
                 kickstand: {
                     id: id('kick'),
                     modelId,
-                    rootId: root.id,
+                    rootId: kickstandRoot.id,
                     hostKnotId: hostKnot.id,
                     hostSegmentId: hostKnot.parentShaftId,
                     segments: [],
@@ -406,7 +407,7 @@ describe(`model removal: ${SCENES} random scenes`, () => {
 
     it('agrees with the store', () => {
         eachScene((input, models, seed) => {
-            assert.deepEqual(unwrappedIdsOf(remove(input, ...models).payload), storeIdsAfterRemoving(input, models), `seed ${seed}`);
+            assert.deepEqual(storeIdsAfterLoading(remove(input, ...models).payload), storeIdsAfterRemoving(input, models), `seed ${seed}`);
         });
         resetStore();
     });
@@ -425,6 +426,18 @@ describe(`model removal: ${SCENES} random scenes`, () => {
                 [],
                 `seed ${seed}`,
             );
+        });
+    });
+
+    it('leaves no root of a removed model that nothing stands on', () => {
+        eachScene((input, models, seed) => {
+            const { payload } = remove(input, ...models);
+            const claimed = new Set([
+                ...payload.trunks.map((trunk) => trunk.rootId),
+                ...(payload.kickstands ?? []).map((build) => build.kickstand.rootId),
+            ]);
+            const left = payload.roots.filter((root) => models.includes(root.modelId ?? '') && !claimed.has(root.id));
+            assert.deepEqual(left.map((root) => root.id), [], `seed ${seed}`);
         });
     });
 
@@ -470,7 +483,7 @@ describe(`model removal: ${SCENES} random scenes`, () => {
 });
 
 describe('model removal: scale', () => {
-    it('clears 60 000 supports in well under a second per ten thousand', () => {
+    it('clears 60 000 supports without going quadratic', () => {
         const parts = Array.from({ length: 2_000 }, (_, index) => supportsOf(`m${index % 20}-${index}`));
         const input = payloadOf(...parts);
         const modelIds = parts.slice(0, 1_000).map((part) => part.twigs[0].modelId);
@@ -480,7 +493,8 @@ describe('model removal: scale', () => {
         const elapsed = performance.now() - started;
 
         assert.ok(removed > 10_000);
-        assert.ok(elapsed < 3_000, `took ${Math.round(elapsed)} ms`);
+        // About 0.2 s here; quadratic would take minutes, so a wide limit stays steady on a busy runner.
+        assert.ok(elapsed < 30_000, `took ${Math.round(elapsed)} ms`);
     });
 
     it('walks a branch chain 5 000 deep without overflowing the stack', () => {
@@ -499,6 +513,15 @@ describe('model removal: scale', () => {
 });
 
 describe('model removal: the store', () => {
+    it('takes a root of the removed model that nothing stands on', () => {
+        // Written in directly: the loader prunes an unclaimed root, editing can leave one.
+        resetStore();
+        setSnapshot({ ...getSnapshot(), roots: { orphan: { id: 'orphan', modelId: 'a' }, kept: { id: 'kept', modelId: 'b' } } } as unknown as SupportState);
+
+        assert.equal(removeSupportEntitiesForModels(['a']), 1);
+        assert.deepEqual(Object.keys(getSnapshot().roots), ['kept']);
+    });
+
     it('is not left holding a root another model\'s trunk stands on', () => {
         const b = supportsOf('b');
         b.roots[0].modelId = 'a';

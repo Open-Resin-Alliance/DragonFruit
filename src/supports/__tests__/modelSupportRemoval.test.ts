@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import { modelCascadeSeeds, withoutModelSupports } from '../PlacementLogic/SupportModelLinker';
 import { IMPORT_PAYLOAD_COLLECTION_ORDER } from '../supportCollections';
 import { SUPPORT_TYPES, type SupportCollectionKey } from '../supportTypeRegistry';
-import { idsOf, payloadOf, storeIdsAfterRemoving, supportsOf } from './helpers/modelSupportFixtures';
+import { idsOf, payloadOf, storeIdsAfterLoading, storeIdsAfterRemoving, supportsOf } from './helpers/modelSupportFixtures';
 
 /**
  * Removing a model's supports from the file's arrays and from the store is one
@@ -108,6 +108,6 @@ describe('removing a model\'s supports', () => {
 
         const { payload } = withoutModelSupports({ payload: input, modelIds: ['a'] });
 
-        assert.deepEqual(idsOf(payload), storeIdsAfterRemoving(input, ['a']));
+        assert.deepEqual(storeIdsAfterLoading(payload), storeIdsAfterRemoving(input, ['a']));
     });
 });
