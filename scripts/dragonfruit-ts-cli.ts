@@ -168,6 +168,18 @@ function parseVec3(s: string): Vec3 {
   return { x: parts[0], y: parts[1], z: parts[2] };
 }
 
+/**
+ * Short flags and old spellings, by the name the commands read. `--o` was the
+ * only spelling of the output flag until `-o` and `--output` worked, so scripts
+ * that still pass it keep working.
+ */
+const FLAG_ALIASES: Record<string, string> = { o: 'output' };
+
+/** `--name`, or a single letter such as `-o`. A value like `-10,20,0` is not a flag. */
+function isFlag(arg: string): boolean {
+  return arg.startsWith('--') || /^-[A-Za-z]$/.test(arg);
+}
+
 function parseArgs(argv: string[]): { command: string; subcommand: string; positional: string[]; flags: Record<string, string | boolean> } {
   const command = argv[0] ?? '';
   const subcommand = argv[1] ?? '';
@@ -177,10 +189,11 @@ function parseArgs(argv: string[]): { command: string; subcommand: string; posit
   let i = 2;
   while (i < argv.length) {
     const arg = argv[i];
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2);
+    if (isFlag(arg)) {
+      const name = arg.replace(/^--?/, '');
+      const key = FLAG_ALIASES[name] ?? name;
       const next = argv[i + 1];
-      if (next && !next.startsWith('--')) {
+      if (next && !isFlag(next)) {
         flags[key] = next;
         i += 2;
       } else {
@@ -230,7 +243,7 @@ function jsonOutput(flags: Record<string, string | boolean>): boolean {
 // ---------------------------------------------------------------------------
 
 async function sceneCreate(args: ReturnType<typeof parseArgs>): Promise<void> {
-  const output = requireFlag(args.flags, 'o');
+  const output = requireFlag(args.flags, 'output');
   const doc = createEmptyDoc();
   await saveVoxl(output, doc);
   if (jsonOutput(args.flags)) {
@@ -1074,10 +1087,10 @@ async function scenePlace(args: ReturnType<typeof parseArgs>): Promise<void> {
 
 async function sceneExportStl(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
-  if (!voxlPath) throw new Error('Usage: scene export-stl <scene.voxl> --o <output.stl> --mesh-dir <dir>');
+  if (!voxlPath) throw new Error('Usage: scene export-stl <scene.voxl> -o <output.stl> --mesh-dir <dir>');
 
   const doc = await loadVoxl(voxlPath);
-  const output = requireFlag(args.flags, 'o');
+  const output = requireFlag(args.flags, 'output');
   const meshDir = optionalFlag(args.flags, 'mesh-dir') ?? dirname(resolve(voxlPath));
   const visibleModels = doc.models.filter((m) => m.visible);
   if (visibleModels.length === 0) throw new Error('No visible models');
@@ -1443,7 +1456,7 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) {
     throw new Error(
-      'Usage: scene slice <scene.voxl> --o <output> [--mesh-dir <dir>]\n'
+      'Usage: scene slice <scene.voxl> -o <output> [--mesh-dir <dir>]\n'
       + '  [--plate <id|n>]                                 the plate to slice, by id or number from 1 (default: the active plate)\n'
       + '  [--printer <profile.json>] [--printer-id <id>]  preset, profile or app-exported bundle; builds the job the app would\n'
       + '  [--material <profile.json>]                      default: the bundle\'s first material, else the app\'s default\n'
@@ -1457,7 +1470,7 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
     );
   }
 
-  const output = requireFlag(args.flags, 'o');
+  const output = requireFlag(args.flags, 'output');
   const meshDir = optionalFlag(args.flags, 'mesh-dir') ?? dirname(resolve(voxlPath));
   const raftMode = optionalFlag(args.flags, 'raft') as 'off' | 'solid' | 'line' | undefined;
   if (raftMode !== undefined && raftMode !== 'off' && raftMode !== 'solid' && raftMode !== 'line') {

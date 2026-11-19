@@ -100,13 +100,13 @@ function checkCubeSlice(label: string, result: SliceReport, output: string): voi
 }
 
 function slice(scene: string, output: string, ...flags: string[]): SliceReport {
-  return JSON.parse(cli('scene', 'slice', scene, '--o', output, '--printer', printer, ...flags, '--json'));
+  return JSON.parse(cli('scene', 'slice', scene, '-o', output, '--printer', printer, ...flags, '--json'));
 }
 
 function oneCube(dir: string, stl: string): void {
   const scene = join(dir, 'one.voxl');
   const output = join(dir, 'one.ctb');
-  cli('scene', 'create', '--o', scene);
+  cli('scene', 'create', '-o', scene);
   const model = JSON.parse(cli('scene', 'add-model', scene, '--mesh', stl, '--name', 'Cube', '--json'));
   cli('scene', 'place-on-platform', scene, '--id', model.id);
   const result = slice(scene, output);
@@ -118,7 +118,7 @@ function oneCube(dir: string, stl: string): void {
 
 async function twoPlates(dir: string, stl: string): Promise<void> {
   const scene = join(dir, 'two.voxl');
-  cli('scene', 'create', '--o', scene);
+  cli('scene', 'create', '-o', scene);
   const a = JSON.parse(cli('scene', 'add-model', scene, '--mesh', stl, '--name', 'Cube A', '--json'));
   const b = JSON.parse(cli('scene', 'add-model', scene, '--mesh', stl, '--name', 'Cube B', '--json'));
   cli('scene', 'place-on-platform', scene, '--id', a.id);
