@@ -99,6 +99,15 @@
     "totalAmountDonated": 30
   },
   {
+    "name": "Viznoman",
+    "profile": "https://opencollective.com/viznoman",
+    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/b023bcba-1115-4154-aa3c-8991af9ebc6f/Smug%20man%20face%20icon.jpg",
+    "website": null,
+    "role": "BACKER",
+    "tier": "Contributor",
+    "totalAmountDonated": 30
+  },
+  {
     "name": "DCent",
     "profile": "https://opencollective.com/guest-c5210655",
     "image": null,
@@ -126,9 +135,9 @@
     "totalAmountDonated": 15
   },
   {
-    "name": "Viznoman",
-    "profile": "https://opencollective.com/viznoman",
-    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/b023bcba-1115-4154-aa3c-8991af9ebc6f/Smug%20man%20face%20icon.jpg",
+    "name": "Emerald",
+    "profile": "https://opencollective.com/incognito-ee2e5f56",
+    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/7a58f963-2e95-455c-b5aa-f9889218c81d/ghoster_comfort_barkie.jpg",
     "website": null,
     "role": "BACKER",
     "tier": "Contributor",
@@ -141,7 +150,16 @@
     "website": null,
     "role": "BACKER",
     "tier": "Backer",
-    "totalAmountDonated": 10
+    "totalAmountDonated": 15
+  },
+  {
+    "name": "Sump Sea Foundry",
+    "profile": "https://opencollective.com/sump-sea-foundry",
+    "image": "https://opencollective-production.s3.us-west-1.amazonaws.com/account-avatar/d37a5671-47ba-4b52-a2bc-2b9c94aed695/471811145_606512545240602_6909841785639435027_n.jpg",
+    "website": null,
+    "role": "BACKER",
+    "tier": null,
+    "totalAmountDonated": 12
   },
   {
     "name": "MachineMenace",
