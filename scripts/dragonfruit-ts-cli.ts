@@ -50,8 +50,11 @@ import type {
   Brace,
   Knot,
   Vec3,
-  SupportEntity,
+  Kickstand,
+  BezierSegment,
+  Segment,
 } from '../src/supports/types';
+import type { KickstandBuildResult } from '../src/supports/SupportTypes/Kickstand/types';
 import type { AaPreset } from '../src/features/slicing/autoAaPhysics';
 import type { SceneSliceModelInput } from './cli/sceneSliceMesh';
 import { removeModelFromDocument } from './cli/sceneRemoveModel';
@@ -178,6 +181,14 @@ const FLAG_ALIASES: Record<string, string> = { o: 'output' };
 /** `--name`, or a single letter such as `-o`. A value like `-10,20,0` is not a flag. */
 function isFlag(arg: string): boolean {
   return arg.startsWith('--') || /^-[A-Za-z]$/.test(arg);
+}
+
+/**
+ * A kickstand's id. Scenes store the whole build result; a bare kickstand is
+ * matched too, as the CLI always has.
+ */
+function kickstandId(k: KickstandBuildResult | Kickstand): string | undefined {
+  return 'kickstand' in k ? k.kickstand?.id : k.id;
 }
 
 function parseArgs(argv: string[]): { command: string; subcommand: string; positional: string[]; flags: Record<string, string | boolean> } {
@@ -593,7 +604,7 @@ async function supportRemove(args: ReturnType<typeof parseArgs>): Promise<void> 
     s.branches = s.branches.filter((b) => !knotIds.includes(b.parentKnotId));
     s.leaves = s.leaves.filter((l) => !knotIds.includes(l.parentKnotId));
     s.braces = s.braces.filter((b) => !knotIds.includes(b.startKnotId) && !knotIds.includes(b.endKnotId));
-    if (s.kickstands) s.kickstands = s.kickstands.filter((k: any) => !knotIds.includes(k.hostKnot?.id));
+    if (s.kickstands) s.kickstands = s.kickstands.filter((k) => !knotIds.includes(k.hostKnot?.id));
     // Recurse: branches are shafts too
     if (branchIds.length > 0) cascadeRemoveByShaftIds(branchIds);
   };
@@ -620,8 +631,7 @@ async function supportRemove(args: ReturnType<typeof parseArgs>): Promise<void> 
     s.leaves = s.leaves.filter((l) => l.id !== id);
     s.braces = s.braces.filter((b) => b.id !== id);
     s.knots = s.knots.filter((k) => k.id !== id);
-    if (s.kickstands) s.kickstands = s.kickstands.filter((k: any) =>
-      (k.kickstand?.id ?? k.id) !== id);
+    if (s.kickstands) s.kickstands = s.kickstands.filter((k) => kickstandId(k) !== id);
   }
 
   await saveVoxl(voxlPath, doc);
@@ -740,7 +750,7 @@ async function supportUpdate(args: ReturnType<typeof parseArgs>): Promise<void> 
     }
   }
   if (!found) for (const k of s.kickstands ?? []) {
-    if ((k as any).kickstand?.id === id || (k as any).id === id) {
+    if (kickstandId(k) === id) {
       found = true; break;
     }
   }
@@ -762,12 +772,11 @@ async function supportUpdate(args: ReturnType<typeof parseArgs>): Promise<void> 
 type VoxlGroup = { id: string; name: string; modelIds: string[] };
 
 function getGroups(doc: VoxlDocumentV1): VoxlGroup[] {
-  return ((doc.extensions as any)?.groups as VoxlGroup[]) ?? [];
+  return (doc.extensions?.groups as VoxlGroup[] | undefined) ?? [];
 }
 
 function setGroups(doc: VoxlDocumentV1, groups: VoxlGroup[]): void {
-  if (!doc.extensions) doc.extensions = {};
-  (doc.extensions as any).groups = groups;
+  doc.extensions = { ...doc.extensions, groups };
 }
 
 async function sceneGroup(args: ReturnType<typeof parseArgs>): Promise<void> {
@@ -870,18 +879,19 @@ async function supportStraightenSegment(args: ReturnType<typeof parseArgs>): Pro
   const s = doc.supports;
   let found = false;
 
-  const straighten = (segments: any[]) => {
-    for (let i = 0; i < segments.length; i++) {
-      if (segments[i].id === segId) {
+  const straighten = (segments: Segment[]) => {
+    for (const segment of segments) {
+      if (segment.id === segId) {
         // Remove bezier fields, set to straight
-        delete segments[i].type;
-        delete segments[i].controlPoint1;
-        delete segments[i].controlPoint2;
-        delete segments[i].startTangent;
-        delete segments[i].endTangent;
-        delete segments[i].tension;
-        delete segments[i].bias;
-        delete segments[i].resolution;
+        const seg: Partial<BezierSegment> = segment as BezierSegment;
+        delete seg.type;
+        delete seg.controlPoint1;
+        delete seg.controlPoint2;
+        delete seg.startTangent;
+        delete seg.endTangent;
+        delete seg.tension;
+        delete seg.bias;
+        delete seg.resolution;
         found = true;
         return;
       }
@@ -890,8 +900,8 @@ async function supportStraightenSegment(args: ReturnType<typeof parseArgs>): Pro
 
   for (const trunk of s.trunks) straighten(trunk.segments);
   if (!found) for (const branch of s.branches) straighten(branch.segments);
-  if (!found) for (const twig of s.twigs ?? []) straighten((twig as any).segments ?? []);
-  if (!found) for (const stick of s.sticks ?? []) straighten((stick as any).segments ?? []);
+  if (!found) for (const twig of s.twigs ?? []) straighten(twig.segments ?? []);
+  if (!found) for (const stick of s.sticks ?? []) straighten(stick.segments ?? []);
 
   if (!found) throw new Error(`Segment '${segId}' not found`);
 
@@ -1143,7 +1153,6 @@ import { quaternionFromGlobalEuler } from '../src/utils/rotation';
 import {
   computeHighPrecisionArrangeUpdates,
   type ArrangeModel,
-  type ArrangeTransform,
   type HullCacheEntry,
   type HighPrecisionArrangeInput,
 } from '../src/features/scene/arrange/highPrecisionArrange';
@@ -1882,8 +1891,8 @@ async function main(): Promise<void> {
       throw new Error(`Unknown command: ${args.command}\n\n${USAGE}`);
     }
     await pending;
-  } catch (err: any) {
-    console.error(`Error: ${err.message}`);
+  } catch (err) {
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 }
