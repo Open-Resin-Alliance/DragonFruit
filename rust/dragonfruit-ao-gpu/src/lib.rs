@@ -78,21 +78,40 @@ fn instance() -> wgpu::Instance {
     })
 }
 
-/// Whether this machine has a discrete GPU.
+/// Whether this machine should spend the bake.
 ///
-/// The product policy is to skip the AO bake entirely without one: an
-/// integrated GPU can run the compute bake, but it is still a bake the machine
-/// has to pay for, and the caller has chosen not to spend it there. The crate
-/// itself still bakes on an integrated adapter when asked directly.
-static HAS_DISCRETE_ADAPTER: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+/// The policy is to skip the AO bake on integrated-only Windows and Linux
+/// machines: the compute bake still runs there, but it is work the user did not
+/// ask for on an adapter that shares power and bandwidth with everything else.
+///
+/// macOS is the exception, and the reason is that the classification, not the
+/// hardware, is what changes. Apple Silicon reports its unified GPU as
+/// `IntegratedGpu` to wgpu, and no Mac it ships has a discrete adapter to prefer,
+/// so a discrete-only rule would disable AO on every Mac - including the fastest
+/// GPUs the app runs on. An integrated adapter therefore counts as capable there.
+static OCCLUSION_SUPPORTED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+    let integrated_is_capable = cfg!(target_os = "macos");
     let instance = instance();
     pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
         .iter()
-        .any(|adapter| adapter.get_info().device_type == wgpu::DeviceType::DiscreteGpu)
+        .any(|adapter| adapter_is_capable(adapter.get_info().device_type, integrated_is_capable))
 });
 
-pub fn has_discrete_adapter() -> bool {
-    *HAS_DISCRETE_ADAPTER
+/// Whether one adapter satisfies the bake policy.
+///
+/// Split out and parameterised so the platform rule is testable without an
+/// adapter; software (`Cpu`) adapters never qualify, whatever the platform.
+fn adapter_is_capable(device_type: wgpu::DeviceType, integrated_is_capable: bool) -> bool {
+    match device_type {
+        wgpu::DeviceType::DiscreteGpu => true,
+        wgpu::DeviceType::IntegratedGpu => integrated_is_capable,
+        _ => false,
+    }
+}
+
+/// Whether the AO bake should run on this machine; see [`OCCLUSION_SUPPORTED`].
+pub fn occlusion_supported() -> bool {
+    *OCCLUSION_SUPPORTED
 }
 
 /// The process-wide device, or `None` when this machine has no usable adapter.
@@ -342,4 +361,31 @@ pub fn bake_raw(mesh: &IndexedMesh, rays: usize, rotate: bool) -> Result<Vec<f32
 pub fn bake_smoothed(mesh: &IndexedMesh, rays: usize) -> Result<Vec<f32>, String> {
     let field = bake(mesh, rays)?;
     Ok(smooth_over_mesh_graph(mesh, &field, SMOOTHING_PASSES))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::adapter_is_capable;
+    use wgpu::DeviceType;
+
+    #[test]
+    fn a_discrete_adapter_always_qualifies() {
+        assert!(adapter_is_capable(DeviceType::DiscreteGpu, false));
+        assert!(adapter_is_capable(DeviceType::DiscreteGpu, true));
+    }
+
+    #[test]
+    fn an_integrated_adapter_qualifies_only_where_it_is_the_machine_gpu() {
+        // Windows/Linux keep the discrete-only policy.
+        assert!(!adapter_is_capable(DeviceType::IntegratedGpu, false));
+        // macOS: every Mac GPU is reported integrated, so it must count.
+        assert!(adapter_is_capable(DeviceType::IntegratedGpu, true));
+    }
+
+    #[test]
+    fn a_software_adapter_never_qualifies() {
+        assert!(!adapter_is_capable(DeviceType::Cpu, true));
+        assert!(!adapter_is_capable(DeviceType::Other, true));
+        assert!(!adapter_is_capable(DeviceType::VirtualGpu, true));
+    }
 }

@@ -104,11 +104,12 @@ fn bake_on_gpu(soup: &[f32], rays: usize) -> Result<(Vec<f32>, usize), String> {
 
 /// Whether AO should be baked on this machine.
 ///
-/// The bake is only run when a discrete GPU is present. Integrated-only
-/// machines render without baked occlusion instead of paying for the bake.
+/// Integrated-only Windows and Linux machines render without baked occlusion
+/// instead of paying for the bake. macOS counts its integrated adapter as
+/// capable: every Mac GPU is reported that way, and it is the machine's GPU.
 #[tauri::command]
 pub fn ao_available() -> bool {
-    dragonfruit_ao_gpu::has_discrete_adapter()
+    dragonfruit_ao_gpu::occlusion_supported()
 }
 
 /// Bake per-vertex ambient occlusion for a mesh supplied in the request body.
@@ -126,9 +127,9 @@ pub fn ao_available() -> bool {
 ///
 #[tauri::command]
 pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, String> {
-    if !dragonfruit_ao_gpu::has_discrete_adapter() {
+    if !dragonfruit_ao_gpu::occlusion_supported() {
         return Err(
-            "bake_vertex_occlusion: AO is disabled without a discrete GPU".to_string(),
+            "bake_vertex_occlusion: AO is disabled on this adapter".to_string(),
         );
     }
 
