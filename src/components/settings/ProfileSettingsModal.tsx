@@ -1296,6 +1296,8 @@ export function ProfileSettingsModal({
   const wasOpenRef = React.useRef(false);
   const materialSelectionInitializedRef = React.useRef(false);
   const lastInitializedNetworkPrinterIdRef = React.useRef<string | null>(null);
+  // Profile whose Fleet Management add-printer flow should open once it is selected.
+  const pendingFleetAddPrinterIdRef = React.useRef<string | null>(null);
   const discoveryInFlightRef = React.useRef(false);
   const discoveryRunIdRef = React.useRef(0);
 
@@ -2253,6 +2255,12 @@ export function ProfileSettingsModal({
     setCachedDiscoveredPrinters(discoveredPrinters);
     setDiscoveredPrinters([]);
     setNetworkConnectionMessage(selectedPrinter.networkConnection?.statusText ?? '');
+    if (pendingFleetAddPrinterIdRef.current === selectedPrinter.id) {
+      pendingFleetAddPrinterIdRef.current = null;
+      setIsAddingNetworkPrinter(true);
+      setIsNetworkSettingsOpen(true);
+      return;
+    }
     setIsAddingNetworkPrinter((selectedPrinter.networkFleet?.length ?? 0) === 0);
   }, [discoveredPrinters, selectedPrinter]);
 
@@ -3282,6 +3290,26 @@ export function ProfileSettingsModal({
     if (presetManufacturers.length > 0) setSelectedPresetManufacturer(presetManufacturers[0]);
   }, [selectedLibraryPresetIds, handlePickPrinter, presetManufacturers]);
 
+  // A second unit of an already-added model joins that profile's network fleet
+  // instead of becoming a duplicate profile.
+  const handleAddUnitToExistingFleet = React.useCallback((presetId: string) => {
+    const existing = profileState.printerProfiles.find((profile) => (
+      profile.isOfficial && resolveOfficialPresetIdFromProfile(profile) === presetId
+    ));
+    if (!existing?.networkSupport) return;
+    setShowPresetPicker(false);
+    setPresetSearch('');
+    setSelectedLibraryPresetIds(new Set());
+    setPrinterRailViewMode('profiles');
+    if (selectedPrinter?.id === existing.id) {
+      setIsAddingNetworkPrinter(true);
+      setIsNetworkSettingsOpen(true);
+      return;
+    }
+    pendingFleetAddPrinterIdRef.current = existing.id;
+    handlePickPrinter(existing.id);
+  }, [handlePickPrinter, profileState.printerProfiles, selectedPrinter?.id]);
+
   const handleResolveVariant = React.useCallback((
     variantPresetId: string,
     networkContext?: PrinterVariantPickerNetworkContext,
@@ -3768,6 +3796,8 @@ export function ProfileSettingsModal({
     const isAlreadyAdded = isFamilyPreset
       ? variantIds.every((id) => addedOfficialPresetIds.has(id))
       : addedOfficialPresetIds.has(preset.presetId);
+    // Network printers can take more units of the same model via the fleet.
+    const canAddFleetUnit = isAlreadyAdded && !isFamilyPreset && Boolean(preset.networkSupport);
     const isSelected = isFamilyPreset
       ? variantIds.some((id) => selectedLibraryPresetIds.has(id))
       : selectedLibraryPresetIds.has(preset.presetId);
@@ -3784,6 +3814,10 @@ export function ProfileSettingsModal({
       : null;
 
     const handleToggle = () => {
+      if (canAddFleetUnit) {
+        handleAddUnitToExistingFleet(preset.presetId);
+        return;
+      }
       if (isAlreadyAdded) return;
       // Variant families AND network-detect presets (e.g. Athena) open the
       // Initial Setup flow.
@@ -3803,8 +3837,9 @@ export function ProfileSettingsModal({
       <button
         key={preset.presetId}
         type="button"
-        disabled={isAlreadyAdded}
+        disabled={isAlreadyAdded && !canAddFleetUnit}
         onClick={handleToggle}
+        title={canAddFleetUnit ? _(msg`Already added. Click to add another printer to its fleet.`) : undefined}
         className="rounded-md border p-2.5 text-left disabled:opacity-55 transition-[background-color,box-shadow,opacity] duration-150"
         style={{
           borderColor: 'var(--border-subtle)',
@@ -3902,7 +3937,7 @@ export function ProfileSettingsModal({
         </div>
       </button>
     );
-  }, [addedOfficialPresetIds, availablePrinterPresets, selectedLibraryPresetIds]);
+  }, [_, addedOfficialPresetIds, availablePrinterPresets, handleAddUnitToExistingFleet, selectedLibraryPresetIds]);
 
   if (!isOpen) return null;
   const hasPrinters = profileState.printerProfiles.length > 0;

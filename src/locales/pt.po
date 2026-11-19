@@ -43,7 +43,7 @@ msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr ""
 
 #. placeholder {0}: selectedLibraryPresetIds.size
-#: src/components/settings/ProfileSettingsModal.tsx:5392
+#: src/components/settings/ProfileSettingsModal.tsx:5427
 msgid "{0, plural, one {Add # printer} other {Add # printers}}"
 msgstr "{0, plural, one {Adicionar # impressora} other {Adicionar # impressoras}}"
 
@@ -758,8 +758,8 @@ msgstr "Adicionar mesa {plateNumber}"
 #: src/components/printers/PrinterVariantPickerModal.tsx:707
 #: src/components/settings/FleetManagement.tsx:269
 #: src/components/settings/PluginStudioModal.tsx:2100
-#: src/components/settings/ProfileSettingsModal.tsx:4002
-#: src/components/settings/ProfileSettingsModal.tsx:4065
+#: src/components/settings/ProfileSettingsModal.tsx:4037
+#: src/components/settings/ProfileSettingsModal.tsx:4100
 msgid "Add printer"
 msgstr "Adicionar impressora"
 
@@ -767,7 +767,7 @@ msgstr "Adicionar impressora"
 msgid "Add printer variant"
 msgstr "Adicionar variante de impressora"
 
-#: src/components/settings/ProfileSettingsModal.tsx:5393
+#: src/components/settings/ProfileSettingsModal.tsx:5428
 msgid "Add printers"
 msgstr "Adicionar impressoras"
 
@@ -784,6 +784,10 @@ msgstr "Adicionar toco"
 #: src/components/controls/AutoSupportPanel.tsx:571
 msgid "Add to existing"
 msgstr "Adicionar aos existentes"
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:707
+msgid "Add to fleet"
+msgstr ""
 
 #: src/supports/history/supportHistoryLabels.ts:14
 msgctxt "Undo history entry"
@@ -879,6 +883,10 @@ msgstr "Saída alfa"
 #: src/features/slicing/components/LutCurveEditor.tsx:1221
 msgid "Alpha value display mode"
 msgstr "Modo de exibição do valor alfa"
+
+#: src/components/settings/ProfileSettingsModal.tsx:3842
+msgid "Already added. Click to add another printer to its fleet."
+msgstr ""
 
 #: src/components/organisms/NotificationStack.tsx:10
 msgid "Already optimal for this goal."
@@ -1518,7 +1526,7 @@ msgstr "A operação booleana requer uma malha manifold"
 msgid "Bottom"
 msgstr "Inferior"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6752
+#: src/components/settings/ProfileSettingsModal.tsx:6787
 msgid "Bottom layer count"
 msgstr ""
 
@@ -2202,7 +2210,7 @@ msgstr "Fechar detalhes do snapshot"
 msgid "Close supports modal"
 msgstr "Fechar janela de suportes"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6696
+#: src/components/settings/ProfileSettingsModal.tsx:6731
 msgid "Close tank material comparison"
 msgstr ""
 
@@ -2996,7 +3004,7 @@ msgstr "Excluir predefinição"
 msgid "Delete presets"
 msgstr "Excluir predefinições"
 
-#: src/components/settings/ProfileSettingsModal.tsx:4288
+#: src/components/settings/ProfileSettingsModal.tsx:4323
 msgid "Delete printer"
 msgstr ""
 
@@ -5090,11 +5098,11 @@ msgstr "Camada 0 de 0. Vivendo perigosamente."
 msgid "Layer Height"
 msgstr "Altura de Camada"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6747
+#: src/components/settings/ProfileSettingsModal.tsx:6782
 msgid "Layer height (mm)"
 msgstr "Altura da camada (mm)"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6730
+#: src/components/settings/ProfileSettingsModal.tsx:6765
 msgid "Layer height, bottom layer count and transition layers must match across tanks. Choose which material supplies all three."
 msgstr ""
 
@@ -5409,7 +5417,7 @@ msgstr "Travar ponto de passagem"
 msgid "Locked"
 msgstr "Travado"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6766
+#: src/components/settings/ProfileSettingsModal.tsx:6801
 msgid "Locked materials cannot be changed. Unlock or make a custom copy before applying settings."
 msgstr ""
 
@@ -8928,7 +8936,7 @@ msgstr "Configurar OAuth"
 msgid "Set up private backups"
 msgstr "Configurar backups privados"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6736
+#: src/components/settings/ProfileSettingsModal.tsx:6771
 msgid "Setting"
 msgstr ""
 
@@ -9749,8 +9757,8 @@ msgstr "Leve-me de volta!"
 msgid "Tank {0}"
 msgstr ""
 
-#: src/components/settings/ProfileSettingsModal.tsx:6687
-#: src/components/settings/ProfileSettingsModal.tsx:6688
+#: src/components/settings/ProfileSettingsModal.tsx:6722
+#: src/components/settings/ProfileSettingsModal.tsx:6723
 msgid "Tank material settings do not match"
 msgstr ""
 
@@ -10132,8 +10140,8 @@ msgstr "Esta é uma operação computacionalmente pesada para empacotamento dens
 msgid "This machine is currently offline"
 msgstr "Esta máquina está offline no momento"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6706
-#: src/components/settings/ProfileSettingsModal.tsx:6718
+#: src/components/settings/ProfileSettingsModal.tsx:6741
+#: src/components/settings/ProfileSettingsModal.tsx:6753
 msgid "This material is locked. Unlock it or make a custom copy before applying settings."
 msgstr ""
 
@@ -10162,8 +10170,8 @@ msgid "This model has severe mesh issues and is likely to need heavy repair."
 msgstr "Este modelo possui problemas graves de malha e provavelmente precisará de um reparo pesado."
 
 #: src/components/printers/PrinterVariantPickerModal.tsx:461
-msgid "This model is already added."
-msgstr "Este modelo já foi adicionado."
+msgid "This model is already added. This printer will join its fleet."
+msgstr ""
 
 #: src/components/settings/PluginsSettingsTab.tsx:1291
 msgid "This package runs native code with your user account. It can read your files and open network connections. Only install packages from a vendor you trust."
@@ -10365,7 +10373,7 @@ msgctxt "Undo history entry"
 msgid "Transform {modelName}"
 msgstr "Transformar {modelName}"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6757
+#: src/components/settings/ProfileSettingsModal.tsx:6792
 msgid "Transition layers"
 msgstr ""
 

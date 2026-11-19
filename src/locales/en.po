@@ -43,7 +43,7 @@ msgid "{0, plural, one {# printer preset} other {# printer presets}}"
 msgstr "{0, plural, one {# printer preset} other {# printer presets}}"
 
 #. placeholder {0}: selectedLibraryPresetIds.size
-#: src/components/settings/ProfileSettingsModal.tsx:5392
+#: src/components/settings/ProfileSettingsModal.tsx:5427
 msgid "{0, plural, one {Add # printer} other {Add # printers}}"
 msgstr "{0, plural, one {Add # printer} other {Add # printers}}"
 
@@ -758,8 +758,8 @@ msgstr "Add plate {plateNumber}"
 #: src/components/printers/PrinterVariantPickerModal.tsx:707
 #: src/components/settings/FleetManagement.tsx:269
 #: src/components/settings/PluginStudioModal.tsx:2100
-#: src/components/settings/ProfileSettingsModal.tsx:4002
-#: src/components/settings/ProfileSettingsModal.tsx:4065
+#: src/components/settings/ProfileSettingsModal.tsx:4037
+#: src/components/settings/ProfileSettingsModal.tsx:4100
 msgid "Add printer"
 msgstr "Add printer"
 
@@ -767,7 +767,7 @@ msgstr "Add printer"
 msgid "Add printer variant"
 msgstr "Add printer variant"
 
-#: src/components/settings/ProfileSettingsModal.tsx:5393
+#: src/components/settings/ProfileSettingsModal.tsx:5428
 msgid "Add printers"
 msgstr "Add printers"
 
@@ -784,6 +784,10 @@ msgstr "Add stump"
 #: src/components/controls/AutoSupportPanel.tsx:571
 msgid "Add to existing"
 msgstr "Add to existing"
+
+#: src/components/printers/PrinterVariantPickerModal.tsx:707
+msgid "Add to fleet"
+msgstr "Add to fleet"
 
 #: src/supports/history/supportHistoryLabels.ts:14
 msgctxt "Undo history entry"
@@ -879,6 +883,10 @@ msgstr "Alpha Output"
 #: src/features/slicing/components/LutCurveEditor.tsx:1221
 msgid "Alpha value display mode"
 msgstr "Alpha value display mode"
+
+#: src/components/settings/ProfileSettingsModal.tsx:3842
+msgid "Already added. Click to add another printer to its fleet."
+msgstr "Already added. Click to add another printer to its fleet."
 
 #: src/components/organisms/NotificationStack.tsx:10
 msgid "Already optimal for this goal."
@@ -1518,7 +1526,7 @@ msgstr "Boolean operation requires a manifold mesh"
 msgid "Bottom"
 msgstr "Bottom"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6752
+#: src/components/settings/ProfileSettingsModal.tsx:6787
 msgid "Bottom layer count"
 msgstr "Bottom layer count"
 
@@ -2202,7 +2210,7 @@ msgstr "Close snapshot details"
 msgid "Close supports modal"
 msgstr "Close supports modal"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6696
+#: src/components/settings/ProfileSettingsModal.tsx:6731
 msgid "Close tank material comparison"
 msgstr "Close tank material comparison"
 
@@ -2996,7 +3004,7 @@ msgstr "Delete preset"
 msgid "Delete presets"
 msgstr "Delete presets"
 
-#: src/components/settings/ProfileSettingsModal.tsx:4288
+#: src/components/settings/ProfileSettingsModal.tsx:4323
 msgid "Delete printer"
 msgstr "Delete printer"
 
@@ -5090,11 +5098,11 @@ msgstr "Layer 0 of 0. Living dangerously."
 msgid "Layer Height"
 msgstr "Layer Height"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6747
+#: src/components/settings/ProfileSettingsModal.tsx:6782
 msgid "Layer height (mm)"
 msgstr "Layer height (mm)"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6730
+#: src/components/settings/ProfileSettingsModal.tsx:6765
 msgid "Layer height, bottom layer count and transition layers must match across tanks. Choose which material supplies all three."
 msgstr "Layer height, bottom layer count and transition layers must match across tanks. Choose which material supplies all three."
 
@@ -5409,7 +5417,7 @@ msgstr "Lock waypoint"
 msgid "Locked"
 msgstr "Locked"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6766
+#: src/components/settings/ProfileSettingsModal.tsx:6801
 msgid "Locked materials cannot be changed. Unlock or make a custom copy before applying settings."
 msgstr "Locked materials cannot be changed. Unlock or make a custom copy before applying settings."
 
@@ -8928,7 +8936,7 @@ msgstr "Set up OAuth"
 msgid "Set up private backups"
 msgstr "Set up private backups"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6736
+#: src/components/settings/ProfileSettingsModal.tsx:6771
 msgid "Setting"
 msgstr "Setting"
 
@@ -9749,8 +9757,8 @@ msgstr "Take me back!"
 msgid "Tank {0}"
 msgstr "Tank {0}"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6687
-#: src/components/settings/ProfileSettingsModal.tsx:6688
+#: src/components/settings/ProfileSettingsModal.tsx:6722
+#: src/components/settings/ProfileSettingsModal.tsx:6723
 msgid "Tank material settings do not match"
 msgstr "Tank material settings do not match"
 
@@ -10132,8 +10140,8 @@ msgstr "This is a computationally expensive operation for dense packing."
 msgid "This machine is currently offline"
 msgstr "This machine is currently offline"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6706
-#: src/components/settings/ProfileSettingsModal.tsx:6718
+#: src/components/settings/ProfileSettingsModal.tsx:6741
+#: src/components/settings/ProfileSettingsModal.tsx:6753
 msgid "This material is locked. Unlock it or make a custom copy before applying settings."
 msgstr "This material is locked. Unlock it or make a custom copy before applying settings."
 
@@ -10162,8 +10170,8 @@ msgid "This model has severe mesh issues and is likely to need heavy repair."
 msgstr "This model has severe mesh issues and is likely to need heavy repair."
 
 #: src/components/printers/PrinterVariantPickerModal.tsx:461
-msgid "This model is already added."
-msgstr "This model is already added."
+msgid "This model is already added. This printer will join its fleet."
+msgstr "This model is already added. This printer will join its fleet."
 
 #: src/components/settings/PluginsSettingsTab.tsx:1291
 msgid "This package runs native code with your user account. It can read your files and open network connections. Only install packages from a vendor you trust."
@@ -10365,7 +10373,7 @@ msgctxt "Undo history entry"
 msgid "Transform {modelName}"
 msgstr "Transform {modelName}"
 
-#: src/components/settings/ProfileSettingsModal.tsx:6757
+#: src/components/settings/ProfileSettingsModal.tsx:6792
 msgid "Transition layers"
 msgstr "Transition layers"
 

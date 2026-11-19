@@ -458,7 +458,7 @@ export function PrinterVariantPickerModal({
                         </div>
                         {detectedAlreadyAdded && (
                           <div className="mt-1.5 text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>
-                            {_(msg`This model is already added.`)}
+                            {_(msg`This model is already added. This printer will join its fleet.`)}
                           </div>
                         )}
                       </div>
@@ -694,7 +694,7 @@ export function PrinterVariantPickerModal({
             >
               {_(msg`Cancel`)}
             </Button>
-            {showNetworkMode && detectedVariant && !detectedAlreadyAdded && (
+            {showNetworkMode && detectedVariant && (
               <Button
                 type="button"
                 onClick={handleConfirmDetected}
@@ -704,7 +704,7 @@ export function PrinterVariantPickerModal({
                 style={ACCENT_ACTION_STYLE}
               >
                 <Check className="h-3.5 w-3.5" />
-                {_(msg`Add printer`)}
+                {detectedAlreadyAdded ? _(msg`Add to fleet`) : _(msg`Add printer`)}
               </Button>
             )}
           </div>
