@@ -92,10 +92,9 @@ function payloadCascadeRecords(payload: DragonfruitImportFormat): Pick<SupportSt
 }
 
 /**
- * `removeSupportEntitiesForModels` for a support payload: the same seeds and
- * the same cascade over the file's arrays, for callers with no store. A payload
- * under former collection names is read as the store would read it. `removed`
- * counts every entity that went, primitives included.
+ * `removeSupportEntitiesForModels` for a support payload, for callers with no store.
+ * The payload comes back in the current format, the same object if it already was
+ * and nothing went; `removed` counts every entity that went, primitives included.
  */
 export function withoutModelSupports({ payload, modelIds }: {
     payload: DragonfruitImportFormat;
@@ -104,7 +103,7 @@ export function withoutModelSupports({ payload, modelIds }: {
     const current = migrateLegacySupportPayload(payload);
     const collections = payloadCascadeRecords(current);
     const seeds = modelCascadeSeeds({ collections, modelIds });
-    if (seeds.length === 0) return { payload, removed: 0 };
+    if (seeds.length === 0) return { payload: current, removed: 0 };
 
     const doomed = collectCascade(collections, seeds);
     const doomedByCollection = groupByCollection(doomed);
