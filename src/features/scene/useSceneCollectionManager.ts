@@ -107,6 +107,7 @@ import {
   reportVoxlUnsupportedVersion,
 } from '@/features/scene/sceneImportMessages';
 import { duplicatedModelName, pastedModelName } from '@/features/scene/modelCopyNames';
+import { dissolveLoneLinkGroups } from '@/features/scene/linkGroups';
 import {
   repairCancelledMessage,
   repairedModelsMessage,
@@ -5473,24 +5474,10 @@ export function useSceneCollectionManager(options?: {
       tryRevokeObjectUrl(model.fileUrl);
     });
 
-    const nextModelsWithoutDeleted = currentModels.filter((m) => !ids.has(m.id));
-
-    // Dissolve link groups if remaining peer count < 2
-    const deletedLinkGroupIds = new Set(existing.map((m) => m.linkGroupId).filter(Boolean) as string[]);
-    let nextModels = nextModelsWithoutDeleted;
-    if (deletedLinkGroupIds.size > 0) {
-      deletedLinkGroupIds.forEach((gId) => {
-        const remaining = nextModels.filter((m) => m.linkGroupId === gId);
-        if (remaining.length < 2) {
-          nextModels = nextModels.map((m) => {
-            if (m.linkGroupId === gId) {
-              return { ...m, linkGroupId: undefined };
-            }
-            return m;
-          });
-        }
-      });
-    }
+    const nextModels = dissolveLoneLinkGroups({
+      models: currentModels.filter((m) => !ids.has(m.id)),
+      removed: existing,
+    });
 
     const nextActiveModelId = currentActiveModelId && ids.has(currentActiveModelId) ? null : currentActiveModelId;
     const nextSelectedModelIds = currentSelectedModelIds.filter((sid) => !ids.has(sid));
