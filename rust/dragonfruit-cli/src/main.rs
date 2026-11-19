@@ -1072,41 +1072,114 @@ fn cmd_rle_subtract(mask_a: &PathBuf, mask_b: &PathBuf, output: &PathBuf) -> Res
 // Slice command implementations — wraps engine::slice_with_progress_v3_to_path
 // ===========================================================================
 
-/// Whole-process CPU seconds (user+system, aggregated across all threads).
-fn cpu_total_seconds() -> f64 {
-    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
-    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
-        return 0.0;
-    }
-    let u = unsafe { usage.assume_init() };
-    u.ru_utime.tv_sec as f64 + u.ru_utime.tv_usec as f64 / 1e6
-        + u.ru_stime.tv_sec as f64 + u.ru_stime.tv_usec as f64 / 1e6
+/// This process's resident memory and CPU time, read the same way on Linux,
+/// macOS and Windows. Resident memory comes from sysinfo, as the engine's
+/// `diag_read_rss_mb` does: `/proc/self/status` exists only on Linux, so macOS
+/// and Windows used to report 0. CPU time comes from `getrusage` where there is
+/// one, for the user/system split, and from sysinfo elsewhere.
+///
+/// Keep one probe per thread and reuse it: building a fresh `System` for every
+/// reading would allocate into the very RSS it measures.
+struct ProcessProbe {
+    sys: sysinfo::System,
+    pid: Option<sysinfo::Pid>,
 }
 
-/// Slicer-process CPU + RSS. Peak RSS is the kernel high-water mark (ru_maxrss),
-/// so it captures transient peaks without a sampler thread. CPU time aggregates
-/// all rayon worker threads, so cpu_percent can exceed 100% under parallelism.
-/// `samples` is the periodic RSS/CPU time series gathered during the run.
+impl ProcessProbe {
+    fn new() -> Self {
+        Self { sys: sysinfo::System::new(), pid: sysinfo::get_current_pid().ok() }
+    }
+
+    /// Current resident set size in bytes, and whole-process CPU seconds
+    /// (user + system, summed over all threads). `None` where a figure
+    /// cannot be read.
+    fn read(&mut self) -> (Option<u64>, Option<f64>) {
+        let refresh = sysinfo::ProcessRefreshKind::nothing().with_memory();
+        #[cfg(not(unix))]
+        let refresh = refresh.with_cpu();
+        let process = self.pid.and_then(|pid| {
+            self.sys.refresh_processes_specifics(
+                sysinfo::ProcessesToUpdate::Some(&[pid]),
+                false,
+                refresh,
+            );
+            self.sys.process(pid)
+        });
+        let rss = process.map(|p| p.memory());
+        #[cfg(unix)]
+        let cpu = cpu_user_system_seconds().map(|(user, system)| user + system);
+        #[cfg(not(unix))]
+        let cpu = process.map(|p| p.accumulated_cpu_time() as f64 / 1000.0);
+        (rss, cpu)
+    }
+}
+
+#[cfg(unix)]
+fn rusage_self() -> Option<libc::rusage> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    Some(unsafe { usage.assume_init() })
+}
+
+/// User and system CPU seconds, summed over all threads.
+#[cfg(unix)]
+fn cpu_user_system_seconds() -> Option<(f64, f64)> {
+    let u = rusage_self()?;
+    Some((
+        u.ru_utime.tv_sec as f64 + u.ru_utime.tv_usec as f64 / 1e6,
+        u.ru_stime.tv_sec as f64 + u.ru_stime.tv_usec as f64 / 1e6,
+    ))
+}
+
+/// sysinfo reports only the total, so there is no split here.
+#[cfg(not(unix))]
+fn cpu_user_system_seconds() -> Option<(f64, f64)> {
+    None
+}
+
+/// The operating system's high-water mark for this process's resident memory,
+/// so transient peaks between samples still count. sysinfo has no peak figure.
+#[cfg(unix)]
+fn peak_rss_bytes() -> Option<u64> {
+    let u = rusage_self()?;
+    // ru_maxrss: kilobytes on Linux, bytes on macOS.
+    #[cfg(target_os = "macos")]
+    return Some(u.ru_maxrss as u64);
+    #[cfg(not(target_os = "macos"))]
+    return Some(u.ru_maxrss as u64 * 1024);
+}
+
+/// The peak working set, Windows' counterpart of `ru_maxrss`.
+#[cfg(windows)]
+fn peak_rss_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let mut counters = PROCESS_MEMORY_COUNTERS {
+        cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        ..Default::default()
+    };
+    let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) };
+    (ok != 0).then_some(counters.PeakWorkingSetSize as u64)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn peak_rss_bytes() -> Option<u64> {
+    None
+}
+
+/// Slicer-process CPU + RSS. CPU time aggregates all rayon worker threads, so
+/// cpu_percent can exceed 100% under parallelism. `samples` is the periodic
+/// RSS/CPU time series gathered during the run. A figure the platform cannot
+/// provide is null.
 fn capture_resources(
     wall_s: f64,
     samples: Vec<serde_json::Value>,
     sample_interval_ms: u64,
 ) -> serde_json::Value {
-    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
-    let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
-    if rc != 0 {
-        return serde_json::json!({ "error": "getrusage failed" });
-    }
-    let u = unsafe { usage.assume_init() };
-    let cpu_user_s = u.ru_utime.tv_sec as f64 + u.ru_utime.tv_usec as f64 / 1e6;
-    let cpu_sys_s = u.ru_stime.tv_sec as f64 + u.ru_stime.tv_usec as f64 / 1e6;
-    let cpu_total_s = cpu_user_s + cpu_sys_s;
-
-    // ru_maxrss: kilobytes on Linux, bytes on macOS.
-    #[cfg(target_os = "macos")]
-    let peak_rss_bytes = u.ru_maxrss as u64;
-    #[cfg(not(target_os = "macos"))]
-    let peak_rss_bytes = (u.ru_maxrss as u64) * 1024;
+    let (end_rss, cpu_total_s) = ProcessProbe::new().read();
+    let split = cpu_user_system_seconds();
 
     // Peak CPU% across the sampled series (transient spikes the average hides).
     let peak_sample_cpu = samples
@@ -1115,29 +1188,17 @@ fn capture_resources(
         .fold(0.0_f64, f64::max);
 
     serde_json::json!({
-        "cpu_user_s": cpu_user_s,
-        "cpu_system_s": cpu_sys_s,
+        "cpu_user_s": split.map(|(user, _)| user),
+        "cpu_system_s": split.map(|(_, system)| system),
         "cpu_total_s": cpu_total_s,
-        "cpu_percent": if wall_s > 0.0 { cpu_total_s / wall_s * 100.0 } else { 0.0 },
+        "cpu_percent": cpu_total_s.map(|cpu| if wall_s > 0.0 { cpu / wall_s * 100.0 } else { 0.0 }),
         "peak_sample_cpu_percent": peak_sample_cpu,
-        "peak_rss_bytes": peak_rss_bytes,
-        "end_rss_bytes": read_vmrss_bytes().unwrap_or(0),
+        "peak_rss_bytes": peak_rss_bytes(),
+        "end_rss_bytes": end_rss,
         "sample_interval_ms": sample_interval_ms,
         "sample_count": samples.len(),
         "samples": samples,
     })
-}
-
-/// Current resident set size from /proc/self/status (Linux). Returns None elsewhere.
-fn read_vmrss_bytes() -> Option<u64> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    for line in status.lines() {
-        if let Some(rest) = line.strip_prefix("VmRSS:") {
-            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
-            return Some(kb * 1024);
-        }
-    }
-    None
 }
 
 fn cmd_slice_run(
@@ -1319,19 +1380,22 @@ fn cmd_slice_run(
                 Ok(f) => Some(f),
                 Err(e) => { eprintln!("resource-log: cannot create {}: {e}", p.display()); None }
             });
+            let mut probe = ProcessProbe::new();
             let mut last = Instant::now();
-            let mut last_cpu = cpu_total_seconds();
+            let mut last_cpu = probe.read().1;
             while !stop.load(Ordering::Relaxed) {
                 std::thread::sleep(interval);
                 let now = Instant::now();
-                let cpu = cpu_total_seconds();
+                let (rss, cpu) = probe.read();
                 let dt = now.duration_since(last).as_secs_f64();
-                let cpu_pct = if dt > 0.0 { (cpu - last_cpu) / dt * 100.0 } else { 0.0 };
-                let rss = read_vmrss_bytes().unwrap_or(0);
+                let cpu_pct = match (cpu, last_cpu) {
+                    (Some(cpu), Some(prev)) if dt > 0.0 => Some((cpu - prev) / dt * 100.0),
+                    _ => None,
+                };
                 let sample = serde_json::json!({
                     "t_ms": start.elapsed().as_millis() as u64,
                     "rss_bytes": rss,
-                    "rss_mb": rss as f64 / 1_048_576.0,
+                    "rss_mb": rss.map(|rss| rss as f64 / 1_048_576.0),
                     "cpu_percent": cpu_pct,
                 });
                 if let Some(f) = log.as_mut() {
