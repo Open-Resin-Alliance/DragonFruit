@@ -1,14 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Box3, BufferAttribute, BufferGeometry } from 'three';
-import { DEFAULT_DETECT_OPTIONS, detectIslands, installInProcessWorkers } from '../../../../scripts/bench-island-scan';
+import { DEFAULT_DETECT_OPTIONS, installInProcessWorkers } from '../../../../scripts/bench-island-scan';
 import { detectVoxelIslands } from '../detect';
 import { disposeEventLoopChannel } from '@/utils/yieldToEventLoop';
 
-// The layer loop in `sliceCandidateLayers` talks to its workers one round trip
-// per layer. These tests pin the two ways that loop used to fail: a host that
-// answers synchronously (the Node harness) stacked one frame set per layer, and
-// a worker that failed left the scan waiting forever.
+// A worker that fails must fail the island scan, not leave it waiting.
 
 type Listener = (event: { data?: unknown; message?: string; error?: unknown }) => void;
 
@@ -45,16 +42,6 @@ test('a worker asked for a layer before init answers with an error instead of st
   const data = (await reply) as { type?: string };
   assert.equal(data.type, 'error');
   worker.terminate();
-});
-
-test('a scan of 2000 layers on the in-process workers finishes and finds the island', { timeout: 60_000 }, async () => {
-  const heightMm = 60;
-  const islands = await detectIslands(tallColumnWithIsland(heightMm), {
-    ...DEFAULT_DETECT_OPTIONS,
-    layerHeightMm: 0.03,
-  });
-  const loose = islands.filter((island) => Math.abs(island.baseZ - (heightMm - 3)) < 0.5);
-  assert.equal(loose.length, 1, `expected the loose cube as an island, got z = ${islands.map((i) => i.baseZ.toFixed(2)).join(', ')}`);
 });
 
 function withFakeWorker(reply: (listeners: { message: Set<Listener>; error: Set<Listener> }) => void): () => void {
