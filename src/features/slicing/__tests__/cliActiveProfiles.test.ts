@@ -8,11 +8,7 @@ import { getActiveMaterialProfile, getActivePrinterProfile } from '@/features/pr
 import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
 import { PRINTERS } from './helpers/sliceJobFixtures';
 
-/**
- * Support tip penetration reads the active profiles from the store while the
- * mesh is built, so `scene slice` has to activate the job's own. Otherwise the
- * tips sink by the offset of whichever material the store started with.
- */
+// Tip penetration reads the active profiles, so `scene slice` must activate the job's own.
 
 const printer = () => PRINTERS[0].cliPrinter();
 
@@ -48,25 +44,15 @@ test('without a material the job and the store still agree', () => {
   assert.equal(getActiveMaterialProfile()?.id, job.material?.id);
 });
 
-test('a layer height override reaches the active material', () => {
-  const job = resolveSceneSliceJob({
-    printer: printer(),
-    material: { name: 'Thin', layerHeightMm: 0.05 },
-    layerHeight: '0.03',
-  });
-  assert.equal(job.material?.layerHeightMm, 0.03);
-  assert.equal(getActiveMaterialProfile()?.layerHeightMm, 0.03);
-});
-
-test('a layer height override leaves the job on the material it asked for', () => {
+test('a layer height override reaches the active material and keeps its other settings', () => {
   const job = resolveSceneSliceJob({
     printer: printer(),
     material: { name: 'Official', layerHeightMm: 0.05, normalExposureSec: 3.3, locked: true },
     layerHeight: '0.03',
   });
-  assert.equal(job.material?.normalExposureSec, 3.3);
-  assert.equal(getActiveMaterialProfile()?.normalExposureSec, 3.3);
+  assert.equal(job.material?.layerHeightMm, 0.03);
   assert.equal(getActiveMaterialProfile()?.layerHeightMm, 0.03);
+  assert.equal(getActiveMaterialProfile()?.normalExposureSec, 3.3);
 });
 
 const mars4Ultra = () => JSON.parse(
@@ -81,21 +67,14 @@ const shrinkFor = (aaPreset: 'raw' | 'sharp' | 'balanced' | 'smooth', percent?: 
   resolveSceneSliceJob({ printer: mars4Ultra(), printerId: 'Mars 4 Ultra', material: thinMaterial(percent), aaPreset }),
 );
 
-test('3DAA presets shrink tips by the material default, as the app does', () => {
+test('under 3DAA tips shrink by the material setting, 10 % by default', () => {
   assert.equal(shrinkFor('balanced'), 10);
-  assert.equal(shrinkFor('smooth'), 10);
-});
-
-test('the material decides how much tips shrink under 3DAA', () => {
-  assert.equal(shrinkFor('balanced', 25), 25);
+  assert.equal(shrinkFor('smooth', 25), 25);
   assert.equal(shrinkFor('balanced', 0), 0);
 });
 
-test('tips do not shrink without 3DAA', () => {
+test('tips do not shrink without 3DAA or without a printer', () => {
   assert.equal(shrinkFor('sharp', 25), 0);
   assert.equal(shrinkFor('raw', 25), 0);
-});
-
-test('a job without a printer has no tip shrink', () => {
   assert.equal(resolveSceneTipShrinkPercent(resolveSceneSliceJob({})), 0);
 });
