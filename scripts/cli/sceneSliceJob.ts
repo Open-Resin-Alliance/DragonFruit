@@ -134,12 +134,7 @@ function storedMaterial(printerId: string, raw: unknown): MaterialProfile {
   return getMaterialProfilesForPrinter(printerId).find((entry) => entry.id === defaultId)!;
 }
 
-/**
- * Makes the job's printer and material the active ones. Support tip penetration
- * reads them from the store while the mesh is built, so anything else sinks the
- * tips by another material's offset. A `--layer-height` override lives only on
- * the job's copy of the material, so it needs its own stored copy.
- */
+/** Makes the job's printer and material active, because tip penetration reads them from the store; a layer height override gets its own stored copy. */
 function activateJobProfiles(printerId: string, material: MaterialProfile, layerHeightOverridden: boolean): void {
   setActivePrinterProfile(printerId);
   if (!layerHeightOverridden) {
@@ -261,11 +256,7 @@ export type SceneSliceRun = {
   jobJson: string | null;
 };
 
-/**
- * How much support tips shrink in this job, the way the export orchestrator
- * resolves it: the material's setting under 3DAA, 0 otherwise. Geometry, so the
- * mesh takes it and the job does not.
- */
+/** The material's support tip shrink under 3DAA and 0 otherwise, as the export orchestrator resolves it. */
 export function resolveSceneTipShrinkPercent(job: SceneSliceJob): number {
   if (!job.printer || !job.material) return 0;
   return resolveSliceJobAntiAliasing({
