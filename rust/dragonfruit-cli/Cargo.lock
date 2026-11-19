@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfruit-cli"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "clap",
  "dragonfruit-islands",
@@ -458,6 +458,8 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "sysinfo",
+ "windows-sys",
  "zip",
 ]
 
