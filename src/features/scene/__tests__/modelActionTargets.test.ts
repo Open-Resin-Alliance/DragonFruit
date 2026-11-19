@@ -69,6 +69,52 @@ test('single-selection Delete uses one fallback and missing targets do not dispa
   assert.deepEqual(calls, [['model-a']]);
 });
 
+test('Delete with a body selected removes that body, not the model', () => {
+  const deletedModels: string[][] = [];
+  const deletedBodies: Array<[string, number[]]> = [];
+
+  const dispatched = dispatchDeleteModelAction({
+    modelIds: ['model-a', 'model-b'],
+    selectedModelIds: ['model-a'],
+    activeModelId: 'model-a',
+  }, (ids) => {
+    deletedModels.push(ids);
+  }, {
+    selectedBodies: [
+      { modelId: 'model-a', bodyIndex: 2 },
+      { modelId: 'model-b', bodyIndex: 0 },
+      { modelId: 'model-a', bodyIndex: 0 },
+    ],
+    deleteModelBodies: (modelId, bodyIndices) => {
+      deletedBodies.push([modelId, bodyIndices]);
+    },
+  });
+
+  assert.equal(dispatched, true);
+  assert.deepEqual(deletedModels, [], 'the 3MF model itself stays');
+  assert.deepEqual(deletedBodies, [['model-a', [2, 0]]], 'only bodies of the target model go');
+});
+
+test('Delete without a selected body still deletes the model', () => {
+  const deletedModels: string[][] = [];
+  const deletedBodies: Array<[string, number[]]> = [];
+
+  dispatchDeleteModelAction({
+    modelIds: ['model-a', 'model-b'],
+    selectedModelIds: ['model-a'],
+  }, (ids) => {
+    deletedModels.push(ids);
+  }, {
+    selectedBodies: [{ modelId: 'model-b', bodyIndex: 1 }],
+    deleteModelBodies: (modelId, bodyIndices) => {
+      deletedBodies.push([modelId, bodyIndices]);
+    },
+  });
+
+  assert.deepEqual(deletedModels, [['model-a']]);
+  assert.deepEqual(deletedBodies, []);
+});
+
 test('multi-selection Cut invokes one ordered batch command', () => {
   const calls: string[][] = [];
 

@@ -6349,7 +6349,11 @@ export default function Home() {
           modelIds: scene.models.map((model) => model.id),
           selectedModelIds: scene.selectedModelIds,
           activeModelId: scene.activeModelId,
-        }, scene.deleteModels);
+        }, scene.deleteModels, {
+          selectedBodies: liveSelectedBodies,
+          deleteModelBodies: scene.deleteModelBodies,
+        });
+        setSelectedBodies([]);
         break;
       case 'copy':
         if (scene.selectedModelIds.length > 0) {
@@ -9633,7 +9637,14 @@ export default function Home() {
         if (isSelectAllModelsActive) {
           void scene.deleteModelsAndExtraPlates(ids);
         } else {
-          void scene.deleteModels(ids);
+          dispatchDeleteModelAction({
+            modelIds: scene.models.map((model) => model.id),
+            selectedModelIds: ids,
+          }, scene.deleteModels, {
+            selectedBodies: liveSelectedBodies,
+            deleteModelBodies: scene.deleteModelBodies,
+          });
+          setSelectedBodies([]);
         }
         setIsSelectAllModelsActive(false);
       },
@@ -9643,7 +9654,7 @@ export default function Home() {
     return () => {
       unregister();
     };
-  }, [isSelectAllModelsActive, scene]);
+  }, [isSelectAllModelsActive, liveSelectedBodies, scene]);
 
   React.useEffect(() => {
     const unregister = registerDeleteHandler(

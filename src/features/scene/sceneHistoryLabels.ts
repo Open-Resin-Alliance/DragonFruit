@@ -140,6 +140,13 @@ export function deleteModelsLabel(count: number): MessageDescriptor {
   });
 }
 
+export function deleteBodiesLabel(count: number): MessageDescriptor {
+  return msg({
+    message: plural(count, { one: 'Delete # body', other: 'Delete # bodies' }),
+    context: 'Undo history entry',
+  });
+}
+
 export function deleteSupportsForModelLabel(modelName: string): MessageDescriptor {
   return msg({ message: `Delete supports of ${modelName}`, context: 'Undo history entry' });
 }

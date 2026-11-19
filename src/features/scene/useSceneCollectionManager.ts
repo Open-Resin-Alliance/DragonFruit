@@ -122,6 +122,7 @@ import {
   colorModelLabel,
   DELETE_MODELS_AND_PLATES_LABEL,
   deleteModelLabel,
+  deleteBodiesLabel,
   deleteModelsLabel,
   deletePlateLabel,
   renamePlateLabel,
@@ -205,6 +206,7 @@ import {
 } from '@/features/mesh-modifiers/meshModifierStore';
 import { clearPreparedGeometryCacheForModel } from '@/features/mesh-modifiers/prepareModelGeometry';
 import { splitClassifiedSupportGeometry } from '@/features/scene/splitClassifiedSupports';
+import { removeModelBodies } from '@/features/scene/modelBodies';
 import {
   applyModelGrouping,
   applyModelGroupUngrouping,
@@ -5554,6 +5556,35 @@ export function useSceneCollectionManager(options?: {
     void deleteModels([id]);
   }, [deleteModels]);
 
+  /** Deletes bodies of a multi-body 3MF model as one undo step; deleting every body deletes the model. */
+  const deleteModelBodies = useCallback((modelId: string, bodyIndices: number[]): boolean => {
+    const currentModels = modelsRef.current;
+    const source = currentModels.find((m) => m.id === modelId);
+    if (!source) return false;
+
+    const result = removeModelBodies(source, bodyIndices, {
+      computeEdgeGeometry: !!source.geometry.edgeGeometry,
+    });
+    if (result.kind === 'unchanged') return false;
+    if (result.kind === 'emptied') {
+      void deleteModels([modelId]);
+      return true;
+    }
+
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds);
+    const nextModels = currentModels.map((m) => (m.id === modelId ? result.model : m));
+    setModels(nextModels);
+    deferAccelerateGeometry([result.model.geometry]);
+
+    const removedCount = (source.splitBodies?.length ?? 0) - (result.model.splitBodies?.length ?? 1);
+    const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds);
+    pushSceneSnapshotHistory(before, after, deleteBodiesLabel(removedCount), modelId);
+    scheduleModelChunkBake(result.model);
+    return true;
+  }, [deferAccelerateGeometry, deleteModels, pushSceneSnapshotHistory]);
+
   const deleteSupportsForModels = useCallback((idsInput: string[], description?: MessageDescriptor) => {
     const ids = new Set(idsInput);
     if (ids.size === 0) return 0;
@@ -9091,6 +9122,7 @@ export function useSceneCollectionManager(options?: {
     deleteModels,
     deleteModelsAndExtraPlates,
     deleteModel,
+    deleteModelBodies,
     deleteSupportsForModels,
     copyModel,
     copySelectedModels,
