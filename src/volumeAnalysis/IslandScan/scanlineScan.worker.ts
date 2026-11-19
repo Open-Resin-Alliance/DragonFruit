@@ -49,8 +49,7 @@ self.onmessage = (e: MessageEvent<InitMessage | StartMessage | LayerMessage>) =>
 
     if (msg.type === 'layer') {
         if (!slicer) {
-            // Answer, so the caller's per-layer promise rejects instead of
-            // waiting forever for a 'done' that never comes.
+            // Reply with an error so the caller rejects instead of waiting.
             self.postMessage({ type: 'error', message: 'layer request before init' });
             return;
         }

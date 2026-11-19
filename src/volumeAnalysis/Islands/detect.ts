@@ -264,11 +264,7 @@ async function sliceCandidateLayers(
   let nextIndex = 0;
   let done = 0;
 
-  // One awaited request per layer. The previous shape asked for the next layer
-  // from inside the reply handler of the current one; with a host whose
-  // `postMessage` delivers synchronously (the Node harness) that is one stack
-  // frame set per layer, and a scan of ~1300 layers overflows the stack. An
-  // `await` returns to the event loop between layers whatever the delivery.
+  // Await each layer so the stack unwinds between layers, even if replies arrive synchronously.
   try {
     await Promise.all(
       workers.map(async (w) => {
@@ -288,11 +284,7 @@ async function sliceCandidateLayers(
   return candidateLayers;
 }
 
-/**
- * One layer round trip. A worker that throws (`error` event) or that answers
- * with an `error` message rejects, instead of leaving the scan waiting forever
- * for a `done` that never comes.
- */
+/** Requests one layer; rejects if the worker throws or replies with an error. */
 function requestLayer(
   w: Worker,
   message: { type: 'layer'; z: number; layerHeightMm: number; gridRef: GridRef; opts: object },

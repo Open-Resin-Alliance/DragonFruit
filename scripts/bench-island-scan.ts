@@ -47,21 +47,8 @@ interface WorkerShim {
 }
 
 /**
- * The stand-in worker. A message is delivered on a later microtask, as a real
- * worker's would be, and the reply goes to the shim whose message is being
- * handled: the worker file calls `self.postMessage`, and that is pointed at the
- * calling shim for the duration of its own handler.
- *
- * Delivering synchronously instead made every reply handler run inside the
- * `postMessage` that asked for it. A caller that asks for the next layer from
- * inside its reply handler (`sliceCandidateLayers`) then nests one frame set per
- * layer, and a model of ~1300 layers at the default pitch overflows the stack.
- *
- * Listeners are dispatched from a snapshot, like a DOM event target: a handler
- * that removes itself and registers the next one must not see the same message
- * again. Dispatching over the live Set hands one reply to every handler added
- * during the dispatch, which answers every remaining layer with the first
- * layer's candidates: zero islands, and a scan that "finishes" instantly.
+ * The stand-in worker: delivers each message on a microtask like a real worker,
+ * and dispatches replies to a snapshot of its listeners like an `EventTarget`.
  */
 function createWorkerShim(): WorkerShim {
     const listeners = new Set<(event: { data: unknown }) => void>();
