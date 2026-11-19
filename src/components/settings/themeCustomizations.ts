@@ -233,13 +233,13 @@ const ATLAS_3DSS_THEME_COLORS: ThemeCustomColors = {
   success: '#36ba78',
 };
 
-// The occasion theme: Prusa's punchy brand orange (#fc6200) as the only
+// The occasion theme: Prusa's colour-matched brand orange (#ff5900) as the only
 // saturated colour in the chrome. The neutrals are near-black rather than brown: the surface
 // ladder carries a trace of the accent's 37.8° hue (two points at most) so the
 // panels sit under the orange instead of fighting it, but not enough to read as
 // a tinted theme - a tinted ladder made the whole window look brown. The accent
-// reaches 6.5:1 on the background and 5.3:1 on surface 2, and the filled primary
-// button keeps a near-black label (5.5:1) instead of white. The secondary amber
+// reaches 6.3:1 on the background and 5.1:1 on surface 2, and the filled primary
+// button keeps a near-black label (5.2:1) instead of white. The secondary amber
 // (#ffb02e) carries the secondary button; the model highlight is the brand orange
 // itself, so a picked part reads as Prusa's own colour in the viewport rather
 // than as a second, duller warm tone.
@@ -254,21 +254,21 @@ const PRUSA_ORANGE_THEME_COLORS: ThemeCustomColors = {
   indicator: '#cec4bb',
   borderSubtle: '#2c2927',
   borderStrong: '#3d3935',
-  accent: '#fc6200',
-  accentHover: '#ff7d1f',
-  primaryButtonSurface: '#e85a00',
+  accent: '#ff5900',
+  accentHover: '#ff7326',
+  primaryButtonSurface: '#e84f00',
   accentContrast: '#1b0b02',
   accentSecondary: '#ffb02e',
   accentSecondaryHover: '#ffc35c',
   secondaryButtonSurface: '#ffb02e',
   accentSecondaryContrast: '#1e1400',
-  topbarAccent: '#fc6200',
+  topbarAccent: '#ff5900',
   // Backdrop runs ember: the plate's warm haze into the accent's orange.
   sceneGradientRadial: '#7a2f0f',
   sceneGradientLinearStart: '#2a1a12',
   sceneGradientLinearMid: '#b23c06',
-  meshSelectionColor: '#fc6200',
-  meshHoverColor: '#fc6200',
+  meshSelectionColor: '#ff5900',
+  meshHoverColor: '#ff5900',
   danger: '#e45454',
   success: '#2eb67d',
 };
