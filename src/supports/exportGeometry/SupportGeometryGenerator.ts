@@ -29,10 +29,38 @@ import { taperWidthAlong } from '@/supports/SupportPrimitives/Shaft/shaftTaperGe
  * Each type's own folder reaches it through the `exportGeometry/helpers.ts`
  * facade, so the generator can move without touching eight folders.
  */
+/**
+ * Tessellation of the primitives an export writes.
+ *
+ * The export is a print artifact, not a render. A 0.6 mm contact tip gains
+ * nothing from a 16x16 sphere that a 50 µm printer cannot resolve, and a tree
+ * with a thousand joints paid ~480 triangles each for it: at the old values the
+ * supported STL was several times the mesh it supported. These match the
+ * viewport's instanced templates where one exists, so the file is the shape the
+ * user saw, and stay at or above what the printer can resolve on the smallest
+ * feature. Tune here, not at the call sites.
+ */
+export const EXPORT_SEGMENTS = {
+  rootDisk: 16,
+  rootCone: 12,
+  rootSphereWidth: 10,
+  rootSphereHeight: 8,
+  shaft: 8,
+  jointWidth: 12,
+  jointHeight: 8,
+  knot: 6,
+  coneRadial: 10,
+  coneSphereWidth: 8,
+  coneSphereHeight: 6,
+  contactDiskRadial: 10,
+  contactTipWidth: 8,
+  contactTipHeight: 6,
+} as const;
+
 export class SupportGeometryGenerator {
   private static readonly NON_SELECTED_JOINT_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
 
-  private static buildSphereMesh(pos: { x: number; y: number; z: number }, diameter: number, widthSegments = 16, heightSegments = 16): THREE.Mesh {
+  private static buildSphereMesh(pos: { x: number; y: number; z: number }, diameter: number, widthSegments: number, heightSegments: number): THREE.Mesh {
     const geometry = new THREE.SphereGeometry(Math.max(0.001, diameter) / 2, widthSegments, heightSegments);
     const mesh = new THREE.Mesh(geometry);
     mesh.position.set(pos.x, pos.y, pos.z);
@@ -171,7 +199,7 @@ export class SupportGeometryGenerator {
     const quaternion = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
 
     // Base Disk
-    const diskGeom = new THREE.CylinderGeometry(root.diameter / 2, root.diameter / 2, diskHeight, 32);
+    const diskGeom = new THREE.CylinderGeometry(root.diameter / 2, root.diameter / 2, diskHeight, EXPORT_SEGMENTS.rootDisk);
     
     // Mesh 1: Disk
     const diskMesh = new THREE.Mesh(diskGeom);
@@ -184,7 +212,7 @@ export class SupportGeometryGenerator {
     const topRadius = shaftDiameter / 2; // Matches trunk shaft
     const bottomRadius = root.diameter / 2;
     
-    const coneGeom = new THREE.CylinderGeometry(topRadius, bottomRadius, coneHeight, 32);
+    const coneGeom = new THREE.CylinderGeometry(topRadius, bottomRadius, coneHeight, EXPORT_SEGMENTS.rootCone);
     const coneMesh = new THREE.Mesh(coneGeom);
     coneMesh.setRotationFromQuaternion(quaternion);
     coneMesh.position.set(0, 0, diskHeight + coneHeight / 2);
@@ -192,7 +220,11 @@ export class SupportGeometryGenerator {
 
     // Sphere Top
     const sphereRadius = topRadius;
-    const sphereGeom = new THREE.SphereGeometry(sphereRadius, 16, 12);
+    const sphereGeom = new THREE.SphereGeometry(
+      sphereRadius,
+      EXPORT_SEGMENTS.rootSphereWidth,
+      EXPORT_SEGMENTS.rootSphereHeight,
+    );
     const sphereMesh = new THREE.Mesh(sphereGeom);
     sphereMesh.position.set(0, 0, diskHeight + coneHeight);
     group.add(sphereMesh);
@@ -240,7 +272,7 @@ export class SupportGeometryGenerator {
     const radius = diameter / 2;
     // The cylinder's +Y is aligned to `end` below, so the top radius is the end.
     const radiusEnd = Math.max(0.0005, (diameterEnd ?? diameter) / 2);
-    const geometry = new THREE.CylinderGeometry(radiusEnd, radius, length, 8);
+    const geometry = new THREE.CylinderGeometry(radiusEnd, radius, length, EXPORT_SEGMENTS.shaft);
     
     // Orient the cylinder
     const midpoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
@@ -256,11 +288,21 @@ export class SupportGeometryGenerator {
   }
 
   public static generateJointMesh(joint: Joint): THREE.Mesh {
-    return this.buildSphereMesh(joint.pos, this.getExportJointDiameter(joint.diameter), 16, 16);
+    return this.buildSphereMesh(
+      joint.pos,
+      this.getExportJointDiameter(joint.diameter),
+      EXPORT_SEGMENTS.jointWidth,
+      EXPORT_SEGMENTS.jointHeight,
+    );
   }
 
   public static generateKnotMesh(knot: { pos: Vec3; diameter?: number }): THREE.Mesh {
-    return this.buildSphereMesh(knot.pos, this.getExportKnotDiameter(knot.diameter ?? 1.2), 8, 8);
+    return this.buildSphereMesh(
+      knot.pos,
+      this.getExportKnotDiameter(knot.diameter ?? 1.2),
+      EXPORT_SEGMENTS.knot,
+      EXPORT_SEGMENTS.knot,
+    );
   }
 
   public static generateConeMesh(coneData: any, penetrationMm: number = 0): THREE.Group {
@@ -300,7 +342,7 @@ export class SupportGeometryGenerator {
 
     // 2. Cone Body
     // Standard Cylinder: Top radius = contact, Bottom radius = body
-    const geometry = new THREE.CylinderGeometry(contactRadius, bodyRadius, length, 16);
+    const geometry = new THREE.CylinderGeometry(contactRadius, bodyRadius, length, EXPORT_SEGMENTS.coneRadial);
 
     const coneMesh = new THREE.Mesh(geometry);
     coneMesh.position.set(center.x, center.y, center.z);
@@ -308,7 +350,11 @@ export class SupportGeometryGenerator {
     group.add(coneMesh);
 
     // 3. Cone-start sphere (matches the live ContactConeRenderer)
-    const sphereGeom = new THREE.SphereGeometry(contactRadius, 16, 12);
+    const sphereGeom = new THREE.SphereGeometry(
+      contactRadius,
+      EXPORT_SEGMENTS.coneSphereWidth,
+      EXPORT_SEGMENTS.coneSphereHeight,
+    );
     const sphereMesh = new THREE.Mesh(sphereGeom);
     sphereMesh.position.set(coneStartPos.x, coneStartPos.y, coneStartPos.z);
     group.add(sphereMesh);
@@ -347,12 +393,21 @@ export class SupportGeometryGenerator {
     
     // Create the contact disk geometry (cylinder shaft + spherical tip)
     // Shaft: From Surface to Tip Center
-    const shaftGeometry = new THREE.CylinderGeometry(radius, radius, thickness + penetrationMm, 16);
+    const shaftGeometry = new THREE.CylinderGeometry(
+      radius,
+      radius,
+      thickness + penetrationMm,
+      EXPORT_SEGMENTS.contactDiskRadial,
+    );
     const shaftMesh = new THREE.Mesh(shaftGeometry);
     shaftMesh.position.set(0, -penetrationMm / 2, 0); // Local origin in group
     
     // Round Tip: Centered at the top of the shaft
-    const tipGeometry = new THREE.SphereGeometry(radius, 16, 16);
+    const tipGeometry = new THREE.SphereGeometry(
+      radius,
+      EXPORT_SEGMENTS.contactTipWidth,
+      EXPORT_SEGMENTS.contactTipHeight,
+    );
     const tipMesh = new THREE.Mesh(tipGeometry);
     tipMesh.position.set(0, thickness / 2, 0); // Position at top of shaft
     

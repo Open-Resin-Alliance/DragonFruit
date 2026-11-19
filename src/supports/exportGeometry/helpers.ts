@@ -4,7 +4,7 @@ import { calculateTipOffset } from '../rendering/calculateTipOffset';
 import { getRaftSettingsForModel } from '../Rafts/Crenelated/RaftState';
 import type { Segment, Vec3 } from '../types';
 import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
-import { SupportGeometryGenerator } from './SupportGeometryGenerator';
+import { EXPORT_SEGMENTS, SupportGeometryGenerator } from './SupportGeometryGenerator';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone';
 import { getActiveMaterialProfile, getActivePrinterProfile } from '@/features/profiles/profileStore';
 
@@ -71,4 +71,4 @@ export function appendShafts(group: THREE.Group, segment: Segment, start: Vec3, 
 // The toolkit a type's export builder draws with. Re-exported so a type folder
 // has one import for its export geometry rather than four reaching across the
 // tree, and so the generator can move without touching eight folders.
-export { SupportGeometryGenerator, getFinalSocketPosition };
+export { EXPORT_SEGMENTS, SupportGeometryGenerator, getFinalSocketPosition };
