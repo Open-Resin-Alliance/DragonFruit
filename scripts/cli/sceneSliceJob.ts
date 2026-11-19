@@ -21,6 +21,7 @@ import {
   getMaterialProfilesForPrinter,
   getProfileStoreSnapshot,
   importPrinterBundle,
+  type MaterialAntiAliasingSettings,
   type MaterialProfile,
   type PrinterProfile,
 } from '../../src/features/profiles/profileStore';
@@ -54,6 +55,24 @@ export interface SceneSliceJobOptions {
   dither?: string;
   ditherBitDepth?: string;
   ditherDeviceGamma?: string;
+  /** Shorthand: 'on' | 'off' | boolean to enable/disable Support Contact Halo with Stage 5 calibrated defaults. */
+  supportHalo?: string | boolean;
+  /** Shorthand: 'on' | 'off' | boolean for Automatic Halo Settings (`supportHaloAuto`). */
+  supportHaloAuto?: string | boolean;
+  supportHaloRadiusMm?: number | string;
+  supportHaloInverseScalePercent?: number | string;
+  supportHaloMaxIntensityPercent?: number | string;
+  supportHaloProfile?: string;
+  supportHaloScope?: string;
+  supportHaloMaxTipDiameterMm?: number | string;
+  supportHaloRadiusPx?: number | string;
+  /** Optional inline AA mode/level/blur overrides so CLI users don't have to write temp JSON files. */
+  aaMode?: string;
+  aaLevel?: string;
+  blurRadiusPx?: number | string;
+  zBlurRadiusLayers?: number | string;
+  zBlendLookBack?: number | string;
+  aaOnSupports?: string | boolean;
 }
 
 export interface SceneSliceJob {
@@ -68,6 +87,10 @@ export interface SceneSliceJob {
   layerHeight: string;
   buildWidth: string;
   buildDepth: string;
+  /** Optional raw CLI halo args forwarded when running without `--printer`. */
+  rawCliHaloArgs?: string[];
+  /** Optional explicit CLI `--z-lookback` override applied to the assembled job. */
+  zBlendLookBackOverride?: number;
 }
 
 type Profile = Record<string, unknown>;
@@ -130,6 +153,29 @@ function storedMaterial(printerId: string, raw: unknown): MaterialProfile {
 
 const AA_PRESETS = ['raw', 'sharp', 'balanced', 'smooth'] as const;
 
+const CORE_AA_OVERRIDE_KEYS = new Set([
+  'mode',
+  'level',
+  'useCustomLevel',
+  'blurBrushRadiusPx',
+  'useCustomBlurBrushRadius',
+  'blurBrushKernel',
+  'blurBrushSigmaX',
+  'blurBrushSigmaY',
+  'zBlurRadiusLayers',
+  'useCustomZBlurRadius',
+  'zBlurKernel',
+  'zBlurSigma',
+  'zBlendLookBack',
+  'useCustomZBlendLookBack',
+  'zBlendAutoMode',
+  'zaaPattern',
+  'zaaDuplicateZ',
+  'blurGraySourceMode',
+  'zBlendResinType',
+  'selectedLutCurveId',
+]);
+
 function parseAaOverride(raw: unknown): SliceAntiAliasingOverride {
   if (!isObject(raw) || !('antiAliasingSettings' in raw || 'minimumAaAlphaPercent' in raw)) {
     throw new Error(
@@ -143,11 +189,226 @@ function parseAaOverride(raw: unknown): SliceAntiAliasingOverride {
   if (raw.minimumAaAlphaPercent !== undefined && typeof raw.minimumAaAlphaPercent !== 'number') {
     throw new Error('--aa-settings: minimumAaAlphaPercent must be a number');
   }
+  const aaObj = raw.antiAliasingSettings as Profile | undefined;
+  const hasCoreAaKey = aaObj ? Object.keys(aaObj).some((k) => CORE_AA_OVERRIDE_KEYS.has(k)) : false;
+  const enableOverride =
+    typeof aaObj?.enableOverride === 'boolean'
+      ? aaObj.enableOverride
+      : aaObj === undefined || hasCoreAaKey;
   return {
-    // Passing settings is asking for them: the override is on, as when the
-    // panel opens a session override.
-    antiAliasingSettings: { ...(raw.antiAliasingSettings as Profile | undefined), enableOverride: true },
+    // Passing core AA settings is asking for them: the override is on, as when the
+    // panel opens a session override. Passing only Support Adjustments (such as
+    // supportHalo* or aaOnSupports) preserves enableOverride=false so --aa-preset
+    // is not clobbered.
+    antiAliasingSettings: {
+      ...(aaObj ?? {}),
+      ...(enableOverride ? { enableOverride: true } : {}),
+    },
     ...(raw.minimumAaAlphaPercent === undefined ? {} : { minimumAaAlphaPercent: raw.minimumAaAlphaPercent }),
+  };
+}
+
+function parseCliBoolFlag(value: string | boolean | undefined, flagName: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'boolean') return value;
+  const norm = value.trim().toLowerCase();
+  if (norm === 'on' || norm === 'true' || norm === '1' || norm === 'yes') return true;
+  if (norm === 'off' || norm === 'false' || norm === '0' || norm === 'no') return false;
+  throw new Error(`--${flagName} must be on, off, true, or false (got '${value}')`);
+}
+
+function parseCliNumberFlag(
+  value: number | string | undefined,
+  flagName: string,
+  min: number,
+  max: number,
+): number | undefined {
+  if (value === undefined) return undefined;
+  const num = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(num) || num < min || num > max) {
+    throw new Error(`--${flagName} must be a number between ${min} and ${max} (got '${value}')`);
+  }
+  return num;
+}
+
+function parseCliHaloProfile(
+  value: string | undefined,
+): MaterialAntiAliasingSettings['supportHaloProfile'] | undefined {
+  if (value === undefined) return undefined;
+  const norm = value.trim().toLowerCase();
+  if (norm === 'donut') return 'donut';
+  if (norm === 'linear') return 'linear';
+  if (norm === 'exponential' || norm === 'exp') return 'exponential';
+  if (norm === 'gaussian' || norm === 'exp_decay') return 'gaussian';
+  throw new Error(
+    `--support-halo-profile must be donut, exp_decay, gaussian, exponential, or linear (got '${value}')`,
+  );
+}
+
+function parseCliHaloScope(
+  value: string | undefined,
+): MaterialAntiAliasingSettings['supportHaloScope'] | undefined {
+  if (value === undefined) return undefined;
+  const norm = value.trim().toLowerCase();
+  if (norm === 'tips_only') return 'tips_only';
+  if (norm === 'full_supports' || norm === 'full_support') return 'full_supports';
+  throw new Error(`--support-halo-scope must be tips_only or full_supports (got '${value}')`);
+}
+
+function parseCliAaMode(value: string | undefined): MaterialAntiAliasingSettings['mode'] | undefined {
+  if (value === undefined) return undefined;
+  const norm = value.trim().toLowerCase();
+  if (norm === 'off' || norm === 'none') return 'Off';
+  if (norm === 'blur' || norm === '2daa') return 'Blur';
+  if (norm === '3daa' || norm === 'vertical2') return '3DAA';
+  throw new Error(`--aa-mode must be Off, Blur (2DAA), or 3DAA (got '${value}')`);
+}
+
+function applySupportHaloAndAaCliFlags(
+  options: SceneSliceJobOptions,
+  baseOverride: SliceAntiAliasingOverride | null,
+): {
+  override: SliceAntiAliasingOverride | null;
+  rawCliHaloArgs: string[];
+  zBlendLookBackOverride?: number;
+} {
+  const supportHalo = parseCliBoolFlag(options.supportHalo, 'support-halo');
+  const supportHaloAutoFlag = parseCliBoolFlag(options.supportHaloAuto, 'support-halo-auto');
+  const radiusMm = parseCliNumberFlag(options.supportHaloRadiusMm, 'support-halo-radius-mm', 0.0, 0.50);
+  const inverseScalePct = parseCliNumberFlag(
+    options.supportHaloInverseScalePercent,
+    'support-halo-inverse-scale-percent',
+    0.0,
+    200.0,
+  );
+  const maxIntensityPct = parseCliNumberFlag(
+    options.supportHaloMaxIntensityPercent,
+    'support-halo-max-intensity',
+    0.0,
+    100.0,
+  );
+  const profile = parseCliHaloProfile(options.supportHaloProfile);
+  const scope = parseCliHaloScope(options.supportHaloScope);
+  const maxTipDiaMm = parseCliNumberFlag(
+    options.supportHaloMaxTipDiameterMm,
+    'support-halo-max-tip-diameter-mm',
+    0.10,
+    5.0,
+  );
+  const radiusPxRaw = parseCliNumberFlag(options.supportHaloRadiusPx, 'support-halo-radius-px', 0, 16);
+  const radiusPx = radiusPxRaw !== undefined ? Math.round(radiusPxRaw) : undefined;
+
+  const aaMode = parseCliAaMode(options.aaMode);
+  const aaLevel = options.aaLevel?.trim();
+  const blurRadiusRaw = parseCliNumberFlag(options.blurRadiusPx, 'blur-radius', 0, 8);
+  const blurRadiusPx = blurRadiusRaw !== undefined ? Math.round(blurRadiusRaw) : undefined;
+  const zBlurRadiusRaw = parseCliNumberFlag(options.zBlurRadiusLayers, 'z-blur-radius', 0, 8);
+  const zBlurRadiusLayers = zBlurRadiusRaw !== undefined ? Math.round(zBlurRadiusRaw) : undefined;
+  const zLookBackRaw = parseCliNumberFlag(options.zBlendLookBack, 'z-lookback', 1, 16);
+  const zBlendLookBack = zLookBackRaw !== undefined ? Math.round(zLookBackRaw) : undefined;
+  const aaOnSupports = parseCliBoolFlag(options.aaOnSupports, 'aa-on-supports');
+
+  const hasGranularHaloFlag =
+    radiusMm !== undefined
+    || inverseScalePct !== undefined
+    || maxIntensityPct !== undefined
+    || profile !== undefined
+    || scope !== undefined
+    || maxTipDiaMm !== undefined
+    || radiusPx !== undefined;
+
+  const hasAnyHaloFlag = supportHalo !== undefined || supportHaloAutoFlag !== undefined || hasGranularHaloFlag;
+  const hasAnyInlineAaFlag =
+    aaMode !== undefined
+    || aaLevel !== undefined
+    || blurRadiusPx !== undefined
+    || zBlurRadiusLayers !== undefined
+    || zBlendLookBack !== undefined
+    || aaOnSupports !== undefined;
+
+  const rawCliHaloArgs: string[] = [];
+  if (supportHalo === false) {
+    rawCliHaloArgs.push('--no-support-halo');
+  } else if (supportHalo === true || supportHaloAutoFlag !== undefined || hasGranularHaloFlag) {
+    rawCliHaloArgs.push('--support-halo');
+    if (radiusMm !== undefined) rawCliHaloArgs.push('--support-halo-radius-mm', String(radiusMm));
+    if (inverseScalePct !== undefined) {
+      rawCliHaloArgs.push('--support-halo-inverse-scale-percent', String(inverseScalePct));
+    }
+    if (maxIntensityPct !== undefined) rawCliHaloArgs.push('--support-halo-max-intensity', String(maxIntensityPct));
+    if (profile !== undefined) rawCliHaloArgs.push('--support-halo-profile', profile);
+    if (scope !== undefined) rawCliHaloArgs.push('--support-halo-scope', scope);
+    if (maxTipDiaMm !== undefined) rawCliHaloArgs.push('--support-halo-max-tip-diameter-mm', String(maxTipDiaMm));
+    if (radiusPx !== undefined) rawCliHaloArgs.push('--support-halo-radius-px', String(radiusPx));
+  }
+
+  if (!hasAnyHaloFlag && !hasAnyInlineAaFlag) {
+    return { override: baseOverride, rawCliHaloArgs };
+  }
+
+  const patch: Partial<MaterialAntiAliasingSettings> = {};
+
+  if (supportHalo === false) {
+    patch.supportHaloEnabled = false;
+  } else if (supportHalo === true || supportHaloAutoFlag !== undefined || hasGranularHaloFlag) {
+    const autoOn = supportHaloAutoFlag !== undefined ? supportHaloAutoFlag : !hasGranularHaloFlag;
+    patch.supportHaloEnabled = true;
+    patch.supportHaloAuto = autoOn;
+    patch.supportHaloRadiusMm =
+      radiusMm
+      ?? (radiusPx !== undefined && radiusPx > 0
+        ? Math.min(0.50, Math.max(0.02, Number((radiusPx * 0.025).toFixed(2))))
+        : 0.15);
+    patch.supportHaloInverseScalePercent = inverseScalePct ?? 100;
+    patch.supportHaloMaxIntensityPercent = maxIntensityPct ?? 25;
+    patch.supportHaloProfile = profile ?? 'donut';
+    patch.supportHaloScope = scope ?? 'tips_only';
+    patch.supportHaloMaxTipDiameterMm = maxTipDiaMm ?? 0.80;
+    if (radiusPx !== undefined) {
+      patch.supportHaloRadiusPx = radiusPx;
+    }
+  }
+
+  if (aaOnSupports !== undefined) {
+    patch.aaOnSupports = aaOnSupports;
+  }
+  if (aaMode !== undefined) {
+    patch.enableOverride = true;
+    patch.mode = aaMode;
+  }
+  if (aaLevel !== undefined) {
+    patch.enableOverride = true;
+    patch.useCustomLevel = true;
+    patch.level = aaLevel;
+  }
+  if (blurRadiusPx !== undefined) {
+    patch.enableOverride = true;
+    patch.useCustomBlurBrushRadius = true;
+    patch.blurBrushRadiusPx = blurRadiusPx;
+  }
+  if (zBlurRadiusLayers !== undefined) {
+    patch.enableOverride = true;
+    patch.useCustomZBlurRadius = true;
+    patch.zBlurRadiusLayers = zBlurRadiusLayers;
+  }
+  if (zBlendLookBack !== undefined) {
+    patch.enableOverride = true;
+    patch.useCustomZBlendLookBack = true;
+    patch.zBlendLookBack = zBlendLookBack;
+  }
+
+  const mergedOverride: SliceAntiAliasingOverride = {
+    ...(baseOverride ?? {}),
+    antiAliasingSettings: {
+      ...(baseOverride?.antiAliasingSettings ?? {}),
+      ...patch,
+    },
+  };
+
+  return {
+    override: mergedOverride,
+    rawCliHaloArgs,
+    ...(zBlendLookBack !== undefined ? { zBlendLookBackOverride: zBlendLookBack } : {}),
   };
 }
 
@@ -193,12 +454,18 @@ export function resolveSceneSliceJob(options: SceneSliceJobOptions): SceneSliceJ
     throw new Error('--aa-preset, --aa-settings and --lut-curves require --printer');
   }
 
+  const baseOverride = options.aaSettings === undefined ? null : parseAaOverride(options.aaSettings);
+  const { override: mergedOverride, rawCliHaloArgs, zBlendLookBackOverride } = applySupportHaloAndAaCliFlags(
+    options,
+    baseOverride,
+  );
+
   // The app's choice when nothing is given: the balanced preset, and whatever
   // the material's own anti-aliasing settings say.
   const antiAliasing: SliceJobAntiAliasingRequest | null = printer
     ? {
         preset: options.aaPreset ?? 'balanced',
-        override: options.aaSettings === undefined ? null : parseAaOverride(options.aaSettings),
+        override: mergedOverride,
         lutCurves: options.lutCurves === undefined ? [] : parseLutCurves(options.lutCurves),
       }
     : null;
@@ -211,6 +478,8 @@ export function resolveSceneSliceJob(options: SceneSliceJobOptions): SceneSliceJ
     layerHeight: options.layerHeight ?? '0.05',
     buildWidth: options.buildWidthMm ?? '218',
     buildDepth: options.buildDepthMm ?? '122',
+    ...(rawCliHaloArgs.length > 0 ? { rawCliHaloArgs } : {}),
+    ...(zBlendLookBackOverride !== undefined ? { zBlendLookBackOverride } : {}),
   };
 }
 
@@ -254,6 +523,7 @@ export function buildSceneSliceRun(
         '--layer-height', job.layerHeight,
         '--build-width-mm', job.buildWidth,
         '--build-depth-mm', job.buildDepth,
+        ...(job.rawCliHaloArgs ?? []),
         '--json',
       ],
       assembled: null,
@@ -272,6 +542,15 @@ export function buildSceneSliceRun(
   });
   if (assembled.antiAliasing.warnings.length > 0) {
     throw new Error(`scene slice will not fall back silently: ${assembled.antiAliasing.warnings.join(' ')}`);
+  }
+  if (
+    job.zBlendLookBackOverride !== undefined
+    && assembled.antiAliasing.antiAliasingMode === 'Vertical2'
+  ) {
+    assembled.antiAliasing = {
+      ...assembled.antiAliasing,
+      zBlendLookBack: job.zBlendLookBackOverride,
+    };
   }
 
   // The app's defaults for what its performance settings decide. The model

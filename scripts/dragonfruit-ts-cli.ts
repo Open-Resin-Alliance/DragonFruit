@@ -20,9 +20,11 @@
 // stubs `npm test` loads for the same reason. The CLI runs as CommonJS under tsx,
 // so the imports below are resolved one after another, after this has run.
 import './test-unit/register.mjs';
-import { readFileSync, writeFileSync, statSync } from 'fs';
-import { basename, resolve, dirname } from 'path';
-import { execFileSync, execSync } from 'child_process';
+import { readFileSync, writeFileSync, statSync, mkdtempSync, rmSync } from 'fs';
+import { basename, resolve, dirname, join } from 'path';
+import { tmpdir } from 'os';
+import { fileURLToPath } from 'url';
+import { execFileSync } from 'child_process';
 import { createRequire } from 'module';
 import { v4 as uuidv4 } from 'uuid';
 import { parseVoxlAuto } from '../src/features/scene/voxl/codec';
@@ -154,6 +156,20 @@ function parseVec3(s: string): Vec3 {
   return { x: parts[0], y: parts[1], z: parts[2] };
 }
 
+const PURE_BOOLEAN_FLAGS = new Set([
+  'json',
+  'no-support-halo',
+  'no-support-halo-auto',
+]);
+
+const OPTIONAL_BOOL_FLAGS = new Set([
+  'support-halo',
+  'support-halo-auto',
+  'aa-on-supports',
+]);
+
+const BOOL_LITERALS = new Set(['on', 'off', 'true', 'false', '1', '0', 'yes', 'no']);
+
 function parseArgs(argv: string[]): { command: string; subcommand: string; positional: string[]; flags: Record<string, string | boolean> } {
   const command = argv[0] ?? '';
   const subcommand = argv[1] ?? '';
@@ -166,7 +182,18 @@ function parseArgs(argv: string[]): { command: string; subcommand: string; posit
     if (arg.startsWith('--')) {
       const key = arg.slice(2);
       const next = argv[i + 1];
-      if (next && !next.startsWith('--')) {
+      if (PURE_BOOLEAN_FLAGS.has(key)) {
+        flags[key] = true;
+        i += 1;
+      } else if (OPTIONAL_BOOL_FLAGS.has(key)) {
+        if (next && !next.startsWith('--') && BOOL_LITERALS.has(next.trim().toLowerCase())) {
+          flags[key] = next;
+          i += 2;
+        } else {
+          flags[key] = true;
+          i += 1;
+        }
+      } else if (next && !next.startsWith('--')) {
         flags[key] = next;
         i += 2;
       } else {
@@ -194,6 +221,21 @@ function optionalFlag(flags: Record<string, string | boolean>, key: string): str
   const val = flags[key];
   if (val === true || val === undefined) return undefined;
   return val as string;
+}
+
+function boolOrStringFlag(
+  flags: Record<string, string | boolean>,
+  key: string,
+  negateKey?: string,
+): string | boolean | undefined {
+  if (negateKey && flags[negateKey] === true) return false;
+  return flags[key];
+}
+
+function resolveRustCliPath(): string {
+  const scriptDir = dirname(fileURLToPath(import.meta.url));
+  const exeSuffix = process.platform === 'win32' ? '.exe' : '';
+  return resolve(scriptDir, `../rust/dragonfruit-cli/target/release/dragonfruit-cli${exeSuffix}`);
 }
 
 /** Reads and parses the JSON file a flag names, if the flag was given. */
@@ -1101,15 +1143,17 @@ async function sceneExportStl(args: ReturnType<typeof parseArgs>): Promise<void>
   let off = 0;
   for (const p of allPositions) { merged.set(p, off); off += p.length; }
 
-  const tmpDir = `/tmp/df-export-stl-${Date.now()}`;
-  execSync(`mkdir -p ${tmpDir}`);
-  const posPath = resolve(tmpDir, 'positions.bin');
-  writePositionsBin(posPath, merged);
+  const tmpDir = mkdtempSync(join(tmpdir(), 'df-export-stl-'));
+  try {
+    const posPath = resolve(tmpDir, 'positions.bin');
+    writePositionsBin(posPath, merged);
 
-  // Shell out to Rust CLI
-  const rustCli = resolve(dirname(new URL(import.meta.url).pathname), '../rust/dragonfruit-cli/target/release/dragonfruit-cli');
-  execSync(`${rustCli} mesh export-stl -i ${tmpDir} -o ${resolve(output)}`, { stdio: 'inherit' });
-  execSync(`rm -rf ${tmpDir}`);
+    // Shell out to Rust CLI
+    const rustCli = resolveRustCliPath();
+    execFileSync(rustCli, ['mesh', 'export-stl', '-i', tmpDir, '-o', resolve(output)], { stdio: 'inherit' });
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
 
   if (jsonOutput(args.flags)) {
     console.log(JSON.stringify({
@@ -1448,6 +1492,17 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
       + '  [--material <profile.json>]                      default: the bundle\'s first material, else the app\'s default\n'
       + '  [--aa-preset sharp|balanced|smooth|raw]          the panel\'s auto AA preset (default: balanced)\n'
       + '  [--aa-settings <aa.json>]                        AA settings on top of the material\'s, like a session override\n'
+      + '  [--aa-mode Off|Blur|3DAA] [--aa-level 2x|4x|8x|16x] [--blur-radius 0..8] [--z-blur-radius 0..8] [--z-lookback 1..16]\n'
+      + '  [--aa-on-supports [on|off]]                      toggle AA on support geometry without overriding core AA preset\n'
+      + '  [--support-halo [on|off]] [--no-support-halo]    enable Support Contact Halo with Stage 5 calibrated defaults\n'
+      + '  [--support-halo-auto [on|off]] [--no-support-halo-auto]\n'
+      + '  [--support-halo-radius-mm 0.02..0.50]            halo radius (mm) @ 0.40mm reference tip (default: 0.15)\n'
+      + '  [--support-halo-inverse-scale-percent 0..200]    inverse blob-size scaling % (default: 100; 0 = fixed radius)\n'
+      + '  [--support-halo-max-intensity 0..100]            peak halo light intensity % (default: 25)\n'
+      + '  [--support-halo-profile donut|exp_decay|linear]  radial decay curve (default: donut)\n'
+      + '  [--support-halo-scope tips_only|full_supports]   target support geometry scope (default: tips_only)\n'
+      + '  [--support-halo-max-tip-diameter-mm 0.10..5.0]   max 2D equivalent tip diameter in mm (default: 0.80)\n'
+      + '  [--support-halo-radius-px 0..16]                 legacy pixel halo radius fallback\n'
       + '  [--lut-curves <curves.json>]                     the curve library a custom LUT is looked up in\n'
       + '  [--dither on|off] [--dither-bit-depth N] [--dither-device-gamma G]\n'
       + '  [--raft off|solid|line]                          bake a raft under rooted supports (default: off)\n'
@@ -1480,6 +1535,33 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
     dither: optionalFlag(args.flags, 'dither'), // 'on' | 'off' | undefined
     ditherBitDepth: optionalFlag(args.flags, 'dither-bit-depth'),
     ditherDeviceGamma: optionalFlag(args.flags, 'dither-device-gamma'),
+    supportHalo: boolOrStringFlag(args.flags, 'support-halo', 'no-support-halo'),
+    supportHaloAuto: boolOrStringFlag(args.flags, 'support-halo-auto', 'no-support-halo-auto'),
+    supportHaloRadiusMm: optionalFlag(args.flags, 'support-halo-radius-mm'),
+    supportHaloInverseScalePercent:
+      optionalFlag(args.flags, 'support-halo-inverse-scale-percent')
+      ?? optionalFlag(args.flags, 'support-halo-inverse-scale'),
+    supportHaloMaxIntensityPercent:
+      optionalFlag(args.flags, 'support-halo-max-intensity')
+      ?? optionalFlag(args.flags, 'support-halo-intensity'),
+    supportHaloProfile: optionalFlag(args.flags, 'support-halo-profile'),
+    supportHaloScope: optionalFlag(args.flags, 'support-halo-scope'),
+    supportHaloMaxTipDiameterMm:
+      optionalFlag(args.flags, 'support-halo-max-tip-diameter-mm')
+      ?? optionalFlag(args.flags, 'support-halo-max-tip-diameter'),
+    supportHaloRadiusPx: optionalFlag(args.flags, 'support-halo-radius-px'),
+    aaMode: optionalFlag(args.flags, 'aa-mode'),
+    aaLevel: optionalFlag(args.flags, 'aa-level'),
+    blurRadiusPx:
+      optionalFlag(args.flags, 'blur-radius')
+      ?? optionalFlag(args.flags, 'blur-radius-px'),
+    zBlurRadiusLayers:
+      optionalFlag(args.flags, 'z-blur-radius')
+      ?? optionalFlag(args.flags, 'z-blur-radius-layers'),
+    zBlendLookBack:
+      optionalFlag(args.flags, 'z-lookback')
+      ?? optionalFlag(args.flags, 'z-blend-lookback'),
+    aaOnSupports: boolOrStringFlag(args.flags, 'aa-on-supports'),
   });
   const doc = await loadVoxl(voxlPath);
   const plate = resolveSlicePlate(doc, {
@@ -1660,61 +1742,64 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   modelInputs.length = 0;
   releaseHeap();
 
-  // Phase 3: Write positions.bin
-  const tmpDir = `/tmp/df-scene-slice-${Date.now()}`;
-  execSync(`mkdir -p ${tmpDir}`);
-  const mergedPath = resolve(tmpDir, 'positions.bin');
+  // Phase 3: Write positions.bin & Phase 4: Shell out to Rust slicer
+  const tmpDir = mkdtempSync(join(tmpdir(), 'df-scene-slice-'));
+  let result = '';
   const totalTriangles = meshPositions.length / 9;
-  writePositionsBin(mergedPath, meshPositions);
-  console.error(`  mesh: ${totalTriangles} triangles -> ${mergedPath}`);
+  try {
+    const mergedPath = resolve(tmpDir, 'positions.bin');
+    writePositionsBin(mergedPath, meshPositions);
+    console.error(`  mesh: ${totalTriangles} triangles -> ${mergedPath}`);
 
-  // Hand-off complete: positions.bin on disk now owns the geometry, and the
-  // slicing engine (Rust) reads it from there — node holds nothing the engine
-  // needs. Drop the mesh buffer (the last large buffer) before shelling out so
-  // the process sits near-idle in RAM during the blocking slice.
-  meshPositions = EMPTY_F32;
-  releaseHeap();
+    // Hand-off complete: positions.bin on disk now owns the geometry, and the
+    // slicing engine (Rust) reads it from there — node holds nothing the engine
+    // needs. Drop the mesh buffer (the last large buffer) before shelling out so
+    // the process sits near-idle in RAM during the blocking slice.
+    meshPositions = EMPTY_F32;
+    releaseHeap();
 
-  // Phase 4: Shell out to Rust slicer
-  const rustCli = resolve(dirname(new URL(import.meta.url).pathname), '../rust/dragonfruit-cli/target/release/dragonfruit-cli');
-  const run = sliceJob.buildSceneSliceRun(job, {
-    maxZMm,
-    modelTriangleCount,
-    models: visibleModels.map((model) => ({
-      id: model.id,
-      name: model.name,
-      polygonCount: model.polygonCount,
-      transform: model.transform,
-    })),
-  }, mergedPath, resolve(output), resolve(tmpDir, 'job.json'));
-  if (run.jobJson) writeFileSync(resolve(tmpDir, 'job.json'), run.jobJson);
-  const { assembled } = run;
-  if (assembled && job.printer) {
-    console.error(
-      `scene slice: printer '${job.printer.name}' -> ${assembled.sourceWidthPx}x${assembled.sourceHeightPx} ${assembled.xPackingMode} `
-      + `build ${assembled.buildWidthMm}x${assembled.buildDepthMm}mm layer ${assembled.layerHeightMm}mm fmt ${assembled.outputFormat}`
-      + `${assembled.formatVersion ? ` ${assembled.formatVersion}` : ''}, material '${job.material?.name}'`,
-    );
-    console.error(
-      `scene slice: dither ${assembled.ditherEnabled ? `on (${assembled.ditherBitDepth}-bit, gamma ${assembled.ditherDeviceGamma})` : 'off'}`,
-    );
+    const rustCli = resolveRustCliPath();
+    const run = sliceJob.buildSceneSliceRun(job, {
+      maxZMm,
+      modelTriangleCount,
+      models: visibleModels.map((model) => ({
+        id: model.id,
+        name: model.name,
+        polygonCount: model.polygonCount,
+        transform: model.transform,
+      })),
+    }, mergedPath, resolve(output), resolve(tmpDir, 'job.json'));
+    if (run.jobJson) writeFileSync(resolve(tmpDir, 'job.json'), run.jobJson);
+    const { assembled } = run;
+    if (assembled && job.printer) {
+      console.error(
+        `scene slice: printer '${job.printer.name}' -> ${assembled.sourceWidthPx}x${assembled.sourceHeightPx} ${assembled.xPackingMode} `
+        + `build ${assembled.buildWidthMm}x${assembled.buildDepthMm}mm layer ${assembled.layerHeightMm}mm fmt ${assembled.outputFormat}`
+        + `${assembled.formatVersion ? ` ${assembled.formatVersion}` : ''}, material '${job.material?.name}'`,
+      );
+      console.error(
+        `scene slice: dither ${assembled.ditherEnabled ? `on (${assembled.ditherBitDepth}-bit, gamma ${assembled.ditherDeviceGamma})` : 'off'}`,
+      );
+    }
+    if (assembled && job.antiAliasing) {
+      const aa = assembled.antiAliasing;
+      const haloInfo = aa.supportHaloEnabled
+        ? ` | halo=on (${aa.supportHaloProfile}, r=${aa.supportHaloRadiusMm}mm, inv=${aa.supportHaloInverseScalePercent}%, max=${aa.supportHaloMaxIntensityPercent}%, scope=${aa.supportHaloScope}<=${aa.supportHaloMaxTipDiameterMm}mm)`
+        : ' | halo=off';
+      console.error(
+        `scene slice: AA '${job.antiAliasing.preset}'${job.antiAliasing.override ? ' + settings' : ''} -> `
+        + `${aa.antiAliasingLevel} ${aa.antiAliasingMode} `
+        + `blur=${aa.blurBrushRadiusPx}px zblur=${aa.zBlurRadiusLayers} lookback=${aa.zBlendLookBack ?? 0}${haloInfo}`,
+      );
+    }
+
+    const shown = run.args.map((arg, i) => (run.args[i - 1] === '--metadata-json' ? `<${arg.length} bytes>` : arg));
+    console.error(`  slicing: ${rustCli} ${shown.join(' ')}`);
+    // No shell: the metadata is JSON, and the paths may contain spaces.
+    result = execFileSync(rustCli, run.args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
   }
-  if (assembled && job.antiAliasing) {
-    const aa = assembled.antiAliasing;
-    console.error(
-      `scene slice: AA '${job.antiAliasing.preset}'${job.antiAliasing.override ? ' + settings' : ''} -> `
-      + `${aa.antiAliasingLevel} ${aa.antiAliasingMode} `
-      + `blur=${aa.blurBrushRadiusPx}px zblur=${aa.zBlurRadiusLayers} lookback=${aa.zBlendLookBack}`,
-    );
-  }
-
-  const shown = run.args.map((arg, i) => (run.args[i - 1] === '--metadata-json' ? `<${arg.length} bytes>` : arg));
-  console.error(`  slicing: ${rustCli} ${shown.join(' ')}`);
-  // No shell: the metadata is JSON, and the paths may contain spaces.
-  const result = execFileSync(rustCli, run.args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
-
-  // Cleanup temp
-  execSync(`rm -rf ${tmpDir}`);
 
   if (jsonOutput(args.flags)) {
     // Parse and augment the Rust output with scene info
@@ -1727,6 +1812,8 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
     sliceResult.scene = {
       voxl: resolve(voxlPath),
       models: visibleModels.length,
+      model_triangles: modelTriangleCount,
+      support_triangles: totalTriangles - modelTriangleCount,
       total_triangles: totalTriangles,
     };
     console.log(JSON.stringify(sliceResult, null, 2));

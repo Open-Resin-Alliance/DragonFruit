@@ -59,7 +59,11 @@ The support tip shrink is geometry, applied while the mesh is prepared, so the e
 resolves the request once before mesh preparation and `assembleSliceJob` resolves it again; both use
 the same function and input. `aaOnSupports` is undefined without a request, and only the
 orchestrator falls back to the performance setting there, because that one is read from browser
-storage.
+storage. Support Halo fields (`supportHaloEnabled`, `supportHaloAuto`, `supportHaloRadiusMm`,
+`supportHaloInverseScalePercent`, `supportHaloMaxIntensityPercent`, `supportHaloProfile`,
+`supportHaloScope`, `supportHaloMaxTipDiameterMm`) are resolved orthogonally from the effective
+`antiAliasingSettings`, so Support Halo works across all presets (`raw`, `sharp`, `balanced`,
+`smooth`) and manual `2DAA`/`3DAA` overrides without forcing `enableOverride`.
 
 ## Example
 

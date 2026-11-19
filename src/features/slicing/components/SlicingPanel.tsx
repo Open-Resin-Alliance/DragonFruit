@@ -28,6 +28,7 @@ import {
   subscribeToProfileStore,
   updateMaterialProfile,
 } from '@/features/profiles/profileStore';
+import { subscribeToExperiments } from '@/features/experiments/experimentsRegistry';
 import {
   getPrinterReachabilityServerSnapshot,
   getPrinterReachabilitySnapshot,
@@ -969,6 +970,13 @@ export function SlicingPanel({
     setMaterialAaEditorDraft(null);
     setIsMaterialAaEditorOpen(false);
   }, [activeMaterialProfile?.id]);
+  useEffect(() => {
+    return subscribeToExperiments(() => {
+      if (activeMaterialProfile) {
+        setSessionAaOverrideDraft(readSessionAaOverrideDraft(activeMaterialProfile));
+      }
+    });
+  }, [activeMaterialProfile]);
   const profileAntiAliasingSettings = useMemo(() => ({
     ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
     ...(activeMaterialProfile?.antiAliasingSettings ?? {}),
