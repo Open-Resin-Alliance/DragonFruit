@@ -856,7 +856,7 @@ export default function Home() {
    */
   const activePlateModelIds = React.useMemo(
     () => new Set(
-      modelsOnPlate(scene.models, scene.activePlateId, scene.plateFrames).map((model) => model.id),
+      modelsOnPlate({ models: scene.models, plateId: scene.activePlateId, frames: scene.plateFrames }).map((model) => model.id),
     ),
     [scene.activePlateId, scene.models, scene.plateFrames],
   );
@@ -3234,7 +3234,7 @@ export default function Home() {
    */
   const printingScrubPreviewModels = React.useMemo(() => {
     const activeFrame = scene.plateFrames.find((frame) => frame.id === scene.activePlateId);
-    const onPlate = modelsOnPlate(scene.models, scene.activePlateId, scene.plateFrames);
+    const onPlate = modelsOnPlate({ models: scene.models, plateId: scene.activePlateId, frames: scene.plateFrames });
     if (!activeFrame || (activeFrame.dxMm === 0 && activeFrame.dyMm === 0)) return onPlate;
 
     return onPlate.map((model) => ({
@@ -11058,16 +11058,16 @@ export default function Home() {
             plateOrdering={scene.plateOrdering}
             plateLocked={scene.plateLocked}
             onTogglePlateLock={() => scene.setPlateLocked(!scene.plateLocked)}
-            plateClearTitle={plateCanBeRemoved(scene.plates, scene.activePlateId)
+            plateClearTitle={plateCanBeRemoved({ plates: scene.plates, plateId: scene.activePlateId })
               ? _(msg({ message: 'Delete this plate', comment: 'Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.' }))
               : _(msg({ message: 'Clear build plate', comment: 'Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.' }))}
             onClearPlate={() => {
               const plateId = scene.activePlateId;
-              const intent = plateCanBeRemoved(scene.plates, plateId) ? 'delete' : 'clear';
+              const intent = plateCanBeRemoved({ plates: scene.plates, plateId }) ? 'delete' : 'clear';
               // An empty bed has nothing to lose: a delete takes it straight away, and
               // a clear has nothing to do. The confirmation is for the models either
               // one takes with it.
-              if (modelsOnPlate(scene.models, plateId, scene.plateFrames).length === 0) {
+              if (modelsOnPlate({ models: scene.models, plateId, frames: scene.plateFrames }).length === 0) {
                 if (intent === 'delete') scene.removePlate(plateId);
                 return;
               }
@@ -11972,7 +11972,7 @@ export default function Home() {
                 // The plate, not the scene: with more than one bed, the bin empties
                 // the one you are working on and leaves the others alone.
                 void scene.deleteModels(
-                  modelsOnPlate(scene.models, scene.activePlateId, scene.plateFrames).map((model) => model.id),
+                  modelsOnPlate({ models: scene.models, plateId: scene.activePlateId, frames: scene.plateFrames }).map((model) => model.id),
                 );
               }}
             >
