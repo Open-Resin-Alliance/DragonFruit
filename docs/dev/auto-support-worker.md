@@ -42,7 +42,8 @@ three pieces of module state:
 
 - the settings store, through `getSettings()` (21 call sites across the
   pipeline, including the registry's placement thresholds),
-- the support snapshot, through `getSnapshot()` (the gap-fill coverage pass),
+- the support snapshot, through `getSnapshot()` (the starting state when the
+  caller passes no `baseState`),
 - the model mesh, through `getModelMesh()` and the brace clearance store.
 
 A worker thread has its own copies of all three, so every run seeds them from

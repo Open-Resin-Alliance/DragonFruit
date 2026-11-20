@@ -3552,12 +3552,12 @@ export function computeAutoSupportPlan(
     // iterating until the coverage target is met or nothing more places.
     let gapFilledTrunks = 0;
     for (let pass = 0; pass < MAX_GAP_FILL_PASSES; pass++) {
-        // Reads the committed store, not the draft: the run's own supports are
-        // not counted here. Left as-is deliberately (a worker seeds the store
-        // with the pre-run state so it matches the main thread); switching to
-        // `draft` converges properly and moves placement by one twig on the
-        // signature fixture. See docs/dev/backlog.md.
-        const tips = collectSupportTips(getSnapshot());
+        // Coverage is measured against the draft: the plate's existing
+        // supports plus everything this run has placed so far. Measuring the
+        // committed store instead skipped gap-fill on an empty plate, and on a
+        // plate with another model's supports read every region of this model
+        // as uncovered, roughly doubling its trunks.
+        const tips = collectSupportTips(draft);
         const gapCandidates = buildGapFillCandidates(overhangIslands, autoSettings, tips)
             .map((c): CandidatePoint => ({ ...c, modelId }));
         if (gapCandidates.length === 0) break;

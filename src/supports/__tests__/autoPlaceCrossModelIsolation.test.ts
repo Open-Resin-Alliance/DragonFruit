@@ -9,7 +9,7 @@ import { collectFanShaftPoints, computeAutoSupportPlan, fanLeafToHost, runAutoPl
 import { setModelMesh } from '../autoSupport/meshStore';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
 import { modelIdOfParentShaft } from '../PlacementLogic/SupportModelLinker';
-import { getSnapshot, resetKickstandsInState, resetStore } from '../state';
+import { getSnapshot, resetKickstandsInState, resetStore, setSnapshot } from '../state';
 import type { SupportState } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -273,4 +273,63 @@ test('a second model rebuilding the same island ids does not steal the first mod
     setModelMesh('model-a', null);
     setModelMesh('model-b', null);
     disposeHandlers();
+});
+
+// ---------------------------------------------------------------------------
+// Gap-fill coverage
+// ---------------------------------------------------------------------------
+
+/** A flat overhang of `sizeMm` square at height z, its footprint sampled every 0.25 mm. */
+function makeOverhangSlab(id: string, cx: number, cy: number, z: number, sizeMm: number): DetectedIsland {
+    const points: Array<{ x: number; y: number; z: number }> = [];
+    const half = sizeMm / 2;
+    for (let x = -half; x <= half + 1e-6; x += 0.25) {
+        for (let y = -half; y <= half + 1e-6; y += 0.25) points.push({ x: cx + x, y: cy + y, z });
+    }
+    return {
+        id,
+        source: 'overhang',
+        contact: new THREE.Vector3(cx, cy, z),
+        baseZ: z,
+        areaMm2: sizeMm * sizeMm,
+        surfaceNormal: { x: 0, y: 0, z: -1 },
+        contactVoxels: footprintFromPoints(points),
+    };
+}
+
+function trunkCount(state: SupportState, modelId: string): number {
+    return Object.values(state.trunks).filter((t) => t.modelId === modelId).length;
+}
+
+test('another model\'s supports elsewhere on the plate do not change gap-fill', () => {
+    // Gap-fill measures coverage against the tips already on the plate. It
+    // used to read the committed store rather than the run's draft, so on an
+    // empty plate it never ran, and with another model's tips anywhere it read
+    // every region of this model as uncovered and filled it again.
+    const islands = [makeOverhangSlab('o1', 0, 0, 20, 12)];
+
+    resetStore();
+    const alone = computeAutoSupportPlan(islands, 'model-b', AUTO_SETTINGS, emptySnapshot(), undefined);
+
+    const withNeighbour = emptySnapshot();
+    addTrunk(withNeighbour, 'far', 'model-a', 150, 0, 0, 20);
+    withNeighbour.trunks['far'].origin = 'island';
+    withNeighbour.trunks['far'].contactCone = {
+        id: 'cone-far',
+        pos: { x: 150, y: 0, z: 20 },
+        normal: { x: 0, y: 0, z: -1 },
+    } as SupportState['trunks'][string]['contactCone'];
+    resetStore();
+    // The worker seeds the store with the pre-run state; mirror that.
+    setSnapshot(withNeighbour);
+    const beside = computeAutoSupportPlan(islands, 'model-b', AUTO_SETTINGS, withNeighbour, undefined);
+    resetStore();
+
+    assert.ok(alone && beside, 'both plans computed');
+    assert.ok(trunkCount(alone.support, 'model-b') > 0, 'the slab is supported');
+    assert.equal(
+        trunkCount(beside.support, 'model-b'),
+        trunkCount(alone.support, 'model-b'),
+        'the same slab gets the same trunks with or without a far-away neighbour',
+    );
 });
