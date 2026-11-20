@@ -325,7 +325,10 @@ export function ownedPrimitives(
 export function groupByCollection(doomed: ReadonlySet<string>): Map<SupportCollectionKey, Set<string>> {
     const byCollection = new Map<SupportCollectionKey, Set<string>>();
     for (const key of doomed) {
-        const [collection, id] = key.split(':') as [SupportCollectionKey, string];
+        // Only the first colon separates: a collection key has none, an id may.
+        const separator = key.indexOf(':');
+        const collection = key.slice(0, separator) as SupportCollectionKey;
+        const id = key.slice(separator + 1);
         const existing = byCollection.get(collection);
         if (existing) existing.add(id);
         else byCollection.set(collection, new Set([id]));
