@@ -7,7 +7,9 @@
  * CLI's own loading: every command died on a Lingui macro before running.
  *
  * Two cases:
- * - One cube through create, add-model, place-on-platform and slice.
+ * - One cube through create, add-model, place-on-platform and slice, with the
+ *   STL deleted before the slice: the app imports only meshes a scene carries,
+ *   so `add-model` has to embed it.
  * - A cube on each of two plates, written with the app's own writer: a CLI save
  *   has to keep the plates, and `--plate 1` and `--plate 2` have to slice the
  *   same cube at the same place. Before ADR-0045 the second plate was dropped
@@ -21,7 +23,7 @@
 // The scene codec pulls in Lingui macros, as the CLI does.
 import './test-unit/register.mjs';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseVoxlAuto } from '../src/features/scene/voxl/codec';
@@ -103,12 +105,24 @@ function slice(scene: string, output: string, ...flags: string[]): SliceReport {
   return JSON.parse(cli('scene', 'slice', scene, '--o', output, '--printer', printer, ...flags, '--json'));
 }
 
-function oneCube(dir: string, stl: string): void {
+async function oneCube(dir: string, stl: string): Promise<void> {
   const scene = join(dir, 'one.voxl');
   const output = join(dir, 'one.ctb');
+  const ownStl = join(dir, 'one-cube.stl');
+  copyFileSync(stl, ownStl);
   cli('scene', 'create', '--o', scene);
-  const model = JSON.parse(cli('scene', 'add-model', scene, '--mesh', stl, '--name', 'Cube', '--json'));
+  const model = JSON.parse(cli('scene', 'add-model', scene, '--mesh', ownStl, '--name', 'Cube', '--json'));
   cli('scene', 'place-on-platform', scene, '--id', model.id);
+
+  // The app skips a model whose mesh is only a file name, so the scene has to
+  // carry the STL: it must survive a save and slice with the file gone.
+  rmSync(ownStl);
+  const parsed = await parseVoxlAuto(readFileSync(scene));
+  const mode = parsed.document.models.find((m) => m.id === model.id)?.mesh?.mode;
+  if (mode !== 'embedded-chunk' || !parsed.meshBytes.has(model.id)) {
+    fail(`add-model left the mesh out of the scene (mode ${mode}); the app would skip the model`);
+    return;
+  }
   const result = slice(scene, output);
   checkCubeSlice('one cube', result, output);
   if (!process.exitCode) {
@@ -201,7 +215,7 @@ async function main(): Promise<void> {
   try {
     const stl = join(dir, 'cube.stl');
     writeFileSync(stl, cubeStl(CUBE_MM, CUBE_LIFT_MM));
-    oneCube(dir, stl);
+    await oneCube(dir, stl);
     await twoPlates(dir, stl);
   } catch (err) {
     // execFileSync's message already carries the child's stderr.
