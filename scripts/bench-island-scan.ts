@@ -47,12 +47,12 @@ interface WorkerShim {
 }
 
 /**
- * The stand-in worker. Delivery is synchronous, so the reply goes to the shim
- * whose message is being handled: the worker file calls `self.postMessage`, and
- * that is pointed at the calling shim for the duration of its own handler.
+ * The stand-in worker: delivers each message on a microtask like a real worker,
+ * and dispatches replies to a snapshot of its listeners like an `EventTarget`.
  */
 function createWorkerShim(): WorkerShim {
     const listeners = new Set<(event: { data: unknown }) => void>();
+    let alive = true;
     return {
         postMessage: (message: unknown) => {
             const globals = globalThis as unknown as {
@@ -62,10 +62,13 @@ function createWorkerShim(): WorkerShim {
             if (!globals.onmessage) {
                 throw new Error('the scanline worker module is not loaded; await installInProcessWorkers() first');
             }
-            globals.postMessage = (data: unknown) => {
-                for (const listener of listeners) listener({ data });
-            };
-            globals.onmessage({ data: message });
+            queueMicrotask(() => {
+                if (!alive) return;
+                globals.postMessage = (data: unknown) => {
+                    for (const listener of [...listeners]) listener({ data });
+                };
+                globals.onmessage!({ data: message });
+            });
         },
         addEventListener: (type, listener) => {
             if (type === 'message') listeners.add(listener);
@@ -73,7 +76,10 @@ function createWorkerShim(): WorkerShim {
         removeEventListener: (type, listener) => {
             if (type === 'message') listeners.delete(listener);
         },
-        terminate: () => listeners.clear(),
+        terminate: () => {
+            alive = false;
+            listeners.clear();
+        },
     };
 }
 
