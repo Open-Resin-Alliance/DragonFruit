@@ -61,6 +61,8 @@ the same function and input. `aaOnSupports` is undefined without a request, and 
 orchestrator falls back to the performance setting there, because that one is read from browser
 storage.
 
+`scene slice` resolves the same shrink through `resolveSceneTipShrinkPercent` and passes it to the mesh build. Tip penetration reads the active profiles from the store instead, so `resolveSceneSliceJob` activates the job's printer and material.
+
 ## Example
 
 ```ts
