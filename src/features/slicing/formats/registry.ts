@@ -1,4 +1,4 @@
-import type { PrinterOutputFormat } from '@/features/profiles/profileStore';
+import type { PrinterOutputFormat, PrinterPreset } from '@/features/profiles/profileStore';
 import type { ResolveSlicingFormatContext, SlicingFormatDefinition } from './types';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
@@ -74,6 +74,49 @@ export function outputFormatSupportsMultiTank(
   const format = outputFormat as PrinterOutputFormat;
   const definition = resolveBuiltinPluginSlicingFormat(format) ?? resolveSideloadedSlicingFormat(format);
   return definition?.supportsMultiTank === true;
+}
+
+/**
+ * Whether the sliced artifact for this format is something a user can keep.
+ *
+ * Formats backed by a device that only accepts network delivery answer false:
+ * the bytes still exist for the uploader, but there is nothing to save.
+ */
+export function outputFormatIsFileExportable(
+  outputFormat: PrinterOutputFormat | string | null | undefined,
+): boolean {
+  if (!outputFormat) return true;
+  const definition = resolveBuiltinPluginSlicingFormat(outputFormat as PrinterOutputFormat)
+    ?? resolveSideloadedSlicingFormat(outputFormat as PrinterOutputFormat);
+  return definition?.fileExportable !== false;
+}
+
+/**
+ * Whether a printer preset can only be driven over the network.
+ *
+ * The format decides, not the printer: a definition that is not file-exportable
+ * exists solely to be delivered to the machine, so a local profile for it could
+ * never produce anything a user can keep. The library therefore has to offer the
+ * network connection flow instead of adding a file-based printer.
+ */
+export function printerPresetRequiresNetworkConnection(
+  preset: Pick<PrinterPreset, 'display'> | null | undefined,
+): boolean {
+  if (!preset) return false;
+  return !outputFormatIsFileExportable(preset.display?.outputFormat);
+}
+
+/**
+ * Whether adding a preset has to run through Initial Setup — a variant choice or
+ * a network connection — instead of creating the local profile directly.
+ */
+export function printerPresetNeedsInitialSetup(
+  preset: Pick<PrinterPreset, 'display' | 'modelVariants' | 'modelVariantDetectPath'> | null | undefined,
+): boolean {
+  if (!preset) return false;
+  if ((preset.modelVariants?.length ?? 0) > 0) return true;
+  if (preset.modelVariantDetectPath) return true;
+  return printerPresetRequiresNetworkConnection(preset);
 }
 
 export function outputFormatUsesPngLayers(outputFormat: PrinterOutputFormat | string | null | undefined): boolean {

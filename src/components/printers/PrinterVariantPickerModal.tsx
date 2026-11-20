@@ -5,9 +5,10 @@ import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
-import { Check, ChevronRight, Printer, X } from 'lucide-react';
+import { AlertTriangle, Check, ChevronRight, Printer, X } from 'lucide-react';
 import { Button, IconButton, ProgressBar, Spinner } from '@/components/atoms';
 import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
+import { printerPresetRequiresNetworkConnection } from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { ManualIpEntryCard, SetupMethodChooser, SetupModeButton } from '@/components/printers/SetupMethodChooser';
 import {
@@ -58,6 +59,13 @@ function formatConnectError(translate: (descriptor: MessageDescriptor, values?: 
     message: "Couldn't connect to {host}.",
     comment: 'Network connect failed for the given printer host/IP. {host} is the address.',
   }), { host });
+}
+
+function formatConnectedPrinterLabel(translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string, deviceName: string): string {
+  return translate(msg({
+    message: 'Connected: {deviceName}',
+    comment: 'The printer answered over the network. {deviceName} is the name or address it reported.',
+  }), { deviceName });
 }
 
 function formatNoDevicesFoundMessage(translate: (descriptor: MessageDescriptor, values?: Record<string, unknown>) => string, presetName: string): string {
@@ -136,15 +144,30 @@ export function PrinterVariantPickerModal({
 }: PrinterVariantPickerModalProps) {
   const { _ } = useLingui();
 
-  const networkAdapter = React.useMemo(() => {
+  // A format that cannot be exported as a file only works when the printer is
+  // connected: the setup flow is the only way to add it.
+  const networkRequired = React.useMemo(
+    () => printerPresetRequiresNetworkConnection(preset),
+    [preset],
+  );
+
+  // Discovery and connect are the minimum the network setup flow needs; the
+  // variant probe is what additionally resolves which model a family preset is.
+  const connectableAdapter = React.useMemo(() => {
     const adapter = getProfileNetworkUiAdapter(preset.networkSupport);
-    const hasDetectOps = Boolean(
-      adapter?.operations?.discover
-      && adapter?.operations?.connect
-      && adapter?.operations?.printerData,
-    );
-    return preset.modelVariantDetectPath && hasDetectOps ? adapter : null;
-  }, [preset.networkSupport, preset.modelVariantDetectPath]);
+    const canConnect = Boolean(adapter?.operations?.discover && adapter?.operations?.connect);
+    return canConnect ? adapter : null;
+  }, [preset.networkSupport]);
+
+  const canDetectVariant = React.useMemo(
+    () => Boolean(connectableAdapter?.operations?.printerData && preset.modelVariantDetectPath),
+    [connectableAdapter, preset.modelVariantDetectPath],
+  );
+
+  // The setup flow can only finish over the network when either the variant is
+  // resolvable there or there is no variant to resolve — a single-model printer
+  // such as a network-only one needs nothing but the connection.
+  const networkAdapter = canDetectVariant || variants.length === 0 ? connectableAdapter : null;
 
   const [mode, setMode] = React.useState<'choose' | 'scan' | 'manual' | 'ip'>(networkAdapter ? 'choose' : 'manual');
   const [manualIp, setManualIp] = React.useState('');
@@ -324,6 +347,26 @@ export function PrinterVariantPickerModal({
       const resolvedPortRaw = Number(connectPayload?.port);
       const resolvedPort = Number.isFinite(resolvedPortRaw) && resolvedPortRaw > 0 ? resolvedPortRaw : portInput;
 
+      const connectedPrinterName = typeof connectPayload?.printerName === 'string' && connectPayload.printerName.trim()
+        ? connectPayload.printerName.trim()
+        : typeof connectPayload?.hostName === 'string' && connectPayload.hostName.trim()
+          ? connectPayload.hostName.trim()
+          : null;
+
+      // Without a variant-detect path the preset is already the concrete model:
+      // the connection itself is the whole setup.
+      if (!canDetectVariant) {
+        setDetectedVariant(preset);
+        setDetectedDeviceName(connectedPrinterName);
+        pendingNetworkRef.current = {
+          host: resolvedHost,
+          port: resolvedPort,
+          printerName: connectedPrinterName ?? undefined,
+          mode: preset.networkSupport,
+        };
+        return;
+      }
+
       const dataResponse = await pluginNetworkFetch({
         pluginId: networkAdapter.pluginId,
         operation: networkAdapter.operations.printerData,
@@ -354,7 +397,7 @@ export function PrinterVariantPickerModal({
 
       const reportedPrinterName = typeof dataPayload?.printerName === 'string' && dataPayload.printerName.trim()
         ? dataPayload.printerName.trim()
-        : null;
+        : connectedPrinterName;
       setDetectedVariant(matched ?? preset);
       setDetectedDeviceName(reportedPrinterName);
       pendingNetworkRef.current = {
@@ -368,7 +411,7 @@ export function PrinterVariantPickerModal({
     } finally {
       setBusy(false);
     }
-  }, [networkAdapter, preset, variants, _]);
+  }, [networkAdapter, canDetectVariant, preset, variants, _]);
 
   const handleManualIpConnect = React.useCallback(() => {
     const host = manualIp.trim();
@@ -427,9 +470,33 @@ export function PrinterVariantPickerModal({
 
         {/* Body */}
         <div className="custom-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-          {!networkAdapter && variants.length === 0 ? (
+          {networkRequired && (
+            // A quiet card: present enough to be read before the buttons, not
+            // loud enough to compete with them. Left-aligned, small type, and a
+            // tint that is a hint of the warning tone rather than a fill.
+            <div
+              className="flex items-start gap-2 rounded-lg border px-3 py-2"
+              style={{
+                borderColor: 'color-mix(in srgb, #d97706, var(--border-subtle) 72%)',
+                background: 'color-mix(in srgb, #d97706, var(--surface-1) 94%)',
+              }}
+            >
+              <AlertTriangle className="mt-[1px] h-4 w-4 shrink-0" style={{ color: '#d97706' }} />
+              <div className="min-w-0">
+                <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>
+                  {_(msg`This printer works over the network only`)}
+                </div>
+                <div className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                  {_(msg`Connect it to slice and print.`)}
+                </div>
+              </div>
+            </div>
+          )}
+          {!networkAdapter && (variants.length === 0 || networkRequired) ? (
             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              {_(msg`This printer has no setup options.`)}
+              {networkRequired
+                ? _(msg`This printer can only be used over the network, and the plugin that provides it offers no network setup.`)
+                : _(msg`This printer has no setup options.`)}
             </p>
           ) : (
             <>
@@ -451,10 +518,10 @@ export function PrinterVariantPickerModal({
                     {detectedVariant ? (
                       <div>
                         <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                          {formatDetectedVariantLabel(_, detectedDisplayName)}
+                          {canDetectVariant ? formatDetectedVariantLabel(_, detectedDisplayName) : formatConnectedPrinterLabel(_, detectedDisplayName)}
                         </div>
                         <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                          {detectedDeviceName ? detectedVariant.name : _(msg`The printer reported this variant.`)}
+                          {canDetectVariant && !detectedDeviceName ? _(msg`The printer reported this variant.`) : detectedVariant.name}
                         </div>
                         {detectedAlreadyAdded && (
                           <div className="mt-1.5 text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>
@@ -556,8 +623,10 @@ export function PrinterVariantPickerModal({
                     </p>
                   )}
 
-                  {/* Fallback: skip networking entirely */}
-                  {!detectedVariant && !connecting && devices.length === 0 && showConfigureLater && (
+                  {/* Fallback: skip networking entirely. Not offered for a
+                      network-only printer: without a connection it cannot produce
+                      anything at all. */}
+                  {!networkRequired && !detectedVariant && !connecting && devices.length === 0 && showConfigureLater && (
                     <div className="pt-1 text-center">
                       <button
                         type="button"
@@ -587,10 +656,10 @@ export function PrinterVariantPickerModal({
                       }}
                     >
                       <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                        {formatDetectedVariantLabel(_, detectedDisplayName)}
+                        {canDetectVariant ? formatDetectedVariantLabel(_, detectedDisplayName) : formatConnectedPrinterLabel(_, detectedDisplayName)}
                       </div>
                       <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                        {detectedDeviceName ? detectedVariant.name : _(msg`The printer reported this variant.`)}
+                        {canDetectVariant && !detectedDeviceName ? _(msg`The printer reported this variant.`) : detectedVariant.name}
                       </div>
                     </div>
                   ) : (
@@ -694,7 +763,7 @@ export function PrinterVariantPickerModal({
             >
               {_(msg`Cancel`)}
             </Button>
-            {showNetworkMode && detectedVariant && !detectedAlreadyAdded && (
+            {(showNetworkMode || mode === 'ip') && detectedVariant && !detectedAlreadyAdded && (
               <Button
                 type="button"
                 onClick={handleConfirmDetected}

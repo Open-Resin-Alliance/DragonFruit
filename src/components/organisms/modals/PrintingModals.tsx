@@ -58,6 +58,8 @@ export type PrintingModalsProps = {
   executePrintingMonitorFeatureToggle: (feature: "webcam" | "timelapse", enabled: boolean) => Promise<void>;
   executePrintingMonitorSdcpDebugCommand: (options: { operation: string; label: string; channel: PrintingMonitorDebugChannel; payload?: Record<string, unknown>; }) => Promise<void>;
   executeStartMonitorRecentPlate: (plateId: number) => Promise<void>;
+  /** Whether the active format's slices are files at all; the finished dialog follows it. */
+  fileExportable: boolean;
   handleCopyPrintingMonitorDebugBundle: () => Promise<void>;
   handleDeleteMonitorRecentPlate: (plateId: number) => void;
   handlePrintNow: () => Promise<void>;
@@ -272,6 +274,7 @@ export function PrintingModals({
   executePrintingMonitorFeatureToggle,
   executePrintingMonitorSdcpDebugCommand,
   executeStartMonitorRecentPlate,
+  fileExportable,
   handleCopyPrintingMonitorDebugBundle,
   handleDeleteMonitorRecentPlate,
   handlePrintNow,
@@ -462,6 +465,7 @@ export function PrintingModals({
         onClose={() => setShowSliceCompletedModal(false)}
         filePath={sliceCompletedModalData.filePath}
         slicingTimeMs={sliceCompletedModalData.slicingTimeMs}
+        fileExportable={fileExportable}
         onOpenInUvTools={getSavedUvToolsSettings().enabled ? (fp) => {
           const s = getSavedUvToolsSettings();
           launchExternalProcess(resolveUvToolsExecutablePath(s), fp).catch((err) =>
@@ -1380,9 +1384,14 @@ export function PrintingModals({
                       const currentLayer = Number.isFinite(Number(snapshot?.currentLayer)) ? Math.max(0, Math.round(Number(snapshot?.currentLayer))) : null;
                       const totalLayersRaw = Number.isFinite(Number(snapshot?.totalLayers)) ? Math.round(Number(snapshot?.totalLayers)) : null;
                       const totalLayers = totalLayersRaw != null && totalLayersRaw > 0 ? totalLayersRaw : null;
+                      const reportedProgressPct = Number(snapshot?.progressPct);
+                      // Layer counts are the richer source when a printer
+                      // reports them; otherwise the snapshot's own ratio wins.
                       const progressPct = totalLayers != null && currentLayer != null
                         ? Math.max(0, Math.min(100, ((Math.max(0, currentLayer - 1)) / totalLayers) * 100))
-                        : null;
+                        : Number.isFinite(reportedProgressPct) && snapshot?.progressPct != null
+                          ? Math.max(0, Math.min(100, reportedProgressPct))
+                          : null;
                       const displayCurrentLayer = hasActivePrint ? currentLayer : null;
                       const displayTotalLayers = hasActivePrint ? totalLayers : null;
                       const displayProgressPct = hasActivePrint ? progressPct : null;

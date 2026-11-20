@@ -345,7 +345,10 @@ import { matchSceneMaterialsToTanks, resolveTankMaterialProfiles } from '@/featu
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import { sliceProfileFingerprint } from '@/features/printing/slicedPlates';
 import { useSlicedPlatePreviewLoading, useSlicedPlates } from '@/features/printing/useSlicedPlates';
-import { resolveOutputFileExtension } from '@/features/slicing/formats/registry';
+import {
+  outputFormatIsFileExportable,
+  resolveOutputFileExtension,
+} from '@/features/slicing/formats/registry';
 import {
   cleanupStalePrintTempArtifacts,
   deletePrintTempArtifactPath,
@@ -937,6 +940,13 @@ export default function Home() {
     getThemeMeshHighlightColors,
   );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  /**
+   * Whether the active format's slices are files a user can keep. A format that only ever
+   * ships to a machine has nothing to save, so the file actions, the UVTools handoff and the
+   * post-slice reveal are absent for it rather than disabled — the capability, never the
+   * plugin, decides.
+   */
+  const canExportSliceFile = outputFormatIsFileExportable(activePrinterProfile?.display.outputFormat);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   /**
    * A scene authored for a Multi-Tank printer cannot print on a single-material
@@ -3069,7 +3079,13 @@ export default function Home() {
     }
 
     // Dispatch slice intent action with the fresh artifact
-    const intent = sliceIntentRef.current;
+    const requestedIntent = sliceIntentRef.current;
+    // A remembered 'file' or 'uvtools' intent must not survive a switch to a format that has
+    // no file to write: it degrades to a plain hand-off instead of running a save that has
+    // nothing to save.
+    const intent: SliceIntent = (requestedIntent === 'file' || requestedIntent === 'uvtools') && !canExportSliceFile
+      ? 'preview'
+      : requestedIntent;
     setCompletedSliceIntent(intent);
     setCompletedSaveDestinationPath(null);
     // A batch writes several files into one folder, so the finished dialog names the folder
@@ -3199,7 +3215,7 @@ export default function Home() {
       };
       void saveAndNavigate(artifact);
     }
-  }, [recordPrintingSlice, scene]);
+  }, [canExportSliceFile, recordPrintingSlice, scene]);
 
   const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
     setPrintingSlicingBenchmark(benchmark);
@@ -3591,7 +3607,9 @@ export default function Home() {
     return formatApproxPrintTimeLabel(_, totalSec);
   }, [_, activeMaterialProfile, printingPreviewTotalLayers]);
 
-  const canDownloadPrintArtifact = Boolean(printingArtifact);
+  // A network-only format still produces an artifact for the uploader, but the
+  // file is not something the user can use: keep the download action hidden.
+  const canDownloadPrintArtifact = Boolean(printingArtifact) && canExportSliceFile;
   const activeNetworkUiAdapter = React.useMemo(
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
     // The registry, not just the mode string: a package installed this session
@@ -4169,6 +4187,9 @@ export default function Home() {
     }
 
     if (intent === 'file' || intent === 'uvtools') {
+      // No file capability, no save dialog: a stale intent is a no-op rather than a picker
+      // for a file this format will never produce.
+      if (!canExportSliceFile) return false;
       // Named for the plate it holds, as the slicer names it, and not for whichever model
       // happens to be selected.
       const extension = suggestedSliceOutputFilename.split('.').pop() ?? '';
@@ -4253,6 +4274,7 @@ export default function Home() {
   }, [
     _,
     activeNetworkUiAdapter,
+    canExportSliceFile,
     reachablePrintableConnectedPrinterFleet,
     printerReachabilityByDeviceId,
     printingTargetDevice,
@@ -4496,6 +4518,9 @@ export default function Home() {
 
   const handleDownloadPrintArtifact = React.useCallback(async () => {
     if (!printingArtifact) return;
+    // A format with no file to keep has no download: the action is hidden, and any stale
+    // caller stays a no-op rather than writing a file the format does not stand behind.
+    if (!canExportSliceFile) return;
 
     const nativeTempPath = printingArtifact.nativeTempPath;
 
@@ -10869,6 +10894,7 @@ export default function Home() {
               estimatedPrintTimeLabel: estimatedPrintTimeLabel,
               estimatedVolumeMlLabel: estimatedVolumeMlLabel,
               canDownloadPrintArtifact: canDownloadPrintArtifact,
+              fileExportable: canExportSliceFile,
               canSendToPrinter: canSendToPrinter,
               printingSendBusy: printingSendBusy,
               printingSendStatusText: printingSendStatusText,
@@ -11456,6 +11482,7 @@ export default function Home() {
         executePrintingMonitorFeatureToggle={executePrintingMonitorFeatureToggle}
         executePrintingMonitorSdcpDebugCommand={executePrintingMonitorSdcpDebugCommand}
         executeStartMonitorRecentPlate={executeStartMonitorRecentPlate}
+        fileExportable={canExportSliceFile}
         handleCopyPrintingMonitorDebugBundle={handleCopyPrintingMonitorDebugBundle}
         handleDeleteMonitorRecentPlate={handleDeleteMonitorRecentPlate}
         handlePrintNow={handlePrintNow}

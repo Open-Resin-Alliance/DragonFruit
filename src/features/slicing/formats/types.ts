@@ -22,6 +22,9 @@ export type SlicingFormatDefinition = {
   displayName: string;
   ownership: SlicingFormatOwnership;
   layerDataKind: 'png' | 'raw-mask';
+  /** When false, the artifact exists only to be delivered to the device and the
+   *  UI must not offer it as a downloadable file. Defaults to true. */
+  fileExportable?: boolean;
   pluginId?: string;
   xPackingStrategy?: SlicingXPackingStrategy;
   formatVersions?: SlicingFormatVersionOption[];

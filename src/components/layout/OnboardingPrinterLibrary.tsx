@@ -16,6 +16,7 @@ import {
   upsertPrinterNetworkDevice,
 } from '@/features/profiles/profileStore';
 import type { PrinterNetworkSupport, PrinterPreset, PrinterProfile } from '@/features/profiles/profileStore';
+import { printerPresetNeedsInitialSetup } from '@/features/slicing/formats/registry';
 import {
   PrinterVariantPickerModal,
   type PrinterVariantPickerNetworkContext,
@@ -123,10 +124,11 @@ export function OnboardingPrinterLibrary({ onAdded, onBack }: OnboardingPrinterL
   const handleAdd = React.useCallback(() => {
     if (!selectedPresetId) return;
     const preset = presets.find((item) => item.presetId === selectedPresetId);
-    // Presets with model variants OR a network detect path (e.g. Athena, which
-    // relies on networking) go through the Initial Setup flow.
-    if (preset?.modelVariants?.length || preset?.modelVariantDetectPath) {
-      setVariantChooserPreset(preset);
+    // Presets that need Initial Setup — model variants, a network detect path
+    // (e.g. Athena), or a format that can only be delivered over the network —
+    // never become a bare local profile.
+    if (printerPresetNeedsInitialSetup(preset)) {
+      setVariantChooserPreset(preset ?? null);
       return;
     }
     const newProfileId = addPrinterProfileFromPreset(selectedPresetId);
@@ -176,9 +178,10 @@ export function OnboardingPrinterLibrary({ onAdded, onBack }: OnboardingPrinterL
         key={preset.presetId}
         type="button"
         onClick={() => {
-          // Match the printer library: variant families / network-detect presets
-          // (e.g. Athena II) open Initial Setup on click instead of selecting.
-          if (preset.modelVariants?.length || preset.modelVariantDetectPath) {
+          // Match the printer library: preset families, network-detect presets
+          // (e.g. Athena II) and network-only formats open Initial Setup on
+          // click instead of selecting a local entry.
+          if (printerPresetNeedsInitialSetup(preset)) {
             setVariantChooserPreset(preset);
             return;
           }

@@ -114,6 +114,15 @@ export type PluginMonitoringSnapshotContract = {
     thumbnailPath?: string | null;
     taskId?: string | null;
     taskStatus?: number | null;
+    /**
+     * Material the printer reports for the loaded tank. Links that cannot
+     * enumerate plates (so there is no job metadata to read a profile name
+     * from) can still name the material this way.
+     */
+    materialCode?: string | null;
+    materialName?: string | null;
+    /** Raw vendor state code behind `stateText`, for exact comparisons. */
+    stateCode?: string | null;
 };
 
 export type PluginMonitoringWebcamInfoContract = {
@@ -121,6 +130,11 @@ export type PluginMonitoringWebcamInfoContract = {
     streamUrl: string | null;
     snapshotUrl: string | null;
     message: string;
+    /**
+     * Why no feed is available when the cause is known: a camera the printer
+     * reports as switched off is a different state from a request failure.
+     */
+    unavailableReason?: 'camera-disabled' | 'unsupported' | 'timeout' | 'error' | null;
 };
 
 export type PluginMonitoringUiPolicy = {
@@ -136,6 +150,12 @@ export type PluginMonitoringUiPolicy = {
     webcamTimeoutCooldownMs?: number;
     /** Cooldown after an immediate webcam request failure. */
     webcamFailureCooldownMs?: number;
+    /**
+     * How often the monitor asks for a new webcam frame while the pane is
+     * open. Links that serve one snapshot per request set this to their own
+     * cadence; streaming links can leave it unset.
+     */
+    webcamPollIntervalMs?: number;
 };
 
 export type PluginMonitoringUiAdapterContract = {
@@ -199,6 +219,14 @@ export type PluginSlicingFormatDefinitionContract = {
         isDefault?: boolean;
     }>;
     rustModulePath: string;
+    /**
+     * Whether the sliced artifact is a file the user can keep.
+     *
+     * A network-only format (one whose device can only be fed over the wire)
+     * still produces an artifact internally, but offering it as a download is
+     * a dead end for the user. Defaults to true.
+     */
+    fileExportable?: boolean;
     wasmExportName: string;
     notes?: string;
 };
