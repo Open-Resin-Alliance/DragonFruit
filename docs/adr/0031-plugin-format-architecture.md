@@ -28,6 +28,7 @@ Current submodules (as of 2026-08-18):
 | Plugin | Path | Format |
 |--------|------|--------|
 | ctb | `plugins/ctb` | ChiTuBox v2–v5 output |
+| sdcp-v1 | `plugins/sdcp-v1` | SDCP v1 MQTT network print |
 | sdcp-v3 | `plugins/sdcp-v3` | SDCP v3 network print |
 | anycubic | `plugins/anycubic` | Anycubic AFF output |
 | elegoo | `plugins/elegoo` | Elegoo GOO output |

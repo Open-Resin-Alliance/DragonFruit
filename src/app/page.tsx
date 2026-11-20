@@ -5388,10 +5388,10 @@ export default function Home() {
       const startedAt = Date.now();
       const timeoutMs = 10 * 60 * 1000;
       const pollMs = 1250;
-      let metadataReady = false;
+      let metadataReady = networkMode === 'sdcp-v1';
       let pollFailureCount = 0;
 
-      while ((Date.now() - startedAt) < timeoutMs) {
+      while (!metadataReady && (Date.now() - startedAt) < timeoutMs) {
         throwIfCanceled();
         try {
           const responseReady = await pluginNetworkFetch({

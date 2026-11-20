@@ -10,6 +10,13 @@ import type { PrinterPreset } from '../../profiles/profileStore';
 
 const ATHENA_16K_8B = 'concepts3d-athena2-16k8b-nanodlp';
 const ATHENA_16K_3B = 'concepts3d-athena2-16k3b-nanodlp';
+const SDCP_V1_PRESET_IDS = [
+  'elegoo-saturn-3-ultra-ctb',
+  'elegoo-saturn-3-ctb',
+  'elegoo-saturn-2-ctb',
+  'elegoo-mars-3-ctb',
+  'elegoo-mars-3-pro-ctb',
+];
 
 function getAthenaPresets(): PrinterPreset[] {
   return getInstalledProfilePlugins()
@@ -68,4 +75,17 @@ test('matchPrinterVariantByBitDepth resolves by declared bit depth', () => {
   assert.equal(matchPrinterVariantByBitDepth(variants, 6), null);
   assert.equal(matchPrinterVariantByBitDepth(variants, null), null);
   assert.equal(matchPrinterVariantByBitDepth(variants, undefined), null);
+});
+
+test('SDCP v1 printer presets select MQTT by default', () => {
+  const presets = getAvailablePrinterPresets();
+
+  for (const presetId of SDCP_V1_PRESET_IDS) {
+    const preset = presets.find((entry) => entry.presetId === presetId);
+    assert.ok(preset, `${presetId} preset exists`);
+    assert.equal(preset.networkSupport, 'sdcp-v1', `${presetId} selects SDCP v1`);
+  }
+
+  const saturn2 = presets.find((preset) => preset.presetId === 'elegoo-saturn-2-ctb');
+  assert.equal(saturn2?.display.resolutionX, 7680, 'Saturn 2 preset represents the 8K model');
 });
