@@ -120,6 +120,13 @@ function toBuildInput(doc: VoxlDocumentV1): { input: BuildVoxlDocumentInput; mes
   return { input, meshBytes };
 }
 
+/** Triangle count from a binary STL's header, or 0 when the bytes are not one (ASCII). */
+function binaryStlTriangleCount(bytes: Uint8Array): number {
+  if (bytes.byteLength < 84) return 0;
+  const count = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(80, true);
+  return 84 + count * 50 === bytes.byteLength ? count : 0;
+}
+
 async function saveVoxl(path: string, doc: VoxlDocumentV1): Promise<void> {
   const { input, meshBytes } = toBuildInput(doc);
   const bytes = await serializeVoxlDocumentV2(input, meshBytes);
@@ -254,20 +261,23 @@ async function sceneAddModel(args: ReturnType<typeof parseArgs>): Promise<void> 
   const rotation = rotStr ? parseVec3(rotStr) : { x: 0, y: 0, z: 0 };
   const scale = scaleStr ? parseVec3(scaleStr) : { x: 1, y: 1, z: 1 };
 
-  let fileSizeBytes: number | undefined;
-  try { fileSizeBytes = statSync(meshPath).size; } catch { /* ignore */ }
+  // The app imports only `embedded-chunk` meshes and skips a model that merely
+  // names a file, so the STL goes into the scene: registered here, the writer
+  // emits its MESH chunk and stamps the ref `embedded-chunk`.
+  const meshBytes = new Uint8Array(readFileSync(meshPath));
 
   const model: VoxlModelEntry = {
     id: uuidv4(),
     name,
     visible: true,
     color: '#a3a3a3',
-    polygonCount: 0,
-    fileSizeBytes,
+    polygonCount: binaryStlTriangleCount(meshBytes),
+    fileSizeBytes: meshBytes.byteLength,
     transform: { position, rotation, scale },
-    mesh: { mode: 'external-file', fileName: basename(meshPath) },
+    mesh: { mode: 'embedded-chunk', fileName: basename(meshPath), mimeType: 'model/stl' },
   };
 
+  LOADED_MESH_BYTES.set(model.id, meshBytes);
   doc.models.push(model);
   doc.scene.activeModelId = model.id;
   await saveVoxl(voxlPath, doc);

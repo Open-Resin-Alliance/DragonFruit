@@ -186,7 +186,7 @@ and prints `[command] Xms` to stderr.
 | Command | Description | Wraps |
 |---------|-------------|-------|
 | `scene create --o <scene.voxl>` | Create empty scene | `voxl/codec-v2::serializeVoxlDocumentV2` |
-| `scene add-model <voxl> --mesh <stl> [--name N] [--position x,y,z]` | Add model | VOXL model entry |
+| `scene add-model <voxl> --mesh <stl> [--name N] [--position x,y,z]` | Add model; the STL is embedded in the scene, so the app can open it | VOXL model entry + MESH chunk |
 | `scene remove-model <voxl> --id <id>` | Remove model (cascades supports) | VOXL mutation |
 | `scene list-models <voxl> [--json]` | List models with transforms | VOXL read |
 | `scene transform-model <voxl> --id <id> [--position x,y,z] [--rotate x,y,z] [--scale x,y,z]` | Set transform | VOXL mutation |
