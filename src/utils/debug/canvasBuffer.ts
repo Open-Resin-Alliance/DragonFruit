@@ -9,9 +9,18 @@
 
 import type { PerfLogger } from './perfLog';
 
-/** The scene canvas is the one react-three-fiber marks with `data-engine`. */
-function findSceneCanvas(): HTMLCanvasElement | null {
-    return document.querySelector<HTMLCanvasElement>('canvas[data-engine]');
+/**
+ * The scene canvas: of the canvases react-three-fiber marks with `data-engine`,
+ * the one with the largest drawing buffer. The first one in the document is not
+ * it: Support Studio's anatomy preview is an R3F canvas too, and once it mounted
+ * every scene and camera line described that 143x432 preview instead.
+ */
+export function findSceneCanvas(root: ParentNode = document): HTMLCanvasElement | null {
+    let best: HTMLCanvasElement | null = null;
+    for (const canvas of root.querySelectorAll<HTMLCanvasElement>('canvas[data-engine]')) {
+        if (!best || canvas.width * canvas.height > best.width * best.height) best = canvas;
+    }
+    return best;
 }
 
 /**
