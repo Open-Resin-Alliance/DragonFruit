@@ -63,7 +63,7 @@ construction.
 Because bodies are laid out as separate soups, a body's vertices are not welded
 *across* bodies — matching a 3MF, where each build item is an independent solid.
 
-The reader is `decodeDfmx` (`src/hooks/useStlGeometry.ts`), which returns the bodies
+The reader is `decodeDfmx` (`src/utils/dfmx.ts`), which returns the bodies
 plus the header facts a preview needs (flags, original and model counts). Each packed
 body is a view into the payload buffer — the payload is the body of a `fetch` response
 (Tauri's IPC is a custom-protocol fetch) and belongs to that call — and the unpacked

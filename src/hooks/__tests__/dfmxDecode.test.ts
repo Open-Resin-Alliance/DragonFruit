@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { zlibSync } from 'fflate';
-import { decodeDfmx } from '../useStlGeometry';
+import { decodeDfmx } from '@/utils/dfmx';
 
 /**
  * Build a version-2 DFMX payload exactly as `encode_mesh_bodies` writes it: a
