@@ -110,3 +110,137 @@ export async function deriveDisplayGeometry(
     return null;
   }
 }
+
+/*
+ * The display meshes the scene has derived, keyed on the model mesh they belong to.
+ *
+ * One derivation per model mesh, however many entries share it: a model, its history
+ * snapshots and its linked copies hold the same `BufferGeometry`, so undoing to an
+ * earlier mesh finds its display mesh here instead of refining it again. A mesh edited
+ * in place (smoothing) is forgotten and derived afresh.
+ */
+
+/** Refines in flight at once: each holds its soup in the request and its result. */
+const DERIVE_CONCURRENCY = 2;
+
+const settled = new WeakMap<THREE.BufferGeometry, THREE.BufferGeometry | null>();
+const inFlight = new WeakMap<THREE.BufferGeometry, Promise<THREE.BufferGeometry | null>>();
+const editions = new WeakMap<THREE.BufferGeometry, number>();
+const edited = new WeakSet<THREE.BufferGeometry>();
+const listeners = new Set<() => void>();
+const waiting: Array<() => void> = [];
+let running = 0;
+let inFlightCount = 0;
+
+function notify(): void {
+  for (const listener of listeners) {
+    try {
+      listener();
+    } catch (error) {
+      console.error('[displayMesh] listener failed', error);
+    }
+  }
+}
+
+async function withSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (running >= DERIVE_CONCURRENCY) {
+    await new Promise<void>((resolve) => waiting.push(resolve));
+  }
+  running += 1;
+  try {
+    return await work();
+  } finally {
+    running -= 1;
+    waiting.shift()?.();
+  }
+}
+
+/**
+ * The display mesh derived for `geometry`: the mesh, `null` when the model draws its
+ * own, or `undefined` when it has not been derived (or was edited since).
+ */
+export function settledDisplayGeometry(
+  geometry: THREE.BufferGeometry,
+): THREE.BufferGeometry | null | undefined {
+  return settled.get(geometry);
+}
+
+/**
+ * Derive the display mesh for `geometry` once, and tell the subscribers when it lands.
+ * A second request for the same mesh shares the first.
+ */
+export function requestDisplayGeometry(
+  geometry: THREE.BufferGeometry,
+): Promise<THREE.BufferGeometry | null> {
+  const known = settled.get(geometry);
+  if (known !== undefined) return Promise.resolve(known);
+  const pending = inFlight.get(geometry);
+  if (pending) return pending;
+
+  const edition = editions.get(geometry) ?? 0;
+  inFlightCount += 1;
+  const promise = withSlot(() => deriveDisplayGeometry(geometry))
+    .then((display): Promise<THREE.BufferGeometry | null> | THREE.BufferGeometry | null => {
+      inFlight.delete(geometry);
+      if ((editions.get(geometry) ?? 0) !== edition) {
+        // Edited while it was being refined: what came back is the old shape.
+        display?.dispose();
+        return requestDisplayGeometry(geometry);
+      }
+      settled.set(geometry, display);
+      notify();
+      return display;
+    })
+    .finally(() => {
+      inFlightCount -= 1;
+    });
+  inFlight.set(geometry, promise);
+  return promise;
+}
+
+/**
+ * The model mesh changed in place, so its display mesh shows the old shape. It is
+ * dropped from the entries that carry it (`wasEditedInPlace`) and derived again.
+ */
+export function forgetDisplayGeometry(geometry: THREE.BufferGeometry): void {
+  editions.set(geometry, (editions.get(geometry) ?? 0) + 1);
+  settled.delete(geometry);
+  edited.add(geometry);
+  notify();
+}
+
+/** Whether `geometry` was edited in place since its entries were last reconciled. */
+export function wasEditedInPlace(geometry: THREE.BufferGeometry): boolean {
+  return edited.has(geometry);
+}
+
+/** The entries carrying `geometry` have dropped their stale display mesh. */
+export function acknowledgeEditInPlace(geometry: THREE.BufferGeometry): void {
+  edited.delete(geometry);
+}
+
+/**
+ * Whether an entry's display mesh is still to come: derived but not yet attached, or
+ * not derived at all. The AO waits for it, so it bakes the mesh that is drawn.
+ */
+export function isDisplayGeometryPending(
+  entry: { geometry: THREE.BufferGeometry; displayGeometry?: THREE.BufferGeometry },
+): boolean {
+  if (edited.has(entry.geometry)) return true;
+  const known = settled.get(entry.geometry);
+  if (entry.displayGeometry) return known != null && known !== entry.displayGeometry;
+  return known !== null;
+}
+
+/** Whether any display mesh is being derived. */
+export function hasDisplayGeometryInFlight(): boolean {
+  return inFlightCount > 0;
+}
+
+/** Called whenever a display mesh lands or a model mesh is forgotten. */
+export function subscribeDisplayGeometry(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}

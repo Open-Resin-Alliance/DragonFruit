@@ -4,7 +4,16 @@ import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import * as THREE from 'three';
 import { loadTauriCore } from '@/utils/tauriMeshBridge';
-import { deriveDisplayGeometry } from './displayMesh';
+import {
+  acknowledgeEditInPlace,
+  hasDisplayGeometryInFlight,
+  isDisplayGeometryPending,
+  requestDisplayGeometry,
+  settledDisplayGeometry,
+  subscribeDisplayGeometry,
+  wasEditedInPlace,
+  deriveDisplayGeometry,
+} from './displayMesh';
 import { solidRemeshFromGeometry, tetSurfaceFromGeometry, type SolidRemeshProgressSink, type SolidRemeshOptions, type TetSurfaceProgressSink, type TetWrapOptions } from '@/utils/meshShrinkwrap';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import { loadMeshGeometry, loadMeshGeometryFromRange, load3mfGeometryMergedWithSplitData, processGeometry, skipsNativePassForModelOnly, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
@@ -3083,6 +3092,7 @@ export function useSceneCollectionManager(options?: {
     || pendingFlatteningPlanesRef.current > 0
     || pendingAoBakeRef.current > 0
     || pendingAoQueueRef.current.length > 0
+    || hasDisplayGeometryInFlight()
   ), []);
 
   const processDeferredDisposalQueue = useCallback(() => {
@@ -4597,6 +4607,52 @@ export function useSceneCollectionManager(options?: {
   }, [higherContrastModelEdges, setModels]);
 
   /**
+   * Display meshes.
+   *
+   * Every model mesh — loaded, replaced by an operation, split by a cut, restored by
+   * undo — gets its display mesh here, the one place that asks for it, and has it
+   * attached when it lands. Keyed on the model mesh, so a mesh history already holds
+   * is not refined twice. See `displayMesh.ts`.
+   */
+  const [displayMeshVersion, setDisplayMeshVersion] = useState(0);
+  useEffect(() => subscribeDisplayGeometry(() => setDisplayMeshVersion((version) => version + 1)), []);
+  useEffect(() => {
+    const attach = new Map<THREE.BufferGeometry, THREE.BufferGeometry | undefined>();
+    const acknowledged: THREE.BufferGeometry[] = [];
+    for (const model of modelsRef.current) {
+      const real = model.geometry.geometry;
+      if (!real.getAttribute('position')) continue;
+      if (wasEditedInPlace(real)) {
+        // Its display mesh shows the shape from before the edit.
+        acknowledged.push(real);
+        if (model.geometry.displayGeometry) attach.set(real, undefined);
+        void requestDisplayGeometry(real);
+        continue;
+      }
+      const known = settledDisplayGeometry(real);
+      if (known === undefined) {
+        // An entry that arrived with one (a clone, a rehydrated snapshot) keeps it.
+        if (!model.geometry.displayGeometry) void requestDisplayGeometry(real);
+        continue;
+      }
+      const display = known ?? undefined;
+      if (model.geometry.displayGeometry !== display) attach.set(real, display);
+    }
+    for (const real of acknowledged) acknowledgeEditInPlace(real);
+    if (attach.size === 0) return;
+    setModels((prev) => prev.map((m) => {
+      const real = m.geometry.geometry;
+      if (!attach.has(real)) return m;
+      const display = attach.get(real);
+      if (m.geometry.displayGeometry === display) return m;
+      const geometry = { ...m.geometry };
+      if (display) geometry.displayGeometry = display;
+      else delete geometry.displayGeometry;
+      return { ...m, geometry };
+    }));
+  }, [models, displayMeshVersion, setModels]);
+
+  /**
    * Baked ambient occlusion.
    *
    * One native bake per model, on an idle callback, off the main thread:
@@ -4621,6 +4677,9 @@ export function useSceneCollectionManager(options?: {
       .filter((model) => {
         // The bake lands on what the viewport draws: the display mesh when the model
         // has one. Its values are per vertex of that mesh and nothing else reads them.
+        // Not before the display mesh has landed: baking the model mesh in the
+        // meantime is a bake thrown away.
+        if (isDisplayGeometryPending(model.geometry)) return false;
         const geometry = displayGeometryOf(model.geometry);
         if (!geometry.getAttribute('position')) return false;
         // A geometry the hardware check skipped has no attribute by design; it
@@ -4713,7 +4772,7 @@ export function useSceneCollectionManager(options?: {
       scheduleIdle(() => void bakeOne());
     }
     return () => { cancelled = true; };
-  }, [models, bakedAoIntensity]);
+  }, [models, bakedAoIntensity, displayMeshVersion]);
 
   const finalizeModelGeometryPostProcessing = useCallback((id: string) => {
     const target = modelsRef.current.find((m) => m.id === id);

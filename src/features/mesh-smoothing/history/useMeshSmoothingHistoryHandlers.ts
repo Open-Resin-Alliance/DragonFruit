@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import * as THREE from 'three';
 
 import { createTypedHistory } from '@/history/typedHistory';
+import { forgetDisplayGeometry } from '@/features/scene/displayMesh';
 
 import { MESH_SMOOTHING_STROKE, type MeshSmoothingHistoryPayloadMap } from './actionTypes';
 import { getMeshSmoothingGeometryByKey, subscribeToMeshSmoothingStrokeFinalized } from '../meshSmoothingEngine';
@@ -103,12 +104,17 @@ export function useMeshSmoothingHistoryHandlers() {
         if (!geometry) return false;
 
         const positions = direction === 'undo' ? payload.before : payload.after;
-        return applyUniquePositions(geometry, payload.uniqueIds, positions);
+        const applied = applyUniquePositions(geometry, payload.uniqueIds, positions);
+        // The model mesh moved in place; the display mesh drawn for it did not.
+        if (applied) forgetDisplayGeometry(geometry);
+        return applied;
       },
     );
 
     const unsubFinalize = subscribeToMeshSmoothingStrokeFinalized((payload) => {
       meshSmoothingHistory.push({ type: MESH_SMOOTHING_STROKE, payload });
+      const geometry = getMeshSmoothingGeometryByKey(payload.geometryKey);
+      if (geometry) forgetDisplayGeometry(geometry);
     });
 
     return () => {
