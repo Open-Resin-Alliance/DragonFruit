@@ -66,7 +66,7 @@ import {
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { runWithConcurrency } from '@/utils/runWithConcurrency';
 import { logToNativeFile } from '@/utils/nativeLog';
-import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeAndAttachOcclusionForGeometry, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, isOcclusionUnavailable, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
+import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeAndAttachOcclusionForGeometry, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, canBakeOcclusionAsync, isOcclusionUnavailable, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
 import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
 import { shelfPack, type ShelfItem } from '@/features/scene/arrange/shelfPack';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -4612,10 +4612,23 @@ export function useSceneCollectionManager(options?: {
    * undo — gets its display mesh here, the one place that asks for it, and has it
    * attached when it lands. Keyed on the model mesh, so a mesh history already holds
    * is not refined twice. See `displayMesh.ts`.
+   *
+   * Only while there is occlusion to draw on it: the display mesh exists for the AO
+   * and nothing else, so a machine without a discrete GPU, or with the AO turned
+   * down to nothing, draws every model's own mesh and holds no second one.
    */
   const [displayMeshVersion, setDisplayMeshVersion] = useState(0);
+  const [aoHardwareAvailable, setAoHardwareAvailable] = useState<boolean | null>(null);
   useEffect(() => subscribeDisplayGeometry(() => setDisplayMeshVersion((version) => version + 1)), []);
   useEffect(() => {
+    let cancelled = false;
+    void canBakeOcclusionAsync().then((available) => {
+      if (!cancelled) setAoHardwareAvailable(available);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (aoHardwareAvailable !== true || bakedAoIntensity <= 0) return;
     const attach = new Map<THREE.BufferGeometry, THREE.BufferGeometry | undefined>();
     const acknowledged: THREE.BufferGeometry[] = [];
     for (const model of modelsRef.current) {
@@ -4649,7 +4662,7 @@ export function useSceneCollectionManager(options?: {
       else delete geometry.displayGeometry;
       return { ...m, geometry };
     }));
-  }, [models, displayMeshVersion, setModels]);
+  }, [models, displayMeshVersion, aoHardwareAvailable, bakedAoIntensity, setModels]);
 
   /**
    * Baked ambient occlusion.
