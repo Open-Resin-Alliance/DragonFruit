@@ -78,17 +78,7 @@ type StrokeUndoState = {
 };
 
 const activeStrokeGeometry = new WeakMap<THREE.BufferGeometry, StrokeUndoState>();
-const scratchNewlyHighlightedByGeometry = new WeakMap<THREE.BufferGeometry, Uint32Array>();
 const scratchSmoothingByGeometry = new WeakMap<THREE.BufferGeometry, SmoothingScratch>();
-
-type HighlightQueueState = {
-  buf: Uint32Array;
-  count: number;
-  read: number;
-  timeoutId: number | null;
-};
-
-const highlightQueueByGeometry = new WeakMap<THREE.BufferGeometry, HighlightQueueState>();
 
 const highlightStateByGeometry = new WeakMap<THREE.BufferGeometry, SmoothingHighlightState>();
 
@@ -522,89 +512,6 @@ function beginHighlightStroke(geometry: THREE.BufferGeometry): void {
   }
 }
 
-function getOrCreateHighlightQueueState(geometry: THREE.BufferGeometry): HighlightQueueState {
-  const existing = highlightQueueByGeometry.get(geometry);
-  if (existing) return existing;
-
-  const next: HighlightQueueState = {
-    buf: new Uint32Array(1024),
-    count: 0,
-    read: 0,
-    timeoutId: null,
-  };
-  highlightQueueByGeometry.set(geometry, next);
-  return next;
-}
-
-function clearHighlightQueue(geometry: THREE.BufferGeometry): void {
-  const state = highlightQueueByGeometry.get(geometry);
-  if (!state) return;
-  if (state.timeoutId != null) {
-    clearTimeout(state.timeoutId);
-    state.timeoutId = null;
-  }
-  state.count = 0;
-  state.read = 0;
-}
-
-function enqueueHighlightUniqueIds(geometry: THREE.BufferGeometry, uniqueIds: Uint32Array): void {
-  if (uniqueIds.length === 0) return;
-
-  // If there is no active stroke, don't do background highlight work.
-  if (!activeStrokeGeometry.has(geometry)) return;
-
-  const state = getOrCreateHighlightQueueState(geometry);
-
-  const needed = state.count + uniqueIds.length;
-  if (needed > state.buf.length) {
-    const nextLen = Math.max(needed, state.buf.length * 2);
-    const next = new Uint32Array(nextLen);
-    next.set(state.buf.subarray(0, state.count));
-    state.buf = next;
-  }
-
-  state.buf.set(uniqueIds, state.count);
-  state.count += uniqueIds.length;
-
-  if (state.timeoutId != null) return;
-
-  const flushChunk = () => {
-    state.timeoutId = null;
-
-    // Stop if stroke ended.
-    if (!activeStrokeGeometry.has(geometry)) {
-      state.count = 0;
-      state.read = 0;
-      return;
-    }
-
-    const topo = getMeshTopology(geometry);
-    if (!topo) {
-      state.count = 0;
-      state.read = 0;
-      return;
-    }
-
-    const chunkSize = 128;
-    const end = Math.min(state.count, state.read + chunkSize);
-    if (end > state.read) {
-      applyHighlightToUniqueVertices(geometry, topo, state.buf.subarray(state.read, end));
-      state.read = end;
-    }
-
-    if (state.read < state.count) {
-      state.timeoutId = setTimeout(flushChunk, 0) as unknown as number;
-      return;
-    }
-
-    // Finished.
-    state.count = 0;
-    state.read = 0;
-  };
-
-  state.timeoutId = setTimeout(flushChunk, 0) as unknown as number;
-}
-
 function applyHighlightToUniqueVertices(geometry: THREE.BufferGeometry, topo: NonNullable<ReturnType<typeof getMeshTopology>>, uniqueIds: Uint32Array): void {
   const hs = getOrCreateHighlightState(geometry);
   if (!hs) return;
@@ -822,7 +729,6 @@ export function beginMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): 
     samples: [],
   });
 
-  clearHighlightQueue(geometry);
   beginHighlightStroke(geometry);
 
   if (readyByGeometry.has(geometry)) {
@@ -966,8 +872,6 @@ function releaseStroke(geometry: THREE.BufferGeometry): void {
 }
 
 export function endMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): void {
-  clearHighlightQueue(geometry);
-
   const pending = pendingInitByGeometry.get(geometry);
   if (pending) {
     pending.canceled = true;
