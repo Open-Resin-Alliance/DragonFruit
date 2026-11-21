@@ -202,9 +202,9 @@ export function relaidPlateShifts({
   laidOut?: PlateFootprint;
   wasOrdering?: PlateOrdering;
 }): Map<string, PlateShift> {
+  // No shortcut for a scene left with one bed: when the first plate is the one
+  // deleted, the bed that is left moves into its slot and takes its models along.
   const shifts = new Map<string, PlateShift>();
-  if (after.length <= 1) return shifts;
-
   const wasFrames = computePlateFrames({ plates: before, footprint: laidOut, ordering: wasOrdering });
   const nowFrames = new Map(
     computePlateFrames({ plates: after, footprint, ordering }).map((frame) => [frame.id, frame]),
