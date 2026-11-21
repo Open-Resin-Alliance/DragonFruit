@@ -32,7 +32,7 @@ use dragonfruit_mesh_repair::{
     analyze, classify_support_split, hollow_voxel, io, punch_cylinders, repair_auto_with_progress,
     repair_separate_parts,
     shrink_wrap_with_progress, solid_remesh_with_progress, tet_surface_with_progress, HolePunchOptions,
-    HollowOptions, HollowSession, IndexedMesh, RepairOptions, ShrinkWrapOptions, SolidRemeshOptions,
+    HollowOptions, HollowSession, IndexedMesh, MeshHealthReport, RepairOptions, ShrinkWrapOptions, SolidRemeshOptions,
     TetWrapOptions,
     Vec3,
 };
@@ -500,18 +500,47 @@ pub async fn mesh_repair_from_path(
     let source_path = file_path.clone();
     let cancel = register_cancel(progress_token.as_ref());
     let token = progress_token.clone();
-    let (mesh, mut report) = tauri::async_runtime::spawn_blocking(move || {
+    let (mesh, mut report, load_ms) = tauri::async_runtime::spawn_blocking(move || {
+        let started = std::time::Instant::now();
         let mesh = io::load_mesh_from_path(&path).map_err(|e| e.to_string())?;
+        let load_ms = started.elapsed().as_secs_f64() * 1000.0;
         let mut sink = progress_sink("mesh-repair-progress", token, cancel, app);
         let outcome = repair_auto_with_progress(mesh, &options, Some(&mut sink));
-        Ok::<_, String>((outcome.mesh, outcome.report))
+        Ok::<_, String>((outcome.mesh, outcome.report, load_ms))
     })
     .await
     .map_err(|e| format!("repair task panicked: {e}"))??;
     release_cancel(progress_token.as_ref());
     report.source_path = Some(source_path);
+    log_repair_report("mesh_repair_from_path", &report, Some(load_ms));
     replace_staging_with_mesh(&mesh)?;
     serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+}
+
+/// Writes a finished repair to the log: the total, the triangle counts and each
+/// step with its time. The report carries all of it for the UI already, but a
+/// tester's log is what reaches us, and without these lines a five-minute repair
+/// shows up as a gap between two unrelated entries.
+fn log_repair_report(command: &str, report: &MeshHealthReport, load_ms: Option<f64>) {
+    let load = load_ms
+        .map(|ms| format!(", file read in {ms:.0}ms"))
+        .unwrap_or_default();
+    log::info!(
+        "[{command}] repaired in {:.0}ms{load}: {} -> {} triangles, fully_repaired={} cancelled={}",
+        report.total_ms,
+        report.pre.triangle_count,
+        report.post.triangle_count,
+        report.fully_repaired,
+        report.cancelled,
+    );
+    for step in &report.steps {
+        log::info!(
+            "[{command}]   step {} in {:.1}ms (changed {})",
+            step.name,
+            step.elapsed_ms,
+            step.changed
+        );
+    }
 }
 
 /// Repairs a plate part by part: the shells that meet stay together as one object, each object is
@@ -569,6 +598,7 @@ pub async fn mesh_repair_parts_from_path(
     let mesh = parts.combined_mesh();
     let mut report = parts.report(Some(source_path));
     report.cancelled = cancelled;
+    log_repair_report("mesh_repair_parts_from_path", &report, None);
     replace_staging_with_mesh(&mesh)?;
     serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
 }
@@ -641,6 +671,7 @@ pub async fn mesh_repair_staged(
     .await
     .map_err(|e| format!("repair task panicked: {e}"))??;
     release_cancel(progress_token.as_ref());
+    log_repair_report("mesh_repair_staged", &report, None);
 
     replace_staging_with_mesh(&mesh)?;
     serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))

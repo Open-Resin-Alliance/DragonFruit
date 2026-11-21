@@ -423,6 +423,10 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // In the browser we fall back to the legacy Manifold WASM path (which only
   // activates when NaN defects were detected).
   let nativeModifiedGeometry = false;
+  // Time spent in the native pass — the analysis, the user's answer to the heavy
+  // repair prompt, the repair and its round trip — kept out of the prep figure.
+  // A five-minute repair logged as "prep 319008ms" sent the reading the wrong way.
+  let nativeMs = 0;
   // A baked classification is the answer the native classify pass would
   // produce for this geometry, so there is nothing left to compute.
   const bakedClassification = options.bakedClassification ?? null;
@@ -431,6 +435,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   
   if (checkTauri() && !skipAll) {
     const nativeMode = options.nativeProcessingMode ?? 'auto';
+    const nativePhaseStart = performance.now();
     const skipAutoNativeProcessingForSize = nativeMode === 'auto'
       && sourceTriangleEstimate >= AUTO_NATIVE_PROCESSING_TRIANGLE_THRESHOLD;
 
@@ -551,13 +556,14 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
         }
 
         const { report } = effectiveResult;
-        console.log(
-          `[processGeometry] Native ${classifyOnly ? 'classification' : usedFallbackClassification ? 'repair/classification (fallback classify applied)' : 'repair/classification'} finished in ${(performance.now() - nativeStart).toFixed(2)}ms ` +
-          `(rust ${report.total_ms.toFixed(1)}ms; the rest is soup expand + staging IPC + apply). ` +
+        const nativeSummary =
+          `[processGeometry] Native ${classifyOnly ? 'classification' : usedFallbackClassification ? 'repair/classification (fallback classify applied)' : 'repair/classification'} finished in ${(performance.now() - nativeStart).toFixed(0)}ms ` +
+          `(rust ${report.total_ms.toFixed(0)}ms; the rest is soup expand + staging IPC + apply). ` +
           `pre=${report.pre.triangle_count}t/${report.pre.non_manifold_edges}nme/${report.pre.boundary_edges}be, ` +
           `post=${report.post.triangle_count}t/${report.post.non_manifold_edges}nme/${report.post.boundary_edges}be, ` +
-          `watertight=${report.post.is_watertight}`,
-        );
+          `watertight=${report.post.is_watertight}`;
+        console.log(nativeSummary);
+        void logToNativeFile('info', nativeSummary);
         meshDefects = {
           ...meshDefects,
           hasDefects: classifyOnly
@@ -588,6 +594,7 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       }
       console.warn('[processGeometry] Native mesh repair failed; falling back to sanitized geometry.', err);
     } finally {
+      nativeMs = performance.now() - nativePhaseStart;
       options.onNativeProcessingStage?.('postprocess');
     }
   }
@@ -641,7 +648,11 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   geometry.computeBoundingBox();
   const prepMs = performance.now() - startPrep;
   console.log(`[${new Date().toISOString()}] [processGeometry] Geometry Prep finished. Took ${prepMs.toFixed(2)}ms`);
-  void logToNativeFile('info', `[processGeometry] prep ${prepMs.toFixed(0)}ms`);
+  void logToNativeFile(
+    'info',
+    `[processGeometry] prep ${(prepMs - nativeMs).toFixed(0)}ms`
+      + (nativeMs > 0 ? ` (plus ${nativeMs.toFixed(0)}ms in the native analyze/repair pass)` : ''),
+  );
 
   // Yield before BVH (expensive synchronous tree build)
   await new Promise<void>(r => setTimeout(r, 0));
