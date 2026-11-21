@@ -1175,16 +1175,26 @@ function writeRecentOpenedFilesToLocalStorage(entries: RecentOpenedFileEntry[]):
   }
 }
 
-function sanitizeImportedModelDisplayName(rawName: string): string {
-  const trimmed = rawName.trim();
-  if (!trimmed) return 'model';
+/** Extensions stripped from an imported display name, longest first so `.stl.gz` goes before `.gz`. */
+const IMPORTED_NAME_EXTENSIONS = ['.chitubox', '.ctb', '.3mf', '.stl', '.obj', '.ply', '.lys'];
 
-  let base = trimmed;
-  while (true) {
-    const dotIndex = base.lastIndexOf('.');
-    if (dotIndex <= 0) break;
-    base = base.slice(0, dotIndex).trim();
-    if (!base) return 'model';
+function sanitizeImportedModelDisplayName(rawName: string): string {
+  let base = rawName.trim();
+  if (!base) return 'model';
+
+  // Only known extensions come off, repeatedly for a doubled one ("part.stl.stl").
+  // A dot in the name itself is kept: a model called "lid_v1.2" is not "lid_v1".
+  for (let stripped = true; stripped;) {
+    stripped = false;
+    for (const extension of IMPORTED_NAME_EXTENSIONS) {
+      if (base.length <= extension.length) continue;
+      if (!base.toLowerCase().endsWith(extension)) continue;
+      const next = base.slice(0, -extension.length).trim();
+      if (!next) return 'model';
+      base = next;
+      stripped = true;
+      break;
+    }
   }
 
   return base;
