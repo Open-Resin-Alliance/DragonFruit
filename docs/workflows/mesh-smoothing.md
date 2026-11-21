@@ -30,6 +30,7 @@ Set paint highlight color using:
 - Paint over target areas to smooth local geometry.
 - Work in smaller passes for predictable results.
 - Re-check silhouette and critical detail edges between passes.
+- On a coarse model — large flat faces, few vertices — the faces under a stroke are split to brush size first, so the brush rounds what it covers instead of tilting whole faces. Only the stroke's area gains triangles, and one undo takes the stroke back, split and all.
 
 ## Practical checks
 

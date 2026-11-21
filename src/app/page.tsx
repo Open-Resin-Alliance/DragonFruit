@@ -34,6 +34,7 @@ import {
   getThemeMeshHighlightColors,
   subscribeToThemeMeshHighlightColors,
 } from '@/components/settings/themeCustomizations';
+import { useMeshSmoothingGeometryReplacement } from '@/features/mesh-smoothing/useMeshSmoothingGeometryReplacement';
 import { useMirrorManager } from '@/features/mirror/useMirrorManager';
 import { useArrangeManager } from '@/features/scene/arrange/useArrangeManager';
 import { useHolePunchManager } from '@/features/hole-punching/useHolePunchManager';
@@ -10586,6 +10587,9 @@ export default function Home() {
   // click toggles a parity bit and applies a negative-scale transform — the GPU
   // renders the flip immediately. On exit we run one combined bake against the
   // accumulated parity bits and reset the scale to positive.
+  // A brush stroke over faces longer than the brush splits them and replaces the mesh.
+  useMeshSmoothingGeometryReplacement(scene);
+
   const mirror = useMirrorManager({
     scene,
     transformMgr,

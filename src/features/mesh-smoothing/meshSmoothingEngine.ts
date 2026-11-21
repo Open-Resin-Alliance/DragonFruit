@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { type SmoothingScratch } from './smoothingAlgorithms';
 import { getMeshTopology, queryUniqueVerticesInSphere } from './topologyCache';
 import { clampMeshSmoothingBrushSizeMm, getMeshSmoothingSettings, type MeshSmoothingSettings } from './settings';
+import { refineUnderStroke, STROKE_EDGE_PER_RADIUS } from './refineUnderStroke';
 
 export type MeshSmoothingStrokeFinalizedPayload = {
   geometryKey: number;
@@ -849,6 +850,121 @@ export function beginMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): 
   }, 0);
 }
 
+/**
+ * Puts a model's mesh in the scene in place of another: `next` for the model whose mesh
+ * is `previous`, as one undo step. Returns whether it did; a stroke it refuses is
+ * smoothed in place instead, on the mesh as it is.
+ */
+export type MeshSmoothingGeometryReplacer = (previous: THREE.BufferGeometry, next: THREE.BufferGeometry) => boolean;
+
+let geometryReplacer: MeshSmoothingGeometryReplacer | null = null;
+
+/**
+ * Lets a stroke that needs more vertices than the mesh has replace the mesh (see
+ * `refineUnderStroke`). Without one, every stroke smooths in place, as a session with
+ * no scene does.
+ */
+export function setMeshSmoothingGeometryReplacer(replacer: MeshSmoothingGeometryReplacer): () => void {
+  geometryReplacer = replacer;
+  return () => {
+    if (geometryReplacer === replacer) geometryReplacer = null;
+  };
+}
+
+/**
+ * Hand `next` to the scene in place of `previous`, if a scene is listening and takes it.
+ * A replacer that throws counts as one that declined.
+ */
+export function replaceMeshSmoothingGeometry(previous: THREE.BufferGeometry, next: THREE.BufferGeometry): boolean {
+  if (!geometryReplacer) return false;
+  try {
+    return geometryReplacer(previous, next);
+  } catch (err) {
+    console.error('[MeshSmoothingEngine] replacing the stroke\'s mesh failed', err);
+    return false;
+  }
+}
+
+/** Copy the topology's moved vertices back into every corner of the soup they weld. */
+function writeBackUniquePositions(topo: NonNullable<ReturnType<typeof getMeshTopology>>, applied: Uint32Array): void {
+  const arr = topo.positionAttribute.array as Float32Array;
+  for (let i = 0; i < applied.length; i++) {
+    const uid = applied[i];
+    const u3 = uid * 3;
+    const group = topo.groups[uid];
+    for (let gi = 0; gi < group.length; gi++) {
+      const v3 = group[gi] * 3;
+      arr[v3 + 0] = topo.uniquePositions[u3 + 0];
+      arr[v3 + 1] = topo.uniquePositions[u3 + 1];
+      arr[v3 + 2] = topo.uniquePositions[u3 + 2];
+    }
+  }
+  topo.positionAttribute.needsUpdate = true;
+}
+
+/**
+ * Smooth a finished stroke on `geometry`, synchronously: every vertex within the brush
+ * of one of its samples, by the same rule a stroke smoothed in place follows. Returns
+ * how many vertices moved.
+ */
+export function smoothStrokeOnGeometry(
+  geometry: THREE.BufferGeometry,
+  samples: ArrayLike<number>,
+  settings: MeshSmoothingSettings,
+  maxVertices: number,
+): number {
+  const topo = getMeshTopology(geometry);
+  if (!topo) return 0;
+  const radius = clampMeshSmoothingBrushSizeMm(settings.brushSizeMm);
+  const affected = new Set<number>();
+  const center = new THREE.Vector3();
+  for (let i = 0; i + 2 < samples.length; i += 3) {
+    center.set(samples[i], samples[i + 1], samples[i + 2]);
+    const near = queryUniqueVerticesInSphere(topo, center, radius);
+    for (let j = 0; j < near.length; j++) affected.add(near[j]);
+  }
+  if (affected.size === 0) return 0;
+
+  const applied = applyUniformSmoothingToTopology(topo, Uint32Array.from(affected), settings, maxVertices);
+  writeBackUniquePositions(topo, applied);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return applied.length;
+}
+
+/**
+ * Smooth the stroke on a copy of the mesh with its faces split under the brush, and put
+ * the copy in the model's place — when the faces there are longer than the brush, which
+ * would leave it nothing to move. Returns whether the stroke was handled that way.
+ */
+function smoothStrokeOnRefinedCopy(
+  geometry: THREE.BufferGeometry,
+  samples: ArrayLike<number>,
+  settings: MeshSmoothingSettings,
+  maxVertices: number,
+): boolean {
+  if (!geometryReplacer) return false;
+  const radius = clampMeshSmoothingBrushSizeMm(settings.brushSizeMm);
+  const next = refineUnderStroke(geometry, samples, radius, radius * STROKE_EDGE_PER_RADIUS);
+  if (!next) return false;
+
+  smoothStrokeOnGeometry(next, samples, settings, maxVertices);
+  const replaced = replaceMeshSmoothingGeometry(geometry, next);
+  if (!replaced) next.dispose();
+  return replaced;
+}
+
+/** Drop a stroke that left the mesh alone (its model now has another one). */
+function releaseStroke(geometry: THREE.BufferGeometry): void {
+  activeStrokeGeometry.delete(geometry);
+  workerPendingFinalize = false;
+  if (workerActiveGeometry === geometry) {
+    workerActiveGeometry = null;
+    workerActiveGeometryKey = 0;
+  }
+}
+
 export function endMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): void {
   clearHighlightQueue(geometry);
 
@@ -872,6 +988,11 @@ export function endMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): vo
   const stroke = activeStrokeGeometry.get(geometry);
   const settings = getMeshSmoothingSettings();
   const maxVertices = 8000;
+
+  if (stroke && stroke.affectedUnique.size === 0 && smoothStrokeOnRefinedCopy(geometry, stroke.samples, settings, maxVertices)) {
+    releaseStroke(geometry);
+    return;
+  }
 
   // If we didn't collect affected verts during the stroke, compute them now from stroke samples.
   if (topo && stroke && stroke.affectedUnique.size === 0 && stroke.samples.length > 0) {
