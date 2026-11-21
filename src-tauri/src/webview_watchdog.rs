@@ -122,6 +122,11 @@ impl WebviewLiveness {
         self.probe_sent_ms.store(0, Ordering::Relaxed);
     }
 
+    /// Whether the webview has reached the backend at least once this run.
+    pub fn has_pinged(&self) -> bool {
+        self.last_seen_ms.load(Ordering::Relaxed) != 0
+    }
+
     /// Milliseconds of silence, or None before the first ping has ever arrived
     /// (startup, or a build with the frontend half missing — neither is a
     /// crash, and neither should raise a dialog).

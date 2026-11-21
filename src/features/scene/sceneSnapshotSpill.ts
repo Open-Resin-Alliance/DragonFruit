@@ -264,9 +264,7 @@ export async function spillSceneSnapshotPair(
       specs.push(geometrySpec);
       id += 1;
       if (id % 4 === 0) {
-        const { promise, resolve } = Promise.withResolvers<void>();
-        setTimeout(resolve, 0);
-        await promise;
+        await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
       }
     }
 

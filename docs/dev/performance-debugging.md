@@ -130,6 +130,35 @@ nothing until you know whether it happened on an M4 Max or a 2017 iMac.
 > not reach the file, or stdout, or anywhere. This is why the header is
 > emitted from inside `setup()`.
 
+### Performance probes
+
+Four probes run in every build, started together from `src/utils/debug/perfProbes.ts`.
+Each writes one tagged line only when it has something to say, so a user's log
+answers "it feels slow" without a profiler:
+
+```
+[perf:canvas] scene canvas css=1180x790 buffer=2360x1580 scale=2.00 (3.7 MP/frame) webgl2 antialias=true msaaMax=4 gpuTimer=false
+[perf:camera] orbit 2140ms fps=24 p50=33ms p95=84ms max=140ms >50ms=9 >100ms=2 frames=51 css=1180x790 buffer=2360x1580 …
+[perf:interaction] click button[Build and tune supports] took 240ms to paint
+[perf:commits] react-dom: 64 commits in 1.0 s, up to 23 in one task (burst) — pointer: button[…] (300 ms ago)
+```
+
+- **canvas** (`canvasBuffer.ts`): the scene's drawing buffer when it appears and
+  whenever its size changes. On a Retina screen the buffer is the window size
+  times the device pixel ratio, which is the fill cost an old GPU pays per frame.
+- **camera** (`cameraFrameTiming.ts`): frame gaps for one camera gesture, from the
+  `picking-*-change` events. Gestures under 400 ms are skipped.
+- **interaction** (`slowInteractions.ts`): clicks and hotkeys that took 100 ms or
+  more to reach the next paint, the band below the stall threshold. Labels come
+  from test ids and accessibility attributes only.
+- **commits** (`reactCommitWatch.ts`): React commits counted through a minimal
+  DevTools global hook, installed from `src/instrumentation-client.ts` because
+  React reads the hook once when react-dom loads. A burst of 20 commits within
+  one task, or 30 a second for two seconds, is reported, then nothing for 10 s.
+  Bursts are delimited by tasks and the rate by elapsed time, because a hidden
+  window stops animation frames and throttles timers. DOM and react-three-fiber
+  commits are counted apart.
+
 ### GPU selection on hybrid systems
 
 Windows laptops with an integrated GPU and a discrete GPU default the WebView2
@@ -166,9 +195,14 @@ the problem, and send `dragonfruit.log`.
 
 Every one of these cost a wasted test cycle before it was understood.
 
-**`console.log` from the webview never reaches `dragonfruit.log`.** `attachConsole`
-mirrors Rust records *into* the webview console; nothing travels the other way.
-Measurements meant for a log file must go through `@tauri-apps/plugin-log`.
+**`console.log` from the webview never reaches `dragonfruit.log`.** Only
+`console.warn`, `console.error`, uncaught errors and unhandled promise
+rejections are forwarded, tagged `[webview]`, by `src/components/AppLogger.tsx`.
+Measurements meant for a log file must go through `@tauri-apps/plugin-log`
+(`logToNativeFile` in `src/utils/nativeLog.ts`). Forwarding rides the same IPC
+as everything else, so a webview whose IPC is broken logs nothing; the backend
+notices that on its own when the splash is still up 20 s after the main window
+was created (`[startup]` warning in `src-tauri/src/main.rs`).
 
 **`Physical footprint (peak)` is reset** when WebKit relieves memory pressure, so
 reading it with `vmmap` after the fact reports a peak lower than the real one —

@@ -3654,23 +3654,68 @@ async fn focus_main_window_command(app: DragonFruitAppHandle) -> Result<(), Stri
 /// Also closes the splash screen window if it is still open.
 #[tauri::command]
 async fn reveal_main_window_command(app: DragonFruitAppHandle) -> Result<(), String> {
+    log::info!("[startup] Frontend asked to reveal the main window");
+    reveal_main_window(&app);
+    Ok(())
+}
+
+/// How long the splash may stay up before the backend closes it on its own.
+/// The frontend normally asks within a second or two of the window being
+/// created; a silence this long means its calls are not reaching us.
+const SPLASH_FALLBACK_DELAY: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Shows the main window and closes the splash. Every failure is logged: a
+/// splash that cannot close is an app the user reads as frozen.
+fn reveal_main_window(app: &DragonFruitAppHandle) {
     // Show the main window first so there is no gap between splash close and
     // main window appearance (which would expose the desktop for a frame).
     // Geometry (restored session state or first-launch maximize) was already
     // applied at window creation, so showing here causes no resize flash.
-    if let Some(window) = app.get_webview_window("main") {
-        let is_visible = window.is_visible().unwrap_or(true);
-        if !is_visible {
-            // Re-enable taskbar entry just before we make the window visible.
-            #[cfg(target_os = "windows")]
-            let _ = window.set_skip_taskbar(false);
-            let _ = window.show();
+    match app.get_webview_window("main") {
+        Some(window) => {
+            let is_visible = window.is_visible().unwrap_or(true);
+            if !is_visible {
+                // Re-enable taskbar entry just before we make the window visible.
+                #[cfg(target_os = "windows")]
+                {
+                    if let Err(error) = window.set_skip_taskbar(false) {
+                        log::warn!("[startup] Failed to restore the main window's taskbar entry: {error}");
+                    }
+                }
+                if let Err(error) = window.show() {
+                    log::warn!("[startup] Failed to show the main window: {error}");
+                }
+            }
         }
+        None => log::warn!("[startup] No main window to reveal"),
     }
     if let Some(splash) = app.get_webview_window("splashscreen") {
-        let _ = splash.close();
+        if let Err(error) = splash.close() {
+            log::warn!("[startup] Failed to close the splash screen: {error}");
+        }
     }
-    Ok(())
+}
+
+/// Closes the splash if the frontend never asked for it. Without this, a
+/// frontend whose IPC calls fail leaves the splash on top forever and nothing
+/// in the log says why (seen on macOS 12.7).
+fn spawn_splash_fallback(app: DragonFruitAppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(SPLASH_FALLBACK_DELAY).await;
+        if app.get_webview_window("splashscreen").is_none() {
+            return;
+        }
+        let pinged = app
+            .try_state::<webview_watchdog::WebviewLiveness>()
+            .is_some_and(|state| state.has_pinged());
+        log::warn!(
+            "[startup] The frontend has not asked to reveal the main window after {} s \
+             (webview heartbeat received: {pinged}). Its calls to the backend may be failing. \
+             Closing the splash screen from the backend.",
+            SPLASH_FALLBACK_DELAY.as_secs()
+        );
+        reveal_main_window(&app);
+    });
 }
 
 #[tauri::command]
@@ -4228,15 +4273,46 @@ fn log_startup_header() {
         .map(|n| n.get().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
 
+    #[cfg(target_os = "macos")]
+    let platform = macos_versions();
+    #[cfg(not(target_os = "macos"))]
+    let platform = String::new();
+
     log::info!(
-        "[header] DragonFruit {} (debug={}) os={} arch={} cores={} log_level={}",
+        "[header] DragonFruit {} (debug={}) os={} arch={} cores={} log_level={}{}",
         env!("CARGO_PKG_VERSION"),
         cfg!(debug_assertions),
         std::env::consts::OS,
         std::env::consts::ARCH,
         cores,
         log::max_level(),
+        platform,
     );
+}
+
+/// The macOS release and the WebKit the process actually loaded, with its path.
+///
+/// The webview's JavaScript engine is this WebKit, not whatever Safari the
+/// user reports: on macOS 12 a Safari 17.6 install came with a webview that
+/// could not parse ES2022 class static blocks. The path tells the system copy
+/// (`/System/Library/Frameworks`) apart from one staged by a Safari update.
+#[cfg(target_os = "macos")]
+fn macos_versions() -> String {
+    use objc2_foundation::{NSBundle, NSProcessInfo, NSString};
+
+    let os = NSProcessInfo::processInfo().operatingSystemVersionString();
+    let webkit = match NSBundle::bundleWithIdentifier(&NSString::from_str("com.apple.WebKit")) {
+        Some(bundle) => {
+            let version = bundle
+                .objectForInfoDictionaryKey(&NSString::from_str("CFBundleVersion"))
+                .and_then(|value| value.downcast::<NSString>().ok())
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            format!("{version} ({})", bundle.bundlePath())
+        }
+        None => "not loaded".to_string(),
+    };
+    format!(" macos=\"{os}\" webkit={webkit}")
 }
 
 fn read_log_level_pref() -> log::LevelFilter {
@@ -4551,6 +4627,7 @@ fn main() {
                         }
                     }
                     log::info!("Main window created successfully");
+                    spawn_splash_fallback(app_handle.clone());
                 }
                 Err(e) => log::error!("Failed to build main window: {e}"),
             }

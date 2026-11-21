@@ -32,7 +32,7 @@ function truncate(value: string): string {
  * already sets for testing and accessibility — never text content, which can
  * carry a user's model or file names into the log.
  */
-function describeTarget(target: EventTarget | null): string {
+export function describeTarget(target: EventTarget | null): string {
     if (!(target instanceof Element)) return 'unknown';
 
     const labelled = target.closest('[data-testid], [aria-label], [title], button, canvas');

@@ -607,11 +607,23 @@ export function FloatingPanelStack({ children, leftInsetPx = 0, rightInsetPx = 0
     setPanelResize({ panelId, startX: clientX, startWidth: getPanelWidth(panelId) });
   }, [getPanelWidth]);
 
+  // The context value must keep one identity for the life of the stack. Every
+  // collapsible panel re-registers in a layout effect when it changes, and each
+  // registration sets state synchronously; a value that followed `children`, the
+  // layout or the viewport turned every parent render into a cascade of nested
+  // updates, which React aborts with error #185 (seen on macOS 12). Panels call
+  // these from event handlers, so reading the latest versions through a ref is
+  // enough.
+  const contextHandlersRef = React.useRef({ requestPanelExpand, beginPanelResize });
+  React.useLayoutEffect(() => {
+    contextHandlersRef.current = { requestPanelExpand, beginPanelResize };
+  }, [requestPanelExpand, beginPanelResize]);
+
   const floatingPanelStackContext = React.useMemo<FloatingPanelStackContextValue>(() => ({
     registerCollapsiblePanel,
-    requestPanelExpand,
-    beginPanelResize,
-  }), [registerCollapsiblePanel, requestPanelExpand, beginPanelResize]);
+    requestPanelExpand: (panelId) => contextHandlersRef.current.requestPanelExpand(panelId),
+    beginPanelResize: (panelId, clientX) => contextHandlersRef.current.beginPanelResize(panelId, clientX),
+  }), [registerCollapsiblePanel]);
 
   // Auto-compact a dock that no longer fits, from the bottom up.
   React.useEffect(() => {

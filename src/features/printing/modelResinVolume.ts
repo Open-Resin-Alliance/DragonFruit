@@ -44,20 +44,21 @@ const YIELD_EVERY_TRIANGLES = 4096;
  * a macrotask otherwise, so the chunked loop below never monopolises a frame.
  */
 function yieldToMainThreadIdle(): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  if (typeof window === 'undefined') {
+  // Not Promise.withResolvers: it needs Safari 17.4, and macOS 12 runs WebKit 15.6.
+  return new Promise<void>((resolve) => {
+    if (typeof window === 'undefined') {
+      setTimeout(resolve, 0);
+      return;
+    }
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+    };
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+      idleWindow.requestIdleCallback(() => resolve(), { timeout: 16 });
+      return;
+    }
     setTimeout(resolve, 0);
-    return promise;
-  }
-  const idleWindow = window as Window & {
-    requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
-  };
-  if (typeof idleWindow.requestIdleCallback === 'function') {
-    idleWindow.requestIdleCallback(() => resolve(), { timeout: 16 });
-    return promise;
-  }
-  setTimeout(resolve, 0);
-  return promise;
+  });
 }
 
 /**

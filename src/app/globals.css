@@ -985,3 +985,110 @@ input[type="number"]:not(.no-spinners):hover::-webkit-outer-spin-button,
   background: color-mix(in srgb, var(--surface-2), var(--accent) 16%);
 }
 
+
+/* Fallbacks for webviews without color-mix() (Safari < 16.2; macOS 12 runs
+   WebKit 15.6). Lightning CSS already wraps each color-mix() above in
+   @supports, but its fallback is the mix's first operand at full strength: a
+   tinted button became a solid tone with its label in the same tone. Theme
+   variables get the exact mix, worked out once from that theme's colours.
+   Component rules use the operand the mix leans on (a brightness filter for
+   the darkened hovers), which drops the faint tints but keeps every surface,
+   border and label visible. Keep this block in step when you add a
+   color-mix() to this file. */
+@supports not (color: color-mix(in srgb, red 50%, blue)) {
+  :root {
+    --accent-secondary-action-border: #7ca130;
+    --accent-secondary-action-bg-92: #272d22;
+    --accent-secondary-action-bg-90: #2a3122;
+  }
+
+  :root[data-theme='light'] {
+    --accent-secondary-action-color: #3f680f;
+    --accent-secondary-action-border: #789f42;
+    --accent-secondary-action-bg-92: #a4b19f;
+    --accent-secondary-action-bg-90: #a2b19c;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme='dark']):not([data-theme='light']) {
+      --accent-secondary-action-color: #3f680f;
+      --accent-secondary-action-border: #789f42;
+      --accent-secondary-action-bg-92: #a4b19f;
+      --accent-secondary-action-bg-90: #a2b19c;
+    }
+  }
+
+  .ui-topbar::before {
+    background: var(--surface-0);
+  }
+
+  .ui-topbar-mode-idle { border-color: var(--border-subtle); }
+  .ui-topbar-mode-active { box-shadow: 0 0 0 1px var(--topbar-accent) inset; }
+
+  .ui-button-danger { border-color: #e14747; }
+  .ui-button-primary { border-color: var(--primary-button-surface); }
+  .ui-button-primary:hover { background: var(--primary-button-surface); filter: brightness(0.88); }
+  .ui-button-accent { border-color: var(--secondary-button-surface); }
+  .ui-button-accent:hover { background: var(--secondary-button-surface); filter: brightness(0.91); }
+
+  .ui-button-tint {
+    background: var(--surface-1);
+    border-color: var(--button-tint);
+  }
+
+  .ui-button-tint:hover { background: var(--surface-2); }
+
+  .ui-segmented-option[data-active="true"] {
+    border-color: var(--segmented-tone, var(--accent));
+    background: var(--surface-0);
+    color: var(--segmented-tone, var(--accent));
+  }
+
+  button:disabled,
+  .ui-button:disabled {
+    background: var(--surface-1);
+    border-color: var(--border-subtle);
+    color: var(--text-muted);
+  }
+
+  .ui-checkbox:hover {
+    border-color: var(--border-subtle);
+    background: var(--surface-2);
+  }
+
+  .ui-checkbox:checked {
+    border-color: var(--accent);
+    background: var(--accent);
+    box-shadow: none;
+  }
+
+  .ui-empty-state {
+    background: var(--surface-0);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .custom-scrollbar { scrollbar-color: var(--accent) var(--surface-2); }
+  .custom-scrollbar::-webkit-scrollbar-track { background: var(--surface-2); }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: var(--accent);
+    border: 2px solid var(--surface-2);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--accent-hover); }
+
+  input[type="number"]:not(.no-spinners)::-webkit-inner-spin-button,
+  input[type="number"]:not(.no-spinners)::-webkit-outer-spin-button,
+  .ui-number-input::-webkit-inner-spin-button,
+  .ui-number-input::-webkit-outer-spin-button {
+    background: var(--surface-2);
+    border-left: 1px solid var(--border-subtle);
+  }
+
+  input[type="number"]:not(.no-spinners):hover::-webkit-inner-spin-button,
+  input[type="number"]:not(.no-spinners):hover::-webkit-outer-spin-button,
+  .ui-number-input:hover::-webkit-inner-spin-button,
+  .ui-number-input:hover::-webkit-outer-spin-button {
+    background: var(--surface-2);
+  }
+}

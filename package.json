@@ -7,7 +7,7 @@
     "chrome >= 119",
     "edge >= 119",
     "firefox >= 121",
-    "safari >= 17.4"
+    "safari >= 15.6"
   ],
   "engines": {
     "node": ">=24.22.2 <25"

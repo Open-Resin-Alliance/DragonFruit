@@ -30,6 +30,7 @@
  */
 
 import { unzlibSync, zlib as zlibAsync } from 'fflate';
+import { inflateZlib } from '@/utils/inflateZlib';
 import { runWithConcurrency } from '@/utils/runWithConcurrency';
 import { logToNativeFile } from '@/utils/nativeLog';
 import {
@@ -1159,20 +1160,11 @@ class LazyOriginalMeshBytesMap extends Map<string, Uint8Array> {
  * supposed to free. Measured at scene open, that showed up as 2.8-10 s stalls and
  * a wedged content process. The native stream is genuinely off-thread, streams its
  * output instead of cloning one large buffer back, and is the faster of the two
- * besides (70 ms against 93 ms for 24 MB in Node).
+ * besides (70 ms against 93 ms for 24 MB in Node). `inflateZlib` falls back to
+ * a synchronous inflate on webviews older than Safari 16.4.
  */
 async function inflateChunk(entry: ChunkDirEntry, raw: Uint8Array): Promise<Uint8Array> {
-  const source = new ReadableStream<BufferSource>({
-    start(controller) {
-      // `BufferSource` insists on an `ArrayBuffer`-backed view, which TS's
-      // typed-array generics cannot see through a `subarray`; the bytes are the
-      // same either way.
-      controller.enqueue(raw as BufferSource);
-      controller.close();
-    },
-  });
-  const stream = source.pipeThrough<Uint8Array>(new DecompressionStream('deflate'));
-  const inflated = new Uint8Array(await new Response(stream).arrayBuffer());
+  const inflated = await inflateZlib(raw);
   if (inflated.byteLength !== entry.uncompressedSize) {
     throw new Error(
       `VOXL V2: chunk ${entry.type}[${entry.index}] size mismatch after decompression ` +
