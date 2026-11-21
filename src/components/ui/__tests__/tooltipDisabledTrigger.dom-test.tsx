@@ -13,7 +13,7 @@ test('a tooltip on a disabled trigger closes once the pointer moves off it, with
   await act(async () => {
     root.render(
       <Tooltip content="Hollow the model first" anchor="trigger">
-        <button type="button" disabled>Interior</button>
+        <button type="button" disabled />
       </Tooltip>,
     );
   });
