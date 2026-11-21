@@ -11,24 +11,16 @@ pub mod staged;
 pub mod stl;
 pub mod three_mf;
 
-/// Dispatch by extension. Caller is responsible for pointing at a real
-/// mesh file; for in-memory staged buffers, use [`staged::load_positions_le`].
-pub fn load_mesh_from_path(path: &Path) -> Result<IndexedMesh, MeshRepairError> {
-    Ok(refine_coarse_faces(load_mesh_unrefined_from_path(path)?))
-}
-
-/// Read a file exactly as written, without [`refine_coarse_faces`].
+/// Dispatch by extension, and read the file exactly as written. Caller is responsible
+/// for pointing at a real mesh file; for in-memory staged buffers, use
+/// [`staged::load_positions_le`].
 ///
-/// [`load_mesh_from_path`] refines because the renderer samples per vertex, and
-/// because triangle ids are what several features index — so everything that
-/// reaches the app has to agree with the geometry the app is holding. A caller
-/// measuring or rewriting the *file* wants what is on disk instead, and the
-/// difference is not small: on a coarse part the refinement may add up to
-/// `COARSE_GROWTH_HEADROOM` triangles before anything reads the mesh, so a
-/// 26,488-triangle pulley arrives at the repair pipeline as 276,488. A tool that
-/// reports the loaded count without saying which of the two it did is reporting
-/// a number that belongs to neither.
-pub fn load_mesh_unrefined_from_path(path: &Path) -> Result<IndexedMesh, MeshRepairError> {
+/// Nothing is refined on the way in. The mesh a file holds is the model: it is what
+/// gets saved, exported, sliced and operated on, and what triangle ids index. A
+/// renderer that wants more vertices for its per-vertex shading refines a copy for
+/// drawing ([`refine_coarse_faces`], through the app's `refine_mesh_soup`), and the
+/// model never grows because it was drawn.
+pub fn load_mesh_from_path(path: &Path) -> Result<IndexedMesh, MeshRepairError> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -43,46 +35,19 @@ pub fn load_mesh_unrefined_from_path(path: &Path) -> Result<IndexedMesh, MeshRep
     }
 }
 
-/// The file's own triangle count, before refinement.
-///
-/// For a caller that wants to say what a load changed, without holding both
-/// meshes: the STL header carries the count, which is the whole of what a coarse
-/// mesh's inflation is measured against.
-pub fn triangle_count_on_disk(path: &Path) -> Option<usize> {
-    let is_stl = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("stl"));
-    if !is_stl {
-        return None;
-    }
-    let head = std::fs::read(path).ok()?;
-    if head.len() < 84 {
-        return None;
-    }
-    let declared = u32::from_le_bytes([head[80], head[81], head[82], head[83]]) as usize;
-    (84 + declared * 50 == head.len()).then_some(declared)
-}
-
-/// Load every body a file declares, each refined.
+/// Load every body a file declares, each as written.
 ///
 /// STL, OBJ and the staged formats describe a single mesh, so this returns one
 /// body for them. A 3MF describes one body per `<build><item>` expanded through
 /// its components, each with its composed transform baked into the vertices —
-/// see [`three_mf::load_bodies`]. Refinement is applied per body for the same
-/// reason it is applied in [`load_mesh_from_path`]: a body is what the frontend
-/// indexes its split data by, so each has to reach the renderer at the density
-/// the single-mesh path would give it.
+/// see [`three_mf::load_bodies`].
 pub fn load_mesh_bodies_from_path(path: &Path) -> Result<Vec<IndexedMesh>, MeshRepairError> {
     let is_three_mf = path
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("3mf"));
     if is_three_mf {
-        return Ok(three_mf::load_bodies(path)?
-            .into_iter()
-            .map(refine_coarse_faces)
-            .collect());
+        return three_mf::load_bodies(path);
     }
     Ok(vec![load_mesh_from_path(path)?])
 }
@@ -97,13 +62,14 @@ pub fn load_mesh_bodies_from_path(path: &Path) -> Result<Vec<IndexedMesh>, MeshR
 /// longest edge went from 16.8mm to 1.1mm, the base's vertices from 1608 to
 /// 10261, and the bake cost 5ms more.
 ///
-/// This runs at load, before anything derives data from the mesh, because
-/// triangle ids are what several features index: the overhang scan, the support
-/// placement that consumes its regions, and the masks and caches keyed off them.
-/// Refining later would move those ids under whoever already holds them. The
-/// refinement is skipped entirely when the mesh is already fine enough, which is
-/// the common case, and it is skipped for a model whose faces are long but whose
-/// size makes that correct.
+/// It makes a *display* mesh: the copy the app draws and bakes its occlusion on
+/// (`refine_mesh_soup` in `src-tauri`). It never runs on the mesh a model is, because
+/// triangle ids are what several features index — the overhang scan, the support
+/// placement that consumes its regions, the masks and caches keyed off them — and
+/// because a model that grows on every load is not the file the user opened. The
+/// refinement is skipped entirely when the mesh is already fine enough, which is the
+/// common case, and it is skipped for a model whose faces are long but whose size
+/// makes that correct.
 pub fn refine_coarse_faces(mesh: IndexedMesh) -> IndexedMesh {
     let mut min = crate::Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
     let mut max = crate::Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
@@ -189,6 +155,38 @@ mod tests {
             }
         }
         out
+    }
+
+    /// The loader reads a coarse model as written. Refining it here grew every model on
+    /// load, and an export or a save wrote the grown mesh back (a re-exported Benchy went
+    /// from 11 to 19 MB); the app refines only the copy it draws.
+    #[test]
+    fn a_coarse_file_is_read_as_written() {
+        let soup = box_soup([0.0; 3], [120.0, 120.0, 40.0]);
+        let triangles = soup.len() / 9;
+        let mut stl = vec![0u8; 80];
+        stl.extend_from_slice(&(triangles as u32).to_le_bytes());
+        for triangle in soup.chunks_exact(9) {
+            stl.extend_from_slice(&[0u8; 12]);
+            for value in triangle {
+                stl.extend_from_slice(&value.to_le_bytes());
+            }
+            stl.extend_from_slice(&[0u8; 2]);
+        }
+        let path = std::env::temp_dir().join(format!("df-coarse-as-written-{}.stl", std::process::id()));
+        std::fs::write(&path, &stl).unwrap();
+
+        let single = load_mesh_from_path(&path).unwrap();
+        let bodies = load_mesh_bodies_from_path(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(single.triangles.len(), triangles);
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0].triangles.len(), triangles);
+        assert!(
+            refine_coarse_faces(single).triangles.len() > triangles,
+            "the block is coarse enough that a refining loader would have grown it",
+        );
     }
 
     /// A coarse model is the model refinement exists for, so it has to reach the

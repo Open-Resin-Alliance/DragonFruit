@@ -15,11 +15,7 @@
 //! registry so the AO is not sent the soup back.
 
 use dragonfruit_mesh_core::mesh::IndexedMesh;
-use dragonfruit_mesh_core::refine::{
-    longest_edge, refine_long_edges_with_budget, refinement_budget, MAX_EDGE_DIAGONAL_FRACTION,
-    MAX_PASSES,
-};
-use dragonfruit_mesh_repair::io::DEFAULT_MERGE_EPSILON;
+use dragonfruit_mesh_repair::io::{refine_coarse_faces, DEFAULT_MERGE_EPSILON};
 use tauri::ipc::{InvokeBody, Request, Response};
 
 #[tauri::command]
@@ -43,33 +39,18 @@ pub async fn refine_mesh_soup(request: Request<'_>) -> Result<Response, String> 
         if mesh.triangles.is_empty() {
             return Err("refine_mesh_soup: no triangles".to_string());
         }
-
-        let mut min = [f32::INFINITY; 3];
-        let mut max = [f32::NEG_INFINITY; 3];
-        for position in &mesh.positions {
-            for (axis, value) in [position.x, position.y, position.z].into_iter().enumerate() {
-                min[axis] = min[axis].min(value);
-                max[axis] = max[axis].max(value);
-            }
-        }
-        let diagonal = ((max[0] - min[0]).powi(2)
-            + (max[1] - min[1]).powi(2)
-            + (max[2] - min[2]).powi(2))
-        .sqrt();
-        let max_edge = diagonal * MAX_EDGE_DIAGONAL_FRACTION;
-        let source_triangles = soup.len() / 9;
-        if !(diagonal.is_finite() && diagonal > 0.0 && longest_edge(&mesh) > max_edge) {
-            // Nothing to split: the caller's own mesh is the one to draw. The welded
-            // mesh is not sent back either — it may have dropped degenerate triangles,
-            // and a display mesh is only worth its memory when it adds vertices.
+        let source_triangles = mesh.triangles.len();
+        // The same rule, threshold and budget the loaders used to apply to the model.
+        let refined = refine_coarse_faces(mesh);
+        let triangles = refined.triangles.len();
+        if triangles == source_triangles {
+            // Nothing to split (refinement only ever adds triangles): the caller's own
+            // mesh is the one to draw, and the welded copy is not sent back.
             return crate::mesh_repair::encode_mesh_bodies(&[], 0, false, None, None, None)
                 .map(Response::new);
         }
-        let budget = refinement_budget(mesh.triangles.len());
-        let refined = refine_long_edges_with_budget(&mesh, max_edge, MAX_PASSES, budget);
-        let triangles = refined.triangles.len();
         log::info!(
-            "[refine_mesh_soup] {source_triangles} soup triangles -> {triangles} refined in {}ms",
+            "[refine_mesh_soup] {source_triangles} triangles -> {triangles} for display in {}ms",
             started.elapsed().as_millis(),
         );
 

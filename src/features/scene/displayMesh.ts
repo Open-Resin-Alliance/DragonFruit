@@ -7,9 +7,10 @@
  * and nothing else: saving, exporting, slicing, scans and operations all read the
  * model's own mesh, so a model never grows because it was drawn.
  *
- * Every producer of a model mesh derives it the same way, through
- * `deriveDisplayGeometry`. A headless session (the CLIs, the scripting API) never
- * calls it: it draws nothing, so it has nothing to derive.
+ * Every model mesh gets it the same way — loaded, replaced by an operation, restored
+ * by undo: the scene's reconciler asks `requestDisplayGeometry` for whatever mesh
+ * lacks one. A headless session (the CLIs, the scripting API) never asks: it draws
+ * nothing, so it has nothing to derive.
  */
 import * as THREE from 'three';
 import { decodeDfmx } from '@/utils/dfmx';

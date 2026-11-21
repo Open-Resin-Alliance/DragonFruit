@@ -16,35 +16,14 @@ use dragonfruit_mesh_repair::{
     about = "DragonFruit mesh repair engine"
 )]
 struct Cli {
-    /// Read the file as it is written on disk, instead of the loader's refined mesh.
-    ///
-    /// The loader subdivides faces longer than 2% of the model diagonal, because the renderer needs
-    /// the density and every triangle id has to agree with the geometry the app holds. That
-    /// refinement is invisible in the counts: a 26,488-triangle pulley reads as 276,488. Pass this
-    /// to measure or rewrite the file itself. It applies to every command that reads a mesh.
-    #[arg(long, global = true)]
-    raw: bool,
     #[command(subcommand)]
     command: Command,
 }
 
-/// The loader every command goes through, so `--raw` cannot be honoured in one place and forgotten
-/// in another. Refining on the way in says so on stderr, because a run that silently changes the
-/// mesh under it is how a count gets attributed to the wrong object.
-fn load_mesh(path: &std::path::Path, raw: bool) -> Result<IndexedMesh, MeshRepairError> {
-    let mut mesh = dragonfruit_mesh_repair::io::load_mesh_unrefined_from_path(path)?;
-    if raw {
-        return Ok(mesh);
-    }
-    let before = mesh.triangles.len();
-    mesh = dragonfruit_mesh_repair::io::refine_coarse_faces(mesh);
-    if mesh.triangles.len() != before {
-        eprintln!(
-            "note: the loader refined {before} -> {} triangles; --raw reads the file as written",
-            mesh.triangles.len()
-        );
-    }
-    Ok(mesh)
+/// The loader every command goes through: the file as written, which is also what the
+/// app holds — it refines only a copy it draws.
+fn load_mesh(path: &std::path::Path) -> Result<IndexedMesh, MeshRepairError> {
+    dragonfruit_mesh_repair::io::load_mesh_from_path(path)
 }
 
 #[derive(Debug, Subcommand)]
@@ -229,7 +208,7 @@ enum Command {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let Cli { raw, command } = Cli::parse();
+    let Cli { command } = Cli::parse();
     match command {
         Command::Solidify {
             input,
@@ -237,7 +216,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             out_stl,
             pretty,
         } => {
-            let mut mesh = load_mesh(&input, raw)?;
+            let mut mesh = load_mesh(&input)?;
             // Sheets first: a cavity plugged with zero-depth geometry is joined to the shell it broke
             // through, so they count as one component and the cavity cannot be seen until it is cut
             // free. The sheets are zero-depth, so dropping them moves no material either.
@@ -282,7 +261,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{s}");
         }
         Command::SolidRemesh { input, out_stl, tolerance, smooth_iterations, pretty } => {
-            let mesh = load_mesh(&input, raw)?;
+            let mesh = load_mesh(&input)?;
             let options = dragonfruit_mesh_repair::solid_remesh::SolidRemeshOptions {
                 tolerance,
                 smooth_iterations,
@@ -300,7 +279,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{s}");
         }
         Command::Cavities { input, pretty } => {
-            let mesh = load_mesh(&input, raw)?;
+            let mesh = load_mesh(&input)?;
             let scan = dragonfruit_mesh_repair::repair::scan_cavities(&mesh);
             let value = serde_json::json!({
                 "input_triangles": mesh.triangles.len(),
@@ -317,7 +296,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{s}");
         }
         Command::Analyze { input, pretty } => {
-            let report = analyze(&load_mesh(&input, raw)?);
+            let report = analyze(&load_mesh(&input)?);
             let s = if pretty {
                 serde_json::to_string_pretty(&report)?
             } else {
@@ -335,7 +314,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 resolve_self_intersections,
                 ..RepairOptions::default()
             };
-            let mesh = load_mesh(&input, raw)?;
+            let mesh = load_mesh(&input)?;
             let Some(parts) = repair_separate_parts(&mesh, &options, None) else {
                 println!(
                     "{{\"parts\":0,\"note\":\"the mesh is one object, or its shells meet each other; nothing to separate\"}}"
@@ -403,7 +382,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let uses_auto = auto;
             let outcome = if progress {
-                let mesh = load_mesh(&input, raw)?;
+                let mesh = load_mesh(&input)?;
                 let sink = |name: &str, _stage: usize| {
                     eprintln!("[stage] {name}");
                     true
@@ -414,7 +393,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     repair_with_progress(mesh, &options, Some(&mut { sink }))
                 }
             } else if uses_auto {
-                dragonfruit_mesh_repair::repair_auto(load_mesh(&input, raw)?, &options)
+                dragonfruit_mesh_repair::repair_auto(load_mesh(&input)?, &options)
             } else {
                 repair_path(&input, &options)?
             };
@@ -443,7 +422,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_triangles,
             pretty,
         } => {
-            let mesh = load_mesh(&input, raw)?;
+            let mesh = load_mesh(&input)?;
             let outcome = dragonfruit_mesh_repair::shrink_wrap(
                 &mesh,
                 &dragonfruit_mesh_repair::ShrinkWrapOptions {
@@ -471,7 +450,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_triangles,
             pretty,
         } => {
-            let mesh = load_mesh(&input, raw)?;
+            let mesh = load_mesh(&input)?;
             let outcome = dragonfruit_mesh_repair::tet_surface(
                 &mesh,
                 &dragonfruit_mesh_repair::TetWrapOptions {

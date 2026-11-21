@@ -12,7 +12,6 @@ import {
   settledDisplayGeometry,
   subscribeDisplayGeometry,
   wasEditedInPlace,
-  deriveDisplayGeometry,
 } from './displayMesh';
 import { solidRemeshFromGeometry, tetSurfaceFromGeometry, type SolidRemeshProgressSink, type SolidRemeshOptions, type TetSurfaceProgressSink, type TetWrapOptions } from '@/utils/meshShrinkwrap';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
@@ -283,8 +282,8 @@ const AO_BAKE_CONCURRENCY = 2;
  *
  * Was two, on the reasoning that each build is a native round trip whose serial
  * phases want overlapping. Measured on the 13-model scene, two left both workers
- * stalled: the native load is only 0.17-0.25 s (`[load_mesh_bytes] parsed, refined
- * and encoded in …`) while the round trip a build waits on is 1.4-2.3 s, because
+ * stalled: the native load is only 0.17-0.25 s (`[load_mesh_bytes] parsed and
+ * encoded in …`, measured when it also refined) while the round trip a build waits on is 1.4-2.3 s, because
  * the wire (65-81 MB a model at ~125 MB/s) and the *single main thread* that
  * decodes, accelerates and computes planes for each model are shared resources. A
  * build's own work is ~1.2 s of that, so the rest is one worker waiting for the
@@ -6544,13 +6543,9 @@ export function useSceneCollectionManager(options?: {
         { sourcePositionsBase64: string; sourcePositionCount: number }
       >();
       for (const normalized of normalizedPayloads) {
-        // The plugin built this geometry in the renderer, so it has not been
-        // through the native loaders that refine coarse faces. Refine it here, and
-        // keep the normals the command returns: it ships one per face, so there is
-        // nothing left for `computeVertexNormals` to derive.
         let geometry = normalized.geometry;
-        // Bake the cavity in first, so refine, classification and the BVH all
-        // describe the hollow solid rather than the shell that encloses it.
+        // Bake the cavity in first, so classification and the BVH describe the
+        // hollow solid rather than the shell that encloses it.
         if (bakeImportedHollowing) {
           const cavity = readPayloadCavity(normalized);
           if (cavity) {
@@ -6570,14 +6565,8 @@ export function useSceneCollectionManager(options?: {
             );
           }
         }
-        // Plugin geometry never passes through the native loaders, so it takes
-        // its display mesh here.
-        const display = await deriveDisplayGeometry(geometry);
-        const skipComputeNormals = display !== null;
-        if (display) geometry = display;
         const processed = await processGeometry(geometry, {
           center: false,
-          ...(skipComputeNormals ? { _skipComputeNormals: true } : {}),
           nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
           skipClassification: skipsNativePassForModelOnly(
             normalized.skipClassification === true,
@@ -7102,7 +7091,7 @@ export function useSceneCollectionManager(options?: {
       // Build every unique mesh, a couple at a time, before the placement loop.
       // Placement stays in order below because it depends on what is already on the
       // plate; building does not. Each build is a native round trip with serial
-      // phases (parse, refine, classify) around a parallel one, so two in flight let
+      // phases (parse, classify) around a parallel one, so two in flight let
       // one model's serial phase run during another's. The hash is computed here once
       // per model and reused by the loop, so neither the content hash nor the
       // integrity check is paid twice.
@@ -7119,9 +7108,6 @@ export function useSceneCollectionManager(options?: {
         nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
         assumeSupportGeometry: model.isSupportGeometry,
         skipClassification: model.isSupportGeometry,
-        // The payload is the scene's own mesh: refining it again changes the count and
-        // order every boundary indexes, and grows it on each round trip.
-        _refine: false,
       });
       const hashByModelId = new Map<string, string>();
       const uniqueBuilds = new Map<
@@ -7162,8 +7148,8 @@ export function useSceneCollectionManager(options?: {
         const buildCount = uniqueBuilds.size;
         // Every mesh's occlusion bake is left in flight rather than awaited per
         // model: it is the GPU's work (0.4-1.2 s a model on the scene this was
-        // measured against) while the remaining meshes are still being parsed,
-        // refined and classified, and running them one model at a time left the
+        // measured against) while the remaining meshes are still being parsed
+        // and classified, and running them one model at a time left the
         // GPU idle for most of the load. They are all awaited below, before any
         // model is placed, so each one's first frame still carries its occlusion
         // — the pop-in that baking after the fact produced.
