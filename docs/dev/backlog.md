@@ -702,9 +702,13 @@ things the target does **not** cover:
   `CanvasRenderingContext2D.roundRect` and `AbortSignal.timeout` (both Safari
   16.0) are polyfilled where missing by `src/utils/legacyWebKitPolyfills.ts`,
   installed from `src/instrumentation-client.ts` before any app or plugin
-  code; add to it rather than guarding each call site. Feature-detect anything
-  newer than Safari 15.6 (`requestIdleCallback` is missing from every Safari).
-  Known gap: the printing preview sizes itself with `cqw`/`cqh` (Safari 16.0),
+  code; add to it rather than guarding each call site. `color-mix()` (Safari
+  16.2) in inline styles and SVG paint attributes is computed at runtime by
+  `src/utils/legacyColorMix.ts`, installed from the same place; stylesheets
+  get their fallbacks at build time and in `globals.css`. Set
+  `localStorage.dfForceColorMixShim = '1'` to run it in a current browser.
+  Feature-detect anything newer than Safari 15.6 (`requestIdleCallback` is
+  missing from every Safari). Known gap: the printing preview sizes itself with `cqw`/`cqh` (Safari 16.0),
   which macOS 12 ignores, so the preview there keeps the full width and may
   not keep its aspect ratio.
 
