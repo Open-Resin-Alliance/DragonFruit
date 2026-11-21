@@ -435,7 +435,7 @@ under Microsoft's terms. DragonFruit's AGPL license is unchanged; see the
 and [Microsoft redistribution rules](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files).
 Build-tool licensing remains the release owner's responsibility.
 
-`scripts/prepare-windows-runtime.ps1` pins the minimum to `14.51.36247.0` and checks
+`scripts/prepare-windows-runtime.ps1` pins the minimum to `14.52.37029.0` and checks
 it against the selected Visual Studio installation's newest x64 CRT using direct
 `vswhere` discovery. It never updates the pin automatically. It generates the
 NSIS include and downloads only checksum-pinned
