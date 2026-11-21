@@ -2306,6 +2306,18 @@ mod registry {
     }
 }
 
+/// Keep `mesh` for its AO bake and return the token that names it — for a mesh built
+/// outside the loaders (the display-mesh refine), which the bake would otherwise be
+/// sent back as a soup.
+pub(crate) fn keep_for_bake(mesh: IndexedMesh) -> u32 {
+    registry::register(mesh)
+}
+
+/// The mesh a bake token names, if it is still registered.
+pub(crate) fn kept_for_bake(token: u32) -> Option<std::sync::Arc<IndexedMesh>> {
+    registry::get(token)
+}
+
 /// The mesh a bake token names, checked against the corner count the caller has.
 ///
 /// The check is the guard that makes the token safe: a caller's geometry is the mesh
@@ -2347,7 +2359,7 @@ const MESH_RESPONSE_FLAG_PREVIEW: u32 = 1;
 /// Positions plus normals, both 9 f32 per triangle.
 const SOUP_BYTES_PER_TRIANGLE: usize = 9 * std::mem::size_of::<f32>() * 2;
 
-fn encode_mesh_bodies(
+pub(crate) fn encode_mesh_bodies(
     bodies: &[IndexedMesh],
     original_triangle_count: u32,
     is_preview: bool,

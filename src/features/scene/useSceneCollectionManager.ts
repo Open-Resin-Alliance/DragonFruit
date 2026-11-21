@@ -3,7 +3,8 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import * as THREE from 'three';
-import { loadTauriCore, refineCoarseFaces, shouldRefineCoarseFaces } from '@/utils/tauriMeshBridge';
+import { loadTauriCore } from '@/utils/tauriMeshBridge';
+import { deriveDisplayGeometry } from './displayMesh';
 import { solidRemeshFromGeometry, tetSurfaceFromGeometry, type SolidRemeshProgressSink, type SolidRemeshOptions, type TetSurfaceProgressSink, type TetWrapOptions } from '@/utils/meshShrinkwrap';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import { loadMeshGeometry, loadMeshGeometryFromRange, load3mfGeometryMergedWithSplitData, processGeometry, skipsNativePassForModelOnly, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
@@ -6510,21 +6511,11 @@ export function useSceneCollectionManager(options?: {
             );
           }
         }
-        let skipComputeNormals = false;
-        // The mesh loaders already gate refinement on size. Plugin geometry
-        // takes this path directly, so apply the same ceiling here instead of
-        // sending a multi-million-triangle soup over IPC for a dense mesh.
-        if (shouldRefineCoarseFaces(geometry)) {
-          try {
-            const refined = await refineCoarseFaces(geometry);
-            if (refined) {
-              geometry = refined;
-              skipComputeNormals = true;
-            }
-          } catch (error) {
-            console.warn('[refine] plugin geometry left unrefined', error);
-          }
-        }
+        // Plugin geometry never passes through the native loaders, so it takes
+        // its display mesh here.
+        const display = await deriveDisplayGeometry(geometry);
+        const skipComputeNormals = display !== null;
+        if (display) geometry = display;
         const processed = await processGeometry(geometry, {
           center: false,
           ...(skipComputeNormals ? { _skipComputeNormals: true } : {}),

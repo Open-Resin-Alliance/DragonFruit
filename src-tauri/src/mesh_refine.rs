@@ -1,19 +1,20 @@
-//! IPC for refining geometry that an importer built outside the native loaders.
+//! IPC for deriving a model's display mesh: its long faces split so the per-vertex
+//! AO has vertices to land on.
 //!
-//! LYS is the case this exists for: it is imported by a TypeScript plugin
-//! (`plugins/lys-import/`), plugins cannot call native code, and so its geometry
-//! never passes through `dragonfruit_mesh_repair::io::load_mesh_from_path` where
-//! coarse faces are refined. The host calls this after a plugin import instead,
-//! which keeps one implementation of the rule and covers any future importer that
-//! builds geometry in the renderer.
+//! The mesh the model *is* never changes here — the renderer keeps it and draws this
+//! one instead (`GeometryWithBounds.displayGeometry`). Every producer of a model mesh
+//! asks the same command: the loaders, the importers that build geometry in the
+//! renderer (LYS, via `plugins/lys-import/`), and the operations that replace a mesh.
 //!
-//! In: a non-indexed triangle soup in the request body, 9 floats per triangle.
-//! Out: `[u32 triangle count][f32 positions][f32 normals]`, 9 of each per
-//! triangle, one normal per corner (`mesh_core::normals`). The mesh is welded on
-//! the way in, which is what gives the refinement shared edges to split.
+//! In: a non-indexed triangle soup in the request body, 9 floats per triangle. It is
+//! welded on the way in, which is what gives the refinement shared edges to split.
+//!
+//! Out: a `DFMX` payload (`mesh_repair::encode_mesh_bodies`). No bodies when the mesh
+//! has nothing to split, so the caller draws its own mesh. Otherwise one body, the
+//! display mesh, with its face normals, and the header's token naming it in the bake
+//! registry so the AO is not sent the soup back.
 
 use dragonfruit_mesh_core::mesh::IndexedMesh;
-use dragonfruit_mesh_core::normals::face_normals;
 use dragonfruit_mesh_core::refine::{
     longest_edge, refine_long_edges_with_budget, refinement_budget, MAX_EDGE_DIAGONAL_FRACTION,
     MAX_PASSES,
@@ -56,38 +57,34 @@ pub async fn refine_mesh_soup(request: Request<'_>) -> Result<Response, String> 
             + (max[2] - min[2]).powi(2))
         .sqrt();
         let max_edge = diagonal * MAX_EDGE_DIAGONAL_FRACTION;
-        let refined = if diagonal.is_finite() && diagonal > 0.0 && longest_edge(&mesh) > max_edge {
-            let budget = refinement_budget(mesh.triangles.len());
-            refine_long_edges_with_budget(&mesh, max_edge, MAX_PASSES, budget)
-        } else {
-            mesh
-        };
-
-        let normals = face_normals(&refined);
+        let source_triangles = soup.len() / 9;
+        if !(diagonal.is_finite() && diagonal > 0.0 && longest_edge(&mesh) > max_edge) {
+            // Nothing to split: the caller's own mesh is the one to draw. The welded
+            // mesh is not sent back either — it may have dropped degenerate triangles,
+            // and a display mesh is only worth its memory when it adds vertices.
+            return crate::mesh_repair::encode_mesh_bodies(&[], 0, false, None, None, None)
+                .map(Response::new);
+        }
+        let budget = refinement_budget(mesh.triangles.len());
+        let refined = refine_long_edges_with_budget(&mesh, max_edge, MAX_PASSES, budget);
         let triangles = refined.triangles.len();
         log::info!(
-            "[refine_mesh_soup] {} soup triangles -> {} refined in {}ms",
-            soup.len() / 9,
-            triangles,
+            "[refine_mesh_soup] {source_triangles} soup triangles -> {triangles} refined in {}ms",
             started.elapsed().as_millis(),
         );
 
-        let mut out = Vec::with_capacity(4 + triangles * 18 * 4);
-        out.extend_from_slice(&(triangles as u32).to_le_bytes());
-        for triangle in &refined.triangles {
-            for index in triangle {
-                let position = refined.positions[*index as usize];
-                out.extend_from_slice(&position.x.to_le_bytes());
-                out.extend_from_slice(&position.y.to_le_bytes());
-                out.extend_from_slice(&position.z.to_le_bytes());
-            }
-        }
-        for normal in &normals {
-            out.extend_from_slice(&normal.x.to_le_bytes());
-            out.extend_from_slice(&normal.y.to_le_bytes());
-            out.extend_from_slice(&normal.z.to_le_bytes());
-        }
-        Ok(Response::new(out))
+        let token = crate::mesh_repair::keep_for_bake(refined);
+        let kept = crate::mesh_repair::kept_for_bake(token)
+            .ok_or_else(|| "refine_mesh_soup: the display mesh was evicted at once".to_string())?;
+        crate::mesh_repair::encode_mesh_bodies(
+            std::slice::from_ref(&*kept),
+            triangles as u32,
+            false,
+            None,
+            None,
+            Some(token),
+        )
+        .map(Response::new)
     })
     .await
     .map_err(|e| format!("refine task panicked: {e}"))?

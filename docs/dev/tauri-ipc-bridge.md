@@ -268,11 +268,14 @@ dispatcher said it was.
 
 A plugin cannot call native code, so geometry an importer builds in the renderer
 (LYS, via `plugins/lys-import/`) never reaches that dispatcher either. The host
-calls `refine_mesh_soup` after a plugin import instead: soup in the request body,
-`[u32 triangle count][positions][normals]` out. It welds the mesh on the way in,
-which is what gives the refinement shared edges to split, and it returns the face
-normals for the same reason the loaders do, so the importer does not have to
-derive them in TypeScript.
+asks `refine_mesh_soup` for it instead, through `deriveDisplayGeometry`
+(`src/features/scene/displayMesh.ts`): soup in the request body, a `DFMX` payload
+out (docs/dev/mesh-wire-formats.md). No bodies means the mesh had nothing to split;
+otherwise one body, the refined mesh with its face normals, and the header's token
+naming it in the bake registry, so the AO asks for it by token instead of being sent
+the soup back. The command welds the mesh on the way in, which is what gives the
+refinement shared edges to split. The result is the model's *display mesh*
+(`GeometryWithBounds.displayGeometry`): drawn and baked, never saved or operated on.
 
 The fix is at the source. `io::load_mesh_from_path` refines faces longer than 2% of
 the model's diagonal, which is a quarter of the occlusion reach, before anything
@@ -287,10 +290,11 @@ one pass over the triangles and nothing else.
 carries its models' original STL bytes in its MESH chunks, and the loader handed
 them to three's `STLLoader` in the renderer (`loadStlGeometryFromBuffer`), which
 is neither the native file dispatcher nor the plugin command, so a scene's models
-were never refined at all. The same call now asks `refine_mesh_soup`, which also
-gives them the face normals the native loaders produce, and it
-asks only below `REFINE_MAX_TRIANGLES` (400k): the command costs twice the mesh in
-traffic, and a mesh with faces too long for the field is a mesh with few of them,
+were never refined at all. The same call now asks `deriveDisplayGeometry`, which
+also gives them the face normals the native loaders produce, and it asks only below
+`DISPLAY_REFINE_MAX_TRIANGLES` (400k) and only when an edge is longer than the
+limit: the command costs the mesh in traffic, and a mesh with faces too long for
+the field is a mesh with few of them,
 so the meshes that need it are the ones small enough to send. Above that limit a
 large mesh with a few huge faces still goes unrefined, which is a real gap and the
 rarer one.

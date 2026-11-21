@@ -14,7 +14,7 @@ import { accelerateGeometry } from '@/utils/bvh';
 import { logToNativeFile } from '@/utils/nativeLog';
 import { decodeDfmx, type DecodedMesh } from '@/utils/dfmx';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
-import { refineCoarseFaces, shouldRefineCoarseFaces } from '@/utils/tauriMeshBridge';
+import { deriveDisplayGeometry } from '@/features/scene/displayMesh';
 import {
   analyzeFromGeometry,
   applyRepairedPositions,
@@ -1239,11 +1239,9 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
  * This is where a VOXL scene's embedded mesh arrives: the MESH chunk is the
  * original STL bytes, and `loadMeshGeometry` routes them here rather than to the
  * native file loaders. Those refine coarse faces and return face normals as they
- * read; a buffer parsed by three does neither, so the same command the plugin
- * import asks is asked here, and only when the mesh is small enough for the round
- * trip to be free (see `REFINE_MAX_TRIANGLES`). The command returns the normals
- * with the payload, which is why the caller then has to skip
- * `computeVertexNormals`.
+ * read; a buffer parsed by three does neither, so it takes the display mesh
+ * `deriveDisplayGeometry` makes for it, which comes with its normals — which is why
+ * the caller then has to skip `computeVertexNormals`.
  */
 export async function loadStlGeometryFromBuffer(buffer: Uint8Array, options: ProcessGeometryOptions = {}): Promise<GeometryWithBounds> {
   // Native first when there is one: a single round trip parses, refines and
@@ -1271,19 +1269,9 @@ export async function loadStlGeometryFromBuffer(buffer: Uint8Array, options: Pro
   const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
   const source = loader.parse(arrayBuffer);
 
-  let geometry = source;
-  let refined = false;
-  if (shouldRefineCoarseFaces(source)) {
-    try {
-      const result = await refineCoarseFaces(source);
-      if (result) {
-        geometry = result;
-        refined = true;
-      }
-    } catch (error) {
-      console.warn('[loadStlGeometry] buffer geometry left unrefined', error);
-    }
-  }
+  const display = await deriveDisplayGeometry(source);
+  const geometry = display ?? source;
+  const refined = display !== null;
 
   // No native decode here, so nothing produced a report to check the stored one
   // against — check it against what three parsed: the same rule the native paths

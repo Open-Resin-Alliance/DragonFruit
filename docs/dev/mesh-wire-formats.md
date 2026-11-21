@@ -1,7 +1,9 @@
 # Mesh Wire Format (DFMX)
 
 One binary payload carries a mesh from Rust to the renderer: `DFMX`, written by
-`encode_mesh_bodies` and returned by the `load_mesh_file` command. It is
+`encode_mesh_bodies` and returned by the `load_mesh_*` commands and by
+`refine_mesh_soup` (a model's display mesh: no bodies when there is nothing to
+split, otherwise one, with its token set). It is
 little-endian, versioned, and holds one or more *bodies*. Each body ends in the
 same soup: positions (9 `f32` per triangle), then one normal per corner (9 `f32` per
 triangle — each triangle's own geometric normal, see `dragonfruit_mesh_core::normals`).
