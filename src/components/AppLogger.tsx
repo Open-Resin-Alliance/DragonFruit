@@ -5,6 +5,7 @@ import { startMainThreadHeartbeat } from "@/utils/debug/mainThreadHeartbeat";
 import { logStartupHeader } from "@/utils/debug/startupHeader";
 import { startWebviewHeartbeat } from "@/utils/debug/webviewHeartbeat";
 import { startPerfProbes } from "@/utils/debug/perfProbes";
+import { describeLogValue } from "@/utils/debug/logValue";
 import { logToNativeFile } from "@/utils/nativeLog";
 
 /**
@@ -110,18 +111,8 @@ const originalConsole = {
   error: console.error.bind(console),
 };
 
-function describe(value: unknown): string {
-  if (value instanceof Error) return value.stack ?? `${value.name}: ${value.message}`;
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
-
 function forward(level: "warn" | "error", parts: unknown[]): void {
-  let text = parts.map(describe).join(" ");
+  let text = parts.map(describeLogValue).join(" ");
   if (text.length > MAX_FORWARDED_LENGTH) {
     text = `${text.slice(0, MAX_FORWARDED_LENGTH)}… (${text.length} chars)`;
   }
