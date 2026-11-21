@@ -8,7 +8,7 @@ msgstr ""
 "Language: pt\n"
 "Project-Id-Version: dragonfruit\n"
 "Report-Msgid-Bugs-To: \n"
-"PO-Revision-Date: 2026-10-13 23:49\n"
+"PO-Revision-Date: 2026-11-21 21:32\n"
 "Last-Translator: \n"
 "Language-Team: Portuguese, Brazilian\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
@@ -24,11 +24,11 @@ msgstr "{deltaDays} D"
 
 #: src/components/layout/EmptySceneState.tsx:48
 msgid "{deltaHours} h"
-msgstr "{deltaHours} H"
+msgstr "{deltaHours} h"
 
 #: src/components/layout/EmptySceneState.tsx:44
 msgid "{deltaMin} min"
-msgstr "{deltaMin} Min"
+msgstr "{deltaMin} min"
 
 #: src/app/page.tsx:11895
 msgid "{hours} h {minutes} min"
@@ -36,16 +36,16 @@ msgstr "{hours} H {minutes} min"
 
 #: src/app/page.tsx:1385
 msgid "{hours} h {paddedMinutes} min"
-msgstr "{hours} H {paddedMinutes} min"
+msgstr "{hours} h {paddedMinutes} min"
 
 #: src/app/page.tsx:1389
 msgid "{minutes} min"
-msgstr "{minutes} Min"
+msgstr "{minutes} min"
 
 #: src/app/page.tsx:5471
 #: src/app/page.tsx:11896
 msgid "{minutes} min {paddedSeconds} s"
-msgstr "{minutes} Min {paddedSeconds} s"
+msgstr "{minutes} min {paddedSeconds} s"
 
 #. Shown when the estimated print time rounds down to under one minute. Keep the "<" comparison symbol.
 #: src/app/page.tsx:1392
@@ -65,135 +65,135 @@ msgstr "~{mins} min"
 #. Badge next to the currently-selected printer in the fleet list (adjective describing the device, e.g. "the active one").
 #: src/components/layout/TopBar.tsx:1017
 msgid "Active"
-msgstr "Ativo"
+msgstr "Active"
 
 #: src/app/page.tsx:3552
 msgid "Add Joint"
-msgstr "Adicionar junta"
+msgstr "Add Joint"
 
 #: src/components/layout/EmptySceneState.tsx:522
 msgid "Add or switch printer anytime from the top bar."
-msgstr "Adicione ou troque a impressora a qualquer momento pela barra superior."
+msgstr "Add or switch printer anytime from the top bar."
 
 #: src/components/layout/EmptySceneState.tsx:494
 msgid "Add printer"
-msgstr "Adicionar impressora"
+msgstr "Add printer"
 
 #: src/components/layout/EmptySceneState.tsx:93
 msgid "Anti-aliasing: nothing to anti-alias."
-msgstr "Anti-aliasing: nada para suavizar."
+msgstr "Anti-aliasing: nothing to anti-alias."
 
 #. Cross-sectional area stats for the current print layer: "Area Σ" = total/summed solid area (Σ is the mathematical summation symbol, usually kept as-is); "Min"/"Max" = smallest/largest single contiguous area, abbreviating "Minimum"/"Maximum".
 #: src/app/page.tsx:22286
 msgid "Area Σ {totalAreaLabel} • Min {minAreaLabel} • Max {maxAreaLabel}"
-msgstr "\tÁrea Σ {totalAreaLabel} · Mín {MinAreaLabel} · Máx {MaxAreaLabel}"
+msgstr "Area Σ {totalAreaLabel} • Min {minAreaLabel} • Max {maxAreaLabel}"
 
 #: src/components/controls/TransformToolbar.tsx:35
 msgid "Arrange"
-msgstr "Organizar"
+msgstr "Arrange"
 
 #: src/components/layout/TopBar.tsx:632
 msgid "Arrange model and transforms"
-msgstr "Organizar modelo e transformações"
+msgstr "Arrange model and transforms"
 
 #: src/components/controls/TransformToolbar.tsx:35
 msgid "Auto-arrange models on plate"
-msgstr "Organizar automaticamente os modelos na mesa"
+msgstr "Auto-arrange models on plate"
 
 #. Badge shown in the top of the empty workspace when the app is a beta build. Uppercase label.
 #: src/components/layout/EmptySceneState.tsx:432
 msgid "BETA VERSION"
-msgstr "VERSÃO BETA"
+msgstr "BETA VERSION"
 
 #: src/components/layout/EmptySceneState.tsx:441
 msgid "Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print."
-msgstr "Importe uma malha ou cena para começar a preparar, analisar, adicionar suportes e exportar sua impressão."
+msgstr "Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print."
 
 #: src/components/layout/TopBar.tsx:640
 msgid "Build and tune supports"
-msgstr "Construir e ajustar suportes"
+msgstr "Build and tune supports"
 
 #. Shown in place of file size when the file is in cache but its size is unknown. Adjective/state label.
 #: src/components/layout/EmptySceneState.tsx:660
 msgid "cached"
-msgstr "memória transitória"
+msgstr "cached"
 
 #: src/components/layout/TopBar.tsx:1269
 msgid "Changing print settings invalidates the current sliced file."
-msgstr "Alterar as configurações de impressão invalida o fatiamento atual."
+msgstr "Changing print settings invalidates the current sliced file."
 
 #: src/components/layout/TopBar.tsx:1250
 msgid "Changing printer profile requires re-slice"
-msgstr "Alterar o perfil da impressora exige um novo fatiamento"
+msgstr "Changing printer profile requires re-slice"
 
 #: src/components/layout/TopBar.tsx:1230
 msgid "Close"
-msgstr "Fechar"
+msgstr "Close"
 
 #: src/components/layout/TopBar.tsx:922
 msgid "Close Program"
-msgstr "Fechar programa"
+msgstr "Close Program"
 
 #: src/components/layout/TopBar.tsx:1282
 msgid "Close warning"
-msgstr "Aviso de fechamento"
+msgstr "Close warning"
 
 #: src/components/layout/TopBar.tsx:1231
 msgid "Close window"
-msgstr "Fechar janela"
+msgstr "Close window"
 
 #. Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep Current Profiles", which cancels).
 #: src/components/layout/TopBar.tsx:1315
 msgid "Continue"
-msgstr "Continuar"
+msgstr "Continue"
 
 #: src/components/ui/EditorContextMenu.tsx:50
 msgid "Copy"
-msgstr "Copiar"
+msgstr "Copy"
 
 #: src/components/layout/EmptySceneState.tsx:381
 #: src/components/layout/EmptySceneState.tsx:384
 msgid "Could not reopen this file from cache."
-msgstr "Não foi possível reabrir este arquivo a partir da memória transitória."
+msgstr "Could not reopen this file from cache."
 
 #: src/components/controls/TransformToolbar.tsx:33
 msgid "Create cavity or open-face shell"
-msgstr "Criar cavidade ou casca com face aberta"
+msgstr "Create cavity or open-face shell"
 
 #: src/components/layout/EmptySceneState.tsx:71
 msgid "Currently displaying nothing at maximum fidelity."
-msgstr "Atualmente exibindo nada, com fidelidade máxima."
+msgstr "Currently displaying nothing at maximum fidelity."
 
 #: src/components/ui/EditorContextMenu.tsx:49
 msgid "Cut"
-msgstr "Cortar"
+msgstr "Cut"
 
 #: src/components/ui/EditorContextMenu.tsx:48
 msgid "Delete"
-msgstr "Excluir"
+msgstr "Delete"
 
 #. Paraphrase of Yoda's line from Star Wars: The Empire Strikes Back (1980): "Do or do not. There is no try."
 #: src/components/layout/EmptySceneState.tsx:76
 msgid "Do or do not. There is no try... oh wait, just click Load Mesh."
-msgstr "Faça ou não faça. Não existe tentar... ah! espera, é só clicar em Carregar Malha."
+msgstr "Do or do not. There is no try... oh wait, just click Load Mesh."
 
 #: src/components/layout/EmptySceneState.tsx:74
 msgid "Drag a file in. The platform is judging you."
-msgstr "Arraste um arquivo aqui. A plataforma está te julgando."
+msgstr "Drag a file in. The platform is judging you."
 
 #. "DragonFruit" is the product name and should stay untranslated/unchanged.
 #: src/components/layout/TopBar.tsx:799
 msgid "DragonFruit app menu"
-msgstr "Menu do aplicativo Dragon Fruit"
+msgstr "DragonFruit app menu"
 
 #. "DragonFruit" is the product name and should stay untranslated/unchanged; only "menu" needs translating.
 #: src/components/layout/TopBar.tsx:688
 msgid "DragonFruit menu"
-msgstr "Menu do DragonFruit"
+msgstr "DragonFruit menu"
 
 #: src/components/layout/EmptySceneState.tsx:695
 msgid "Drop supported files"
-msgstr "Solte os arquivos suportados"
+msgstr "Drop supported files"
 
 #: src/app/page.tsx:3558
 #: src/components/ui/EditorContextMenu.tsx:88
@@ -202,16 +202,16 @@ msgstr "Editor"
 
 #: src/components/ui/EditorContextMenu.tsx:85
 msgid "Editor context menu"
-msgstr "Editor do menu de contexto"
+msgstr "Editor context menu"
 
 #. Paraphrase of "Elementary, my dear Watson", the line associated with Sherlock Holmes (Arthur Conan Doyle stories; multiple film and TV adaptations).
 #: src/components/layout/EmptySceneState.tsx:87
 msgid "Elementary, my dear user — load a model."
-msgstr "Elementar, meu caro usuário — carregue um modelo."
+msgstr "Elementary, my dear user — load a model."
 
 #: src/components/layout/EmptySceneState.tsx:436
 msgid "Empty workspace"
-msgstr "Espaço de trabalho vazio"
+msgstr "Empty workspace"
 
 #. "Est." abbreviates "Estimated", qualifying the print-time figure that follows it (e.g. "Est. 2h 05m • 12.50 ml"), not an abbreviation of anything else.
 #: src/app/page.tsx:22278
@@ -220,20 +220,20 @@ msgstr "Est. {estimatedTimeLabel} • {usedMaterialLabel}"
 
 #: src/components/layout/EmptySceneState.tsx:63
 msgid "Every great print starts with an empty scene."
-msgstr "Toda grande impressão começa com uma cena vazia."
+msgstr "Every great print starts with an empty scene."
 
 #: src/components/layout/TopBar.tsx:645
 msgid "Export"
-msgstr "Exportar"
+msgstr "Export"
 
 #: src/components/layout/TopBar.tsx:648
 msgid "Finalize and export output"
-msgstr "Finalizar e exportar saída"
+msgstr "Finalize and export output"
 
 #. "Fleet" means the set of physical network printers discovered under the current printer profile, not a literal fleet of vehicles.
 #: src/components/layout/TopBar.tsx:955
 msgid "Fleet quick switch"
-msgstr "Troca rápida de frota"
+msgstr "Fleet quick switch"
 
 #. Section heading above the list of network printers belonging to the current profile. "Units" = individual printers.
 #: src/components/layout/TopBar.tsx:958
