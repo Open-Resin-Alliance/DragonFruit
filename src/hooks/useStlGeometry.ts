@@ -49,7 +49,21 @@ export type MeshDefects = {
 };
 
 export type GeometryWithBounds = {
+  /**
+   * The model's mesh as the file or the last operation left it. Saving, export,
+   * slicing, scans and every mesh operation read this one.
+   */
   geometry: THREE.BufferGeometry;
+  /**
+   * What the viewport draws, when it is not `geometry` itself: the same surface
+   * with its long faces split so the per-vertex AO has vertices to land on.
+   *
+   * Derived, never written anywhere, and never indexed by anything that outlives
+   * a frame — triangle ids address `geometry`. Absent means the mesh needed no
+   * refinement (or there is no AO to refine for), and `geometry` is drawn as is.
+   * See {@link displayGeometryOf}.
+   */
+  displayGeometry?: THREE.BufferGeometry;
   bbox: THREE.Box3;
   center: THREE.Vector3;
   size: THREE.Vector3;
@@ -339,6 +353,11 @@ function buildSectionGeometries(
   modelGeo.setAttribute('position', new THREE.BufferAttribute(modelPositions, 3));
 
   return { supportSectionGeometry: supportGeo, modelSectionGeometry: modelGeo };
+}
+
+/** The geometry the viewport draws for a model: its display mesh, or the mesh itself. */
+export function displayGeometryOf(entry: Pick<GeometryWithBounds, 'geometry' | 'displayGeometry'>): THREE.BufferGeometry {
+  return entry.displayGeometry ?? entry.geometry;
 }
 
 /**

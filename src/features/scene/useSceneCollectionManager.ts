@@ -42,7 +42,7 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 import { forgetCenteredPositions } from '@/utils/modelBounds';
 import { releasePrepareMergedSupportsFor } from '@/supports/prepare/mergedSupportCache';
 import { releaseGeometryStorage as releaseGeometryStorageBase } from '@/utils/releaseGeometry';
-import { disposeSpilledSceneSnapshot, hasSpilledSceneSnapshot, pruneSpilledSceneSnapshots, rehydrateSceneSnapshotPair, spillSceneSnapshotPair, spilledSceneSnapshotBytes } from './sceneSnapshotSpill';
+import { disposeSpilledSceneSnapshot, hasSpilledSceneSnapshot, modelGeometries, pruneSpilledSceneSnapshots, rehydrateSceneSnapshotPair, spillSceneSnapshotPair, spilledSceneSnapshotBytes } from './sceneSnapshotSpill';
 import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/supports/types';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/builtinComplexPluginFileTypeHandlers';
@@ -159,7 +159,7 @@ import {
   unlinkModelsLabel,
 } from '@/features/scene/sceneHistoryLabels';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
-import { MODEL_EDGE_OVERLAY_ENABLED, buildModelEdgeGeometry } from '@/hooks/useStlGeometry';
+import { MODEL_EDGE_OVERLAY_ENABLED, buildModelEdgeGeometry, displayGeometryOf } from '@/hooks/useStlGeometry';
 import { MESH_SHADER_TYPES, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
 import {
   getSavedWorkspaceCameraSettings,
@@ -667,15 +667,6 @@ function installLiveModelsProvider(provider: (() => LoadedModel[]) | null): void
 
 function installExtraRetainedGeometries(provider: (() => Iterable<THREE.BufferGeometry>) | null): void {
   extraRetainedGeometriesProvider = provider;
-}
-
-function modelGeometries(model: Pick<LoadedModel, 'geometry'>): THREE.BufferGeometry[] {
-  const geometries: THREE.BufferGeometry[] = [model.geometry.geometry];
-  if (model.geometry.edgeGeometry) geometries.push(model.geometry.edgeGeometry);
-  const defects = model.geometry.meshDefects;
-  if (defects?.supportSectionGeometry) geometries.push(defects.supportSectionGeometry);
-  if (defects?.modelSectionGeometry) geometries.push(defects.modelSectionGeometry);
-  return geometries;
 }
 
 /**
@@ -2986,6 +2977,7 @@ export function useSceneCollectionManager(options?: {
         // overlay for each copy, which is O(triangles) and blocked the main
         // thread for most of a second on an 8-model duplicate.
         ...(source.edgeGeometry ? { edgeGeometry: source.edgeGeometry } : {}),
+        ...(source.displayGeometry ? { displayGeometry: source.displayGeometry } : {}),
       };
     }
 
@@ -3004,9 +2996,13 @@ export function useSceneCollectionManager(options?: {
     if (options?.accelerate ?? true) {
       accelerateGeometry(clonedGeometry);
     }
+    // The display mesh only draws (no BVH), and a clone may be edited on its own, so
+    // it gets its own copy — its AO included — rather than a stale share.
+    const clonedDisplay = source.displayGeometry?.clone();
 
     return {
       geometry: clonedGeometry,
+      ...(clonedDisplay ? { displayGeometry: clonedDisplay } : {}),
       bbox: source.bbox.clone(),
       center: source.center.clone(),
       size: source.size.clone(),
@@ -4622,7 +4618,9 @@ export function useSceneCollectionManager(options?: {
 
     const queue = modelsRef.current
       .filter((model) => {
-        const geometry = model.geometry.geometry;
+        // The bake lands on what the viewport draws: the display mesh when the model
+        // has one. Its values are per vertex of that mesh and nothing else reads them.
+        const geometry = displayGeometryOf(model.geometry);
         if (!geometry.getAttribute('position')) return false;
         // A geometry the hardware check skipped has no attribute by design; it
         // must not be re-queued on every model change.
@@ -4668,7 +4666,7 @@ export function useSceneCollectionManager(options?: {
       // work done in the first 200 ms.
       pendingAoBakeRef.current += 1;
       const model = modelsRef.current.find((m) => m.id === id);
-      const geometry = model?.geometry.geometry;
+      const geometry = model ? displayGeometryOf(model.geometry) : undefined;
       if (geometry) pendingAoGeometriesRef.current.add(geometry);
       try {
         if (geometry) {
