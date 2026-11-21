@@ -71,32 +71,7 @@ pub fn load_mesh_bodies_from_path(path: &Path) -> Result<Vec<IndexedMesh>, MeshR
 /// common case, and it is skipped for a model whose faces are long but whose size
 /// makes that correct.
 pub fn refine_coarse_faces(mesh: IndexedMesh) -> IndexedMesh {
-    let mut min = crate::Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
-    let mut max = crate::Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for position in &mesh.positions {
-        min = min.min(*position);
-        max = max.max(*position);
-    }
-    let diagonal = max.sub(min).length();
-    if !diagonal.is_finite() || diagonal <= 0.0 {
-        return mesh;
-    }
-    let max_edge = diagonal * dragonfruit_mesh_core::refine::MAX_EDGE_DIAGONAL_FRACTION;
-    if dragonfruit_mesh_core::refine::longest_edge(&mesh) <= max_edge {
-        return mesh;
-    }
-    // Bounded, and spent on the longest edges first: refining a dense hard-surface
-    // part all the way to its own detail scale measured 8.31x the triangles and
-    // 11x the bake, which is not a trade a shading term gets to make. The budget
-    // is `refinement_budget`'s, not a bare fraction: on a coarse mesh a fraction
-    // of a small count is no budget at all.
-    let budget = dragonfruit_mesh_core::refine::refinement_budget(mesh.triangles.len());
-    dragonfruit_mesh_core::refine::refine_long_edges_with_budget(
-        &mesh,
-        max_edge,
-        dragonfruit_mesh_core::refine::MAX_PASSES,
-        budget,
-    )
+    dragonfruit_mesh_core::refine::refine_coarse_faces(mesh)
 }
 
 /// Default merge epsilon used when reading an unindexed soup. Relative to the bbox diagonal.
