@@ -328,6 +328,11 @@ over and changes it only by the axial dolly. Its look target is the orbit
 framing, often at another depth, so deriving the radius from it instead re-scaled
 the view at the start of every gesture — a visible "zoom click", repeated each
 time deadzone jitter handed the camera back and took it again.
+It also reports the end of navigation (`onNavigationActiveChange(false)`) only
+at hand-back, after re-seating `controls.target`: `OrthoFrustumSync` resumes on
+that report, and resuming during the idle frames before hand-back derived the
+frustum from the stale target — a zoom bump at the end of a gesture, largest
+after a sideways pan.
 
 The native path also **reports a perspective view to navlib while the camera is
 orthographic** (`FORCE_PERSPECTIVE_IN_ORTHO`, plus a synthetic `view.focusDistance`

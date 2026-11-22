@@ -412,18 +412,25 @@ export function SpaceMouseController({
     // If input is near-zero, count idle frames and eventually release OrbitControls.
     // Pivot is NOT reset — it persists for the next input burst (Fusion 360 style).
     if (totalMag < 0.02) {
-      if (isNavigatingRef.current) {
-        isNavigatingRef.current = false;
-        onNavigationActiveChange?.(false);
-      }
       idleFramesRef.current++;
-      if (idleFramesRef.current >= IDLE_HANDBACK_FRAMES && weDisabledOrbitRef.current) {
-        const handoffTarget = getHandoffTarget();
-        controls.target.copy(handoffTarget);
-        clearCursorPivotAnchor(controls);
-        controls.enabled = true;
-        controls.update();
-        weDisabledOrbitRef.current = false;
+      if (idleFramesRef.current >= IDLE_HANDBACK_FRAMES) {
+        if (weDisabledOrbitRef.current) {
+          const handoffTarget = getHandoffTarget();
+          controls.target.copy(handoffTarget);
+          clearCursorPivotAnchor(controls);
+          controls.enabled = true;
+          controls.update();
+          weDisabledOrbitRef.current = false;
+        }
+        // Report the end only now. OrthoFrustumSync resumes on it and derives
+        // the frustum from controls.target, which is stale until the hand-back
+        // above re-seats it: reporting on the first idle frame re-scaled the
+        // view for those frames and back again at hand-back — a zoom bump at
+        // the end of every gesture, largest after a sideways pan.
+        if (isNavigatingRef.current) {
+          isNavigatingRef.current = false;
+          onNavigationActiveChange?.(false);
+        }
       }
       return;
     }
