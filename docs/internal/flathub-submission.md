@@ -35,9 +35,9 @@ Replace the fast-path manifest with a hermetic one:
       (`node scripts/tauri-build.mjs`) with `--offline` for cargo and
       `--prefer-offline` for npm, fed by the generated sources JSON files.
 - [ ] **SDK extensions** enabled:
-      - `org.freedesktop.Sdk.Extension.rust-stable//24.08`
-      - `org.freedesktop.Sdk.Extension.node20//24.08`
-      - `org.freedesktop.Sdk.Extension.llvm18//24.08`
+      - `org.freedesktop.Sdk.Extension.rust-stable//26.08`
+      - `org.freedesktop.Sdk.Extension.node24//26.08`
+      - `org.freedesktop.Sdk.Extension.llvm22//26.08` (llvm18 is not built for 26.08)
       - Wire them via `build-options.append-path` +
         `build-options.prepend-ld-library-path`.
 - [ ] **Remove `--share=network` from `finish-args` while building** — the
@@ -64,7 +64,7 @@ Replace the fast-path manifest with a hermetic one:
       needs to pass in strict mode (warnings → errors).
 - [ ] **`desktop-file-validate`** — currently passes.
 - [ ] **`flatpak-builder-lint manifest …`** — Flathub's own linter. Install
-      via `flatpak install flathub org.flatpak.Builder//24.08`, run as
+      via `flatpak install flathub org.flatpak.Builder`, run as
       `flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest flatpak/…yml`.
       Must report zero errors. Lints `finish-args` completeness, `app-id`
       conventions, forbidden patterns (`--filesystem=host`, SUID binaries).

@@ -395,8 +395,8 @@ jobs:
         if: matrix.build_kind == 'flatpak'
         run: |
           flatpak --user install -y --noninteractive flathub \
-            org.freedesktop.Sdk//24.08 \
-            org.freedesktop.Platform//24.08
+            org.freedesktop.Sdk//26.08 \
+            org.freedesktop.Platform//26.08
 
       - name: Build Tauri app (CEF variant on Linux)
         if: matrix.build_kind == 'flatpak'

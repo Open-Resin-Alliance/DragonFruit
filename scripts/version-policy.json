@@ -18,7 +18,7 @@
   "runners": {
     "ubuntu": {
       "max": "24.04",
-      "reason": "The Flatpak binary is built on the runner and runs on the runtime's glibc, so runner glibc must not exceed the runtime's (22.04: 2.35, 24.04: 2.39; runtime 24.08 believed 2.40, 25.08 is 2.42). 26.04 only after the runtime moves up"
+      "reason": "The Flatpak binary is built on the runner and runs on the runtime's glibc, so runner glibc must not exceed the runtime's (22.04: 2.35, 24.04: 2.39, 26.04: 2.43; runtime 24.08: 2.40, 25.08: 2.42, 26.08: 2.44). With the runtime on 26.08, 26.04 would fit too; moving the runners is a separate change"
     }
   },
   "actions": {

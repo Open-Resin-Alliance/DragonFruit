@@ -13,7 +13,7 @@
 
 app-id: org.openresinalliance.dragonfruit
 runtime: org.freedesktop.Platform
-runtime-version: "24.08"
+runtime-version: "26.08"
 sdk: org.freedesktop.Sdk
 command: dragonfruit
 # Keep local/self-hosted builds working on minimal hosts where the legacy
