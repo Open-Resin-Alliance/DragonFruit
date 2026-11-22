@@ -432,7 +432,51 @@ replay the accumulated pose as a jump — and, because the ownership handshake k
 off the last applied `seq`, leaving it unconsumed would stall the handshake so JS
 could never re-assert its own camera while navlib is idle.
 
+### Linux: spacenavd
+
+navlib exists only on Windows and macOS, so on Linux `spacemouse_native_start`
+refuses and the Gamepad-API `SpaceMouseController` drives the camera. The
+webview's Gamepad API rarely sees the puck there, though: spacenavd grabs the
+device by default, and the Flatpak has no `/dev/input`. So the host reads
+spacenavd itself:
+
+- `src-tauri/src/spacemouse/spnav.rs` is a client for spacenavd's UNIX socket
+  (`/run/spnav.sock`; 32-byte packets of eight native-endian `i32`s). It
+  switches the connection to protocol v1 (spacenavd 1.0+) and subscribes to the
+  **raw** axis and button events only. The processed motion events carry the
+  user's `spnavrc` (axis swaps, inversions, sensitivity), which is tuned for
+  other applications and would scramble the axes here; DragonFruit's own
+  per-axis settings are the tuning surface, as on Windows and macOS. Raw axes
+  are still in spacenavd's device-normalised Y-up frame, so `HID_FROM_SPNAV`
+  maps them back to the HID order a browser pad reports. spacenavd rescales
+  every absolute axis to ±500, so dividing by 500 yields the same ±1 values the
+  Gamepad API reports, and the controller's tuning defaults and deadzone hold.
+  The client runs on its own thread, reconnects every 2 s, emits once per HID
+  report rather than once per axis, and zeroes the axes when the connection
+  drops so a held axis cannot keep driving. A daemon older than 1.0 is logged
+  and left alone.
+- The `spacemouse_spnav_start` command starts that thread (idempotent) and
+  returns the current `SpnavState` (`connected`, `axes`, `buttons`); every
+  change after that is emitted as a `spacemouse://spnav` event with the same
+  shape. On Windows and macOS the command returns an error.
+- `src/components/scene/camera/spnavSpaceMouse.ts` turns that state into a
+  synthetic `Gamepad` (`getSpnavGamepad`, id `SPNAV_DEVICE_ID`), started lazily
+  on first call. `getCandidateGamepads` lists it ahead of the browser's pads, so
+  the controller, the device list in Settings → 3D Mouse and the block list all
+  treat it like any other detected 3D mouse. Listing it first also means that
+  when spacenavd runs with `grab = false` and the browser sees the same puck,
+  only the spacenavd copy drives the camera.
+
+Focus gating is the frontend's alone here: spacenavd keeps sending motion to a
+backgrounded DragonFruit, and the controller drops it through
+`getWindowFocused` as it does for any Gamepad-API pad.
+
 ## Tests
+
+`src/components/scene/camera/__tests__/spnavSpaceMouse.test.ts` covers the
+synthetic pad; `spnav.rs` unit-tests the axis mapping and packet handling.
+The mapping was also checked against a SpaceNavigator's evdev axes, with a
+non-default `spnavrc` in place.
 
 `src/components/scene/camera/__tests__/orthoDolly.test.ts` covers the frustum
 derivation, wheel scale, cursor anchoring, radius clamping, and the zoom bake.

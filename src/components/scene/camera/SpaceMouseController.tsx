@@ -11,6 +11,7 @@ import {
 import { ORTHO_MAX_RADIUS, ORTHO_MIN_RADIUS, applyOrthoFrustum, orthoAspectOf } from './orthoDolly';
 import { clearCursorPivotAnchor } from './orbitControlsPivot';
 import { getWindowFocused, retainWindowFocus } from './windowFocus';
+import { getSpnavGamepad } from './spnavSpaceMouse';
 
 type OrbitLikeControls = {
   target: THREE.Vector3;
@@ -46,8 +47,15 @@ const DEBUG_LOG = false;
 const seenDeviceIds = new Set<string>();
 
 export function getCandidateGamepads(): Gamepad[] {
-  if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return [];
-  return Array.from(navigator.getGamepads()).filter((pad): pad is Gamepad => !!pad && pad.axes.length >= 6);
+  // Listed first so it wins over the same puck seen through the Gamepad API
+  // (possible when spacenavd runs with `grab = false`).
+  const spnav = getSpnavGamepad();
+  const spnavPads = spnav ? [spnav] : [];
+  if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return spnavPads;
+  return [
+    ...spnavPads,
+    ...Array.from(navigator.getGamepads()).filter((pad): pad is Gamepad => !!pad && pad.axes.length >= 6),
+  ];
 }
 
 function getActiveSpaceMousePad(candidates: Gamepad[], blockedDeviceIds: string[]): Gamepad | null {

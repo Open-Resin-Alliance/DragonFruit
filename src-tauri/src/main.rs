@@ -4658,6 +4658,7 @@ fn main() {
             spacemouse::spacemouse_native_start,
             spacemouse::spacemouse_native_stop,
             spacemouse::spacemouse_native_sync,
+            spacemouse::spacemouse_spnav_start,
             network::plugin_network_request,
             plugin_sideload::sideloaded_plugin_allowance,
             plugin_sideload::sideloaded_plugin_set_allowance,
