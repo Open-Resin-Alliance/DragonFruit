@@ -8,6 +8,7 @@ mod ao_vertex;
 mod overhang;
 mod spacemouse;
 mod updater_channel;
+mod undo_spill;
 
 fn default_minimum_aa_alpha_percent() -> f32 {
     35.0
@@ -4663,6 +4664,10 @@ fn main() {
     builder
         .invoke_handler(tauri::generate_handler![
             webview_watchdog::webview_heartbeat,
+            undo_spill::undo_spill_append,
+            undo_spill::undo_spill_read,
+            undo_spill::undo_spill_remove,
+            undo_spill::undo_spill_prune,
             stage_mesh_binary_start,
             allocate_mesh_stage_path,
             append_mesh_stage_chunk,
