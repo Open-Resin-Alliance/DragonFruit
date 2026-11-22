@@ -37,6 +37,7 @@ import type { View3DSettings } from '@/components/settings/view3dPreferences';
 import type { SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
 import { useSceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
 import { formatTopbarPrinterAriaLabel, formatTopbarPrinterTitle } from '@/components/layout/topBarMessages';
+import { WindowResizeHandles } from '@/components/layout/WindowResizeHandles';
 
 interface TopBarProps {
   meshColor: string;
@@ -700,6 +701,7 @@ export function TopBar({
 
   return (
     <>
+      {isDesktopWindow && <WindowResizeHandles />}
       <div className={`ui-topbar-blur ${hideWorkflowControls ? 'ui-topbar-blur-transparent' : ''}`} aria-hidden="true" />
       <div
         className={`ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative ${hideWorkflowControls ? 'justify-between ui-topbar-transparent' : ''}`}
