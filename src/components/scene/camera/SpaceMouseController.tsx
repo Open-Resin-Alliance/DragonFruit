@@ -124,6 +124,12 @@ export function SpaceMouseController({
 
   // Track whether *we* disabled OrbitControls so we can restore it.
   const weDisabledOrbitRef = React.useRef(false);
+  // Ortho dolly radius while this controller owns the camera. Seeded from the
+  // frustum's own reference (camera → controls.target) when it takes over and
+  // moved only by dolly, so a gesture never re-scales the view on its first
+  // frame. The look target (the orbit framing) need not sit at that distance.
+  const orthoRadiusRef = React.useRef(0);
+  const handoffTargetRef = React.useRef(new THREE.Vector3());
   // Persistent pivot — survives across idle gaps (Fusion 360 style).
   // Once established, pan accumulates onto it; only reset on explicit selection change.
   const activePivotRef = React.useRef<THREE.Vector3>(defaultPivot.clone());
@@ -162,12 +168,19 @@ export function SpaceMouseController({
   }, [defaultPivot, pivotCandidates, pivotPoint]);
 
   const getHandoffTarget = React.useCallback(() => {
+    // Ortho: re-seat the orbit target on the view axis at the gesture's radius,
+    // so the frustum OrthoFrustumSync derives on resume is the one on screen.
+    if (weDisabledOrbitRef.current && (camera as THREE.OrthographicCamera).isOrthographicCamera) {
+      return handoffTargetRef.current
+        .copy(camera.position)
+        .addScaledVector(camera.getWorldDirection(rayDirectionRef.current), orthoRadiusRef.current);
+    }
     if (hasLookTargetRef.current) return lookTargetRef.current;
     if (pivotPoint) return pivotPoint;
     if (hasActivePivotRef.current) return activePivotRef.current;
     if (isOrbitLikeControls(controls)) return controls.target;
     return defaultPivot;
-  }, [controls, defaultPivot, pivotPoint]);
+  }, [camera, controls, defaultPivot, pivotPoint]);
 
   const tryAcquirePivotFromCameraRay = React.useCallback((force = false) => {
     if (settings.pivotMode !== 'camera-ray') return false;
@@ -423,6 +436,11 @@ export function SpaceMouseController({
 
     idleFramesRef.current = 0;
     if (!weDisabledOrbitRef.current) {
+      orthoRadiusRef.current = THREE.MathUtils.clamp(
+        camera.position.distanceTo(controls.target),
+        ORTHO_MIN_RADIUS,
+        ORTHO_MAX_RADIUS,
+      );
       controls.enabled = false;
       weDisabledOrbitRef.current = true;
     }
@@ -478,6 +496,7 @@ export function SpaceMouseController({
       // Real dolly in both projections: move the camera along its view axis. For
       // ortho the derived frustum (below) turns that into scale.
       camera.position.addScaledVector(forward, dolly * zoomScale);
+      orthoRadiusRef.current -= dolly * zoomScale;
     }
 
     // ── Rotation (orbit around pivot with free orientation) ──
@@ -527,15 +546,17 @@ export function SpaceMouseController({
     camera.updateMatrixWorld();
 
     if (orthoCamera) {
-      // The camera now looks at lookTarget, so the axial dolly radius is simply
-      // the distance to it. Set the derived frustum directly; the shared sync is
-      // suspended while this controller owns the camera.
-      const radius = THREE.MathUtils.clamp(
-        camera.position.distanceTo(lookTarget),
+      // Set the derived frustum directly from the gesture's own radius (seeded
+      // at takeover, moved by dolly only); the shared sync is suspended while
+      // this controller owns the camera. Deriving it from the distance to
+      // lookTarget instead re-scaled the view whenever a gesture began with the
+      // look target at another depth than controls.target.
+      orthoRadiusRef.current = THREE.MathUtils.clamp(
+        orthoRadiusRef.current,
         ORTHO_MIN_RADIUS,
         ORTHO_MAX_RADIUS,
       );
-      applyOrthoFrustum(orthoCamera, radius, orthoAspectOf(orthoCamera), { sceneRadius, fovDeg });
+      applyOrthoFrustum(orthoCamera, orthoRadiusRef.current, orthoAspectOf(orthoCamera), { sceneRadius, fovDeg });
     }
 
     onNavigationFrame?.();
