@@ -663,7 +663,7 @@ run_matrix() { # <label> <sha> <ts-cmd> <rust-binary> <hw-label> <hw-cpus> <hw-m
         # DF_RESOURCE_LOG makes the slicer stream each RSS/CPU sample to $reslog as it goes,
         # so the series survives an OOM SIGKILL that never reaches the final --json emit; the
         # failure branch below folds it into the error row for post-mortem debugging.
-        if DF_RESOURCE_LOG="$reslog" $DETERMINISTIC_STAMP $HWPRE $TS scene slice "$voxl" --o "$tmp" --mesh-dir "$MESH_DIR" \
+        if DF_RESOURCE_LOG="$reslog" $DETERMINISTIC_STAMP $HWPRE $TS scene slice "$voxl" -o "$tmp" --mesh-dir "$MESH_DIR" \
                    --printer "$printer" --layer-height "$lh" --aa-preset "$aa" \
                    --json >"$resf" 2>"$errf"; then
           # print inspect is zip-only; on binary formats (.ctb/.goo/…) it fails and

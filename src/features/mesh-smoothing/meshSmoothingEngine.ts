@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { applySmoothingToTopology, type SmoothingScratch, type SmoothingStepOptions } from './smoothingAlgorithms';
+import { type SmoothingScratch } from './smoothingAlgorithms';
 import { getMeshTopology, queryUniqueVerticesInSphere } from './topologyCache';
 import { clampMeshSmoothingBrushSizeMm, getMeshSmoothingSettings, type MeshSmoothingSettings } from './settings';
 
@@ -25,19 +25,6 @@ type MeshSmoothingWorkerInitMessage = {
   uniquePositions: Float32Array;
   neighborOffsets: Uint32Array;
   neighborsFlat: Uint32Array;
-};
-
-type MeshSmoothingWorkerStepMessage = {
-  type: 'step';
-  geometryKey: number;
-  jobId: number;
-  center: [number, number, number];
-  radius: number;
-  strength: number;
-  iterations: number;
-  falloff: MeshSmoothingSettings['falloff'];
-  maxVertices: number;
-  affected: Uint32Array;
 };
 
 type MeshSmoothingWorkerFinalizeMessage = {
@@ -90,11 +77,8 @@ type StrokeUndoState = {
 };
 
 const activeStrokeGeometry = new WeakMap<THREE.BufferGeometry, StrokeUndoState>();
-const scratchIdsByGeometry = new WeakMap<THREE.BufferGeometry, number[]>();
-const scratchAffectedByGeometry = new WeakMap<THREE.BufferGeometry, Uint32Array>();
 const scratchNewlyHighlightedByGeometry = new WeakMap<THREE.BufferGeometry, Uint32Array>();
 const scratchSmoothingByGeometry = new WeakMap<THREE.BufferGeometry, SmoothingScratch>();
-const scratchQueryObjectsByGeometry = new WeakMap<THREE.BufferGeometry, { sphere: THREE.Sphere; closestPoint: THREE.Vector3 }>();
 
 type HighlightQueueState = {
   buf: Uint32Array;
@@ -828,112 +812,6 @@ function getSmoothingScratch(geometry: THREE.BufferGeometry, uniqueCount: number
   return next;
 }
 
-function queryAffectedUniqueVertices(
-  geometry: THREE.BufferGeometry,
-  centerLocal: THREE.Vector3,
-  radius: number,
-): Uint32Array {
-  const topology = getMeshTopology(geometry);
-  if (!topology) return new Uint32Array(0);
-
-  // For small brush radii, the spatial hash query is typically faster than BVH shapecast.
-  if (radius <= 1.5) {
-    return queryUniqueVerticesInSphere(topology, centerLocal, radius);
-  }
-
-  const g = geometry as BVHGeometry;
-  if (!g.boundsTree || typeof g.boundsTree.shapecast !== 'function') {
-    // Fallback: spatial hash scan (slower)
-    return queryUniqueVerticesInSphere(topology, centerLocal, radius);
-  }
-
-  const indexAttr = geometry.getIndex();
-  const idxArray = indexAttr ? (indexAttr.array as unknown as ArrayLike<number>) : null;
-
-  let qo = scratchQueryObjectsByGeometry.get(geometry);
-  if (!qo) {
-    qo = { sphere: new THREE.Sphere(new THREE.Vector3(), 1), closestPoint: new THREE.Vector3() };
-    scratchQueryObjectsByGeometry.set(geometry, qo);
-  }
-  qo.sphere.center.copy(centerLocal);
-  qo.sphere.radius = radius;
-  const sphere = qo.sphere;
-  const closestPoint = qo.closestPoint;
-  const radius2 = radius * radius;
-
-  let scratch = scratchIdsByGeometry.get(geometry);
-  if (!scratch) {
-    scratch = [];
-    scratchIdsByGeometry.set(geometry, scratch);
-  }
-  scratch.length = 0;
-
-  // Increment stamp, reset if we overflow.
-  topology.stamp = (topology.stamp + 1) >>> 0;
-  if (topology.stamp === 0) {
-    topology.mark.fill(0);
-    topology.stamp = 1;
-  }
-
-  const mark = topology.mark;
-  const stamp = topology.stamp;
-  const uPos = topology.uniquePositions;
-  const originalToUnique = topology.originalToUnique;
-
-  const maybeAddUnique = (uid: number) => {
-    if (uid >= mark.length) return;
-    if (mark[uid] === stamp) return;
-
-    const u3 = uid * 3;
-    const dx = uPos[u3 + 0] - centerLocal.x;
-    const dy = uPos[u3 + 1] - centerLocal.y;
-    const dz = uPos[u3 + 2] - centerLocal.z;
-    const d2 = dx * dx + dy * dy + dz * dz;
-    if (d2 > radius2) return;
-
-    mark[uid] = stamp;
-    scratch!.push(uid);
-  };
-
-  g.boundsTree.shapecast({
-    intersectsBounds: (box) => sphere.intersectsBox(box),
-    intersectsTriangle: (_tri, triIndex) => {
-      // Fast reject: triangle doesn't touch the sphere.
-      _tri.closestPointToPoint(centerLocal, closestPoint);
-      if (closestPoint.distanceToSquared(centerLocal) > radius2) return false;
-
-      if (idxArray) {
-        const a = idxArray[triIndex * 3 + 0] as number;
-        const b = idxArray[triIndex * 3 + 1] as number;
-        const c = idxArray[triIndex * 3 + 2] as number;
-        maybeAddUnique(originalToUnique[a]);
-        maybeAddUnique(originalToUnique[b]);
-        maybeAddUnique(originalToUnique[c]);
-      } else {
-        const a = triIndex * 3 + 0;
-        const b = triIndex * 3 + 1;
-        const c = triIndex * 3 + 2;
-        maybeAddUnique(originalToUnique[a]);
-        maybeAddUnique(originalToUnique[b]);
-        maybeAddUnique(originalToUnique[c]);
-      }
-
-      return false;
-    },
-  });
-
-  let typed = scratchAffectedByGeometry.get(geometry);
-  if (!typed || typed.length < scratch.length) {
-    typed = new Uint32Array(Math.max(scratch.length, typed?.length ?? 0, 64));
-    scratchAffectedByGeometry.set(geometry, typed);
-  }
-
-  for (let i = 0; i < scratch.length; i++) {
-    typed[i] = scratch[i];
-  }
-  return typed.subarray(0, scratch.length);
-}
-
 export function beginMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): void {
   activeStrokeGeometry.set(geometry, {
     affectedUnique: new Set(),
@@ -969,107 +847,6 @@ export function beginMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): 
       setLoadingState({ active: false });
     }
   }, 0);
-}
-
-export function paintMeshSmoothingEngineStep(
-  geometry: THREE.BufferGeometry,
-  centerLocal: THREE.Vector3,
-  settings: MeshSmoothingSettings,
-): void {
-  // We no longer mutate mesh vertex colors during the stroke.
-  // Stroke preview is handled by a GPU overlay, and we collect samples for stroke-end smoothing.
-  void geometry;
-  void centerLocal;
-  void settings;
-}
-
-export function applyMeshSmoothingEngineStep(
-  geometry: THREE.BufferGeometry,
-  centerLocal: THREE.Vector3,
-  settings: MeshSmoothingSettings,
-): void {
-  const topology = getMeshTopology(geometry);
-  if (!topology) return;
-
-  const radius = clampMeshSmoothingBrushSizeMm(settings.brushSizeMm);
-  const affected = queryAffectedUniqueVertices(geometry, centerLocal, radius);
-  if (affected.length === 0) return;
-
-  applyHighlightToUniqueVertices(geometry, topology, affected);
-
-  const w = ensureSmoothingWorker();
-  const geometryKey = getGeometryKey(geometry);
-  const maxVertices = 2500;
-
-  // Use worker if available and geometry matches the active stroke.
-  if (w && workerActiveGeometry === geometry && workerActiveGeometryKey === geometryKey && !workerPendingFinalize) {
-    const jobId = workerNextJobId++;
-    workerLatestSentJobId = jobId;
-
-    // Important: transfer a tightly-sized buffer to avoid expensive structured cloning.
-    const affectedPacked = new Uint32Array(affected.length);
-    affectedPacked.set(affected);
-
-    const msg: MeshSmoothingWorkerStepMessage = {
-      type: 'step',
-      geometryKey,
-      jobId,
-      center: [centerLocal.x, centerLocal.y, centerLocal.z],
-      radius,
-      strength: Math.max(0, Math.min(1, settings.strength)),
-      iterations: settings.iterations,
-      falloff: settings.falloff,
-      maxVertices,
-      affected: affectedPacked,
-    };
-
-    w.postMessage(msg, [affectedPacked.buffer]);
-    return;
-  }
-
-  // CPU fallback (keeps functionality even if Worker is unavailable).
-  const opts: SmoothingStepOptions = {
-    center: centerLocal,
-    radius,
-    strength: Math.max(0, Math.min(1, settings.strength)),
-    iterations: settings.iterations,
-    falloff: settings.falloff,
-    maxVertices,
-  };
-
-  const plannedApplied = limitVertices(affected, maxVertices);
-  captureBeforeUniquePositions(geometry, topology, plannedApplied);
-
-  const scratch = getSmoothingScratch(geometry, affected.length);
-  const applied = applySmoothingToTopology(topology, affected, opts, scratch);
-
-  const stroke = activeStrokeGeometry.get(geometry);
-  if (stroke) {
-    for (let i = 0; i < applied.length; i++) stroke.affectedUnique.add(applied[i]);
-  }
-
-  // Write back to geometry position attribute
-  const posAttr = topology.positionAttribute;
-  const arr = posAttr.array as Float32Array;
-
-  for (let i = 0; i < applied.length; i++) {
-    const uid = applied[i];
-    const u3 = uid * 3;
-    const x = topology.uniquePositions[u3 + 0];
-    const y = topology.uniquePositions[u3 + 1];
-    const z = topology.uniquePositions[u3 + 2];
-
-    const group = topology.groups[uid];
-    for (let gi = 0; gi < group.length; gi++) {
-      const vi = group[gi];
-      const v3 = vi * 3;
-      arr[v3 + 0] = x;
-      arr[v3 + 1] = y;
-      arr[v3 + 2] = z;
-    }
-  }
-
-  posAttr.needsUpdate = true;
 }
 
 export function endMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): void {

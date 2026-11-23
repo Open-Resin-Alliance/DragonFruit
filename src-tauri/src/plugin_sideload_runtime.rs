@@ -975,6 +975,8 @@ mod tests {
             layers: Some(package::LayerKind::Rle),
             requires_area_stats: false,
             multi_tank: false,
+            format_versions: Vec::new(),
+            file_extension_from_version: false,
         }];
         demo.file_types = vec![package::FileTypeDecl {
             extension: ".echo".to_string(),
@@ -1097,6 +1099,8 @@ mod tests {
                 layers: Some(package::LayerKind::Rle),
                 requires_area_stats: false,
                 multi_tank: false,
+                format_versions: Vec::new(),
+                file_extension_from_version: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",
@@ -1212,6 +1216,8 @@ mod tests {
                 layers: None,
                 requires_area_stats: false,
                 multi_tank: false,
+                format_versions: Vec::new(),
+                file_extension_from_version: false,
             }],
             ..manifest(vec![package::Capability::SlicerEncoder])
         };
@@ -1246,6 +1252,8 @@ mod tests {
                 layers: None,
                 requires_area_stats: false,
                 multi_tank: false,
+                format_versions: Vec::new(),
+                file_extension_from_version: false,
             }],
             ..manifest(vec![package::Capability::SlicerEncoder])
         };

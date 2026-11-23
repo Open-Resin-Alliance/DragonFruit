@@ -380,6 +380,8 @@ mod tests {
                 layers: Some(package::LayerKind::Rle),
                 requires_area_stats: false,
                 multi_tank: false,
+                format_versions: Vec::new(),
+                file_extension_from_version: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",
@@ -435,6 +437,8 @@ mod tests {
                 layers: Some(package::LayerKind::Rle),
                 requires_area_stats: false,
                 multi_tank: false,
+                format_versions: Vec::new(),
+                file_extension_from_version: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",
@@ -474,6 +478,8 @@ mod tests {
                 layers: Some(package::LayerKind::Rle),
                 requires_area_stats: false,
                 multi_tank: false,
+                format_versions: Vec::new(),
+                file_extension_from_version: false,
             }],
             file_types: vec![package::FileTypeDecl {
                 extension: ".echo".to_string(),
@@ -498,6 +504,7 @@ mod tests {
             manifest.clone(),
             ".exf",
             package::LayerKind::Rle,
+            false,
             false,
         );
         let output = root.join("job.exf");
@@ -552,6 +559,8 @@ mod tests {
                 layers: Some(package::LayerKind::Rle),
                 requires_area_stats: false,
                 multi_tank: false,
+                format_versions: Vec::new(),
+                file_extension_from_version: false,
             }],
             job_metadata_payloads: vec![package::JobMetadataPayloadDecl {
                 setting_path: "echo.embedScene".to_string(),
@@ -570,6 +579,7 @@ mod tests {
             manifest.clone(),
             ".exf",
             package::LayerKind::Rle,
+            false,
             false,
         );
         let output = root.join("job.exf");
@@ -616,6 +626,8 @@ mod tests {
                 layers: Some(package::LayerKind::RawMask),
                 requires_area_stats: false,
                 multi_tank: false,
+                format_versions: Vec::new(),
+                file_extension_from_version: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",
@@ -629,6 +641,7 @@ mod tests {
             manifest.clone(),
             ".exf",
             package::LayerKind::RawMask,
+            false,
             false,
         );
         assert!(!encoder.requires_png_layers());
@@ -665,6 +678,8 @@ mod tests {
                 layers: Some(package::LayerKind::Png),
                 requires_area_stats: true,
                 multi_tank: false,
+                format_versions: Vec::new(),
+                file_extension_from_version: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",
@@ -679,6 +694,7 @@ mod tests {
             ".exf",
             package::LayerKind::Png,
             true,
+            false,
         );
         assert!(encoder.requires_area_stats());
 
@@ -718,6 +734,8 @@ mod tests {
                 layers: Some(package::LayerKind::Rle),
                 requires_area_stats: false,
                 multi_tank: false,
+                format_versions: Vec::new(),
+                file_extension_from_version: false,
             }],
             ..crate::plugin_test_support::manifest(
                 "example.encoder",
@@ -732,6 +750,7 @@ mod tests {
             manifest.clone(),
             ".exf",
             package::LayerKind::Rle,
+            false,
             false,
         );
         let output = root.join("pipe.exf");
@@ -770,6 +789,7 @@ mod tests {
             manifest,
             ".exf",
             package::LayerKind::Png,
+            false,
             false,
         );
         assert!(encoder.requires_png_layers());

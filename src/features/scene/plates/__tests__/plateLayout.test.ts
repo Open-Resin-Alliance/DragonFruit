@@ -163,11 +163,20 @@ test('a new ordering moves the models from the grid they were laid out on', () =
   assert.ok(shifts.size > 0, 'the two grids differ for four beds');
 });
 
-test('a scene left with one bed has nothing to re-lay', () => {
+test('a scene left with one bed moves the models of that bed into the first slot', () => {
   const two = plateIds(2);
   const was = computePlateFrames({ plates: two, footprint, ordering: FIXED_3 });
-  const models = deepFreeze([at('on1', centreOf(was[0]).x, centreOf(was[0]).y)]);
-  assert.equal(relaidPlateShifts({ before: two, after: [two[0]], models, footprint, ordering: FIXED_3 }).size, 0);
+  const models = deepFreeze([
+    at('on1', centreOf(was[0]).x, centreOf(was[0]).y),
+    at('on2', centreOf(was[1]).x, centreOf(was[1]).y),
+  ]);
+
+  const keptFirst = relaidPlateShifts({ before: two, after: [two[0]], models, footprint, ordering: FIXED_3 });
+  assert.equal(keptFirst.size, 0, 'the first bed stays where it is');
+
+  const keptSecond = relaidPlateShifts({ before: two, after: [two[1]], models, footprint, ordering: FIXED_3 });
+  assert.deepEqual([...keptSecond.keys()], ['on2'], 'the first bed took its models with it');
+  assert.deepEqual(keptSecond.get('on2'), { dxMm: was[0].dxMm - was[1].dxMm, dyMm: was[0].dyMm - was[1].dyMm });
 });
 
 test('any plate can be deleted, the first included, while another is left', () => {

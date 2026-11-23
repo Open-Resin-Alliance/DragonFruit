@@ -12,6 +12,8 @@
  * The modified arrays are transferred back the same way.
  */
 
+import { swapTriangleCorners } from '../logic/swapTriangleCorners';
+
 type BakeRequest = {
   positions: Float32Array;
   normals: Float32Array | null;
@@ -46,18 +48,10 @@ self.onmessage = (e: MessageEvent<BakeRequest>) => {
         indices[i + 2] = tmp;
       }
     } else {
-      // Non-indexed geometry: swap vertices 1 and 2 of each triangle inline.
-      const stride = posItemSize * 3;
-      const triCount = Math.floor(positions.length / stride);
-      for (let t = 0; t < triCount; t++) {
-        const baseA = t * stride + posItemSize;
-        const baseB = baseA + posItemSize;
-        for (let c = 0; c < posItemSize; c++) {
-          const tmp = positions[baseA + c];
-          positions[baseA + c] = positions[baseB + c];
-          positions[baseB + c] = tmp;
-        }
-      }
+      // Non-indexed geometry: swap corners 1 and 2 of each triangle inline, in the
+      // normals too, or every normal lands on a corner it was not computed for.
+      swapTriangleCorners(positions, posItemSize);
+      if (normals) swapTriangleCorners(normals, normItemSize);
     }
 
     // 3. Negate normals along this axis.
