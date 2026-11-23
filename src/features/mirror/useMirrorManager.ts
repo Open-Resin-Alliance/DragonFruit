@@ -16,6 +16,7 @@ import type { useTransformManager } from '@/features/transform/useTransformManag
 import {
   mirrorModelLabel,
 } from '@/features/scene/sceneHistoryLabels';
+import { swapTriangleCorners } from '@/features/mirror/logic/swapTriangleCorners';
 
 type MirrorSession = {
   modelId: string;
@@ -274,10 +275,20 @@ export function useMirrorManager({
       if (bi) {
         baked.setIndex(new THREE.BufferAttribute(bi, 1));
       }
+      // A non-indexed soup reverses its winding by swapping corners, which the
+      // worker did to positions and normals once per axis: with an odd number of
+      // axes every other per-corner attribute has to swap as well, on a copy.
+      const cornersSwapped = !bi && axes.length % 2 === 1;
       const srcAttrs = source.attributes;
       for (const name of Object.keys(srcAttrs)) {
-        if (name !== 'position' && name !== 'normal') {
-          baked.setAttribute(name, srcAttrs[name] as THREE.BufferAttribute);
+        if (name === 'position' || name === 'normal') continue;
+        const attr = srcAttrs[name];
+        if (cornersSwapped && attr instanceof THREE.BufferAttribute && attr.count === posAttr.count) {
+          const swapped = attr.clone();
+          swapTriangleCorners(swapped.array, swapped.itemSize);
+          baked.setAttribute(name, swapped);
+        } else {
+          baked.setAttribute(name, attr as THREE.BufferAttribute);
         }
       }
       baked.computeBoundingBox();
