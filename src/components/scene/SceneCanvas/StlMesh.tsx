@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect } from 'react';
+import React from 'react';
 import * as THREE from 'three';
 import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
 import { MODEL_EDGE_OVERLAY_ENABLED } from '@/hooks/useStlGeometry';
@@ -19,7 +19,6 @@ import {
   recordMeshSmoothingEngineStrokeSample,
   ensureMeshSmoothingEngineReady,
 } from '@/features/mesh-smoothing/meshSmoothingEngine';
-import { clampMeshSmoothingBrushSizeMm, getMeshSmoothingSettings } from '@/features/mesh-smoothing/settings';
 import {
   paintSupportBlockers,
   beginSupportBlockerStroke,
@@ -36,8 +35,10 @@ import { BAKED_OCCLUSION_ATTRIBUTE, bakedOcclusionStrength, bakedOcclusionVersio
 import { prewarmSupportPlacementAsync } from '@/supports/PlacementLogicV3/supportPlacementPrewarm';
 
 // Scratch raycaster reused for clip-zone fallback raycasts.
-const _clipFallbackRaycaster = new THREE.Raycaster();
-const _interiorCavityRaycaster = new THREE.Raycaster();
+/** three-mesh-bvh reads `firstHitOnly` off the raycaster; three's own type lacks it. */
+type BvhRaycaster = THREE.Raycaster & { firstHitOnly?: boolean };
+const _clipFallbackRaycaster: BvhRaycaster = new THREE.Raycaster();
+const _interiorCavityRaycaster: BvhRaycaster = new THREE.Raycaster();
 const _interiorCavityRaycastMesh = new THREE.Mesh();
 
 // Mini-cache for clip-aware fallback raycasts.  Near the clip boundary the
@@ -288,13 +289,13 @@ function findClipAwareHit(
   rc.near = primaryDistance + 0.05;
   // Bound the search — models fit within the build volume.
   rc.far = primaryDistance + 500;
-  (rc as any).firstHitOnly = true;
+  rc.firstHitOnly = true;
   const hits: THREE.Intersection[] = [];
   (mesh as THREE.Mesh).raycast(rc, hits);
   // Reset to safe defaults.
   rc.near = 0;
   rc.far = Infinity;
-  (rc as any).firstHitOnly = false;
+  rc.firstHitOnly = false;
   if (hits.length === 0) {
     _clipCacheKey = cacheKey;
     _clipCacheResult = null;
@@ -330,7 +331,7 @@ function findInteriorCavityHit(
   // like. `firstHitOnly` already makes this cheap, so there is no bound to keep.
   rc.near = 0;
   rc.far = Infinity;
-  (rc as any).firstHitOnly = true;
+  rc.firstHitOnly = true;
 
   const mesh = _interiorCavityRaycastMesh;
   mesh.geometry = cavityGeometry;
@@ -346,7 +347,7 @@ function findInteriorCavityHit(
 
   rc.near = 0;
   rc.far = Infinity;
-  (rc as any).firstHitOnly = false;
+  rc.firstHitOnly = false;
 
   if (hits.length === 0) return null;
   const hit = hits[0];
@@ -424,7 +425,6 @@ function StlMeshComponent({
   onSelectModeDragStart,
   disableRaycast,
   blockSupportPlacement,
-  suppressNextClickRef,
   modelId,
   isSelected,
   materialOutlineEnabled = false,
@@ -694,6 +694,9 @@ function StlMeshComponent({
     return occlusion && occlusion.count === geometry.getAttribute('position').count
       ? bakedOcclusionStrength(bakedAoIntensity)
       : 0;
+    // The bake writes the attribute into `geometry` in place: its version is the only
+    // thing that changes, so it is what tells this memo to read the attribute again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [geometry, bakedAoVersion, bakedAoIntensity]);
 
   const hasVertexColorAttribute = React.useMemo(() => {
@@ -1206,6 +1209,9 @@ if (uDitherAmount > 0.0) {
     });
 
     return material;
+    // Width, colour and opacity only seed the uniforms; the effect below keeps them
+    // current, so changing one does not rebuild the material and recompile its shader.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planes, supportPlacementGuideEnabled]);
 
   React.useEffect(() => {
