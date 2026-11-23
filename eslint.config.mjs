@@ -90,6 +90,21 @@ const eslintConfig = defineConfig([
       "@next/next/no-img-element": "off",
     },
   },
+  {
+    // Where a bed sits is plateLayout.ts's to say (ADR-0045, #940): eleven callers each
+    // worked out the cascade with their own footprint, count and ordering, and drifted.
+    files: ["**/*.{ts,tsx,js,jsx,mjs}"],
+    ignores: ["src/features/scene/plates/**"],
+    rules: {
+      "no-restricted-imports": ["error", {
+        patterns: [{
+          group: ["**/plates/plateCascade", "./plateCascade"],
+          importNames: ["plateCascadeOffsetMm", "plateCascadeCell"],
+          message: "Read plate positions from plateLayout.ts: computePlateFrames for the beds there are, appendedPlateSlots for beds about to be added.",
+        }],
+      }],
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

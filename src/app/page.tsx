@@ -252,8 +252,7 @@ import {
   type ArrangeModel as HighPrecisionArrangeModel,
 } from '@/features/scene/arrange/highPrecisionArrange';
 import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
-import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
-import { modelsOnPlate, plateCanBeRemoved } from '@/features/scene/plates/plateLayout';
+import { appendedPlateSlots, modelsOnPlate, plateCanBeRemoved } from '@/features/scene/plates/plateLayout';
 
 // Domain Features
 import { useSceneCollectionManager, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
@@ -9878,17 +9877,17 @@ export default function Home() {
       const remaining = Math.max(0, totalCount - chosenCenters.length);
       const perBed = Math.max(1, maxCols * maxRows);
       const ghostBeds = remaining > 0 ? Math.ceil(remaining / perBed) : 0;
-      const footprint = { widthMm: scene.view3dSettings.widthMm, depthMm: scene.view3dSettings.depthMm };
       const ghostOffsets: Array<{ dxMm: number; dyMm: number }> = [];
       let placedOnGhostBeds = 0;
+      const ghostSlots = appendedPlateSlots({
+        plates: scene.plates,
+        count: ghostBeds,
+        footprint: scene.view3dSettings,
+        ordering: scene.plateOrdering,
+      });
 
-      for (let bed = 0; bed < ghostBeds; bed += 1) {
-        const offset = plateCascadeOffsetMm(
-          scene.plates.length + bed,
-          footprint,
-          scene.plates.length + ghostBeds,
-          scene.plateOrdering,
-        );
+      for (const { dxMm, dyMm } of ghostSlots) {
+        const offset = { dxMm, dyMm };
         ghostOffsets.push(offset);
 
         // Nearest the middle of that bed first, which is where the eye looks for them.

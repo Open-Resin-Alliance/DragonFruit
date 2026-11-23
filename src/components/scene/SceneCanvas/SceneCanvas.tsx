@@ -151,7 +151,8 @@ import { recordReactCommit } from '@/utils/debug/renderProfiler';
 import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './SceneSelectionAndPicking';
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, SceneMoodOverlay } from './SceneEnvironment';
 import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
-import { plateCascadeOffsetMm, type PlateOrdering } from '@/features/scene/plates/plateCascade';
+import type { PlateOrdering } from '@/features/scene/plates/plateCascade';
+import { appendedPlateSlots } from '@/features/scene/plates/plateLayout';
 import { modelAnswersPointer, modelPlateScope, sceneryModelIds, SCENERY_DIM, type PlateScope } from '@/features/scene/plates/plateInteractivity';
 import type { PlateFrame, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { StlMesh } from './StlMesh';
@@ -1895,22 +1896,17 @@ export function SceneCanvas({
    * same footprint. Null without a plate list, which is the single-plate path.
    */
   const nextPlateFrame = React.useMemo(() => {
-    const last = plateFrames?.[plateFrames.length - 1];
-    if (!last) return null;
-    const widthMm = last.maxX - last.minX;
-    const depthMm = last.maxY - last.minY;
+    if (!plateFrames || plateFrames.length === 0) return null;
     // The ghost is the plate this scene would have next, so the grid is numbered
     // against one more plate than there is: that is where it will actually land.
-    const { dxMm, dyMm } = plateCascadeOffsetMm(
-      last.index + 1,
-      { widthMm, depthMm },
-      plateFrames.length + 1,
-      plateOrdering,
-    );
-    const minX = last.minX - last.dxMm + dxMm;
-    const minY = last.minY - last.dyMm + dyMm;
-    return { dxMm, dyMm, minX, minY, maxX: minX + widthMm, maxY: minY + depthMm };
-  }, [plateFrames, plateOrdering]);
+    const [next] = appendedPlateSlots({
+      plates: plateFrames,
+      count: 1,
+      footprint: activeBuildVolumeSettings,
+      ordering: plateOrdering,
+    });
+    return next ?? null;
+  }, [activeBuildVolumeSettings, plateFrames, plateOrdering]);
 
   const plateLayers = React.useMemo(() => {
     if (!plates || plates.length === 0 || !plateFrames || plateFrames.length === 0) return undefined;
