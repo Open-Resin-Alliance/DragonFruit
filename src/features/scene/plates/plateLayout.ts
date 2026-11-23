@@ -59,6 +59,41 @@ export function plateLocalRect({ widthMm, depthMm, originMode }: PlateFootprint)
   };
 }
 
+/** How far in from each edge of a plate models are kept, in millimetres. */
+export interface PlateSafetyMargin {
+  front?: number;
+  back?: number;
+  left?: number;
+  right?: number;
+}
+
+/**
+ * Where models may go on one plate: its build volume, moved by `offsetMm` (a plate's
+ * cascade offset, or none for the plate's own frame), less the safety margin on each
+ * side. A negative margin keeps nothing clear.
+ */
+export function plateBuildArea({
+  footprint,
+  offsetMm,
+  safetyMarginMm,
+}: {
+  footprint: PlateFootprint;
+  offsetMm?: { dxMm: number; dyMm: number };
+  safetyMarginMm?: PlateSafetyMargin;
+}): PlateRect {
+  const local = plateLocalRect(footprint);
+  // Summed in this order on purpose: the packers' results are compared exactly, and this
+  // is the order they were written with.
+  const minX = local.minX + (offsetMm?.dxMm ?? 0);
+  const minY = local.minY + (offsetMm?.dyMm ?? 0);
+  return {
+    minX: minX + Math.max(0, safetyMarginMm?.left ?? 0),
+    maxX: minX + footprint.widthMm - Math.max(0, safetyMarginMm?.right ?? 0),
+    minY: minY + Math.max(0, safetyMarginMm?.front ?? 0),
+    maxY: minY + footprint.depthMm - Math.max(0, safetyMarginMm?.back ?? 0),
+  };
+}
+
 /** Every plate's world rect and cascade offset, in display order. */
 export function computePlateFrames({
   plates,

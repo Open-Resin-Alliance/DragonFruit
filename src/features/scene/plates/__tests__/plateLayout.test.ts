@@ -6,6 +6,7 @@ import * as plateLayout from '../plateLayout';
 import {
   appendedPlateSlots,
   computePlateFrames,
+  plateBuildArea,
   plateFrameFor,
   modelsOnPlate,
   plateCanBeRemoved,
@@ -214,6 +215,26 @@ test('beds about to be added sit where adding them puts them, on the grown grid'
   assert.equal(fifth.dyMm, footprint.depthMm + PLATE_CASCADE_GAP_MM);
   assert.equal(fifth.dxMm, footprint.widthMm + PLATE_CASCADE_GAP_MM);
   assert.deepEqual(appendedPlateSlots({ plates: four, count: 0, footprint, ordering: FIXED_3 }), []);
+});
+
+test('a plate\'s build area is its volume, moved to the plate, less the safety margin', () => {
+  const bed = { widthMm: 200, depthMm: 100 };
+  assert.deepEqual(plateBuildArea({ footprint: { ...bed, originMode: 'center' } }), {
+    minX: -100, maxX: 100, minY: -50, maxY: 50,
+  });
+  assert.deepEqual(
+    plateBuildArea({
+      footprint: { ...bed, originMode: 'front_left' },
+      offsetMm: { dxMm: 224, dyMm: 124 },
+      safetyMarginMm: deepFreeze({ left: 5, right: 6, front: 7, back: 8 }),
+    }),
+    { minX: 229, maxX: 418, minY: 131, maxY: 216 },
+  );
+  assert.deepEqual(
+    plateBuildArea({ footprint: { ...bed, originMode: 'center' }, safetyMarginMm: { left: -3, back: -1 } }),
+    { minX: -100, maxX: 100, minY: -50, maxY: 50 },
+    'a negative margin keeps nothing clear, and a missing one is none',
+  );
 });
 
 test('every exported function takes one parameters object (ADR-0045 rule 4)', () => {

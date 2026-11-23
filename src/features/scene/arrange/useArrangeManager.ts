@@ -9,6 +9,7 @@ import { type HullCacheEntry, type ArrangeModel as HighPrecisionArrangeModel } f
 import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
 import { freeRectsForPlate, type PlateRect } from '@/features/scene/arrange/plateFreeSpace';
 import { modelPlateScope } from '@/features/scene/plates/plateInteractivity';
+import { plateBuildArea, plateLocalRect } from '@/features/scene/plates/plateLayout';
 
 type SceneManager = ReturnType<typeof useSceneCollectionManager>;
 type TransformManager = ReturnType<typeof useTransformManager>;
@@ -386,16 +387,12 @@ export function useArrangeManager({
    * `resolveArrangeVisibleModels`, which is scoped to the active plate.
    */
   const resolveArrangeFrame = React.useCallback((offset?: { dxMm: number; dyMm: number }) => {
-    const { originMode, widthMm, depthMm, safetyMarginMm } = scene.view3dSettings;
     const { dxMm, dyMm } = offset ?? arrangePlateOffset();
-    const rawMinX = (originMode === 'front_left' ? 0 : -widthMm * 0.5) + dxMm;
-    const rawMaxX = rawMinX + widthMm;
-    const rawMinY = (originMode === 'front_left' ? 0 : -depthMm * 0.5) + dyMm;
-    const rawMaxY = rawMinY + depthMm;
-    const minX = rawMinX + Math.max(0, safetyMarginMm?.left ?? 0);
-    const maxX = rawMaxX - Math.max(0, safetyMarginMm?.right ?? 0);
-    const minY = rawMinY + Math.max(0, safetyMarginMm?.front ?? 0);
-    const maxY = rawMaxY - Math.max(0, safetyMarginMm?.back ?? 0);
+    const { minX, maxX, minY, maxY } = plateBuildArea({
+      footprint: scene.view3dSettings,
+      offsetMm: { dxMm, dyMm },
+      safetyMarginMm: scene.view3dSettings.safetyMarginMm,
+    });
 
     return {
       dxMm,
@@ -1708,8 +1705,11 @@ export function useArrangeManager({
   const computeArrangeSlots = React.useCallback((count: number, stepX: number, stepY: number) => {
     const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
     const rows = Math.ceil(count / columns);
-    const centerX = scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.widthMm * 0.5 : 0;
-    const centerY = scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.depthMm * 0.5 : 0;
+    const { centerX, centerY } = plateLocalRect({
+      widthMm: scene.view3dSettings.widthMm,
+      depthMm: scene.view3dSettings.depthMm,
+      originMode: scene.view3dSettings.originMode,
+    });
     const startX = centerX - ((columns - 1) * stepX) * 0.5;
     const startY = centerY - ((rows - 1) * stepY) * 0.5;
 
@@ -1944,15 +1944,10 @@ export function useArrangeManager({
     // Spacing may be negative (nesting); clamp so a step never collapses.
     const spacing = Math.max(-Math.min(width, depth) + 0.1, duplicateSpacingMm);
 
-    const rawFillMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-    const rawFillMaxX = rawFillMinX + scene.view3dSettings.widthMm;
-    const rawFillMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-    const rawFillMaxY = rawFillMinY + scene.view3dSettings.depthMm;
-    const fillSm = scene.view3dSettings.safetyMarginMm;
-    const minX = rawFillMinX + Math.max(0, fillSm?.left ?? 0);
-    const maxX = rawFillMaxX - Math.max(0, fillSm?.right ?? 0);
-    const minY = rawFillMinY + Math.max(0, fillSm?.front ?? 0);
-    const maxY = rawFillMaxY - Math.max(0, fillSm?.back ?? 0);
+    const { minX, maxX, minY, maxY } = plateBuildArea({
+      footprint: scene.view3dSettings,
+      safetyMarginMm: scene.view3dSettings.safetyMarginMm,
+    });
 
     const plateWidth = Math.max(1, maxX - minX);
     const plateDepth = Math.max(1, maxY - minY);

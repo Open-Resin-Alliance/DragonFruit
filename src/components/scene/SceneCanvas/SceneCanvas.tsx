@@ -152,7 +152,7 @@ import { PickingProviderWrapper, SelectionSync, useInteractionWarning } from './
 import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers, Lights, SceneMoodOverlay } from './SceneEnvironment';
 import { plateNumberPlaceholder } from '@/features/scene/plates/plateMessages';
 import type { PlateOrdering } from '@/features/scene/plates/plateCascade';
-import { appendedPlateSlots } from '@/features/scene/plates/plateLayout';
+import { appendedPlateSlots, plateFrameFor, plateLocalRect } from '@/features/scene/plates/plateLayout';
 import { modelAnswersPointer, modelPlateScope, sceneryModelIds, SCENERY_DIM, type PlateScope } from '@/features/scene/plates/plateInteractivity';
 import type { PlateFrame, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 import { StlMesh } from './StlMesh';
@@ -1478,36 +1478,35 @@ export function SceneCanvas({
   );
   const activeBuildVolumeSettings = view3dSettings ?? DEFAULT_VIEW3D_SETTINGS;
 
+  /** One plate's build volume in its own frame, before the cascade offset. */
+  const plateLocal = React.useMemo(() => plateLocalRect({
+    widthMm: activeBuildVolumeSettings.widthMm,
+    depthMm: activeBuildVolumeSettings.depthMm,
+    originMode: activeBuildVolumeSettings.originMode,
+  }), [activeBuildVolumeSettings.depthMm, activeBuildVolumeSettings.originMode, activeBuildVolumeSettings.widthMm]);
+
   // The plate's footprint, for cursor-orbit pivots that land on empty space.
   const platePivotBounds = React.useMemo<PlatePivotBounds>(() => {
-    const width = activeBuildVolumeSettings.widthMm;
-    const depth = activeBuildVolumeSettings.depthMm;
-    const frontLeft = activeBuildVolumeSettings.originMode === 'front_left';
-    const minX = frontLeft ? 0 : -width * 0.5;
-    const minY = frontLeft ? 0 : -depth * 0.5;
-    return { minX, maxX: minX + width, minY, maxY: minY + depth };
-  }, [activeBuildVolumeSettings.depthMm, activeBuildVolumeSettings.originMode, activeBuildVolumeSettings.widthMm]);
+    const { minX, maxX, minY, maxY } = plateLocal;
+    return { minX, maxX, minY, maxY };
+  }, [plateLocal]);
 
   /** Where the active plate is in the world. No frames means one plate at the origin. */
   const activePlateFrame = React.useMemo(
-    () => plateFrames?.find((frame) => frame.id === activePlateId) ?? plateFrames?.[0],
+    () => plateFrameFor({ frames: plateFrames ?? [], plateId: activePlateId }),
     [plateFrames, activePlateId],
   );
 
   const buildVolumeCenterTarget = React.useMemo(() => {
-    const centerX = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.widthMm * 0.5 : 0;
-    const centerY = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.depthMm * 0.5 : 0;
     const centerZ = activeBuildVolumeSettings.maxZMm * 0.5;
     return new THREE.Vector3(
-      centerX + (activePlateFrame?.dxMm ?? 0),
-      centerY + (activePlateFrame?.dyMm ?? 0),
+      plateLocal.centerX + (activePlateFrame?.dxMm ?? 0),
+      plateLocal.centerY + (activePlateFrame?.dyMm ?? 0),
       centerZ,
     );
   }, [
-    activeBuildVolumeSettings.depthMm,
     activeBuildVolumeSettings.maxZMm,
-    activeBuildVolumeSettings.originMode,
-    activeBuildVolumeSettings.widthMm,
+    plateLocal,
     activePlateFrame?.dxMm,
     activePlateFrame?.dyMm,
   ]);
@@ -1520,21 +1519,11 @@ export function SceneCanvas({
    * volume's centre sits half way up the volume, and pivoting there leaves the plate low
    * in the view — fine for Home, which is framing the volume, not for moving to a bed.
    */
-  const plateViewTarget = React.useMemo(() => {
-    const centerX = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.widthMm * 0.5 : 0;
-    const centerY = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.depthMm * 0.5 : 0;
-    return new THREE.Vector3(
-      centerX + (activePlateFrame?.dxMm ?? 0),
-      centerY + (activePlateFrame?.dyMm ?? 0),
-      0,
-    );
-  }, [
-    activeBuildVolumeSettings.depthMm,
-    activeBuildVolumeSettings.originMode,
-    activeBuildVolumeSettings.widthMm,
-    activePlateFrame?.dxMm,
-    activePlateFrame?.dyMm,
-  ]);
+  const plateViewTarget = React.useMemo(() => new THREE.Vector3(
+    plateLocal.centerX + (activePlateFrame?.dxMm ?? 0),
+    plateLocal.centerY + (activePlateFrame?.dyMm ?? 0),
+    0,
+  ), [plateLocal, activePlateFrame?.dxMm, activePlateFrame?.dyMm]);
 
   /** What the camera controller needs to pan to the plate that was just picked. */
   const plateFocus = React.useMemo(
@@ -2247,10 +2236,8 @@ export function SceneCanvas({
 
     const width = activeBuildVolumeSettings.widthMm;
     const depth = activeBuildVolumeSettings.depthMm;
-    const dx = activePlateFrame?.dxMm ?? 0;
-    const dy = activePlateFrame?.dyMm ?? 0;
-    const minX = (activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -width * 0.5) + dx;
-    const minY = (activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -depth * 0.5) + dy;
+    const minX = plateLocal.minX + (activePlateFrame?.dxMm ?? 0);
+    const minY = plateLocal.minY + (activePlateFrame?.dyMm ?? 0);
 
     const sm = activeBuildVolumeSettings.safetyMarginMm;
     const marginFront = sm?.front ?? 0;
@@ -2262,7 +2249,7 @@ export function SceneCanvas({
       new THREE.Vector3(minX + marginLeft, minY + marginFront, 0),
       new THREE.Vector3(minX + width - marginRight, minY + depth - marginBack, activeBuildVolumeSettings.maxZMm),
     );
-  }, [activeBuildVolumeSettings, activePlateFrame?.dxMm, activePlateFrame?.dyMm]);
+  }, [activeBuildVolumeSettings, plateLocal, activePlateFrame?.dxMm, activePlateFrame?.dyMm]);
 
   /**
    * The build volume of every plate, in world coordinates. A model is judged
@@ -6768,8 +6755,8 @@ export function SceneCanvas({
         <Helpers
           gridWidthMm={activeBuildVolumeSettings.widthMm}
           gridDepthMm={activeBuildVolumeSettings.depthMm}
-          originMinX={activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -activeBuildVolumeSettings.widthMm * 0.5}
-          originMinY={activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -activeBuildVolumeSettings.depthMm * 0.5}
+          originMinX={plateLocal.minX}
+          originMinY={plateLocal.minY}
           buildPlateOpacity={(!thumbnailCaptureActive || includeBuildPlateDuringCapture) ? buildPlateOpacity : 0}
           showGrid={(!thumbnailCaptureActive || includeHelpersGridDuringCapture) && !hideGridHelpers}
           showBuildPlate={!thumbnailCaptureActive || includeBuildPlateDuringCapture}
