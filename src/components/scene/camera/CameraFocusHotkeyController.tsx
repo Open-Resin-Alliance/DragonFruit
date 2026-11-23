@@ -4,6 +4,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { useCameraFocusHotkey } from '@/hotkeys/useCameraFocusHotkey';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { clearCursorPivotAnchor } from './orbitControlsPivot';
 
 /**
  * How far below the middle of the view a plate lands when one is picked, as a fraction of
@@ -211,16 +212,30 @@ export function CameraFocusHotkeyController({
     // orthographic camera the frustum is derived from that distance.
     const endPos = endTarget.clone().add(viewDir.clone().multiplyScalar(fitDistance));
 
+    // A scripted framing ends whatever cursor pivot was in force: the animation
+    // drives `target`, and an anchor would re-aim the camera to keep the old pixel
+    // — the view would swing to the cursor instead of the model.
+    clearCursorPivotAnchor(controls);
+
     // Disable damping so no pending velocity is applied during update()
     const prevDamping = controls.enableDamping;
     const prevEnabled = controls.enabled;
     if (typeof prevDamping === 'boolean') controls.enableDamping = false;
     if (typeof prevEnabled === 'boolean') controls.enabled = false;
 
+    // Start from the point the camera is *looking at*, not from `controls.target`:
+    // the two differ whenever a cursor pivot holds the target off the screen's
+    // middle, and starting from the target would snap the aim before the transition
+    // began. Aiming at the look point reproduces the current orientation exactly, so
+    // the view rotates to the new centre instead of jumping.
+    const startLookPoint = camera.position
+      .clone()
+      .addScaledVector(camera.getWorldDirection(new THREE.Vector3()), currentRadius);
+
     transitionRef.current = {
       startPos: camera.position.clone(),
       endPos,
-      startTarget: controls.target.clone(),
+      startTarget: startLookPoint,
       endTarget,
       startTime: null,
       // The caller can stretch the slide: a far pan benefits from a longer, calmer
@@ -277,6 +292,16 @@ export function CameraFocusHotkeyController({
     const visibleById = new Map(visibleModels.map((model) => [model.id, model] as const));
     const hoverPoint = hoverPointRef.current;
 
+    // The active model wins outright: F means "show me the model I am working
+    // on", so it frames that model's centre whatever the pointer happens to be
+    // over. Hover and selection only decide when there is no active model.
+    const activeModel = activeModelId ? visibleById.get(activeModelId) ?? null : null;
+    if (activeModel) {
+      const sphere = computeModelWorldBoundingSphere(activeModel);
+      snapCameraToPoint(sphere.center, sphere.radius);
+      return;
+    }
+
     const hoveredSelectedModel = hoveredModelId
       && (
         hoveredModelId === activeModelId
@@ -304,7 +329,6 @@ export function CameraFocusHotkeyController({
       preferredIds.push(id);
     };
 
-    pushPreferred(activeModelId);
     selectedModelIds.forEach((id) => pushPreferred(id));
     pushPreferred(hoveredModelId);
 

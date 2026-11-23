@@ -92,7 +92,6 @@ src-tauri/permissions.toml
 src-tauri/windows-resources/*.dll
 src-tauri/windows-resources/nsis-plugins/
 src-tauri/windows-resources/runtime-version.nsh
-src-tauri/windows-resources/runtime-version.wxi
 src-tauri/binaries/dragonfruit-voxl-thumbnailer*
 **/build
 # Editor swap files (vim leaves these next to the file being edited)

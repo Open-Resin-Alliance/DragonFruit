@@ -22,6 +22,11 @@ import {
 } from '@/features/network/printerReachabilityStore';
 import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
+import {
+  computeModelBaseResinMl,
+  resinVolumeGeometryInputs,
+  scaleResinMl,
+} from '@/features/printing/modelResinVolume';
 
 interface ModelStatsCardProps {
   model: LoadedModel | null;
@@ -284,93 +289,10 @@ export function ModelStatsCard({
     return bottomTime + normalTime + movementOverheadSec;
   }, [effectiveBottomExposureSec, effectiveBottomLayerCount, effectiveNormalExposureSec, numLayers, resinTargetModels.length]);
 
-  const yieldToMainThread = React.useCallback(async () => {
-    await new Promise<void>((resolve) => {
-      if (typeof window !== 'undefined' && typeof (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback === 'function') {
-        (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback?.(() => resolve(), { timeout: 16 });
-        return;
-      }
-      setTimeout(resolve, 0);
-    });
-  }, []);
-
-  const computeBaseResinMlChunked = React.useCallback(async (
-    position: { getX: (i: number) => number; getY: (i: number) => number; getZ: (i: number) => number; count: number },
-    index: { getX: (i: number) => number; count: number } | null,
-  ): Promise<number | null> => {
-    let signedVolume = 0;
-
-    const vax = { x: 0, y: 0, z: 0 };
-    const vbx = { x: 0, y: 0, z: 0 };
-    const vcx = { x: 0, y: 0, z: 0 };
-
-    const readVertex = (i: number, out: { x: number; y: number; z: number }) => {
-      out.x = position.getX(i);
-      out.y = position.getY(i);
-      out.z = position.getZ(i);
-    };
-
-    const addTriangle = (ia: number, ib: number, ic: number) => {
-      readVertex(ia, vax);
-      readVertex(ib, vbx);
-      readVertex(ic, vcx);
-
-      signedVolume += (
-        vax.x * (vbx.y * vcx.z - vbx.z * vcx.y)
-        - vax.y * (vbx.x * vcx.z - vbx.z * vcx.x)
-        + vax.z * (vbx.x * vcx.y - vbx.y * vcx.x)
-      ) / 6;
-    };
-
-    const yieldEveryTriangles = 4096;
-    let processedTriangles = 0;
-
-    if (index) {
-      for (let i = 0; i < index.count; i += 3) {
-        addTriangle(index.getX(i), index.getX(i + 1), index.getX(i + 2));
-        processedTriangles += 1;
-        if (processedTriangles % yieldEveryTriangles === 0) {
-          await yieldToMainThread();
-        }
-      }
-    } else {
-      for (let i = 0; i < position.count; i += 3) {
-        addTriangle(i, i + 1, i + 2);
-        processedTriangles += 1;
-        if (processedTriangles % yieldEveryTriangles === 0) {
-          await yieldToMainThread();
-        }
-      }
-    }
-
-    const baseVolumeMm3 = Math.abs(signedVolume);
-    return Number.isFinite(baseVolumeMm3) ? (baseVolumeMm3 / 1000) : null;
-  }, [yieldToMainThread]);
-
   const getOrComputeBaseResinMl = React.useCallback(async (entry: LoadedModel): Promise<number | null> => {
-    const geometry = entry.geometry.geometry;
-    const positionAttr = geometry.getAttribute('position');
-    if (!positionAttr) return null;
-
-    const sourceKey = String(geometry.userData?.resinVolumeSourceKey ?? geometry.uuid);
-    geometry.userData = {
-      ...geometry.userData,
-      resinVolumeSourceKey: sourceKey,
-    };
-
-    const position = positionAttr as {
-      getX: (i: number) => number;
-      getY: (i: number) => number;
-      getZ: (i: number) => number;
-      count: number;
-      version?: number;
-      data?: { version?: number };
-    };
-    const index = geometry.getIndex() as ({ getX: (i: number) => number; count: number; version?: number } | null);
-
-    const positionVersion = position.version ?? position.data?.version ?? 0;
-    const indexVersion = index?.version ?? 0;
-    const cacheKey = `${sourceKey}:${positionVersion}:${indexVersion}`;
+    const inputs = resinVolumeGeometryInputs(entry.geometry.geometry);
+    if (!inputs) return null;
+    const { position, index, cacheKey } = inputs;
 
     const cached = baseResinMlCacheRef.current.get(cacheKey);
     if (cached !== undefined) return cached;
@@ -378,7 +300,7 @@ export function ModelStatsCard({
     const inFlight = inFlightBaseResinMlRef.current.get(cacheKey);
     if (inFlight) return inFlight;
 
-    const promise = computeBaseResinMlChunked(position, index)
+    const promise = computeModelBaseResinMl(position, index)
       .then((result) => {
         baseResinMlCacheRef.current.set(cacheKey, result);
         inFlightBaseResinMlRef.current.delete(cacheKey);
@@ -391,7 +313,7 @@ export function ModelStatsCard({
 
     inFlightBaseResinMlRef.current.set(cacheKey, promise);
     return promise;
-  }, [computeBaseResinMlChunked]);
+  }, []);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -414,10 +336,7 @@ export function ModelStatsCard({
         if (cancelled) return;
         if (baseMl == null) continue;
 
-        const sx = Math.abs(entry.transform.scale.x || 1);
-        const sy = Math.abs(entry.transform.scale.y || 1);
-        const sz = Math.abs(entry.transform.scale.z || 1);
-        totalMl += baseMl * sx * sy * sz;
+        totalMl += scaleResinMl(baseMl, entry.transform.scale);
         found = true;
       }
 

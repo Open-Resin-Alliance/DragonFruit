@@ -92,6 +92,27 @@ export function readVoxlChunkText(bytes: Uint8Array, type: string, index = 0): s
   throw new Error(`chunk ${type}[${index}] not found`);
 }
 
+/**
+ * Every chunk in a serialized VOXL container, decompressed, keyed `TYPE[index]`.
+ * Lets a test compare two files chunk by chunk regardless of their order.
+ */
+export function readVoxlChunks(bytes: Uint8Array): Map<string, Uint8Array> {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const chunkCount = view.getUint32(8, true);
+  const chunks = new Map<string, Uint8Array>();
+  for (let i = 0; i < chunkCount; i += 1) {
+    const base = 16 + i * 20;
+    const tag = String.fromCharCode(bytes[base], bytes[base + 1], bytes[base + 2], bytes[base + 3]);
+    const index = view.getUint16(base + 4, true);
+    const compression = view.getUint16(base + 6, true);
+    const offset = view.getUint32(base + 8, true);
+    const compressedSize = view.getUint32(base + 12, true);
+    const raw = bytes.subarray(offset, offset + compressedSize);
+    chunks.set(`${tag}[${index}]`, compression === 1 ? unzlibSync(raw) : raw);
+  }
+  return chunks;
+}
+
 /** Counts chunks of a given 4-char type in a serialized VOXL document. */
 export function countVoxlChunks(bytes: Uint8Array, type: string): number {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

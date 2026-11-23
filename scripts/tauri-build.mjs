@@ -141,7 +141,6 @@ console.log(`[tauri-build] ${npxCmd} ${cmdArgs.join(" ")} (target=${targetTriple
 
 const tauriEnv = {
   ...process.env,
-  ...(targetsLinux ? { APPIMAGE_EXTRACT_AND_RUN: process.env.APPIMAGE_EXTRACT_AND_RUN ?? "1" } : {}),
   // Universal: build manifold's C++ fat and tell build-thumbnail-providers.mjs
   // to emit a universal sidecar. Respect a caller-provided CMAKE_OSX_ARCHITECTURES.
   ...(isUniversal

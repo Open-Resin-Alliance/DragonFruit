@@ -416,3 +416,16 @@
   again does not refresh it, so a layer you keep returning to can be dropped first.
 - Why: minor — the cache is small and a dropped layer is just read again from the archive.
   Refreshing needs care: the snapshot's preview maps are read during render.
+
+### [toolchain] check-versions hides a lagging Cargo.lock — S · low risk
+- Where: the crates section of scripts/check-versions.mjs (`[...locked].reduce(...)`).
+- What: a crate's locked versions are merged across the 10 standalone `Cargo.lock` files and
+  only the highest is shown, so a lock still on `zip 9.2.0` vanishes behind one on `9.5.0`.
+- Fix: report per lock, naming the lock path of every one behind the newest release.
+
+### [toolchain] check-versions does not run cargo audit — M · low risk
+- Where: scripts/check-versions.mjs and scripts/version-policy.json.
+- What: versions are compared but known advisories are not; only Dependabot reports them.
+- Fix: `cargo audit` per `Cargo.lock`, warn and skip when it is not installed, and accept holds
+  with a reason in the policy (e.g. `rand 0.7.3` via `tauri-runtime-cef` → `kuchikiki`,
+  dismissed as Dependabot alert #44 because it cannot move without the CEF fork).

@@ -47,7 +47,7 @@ function hostTarget() {
 // Derived from the triple rather than looked up, so an arm64 Windows or Linux
 // host is not a missing map entry.
 function bundlesFor(target) {
-      if (target.includes("windows")) return "msi,nsis";
+      if (target.includes("windows")) return "nsis";
       if (target.includes("linux")) return "deb,rpm";
       if (target.includes("darwin")) return "app,dmg";
       return null;

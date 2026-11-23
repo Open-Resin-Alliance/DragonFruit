@@ -3,7 +3,7 @@ import { resolveObjectURL } from 'node:buffer';
 import test from 'node:test';
 import { useEffect } from 'react';
 import { getMultiPlateSettingsSnapshot, saveMultiPlateSettings } from '@/components/settings/multiPlatePreferences';
-import { clearHistory, undo } from '@/history/historyStore';
+import { clearHistory, getUndoCount, redo, undo } from '@/history/historyStore';
 import { getSnapshot as getSupportSnapshot, loadFromImportFormat, resetStore as resetSupportStore } from '@/supports/state';
 import { SUPPORT_COLLECTION_KEYS } from '@/supports/supportTypeRegistry';
 import type { DragonfruitImportFormat } from '@/supports/types';
@@ -252,6 +252,78 @@ test('deleting the first plate takes its models and moves the other beds up a sl
     assert.equal(plateOf(a), plate1, 'undo brings the model back onto the first plate');
     for (const [id, plateId] of Object.entries(kept)) assert.equal(plateOf(id), plateId, 'and the others back onto theirs');
     for (const id of [a, c, d]) assert.deepEqual(rootOf(id), rootsBefore[id], 'supports included');
+  } finally {
+    await unmount();
+  }
+});
+
+test('deleting the first of two plates brings the model on the second onto the bed that is left', async () => {
+  const { scene, loadCube, plateOf, positionOf, rootOf, unmount } = await mountScene();
+
+  try {
+    const a = await loadCube('a.stl');
+    const c = await loadCube('c.stl');
+    const plate1 = plateOf(a);
+    const plate2 = scene().addPlate();
+    await settle(20);
+    scene().moveModelsToPlate([c], plate2);
+    await settle(50);
+    assert.equal(plateOf(c), plate2, 'set up as described');
+    resetSupportStore();
+    loadFromImportFormat(rootsUnder([a, c].map((id) => ({ id, ...positionOf(id) }))));
+    const before = { position: positionOf(c), root: rootOf(c) };
+
+    clearHistory();
+    assert.equal(scene().removePlate(plate1), true, 'the first plate can go');
+    await waitFor(() => scene().plates.length === 1, 'the plate to go');
+    await settle(100);
+
+    const frame = scene().plateFrames.find((candidate) => candidate.id === plate2)!;
+    const { x, y } = positionOf(c);
+    assert.ok(
+      x >= frame.minX && x <= frame.maxX && y >= frame.minY && y <= frame.maxY,
+      `the model stands on the bed that is left (at ${x}, ${y})`,
+    );
+    assert.notDeepEqual(positionOf(c), before.position, 'it moved with its bed');
+    assert.deepEqual(rootOf(c), positionOf(c), 'and its supports with it');
+
+    undo();
+    await waitFor(() => scene().plates.length === 2, 'undo to bring the plate back');
+    await settle(100);
+    assert.deepEqual(positionOf(c), before.position, 'undo puts it back');
+    assert.deepEqual(rootOf(c), before.root, 'supports included');
+  } finally {
+    await unmount();
+  }
+});
+
+test('renaming a plate is a step undo takes back and redo puts back', async () => {
+  const { scene, loadCube, unmount } = await mountScene();
+  const plateNames = () => scene().plates.map((plate) => plate.name);
+
+  try {
+    const a = await loadCube('a.stl');
+    const plate2 = scene().addPlate();
+    await settle(20);
+    clearHistory();
+
+    scene().renamePlate(plate2, 'Azalea Berro');
+    await waitFor(() => plateNames()[1] === 'Azalea Berro', 'the rename');
+    scene().setPlateName('Calabaza');
+    await waitFor(() => plateNames()[0] === 'Calabaza', 'the active plate rename');
+    scene().renamePlate(plate2, 'Azalea Berro');
+    await settle(20);
+    assert.equal(getUndoCount(), 2, 'one step per rename, none for a name that did not change');
+
+    undo();
+    await waitFor(() => plateNames()[0] === '', 'undo to take back the active plate rename');
+    assert.deepEqual(plateNames(), ['', 'Azalea Berro']);
+    undo();
+    await waitFor(() => plateNames()[1] === '', 'undo to take back the first rename');
+    assert.deepEqual(scene().models.map((model) => model.id), [a], 'the models are left as they were');
+
+    redo();
+    await waitFor(() => plateNames()[1] === 'Azalea Berro', 'redo to put the rename back');
   } finally {
     await unmount();
   }

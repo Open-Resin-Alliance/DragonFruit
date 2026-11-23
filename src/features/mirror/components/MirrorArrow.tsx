@@ -9,7 +9,7 @@ import {
   HANDLE_HEAD_RADIUS_MM,
   HANDLE_RENDER_ORDER,
 } from '../constants';
-import { GIZMO_COLORS, GIZMO_LIGHTING } from '@/components/gizmo/constants';
+import { GIZMO_COLORS } from '@/components/gizmo/constants';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
 
@@ -97,12 +97,6 @@ export function MirrorArrow({
     : effectiveHovered
       ? GIZMO_COLORS.hover
       : axisColors.end;
-
-  const lightIntensity = isActive
-    ? GIZMO_LIGHTING.pointLightIntensity.active
-    : effectiveHovered
-      ? GIZMO_LIGHTING.pointLightIntensity.hovered
-      : GIZMO_LIGHTING.pointLightIntensity.idle;
 
   const shaftLength = HANDLE_SHAFT_LENGTH_MM;
   const shaftRadius = HANDLE_SHAFT_RADIUS_MM;
@@ -224,14 +218,6 @@ export function MirrorArrow({
           />
         </mesh>
       </group>
-
-      {/* Point light */}
-      <pointLight
-        position={arrowTipPosition}
-        color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : axisColors.end}
-        intensity={lightIntensity}
-        distance={1.5}
-      />
     </group>
   );
 }

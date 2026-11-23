@@ -26,7 +26,7 @@ echo "Generating custom images for the installers..."
 echo
 echo "When you are ready to sent the PR, run:"
 echo
-echo "git commit -m 'chore: release $VER'"
+echo "git commit -am 'chore: release $VER'"
 echo
 echo "followed by:"
 echo

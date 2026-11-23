@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { Html, useCursor } from '@react-three/drei';
 import { __iconNode as pencilIcon } from 'lucide-react/dist/esm/icons/pencil.js';
 import { fitFontToWidth } from '@/utils/canvasTextFit';
+import { dragSelection, rangeForClicks, type TextRange } from './textSelection';
 import {
   PLATE_WIDGET_USER_DATA,
   drawPlateWidgetIcon,
@@ -44,6 +45,25 @@ const EDITOR_MIN_CHARS = 6;
  * browser's own caret period, which a painted one has to keep up with itself. */
 const EDITOR_CARET_CSS = 2;
 const CARET_BLINK_MS = 530;
+/** How far the placeholder sits from the caret in an empty field. Flush against it,
+ * the caret disappears into the stem of the first bold capital. */
+const EDITOR_PLACEHOLDER_INDENT_CSS = EDITOR_CARET_CSS + 4;
+/** Longest gap between presses that still counts towards a double or triple click. */
+const MULTI_CLICK_MS = 500;
+
+type LabelTexture = {
+  texture: THREE.Texture | null;
+  widthCss: number;
+  heightCss: number;
+  /** Where a press at `xCss` across the texture falls in the text. */
+  hit: (xCss: number) => TextHit;
+};
+
+/** A press on the text: the caret position nearest to it, and the character under it,
+ * which is the one a double click takes the word of. */
+type TextHit = { caret: number; char: number };
+
+const NO_TEXT_HIT = () => ({ caret: 0, char: 0 });
 
 /**
  * The build plate's name, written on the plate itself and clicked to change it.
@@ -105,17 +125,29 @@ export function PlateNameLabel({
   const [draft, setDraft] = React.useState<string | null>(null);
   const [hovered, setHovered] = React.useState(false);
   /** Which part of the draft the keyboard has, so the painted caret can follow it. */
-  const [selection, setSelection] = React.useState({ start: 0, end: 0 });
+  const [selection, setSelection] = React.useState<TextRange>({ start: 0, end: 0 });
   const [caretOn, setCaretOn] = React.useState(true);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
+  const meshRef = React.useRef<THREE.Mesh | null>(null);
+  /** The presses so far in the current run of clicks, for double and triple clicks. */
+  const clicksRef = React.useRef({ time: 0, count: 0 });
+  /** What the current selection was started from, for a drag or a shift-click to
+   * extend: the caret, or the word a double click took. */
+  const anchorRef = React.useRef<TextRange>({ start: 0, end: 0 });
+  /** Set while the button is held after a press on the field; a drag after a double
+   * click selects whole words. */
+  const dragRef = React.useRef<{ byWord: boolean } | null>(null);
+  /** The selection a press asked for while the input was away from the focus: after a
+   * click on the closed label, before the input has mounted, or after a press on the
+   * open one, which blurs it. Taking the focus back puts back the selection the input
+   * had when it lost it, so this one is applied once the focus is back. */
+  const pendingSelectionRef = React.useRef<TextRange | null>(null);
   /** Set between a press on the field and the blur that press causes, so the
    * editor's own field does not close the editor (see the plane's `onPointerDown`). */
   const keepEditingRef = React.useRef(false);
   /** Set once the editor is being taken down. Unmounting the focused input raises a
    * blur of its own, and that blur must not commit a draft Escape just threw away. */
   const tearingDownRef = React.useRef(false);
-  /** Set by a double-click on the label, and spent by the next focus of the field. */
-  const selectAllOnFocusRef = React.useRef(false);
   const isEditing = draft !== null;
   const colors = usePlateWidgetColors();
   const worldPerCssPixel = widgetWorldPerCssPixel(labelScale);
@@ -146,12 +178,48 @@ export function PlateNameLabel({
   useCursor(hovered);
 
   /** The input is the only thing that knows where the caret is: read it back for
-   * the texture. A fresh keystroke shows the caret again, blink or not. */
-  const readSelection = React.useCallback(() => {
-    const element = inputRef.current;
+   * the texture. It is handed the element because the focus `autoFocus` raises comes
+   * before React has set `inputRef`. */
+  const readSelection = (element: HTMLInputElement | null) => {
     if (!element) return;
     setSelection({ start: element.selectionStart ?? 0, end: element.selectionEnd ?? 0 });
-  }, []);
+  };
+
+  const selectInField = (range: TextRange) => {
+    const element = inputRef.current;
+    if (!element) return;
+    element.setSelectionRange(range.start, range.end, range.backward ? 'backward' : 'forward');
+    readSelection(element);
+    setCaretOn(true);
+    if (keepEditingRef.current) pendingSelectionRef.current = range;
+  };
+
+  const applyPendingSelection = () => {
+    const pending = pendingSelectionRef.current;
+    if (!pending) return;
+    pendingSelectionRef.current = null;
+    selectInField(pending);
+  };
+
+  /** Where along the label the pointer is, in the texture's CSS pixels. Worked out
+   * from the ray rather than the hit, so a drag that leaves the label still tracks. */
+  const pointerCss = (ray: THREE.Ray): number | null => {
+    const mesh = meshRef.current;
+    if (!mesh) return null;
+    const local = ray.clone().applyMatrix4(mesh.matrixWorld.clone().invert());
+    if (Math.abs(local.direction.z) < 1e-9) return null;
+    const x = local.origin.x - (local.origin.z / local.direction.z) * local.direction.x;
+    return x / worldPerCssPixel + label.widthCss / 2;
+  };
+
+  /** Counts a press towards a double or triple click, the way the browser does. */
+  const countClick = (): number => {
+    const now = performance.now();
+    const previous = clicksRef.current;
+    const count = now - previous.time < MULTI_CLICK_MS ? (previous.count % 3) + 1 : 1;
+    clicksRef.current = { time: now, count };
+    return count;
+  };
 
   const commitDraft = () => {
     if (draft === null) return;
@@ -163,9 +231,13 @@ export function PlateNameLabel({
     if (next !== name) onCommit(next);
   };
 
-  const openEditor = () => {
+  const openEditor = (range: TextRange) => {
     tearingDownRef.current = false;
-    selectAllOnFocusRef.current = false;
+    pendingSelectionRef.current = range;
+    anchorRef.current = range;
+    // The texture is drawn before the input can report its selection, so it starts
+    // from the one asked for, not from whatever the last edit left behind.
+    setSelection(range);
     setDraft(name);
   };
 
@@ -173,6 +245,7 @@ export function PlateNameLabel({
     <>
       <group position={position} rotation={[0, 0, facingRotation]}>
         <mesh
+          ref={meshRef}
           // The anchor is the label's bottom-left corner, so the plane's centre is
           // half its own size to the right of it and half a size further back.
           position={[
@@ -189,32 +262,60 @@ export function PlateNameLabel({
             setHovered(true);
           }}
           onPointerOut={() => setHovered(false)}
+          // The input never sees the pointer, so the plane does what a field does with
+          // it: a press puts the caret under the pointer, a drag or a shift-click
+          // selects, a double click takes the word and a triple click the whole name.
           onPointerDown={(event) => {
             event.stopPropagation();
+            const clicks = countClick();
+            if (!isEditing || draft === null) return;
             // The press goes to the canvas, which takes the focus the editor's input
             // needs. Hand it back once the browser has finished moving it — the blur
             // in between is this press, not the field being left, so it commits nothing.
-            if (!isEditing) return;
             keepEditingRef.current = true;
             window.setTimeout(() => {
               keepEditingRef.current = false;
               inputRef.current?.focus();
+              applyPendingSelection();
             }, 0);
+            const x = pointerCss(event.ray);
+            if (x === null) return;
+            const hit = label.hit(x);
+            if (clicks === 1 && event.shiftKey) {
+              selectInField(dragSelection(draft, anchorRef.current, hit.caret, false));
+            } else {
+              const range = rangeForClicks(draft, clicks === 2 ? hit.char : hit.caret, clicks);
+              anchorRef.current = range;
+              selectInField(range);
+            }
+            if (clicks < 3) {
+              dragRef.current = { byWord: clicks === 2 };
+              (event.target as unknown as Element).setPointerCapture(event.pointerId);
+            }
+          }}
+          onPointerMove={(event) => {
+            const drag = dragRef.current;
+            if (!drag || draft === null) return;
+            event.stopPropagation();
+            const x = pointerCss(event.ray);
+            if (x === null) return;
+            const hit = label.hit(x);
+            selectInField(dragSelection(draft, anchorRef.current, drag.byWord ? hit.char : hit.caret, drag.byWord));
+          }}
+          onPointerUp={(event) => {
+            if (!dragRef.current) return;
+            dragRef.current = null;
+            (event.target as unknown as Element).releasePointerCapture(event.pointerId);
           }}
           onClick={(event) => {
             event.stopPropagation();
             if (isEditing) return;
-            openEditor();
-          }}
-          // The input never sees the pointer, so a double-click cannot select the word
-          // under it the way a field would. It selects the whole name instead, once the
-          // press above has handed the focus back. On a closed label the first click
-          // has only just opened the editor, and `Html` mounts its input after the
-          // double-click, so the selection waits for that input's focus.
-          onDoubleClick={(event) => {
-            event.stopPropagation();
-            selectAllOnFocusRef.current = true;
-            window.setTimeout(() => inputRef.current?.focus(), 0);
+            // A double click on the closed label lands here twice before the editor
+            // has rendered, so each press asks again with its own count.
+            const clicks = clicksRef.current.count;
+            const x = pointerCss(event.ray);
+            const hit = x === null ? { caret: name.length, char: name.length } : label.hit(x);
+            openEditor(rangeForClicks(name, clicks === 2 ? hit.char : hit.caret, clicks));
           }}
         >
           <planeGeometry args={[label.widthCss * worldPerCssPixel, label.heightCss * worldPerCssPixel]} />
@@ -246,17 +347,16 @@ export function PlateNameLabel({
             value={draft}
             onChange={(event) => {
               setDraft(event.target.value);
-              readSelection();
+              readSelection(event.currentTarget);
               setCaretOn(true);
             }}
-            onSelect={readSelection}
-            onKeyUp={readSelection}
+            onSelect={(event) => readSelection(event.currentTarget)}
+            onKeyUp={(event) => readSelection(event.currentTarget)}
             onFocus={(event) => {
-              if (selectAllOnFocusRef.current) {
-                selectAllOnFocusRef.current = false;
-                event.currentTarget.select();
-              }
-              readSelection();
+              // `inputRef` is not set yet when this is the focus `autoFocus` raises.
+              inputRef.current ??= event.currentTarget;
+              applyPendingSelection();
+              readSelection(event.currentTarget);
             }}
             onBlur={() => {
               if (keepEditingRef.current || tearingDownRef.current) return;
@@ -284,6 +384,30 @@ export function PlateNameLabel({
   );
 }
 
+type TextHitTester = (xCss: number) => TextHit;
+
+/**
+ * Where along `text`, drawn in `font` from `originCss`, a press at `xCss` falls: what
+ * turns a press on the painted text into a place in the input.
+ */
+function textHitTester(font: string, text: string, originCss: number): TextHitTester {
+  if (!text || typeof document === 'undefined') return NO_TEXT_HIT;
+  const measure = document.createElement('canvas').getContext('2d');
+  if (!measure) return () => ({ caret: text.length, char: text.length });
+  measure.font = font;
+  const edges = Array.from({ length: text.length + 1 }, (_, index) => originCss + measure.measureText(text.slice(0, index)).width);
+  return (xCss) => {
+    let caret = 0;
+    for (let index = 1; index < edges.length; index += 1) {
+      if (Math.abs(edges[index] - xCss) < Math.abs(edges[caret] - xCss)) caret = index;
+    }
+    // The last character whose left edge the press is past, kept inside the text.
+    let char = 0;
+    while (char < text.length - 1 && edges[char + 1] <= xCss) char += 1;
+    return { caret, char };
+  };
+}
+
 /**
  * Bakes the label into a canvas texture: either the name in the accent colour
  * (muted while the plate is unnamed) with the pencil beside it, or — while a name is
@@ -298,11 +422,11 @@ function buildLabelTexture({ name, placeholder, colors, hovered, editing, draft,
   hovered: boolean;
   editing: boolean;
   draft: string;
-  selection: { start: number; end: number };
+  selection: TextRange;
   caretOn: boolean;
-}): { texture: THREE.Texture | null; widthCss: number; heightCss: number } {
+}): LabelTexture {
   const fallbackWidth = LABEL_PADDING_CSS * 2 + LABEL_GAP_CSS + PENCIL_BUTTON_CSS;
-  const fallback = { texture: null, widthCss: fallbackWidth, heightCss: LABEL_LINE_HEIGHT_CSS };
+  const fallback = { texture: null, widthCss: fallbackWidth, heightCss: LABEL_LINE_HEIGHT_CSS, hit: NO_TEXT_HIT };
   if (typeof document === 'undefined') return fallback;
 
   const measure = document.createElement('canvas').getContext('2d');
@@ -379,6 +503,8 @@ function buildLabelTexture({ name, placeholder, colors, hovered, editing, draft,
     // where the size was rounded up to a whole pixel.
     widthCss: canvas.width / TEXTURE_SCALE,
     heightCss: canvas.height / TEXTURE_SCALE,
+    // The placeholder is not text the field holds, so a press on it opens an empty one.
+    hit: name ? textHitTester(font, name, LABEL_PADDING_CSS) : NO_TEXT_HIT,
   };
 }
 
@@ -393,10 +519,10 @@ function buildEditorTexture(
     draft: string;
     placeholder: string;
     colors: PlateWidgetColors;
-    selection: { start: number; end: number };
+    selection: TextRange;
     caretOn: boolean;
   },
-): { texture: THREE.Texture | null; widthCss: number; heightCss: number } {
+): LabelTexture {
   const text = draft || placeholder;
   measure.font = LABEL_FONT;
   const charCss = measure.measureText('0').width;
@@ -410,7 +536,7 @@ function buildEditorTexture(
   canvas.width = Math.ceil(boxWidthCss * TEXTURE_SCALE);
   canvas.height = Math.ceil(boxHeightCss * TEXTURE_SCALE);
   const ctx = canvas.getContext('2d');
-  const size = { texture: null, widthCss: boxWidthCss, heightCss: boxHeightCss };
+  const size = { texture: null, widthCss: boxWidthCss, heightCss: boxHeightCss, hit: NO_TEXT_HIT };
   if (!ctx) return size;
   ctx.scale(TEXTURE_SCALE, TEXTURE_SCALE);
 
@@ -455,7 +581,7 @@ function buildEditorTexture(
   // The placeholder is what the field shows while it is empty, in the muted colour
   // the label itself wears before it is named.
   ctx.fillStyle = draft ? colors.textStrong : colors.textMuted;
-  ctx.fillText(text, textXCss, boxHeightCss / 2 + 2);
+  ctx.fillText(text, draft ? textXCss : textXCss + EDITOR_PLACEHOLDER_INDENT_CSS, boxHeightCss / 2 + 2);
 
   // The caret, gone while something is selected — which is when the browser hides
   // its own too.
@@ -485,5 +611,6 @@ function buildEditorTexture(
     // where the size was rounded up to a whole pixel.
     widthCss: canvas.width / TEXTURE_SCALE,
     heightCss: canvas.height / TEXTURE_SCALE,
+    hit: textHitTester(font, draft, textXCss),
   };
 }

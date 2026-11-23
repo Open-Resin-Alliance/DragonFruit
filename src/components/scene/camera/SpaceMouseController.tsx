@@ -9,6 +9,7 @@ import {
   type SpaceMouseSettings,
 } from '@/components/settings/spacemousePreferences';
 import { ORTHO_MAX_RADIUS, ORTHO_MIN_RADIUS, applyOrthoFrustum, orthoAspectOf } from './orthoDolly';
+import { clearCursorPivotAnchor } from './orbitControlsPivot';
 import { getWindowFocused, retainWindowFocus } from './windowFocus';
 
 type OrbitLikeControls = {
@@ -277,6 +278,7 @@ export function SpaceMouseController({
     }
 
     if (weDisabledOrbitRef.current && isOrbitLikeControls(controls)) {
+      clearCursorPivotAnchor(controls);
       controls.enabled = true;
       controls.update();
       weDisabledOrbitRef.current = false;
@@ -317,6 +319,7 @@ export function SpaceMouseController({
       if (weDisabledOrbitRef.current) {
         const handoffTarget = getHandoffTarget();
         controls.target.copy(handoffTarget);
+        clearCursorPivotAnchor(controls);
         controls.enabled = true;
         controls.update();
         weDisabledOrbitRef.current = false;
@@ -361,6 +364,7 @@ export function SpaceMouseController({
       if (weDisabledOrbitRef.current) {
         const handoffTarget = getHandoffTarget();
         controls.target.copy(handoffTarget);
+        clearCursorPivotAnchor(controls);
         controls.enabled = true;
         controls.update();
         weDisabledOrbitRef.current = false;
@@ -403,6 +407,7 @@ export function SpaceMouseController({
       if (idleFramesRef.current >= IDLE_HANDBACK_FRAMES && weDisabledOrbitRef.current) {
         const handoffTarget = getHandoffTarget();
         controls.target.copy(handoffTarget);
+        clearCursorPivotAnchor(controls);
         controls.enabled = true;
         controls.update();
         weDisabledOrbitRef.current = false;

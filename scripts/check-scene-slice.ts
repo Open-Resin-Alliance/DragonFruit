@@ -30,9 +30,10 @@ import { DYNAMIC_PLATE_ORDERING } from '../src/features/scene/plates/plateCascad
 import { computePlateFrames } from '../src/features/scene/plates/plateLayout';
 
 const root = resolve(__dirname, '..');
-const tsx = join(root, 'node_modules', '.bin', 'tsx');
+// Through node: the `.bin` entry is a shell script, which Windows cannot execute.
+const tsx = join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const cliScript = join(root, 'scripts', 'dragonfruit-ts-cli.ts');
-const rustCli = join(root, 'rust', 'dragonfruit-cli', 'target', 'release', 'dragonfruit-cli');
+const rustCli = join(root, 'rust', 'dragonfruit-cli', 'target', 'release', process.platform === 'win32' ? 'dragonfruit-cli.exe' : 'dragonfruit-cli');
 const printer = join(root, 'scripts', 'bench', 'printers', 'saturn_2-bundle.json');
 
 const CUBE_MM = 20;
@@ -75,7 +76,7 @@ function cubeStl(size: number, z0: number): Buffer {
 }
 
 function cli(...args: string[]): string {
-  return execFileSync(tsx, [cliScript, ...args], { cwd: root, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return execFileSync(process.execPath, [tsx, cliScript, ...args], { cwd: root, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 function fail(message: string): void {
@@ -99,13 +100,13 @@ function checkCubeSlice(label: string, result: SliceReport, output: string): voi
 }
 
 function slice(scene: string, output: string, ...flags: string[]): SliceReport {
-  return JSON.parse(cli('scene', 'slice', scene, '--o', output, '--printer', printer, ...flags, '--json'));
+  return JSON.parse(cli('scene', 'slice', scene, '-o', output, '--printer', printer, ...flags, '--json'));
 }
 
 function oneCube(dir: string, stl: string): void {
   const scene = join(dir, 'one.voxl');
   const output = join(dir, 'one.ctb');
-  cli('scene', 'create', '--o', scene);
+  cli('scene', 'create', '-o', scene);
   const model = JSON.parse(cli('scene', 'add-model', scene, '--mesh', stl, '--name', 'Cube', '--json'));
   cli('scene', 'place-on-platform', scene, '--id', model.id);
   const result = slice(scene, output);
@@ -117,7 +118,7 @@ function oneCube(dir: string, stl: string): void {
 
 async function twoPlates(dir: string, stl: string): Promise<void> {
   const scene = join(dir, 'two.voxl');
-  cli('scene', 'create', '--o', scene);
+  cli('scene', 'create', '-o', scene);
   const a = JSON.parse(cli('scene', 'add-model', scene, '--mesh', stl, '--name', 'Cube A', '--json'));
   const b = JSON.parse(cli('scene', 'add-model', scene, '--mesh', stl, '--name', 'Cube B', '--json'));
   cli('scene', 'place-on-platform', scene, '--id', a.id);

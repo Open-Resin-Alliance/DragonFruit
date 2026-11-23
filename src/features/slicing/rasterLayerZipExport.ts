@@ -12,18 +12,15 @@ import {
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import { getRaftSettings, getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
-import { buildRaftFootprintMeshes } from '@/supports/Rafts/Crenelated/geometry/generateRaftFromFootprint';
 import { collectModelPlateFootprint, type PlateFootprintSource } from '@/supports/Rafts/Crenelated/geometry/modelPlateFootprint';
-import { inflateModelPlateClearance, raftBandTopMm } from '@/supports/Rafts/Crenelated/geometry/computeRaftFootprint';
+import { raftBandTopMm } from '@/supports/Rafts/Crenelated/geometry/computeRaftFootprint';
+import { buildRaftMeshesForCircles } from '@/supports/Rafts/Crenelated/geometry/buildRaftMeshesForCircles';
 import type { PolygonWithHoles } from '@/supports/Rafts/Crenelated/geometry/polygonSet2d';
 import {
   collectRaftBaseCirclesByModel,
   fromRaftModelKey,
   RAFT_UNASSIGNED_MODEL_KEY,
 } from '@/supports/Rafts/Crenelated/raftFootprintCircles';
-import { filterLineRaftEdges, generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
-import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBeam';
-import { buildLineRaftEdgePairs } from '@/supports/Rafts/Crenelated/geometry/buildLineRaftEdgePairs';
 import type { Brace, ContactDisk, Segment, SupportState, Vec3 } from '@/supports/types';
 import { braceSpanDiameters } from '@/supports/SupportTypes/Brace/braceSpanDiameters';
 import { taperWidthAlong } from '@/supports/SupportPrimitives/Shaft/shaftTaperGeometry';
@@ -637,27 +634,27 @@ type SupportSliceTessellation = {
 /** Exported for `local-only/slice-goldens/`; not part of the public surface. */
 export function resolveSupportSliceTessellation(
   supportState: ReturnType<typeof getSupportSnapshot>,
-  kickstandState: SupportState,
+  visibleModelIds: ReadonlySet<string>,
+  visibleRootIds: ReadonlySet<string>,
 ): SupportSliceTessellation {
-  // How much geometry the scene will emit, which decides the detail level.
+  // Only geometry in this export may influence its detail level.
   let segmentCount = 0;
   let shaftlessCount = 0;
 
   for (const descriptor of SUPPORT_TYPES) {
-    const collection = supportState[descriptor.location.key] as unknown as Record<string, { segments?: unknown[] }>;
-    const entities = Object.values(collection ?? {});
-
-    if (!descriptor.hasSegments) {
-      // A leaf or brace is one primitive rather than a chain of them.
-      shaftlessCount += entities.length;
-      continue;
+    const collection = supportState[descriptor.location.key] as unknown as Record<string, { modelId?: string; segments?: unknown[] }>;
+    for (const entity of Object.values(collection ?? {})) {
+      if (!entity.modelId || !visibleModelIds.has(entity.modelId)) continue;
+      if (descriptor.hasSegments) segmentCount += entity.segments?.length ?? 0;
+      else shaftlessCount += 1;
     }
-    for (const entity of entities) segmentCount += entity.segments?.length ?? 0;
   }
 
-  const primitiveCount = segmentCount
-    + Object.keys(supportState.roots).length
-    + shaftlessCount;
+  let rootCount = 0;
+  for (const root of Object.values(supportState.roots)) {
+    if (visibleModelIds.has(root.modelId) || visibleRootIds.has(root.id)) rootCount += 1;
+  }
+  const primitiveCount = segmentCount + rootCount + shaftlessCount;
 
   if (segmentCount >= 20_000 || primitiveCount >= 24_000) {
     return {
@@ -831,12 +828,6 @@ export function buildSupportAndRaftWorldTriangles(
   const supportState = getSupportSnapshot();
   const sink: TriangleSink = collector ?? out;
   const tipScale = 1 - supportTipShrinkPercent / 100;
-  const tessellation = resolveSupportSliceTessellation(supportState, supportState);
-  const segmentTessellation = {
-    shaftRadialSegments: tessellation.shaftRadialSegments,
-    bezierRadialSegments: tessellation.bezierRadialSegments,
-    bezierSteps: tessellation.bezierSteps,
-  };
   const seenJointIds = new Set<string>();
   const JOINT_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
   const visibleRootIds = new Set<string>();
@@ -867,6 +858,13 @@ export function buildSupportAndRaftWorldTriangles(
       rootModelKeyById.set(kickstand.rootId, kickstand.modelId);
     }
   }
+
+  const tessellation = resolveSupportSliceTessellation(supportState, visibleModelIds, visibleRootIds);
+  const segmentTessellation = {
+    shaftRadialSegments: tessellation.shaftRadialSegments,
+    bezierRadialSegments: tessellation.bezierRadialSegments,
+    bezierSteps: tessellation.bezierSteps,
+  };
 
   const rootTopRadiusByRootId = new Map<string, number>();
   for (const trunk of Object.values(supportState.trunks)) {
@@ -1058,18 +1056,14 @@ export function buildSupportAndRaftWorldTriangles(
   if (circlesByModel.size > 0) {
     // A model standing on the plate keeps the sliced raft out of itself, exactly
     // as the viewport does — preview and print must not disagree.
-    const clearanceByBandTop = new Map<
-      number,
-      { clearance: PolygonWithHoles[]; clearanceCut: PolygonWithHoles[] | null }
-    >();
-    const getClearanceEntry = (bandTop: number) => {
-      let entry = clearanceByBandTop.get(bandTop);
-      if (!entry) {
-        const clearance = collectModelPlateFootprint(plateClearanceModels, bandTop);
-        entry = { clearance, clearanceCut: null };
-        clearanceByBandTop.set(bandTop, entry);
+    const clearanceByBandTop = new Map<number, PolygonWithHoles[]>();
+    const getClearanceForBandTop = (bandTop: number): PolygonWithHoles[] => {
+      let clearance = clearanceByBandTop.get(bandTop);
+      if (!clearance) {
+        clearance = collectModelPlateFootprint(plateClearanceModels, bandTop);
+        clearanceByBandTop.set(bandTop, clearance);
       }
-      return entry;
+      return clearance;
     };
 
     for (const [modelKey, circles] of circlesByModel) {
@@ -1084,69 +1078,12 @@ export function buildSupportAndRaftWorldTriangles(
         : getRaftSettings();
       if (raft.bottomMode === 'off') continue;
 
-      const clearanceEntry = getClearanceEntry(raftBandTopMm(raft));
-      const parts = buildRaftFootprintMeshes({
-        circles,
-        raft,
-        clearance: clearanceEntry.clearance,
-      });
-      if (!parts.baseMesh && parts.footprint.length === 0) continue;
-
-      if (parts.baseMesh) {
-        appendGeometryTriangles(sink, parts.baseMesh.geometry);
-        disposeTempMesh(parts.baseMesh);
-      } else if (raft.bottomMode === 'line') {
-        const nodes2d = circles.map((c) => new THREE.Vector2(c.x, c.y));
-        const hasBorderRing = parts.footprint.length > 0;
-        const edgePairs = buildLineRaftEdgePairs(nodes2d, {
-          hasBorderRing,
-          keepFactor: 8,
-          absMaxLen: 220,
-          enforceConnected: true,
-        });
-
-        const beamHeight = Math.max(0.01, raft.lineHeightMm);
-        if (!clearanceEntry.clearanceCut) {
-          clearanceEntry.clearanceCut = inflateModelPlateClearance(clearanceEntry.clearance);
-        }
-
-        // Beams a model on the plate is in the way of are never drawn: cutting them
-        // would leave severed ends to close up again, and two clusters either side of
-        // a model should stay two clusters.
-        const unionEdges: Array<[THREE.Vector2, THREE.Vector2]> = filterLineRaftEdges(
-          edgePairs.map(([a, b]) => [nodes2d[a], nodes2d[b]]),
-          clearanceEntry.clearanceCut,
-          raft.lineWidthMm,
-        );
-        const unionMesh = generateUnionedLineRaftMesh(unionEdges, {
-          widthMm: raft.lineWidthMm,
-          heightMm: beamHeight,
-          borderProfile: null,
-        });
-
-        const unionPositionAttribute = unionMesh.geometry.getAttribute('position');
-        const unionHasGeometry = !!unionPositionAttribute && unionPositionAttribute.count > 0;
-        if (unionHasGeometry) {
-          appendGeometryTriangles(sink, unionMesh.geometry);
-        } else {
-          for (const [a, b] of unionEdges) {
-            const start = new THREE.Vector3(a.x, a.y, 0);
-            const end = new THREE.Vector3(b.x, b.y, 0);
-            const beam = generateChamferedBeam(start, end, {
-              widthMm: raft.lineWidthMm,
-              heightMm: beamHeight,
-              chamferAngleDeg: 90,
-            });
-            appendGeometryTriangles(sink, beam.geometry);
-            disposeTempMesh(beam);
-          }
-        }
-        disposeTempMesh(unionMesh);
-      }
-
-      if (parts.wallMesh) {
-        appendGeometryTriangles(sink, parts.wallMesh.geometry);
-        disposeTempMesh(parts.wallMesh);
+      const clearance = getClearanceForBandTop(raftBandTopMm(raft));
+      // The one raft builder: base (or line beams) then wall, as the estimate
+      // measures them. A model in the way drops whole beams, never cuts them.
+      for (const mesh of buildRaftMeshesForCircles({ circles, raft, clearance })) {
+        appendGeometryTriangles(sink, mesh.geometry);
+        disposeTempMesh(mesh);
       }
     }
   }

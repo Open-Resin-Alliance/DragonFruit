@@ -81,9 +81,11 @@ function computeViewCullState(
     const alignment = Math.abs(viewDirection.dot(getAxisWorldDirection(axis, rotationEuler)));
 
     // Axis arrows and scale cubes should only get out of the way when they're
-    // very close to collapsing into the center from the current view.
-    move[axis] = quantizeOpacity(1 - smoothstep(0.82, 0.97, alignment));
-    scale[axis] = quantizeOpacity(1 - smoothstep(0.78, 0.95, alignment));
+    // very close to collapsing into the center from the current view. Fading
+    // earlier than this ate most of the orbit: an arrow 20 degrees off the view
+    // axis is still a distinctly separate handle and has to stay usable.
+    move[axis] = quantizeOpacity(1 - smoothstep(0.95, 0.995, alignment));
+    scale[axis] = quantizeOpacity(1 - smoothstep(0.94, 0.99, alignment));
 
     // Rotation rings fade only when they're nearly edge-on (a thin line that's
     // hard to grab). X/Y used to fade much earlier — a deliberate top-down
@@ -159,7 +161,6 @@ export function TransformGizmo({
   showCenter = DEFAULT_GIZMO_CONFIG.showCenter,
   size = DEFAULT_GIZMO_CONFIG.size,
   opacity = DEFAULT_GIZMO_CONFIG.opacity,
-  enableLighting = DEFAULT_GIZMO_CONFIG.enableLighting,
   constrainToSurface = DEFAULT_GIZMO_CONFIG.constrainToSurface,
   constrainToPlane = DEFAULT_GIZMO_CONFIG.constrainToPlane,
   axisLock = DEFAULT_GIZMO_CONFIG.axisLock,
@@ -241,7 +242,12 @@ export function TransformGizmo({
       if (obj.userData?.gizmoOverlayPatched === true) return;
 
       obj.frustumCulled = false;
-      obj.renderOrder = GIZMO_RENDER_ORDER;
+      // Handles render with depth testing off, so draw order alone decides what
+      // covers what. A handle can ask to sit above its siblings by declaring a
+      // `gizmoRenderOrderOffset` in userData (the scale cubes must cover the
+      // translate shafts they sit on).
+      const renderOrderOffset = obj.userData?.gizmoRenderOrderOffset;
+      obj.renderOrder = GIZMO_RENDER_ORDER + (typeof renderOrderOffset === 'number' ? renderOrderOffset : 0);
       // Mark only renderable gizmo handle geometry so pointer handlers can detect
       // gizmo involvement from intersections. Do NOT tag lights/targets; those
       // should not be hidden during thumbnail capture because it changes lighting.
@@ -535,7 +541,6 @@ export function TransformGizmo({
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('axis-x')}
               interactionsEnabled={partIsInteractable('axis-x')}
-              enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
               moveHandleBidirectional={moveHandleBidirectional}
@@ -560,7 +565,6 @@ export function TransformGizmo({
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('axis-y')}
               interactionsEnabled={partIsInteractable('axis-y')}
-              enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
               moveHandleBidirectional={moveHandleBidirectional}
@@ -585,7 +589,6 @@ export function TransformGizmo({
               suppressHover={suppressHover}
               opacityScale={partOpacityScale('axis-z')}
               interactionsEnabled={partIsInteractable('axis-z')}
-              enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
               moveHandleBidirectional={moveHandleBidirectional}

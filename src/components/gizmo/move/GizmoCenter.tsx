@@ -3,7 +3,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent, useFrame, useThree } from '@react-three/fiber';
-import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
+import { GIZMO_COLORS, GIZMO_SIZES } from '../constants';
 import { getCachedCircleGeometry, getCachedRingGeometry, getCachedSphereGeometry } from '../gizmoGeometryCache';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
@@ -16,7 +16,6 @@ interface GizmoCenterProps {
   isHidden?: boolean;
   suppressHover?: boolean;
   opacityScale?: number;
-  enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
   onDragStart: () => boolean | void;
   onDrag: (delta: THREE.Vector3) => void;
@@ -35,7 +34,6 @@ export function GizmoCenter({
   isHidden,
   suppressHover = false,
   opacityScale = 1,
-  enableLighting = true,
   gizmoPosition,
   onDragStart,
   onDrag,
@@ -264,15 +262,6 @@ export function GizmoCenter({
   const baseOpacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.55;
   const opacity = baseOpacity * opacityScale;
 
-  // Emissive intensity - disabled for center disc (no glow)
-  const emissiveIntensity = 0;
-
-  // Point light intensity based on state (uses effectiveHovered for GPU picking support)
-  const lightIntensity = isActive
-    ? GIZMO_LIGHTING.pointLightIntensity.active
-    : effectiveHovered
-    ? GIZMO_LIGHTING.pointLightIntensity.hovered
-    : GIZMO_LIGHTING.pointLightIntensity.idle;
   const pickGeometry = React.useMemo(() => getCachedSphereGeometry(GIZMO_SIZES.centerRadius * 1.08, 24, 24), []);
   const discGeometry = React.useMemo(() => getCachedCircleGeometry(GIZMO_SIZES.centerRadius * 1.05, 32), []);
   const borderRingGeometry = React.useMemo(

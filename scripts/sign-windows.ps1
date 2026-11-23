@@ -5,8 +5,8 @@ Signs one Windows binary with Azure Artifact Signing.
 
 .DESCRIPTION
 Tauri's `bundle.windows.signCommand` invokes this once per binary it produces:
-the application executable, sidecars and plugin DLLs, and the NSIS and MSI
-installers. Signing therefore happens before the updater artifacts are
+the application executable, sidecars and plugin DLLs, and the NSIS
+installer. Signing therefore happens before the updater artifacts are
 generated, so the `.exe.sig` Tauri writes covers the signed bytes.
 
 The workflow authenticates with OpenID Connect through `azure/login`, which

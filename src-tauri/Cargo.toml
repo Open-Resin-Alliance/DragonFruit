@@ -1,6 +1,6 @@
 [package]
 name = "dragonfruit-desktop"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 
 [build-dependencies]
@@ -67,7 +67,8 @@ libloading = "0.8"
 # The webview watchdog's reload prompt: a sheet it can close itself, which
 # rfd's blocking modal cannot do.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+# NSBundle/NSProcessInfo: the macOS and WebKit versions in the log header.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSBundle", "NSProcessInfo"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "std",
   "block2",
@@ -94,6 +95,10 @@ tauri-wry = ["tauri/wry", "logging", "dep:tauri-plugin-single-instance"]
 tauri-cef = ["tauri/cef", "logging"]
 # File/stdout/webview logging via tauri-plugin-log. Backend-agnostic.
 logging = ["dep:tauri-plugin-log"]
+# Web inspector in release builds (right-click → Inspect Element). Preview
+# builds only, enabled by build-preview.yml; releases never ship it. On macOS
+# it sets a private WKPreferences key, which also covers macOS < 13.3.
+devtools = ["tauri/devtools"]
 
 # Redirect all transitive tauri crate deps to the feat/cef branch so Cargo
 # resolves a single tauri version tree. Safe for macOS/Windows since wry

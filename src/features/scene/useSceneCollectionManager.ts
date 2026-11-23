@@ -107,6 +107,7 @@ import {
   reportVoxlUnsupportedVersion,
 } from '@/features/scene/sceneImportMessages';
 import { duplicatedModelName, pastedModelName } from '@/features/scene/modelCopyNames';
+import { dissolveLoneLinkGroups } from '@/features/scene/linkGroups';
 import {
   repairCancelledMessage,
   repairedModelsMessage,
@@ -124,6 +125,7 @@ import {
   deleteModelLabel,
   deleteModelsLabel,
   deletePlateLabel,
+  renamePlateLabel,
   deleteSupportsForModelLabel,
   deleteSupportsForModelsLabel,
   duplicateModelLabel,
@@ -233,6 +235,26 @@ type PersistedMeshAppearance = {
   hoverTintStrength: number;
   selectedTintStrength: number;
 };
+
+/**
+ * Run `cb` once the browser is idle, or on a short timer in a runtime without an idle
+ * callback (Safari, Node).
+ */
+function scheduleWhenIdle(cb: () => void, timeoutMs: number): void {
+  const idleWindow: { requestIdleCallback?: Window['requestIdleCallback'] } | undefined =
+    typeof window === 'undefined' ? undefined : window;
+  if (typeof idleWindow?.requestIdleCallback === 'function') {
+    idleWindow.requestIdleCallback(cb, { timeout: timeoutMs });
+  } else {
+    setTimeout(cb, 16);
+  }
+}
+
+/** The parts of a support that widen its footprint, read off any support type. */
+type FootprintPoint = { x: number; y: number; z: number };
+type FootprintJoint = { pos?: FootprintPoint; diameter?: number };
+type FootprintSegment = { diameter: number; topJoint?: FootprintJoint; bottomJoint?: FootprintJoint };
+type FootprintContact = { pos?: FootprintPoint; contactDiameterMm?: number; profile?: { contactDiameterMm?: number } };
 
 /**
  * Ambient-occlusion bakes in flight at once (see the scheduling comment in the
@@ -1892,9 +1914,10 @@ export function useSceneCollectionManager(options?: {
    * save records as the single-plate shorthand.
    */
   const plateName = activePlate?.name ?? '';
+  // `renamePlate` is defined further down, beside the other plate edits, and pushes the history.
+  const renamePlateRef = useRef<(plateId: string, name: string) => void>(() => {});
   const setPlateName = useCallback((name: string) => {
-    const target = activePlateIdRef.current;
-    setPlates((prev) => prev.map((plate) => (plate.id === target ? { ...plate, name } : plate)));
+    renamePlateRef.current(activePlateIdRef.current, name);
   }, []);
   /**
    * Which plates refuse edits. A lock, not a document field: it is about the
@@ -1929,7 +1952,7 @@ export function useSceneCollectionManager(options?: {
    * first plate, which is what a scene written before plates meant by it.
    */
   const modelPlateId = useCallback(
-    (model: LoadedModel) => plateIdForModel(model, plateFramesRef.current),
+    (model: LoadedModel) => plateIdForModel({ model, frames: plateFramesRef.current }),
     [],
   );
   /** Whether the plate a model stands on refuses edits. */
@@ -2994,13 +3017,7 @@ export function useSceneCollectionManager(options?: {
 
     deferredAccelerationProcessingRef.current = true;
 
-    const scheduleNext = (cb: () => void) => {
-      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-        (window as any).requestIdleCallback(cb, { timeout: 120 });
-      } else {
-        setTimeout(cb, 16);
-      }
-    };
+    const scheduleNext = (cb: () => void) => scheduleWhenIdle(cb, 120);
 
     const step = () => {
       if (deferredAccelerationPauseReasonsRef.current.size > 0) {
@@ -3069,13 +3086,7 @@ export function useSceneCollectionManager(options?: {
 
     deferredDisposalProcessingRef.current = true;
 
-    const scheduleNext = (cb: () => void) => {
-      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-        (window as any).requestIdleCallback(cb, { timeout: 120 });
-      } else {
-        setTimeout(cb, 16);
-      }
-    };
+    const scheduleNext = (cb: () => void) => scheduleWhenIdle(cb, 120);
 
     const step = () => {
       const geometry = deferredDisposalQueueRef.current.shift();
@@ -3634,7 +3645,7 @@ export function useSceneCollectionManager(options?: {
         progress: null,
       });
     }
-  }, [_, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, requestMeshRepairConfirmation, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, isActivePlateLocked, requestMeshRepairConfirmation, trackRecentOpenedFiles, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -3654,7 +3665,7 @@ export function useSceneCollectionManager(options?: {
     // place for a side effect, and the active plate is a second piece of state.
     const current = modelsRef.current.find((m) => m.id === id);
     if (current) {
-      const plateId = plateIdForModel({ ...current, transform }, plateFramesRef.current);
+      const plateId = plateIdForModel({ model: { ...current, transform }, frames: plateFramesRef.current });
       if (plateId && plateId !== current.plateId && followLandedPlateRef.current) {
         setActivePlateId((active) => (active === plateId ? active : plateId));
       }
@@ -3663,7 +3674,7 @@ export function useSceneCollectionManager(options?: {
     setModels((prev) => prev.map((m) => {
       if (m.id !== id) return m;
       // Membership follows the model: it stands on whichever plate it now does.
-      return withPlateMembership({ ...m, transform }, plateFramesRef.current);
+      return withPlateMembership({ model: { ...m, transform }, frames: plateFramesRef.current });
     }));
   }, []);
 
@@ -3797,7 +3808,7 @@ export function useSceneCollectionManager(options?: {
     for (const model of modelsRef.current) {
       const nextTransform = updateMap.get(model.id);
       if (!nextTransform) continue;
-      const plateId = plateIdForModel({ ...model, transform: nextTransform }, plateFramesRef.current);
+      const plateId = plateIdForModel({ model: { ...model, transform: nextTransform }, frames: plateFramesRef.current });
       if (plateId) landedPlateIds.add(plateId);
     }
     // A drag that lands on another bed makes that bed the one you are working on,
@@ -3812,7 +3823,11 @@ export function useSceneCollectionManager(options?: {
       const nextTransform = updateMap.get(m.id);
       if (!nextTransform) return m;
       // Membership follows the model: it stands on whichever plate it now does.
-      return withPlateMembership({ ...m, transform: nextTransform }, plateFramesRef.current, options?.landedPlateId);
+      return withPlateMembership({
+        model: { ...m, transform: nextTransform },
+        frames: plateFramesRef.current,
+        landedPlateId: options?.landedPlateId,
+      });
     }));
 
     if (followedPlateId && activePlateIdRef.current !== followedPlateId) {
@@ -4138,7 +4153,7 @@ export function useSceneCollectionManager(options?: {
       };
       // Membership follows the model, folded into the same update so a drag does
       // not cost a second render.
-      return withPlateMembership(nextModel, plateFramesRef.current);
+      return withPlateMembership({ model: nextModel, frames: plateFramesRef.current });
     });
 
     // Follow the moved set when it lands wholly on one plate, which is a drag of one or a
@@ -4236,13 +4251,7 @@ export function useSceneCollectionManager(options?: {
     if (!options?.deferPostProcessing) {
       deferAccelerateGeometry([nextGeometry]);
 
-      const scheduleIdle = (cb: () => void) => {
-        if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-          (window as any).requestIdleCallback(cb, { timeout: 250 });
-        } else {
-          setTimeout(cb, 16);
-        }
-      };
+      const scheduleIdle = (cb: () => void) => scheduleWhenIdle(cb, 250);
       pendingFlatteningPlanesRef.current += 1;
       scheduleIdle(() => {
         try {
@@ -4385,13 +4394,7 @@ export function useSceneCollectionManager(options?: {
     setModels(nextModels);
 
     // Defer post-processing (flattening planes) like replaceModelGeometry does.
-    const scheduleIdle = (cb: () => void) => {
-      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-        (window as any).requestIdleCallback(cb, { timeout: 250 });
-      } else {
-        setTimeout(cb, 16);
-      }
-    };
+    const scheduleIdle = (cb: () => void) => scheduleWhenIdle(cb, 250);
     scheduleIdle(() => {
       const planes = computeFlatteningPlanes(bufferGeometry);
       setModels((prev) => prev.map((m) => (
@@ -4525,13 +4528,7 @@ export function useSceneCollectionManager(options?: {
     setModels(nextModels);
 
     // Defer flattening-plane computation for every new geometry.
-    const scheduleIdle = (cb: () => void) => {
-      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-        (window as any).requestIdleCallback(cb, { timeout: 250 });
-      } else {
-        setTimeout(cb, 16);
-      }
-    };
+    const scheduleIdle = (cb: () => void) => scheduleWhenIdle(cb, 250);
     scheduleIdle(() => {
       const planes = built.map((b) => computeFlatteningPlanes(b.geometry));
       setModels((prev) => prev.map((m) => {
@@ -4726,13 +4723,7 @@ export function useSceneCollectionManager(options?: {
 
     deferAccelerateGeometry([target.geometry]);
 
-    const scheduleIdle = (cb: () => void) => {
-      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
-        (window as any).requestIdleCallback(cb, { timeout: 250 });
-      } else {
-        setTimeout(cb, 16);
-      }
-    };
+    const scheduleIdle = (cb: () => void) => scheduleWhenIdle(cb, 250);
     pendingFlatteningPlanesRef.current += 1;
     scheduleIdle(() => {
       try {
@@ -5493,24 +5484,10 @@ export function useSceneCollectionManager(options?: {
       tryRevokeObjectUrl(model.fileUrl);
     });
 
-    const nextModelsWithoutDeleted = currentModels.filter((m) => !ids.has(m.id));
-
-    // Dissolve link groups if remaining peer count < 2
-    const deletedLinkGroupIds = new Set(existing.map((m) => m.linkGroupId).filter(Boolean) as string[]);
-    let nextModels = nextModelsWithoutDeleted;
-    if (deletedLinkGroupIds.size > 0) {
-      deletedLinkGroupIds.forEach((gId) => {
-        const remaining = nextModels.filter((m) => m.linkGroupId === gId);
-        if (remaining.length < 2) {
-          nextModels = nextModels.map((m) => {
-            if (m.linkGroupId === gId) {
-              return { ...m, linkGroupId: undefined };
-            }
-            return m;
-          });
-        }
-      });
-    }
+    const nextModels = dissolveLoneLinkGroups({
+      models: currentModels.filter((m) => !ids.has(m.id)),
+      removed: existing,
+    });
 
     const nextActiveModelId = currentActiveModelId && ids.has(currentActiveModelId) ? null : currentActiveModelId;
     const nextSelectedModelIds = currentSelectedModelIds.filter((sid) => !ids.has(sid));
@@ -5835,7 +5812,7 @@ export function useSceneCollectionManager(options?: {
       payload.knots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
       payload.kickstandKnots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
 
-      const expandSegments = (segments: Array<any>) => {
+      const expandSegments = (segments: FootprintSegment[]) => {
         segments.forEach((segment) => {
           expand(segment.topJoint?.pos, Math.max(0.001, (segment.topJoint?.diameter ?? segment.diameter) / 2));
           expand(segment.bottomJoint?.pos, Math.max(0.001, (segment.bottomJoint?.diameter ?? segment.diameter) / 2));
@@ -5847,12 +5824,12 @@ export function useSceneCollectionManager(options?: {
       // differs by contact kind -- a cone's is in its profile, a disk's is on
       // the contact.
       for (const descriptor of SUPPORT_TYPES) {
-        const entities = payload[descriptor.location.key] as unknown as Array<Record<string, any>> | undefined;
+        const entities = payload[descriptor.location.key] as unknown as Array<Record<string, unknown>> | undefined;
         if (!entities) continue;
         for (const entity of entities) {
-          if (descriptor.hasSegments) expandSegments(entity.segments as any[]);
+          if (descriptor.hasSegments) expandSegments(entity.segments as FootprintSegment[]);
           for (const { kind, field } of contactEndpointsFor(descriptor.id)) {
-            const contact = entity[field];
+            const contact = entity[field] as FootprintContact | undefined;
             if (!contact?.pos) continue;
             const diameter = kind === 'cone'
               ? contact.profile?.contactDiameterMm
@@ -6274,7 +6251,7 @@ export function useSceneCollectionManager(options?: {
     }
 
     return createdIds;
-  }, [_, activeModelId, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, footprintForTransform, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+  }, [_, activeModelId, activePlateRect, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, footprintForTransform, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
   const duplicateModelWithTransforms = useCallback((
     sourceId: string,
@@ -6976,7 +6953,7 @@ export function useSceneCollectionManager(options?: {
         });
       }
     }
-  }, [_, emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestMissingPrinterPluginChoice, requestSceneImportHollowingChoice, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestMissingPrinterPluginChoice, requestSceneImportHollowingChoice, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
@@ -7653,7 +7630,7 @@ export function useSceneCollectionManager(options?: {
         });
       }
     }
-  }, [_, cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, applyBundleTankAssignments, cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, modelFootprintRect, remapImportedMaterialReferences, requestMissingPrinterPluginChoice, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm, waitForUiYield]);
 
   const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
@@ -8828,7 +8805,7 @@ export function useSceneCollectionManager(options?: {
 
   /** The plate a model stands on; the rule is `resolveModelPlateId` in plateLayout. */
   const resolveModelPlateId = useCallback(
-    (model: LoadedModel): string => plateIdForModel(model, plateFrames),
+    (model: LoadedModel): string => plateIdForModel({ model, frames: plateFrames }),
     [plateFrames],
   );
 
@@ -8838,9 +8815,26 @@ export function useSceneCollectionManager(options?: {
     return plateFrames.find((frame) => frame.id === plateId) ?? plateFrames[0];
   }, [plateFrames, resolveModelPlateId]);
 
+  /** Rename a plate, as its own history step; renaming it to the name it has is not one. */
   const renamePlate = useCallback((plateId: string, name: string) => {
-    setPlates((prev) => prev.map((plate) => (plate.id === plateId ? { ...plate, name } : plate)));
-  }, []);
+    const current = platesRef.current;
+    const index = current.findIndex((plate) => plate.id === plateId);
+    if (index < 0 || current[index].name === name) return;
+
+    const next = current.map((plate) => (plate.id === plateId ? { ...plate, name } : plate));
+    const snapshot = (plates: ScenePlate[]) => captureSceneSnapshot(
+      modelsRef.current,
+      activeModelIdRef.current,
+      selectedModelIdsRef.current,
+      { plates, activePlateId: activePlateIdRef.current },
+    );
+    const before = snapshot(current);
+    // The ref too, so a second rename in the same tick starts from this one.
+    platesRef.current = next;
+    setPlates(next);
+    pushSceneSnapshotHistory(before, snapshot(next), renamePlateLabel(index + 1));
+  }, [pushSceneSnapshotHistory]);
+  renamePlateRef.current = renamePlate;
 
   /**
    * Delete a plate and the models standing on it. Any plate can go, the first one
@@ -8849,10 +8843,10 @@ export function useSceneCollectionManager(options?: {
    */
   const removePlate = useCallback((plateId: string): boolean => {
     const current = platesRef.current;
-    if (!plateCanBeRemoved(current, plateId)) return false;
+    if (!plateCanBeRemoved({ plates: current, plateId })) return false;
     const remaining = current.filter((plate) => plate.id !== plateId);
 
-    const doomed = modelsOnPlate(modelsRef.current, plateId, plateFramesRef.current);
+    const doomed = modelsOnPlate({ models: modelsRef.current, plateId, frames: plateFramesRef.current });
     const nextActivePlateId = activePlateIdRef.current === plateId ? remaining[0].id : activePlateIdRef.current;
     // The supports too: the delete takes the doomed models' supports, and the shift moves the
     // others', so an undo without them would leave both where the delete put them.

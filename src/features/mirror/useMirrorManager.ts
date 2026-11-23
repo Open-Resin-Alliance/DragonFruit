@@ -3,7 +3,6 @@ import * as THREE from 'three';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import type { MirrorAxis } from '@/features/mirror/types';
 import { bakeWithFlips } from '@/features/mirror/logic/bakeWithFlips';
-import { swapNonIndexedAttributeWinding } from '@/features/mirror/logic/bakeMirrorIntoGeometry';
 import {
   buildMirrorSupportTransforms,
   reflectTransformAcrossWorldAxis,
@@ -18,6 +17,7 @@ import type { useTransformManager } from '@/features/transform/useTransformManag
 import {
   mirrorModelLabel,
 } from '@/features/scene/sceneHistoryLabels';
+import { swapTriangleCorners } from '@/features/mirror/logic/swapTriangleCorners';
 
 type MirrorSession = {
   modelId: string;
@@ -289,17 +289,20 @@ export function useMirrorManager({
       for (const g of source.groups) {
         baked.addGroup(g.start, g.count, g.materialIndex);
       }
+      // A non-indexed soup reverses its winding by swapping corners, which the
+      // worker did to positions and normals once per axis: with an odd number of
+      // axes every other per-corner attribute has to swap as well, on a copy.
+      const cornersSwapped = !bi && axes.length % 2 === 1;
       const srcAttrs = source.attributes;
       for (const name of Object.keys(srcAttrs)) {
-        if (name !== 'position' && name !== 'normal') {
-          const attr = srcAttrs[name];
-          if (!bi && axes.length % 2 === 1 && attr instanceof THREE.BufferAttribute) {
-            const cloned = attr.clone();
-            swapNonIndexedAttributeWinding(cloned);
-            baked.setAttribute(name, cloned);
-          } else {
-            baked.setAttribute(name, attr instanceof THREE.BufferAttribute ? attr.clone() : attr);
-          }
+        if (name === 'position' || name === 'normal') continue;
+        const attr = srcAttrs[name];
+        if (cornersSwapped && attr instanceof THREE.BufferAttribute && attr.count === posAttr.count) {
+          const swapped = attr.clone();
+          swapTriangleCorners(swapped.array, swapped.itemSize);
+          baked.setAttribute(name, swapped);
+        } else {
+          baked.setAttribute(name, attr instanceof THREE.BufferAttribute ? attr.clone() : attr);
         }
       }
       baked.computeBoundingBox();

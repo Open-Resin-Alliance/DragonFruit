@@ -10,7 +10,6 @@ on:
       - scripts/inetc-license.txt
       - src-tauri/tauri.windows.conf.json
       - src-tauri/nsis/**
-      - src-tauri/wix/**
   workflow_dispatch:
 permissions:
   contents: read

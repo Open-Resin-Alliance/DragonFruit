@@ -11,6 +11,12 @@ commit. It is not a nightly, it is not on a schedule, and it is not wired to
 the auto-updater — see [Releases and channels](releases.md) for how real
 releases work.
 
+Previews are built with the `devtools` Cargo feature (`src-tauri/Cargo.toml`,
+enabled only in `.github/workflows/build-preview.yml`), so a tester can
+right-click the window and choose **Inspect Element** to read the webview
+console. On macOS this works below 13.3 too, through a private WebKit
+preference. Releases are built without it.
+
 ### On a pull request from this repository
 
 Comment `/preview` on the pull request:

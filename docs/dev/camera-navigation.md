@@ -179,6 +179,139 @@ See `src/components/scene/camera/__tests__/trackpadGesturePose.test.ts` for the
 radius, polar-clamp, screen-scale and blend properties, replayed over the
 recorded captures in `src/components/scene/__tests__/wheelCaptures.fixture.ts`.
 
+## Wheel zoom
+
+The wheel used to dolly on the spot: OrbitControls applied its scale inside
+`update()` for perspective, and `dollyOrthoToCursor` ran directly inside the
+wheel handler for orthographic. Both are one discrete step per event, so a mouse
+wheel — whole-number deltas — read as a jump while a damped drag glided.
+
+The wheel now folds into the same kind of pose the trackpad gesture uses
+(`src/components/scene/camera/wheelZoomPose.ts`) and `WheelZoomPoseApplier` eases
+the camera onto it once per frame with the shared camera-feel time constant
+(`cameraPoseTauMs`: 0 for `raw`, 40–70 ms otherwise). Cursor anchoring is kept in
+both projections: perspective reproduces OrbitControls' `zoomToCursor` step (the
+camera slides down the pointer ray) and orthographic reuses `dollyOrthoToCursor`
+against a scratch camera posed like the pose.
+
+Things worth knowing before touching it:
+
+- **Never move the camera inside the wheel handler.** The capture-phase handler
+  in `SceneCanvas.onTrackpadWheel` raises `picking-zoom-start` / `-change` itself
+  and stops propagation, because it now owns the wheel for both projections —
+  OrbitControls must not also dolly. (Its `enableZoom` stays on for touch
+  pinch, which arrives as pointer events, not wheel.)
+- **Each event does its maths against the pose, not the live camera.** The camera
+  lags by design; computing the next step from it would shrink every step taken
+  while the camera was catching up.
+- **The applier snaps to the pose when it releases.** A translation residual
+  after `WHEEL_ZOOM_POSE_RELEASE_MS` is sub-pixel, which is why the trackpad pose
+  can simply be dropped; a zoom residual is a visible change of scale, so the
+  last pose is applied in full before it is cleared.
+- **Orthographic re-derives the frustum in the applier.** The zoom *is* the
+  radius, so leaving it to `OrthoFrustumSync` would scale the view a frame behind
+  the eased position.
+- The wheel-zoom interaction (picking suspension) outlives the last event by
+  `max(120 ms, 3 × tau)`, since the camera is still moving after the wheel stops.
+
+`src/components/scene/camera/__tests__/wheelZoomPose.test.ts` pins the radius
+scaling, the cursor anchoring in both projections, step composition, and the
+OrbitControls-derived radius scale.
+
+## Orbit pivot
+
+Camera → Orbit pivot chooses what a rotate turns around: the view centre
+(default) or the point under the cursor. This is the CAD-style pivot (Navisworks'
+steering-wheel Orbit: "the model rotates around a pivot point while the view
+remains fixed", pivot picked on the surface; Blender's turntable orbit with pivot
+modes is the same shape).
+
+**There is one camera controller and one projection of it, in both modes.**
+Cursor mode is a setting on the ordinary `OrbitControls`, not a second camera
+system: `PivotOrbitControls` (`src/components/scene/camera/orbitControlsPivot.ts`)
+is a subclass of three's `OrbitControls` with a single addition — `anchorNdc`, the
+pixel its `target` must project onto — and `PivotOrbitControls.tsx` is the R3F
+binding (`makeDefault`, the store handshake, `start`/`change`/`end`). Everything
+else is upstream: damping, speeds, pan, dolly, touch, the feel presets and the
+`enabled`-means-someone-else-has-the-camera contract. `CursorOrbitPivot.tsx` is
+the whole of the mode's own code: on a rotate press it resolves the pivot and
+sets `target` plus `anchorNdc` to the press point's own pixel.
+
+- **`anchoredAim.ts` solves the aim instead of iterating it.** Upstream aims at
+  `target` on every `update()`, which can only put it in the middle of the screen
+  — so an off-centre orbit centre slides away as the camera pitches. The solve
+  carries the direction to the pivot onto the direction the anchor requires, and
+  picks the roll (two closed-form roots) that levels the horizon. Iterating that
+  aim instead oscillates as the view approaches the poles. `__tests__/anchoredAim`
+  pins: a pivot already on its pixel reproduces the pose, the pixel survives the
+  whole orbit, the horizon stays level, and the along-up degenerate case is
+  refused.
+- **Every scripted framing drops the cursor pivot.** The intro, Home, the mode
+  entry framing and the focus hotkey drive `target` themselves and call
+  `controls.update()` per frame; a cursor anchor would re-aim each of those frames
+  to keep its old pixel, so the view would swing to the cursor instead of the
+  model. All four call `clearCursorPivotAnchor` before they start. F resolves to
+  the *active* model's bounding sphere — the pointer's hover is not consulted while
+  there is an active model.
+- **The SpaceMouse handoff drops the cursor pivot.** Both SpaceMouse controllers
+  disable OrbitControls for the gesture and, on release, copy their own pivot into
+  `controls.target` and re-enable — all in one tick, before any frame could notice
+  the change. A cursor anchor left over from before the gesture then re-aimed the
+  camera to put that new target back under the old pixel: the jump on release.
+  Every handoff now calls `clearCursorPivotAnchor`, so the camera resumes on the
+  SpaceMouse's pivot, which is the pose the gesture ended on.
+- **While another owner has the controls, the anchor follows the target.**
+  `CursorOrbitPivot` re-anchors on wherever the target projects if it moved while
+  the controls were disabled (Home, a mode framing). That is the same no-op
+  invariant as a pick — see `anchoredAim`'s "a pivot already on its pixel
+  reproduces the pose". Panning never enters that path: it is this control's own
+  target sliding, and the anchor travels with it.
+- **The anchor is the pivot's own pixel, not the pointer's.** Both are the same
+  place for a surface hit, but off the model the pivot is the model centre or the
+  plate, which sit somewhere else on screen: anchoring those to the pointer would
+  swing the view to bring them under the cursor. The press projects the resolved
+  pivot and anchors there instead.
+- **The pick moves nothing.** `anchorNdc` is seeded from the pixel the pivot
+  already occupies, so the solve reproduces the current pose for the new target —
+  no re-aim, no rescale, no jump on press. From there the pivot keeps that pixel
+  through elevation, pan and zoom because the anchor is the orbit's invariant, not
+  a pose difference computed per frame.
+- **`anchorNdc` at (0, 0) is exactly upstream.** View-centre mode leaves it at the
+  origin and the subclass returns straight after `super.update()`, so the default
+  mode is stock OrbitControls behaviour.
+- **The pivot is the nearest visible model surface under the pointer**; off any
+  model it is the selected model's bounding-box centre, and with nothing selected
+  the build plate (z = 0) clamped to the plate footprint
+  (`src/components/scene/camera/orbitPivot.ts`). It is resolved on the press —
+  beginning an orbit puts the models' CPU raycasting to sleep, so resolving on
+  the orbit's start event found nothing.
+- **A cursor pivot holds the orbit off the poles.** The level-horizon solve is
+  exact everywhere except within a few degrees of vertical: there the world up is
+  perpendicular to the screen up, so the sign of "which way is up" is decided by
+  numerical noise and the frame flips as the orbit circles the pole. The control
+  tightens `minPolarAngle`/`maxPolarAngle` to 0.2 rad while an anchor is set
+  (restoring the app's own limits when it is not), so the orbit stops just short
+  and the frame stays stable. `__tests__/anchoredAim` pins the uprightness outside
+  that band.
+- **The pose appliers run before the controls, not after.** `WheelZoomPoseApplier` and `TrackpadGesturePoseApplier` write the camera pose *and* orient it at the orbit target — the stock aim, which puts the target in the middle of the screen. `PivotOrbitControls` runs at frame priority -1 and has the last word on the orientation, so both appliers run at -2: without that ordering a cursor pivot is centred for the duration of every eased gesture and snaps back afterwards.
+- **The wheel dollies straight in while a pivot is anchored.** OrbitControls'
+  `zoomToCursor`, and the app's wheel pose that reproduces it, slide the camera
+  down the pointer ray — which drags the orbit *target* toward the pointer, and
+  the target is the picked pivot here. `applyWheelZoomToPose` takes
+  `zoomToCursor: false` in that case: the camera slides along its own view axis,
+  so the pivot stays where it was picked while the scale changes.
+- **Orthographic picks slide the camera along its view axis.** In ortho the zoom
+  *is* the camera→target distance (`orthoDolly.ts`), so adopting a pivot at a
+  different depth would rescale the view. A parallel projection ignores where the
+  camera sits along its own axis, so the pick moves the camera there until the
+  dolly distance is restored: the pivot stays on the surface point that was
+  clicked, and neither the image nor the frustum changes.
+- **Framing by the app drops the anchor.** Home, the intro, focus and a plate
+  switch set the target themselves; a target that is not the one this mode picked
+  means a centred framing, so the anchor resets to the origin. Panning keeps it —
+  that is the same target sliding, and the anchor is meant to slide with it.
+- Known limits of the mode: mouse only (a touch has no cursor).
+
 ## SpaceMouse
 
 Both SpaceMouse controllers (`NativeSpaceMouseController`,

@@ -19,7 +19,11 @@ try {
     }
 } catch (e) {}
 
-if (typeof EventTarget !== 'undefined') {
+// Development only. The guard tells library code from app code by the source
+// paths in the stack, and a production bundle has none: there `node_modules`
+// is just another chunk, so three's OrbitControls (which listens for keydown on
+// the document from `connect()`) was reported as a violation in every release.
+if (process.env.NODE_ENV !== 'production' && typeof EventTarget !== 'undefined') {
     const originalAddEventListener = EventTarget.prototype.addEventListener;
     EventTarget.prototype.addEventListener = function (
         this: EventTarget,

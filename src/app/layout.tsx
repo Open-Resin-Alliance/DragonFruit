@@ -9,6 +9,7 @@ import { DevIndicatorPosition } from "@/components/debug/DevIndicatorPosition";
 import { AppLogger } from "@/components/AppLogger";
 import { I18nClientProvider } from "@/components/I18nClientProvider";
 import { ScrollLockedInputs } from "@/components/ui/ScrollLockedInputs";
+import { NativeContextMenuGuard } from "@/components/ui/NativeContextMenuGuard";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -57,6 +58,7 @@ export default function RootLayout({
             <RendererCrashDiagnostics />
             <DevIndicatorPosition />
             <ScrollLockedInputs />
+            <NativeContextMenuGuard />
             {children}
           </HotkeyProvider>
         </I18nClientProvider>

@@ -4,6 +4,7 @@ import React from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { SupportMode } from '@/supports/types';
+import { clearCursorPivotAnchor } from './orbitControlsPivot';
 
 type CameraIntroControllerProps = {
   bounds: THREE.Box3 | null;
@@ -217,6 +218,7 @@ export function CameraIntroController({
         camera.updateMatrixWorld();
         // Single sync call at completion to refresh OrbitControls internals
         // without causing per-frame change churn during the scripted intro.
+        clearCursorPivotAnchor(orbitControls);
         orbitControls.update();
 
         onComplete?.(runId);
