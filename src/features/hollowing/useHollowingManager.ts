@@ -33,7 +33,7 @@ import {
   type HollowOptions,
   type HollowReport,
 } from '@/utils/meshHollowing';
-import { centerCavityPositions } from '@/features/hollowing/cavityCentering';
+import { centerCavityPositions, uncenterCavityPositions } from '@/features/hollowing/cavityCentering';
 import { getRotationQuatTuple, resolveBlockedVoxelValidity } from '@/features/mesh-modifiers/hollowingGrid';
 import { toPersistedHolePunchPlacements } from '@/features/hole-punching/holePunchPersistence';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
@@ -1363,8 +1363,12 @@ export function useHollowingManager({
       );
       if (view.length !== hollowing.cavityPositionCount * 3) continue;
 
-      const positions = new Float32Array(view.length);
-      positions.set(view);
+      // The persisted cavity is centered; the model geometry it is drawn with may
+      // not be (a model hollowed in this session keeps its raw frame).
+      const modelGeometry = model.geometry.geometry;
+      if (!modelGeometry.boundingBox) modelGeometry.computeBoundingBox();
+      const modelCenter = modelGeometry.boundingBox?.getCenter(new THREE.Vector3()) ?? new THREE.Vector3();
+      const positions = uncenterCavityPositions(view, modelCenter);
       const cavityGeometry = new THREE.BufferGeometry();
       cavityGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       cavityGeometry.computeVertexNormals();

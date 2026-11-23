@@ -29,3 +29,23 @@ export function centerCavityPositions(
   }
   return out;
 }
+
+/**
+ * The inverse of `centerCavityPositions`: puts a persisted cavity back into the
+ * frame of the model geometry it belongs to.
+ *
+ * The cavity is drawn offset by the same −bbox center as its model (StlMesh's
+ * `meshLocalOffset`), so it has to share the model geometry's frame. A model
+ * loaded from a VOXL is already centered and `center` is ~0; a model hollowed
+ * in this session keeps its raw frame, and a cavity rebuilt from the persisted
+ * copy (after undo/redo dropped the in-memory one) sat `center` too low.
+ *
+ * @param positions the persisted, centered xyz triples (never mutated).
+ * @param center the bbox center of the model geometry the cavity is drawn with.
+ */
+export function uncenterCavityPositions(
+  positions: Float32Array,
+  center: { readonly x: number; readonly y: number; readonly z: number },
+): Float32Array {
+  return centerCavityPositions(positions, { x: -center.x, y: -center.y, z: -center.z });
+}
