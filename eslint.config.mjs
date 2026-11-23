@@ -103,6 +103,15 @@ const eslintConfig = defineConfig([
           message: "Read plate positions from plateLayout.ts: computePlateFrames for the beds there are, appendedPlateSlots for beds about to be added.",
         }],
       }],
+      // Thirteen copies of `originMode === 'front_left' ? 0 : -width / 2` is how a plate's
+      // rect came to be worked out in as many ways.
+      "no-restricted-syntax": ["error", ...[
+        "BinaryExpression[right.value='front_left'][left.type='MemberExpression'][left.property.name='originMode']",
+        "BinaryExpression[right.value='front_left'][left.type='Identifier'][left.name='originMode']",
+      ].map((selector) => ({
+        selector,
+        message: "Read a plate's rect from plateLayout.ts (plateLocalRect, plateBuildArea, plateCenterFor) instead of branching on originMode.",
+      }))],
     },
   },
   // Override default ignores of eslint-config-next.
