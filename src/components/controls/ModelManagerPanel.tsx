@@ -486,7 +486,7 @@ export function ModelManagerPanel({
         label: <Trans>Delete plate</Trans>,
         icon: Trash2,
         // Any plate can go but the last: a scene needs a bed to build on.
-        disabled: !plateCanBeRemoved(plates ?? [], contextMenu.plateId),
+        disabled: !plateCanBeRemoved({ plates: plates ?? [], plateId: contextMenu.plateId }),
       },
     );
   }
