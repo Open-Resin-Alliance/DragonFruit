@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { modelGeometryOf } from '../autoSupport/meshStore';
 
 // Pooled scratch objects — reused across calls to avoid per-frame GC pressure.
 const _nA = new THREE.Vector3();
@@ -27,7 +28,8 @@ export function calculateSmoothedNormal(hit: THREE.Intersection): { x: number, y
         };
     }
 
-    const geom = hit.object.geometry;
+    // The hit's face indices address the model's own mesh (StlMesh raycasts it), not the display mesh it draws.
+    const geom = modelGeometryOf(hit.object);
     const normalAttr = geom.attributes.normal;
 
     // If no vertex normals, fallback to face normal
