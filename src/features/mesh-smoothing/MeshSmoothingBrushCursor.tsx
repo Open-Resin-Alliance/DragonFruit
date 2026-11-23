@@ -167,6 +167,10 @@ export function MeshSmoothingBrushCursor() {
       <instancedMesh
         ref={markerRef}
         args={[undefined, undefined, MAX_MARKER_INSTANCES]}
+        // Born empty. The cursor mounts when the pointer first reaches the model, after
+        // the effect above has already run against no mesh; at the constructor's count
+        // every instance drew at the origin, a highlight-coloured disc at the plate centre.
+        count={0}
         renderOrder={99998}
         frustumCulled={false}
         onBeforeRender={() => {
