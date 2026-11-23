@@ -199,48 +199,39 @@ describe('a CLI save keeps what the app wrote', () => {
     }
   });
 
-  test('mesh hashes, and the linked pair still sharing one chunk (#1057)', async () => {
+  test('mesh hashes, and the linked pair still sharing one chunk', () => {
     assert.equal(chunksOfType(readVoxlChunks(appBytes), 'MESH').size, 2, 'the app should share the chunk');
-    await knownFailure('#1057', () => {
-      assert.deepEqual(cli.document.models.map(meshSharing), app.document.models.map(meshSharing));
-      assertSameChunks(
-        chunksOfType(readVoxlChunks(cliBytes), 'MESH'),
-        chunksOfType(readVoxlChunks(appBytes), 'MESH'),
-      );
-    });
+    assert.deepEqual(cli.document.models.map(meshSharing), app.document.models.map(meshSharing));
+    assertSameChunks(
+      chunksOfType(readVoxlChunks(cliBytes), 'MESH'),
+      chunksOfType(readVoxlChunks(appBytes), 'MESH'),
+    );
   });
 
-  test('original full-resolution meshes (#924)', async () => {
-    await knownFailure('#924', () => {
-      assertSameChunks(
-        chunksOfType(readVoxlChunks(cliBytes), 'ORIG'),
-        chunksOfType(readVoxlChunks(appBytes), 'ORIG'),
-      );
-    });
+  test('original full-resolution meshes', () => {
+    assertSameChunks(
+      chunksOfType(readVoxlChunks(cliBytes), 'ORIG'),
+      chunksOfType(readVoxlChunks(appBytes), 'ORIG'),
+    );
   });
 
-  test('material profiles (#1057)', async () => {
-    await knownFailure('#1057', () => {
-      assert.deepEqual(cli.document.materials, app.document.materials);
-    });
+  test('material profiles', () => {
+    assert.deepEqual(cli.document.materials, app.document.materials);
   });
 
-  test('split bodies and their material state (#1057)', async () => {
-    await knownFailure('#1057', () => {
-      assert.deepEqual(cli.document.models.map(bodyFields), app.document.models.map(bodyFields));
-      assertSameChunks(
-        chunksOfType(readVoxlChunks(cliBytes), 'BODY'),
-        chunksOfType(readVoxlChunks(appBytes), 'BODY'),
-      );
-    });
+  test('split bodies and their material state', () => {
+    assert.deepEqual(cli.document.models.map(bodyFields), app.document.models.map(bodyFields));
+    assertSameChunks(
+      chunksOfType(readVoxlChunks(cliBytes), 'BODY'),
+      chunksOfType(readVoxlChunks(appBytes), 'BODY'),
+    );
   });
 
-  test('no other chunk is lost, added or changed', () => {
-    // META carries the timestamps; the others have their own cases.
-    const OWN_CASES = new Set(['META', 'MODL', 'MESH', 'ORIG', 'MATP', 'BODY']);
-    const rest = (chunks: Map<string, Uint8Array>) =>
-      new Map([...chunks].filter(([key]) => !OWN_CASES.has(key.slice(0, 4))));
-    assertSameChunks(rest(readVoxlChunks(cliBytes)), rest(readVoxlChunks(appBytes)));
+  test('every chunk but META byte for byte, so nothing is lost, added or changed', () => {
+    // META carries the timestamps, compared above without them.
+    const withoutMeta = (chunks: Map<string, Uint8Array>) =>
+      new Map([...chunks].filter(([key]) => !key.startsWith('META[')));
+    assertSameChunks(withoutMeta(readVoxlChunks(cliBytes)), withoutMeta(readVoxlChunks(appBytes)));
   });
 });
 
