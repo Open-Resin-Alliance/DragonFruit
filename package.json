@@ -4,7 +4,7 @@
   "buildChannel": "release",
   "private": true,
   "engines": {
-    "node": ">=22.23.2 <23"
+    "node": ">=22.23.5 <23"
   },
   "scripts": {
     "bench:import-postprocess": "node --import tsx --import ./scripts/test-unit/register.mjs scripts/bench-import-postprocess.ts",
@@ -91,7 +91,7 @@
     "jszip": "^3.10.1",
     "lucide-react": "^0.563.0",
     "manifold-3d": "^3.4.1",
-    "next": "^16.4.3",
+    "next": "^16.4.6",
     "react": "19.2.0",
     "react-colorful": "^5.6.1",
     "react-dom": "19.2.0",
@@ -118,7 +118,7 @@
     "babel-plugin-react-compiler": "1.0.0",
     "esbuild": "^0.25.12",
     "eslint": "^9.39.3",
-    "eslint-config-next": "^16.3.8",
+    "eslint-config-next": "^16.4.6",
     "knip": "^6.32.2",
     "tailwindcss": "^4.1.16",
     "tsx": "^4.7.0",
