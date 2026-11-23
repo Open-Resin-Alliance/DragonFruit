@@ -9,6 +9,7 @@ import {
     typesMissingContactOverride,
     removalShapeFor, type SupportRemovalResult } from './supportTypeRegistry';
 import { collectCascade, groupByCollection, ownedPrimitives, type EntityRef } from './supportCascade';
+import { modelCascadeSeeds } from './PlacementLogic/SupportModelLinker';
 import { pushSupportHistory } from './history/supportHistory';
 import { supportSettleFor } from './settle/seam';
 import { collectOwnedRootIds, hasSupportUpdater, hostKnotFieldsFor, typeIdForCollection, updateSupportEntity, JOINT_REMOVAL_TYPES, MODEL_ID_COLLECTION_KEYS, bundledSupportTypeId, parseKnotHostId, parsePrefixedSegmentId, isKnotHostId, isConeKnotHost, isSpanKnotHost, knotHostId, CONE_KNOT_HOST_TYPES, SPAN_KNOT_HOST_TYPES, SUPPORT_COLLECTION_KEYS, contactEndpointsFor, EDITABLE_SUPPORT_TYPES, hasSettingsInference, inferSupportSettings, isEditableSupportType, registerCollectionRestore, collectionsMissingRestore, registerSettingsInference, transformExtrasFor, type SupportTypeDescriptor, createEmptySupportCollections, getSupportTypeDescriptor, registerKnotDiameterRule, registerSupportUpdater, registerSupportTypeResolver, resolveKnotDiameter, resolveSupportTypeIdOf, type SupportEntityFor, SUPPORT_STATE_COLLECTIONS, SUPPORT_TYPES, type SupportTypeId, type JointRemovalTypeId } from './supportTypeRegistry';
@@ -346,15 +347,7 @@ export function removeSupportEntitiesForModel(modelId: string): number {
  * per model.
  */
 export function removeSupportEntitiesForModels(modelIds: Iterable<string>): number {
-    const targets = new Set(modelIds);
-    const seeds: EntityRef[] = [];
-    for (const descriptor of SUPPORT_TYPES) {
-        const collection = descriptor.location.key;
-        for (const entity of Object.values(state[collection])) {
-            const owned = entity as unknown as { id: string; modelId?: string };
-            if (owned.modelId !== undefined && targets.has(owned.modelId)) seeds.push({ collection, id: owned.id });
-        }
-    }
+    const seeds = modelCascadeSeeds({ collections: state, modelIds });
     if (seeds.length === 0) return 0;
 
     removeSupportEntities(seeds);
