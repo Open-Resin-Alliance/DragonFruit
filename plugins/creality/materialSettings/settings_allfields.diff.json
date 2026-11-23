@@ -1,0 +1,28 @@
+{
+  "$inherit": "twostage",
+  "displayName": "cxdlpv4 Resin Settings (All Fields)",
+  "fields": [
+    {
+      "key": "bottomLightOffDelaySec",
+      "label": "Burn-in Light Off Delay (s)",
+      "kind": "number",
+      "defaultValue": 1,
+      "min": 0,
+      "max": 120,
+      "step": 0.01,
+      "placement": { "tabId": "simple", "sectionId": "timing", "cardId": "timing-settings", "order": 10 },
+      "metadataPath": "cxdlpv4.bottomLightOffDelaySec"
+    },
+    {
+      "key": "bottomProjectorPwmPercent",
+      "label": "Burn-in Projector PWM (%)",
+      "kind": "number",
+      "defaultValue": 100,
+      "min": 1,
+      "max": 100,
+      "step": 1,
+      "placement": { "tabId": "simple", "sectionId": "light", "cardId": "light-settings", "order": 75 },
+      "metadataPath": "cxdlpv4.bottomProjectorPwmPercent"
+    }
+  ]
+}
