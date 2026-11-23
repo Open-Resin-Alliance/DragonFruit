@@ -3643,7 +3643,7 @@ export function useSceneCollectionManager(options?: {
         progress: null,
       });
     }
-  }, [_, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, requestMeshRepairConfirmation, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, isActivePlateLocked, requestMeshRepairConfirmation, trackRecentOpenedFiles, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -6245,7 +6245,7 @@ export function useSceneCollectionManager(options?: {
     }
 
     return createdIds;
-  }, [_, activeModelId, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, footprintForTransform, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+  }, [_, activeModelId, activePlateRect, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, footprintForTransform, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
   const duplicateModelWithTransforms = useCallback((
     sourceId: string,
@@ -6947,7 +6947,7 @@ export function useSceneCollectionManager(options?: {
         });
       }
     }
-  }, [_, emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestMissingPrinterPluginChoice, requestSceneImportHollowingChoice, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestMissingPrinterPluginChoice, requestSceneImportHollowingChoice, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
@@ -7624,7 +7624,7 @@ export function useSceneCollectionManager(options?: {
         });
       }
     }
-  }, [_, cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, waitForUiYield]);
+  }, [_, applyBundleTankAssignments, cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, modelFootprintRect, remapImportedMaterialReferences, requestMissingPrinterPluginChoice, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm, waitForUiYield]);
 
   const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
