@@ -102,6 +102,23 @@ async function loadVoxl(path: string): Promise<VoxlDocumentV1> {
   return result.document;
 }
 
+/**
+ * Give `copyId` the geometry `sourceId` was loaded with: its mesh, its original
+ * and its split bodies. A copy has a new id, and the save looks geometry up by
+ * id, so without this it is written with no mesh at all. Sharing the bytes also
+ * lets the writer store the copy's mesh in the source's chunk.
+ */
+function shareLoadedGeometry(sourceId: string, copyId: string): void {
+  const mesh = LOADED_MESH_BYTES.get(sourceId);
+  if (mesh) LOADED_MESH_BYTES.set(copyId, mesh);
+  const original = LOADED_ORIG_BYTES.get(sourceId);
+  if (original) LOADED_ORIG_BYTES.set(copyId, original);
+  const originalChunk = LOADED_ORIG_CHUNKS.get(sourceId);
+  if (originalChunk) LOADED_ORIG_CHUNKS.set(copyId, originalChunk);
+  const bodies = LOADED_BODY_CHUNKS.get(sourceId);
+  if (bodies) LOADED_BODY_CHUNKS.set(copyId, bodies);
+}
+
 type VoxlSaveSource = {
   input: BuildVoxlDocumentInput;
   meshBytes: Map<number, Uint8Array>;
@@ -431,6 +448,7 @@ async function sceneDuplicate(args: ReturnType<typeof parseArgs>): Promise<void>
     copy.transform.position.x += offset.x * i;
     copy.transform.position.y += offset.y * i;
     copy.transform.position.z += offset.z * i;
+    shareLoadedGeometry(source.id, copy.id);
     doc.models.push(copy);
     newIds.push(copy.id);
   }

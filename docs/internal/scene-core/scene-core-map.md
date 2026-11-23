@@ -308,7 +308,7 @@ Each user-level GUI operation against the TypeScript CLI. **Full** = same rule, 
 | Grouping | Group / ungroup | scene group / ungroup | **Partial** | Different storage; neither sees the other's groups (B6). |
 | Grouping | List groups | scene list-groups | **Partial** | Always 0 on an app-saved scene. |
 | Grouping | Rename group | — | **Missing** | |
-| Duplicate/arrange | Duplicate with layout | scene duplicate | **Partial** | CLI: fixed offset, different names, no group, no supports (issue #937); copies may be meshless (B1). |
+| Duplicate/arrange | Duplicate with layout | scene duplicate | **Partial** | CLI: fixed offset, different names, no group, no supports (issue #937). Copies carry their source's geometry since B1 (#923). |
 | Duplicate/arrange | Arrange | scene arrange | **Partial** | Same algorithm, but CLI packs all onto plate 1: no offsets, locks, new beds, support footprints. |
 | Clipboard | Copy / cut / paste | — | **Missing** | Clipboard is UI; paste placement is a rule (placement group). |
 | Plates | Add / remove / rename plate | — | **Missing** | CLI can keep plates through a save but not change them. |
@@ -528,7 +528,7 @@ confirmed the bug and where it is tracked (B1, B2, B3, B5, B6; B3 and B5 are alr
 
 | ID | Suspected bug | Where | Status | Impact |
 | --- | --- | --- | --- | --- |
-| B1 | CLI `scene duplicate` saves copies with no mesh | sceneDuplicate and toBuildInput in dragonfruit-ts-cli.ts | Confirmed by maintainer (ran it). Open: issue #923. | High |
+| B1 | CLI `scene duplicate` saves copies with no mesh | sceneDuplicate and toBuildInput in dragonfruit-ts-cli.ts | Confirmed by maintainer (ran it). Fixed: each copy shares its source's mesh, original and bodies (issue #923). | High |
 | B2 | CLI save drops ORIG (full-res original) chunks and the sha map | toBuildInput in dragonfruit-ts-cli.ts | Confirmed by maintainer. Fixed: a CLI save writes back the ORIG chunks and mesh hashes it loaded (issue #924). | High |
 | B11 | CLI save drops material profiles (MATP), split bodies (BODY and the body fields) and mesh hashes, so shared mesh chunks are written once per model | toBuildInput in dragonfruit-ts-cli.ts | Found by the round trip test (`cliSaveRoundTrip.test.ts`). Fixed: a CLI save writes back what it loaded (issue #1057). | Med |
 | B3 | Ctrl+S saves only visible models (and their supports) | performTopBarSaveScene in page.tsx | Confirmed by maintainer. Fixed on dev by PR #942 (issue #925; 0.2.x backport PR #944). | Med |

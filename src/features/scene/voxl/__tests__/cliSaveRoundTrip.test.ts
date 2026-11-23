@@ -18,9 +18,7 @@ import { meshLike, readVoxlChunks, testModel } from './voxlTestSupport';
  * ADR-0045 rule 6: a CLI save keeps every field the writer accepts. The scene is
  * written by the app's writer, put through the CLI's own load and save by a
  * command that changes nothing, and read back: whatever differs, the CLI lost.
- *
- * A case that fails because of a known bug is wrapped in `knownFailure`, which
- * fails the other way round once the bug is fixed, so the fix has to remove it.
+ * `scene duplicate` gets the same check for the copies it adds.
  */
 
 const CLI = resolve(fileURLToPath(import.meta.url), '../../../../../../scripts/dragonfruit-ts-cli.ts');
@@ -31,15 +29,6 @@ function runCli(...args: string[]): string {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-}
-
-/** Expect `check` to fail on `issue`; once it passes, the mark must go. */
-async function knownFailure(issue: string, check: () => void | Promise<void>): Promise<void> {
-  await assert.rejects(
-    async () => check(),
-    assert.AssertionError,
-    `${issue} looks fixed: remove its knownFailure mark`,
-  );
 }
 
 const MESH_A = meshLike(1);
@@ -100,6 +89,17 @@ function appScene(): { input: BuildVoxlDocumentInput; meshBytes: Map<number, Uin
   };
 }
 
+/** The scene as the app saves it, hashes and originals included. */
+async function writeAppScene(): Promise<Uint8Array> {
+  const { input, meshBytes, originals } = appScene();
+  // The app hands the writer each mesh's hash, which is what lets it share a chunk.
+  const sha256 = new Map([...meshBytes].map(([index, bytes]) => [index, createHash('sha256').update(bytes).digest('hex')]));
+  return serializeVoxlDocumentV2(input, meshBytes, sha256, {
+    originalMeshBytes: originals,
+    embedOriginalMesh: true,
+  });
+}
+
 /** The model fields that belong to multi-body material state, compared on their own. */
 const BODY_FIELDS = ['bodyCount', 'bodyMaterialProfileIds', 'bodyColors'] as const;
 
@@ -145,13 +145,7 @@ describe('a CLI save keeps what the app wrote', () => {
 
   before(async () => {
     dir = mkdtempSync(join(tmpdir(), 'df-cli-roundtrip-'));
-    const { input, meshBytes, originals } = appScene();
-    // The app hands the writer each mesh's hash, which is what lets it share a chunk.
-    const sha256 = new Map([...meshBytes].map(([index, bytes]) => [index, createHash('sha256').update(bytes).digest('hex')]));
-    appBytes = await serializeVoxlDocumentV2(input, meshBytes, sha256, {
-      originalMeshBytes: originals,
-      embedOriginalMesh: true,
-    });
+    appBytes = await writeAppScene();
     const path = join(dir, 'scene.voxl');
     writeFileSync(path, appBytes);
 
@@ -235,27 +229,53 @@ describe('a CLI save keeps what the app wrote', () => {
   });
 });
 
-describe('scene duplicate keeps the source mesh', () => {
-  test('each copy carries the mesh of its source (#923)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'df-cli-duplicate-'));
-    try {
-      const { input, meshBytes } = appScene();
-      const path = join(dir, 'scene.voxl');
-      writeFileSync(path, await serializeVoxlDocumentV2(input, meshBytes));
+describe('scene duplicate gives each copy its source geometry', () => {
+  let dir: string;
+  let source: ParsedVoxlResult;
+  let parsed: ParsedVoxlResult;
+  let appBytes: Uint8Array;
+  let bytes: Uint8Array;
+  let duplicated: string[];
 
-      const { duplicated } = JSON.parse(
-        runCli('scene', 'duplicate', path, '--id', 'm-b', '--count', '2', '--json'),
-      ) as { duplicated: string[] };
-      assert.equal(duplicated.length, 2);
+  before(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'df-cli-duplicate-'));
+    appBytes = await writeAppScene();
+    const path = join(dir, 'scene.voxl');
+    writeFileSync(path, appBytes);
 
-      const parsed = await parseVoxlBinaryV2(new Uint8Array(readFileSync(path)));
-      await knownFailure('#923', () => {
-        for (const id of duplicated) {
-          assert.deepEqual(parsed.meshBytes.get(id), MESH_B, `copy ${id} has no mesh`);
-        }
-      });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    ({ duplicated } = JSON.parse(
+      runCli('scene', 'duplicate', path, '--id', 'm-b', '--count', '2', '--json'),
+    ) as { duplicated: string[] });
+
+    bytes = new Uint8Array(readFileSync(path));
+    source = await parseVoxlBinaryV2(appBytes);
+    parsed = await parseVoxlBinaryV2(bytes);
+  });
+
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  test('two copies', () => {
+    assert.equal(duplicated.length, 2);
+  });
+
+  test('each copy carries the mesh of its source', () => {
+    for (const id of duplicated) {
+      assert.deepEqual(parsed.meshBytes.get(id), MESH_B, `copy ${id} has no mesh`);
+    }
+  });
+
+  test('the copies share the source mesh chunk instead of adding their own', () => {
+    assertSameChunks(chunksOfType(readVoxlChunks(bytes), 'MESH'), chunksOfType(readVoxlChunks(appBytes), 'MESH'));
+  });
+
+  test('each copy keeps the source original and split bodies', () => {
+    const sourceBodies = source.bodyChunks?.get('m-b');
+    assert.ok(sourceBodies);
+    for (const id of duplicated) {
+      assert.deepEqual(parsed.originalMeshBytes?.get(id), ORIGINAL_B, `copy ${id} has no original`);
+      assert.deepEqual(parsed.bodyChunks?.get(id), sourceBodies, `copy ${id} has no bodies`);
+      const copy = parsed.document.models.find((model) => model.id === id);
+      assert.deepEqual(copy && bodyFields(copy), bodyFields(source.document.models[2]));
     }
   });
 });
