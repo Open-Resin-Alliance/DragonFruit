@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { DYNAMIC_PLATE_ORDERING, type PlateOrdering } from '../plateCascade';
+import * as plateLayout from '../plateLayout';
 import {
   computePlateFrames,
   modelsOnPlate,
@@ -43,35 +44,35 @@ test('plates are pitched by their footprint plus the cascade gap', () => {
 });
 
 test('a model belongs to the plate it stands on, whatever it was stored with', () => {
-  assert.equal(resolveModelPlateId(at('a', 0, 0), frames), 'p1');
-  assert.equal(resolveModelPlateId(at('b', 242.88, 0), frames), 'p2');
+  assert.equal(resolveModelPlateId({ model: at('a', 0, 0), frames }), 'p1');
+  assert.equal(resolveModelPlateId({ model: at('b', 242.88, 0), frames }), 'p2');
   // Dragged back onto the first bed: the stale membership loses.
-  assert.equal(resolveModelPlateId(at('c', 10, 10, 'p2'), frames), 'p1');
+  assert.equal(resolveModelPlateId({ model: at('c', 10, 10, 'p2'), frames }), 'p1');
 });
 
 test('off every plate, the stored membership decides, then the first plate', () => {
-  assert.equal(resolveModelPlateId(at('a', 1000, 1000, 'p2'), frames), 'p2');
-  assert.equal(resolveModelPlateId(at('b', 1000, 1000, 'gone'), frames), 'p1');
-  assert.equal(resolveModelPlateId(at('c', 1000, 1000), frames), 'p1');
-  assert.equal(resolveModelPlateId(at('d', 0, 0), []), '');
+  assert.equal(resolveModelPlateId({ model: at('a', 1000, 1000, 'p2'), frames }), 'p2');
+  assert.equal(resolveModelPlateId({ model: at('b', 1000, 1000, 'gone'), frames }), 'p1');
+  assert.equal(resolveModelPlateId({ model: at('c', 1000, 1000), frames }), 'p1');
+  assert.equal(resolveModelPlateId({ model: at('d', 0, 0), frames: [] }), '');
 });
 
 test('membership follows the model, unless the gesture names the plate', () => {
-  assert.equal(withPlateMembership(at('a', 242.88, 0, 'p1'), frames).plateId, 'p2');
-  assert.equal(withPlateMembership(at('b', 0, 0), frames, 'p2').plateId, 'p2');
+  assert.equal(withPlateMembership({ model: at('a', 242.88, 0, 'p1'), frames }).plateId, 'p2');
+  assert.equal(withPlateMembership({ model: at('b', 0, 0), frames, landedPlateId: 'p2' }).plateId, 'p2');
   const unframed = at('c', 0, 0, 'p2');
-  assert.equal(withPlateMembership(unframed, []), unframed, 'with no frames it keeps what it had');
+  assert.equal(withPlateMembership({ model: unframed, frames: [] }), unframed, 'with no frames it keeps what it had');
 });
 
 test('models on a plate keep their order', () => {
   const models = [at('a', 0, 0), at('b', 242.88, 0), at('c', -50, 20), at('d', 300, 0)];
-  assert.deepEqual(modelsOnPlate(models, 'p1', frames).map((m) => m.id), ['a', 'c']);
-  assert.deepEqual(modelsOnPlate(models, 'p2', frames).map((m) => m.id), ['b', 'd']);
+  assert.deepEqual(modelsOnPlate({ models, plateId: 'p1', frames }).map((m) => m.id), ['a', 'c']);
+  assert.deepEqual(modelsOnPlate({ models, plateId: 'p2', frames }).map((m) => m.id), ['b', 'd']);
 });
 
 test('a slice scope carries the plate\'s models, volume and offset', () => {
   const models = [at('a', 0, 0), at('b', 242.88, 0)];
-  assert.deepEqual(plateSliceScope(frames[1], models, frames), {
+  assert.deepEqual(plateSliceScope({ frame: frames[1], models, frames }), {
     plateId: 'p2',
     modelIds: ['b'],
     volumeBoundsMm: { minX: frames[1].minX, minY: frames[1].minY, maxX: frames[1].maxX, maxY: frames[1].maxY },
@@ -171,8 +172,16 @@ test('a scene left with one bed has nothing to re-lay', () => {
 
 test('any plate can be deleted, the first included, while another is left', () => {
   const three = Object.freeze([{ id: 'p1' }, { id: 'p2' }, { id: 'p3' }].map((plate) => Object.freeze(plate)));
-  assert.equal(plateCanBeRemoved(three, 'p1'), true);
-  assert.equal(plateCanBeRemoved(three, 'p3'), true);
-  assert.equal(plateCanBeRemoved(three, 'nope'), false, 'a plate that is not there');
-  assert.equal(plateCanBeRemoved(Object.freeze([Object.freeze({ id: 'p1' })]), 'p1'), false, 'the last plate stays');
+  assert.equal(plateCanBeRemoved({ plates: three, plateId: 'p1' }), true);
+  assert.equal(plateCanBeRemoved({ plates: three, plateId: 'p3' }), true);
+  assert.equal(plateCanBeRemoved({ plates: three, plateId: 'nope' }), false, 'a plate that is not there');
+  assert.equal(plateCanBeRemoved({ plates: Object.freeze([Object.freeze({ id: 'p1' })]), plateId: 'p1' }), false, 'the last plate stays');
+});
+
+test('every exported function takes one parameters object (ADR-0045 rule 4)', () => {
+  const functions = Object.entries(plateLayout).filter(([, value]) => typeof value === 'function');
+  assert.ok(functions.length > 0, 'the module exports functions');
+  for (const [name, fn] of functions) {
+    assert.equal((fn as (...args: unknown[]) => unknown).length, 1, `${name} takes one parameters object`);
+  }
 });

@@ -115,12 +115,36 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, width, wrapperC
     window.clearTimeout(delayTimerRef.current);
     delayTimerRef.current = null;
   };
+  // WebKit before 16.4 (the macOS 12 webview) dispatches no mouse events to a
+  // disabled control, so a pointer leaving a disabled trigger never sends the
+  // wrapper its `mouseleave` and the box stays up. While the pointer is in, a
+  // document listener checks it against the trigger's box instead.
+  const stopWatchingPointerRef = useRef<(() => void) | null>(null);
+  const stopWatchingPointer = () => {
+    stopWatchingPointerRef.current?.();
+    stopWatchingPointerRef.current = null;
+  };
+  const watchPointer = () => {
+    stopWatchingPointer();
+    const onMove = (e: PointerEvent) => {
+      const box = triggerRef.current?.getBoundingClientRect();
+      if (box && e.clientX >= box.left && e.clientX <= box.right && e.clientY >= box.top && e.clientY <= box.bottom) return;
+      handleMouseLeave();
+    };
+    document.addEventListener('pointermove', onMove, { capture: true, passive: true });
+    stopWatchingPointerRef.current = () => document.removeEventListener('pointermove', onMove, { capture: true });
+  };
+
   // Cancel a pending reveal on unmount, or a delayed tooltip would set state on a
   // component that is gone.
-  useEffect(() => clearDelay, []);
+  useEffect(() => () => {
+    clearDelay();
+    stopWatchingPointer();
+  }, []);
 
   const handleMouseEnter = (e: React.MouseEvent) => {
     clearDelay();
+    watchPointer();
     if (delayMs <= 0) {
       setHovered(true);
       setPos({ x: e.clientX, y: e.clientY });
@@ -143,6 +167,7 @@ export function Tooltip({ content, offsetY = 28, maxWidth = 260, width, wrapperC
 
   const handleMouseLeave = () => {
     clearDelay();
+    stopWatchingPointer();
     setHovered(false);
     setPos(null);
   };

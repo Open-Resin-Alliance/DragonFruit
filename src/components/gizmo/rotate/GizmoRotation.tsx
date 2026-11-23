@@ -4,7 +4,7 @@ import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react'
 import * as THREE from 'three';
 import { ThreeEvent, useThree, useFrame } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
-import { GIZMO_COLORS, GIZMO_DIAL_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
+import { GIZMO_COLORS, GIZMO_DIAL_COLORS, GIZMO_SIZES } from '../constants';
 import { beginGizmoDrag } from '../gizmoDragRegistry';
 import {
   DIAL_ANATOMY,
@@ -70,7 +70,6 @@ interface GizmoRotationProps {
   opacityScale?: number;
   interactionsEnabled?: boolean;
   suppressAxisAnimations?: boolean;
-  enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
   disableRingBillboard?: boolean;
   /** Scale factor for the rotation handle (diamond cones and pick sphere) relative to gizmo size */
@@ -142,7 +141,6 @@ export function GizmoRotation({
   opacityScale = 1,
   interactionsEnabled = true,
   suppressAxisAnimations = false,
-  enableLighting = true,
   gizmoPosition,
   disableRingBillboard = false,
   handleScale = 1.0,
@@ -205,7 +203,6 @@ export function GizmoRotation({
   const rotatingArcRef = useRef<THREE.Group>(null);
   const handleRootRef = useRef<THREE.Group>(null);
   const billboardGroupRef = useRef<THREE.Group>(null);
-  const pointLightRef = useRef<THREE.PointLight>(null);
   const { camera, gl } = useThree();
 
   useEffect(() => {
@@ -367,6 +364,27 @@ export function GizmoRotation({
     return Math.atan2(cameraDir.y, cameraDir.x);
   }, [axis, camera.position, gizmoPosition]);
 
+  // The handle's angle is smoothed toward the camera every frame, so a fresh
+  // ring would spend its first frames gliding in from its 45 degree resting
+  // angle. Pose it before the first draw instead: the gizmo has no opening
+  // animation, it appears already settled.
+  const hasPosedRef = useRef(false);
+  React.useLayoutEffect(() => {
+    if (hasPosedRef.current) return;
+    hasPosedRef.current = true;
+    if (disableRingBillboard) return;
+
+    // The ring's world matrix is only refreshed at draw time, which is after
+    // this effect; the camera-in-ring reading below needs it now.
+    ringGroupRef.current?.updateWorldMatrix(true, false);
+    const aligned = getCameraAlignedAngle();
+    handleAngleRef.current = aligned;
+    targetHandleAngleRef.current = aligned;
+
+    const cameraDir = new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
+    billboardRotationRef.current = Math.atan2(cameraDir.y, cameraDir.x);
+  }, [camera.position, disableRingBillboard, getCameraAlignedAngle, gizmoPosition]);
+
   React.useEffect(() => {
     if (disableRingBillboard) {
       if (isDragging) return;
@@ -414,10 +432,6 @@ export function GizmoRotation({
 
     if (pickMeshRef.current) {
       pickMeshRef.current.position.set(hx, hy, 0);
-    }
-
-    if (pointLightRef.current) {
-      pointLightRef.current.position.set(hx, hy, 0);
     }
 
     if (!disableRingBillboard) {
@@ -707,13 +721,6 @@ export function GizmoRotation({
       ? GIZMO_COLORS.active
       : ringColors.ring;
 
-  // Point light intensity based on state (uses effectiveHovered for GPU picking support)
-  const lightIntensity = isActive
-    ? GIZMO_LIGHTING.pointLightIntensity.active
-    : effectiveHovered
-    ? GIZMO_LIGHTING.pointLightIntensity.hovered
-    : GIZMO_LIGHTING.pointLightIntensity.idle;
-
   const frontArcPoints = useMemo(() => getCachedRotationArcPoints('front'), []);
   const backArcPoints = useMemo(() => getCachedRotationArcPoints('back'), []);
 
@@ -750,15 +757,6 @@ export function GizmoRotation({
         <meshBasicMaterial visible={false} />
       </mesh>
 
-      <Line
-        points={backArcPoints}
-        color={isDimmed ? dimmedColor : ringColor}
-        lineWidth={0.8}
-        transparent
-        opacity={Math.max(0, opacity * 0.26)}
-        depthTest={false}
-      />
-
       {/* Protractor dial, anchored at the grab. Mounted in the ring's own frame
           and NOT inside the camera-following arc group below: fixed angular
           positions inside a camera-following frame would drift away from the
@@ -776,6 +774,17 @@ export function GizmoRotation({
 
       {/* Rotating group to keep colored arc facing camera - uses same angle as handle */}
       <group ref={rotatingArcRef}>
+        {/* Faint remainder of the circle, 270 degrees against the bright arc's
+            90, in the same frame so the two always complete each other */}
+        <Line
+          points={backArcPoints}
+          color={isDimmed ? dimmedColor : ringColor}
+          lineWidth={0.8}
+          transparent
+          opacity={Math.max(0, opacity * 0.26)}
+          depthTest={false}
+        />
+
         {/* Front arc with gradient - pure color at center, lighter at ends */}
         <mesh geometry={arcGeometry} scale={ringIsActive ? 1.02 : 1.0}>
           <meshBasicMaterial
@@ -869,18 +878,6 @@ export function GizmoRotation({
           </group>
         </group>
       </group>
-
-      {/* Point light at diamond handle to cast colored light on model */}
-      {enableLighting && !isDimmed && (
-        <pointLight
-          ref={pointLightRef}
-          position={initialHandlePos}
-          color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : diamondPrimaryColor}
-          intensity={lightIntensity}
-          distance={GIZMO_LIGHTING.pointLightDistance}
-          decay={GIZMO_LIGHTING.pointLightDecay}
-        />
-      )}
     </group>
   );
 }

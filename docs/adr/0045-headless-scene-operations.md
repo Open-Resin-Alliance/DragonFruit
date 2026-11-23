@@ -88,10 +88,10 @@ fixes since 2026-09-20).
   every plate's world rect and cascade offset (`PlateFrame`), what the manager
   computes today in its `plateFrames` memo. The local rect each plate starts from,
   restated at four other sites in the manager, comes from one helper.
-- `resolveModelPlateId(model, frames)` returns the plate a model stands on: the
+- `resolveModelPlateId({ model, frames })` returns the plate a model stands on: the
   frame containing its position, else its stored `plateId` if that plate exists,
   else the first plate. Today's rule, unchanged.
-- `modelsOnPlate(models, plateId, frames)` replaces the inline filters.
+- `modelsOnPlate({ models, plateId, frames })` replaces the inline filters.
 
 Consumers in the first change: the manager's `plateFrames` and
 `resolveModelPlateId`, `ExportPanelStack`'s slice scopes, and `scene slice`, which

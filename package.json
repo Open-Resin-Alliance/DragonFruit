@@ -1,16 +1,16 @@
 {
   "name": "dragonfruit",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "buildChannel": "beta",
   "private": true,
   "browserslist": [
     "chrome >= 119",
     "edge >= 119",
     "firefox >= 121",
-    "safari >= 17.4"
+    "safari >= 15.6"
   ],
   "engines": {
-    "node": ">=24.22.2 <25"
+    "node": ">=24.22.3 <25"
   },
   "scripts": {
     "bench:import-postprocess": "node --import tsx --import ./scripts/test-unit/register.mjs scripts/bench-import-postprocess.ts",
@@ -70,10 +70,10 @@
     "tauri:bundle:macos:universal": "node scripts/tauri-bundle-macos-universal.mjs",
     "tauri:bundle:windows": "node scripts/tauri-build.mjs --target x86_64-pc-windows-msvc --bundles nsis",
     "tauri:dev": "node scripts/tauri-dev.mjs",
-    "test": "node --import tsx --import ./scripts/test-unit/register.mjs --test 'src/**/*.test.{ts,tsx}' 'plugins/**/*.test.{ts,tsx}'",
+    "test": "node --import tsx --import ./scripts/test-unit/register.mjs --test \"src/**/*.test.{ts,tsx}\" \"plugins/**/*.test.{ts,tsx}\"",
     "pretest:dom": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins && npm run generate:support-registrations && npm run generate:support-renderers",
-    "test:dom": "node --import tsx --import ./scripts/test-dom/register.mjs --test 'src/**/*.dom-test.tsx'",
-    "test:watch": "node --import tsx --import ./scripts/test-unit/register.mjs --test --watch 'src/**/*.test.{ts,tsx}' 'plugins/**/*.test.{ts,tsx}'",
+    "test:dom": "node --import tsx --import ./scripts/test-dom/register.mjs --test \"src/**/*.dom-test.tsx\"",
+    "test:watch": "node --import tsx --import ./scripts/test-unit/register.mjs --test --watch \"src/**/*.test.{ts,tsx}\" \"plugins/**/*.test.{ts,tsx}\"",
     "generate:support-registrations": "node scripts/generate-support-registrations.mjs",
     "generate:support-renderers": "node scripts/generate-support-renderers.mjs",
     "prebench:auto-supports": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins && npm run generate:support-registrations && npm run generate:support-renderers",
@@ -97,7 +97,7 @@
     "jszip": "^3.10.1",
     "lucide-react": "^0.563.0",
     "manifold-3d": "^3.4.1",
-    "next": "^16.4.3",
+    "next": "^16.4.6",
     "react": "19.2.0",
     "react-colorful": "^5.6.1",
     "react-dom": "19.2.0",
@@ -124,7 +124,7 @@
     "babel-plugin-react-compiler": "1.0.0",
     "esbuild": "^0.25.12",
     "eslint": "^9.39.3",
-    "eslint-config-next": "^16.3.8",
+    "eslint-config-next": "^16.4.6",
     "knip": "^6.32.2",
     "tailwindcss": "^4.1.16",
     "tsx": "^4.7.0",

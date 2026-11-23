@@ -74,28 +74,6 @@ export const GIZMO_SIZES: GizmoSizes = {
   scaleHexagonDepth: 0.3,  // Increased 50% (was 0.2)
 };
 
-export const GIZMO_LIGHTING = {
-  // Emissive intensity for materials
-  emissiveIntensity: {
-    idle: 1.2,
-    hovered: 3.2,
-    active: 5.2,
-  },
-  
-  // Point light intensity for casting light on model
-  pointLightIntensity: {
-    idle: 0.9,
-    hovered: 2.2,
-    active: 3.2,
-  },
-  
-  // Point light distance (how far the light reaches)
-  pointLightDistance: 6.2,
-  
-  // Point light decay (how quickly light fades)
-  pointLightDecay: 1.15,
-};
-
 export const DEFAULT_GIZMO_CONFIG = {
   enableMove: true,
   enableRotate: false,
@@ -104,7 +82,6 @@ export const DEFAULT_GIZMO_CONFIG = {
   showCenter: true,
   size: 1.0,
   opacity: 1.0,
-  enableLighting: true,  // Enable by default, users can disable for performance
   constrainToSurface: false,
   constrainToPlane: false,
   axisLock: null,
