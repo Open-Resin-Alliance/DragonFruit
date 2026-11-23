@@ -182,6 +182,24 @@ export function plateFrameFor({
 }
 
 /**
+ * The middle of the plate `plateId` in world coordinates, or of the first plate when
+ * the id is gone: where new work lands, and where centring a selection puts it.
+ */
+export function plateCenterFor({
+  frames,
+  plateId,
+  footprint,
+}: {
+  frames: readonly PlateFrame[];
+  plateId: string | null | undefined;
+  footprint: PlateFootprint;
+}): { x: number; y: number } {
+  const { centerX, centerY } = plateLocalRect(footprint);
+  const frame = plateFrameFor({ frames, plateId });
+  return { x: centerX + (frame?.dxMm ?? 0), y: centerY + (frame?.dyMm ?? 0) };
+}
+
+/**
  * The plate a model stands on.
  *
  * Where it stands is what counts: every plate is a valid build volume, and a

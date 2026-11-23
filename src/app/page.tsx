@@ -252,7 +252,7 @@ import {
   type ArrangeModel as HighPrecisionArrangeModel,
 } from '@/features/scene/arrange/highPrecisionArrange';
 import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
-import { appendedPlateSlots, modelsOnPlate, plateBuildArea, plateCanBeRemoved, plateLocalRect } from '@/features/scene/plates/plateLayout';
+import { appendedPlateSlots, modelsOnPlate, plateBuildArea, plateCanBeRemoved, plateCenterFor, plateLocalRect } from '@/features/scene/plates/plateLayout';
 
 // Domain Features
 import { useSceneCollectionManager, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
@@ -9301,14 +9301,25 @@ export default function Home() {
       selectedModelIds: scene.selectedModelIds,
       activeModelId: scene.activeModelId,
     });
-    const targetCenter = scene.view3dSettings.originMode === 'front_left'
-      ? new THREE.Vector2(scene.view3dSettings.widthMm * 0.5, scene.view3dSettings.depthMm * 0.5)
-      : new THREE.Vector2(0, 0);
+    // The middle of the plate being worked on: on plate 3, centring the selection
+    // used to send it to the middle of plate 1.
+    const { x, y } = plateCenterFor({
+      frames: scene.plateFrames,
+      plateId: scene.activePlateId,
+      footprint: {
+        widthMm: scene.view3dSettings.widthMm,
+        depthMm: scene.view3dSettings.depthMm,
+        originMode: scene.view3dSettings.originMode,
+      },
+    });
+    const targetCenter = new THREE.Vector2(x, y);
     applySelectionPositionUpdates(buildCenterSelectionUpdates(scene.models, targetIds, targetCenter));
   }, [
     applySelectionPositionUpdates,
     scene.activeModelId,
+    scene.activePlateId,
     scene.models,
+    scene.plateFrames,
     scene.selectedModelIds,
     scene.view3dSettings.depthMm,
     scene.view3dSettings.originMode,

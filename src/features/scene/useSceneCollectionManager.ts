@@ -20,6 +20,7 @@ import {
   computePlateFrames,
   modelsOnPlate,
   plateCanBeRemoved,
+  plateCenterFor,
   plateFrameFor,
   plateLocalRect,
   relaidPlateShifts,
@@ -2591,9 +2592,9 @@ export function useSceneCollectionManager(options?: {
    * every caller.
    */
   const defaultImportCenterXY = useMemo(() => {
-    const { centerX: localX, centerY: localY } = plateLocalRect(view3dSettings);
-    return new THREE.Vector2(localX + (activePlateFrame?.dxMm ?? 0), localY + (activePlateFrame?.dyMm ?? 0));
-  }, [activePlateFrame, view3dSettings]);
+    const { x, y } = plateCenterFor({ frames: plateFrames, plateId: activePlateId, footprint: view3dSettings });
+    return new THREE.Vector2(x, y);
+  }, [activePlateId, plateFrames, view3dSettings]);
 
   type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
