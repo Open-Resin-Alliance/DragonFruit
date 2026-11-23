@@ -9,6 +9,7 @@ import {
   hasDisplayGeometryInFlight,
   isDisplayGeometryPending,
   requestDisplayGeometry,
+  settleDisplayGeometry,
   settledDisplayGeometry,
   subscribeDisplayGeometry,
   wasEditedInPlace,
@@ -4227,6 +4228,11 @@ export function useSceneCollectionManager(options?: {
        * that previewed its change on the model (Mirror) passes the state from before it.
        */
       historyBefore?: { transform?: ModelTransform; supportState?: SupportState };
+      /**
+       * The new mesh's display mesh, when the operation has it already (Mirror). It
+       * lands with the mesh, so no frame draws the model without its AO.
+       */
+      displayGeometry?: THREE.BufferGeometry;
     },
   ) => {
     const currentModels = modelsRef.current;
@@ -4257,6 +4263,10 @@ export function useSceneCollectionManager(options?: {
       flatteningPlanes: target.geometry.flatteningPlanes,
       ...(nextEdgeGeometry ? { edgeGeometry: nextEdgeGeometry } : {}),
     };
+    if (options?.displayGeometry) {
+      settleDisplayGeometry(nextBufferGeometry, options.displayGeometry);
+      nextGeometry.displayGeometry = options.displayGeometry;
+    }
 
     if (!options?.deferPostProcessing) {
       deferAccelerateGeometry([nextGeometry]);

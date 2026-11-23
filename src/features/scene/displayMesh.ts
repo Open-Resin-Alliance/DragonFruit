@@ -167,6 +167,16 @@ export function settledDisplayGeometry(
 }
 
 /**
+ * Record `display` as the display mesh of `geometry`, for an operation that has it
+ * without refining: Mirror reflects the old one, AO and all, because a reflection
+ * keeps every edge length and every occluder. Deriving it afresh left the model
+ * drawing its own mesh, unoccluded, until the refine and the bake landed.
+ */
+export function settleDisplayGeometry(geometry: THREE.BufferGeometry, display: THREE.BufferGeometry): void {
+  settled.set(geometry, display);
+}
+
+/**
  * Derive the display mesh for `geometry` once, and tell the subscribers when it lands.
  * A second request for the same mesh shares the first.
  */

@@ -85,3 +85,24 @@ test('bakeMirrorIntoGeometry produces non-zero recomputed normals', () => {
   const len = Math.hypot(n[0], n[1], n[2]);
   assert.ok(len > 0.5);
 });
+
+test('a non-indexed mirror keeps every attribute on the corner it belongs to', () => {
+  // A display mesh is non-indexed and carries its baked AO per corner: swapping only
+  // the positions handed each corner its neighbour's occlusion.
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+    1, 0, 0,
+    0, 1, 0,
+    0, 0, 1,
+  ]), 3));
+  geom.setAttribute('aBakedAo', new THREE.BufferAttribute(new Float32Array([0.1, 0.2, 0.3]), 1));
+  const out = bakeMirrorIntoGeometry(geom, 'x');
+  const pos = out.getAttribute('position').array as Float32Array;
+  const ao = out.getAttribute('aBakedAo').array as Float32Array;
+  // The corner that was (0, 1, 0) with 0.2 is now the third, and still has 0.2.
+  assert.deepEqual([pos[6], pos[7], pos[8]].map(Math.abs), [0, 1, 0]);
+  assert.ok(Math.abs(ao[2] - 0.2) < 1e-6);
+  assert.ok(Math.abs(ao[1] - 0.3) < 1e-6);
+  assert.ok(Math.abs(ao[0] - 0.1) < 1e-6);
+  assert.ok(Math.abs(geom.getAttribute('aBakedAo').array[1] - 0.2) < 1e-6, 'the source is untouched');
+});
