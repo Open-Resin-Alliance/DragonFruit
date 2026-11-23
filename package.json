@@ -4,7 +4,7 @@
   "buildChannel": "release",
   "private": true,
   "engines": {
-    "node": ">=22.23.2 <23"
+    "node": ">=22.23.5 <23"
   },
   "scripts": {
     "bench:import-postprocess": "node --import tsx --import ./scripts/test-unit/register.mjs scripts/bench-import-postprocess.ts",
