@@ -10562,6 +10562,7 @@ export default function Home() {
     activeGeometry: scene.activeModel?.geometry.geometry ?? null,
     activeGeometryKey: scene.activeModel?.id ?? null,
     activeModelId: scene.activeModel?.id ?? null,
+    activeModelScale: scene.activeModel ? scene.activeModel.transform.scale.toArray() : null,
     commitParts: React.useCallback((parts: THREE.BufferGeometry[]) => {
       const target = scene.activeModel;
       if (!target) {
