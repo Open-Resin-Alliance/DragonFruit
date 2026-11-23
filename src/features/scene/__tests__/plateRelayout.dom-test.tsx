@@ -3,7 +3,9 @@ import { resolveObjectURL } from 'node:buffer';
 import test from 'node:test';
 import { useEffect } from 'react';
 import { getMultiPlateSettingsSnapshot, saveMultiPlateSettings } from '@/components/settings/multiPlatePreferences';
-import { PLATE_CASCADE_GAP_MM } from '@/features/scene/plates/plateCascade';
+import { PLATE_CASCADE_GAP_MM, VOXL_PLATE_ORIGIN_EXTENSION } from '@/features/scene/plates/plateCascade';
+import { serializeVoxlDocumentV2 } from '@/features/scene/voxl/codec-v2';
+import { testInput, testModel } from '@/features/scene/voxl/__tests__/voxlTestSupport';
 import { clearHistory, getUndoCount, redo, undo } from '@/history/historyStore';
 import { getSnapshot as getSupportSnapshot, loadFromImportFormat, resetStore as resetSupportStore } from '@/supports/state';
 import { SUPPORT_COLLECTION_KEYS } from '@/supports/supportTypeRegistry';
@@ -364,6 +366,40 @@ test('renaming a plate is a step undo takes back and redo puts back', async () =
 
     redo();
     await waitFor(() => plateNames()[1] === 'Azalea Berro', 'redo to put the rename back');
+  } finally {
+    await unmount();
+  }
+});
+
+test('a scene saved under the other origin opens with each model and its support on the same spot of the bed (#940)', async () => {
+  const { scene, positionOf, unmount } = await mountScene();
+
+  try {
+    const { widthMm, depthMm, originMode } = scene().view3dSettings;
+    assert.equal(originMode, 'center', 'the viewer measures from the middle of the bed');
+    // Saved under a front-left origin, a quarter of the way into the bed from its front-left corner.
+    const saved = { x: widthMm / 4, y: depthMm / 4 };
+    const input = testInput([testModel('cube', {
+      mesh: { mode: 'embedded-chunk', mimeType: 'model/stl' },
+      transform: { position: { ...saved, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+    })]);
+    input.supports = rootsUnder([{ id: 'cube', ...saved }]);
+    input.extensions = { [VOXL_PLATE_ORIGIN_EXTENSION]: 'front_left' };
+    const bytes = await serializeVoxlDocumentV2(input, new Map([[0, new TextEncoder().encode(CUBE_STL)]]));
+
+    assert.equal(await scene().importSceneFile(new File([bytes as BlobPart], 'scene.voxl')), true, 'the scene opens');
+    await waitFor(() => scene().models.length === 1, 'the scene to open');
+    await settle(50);
+
+    // The same spot, measured from the middle: a quarter of the bed short of it.
+    const [model] = scene().models;
+    const expected = { x: saved.x - widthMm / 2, y: saved.y - depthMm / 2 };
+    assert.deepEqual(positionOf(model.id), expected, 'the model keeps its place on the bed');
+    // The import gives the scene's supports ids of their own, so the root is found by its model.
+    const roots = Object.values(getSupportSnapshot().roots).filter((root) => root.modelId === model.id);
+    assert.equal(roots.length, 1, 'the model brought its support');
+    const { x, y } = roots[0].transform.pos;
+    assert.deepEqual({ x, y }, expected, 'its support follows it');
   } finally {
     await unmount();
   }

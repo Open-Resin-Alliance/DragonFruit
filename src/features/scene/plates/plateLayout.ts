@@ -308,6 +308,29 @@ export interface PlateShift {
 }
 
 /**
+ * How far every model moves when a scene laid out under one origin mode is opened under
+ * another: by how far the middle of a bed moves between the two frames, so a model keeps
+ * its place on its bed. Every bed's frame moves by the same amount, so one shift serves
+ * every model, on every plate.
+ *
+ * `was` is the footprint and origin the file was laid out with, `now` the viewer's. With
+ * the same origin there is nothing to do here: a change of build volume alone is
+ * `relaidPlateShifts`'s, which keeps each model where it was from its plate's origin.
+ */
+export function originModeShift({
+  was,
+  now,
+}: {
+  was: PlateFootprint;
+  now: PlateFootprint;
+}): PlateShift {
+  if (was.originMode === now.originMode) return { dxMm: 0, dyMm: 0 };
+  const from = plateLocalRect(was);
+  const to = plateLocalRect(now);
+  return { dxMm: to.centerX - from.centerX, dyMm: to.centerY - from.centerY };
+}
+
+/**
  * How far each model moves when the beds are re-laid, by model id. Models that stay
  * put are left out, so an empty map means nothing moves.
  *

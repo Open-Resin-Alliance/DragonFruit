@@ -7,6 +7,7 @@ import { buildSceneSaveContext } from '@/features/export/logic/sceneSaveContext'
 import { VoxlChunkCache } from '@/features/scene/voxl';
 import type { VoxlPrinterBundle } from '@/features/scene/voxl';
 import type { PlateOrdering } from '@/features/scene/plates/plateCascade';
+import type { PlateOriginMode } from '@/features/scene/plates/plateLayout';
 import type { LoadedModel, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 
 // ---------------------------------------------------------------------------
@@ -353,6 +354,8 @@ export type UseSceneAutosaveOptions = {
   printer?: VoxlPrinterBundle;
   /** The grid the beds are laid out on, saved with the file. */
   plateOrdering?: PlateOrdering;
+  /** The origin the beds are laid out with, saved with the file. */
+  plateOriginMode?: PlateOriginMode;
   enabled?: boolean;
   debounceMs?: number;
   cooldownMs?: number;
@@ -398,6 +401,7 @@ export function useSceneAutosave({
   plateName,
   printer,
   plateOrdering,
+  plateOriginMode,
   enabled = true,
   debounceMs = AUTOSAVE_DEBOUNCE_MS,
   cooldownMs = AUTOSAVE_COOLDOWN_MS,
@@ -428,6 +432,8 @@ export function useSceneAutosave({
   printerRef.current = printer;
   const plateOrderingRef = React.useRef(plateOrdering);
   plateOrderingRef.current = plateOrdering;
+  const plateOriginModeRef = React.useRef(plateOriginMode);
+  plateOriginModeRef.current = plateOriginMode;
   const enabledRef = React.useRef(enabled);
   enabledRef.current = enabled;
   const debounceMsRef = React.useRef(debounceMs);
@@ -597,6 +603,7 @@ export function useSceneAutosave({
               plates: platesRef.current,
               activePlateId: activePlateIdRef.current,
               plateOrdering: plateOrderingRef.current,
+              plateOriginMode: plateOriginModeRef.current,
               plateName: plateNameRef.current,
               printer: printerRef.current,
             }),

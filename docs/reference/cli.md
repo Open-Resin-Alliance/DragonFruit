@@ -213,9 +213,10 @@ on that plate are sliced, shifted back by the plate's offset so they land where
 they stand on it, and each model left out is named on stderr
 (`not sliced: 'Cube B' stands on plate 2`). Which plate a model stands on comes
 from `plateLayout.ts`, the same rule the app uses (see
-[ADR-0045](../adr/0045-headless-scene-operations.md)). The VOXL does not record
-the viewer's origin mode, so plates are laid out with the default centred
-origin. Every command that saves keeps the scene's plates, active plate and
+[ADR-0045](../adr/0045-headless-scene-operations.md)). Plates are laid out with
+the origin the scene was saved under (the `plateOriginMode` extension), and
+`scene arrange` writes its positions in that same frame; a scene that does not
+record one was laid out from the plate's centre, the app's default. Every command that saves keeps the scene's plates, active plate and
 embedded printer.
 
 Anti-aliasing is resolved by the same code as the slicing panel. Without flags

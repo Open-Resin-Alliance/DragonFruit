@@ -27,6 +27,7 @@ export function buildSceneSaveContext(
     plateName: source.plateName,
     printer: source.printer,
     plateOrdering: source.plateOrdering,
+    plateOriginMode: source.plateOriginMode,
     ...(exportThumbnailPng ? { exportThumbnailPng } : {}),
   };
 }

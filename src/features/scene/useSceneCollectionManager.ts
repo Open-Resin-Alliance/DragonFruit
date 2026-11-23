@@ -13,12 +13,15 @@ import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFla
 import {
   DYNAMIC_PLATE_ORDERING,
   VOXL_PLATE_ORDERING_EXTENSION,
+  VOXL_PLATE_ORIGIN_EXTENSION,
   readPlateOrdering,
+  readPlateOriginMode,
   type PlateOrdering,
 } from '@/features/scene/plates/plateCascade';
 import {
   computePlateFrames,
   modelsOnPlate,
+  originModeShift,
   plateCanBeRemoved,
   plateCenterFor,
   plateFrameFor,
@@ -7346,13 +7349,17 @@ export function useSceneCollectionManager(options?: {
       // stays centred on plate 2. The file's supports follow their models, because the shift
       // is the delta against the transforms captured above.
       const recordedLayoutMm = document.meta?.printer?.printer.buildVolumeMm;
+      // The origin the file's positions are measured from. A file that does not say is read
+      // in the viewer's own, as it always was.
+      const fileOriginMode = readPlateOriginMode(document.extensions?.[VOXL_PLATE_ORIGIN_EXTENSION])
+        ?? view3dSettings.originMode;
       if (recordedLayoutMm && scenePlates.plates.length > 1) {
         const filePlates = scenePlates.plates.map((plate) => ({ id: plate.id, name: plate.name ?? '' }));
         const shifted = modelsShiftedForRelaidPlates(filePlates, filePlates, importedModels, {
           laidOut: {
             widthMm: recordedLayoutMm.width,
             depthMm: recordedLayoutMm.depth,
-            originMode: view3dSettings.originMode,
+            originMode: fileOriginMode,
           },
           // The grid the file's beds were laid out on, which is what its model positions
           // are measured against. A file that does not say was written under the dynamic
@@ -7362,6 +7369,29 @@ export function useSceneCollectionManager(options?: {
             ?? DYNAMIC_PLATE_ORDERING,
         });
         if (shifted !== importedModels) importedModels.splice(0, importedModels.length, ...shifted);
+      }
+
+      // Saved under the other origin, every position is measured from another point of the
+      // bed: every model moves by how far the middle of a bed moves between the two frames,
+      // on one plate or many, and its supports follow it through the same delta.
+      const originShift = originModeShift({
+        was: {
+          widthMm: recordedLayoutMm?.width ?? view3dSettings.widthMm,
+          depthMm: recordedLayoutMm?.depth ?? view3dSettings.depthMm,
+          originMode: fileOriginMode,
+        },
+        now: {
+          widthMm: view3dSettings.widthMm,
+          depthMm: view3dSettings.depthMm,
+          originMode: view3dSettings.originMode,
+        },
+      });
+      if (originShift.dxMm !== 0 || originShift.dyMm !== 0) {
+        const offset = new THREE.Vector3(originShift.dxMm, originShift.dyMm, 0);
+        importedModels.splice(0, importedModels.length, ...importedModels.map((model) => ({
+          ...model,
+          transform: { ...model.transform, position: model.transform.position.clone().add(offset) },
+        })));
       }
 
       // "Off-plate" means standing on none of the file's beds, not off the bed being worked

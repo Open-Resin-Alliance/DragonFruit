@@ -10,6 +10,7 @@ import {
   plateCenterFor,
   plateFrameFor,
   modelsOnPlate,
+  originModeShift,
   plateCanBeRemoved,
   plateLocalRect,
   relaidPlateShifts,
@@ -250,6 +251,24 @@ test('a plate\'s centre is the middle of its own bed, in either origin mode', ()
     assert.deepEqual(plateCenterFor({ frames: three, plateId: 'gone', footprint: bed }), { x: local.centerX, y: local.centerY });
     assert.deepEqual(plateCenterFor({ frames: [], plateId: 'p1', footprint: bed }), { x: local.centerX, y: local.centerY });
   }
+});
+
+test('a scene opened under the other origin moves as far as the middle of a bed moves', () => {
+  const centred = footprint;
+  const cornered = { ...footprint, originMode: 'front_left' as const };
+  assert.deepEqual(originModeShift({ was: centred, now: centred }), { dxMm: 0, dyMm: 0 });
+  assert.deepEqual(originModeShift({ was: cornered, now: cornered }), { dxMm: 0, dyMm: 0 });
+  // A model in the middle of a front-left bed stands at (w/2, d/2); under a centred origin
+  // the middle is (0, 0), and the other way round.
+  assert.deepEqual(originModeShift({ was: cornered, now: centred }), { dxMm: -footprint.widthMm / 2, dyMm: -footprint.depthMm / 2 });
+  assert.deepEqual(originModeShift({ was: centred, now: cornered }), { dxMm: footprint.widthMm / 2, dyMm: footprint.depthMm / 2 });
+  // Saved on a smaller printer: the middle of the bed it was saved on lands in the middle of this one.
+  const small = { widthMm: 120, depthMm: 70, originMode: 'front_left' as const };
+  assert.deepEqual(originModeShift({ was: small, now: centred }), { dxMm: -60, dyMm: -35 });
+  assert.deepEqual(originModeShift({ was: { ...small, originMode: 'center' }, now: cornered }), {
+    dxMm: footprint.widthMm / 2,
+    dyMm: footprint.depthMm / 2,
+  });
 });
 
 test('every exported function takes one parameters object (ADR-0045 rule 4)', () => {

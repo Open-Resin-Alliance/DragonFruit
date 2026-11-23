@@ -9,6 +9,7 @@ import {
   plateCascadeCell,
   plateCascadeOffsetMm,
   readPlateOrdering,
+  readPlateOriginMode,
   type PlateOrdering,
 } from '../plateCascade';
 
@@ -152,4 +153,13 @@ test('a saved layout reads back, and anything else reads as nothing', () => {
   // Bounded on the way in too, so a hand-edited file cannot ask for 900 columns.
   assert.deepEqual(readPlateOrdering({ mode: 'fixed', columns: 900 }), { mode: 'fixed', columns: MAX_FIXED_PLATE_COLUMNS });
   assert.deepEqual(readPlateOrdering({ mode: 'fixed', columns: 'four' }), { mode: 'fixed', columns: DEFAULT_FIXED_PLATE_COLUMNS });
+});
+
+test('a saved origin reads back, and anything else reads as nothing', () => {
+  assert.equal(readPlateOriginMode('center'), 'center');
+  assert.equal(readPlateOriginMode('front_left'), 'front_left');
+  // A file written before the origin was recorded keeps the reader's own.
+  assert.equal(readPlateOriginMode(undefined), null);
+  assert.equal(readPlateOriginMode('frontLeft'), null);
+  assert.equal(readPlateOriginMode({ originMode: 'center' }), null);
 });
