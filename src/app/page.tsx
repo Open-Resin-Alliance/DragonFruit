@@ -301,7 +301,8 @@ import {
   subscribeHistoryOperations,
   undo,
 } from '@/history/historyStore';
-import type { HistoryDebugEvent, HistoryOrigin } from '@/history/types';
+import type { HistoryDebugEvent, HistoryOrigin, HistorySelection } from '@/history/types';
+import { resolveHistorySelection, sameHistorySelection } from '@/features/scene/historySelection';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
 import {
   getSceneAutosaveSettingsServerSnapshot,
@@ -5993,6 +5994,14 @@ export default function Home() {
   // setters exist further down this component.
   const historyOriginRef = React.useRef<HistoryOrigin>({ appMode: 'prepare', transformMode: 'select' });
   const restoreHistoryOriginRef = React.useRef<(origin: HistoryOrigin) => void>(() => {});
+  /**
+   * The undone entry's selection, applied once the entry's own changes have rendered,
+   * and the selection when it was undone: an entry that restores its own (a scene
+   * snapshot) has moved it by then, and is left to it.
+   */
+  const pendingHistorySelectionRef = React.useRef<{ saved: HistorySelection | undefined; before: HistorySelection | undefined } | null>(null);
+  /** Set when an undo moved the selection, so the camera follows once it has. */
+  const historyFocusPendingRef = React.useRef(false);
 
   React.useEffect(() => setHistoryOriginProvider(() => historyOriginRef.current), []);
 
@@ -6003,6 +6012,10 @@ export default function Home() {
       // Transform gizmo is up should put the Cut tool back, not silently reshape
       // geometry the current tool can't even show.
       if (action.origin) restoreHistoryOriginRef.current(action.origin);
+      pendingHistorySelectionRef.current = {
+        saved: action.origin?.selection,
+        before: historyOriginRef.current.selection,
+      };
 
       pendingHistoryTransformResyncRef.current = true;
       invalidatePendingTransformHistory();
@@ -7996,8 +8009,48 @@ export default function Home() {
   // always closes over today's mode — a stale closure would switch to the tool
   // that was current when the effect last ran.
   React.useEffect(() => {
-    historyOriginRef.current = { appMode: scene.mode, transformMode: transformMgr.transformMode };
-  }, [scene.mode, transformMgr.transformMode]);
+    historyOriginRef.current = {
+      appMode: scene.mode,
+      transformMode: transformMgr.transformMode,
+      selection: { activeModelId: scene.activeModelId, modelIds: [...scene.selectedModelIds] },
+    };
+  }, [scene.mode, transformMgr.transformMode, scene.activeModelId, scene.selectedModelIds]);
+
+  // Bring back the models the undone entry was made on. Run on the tick the history
+  // subscriber bumps, not in the subscriber: an undo that restores a deleted model
+  // only has it in `scene.models` once that render lands.
+  React.useEffect(() => {
+    const pending = pendingHistorySelectionRef.current;
+    pendingHistorySelectionRef.current = null;
+    if (!pending) return;
+    const current = { activeModelId: scene.activeModelId, modelIds: scene.selectedModelIds };
+    if (pending.before && !sameHistorySelection(pending.before, current)) {
+      historyFocusPendingRef.current = true;
+      return;
+    }
+    const byId = new Map(scene.models.map((model) => [model.id, model] as const));
+    const next = resolveHistorySelection(
+      pending.saved,
+      current,
+      (id) => {
+        const model = byId.get(id);
+        return Boolean(model) && !scene.isModelPlateLocked(model!);
+      },
+    );
+    if (!next) return;
+    scene.setSelectedModelIds(next.modelIds);
+    scene.setActiveModelId(next.activeModelId);
+    historyFocusPendingRef.current = true;
+    // Only the tick starts this; the rest is read as it stands when it fires.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyTransformResyncTick]);
+
+  // Then frame it, the way F does, once the camera controller has the new selection.
+  React.useEffect(() => {
+    if (!historyFocusPendingRef.current) return;
+    historyFocusPendingRef.current = false;
+    window.dispatchEvent(new Event('camera-fit-request'));
+  }, [scene.activeModelId, scene.selectedModelIds]);
 
   const historyOriginToolPendingRef = React.useRef(false);
 

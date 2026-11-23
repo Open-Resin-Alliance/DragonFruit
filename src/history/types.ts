@@ -14,6 +14,17 @@ export type HistoryDirection = 'undo' | 'redo';
 export interface HistoryOrigin {
   appMode: string;
   transformMode: string;
+  /**
+   * The models the edit was made on. Undo puts the tool back, and with two models
+   * on the plate it also has to put the model back: undoing a brush stroke on one
+   * while the other is selected reshaped a model nobody was looking at.
+   */
+  selection?: HistorySelection;
+}
+
+export interface HistorySelection {
+  activeModelId: string | null;
+  modelIds: string[];
 }
 
 export interface HistoryAction<Type extends string = string, Payload = unknown> {
