@@ -25,10 +25,11 @@ import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { basename, resolve, dirname } from 'path';
 import { execFileSync } from 'child_process';
+import { createHash } from 'crypto';
 import { createRequire } from 'module';
 import { v4 as uuidv4 } from 'uuid';
 import { parseVoxlAuto } from '../src/features/scene/voxl/codec';
-import { serializeVoxlDocumentV2 } from '../src/features/scene/voxl/codec-v2';
+import { decodeVoxlBodyChunk, serializeVoxlDocumentV2 } from '../src/features/scene/voxl/codec-v2';
 import { reportAddressesTriangleSoup } from '../src/features/scene/voxl/classification';
 import {
   DYNAMIC_PLATE_ORDERING,
@@ -38,8 +39,10 @@ import {
 import { computePlateFrames, plateSliceScope, resolveModelPlateId, type PlateSliceScope } from '../src/features/scene/plates/plateLayout';
 import type {
   BuildVoxlDocumentInput,
+  PrecompressedChunk,
   VoxlDocumentV1,
   VoxlModelEntry,
+  VoxlModelRuntimeLike,
 } from '../src/features/scene/voxl/types';
 import type {
   DragonfruitImportFormat,
@@ -84,36 +87,81 @@ let LOADED_MESH_BYTES = new Map<string, Uint8Array>();
 // decimated"; the slice path prefers these over the decimated MESH bytes so it
 // slices the same geometry the GUI would.
 let LOADED_ORIG_BYTES = new Map<string, Uint8Array>();
+// The same originals as stored (compressed), keyed by model id, so a save writes
+// them back as they were instead of inflating and recompressing them.
+let LOADED_ORIG_CHUNKS = new Map<string, PrecompressedChunk>();
+// Raw BODY chunks (split 3MF bodies), keyed by model id.
+let LOADED_BODY_CHUNKS = new Map<string, Uint8Array>();
 async function loadVoxl(path: string): Promise<VoxlDocumentV1> {
   const raw = readFileSync(path);
   const result = await parseVoxlAuto(raw);
   LOADED_MESH_BYTES = result.meshBytes;
   LOADED_ORIG_BYTES = result.originalMeshBytes ?? new Map();
+  LOADED_ORIG_CHUNKS = result.originalMeshChunks ?? new Map();
+  LOADED_BODY_CHUNKS = result.bodyChunks ?? new Map();
   return result.document;
 }
 
 /**
- * Adapt the in-memory V1-shaped document to the V2 writer's input.
- *
- * The writer keys pre-decoded mesh bytes by model *index*; `loadVoxl` holds
- * them by model *id*. A model with no loaded bytes keeps its `mesh` ref
- * unchanged (the writer emits no MESH chunk for its index).
+ * Give `copyId` the geometry `sourceId` was loaded with: its mesh, its original
+ * and its split bodies. A copy has a new id, and the save looks geometry up by
+ * id, so without this it is written with no mesh at all. Sharing the bytes also
+ * lets the writer store the copy's mesh in the source's chunk.
  */
-function toBuildInput(doc: VoxlDocumentV1): { input: BuildVoxlDocumentInput; meshBytes: Map<number, Uint8Array> } {
+function shareLoadedGeometry(sourceId: string, copyId: string): void {
+  const mesh = LOADED_MESH_BYTES.get(sourceId);
+  if (mesh) LOADED_MESH_BYTES.set(copyId, mesh);
+  const original = LOADED_ORIG_BYTES.get(sourceId);
+  if (original) LOADED_ORIG_BYTES.set(copyId, original);
+  const originalChunk = LOADED_ORIG_CHUNKS.get(sourceId);
+  if (originalChunk) LOADED_ORIG_CHUNKS.set(copyId, originalChunk);
+  const bodies = LOADED_BODY_CHUNKS.get(sourceId);
+  if (bodies) LOADED_BODY_CHUNKS.set(copyId, bodies);
+}
+
+type VoxlSaveSource = {
+  input: BuildVoxlDocumentInput;
+  meshBytes: Map<number, Uint8Array>;
+  sha256: Map<number, string>;
+  originals: Map<number, PrecompressedChunk>;
+};
+
+/**
+ * Adapt the in-memory V1-shaped document to the V2 writer's input, handing back
+ * everything `loadVoxl` read (ADR-0045 rule 6: a CLI save keeps every field).
+ *
+ * The writer keys pre-decoded mesh bytes, their hashes and the originals by model
+ * *index*; `loadVoxl` holds them by model *id*. A model with no loaded bytes keeps
+ * its `mesh` ref unchanged (the writer emits no MESH chunk for its index). The
+ * hashes are what let the writer store a mesh several models share only once.
+ */
+function toBuildInput(doc: VoxlDocumentV1): VoxlSaveSource {
   const meshBytes = new Map<number, Uint8Array>();
-  doc.models.forEach((model, index) => {
+  const sha256 = new Map<number, string>();
+  const originals = new Map<number, PrecompressedChunk>();
+  const models: VoxlModelRuntimeLike[] = doc.models.map((model, index) => {
     const bytes = LOADED_MESH_BYTES.get(model.id);
-    if (bytes) meshBytes.set(index, bytes);
+    if (bytes) {
+      meshBytes.set(index, bytes);
+      sha256.set(index, createHash('sha256').update(bytes).digest('hex'));
+    }
+    const original = LOADED_ORIG_CHUNKS.get(model.id);
+    if (original) originals.set(index, original);
+    const bodyChunk = LOADED_BODY_CHUNKS.get(model.id);
+    if (!bodyChunk) return model;
+    const { center, bodies } = decodeVoxlBodyChunk(bodyChunk);
+    return { ...model, bodies, bodyCenter: center };
   });
 
   const input: BuildVoxlDocumentInput = {
-    models: doc.models,
+    models,
     activeModelId: doc.scene.activeModelId,
     selectedModelIds: doc.scene.selectedModelIds,
     plates: doc.scene.plates,
     activePlateId: doc.scene.activePlateId,
     supports: doc.supports,
     extensions: doc.extensions,
+    ...(doc.materials ? { materials: doc.materials } : {}),
     meta: {
       generator: doc.meta.generator,
       generatorVersion: doc.meta.generatorVersion,
@@ -121,12 +169,15 @@ function toBuildInput(doc: VoxlDocumentV1): { input: BuildVoxlDocumentInput; mes
     },
   };
 
-  return { input, meshBytes };
+  return { input, meshBytes, sha256, originals };
 }
 
 async function saveVoxl(path: string, doc: VoxlDocumentV1): Promise<void> {
-  const { input, meshBytes } = toBuildInput(doc);
-  const bytes = await serializeVoxlDocumentV2(input, meshBytes);
+  const { input, meshBytes, sha256, originals } = toBuildInput(doc);
+  const bytes = await serializeVoxlDocumentV2(input, meshBytes, sha256, {
+    precompressedOriginal: originals,
+    embedOriginalMesh: true,
+  });
   writeFileSync(path, bytes);
 }
 
@@ -397,6 +448,7 @@ async function sceneDuplicate(args: ReturnType<typeof parseArgs>): Promise<void>
     copy.transform.position.x += offset.x * i;
     copy.transform.position.y += offset.y * i;
     copy.transform.position.z += offset.z * i;
+    shareLoadedGeometry(source.id, copy.id);
     doc.models.push(copy);
     newIds.push(copy.id);
   }

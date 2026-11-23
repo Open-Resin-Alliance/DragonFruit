@@ -6,7 +6,7 @@ function, parity test as done.
 
 ## 1. scene-core: test that a CLI save keeps every field (round trip)
 
-**Status:** opened as issue #928 (test-only).
+**Status:** opened as issue #928 (test-only); the test is `src/features/scene/voxl/__tests__/cliSaveRoundTrip.test.ts`, and it also found issue #1057.
 
 **Labels (suggested):** `scene-core` · **Effort:** S · **Risk:** Low · **Depends on:** —
 
