@@ -17,6 +17,7 @@ import {
   readPlateOrdering,
   type PlateOrdering,
 } from '@/features/scene/plates/plateCascade';
+import { resolveImportedPlates } from '@/features/scene/plates/plateImport';
 import {
   computePlateFrames,
   plateLocalRect,
@@ -6350,11 +6351,21 @@ export function useSceneCollectionManager(options?: {
       // The file's plates, read once: the models below are stamped with the
       // plate they stand on, and the scene adopts the list after they land.
       const scenePlates = readScenePlates(document.scene);
-      const importedPlateIds = new Set(scenePlates.plates.map((plate) => plate.id));
-      const importedDefaultPlateId = scenePlates.plates[0]?.id;
+      // Opening a scene merges into the current one (#1049): when the scene
+      // already holds models, the file's plates are appended as NEW plates
+      // (fresh ids), so the import neither reuses the plates already here
+      // nor overwrites their names. Into an empty scene the file keeps its
+      // own plate ids, as before.
+      const resolvedPlates = resolveImportedPlates(
+        scenePlates.plates,
+        scenePlates.activePlateId,
+        modelsRef.current.length > 0,
+        uuidv4,
+      );
+      const importedDefaultPlateId = resolvedPlates.activePlateId;
       /** A model's plate, when the file names one of its own; otherwise its first. */
       const plateIdForImport = (raw?: string): string | undefined =>
-        raw && importedPlateIds.has(raw) ? raw : importedDefaultPlateId;
+        (raw ? resolvedPlates.idMap.get(raw) : undefined) ?? importedDefaultPlateId;
 
       const existingIds = new Set(modelsRef.current.map((model) => model.id));
       const idMap = new Map<string, string>();
@@ -6756,9 +6767,15 @@ export function useSceneCollectionManager(options?: {
         // single-plate shorthand a file written before plates carries. A file with
         // no plate list at all leaves this scene's plates as they were, since this
         // path merges into the scene rather than replacing it.
-        if (scenePlates.plates.length > 0) {
-          setPlates(scenePlates.plates.map((plate) => ({ id: plate.id, name: plate.name ?? '' })));
-          setActivePlateId(scenePlates.activePlateId ?? scenePlates.plates[0].id);
+        if (resolvedPlates.plates.length > 0) {
+          // Append the file's plates as new ones when the scene already holds
+          // models (#1049); replace them only for a scene opened into an empty one.
+          if (resolvedPlates.append) {
+            setPlates((prev) => [...prev, ...resolvedPlates.plates]);
+          } else {
+            setPlates(resolvedPlates.plates);
+          }
+          setActivePlateId(resolvedPlates.activePlateId ?? resolvedPlates.plates[0].id);
         } else if (scenePlates.legacyName) {
           const legacyName = scenePlates.legacyName;
           setPlates((prev) => prev.map((plate, index) => (index === 0 ? { ...plate, name: legacyName } : plate)));
