@@ -12,7 +12,7 @@ Use **Brush** in Prepare mode to sculpt and clean local surface regions before s
 
 In the smoothing settings panel, tune:
 
-- **Brush Size** (mm)
+- **Brush Size** (mm) — printed millimetres, so on a model scaled on the plate the brush covers what the cursor ring shows.
 - **Strength**
 - **Falloff** (`linear`, `smooth`, `sharp`)
 - **Iterations**

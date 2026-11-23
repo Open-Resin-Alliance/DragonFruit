@@ -20,6 +20,7 @@ import {
   ensureMeshSmoothingEngineReady,
 } from '@/features/mesh-smoothing/meshSmoothingEngine';
 import {
+  getSupportBlockerBrushSizeMm,
   paintSupportBlockers,
   beginSupportBlockerStroke,
   setSupportBlockerHover,
@@ -38,6 +39,18 @@ import { prewarmSupportPlacementAsync } from '@/supports/PlacementLogicV3/suppor
 /** three-mesh-bvh reads `firstHitOnly` off the raycaster; three's own type lacks it. */
 type BvhRaycaster = THREE.Raycaster & { firstHitOnly?: boolean };
 const _clipFallbackRaycaster: BvhRaycaster = new THREE.Raycaster();
+const _plateScale = new THREE.Vector3();
+
+/**
+ * Printed millimetres per unit of `object`'s mesh. The brushes are sized in millimetres
+ * and paint the mesh in its own units, so a model scaled on the plate needs its radius
+ * divided by this. A non-uniform scale gets the mean.
+ */
+function mmPerMeshUnit(object: THREE.Object3D): number {
+  _plateScale.setFromMatrixScale(object.matrixWorld);
+  const scale = Math.cbrt(Math.abs(_plateScale.x * _plateScale.y * _plateScale.z));
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
 const _interiorCavityRaycaster: BvhRaycaster = new THREE.Raycaster();
 const _interiorCavityRaycastMesh = new THREE.Mesh();
 
@@ -1657,7 +1670,7 @@ if (uDitherAmount > 0.0) {
                 localPoint.copy(e.point);
                 e.object.worldToLocal(localPoint);
 
-                paintSupportBlockers(modelId, geometry, localPoint);
+                paintSupportBlockers(modelId, geometry, localPoint, getSupportBlockerBrushSizeMm() / mmPerMeshUnit(e.object));
               }
             }
           }
@@ -1813,7 +1826,7 @@ if (uDitherAmount > 0.0) {
             beginMeshSmoothingStroke(e.point.clone(), normal);
 
             onSmoothingGeometryActivate?.(geometry);
-            beginMeshSmoothingEngineStroke(geometry);
+            beginMeshSmoothingEngineStroke(geometry, mmPerMeshUnit(e.object));
           }
           if ((mode === 'prepare' || mode === 'support') && transformMode === 'supportBlockers' && isActiveModel && e.button === 0) {
             beginSupportBlockerStroke(modelId);
@@ -1822,7 +1835,7 @@ if (uDitherAmount > 0.0) {
             localPoint.copy(e.point);
             e.object.worldToLocal(localPoint);
 
-            paintSupportBlockers(modelId, geometry, localPoint);
+            paintSupportBlockers(modelId, geometry, localPoint, getSupportBlockerBrushSizeMm() / mmPerMeshUnit(e.object));
           }
         }}
       >

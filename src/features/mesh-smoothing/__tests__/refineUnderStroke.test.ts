@@ -161,3 +161,24 @@ test('smoothing the split corner rounds it locally, where the coarse cube could 
   assert.ok(onRefined.farthest <= 0.5 + 1e-6, `a vertex ${onRefined.farthest.toFixed(2)}mm from the brush moved`);
   assert.ok(onRefined.tipMoved < onCoarse.tipMoved, 'a local rounding, not the tip pulled to its far neighbours');
 });
+
+test('on a model scaled up on the plate, the brush covers the millimetres it shows', () => {
+  // A 0.2-unit cube printed at 50×: 10mm across, like the cube above. A 0.5mm brush is
+  // 0.01 of its own units, and only what lies within that may move.
+  const settings = { ...DEFAULT_MESH_SMOOTHING_SETTINGS, brushSizeMm: 0.5, strength: 1, iterations: 3 };
+  const mmPerUnit = 50;
+  const tip = [0.2, 0.2, 0.2];
+  const radius = settings.brushSizeMm / mmPerUnit;
+  const refined = refineUnderStroke(cube(0.2), tip, radius, radius);
+  assert.ok(refined, 'faces of 0.2 units are far longer than a 0.01-unit brush');
+  const before = refined.clone();
+  const moved = smoothStrokeOnGeometry(refined, tip, settings, 8000, mmPerUnit);
+  assert.ok(moved > 0, 'the corner is rounded');
+  const corner = new THREE.Vector3(...tip);
+  for (let i = 0; i < before.getAttribute('position').count; i++) {
+    const was = new THREE.Vector3().fromBufferAttribute(before.getAttribute('position'), i);
+    const now = new THREE.Vector3().fromBufferAttribute(refined.getAttribute('position'), i);
+    if (was.distanceTo(now) < 1e-9) continue;
+    assert.ok(was.distanceTo(corner) <= radius + 1e-9, `a vertex ${(was.distanceTo(corner) * mmPerUnit).toFixed(2)}mm from the brush moved`);
+  }
+});

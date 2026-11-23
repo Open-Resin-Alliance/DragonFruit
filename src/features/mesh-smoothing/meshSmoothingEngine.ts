@@ -75,7 +75,18 @@ type StrokeUndoState = {
   ids: number[];
   before: number[];
   samples: number[];
+  /** Millimetres per model unit: the model's scale on the plate. */
+  mmPerUnit: number;
 };
+
+/**
+ * The brush radius in the model's own units. The brush is sized in printed millimetres
+ * and the stroke runs on the mesh as modelled, so a model scaled up 50× gets a radius
+ * fifty times smaller in its own units.
+ */
+function brushRadiusInModelUnits(settings: MeshSmoothingSettings, mmPerUnit: number): number {
+  return clampMeshSmoothingBrushSizeMm(settings.brushSizeMm) / (mmPerUnit > 0 ? mmPerUnit : 1);
+}
 
 const activeStrokeGeometry = new WeakMap<THREE.BufferGeometry, StrokeUndoState>();
 const scratchSmoothingByGeometry = new WeakMap<THREE.BufferGeometry, SmoothingScratch>();
@@ -116,7 +127,8 @@ export function recordMeshSmoothingEngineStrokeSample(geometry: THREE.BufferGeom
     const dy = centerLocal.y - ly;
     const dz = centerLocal.z - lz;
     const d2 = dx * dx + dy * dy + dz * dz;
-    if (d2 < 0.01 * 0.01) return;
+    const minStep = 0.01 / stroke.mmPerUnit;
+    if (d2 < minStep * minStep) return;
   }
 
   s.push(centerLocal.x, centerLocal.y, centerLocal.z);
@@ -720,13 +732,18 @@ function getSmoothingScratch(geometry: THREE.BufferGeometry, uniqueCount: number
   return next;
 }
 
-export function beginMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): void {
+/**
+ * `mmPerUnit` is the model's scale on the plate — how many printed millimetres one unit
+ * of its mesh is — so the brush, sized in millimetres, covers what it shows.
+ */
+export function beginMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry, mmPerUnit = 1): void {
   activeStrokeGeometry.set(geometry, {
     affectedUnique: new Set(),
     beforeIndexByUid: new Map(),
     ids: [],
     before: [],
     samples: [],
+    mmPerUnit: Number.isFinite(mmPerUnit) && mmPerUnit > 0 ? mmPerUnit : 1,
   });
 
   beginHighlightStroke(geometry);
@@ -811,17 +828,18 @@ function writeBackUniquePositions(topo: NonNullable<ReturnType<typeof getMeshTop
 /**
  * Smooth a finished stroke on `geometry`, synchronously: every vertex within the brush
  * of one of its samples, by the same rule a stroke smoothed in place follows. Returns
- * how many vertices moved.
+ * how many vertices moved. `mmPerUnit` is the model's scale on the plate.
  */
 export function smoothStrokeOnGeometry(
   geometry: THREE.BufferGeometry,
   samples: ArrayLike<number>,
   settings: MeshSmoothingSettings,
   maxVertices: number,
+  mmPerUnit = 1,
 ): number {
   const topo = getMeshTopology(geometry);
   if (!topo) return 0;
-  const radius = clampMeshSmoothingBrushSizeMm(settings.brushSizeMm);
+  const radius = brushRadiusInModelUnits(settings, mmPerUnit);
   const affected = new Set<number>();
   const center = new THREE.Vector3();
   for (let i = 0; i + 2 < samples.length; i += 3) {
@@ -849,13 +867,14 @@ function smoothStrokeOnRefinedCopy(
   samples: ArrayLike<number>,
   settings: MeshSmoothingSettings,
   maxVertices: number,
+  mmPerUnit: number,
 ): boolean {
   if (!geometryReplacer) return false;
-  const radius = clampMeshSmoothingBrushSizeMm(settings.brushSizeMm);
+  const radius = brushRadiusInModelUnits(settings, mmPerUnit);
   const next = refineUnderStroke(geometry, samples, radius, radius * STROKE_EDGE_PER_RADIUS);
   if (!next) return false;
 
-  smoothStrokeOnGeometry(next, samples, settings, maxVertices);
+  smoothStrokeOnGeometry(next, samples, settings, maxVertices, mmPerUnit);
   const replaced = replaceMeshSmoothingGeometry(geometry, next);
   if (!replaced) next.dispose();
   return replaced;
@@ -893,14 +912,14 @@ export function endMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): vo
   const settings = getMeshSmoothingSettings();
   const maxVertices = 8000;
 
-  if (stroke && stroke.affectedUnique.size === 0 && smoothStrokeOnRefinedCopy(geometry, stroke.samples, settings, maxVertices)) {
+  if (stroke && stroke.affectedUnique.size === 0 && smoothStrokeOnRefinedCopy(geometry, stroke.samples, settings, maxVertices, stroke.mmPerUnit)) {
     releaseStroke(geometry);
     return;
   }
 
   // If we didn't collect affected verts during the stroke, compute them now from stroke samples.
   if (topo && stroke && stroke.affectedUnique.size === 0 && stroke.samples.length > 0) {
-    const radius = clampMeshSmoothingBrushSizeMm(settings.brushSizeMm);
+    const radius = brushRadiusInModelUnits(settings, stroke.mmPerUnit);
     const samples = stroke.samples;
     for (let i = 0; i + 2 < samples.length; i += 3) {
       const center = new THREE.Vector3(samples[i] ?? 0, samples[i + 1] ?? 0, samples[i + 2] ?? 0);
