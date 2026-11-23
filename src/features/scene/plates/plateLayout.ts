@@ -70,19 +70,80 @@ export function computePlateFrames({
   ordering: PlateOrdering;
 }): PlateFrame[] {
   const local = plateLocalRect(footprint);
-  return plates.map((plate, index) => {
-    const { dxMm, dyMm } = plateCascadeOffsetMm(index, footprint, plates.length, ordering);
-    return {
-      id: plate.id,
-      index,
-      dxMm,
-      dyMm,
-      minX: local.minX + dxMm,
-      minY: local.minY + dyMm,
-      maxX: local.maxX + dxMm,
-      maxY: local.maxY + dyMm,
-    };
-  });
+  return plates.map((plate, index) => ({
+    id: plate.id,
+    ...slotAt({ index, plateCount: plates.length, local, footprint, ordering }),
+  }));
+}
+
+/** Where the plate at `index` sits in a grid of `plateCount` plates. */
+function slotAt({
+  index,
+  plateCount,
+  local,
+  footprint,
+  ordering,
+}: {
+  index: number;
+  plateCount: number;
+  local: PlateRect;
+  footprint: PlateFootprint;
+  ordering: PlateOrdering;
+}): PlateSlot {
+  const { dxMm, dyMm } = plateCascadeOffsetMm(index, footprint, plateCount, ordering);
+  return {
+    index,
+    dxMm,
+    dyMm,
+    minX: local.minX + dxMm,
+    minY: local.minY + dyMm,
+    maxX: local.maxX + dxMm,
+    maxY: local.maxY + dyMm,
+  };
+}
+
+/** Where a plate that does not exist yet would sit: a frame with no id to name it. */
+export type PlateSlot = Omit<PlateFrame, 'id'>;
+
+/**
+ * Where `count` beds added after `plates` would sit, once they are there.
+ *
+ * The grid is numbered against the grown plate count, because that is where the new
+ * beds land. A preview of beds an action would add (the next-bed ghost, a duplicate
+ * that overflows onto new beds) reads them here, so it shows them where adding them
+ * puts them.
+ */
+export function appendedPlateSlots({
+  plates,
+  count,
+  footprint,
+  ordering,
+}: {
+  plates: readonly { id: string }[];
+  count: number;
+  footprint: PlateFootprint;
+  ordering: PlateOrdering;
+}): PlateSlot[] {
+  const local = plateLocalRect(footprint);
+  const plateCount = plates.length + Math.max(0, count);
+  return Array.from({ length: Math.max(0, count) }, (_, offset) => (
+    slotAt({ index: plates.length + offset, plateCount, local, footprint, ordering })
+  ));
+}
+
+/**
+ * The frame of the plate `plateId`, or the first plate's when no plate has that id:
+ * new work goes to the first plate when the one it names is gone. Undefined only
+ * when there are no frames.
+ */
+export function plateFrameFor({
+  frames,
+  plateId,
+}: {
+  frames: readonly PlateFrame[];
+  plateId: string | null | undefined;
+}): PlateFrame | undefined {
+  return frames.find((frame) => frame.id === plateId) ?? frames[0];
 }
 
 /**

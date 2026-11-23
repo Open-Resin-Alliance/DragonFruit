@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DYNAMIC_PLATE_ORDERING, type PlateOrdering } from '../plateCascade';
+import { DYNAMIC_PLATE_ORDERING, PLATE_CASCADE_GAP_MM, type PlateOrdering } from '../plateCascade';
 import * as plateLayout from '../plateLayout';
 import {
+  appendedPlateSlots,
   computePlateFrames,
+  plateFrameFor,
   modelsOnPlate,
   plateCanBeRemoved,
   plateLocalRect,
@@ -185,6 +187,33 @@ test('any plate can be deleted, the first included, while another is left', () =
   assert.equal(plateCanBeRemoved({ plates: three, plateId: 'p3' }), true);
   assert.equal(plateCanBeRemoved({ plates: three, plateId: 'nope' }), false, 'a plate that is not there');
   assert.equal(plateCanBeRemoved({ plates: Object.freeze([Object.freeze({ id: 'p1' })]), plateId: 'p1' }), false, 'the last plate stays');
+});
+
+test('a plate frame is found by id, and a stale id falls back to the first plate', () => {
+  const three = deepFreeze(computePlateFrames({ plates: plateIds(3), footprint, ordering: DYNAMIC_PLATE_ORDERING }));
+  assert.equal(plateFrameFor({ frames: three, plateId: 'p3' }), three[2]);
+  assert.equal(plateFrameFor({ frames: three, plateId: 'gone' }), three[0]);
+  assert.equal(plateFrameFor({ frames: three, plateId: null }), three[0]);
+  assert.equal(plateFrameFor({ frames: [], plateId: 'p1' }), undefined);
+});
+
+test('beds about to be added sit where adding them puts them, on the grown grid', () => {
+  const four = deepFreeze(plateIds(4));
+  for (const ordering of [DYNAMIC_PLATE_ORDERING, FIXED_3]) {
+    for (const originMode of ['center', 'front_left'] as const) {
+      const bed = { ...footprint, originMode };
+      const grown = computePlateFrames({ plates: [...four, { id: 'n1' }, { id: 'n2' }], footprint: bed, ordering });
+      const slots = appendedPlateSlots({ plates: four, count: 2, footprint: bed, ordering });
+      assert.deepEqual(slots.map((slot, i) => ({ id: grown[4 + i].id, ...slot })), grown.slice(4), `${ordering.mode}, ${originMode}`);
+    }
+  }
+  // A 2x2 grid of four grows to 3x2 with a fifth bed: the ghost lands in the middle of
+  // the second row, not on a third row below the first bed, where a 2-wide grid puts it.
+  const [fifth] = appendedPlateSlots({ plates: four, count: 1, footprint, ordering: DYNAMIC_PLATE_ORDERING });
+  assert.equal(fifth.index, 4);
+  assert.equal(fifth.dyMm, footprint.depthMm + PLATE_CASCADE_GAP_MM);
+  assert.equal(fifth.dxMm, footprint.widthMm + PLATE_CASCADE_GAP_MM);
+  assert.deepEqual(appendedPlateSlots({ plates: four, count: 0, footprint, ordering: FIXED_3 }), []);
 });
 
 test('every exported function takes one parameters object (ADR-0045 rule 4)', () => {
