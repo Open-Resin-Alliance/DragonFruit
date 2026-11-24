@@ -69,9 +69,10 @@ grep -rhoE '\binvoke(<[^>]*>)?\(' src plugins --include=*.ts --include=*.tsx \
   the difference is invisible until it renders as misaligned triangles or
   disconnected speckles. The island scanner learned this first, overhang
   classification second, the ambient-occlusion bake third — see the gotcha entry
-  in `dev/backlog.md` for the whole history. Staging stays the right tool for
-  commands that *produce* or *transform* a mesh (`mesh_repair_staged`, hollowing):
-  there the output replaces the buffer, so there is nothing to index against.
+  in `dev/backlog.md` for the whole history. Commands that *produce* or
+  *transform* a mesh (`mesh_repair_staged`, hollowing) take their input from the
+  native mesh store (`native-mesh-store.md`) or, until their family moves, from
+  staging: there the output is a new mesh, so there is nothing to index against.
 - **A raw-body command cannot also take arguments.** A command declared with
   `request: tauri::ipc::Request` has no JSON body, so any sibling parameter is
   rejected at the call site — *"expected a value for key … but the IPC call used
@@ -459,7 +460,10 @@ state in process-wide `OnceLock` statics in `main.rs`:
 
 That the staging state is a **process-wide singleton, not per-call**, is the
 reason writers must be single-flight: two overlapping stage sequences share
-these statics.
+these statics. Meshes that operations read and produce are moving off it onto
+the native mesh store (`native-mesh-store.md`, ADR-0048), which holds any
+number of meshes under ids the caller passes back; the classify, analyze and
+repair commands already use it.
 
 **The runtime backend is a compile-time choice.** `src-tauri/Cargo.toml` builds
 Tauri with `default-features = false` and selects the backend by feature —

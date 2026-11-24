@@ -1233,8 +1233,9 @@ its second version was speckled shading on an imported mesh. It shows only on
 
 **Four ways the Rust-side mesh diverges from the frontend's mesh:**
 
-- **The shared staging buffer is process-wide mutable state.** Repair, hole
-  punching, hollowing and the next import all write it. A command that stages a
+- **The shared staging buffer is process-wide mutable state.** Hole punching,
+  hollowing and the next import all write it (repair, classify and analyze moved
+  to the native mesh store, `native-mesh-store.md`). A command that stages a
   mesh, then reads it back later (an idle callback, an `await`), can find a
   *different* mesh there and compute values for that one.
 - **Re-loading the file on the Rust side re-welds it.** The loader welds with its
