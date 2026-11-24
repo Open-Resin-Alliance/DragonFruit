@@ -54,7 +54,7 @@ import {
     buildGapFillCandidates,
     collectSupportTips,
     computeRegionCoverage,
-    coverageRadiusForArea,
+    coverageRadiusForRegion,
 } from './coverage';
 import { sizeParameters, presetForArea, modelSizingFactors, RESIN_DENSITY_G_PER_MM3 } from './parameterSizing';
 import { computeLoadBudget, type PlacedContact } from './loadBudget';
@@ -76,7 +76,13 @@ import { DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG } from '../Settings/defaults';
 import { cloneSupportState, getSnapshot, setSnapshot } from '../state';
 import { createOwnedDraft, draftAddEntity, draftAddPrimitive, draftCommitSupport, draftRemoveEntity, draftRemovePrimitive, sealOwnedDraft } from './supportDraft';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
-import { buildTrunkData } from '../SupportTypes/Trunk/trunkBuilder';
+import { buildTrunkData, buildTrunkDataFromPlacement } from '../SupportTypes/Trunk/trunkBuilder';
+import { getSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
+import {
+    synthesizeTreeClusters,
+    findOffsetSilhouetteRoute,
+    type TreeSynthesisGridConfig,
+} from './treeSynthesis';
 import { buildCavityBridge } from '../SupportTypes/Trunk/useTrunkPlacement';
 import { createCavityTester } from '../interiorSupportGeometry';
 import { closestSurfaceNormal } from './closestSurfaceNormal';
@@ -103,8 +109,10 @@ import {
     FAN_LINK_TIP_INSET_MM,
     CONSOLIDATION_BRANCH_MIN_HEIGHT_MM,
     MAX_LEAF_SPAN_BEFORE_BRANCH_MM,
+    MAX_LEAF_FALLBACK_SPAN_MM,
     MERGE_HOST_LOAD_WEIGHT,
     MAX_CAVITY_BRIDGE_MM,
+    MIN_TRUNK_SPACING_MM,
 } from './constants';
 
 const LOG_PREFIX = '[AutoSupport]';
@@ -1856,11 +1864,13 @@ export function collectFanShaftPoints(draft: SupportState): FanShaftPoint[] {
     for (const { hostTypeId, hostId, entity } of collectHostEntities(draft)) {
         if (entity.origin === NEAR_PLATE_ORIGIN) continue;
         for (const seg of entity.segments ?? []) {
-            // Both joints must exist: a knot attached to a joint-less segment
-            // is culled later as missingHost — never offer such a segment.
-            const start = seg.bottomJoint?.pos;
-            const end = seg.topJoint?.pos;
-            if (!start || !end) continue;
+            // Resolve through hostSegmentSpan so bottom segments (which rise
+            // from the root top with no bottomJoint entity) are sampled along
+            // the exact same line validateAndCullOrphans checks. Segments with
+            // neither joints nor a root/cone anchor still return null.
+            const span = hostSegmentSpan(draft, entity, seg);
+            if (!span) continue;
+            const { start, end } = span;
             const diameter = seg.diameter ?? 1.0;
             for (let i = 0; i <= SHAFT_SAMPLES_PER_SEGMENT; i++) {
                 const t = i / SHAFT_SAMPLES_PER_SEGMENT;
@@ -2060,7 +2070,11 @@ export function rehostLegacyKnots(draft: SupportState, modelId?: string): Suppor
  * fat trunk under a needle-thin contact is the visible mismatch this pass
  * exists to stop. An explicit larger contact is kept.
  */
-export function syncContactConeDiameters(draft: SupportState, modelId?: string): SupportState {
+export function syncContactConeDiameters(
+    draft: SupportState,
+    modelId?: string,
+    autoSettings?: Partial<AutoSupportSettings>,
+): SupportState {
     // Which types contribute their segment diameters, from each type's declared
     // `coneBodyFollows`. A type whose cone body is left alone (stick, stump)
     // declares no source rather than being filtered out.
@@ -2133,6 +2147,10 @@ export function syncContactConeDiameters(draft: SupportState, modelId?: string):
             };
         }
     }
+    const bandShaftDia = activeSizingBand(autoSettings).shaftDiameterMm;
+    const memberRatio = autoSettings?.memberHostShaftRatio
+        ?? getSettings().autoSupport?.memberHostShaftRatio
+        ?? AUTO_SUPPORT_CONSTRAINTS.memberHostShaftRatio.defaultValue;
     const nextLeaves: SupportState['leaves'] = { ...draft.leaves };
     for (const [lid, l] of Object.entries(draft.leaves)) {
         if (modelId !== undefined && l.modelId !== modelId) continue;
@@ -2140,7 +2158,14 @@ export function syncContactConeDiameters(draft: SupportState, modelId?: string):
         if (!knot) continue;
         const hostDia = diameterBySegmentId.get(knot.parentShaftId);
         if (hostDia === undefined) continue;
-        const cone = syncCone(l.contactCone, hostDia);
+        // Cap leaf cone body diameter to member proportions (matching hosted
+        // branches via memberHostShaftRatio) so detail leaves never bloat into
+        // full thickened trunk diameter clubs (e.g. Ø1.35–1.60 mm).
+        const leafBodyDia = Math.min(
+            hostDia,
+            Math.max(bandShaftDia, Math.round(hostDia * memberRatio * 1000) / 1000),
+        );
+        const cone = syncCone(l.contactCone, leafBodyDia);
         if (cone && cone !== l.contactCone) {
             nextLeaves[lid] = {
                 ...l,
@@ -2611,11 +2636,9 @@ export function fanLeafToHost(
     }
     // Tier 1 keeps every placement that already worked, and the look that goes
     // with it. The rescue tier answers a different question — it removes a lone
-    // pillar, it does not add material — so it takes the SHORTEST legal link
-    // (the least drop that still clears the angle) instead of the steepest,
-    // which would spend the whole rescue span on a longer member for no gain.
-    const pool = candidates.length > 0 ? candidates : rescue;
-    if (pool.length === 0) {
+    // pillar or rescues a high/occluded contact onto a deeper clear knot — so
+    // it runs in shortest-first order if every Tier-1 sample fails.
+    if (candidates.length === 0 && rescue.length === 0) {
         return {
             ok: false,
             reason: refusal,
@@ -2624,102 +2647,119 @@ export function fanLeafToHost(
             steepAngleDeg: Number.isFinite(steepAngleDeg) ? steepAngleDeg : undefined,
         };
     }
-    const order: FanHostOrder = candidates.length > 0 ? hostOrder : 'nearest';
 
-    // Steepest first (placement fanning) or nearest first (chunk
-    // consolidation); the other metric breaks ties.
-    pool.sort((a, b) => (order === 'nearest'
+    // Steepest first (placement fanning) or nearest first (chunk consolidation);
+    // cap rescue fallthrough to the 6 shortest samples when Tier-1 candidates
+    // already existed so dense forests never spend seconds probing deep shafts.
+    candidates.sort((a, b) => (hostOrder === 'nearest'
         ? a.dist2 - b.dist2 || a.angleDeg - b.angleDeg
         : a.angleDeg - b.angleDeg || a.dist2 - b.dist2));
+    rescue.sort((a, b) => a.dist2 - b.dist2 || a.angleDeg - b.angleDeg);
+    const pool = candidates.length > 0 && rescue.length > 0
+        ? [...candidates, ...rescue.slice(0, 6)]
+        : (candidates.length > 0 ? candidates : rescue);
 
-    // Try each candidate until one clears blocked/cross/capacity/build.
-    let lastBlockedReason: FanLeafRefusal | null = null;
-    for (const { sp, dist2, angleDeg } of pool) {
-        const parentKnot = {
-            id: freeKnotId(draft, knotIdPrefix),
-            parentShaftId: sp.segmentId ?? sp.hostId,
-            t: sp.t,
-            pos: sp.pos,
-            diameter: sp.diameter + 0.125,
-        };
-        const resolved = resolveSurfaceNormal(target, mesh ?? undefined);
-        /**
-         * The pre-test asks the question the member will have to answer at build
-         * time, and no more. A leaf is one tapered cone from the host to the tip,
-         * and a contact cone is allowed to touch the surface it points at (that is
-         * what `contactConeCollides` exempts), so testing a bare ray all the way to
-         * the tip refused every link onto a flat: the tip sits *on* the surface,
-         * and the last stretch of a ray to it is inside the shaft keep-out however
-         * steep the link is. Measured on a dense flat in gridless mode: 976
-         * consolidation links refused that way, 308 of 438 hosts left bare. A
-         * branch, which is a real shaft, still has to reach a point short of the
-         * tip, because its own collision test runs after it is built.
-         */
-        if (mesh) {
-            const toTip = {
-                x: target.x - sp.pos.x,
-                y: target.y - sp.pos.y,
-                z: target.z - sp.pos.z,
+    const tryAttachPool = (leafSpanCeilingMm: number, allowBranch: boolean) => {
+        let lastBlockedReason: FanLeafRefusal | null = null;
+        for (const { sp, dist2, angleDeg } of pool) {
+            const spanMm = Math.sqrt(dist2);
+            if (!allowBranch && spanMm > leafSpanCeilingMm) continue;
+            const parentKnot = {
+                id: freeKnotId(draft, knotIdPrefix),
+                parentShaftId: sp.segmentId ?? sp.hostId,
+                t: sp.t,
+                pos: sp.pos,
+                diameter: sp.diameter + 0.125,
             };
-            const length = Math.hypot(toTip.x, toTip.y, toTip.z) || 1;
-            const inset = Math.min(FAN_LINK_TIP_INSET_MM, length * 0.5);
-            const shortOfTip = {
-                x: target.x - (toTip.x / length) * inset,
-                y: target.y - (toTip.y / length) * inset,
-                z: target.z - (toTip.z / length) * inset,
-            };
-            const blocked = Math.sqrt(dist2) > MAX_LEAF_SPAN_BEFORE_BRANCH_MM
-                ? isShaftBlocked(sp.pos, shortOfTip, 0.2, mesh)
-                : contactConeCollides(sp.pos, { pos: target, normal: resolved.normal }, mesh);
-            if (blocked) {
-                lastBlockedReason = 'blocked';
-                continue;
-            }
-        }
-
-        // Long spans route to branches with real shafts instead of long tapered
-        // leaf cones (spindly spikes), for EVERY origin. Overhang fanning used to
-        // stay a leaf past this threshold, which is how an 11.6mm cone got built;
-        // the leaf's own rule — past ~6mm it stands next to its trunk rather than
-        // supporting it — does not care which surface the tip touches. Failed
-        // branch attempts fall through to the next candidate (a shorter span may
-        // still leaf).
-        const cappedTip = tipDiameterMm !== undefined
-            ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, tipDiameterMm)
-            : undefined;
-        if (Math.sqrt(dist2) > MAX_LEAF_SPAN_BEFORE_BRANCH_MM) {
-            const branchMaxAngleDeg = Math.min(50, maxAngleDeg);
-            if (angleDeg > branchMaxAngleDeg) {
-                lastBlockedReason = 'angle';
-                continue;
-            }
-            try {
-                const band = activeSizingBand(autoSettings);
-                const built = buildHostedBranch(
-                    {
-                        tipPos: resolved.point,
-                        tipNormal: resolved.normal,
-                        modelId,
-                        parentKnot,
-                        mesh: mesh ?? undefined,
-                        tipContactDiameterMm: cappedTip ?? band.tipContactDiameterMm,
-                        rootsDiameterMm: band.rootDiameterMm,
-                    },
-                    band.shaftDiameterMm,
-                    sp.diameter,
-                    (attempt) => Boolean(attempt.supportData.error)
-                        || Boolean(mesh && branchCollidesWithSDF(attempt.branch, mesh)),
-                    autoSettings,
-                );
-                if (!built) {
+            const resolved = resolveSurfaceNormal(target, mesh ?? undefined);
+            /**
+             * The pre-test asks the question the member will have to answer at build
+             * time, and no more. A leaf is one tapered cone from the host to the tip,
+             * and a contact cone is allowed to touch the surface it points at (that is
+             * what `contactConeCollides` exempts), so testing a bare ray all the way to
+             * the tip refused every link onto a flat: the tip sits *on* the surface,
+             * and the last stretch of a ray to it is inside the shaft keep-out however
+             * steep the link is. Measured on a dense flat in gridless mode: 976
+             * consolidation links refused that way, 308 of 438 hosts left bare. A
+             * branch, which is a real shaft, still has to reach a point short of the
+             * tip, because its own collision test runs after it is built.
+             */
+            const isBranchAttempt = allowBranch && spanMm > leafSpanCeilingMm;
+            if (mesh) {
+                const toTip = {
+                    x: target.x - sp.pos.x,
+                    y: target.y - sp.pos.y,
+                    z: target.z - sp.pos.z,
+                };
+                const length = Math.hypot(toTip.x, toTip.y, toTip.z) || 1;
+                const inset = Math.min(FAN_LINK_TIP_INSET_MM, length * 0.5);
+                const shortOfTip = {
+                    x: target.x - (toTip.x / length) * inset,
+                    y: target.y - (toTip.y / length) * inset,
+                    z: target.z - (toTip.z / length) * inset,
+                };
+                const blocked = isBranchAttempt
+                    ? isShaftBlocked(sp.pos, shortOfTip, 0.2, mesh)
+                    : contactConeCollides(sp.pos, { pos: target, normal: resolved.normal }, mesh);
+                if (blocked) {
                     lastBlockedReason = 'blocked';
                     continue;
                 }
-                if (branchDepartureAngleDeg(built.branch, parentKnot.pos) > branchMaxAngleDeg) {
+            }
+
+            // Long spans route to branches with real shafts instead of long tapered
+            // leaf cones (spindly spikes), for EVERY origin. Overhang fanning used to
+            // stay a leaf past this threshold, which is how an 11.6mm cone got built;
+            // the leaf's own rule — past ~4.5mm prefer a real branch — does not care
+            // which surface the tip touches. Failed branch attempts fall through to
+            // deeper samples (and finally to a strict <=5.5mm slim-leaf fallback if
+            // no branch shaft fits below the contact cone).
+            const cappedTip = tipDiameterMm !== undefined
+                ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, tipDiameterMm)
+                : undefined;
+            if (isBranchAttempt) {
+                const branchMaxAngleDeg = Math.min(50, maxAngleDeg);
+                if (angleDeg > branchMaxAngleDeg) {
                     lastBlockedReason = 'angle';
                     continue;
                 }
-                {
+                try {
+                    const band = activeSizingBand(autoSettings);
+                    const built = buildHostedBranch(
+                        {
+                            tipPos: resolved.point,
+                            tipNormal: resolved.normal,
+                            modelId,
+                            parentKnot,
+                            mesh: mesh ?? undefined,
+                            tipContactDiameterMm: cappedTip ?? band.tipContactDiameterMm,
+                            rootsDiameterMm: band.rootDiameterMm,
+                        },
+                        band.shaftDiameterMm,
+                        sp.diameter,
+                        (attempt) => Boolean(attempt.supportData.error)
+                            || Boolean(mesh && branchCollidesWithSDF(attempt.branch, mesh)),
+                        autoSettings,
+                    );
+                    if (!built) {
+                        lastBlockedReason = 'blocked';
+                        continue;
+                    }
+                    if (branchDepartureAngleDeg(built.branch, parentKnot.pos) > branchMaxAngleDeg) {
+                        lastBlockedReason = 'angle';
+                        continue;
+                    }
+                    if (leafPathCrossesSupports(
+                        parentKnot.pos,
+                        built.branch.contactCone?.pos ?? target,
+                        0.25,
+                        draft,
+                        sp.hostId,
+                        excludeHostIds,
+                    )) {
+                        lastBlockedReason = 'cross';
+                        continue;
+                    }
                     if (maxAttachments > 0 && isHostAtAttachmentCapacity(sp.hostTypeId, sp.hostId, maxAttachments, draft)) {
                         lastBlockedReason = 'capacity';
                         continue;
@@ -2731,78 +2771,86 @@ export function fanLeafToHost(
                     built.branch.origin = origin ?? 'island';
                     const memberTypeId = builtMemberTypeId(built.branch);
                     return {
-                        ok: true,
+                        ok: true as const,
                         kind: memberTypeId,
                         draft: draftAddEntity(next, memberTypeId, built.branch),
                         hostTypeId: sp.hostTypeId,
                         hostId: sp.hostId,
                         entityId: built.branch.id,
-                        distMm: Math.sqrt(dist2),
+                        distMm: spanMm,
                         angleDeg,
                     };
+                } catch {
+                    lastBlockedReason = 'build';
                 }
-                lastBlockedReason = 'blocked';
-            } catch {
-                lastBlockedReason = 'build';
+                continue;
             }
-            continue;
-        }
 
-        let leaf;
-        try {
-            const built = buildLeafData({
-                tipPos: resolved.point,
-                surfaceNormal: resolved.normal,
-                modelId,
-                parentKnot,
-                hostDiameterMm: sp.diameter,
-                tipContactDiameterMm: cappedTip ?? activeSizingBand(autoSettings).tipContactDiameterMm,
-                mesh: mesh ?? undefined,
-            });
-            if (built.supportData.error) {
+            let leaf;
+            try {
+                const built = buildLeafData({
+                    tipPos: resolved.point,
+                    surfaceNormal: resolved.normal,
+                    modelId,
+                    parentKnot,
+                    hostDiameterMm: sp.diameter,
+                    tipContactDiameterMm: cappedTip ?? activeSizingBand(autoSettings).tipContactDiameterMm,
+                    mesh: mesh ?? undefined,
+                });
+                if (built.supportData.error) {
+                    lastBlockedReason = 'build';
+                    continue;
+                }
+                leaf = built.leaf;
+                if (cappedTip !== undefined) {
+                    leaf.contactCone = applyExplicitTipCapToCone(leaf.contactCone, cappedTip)!;
+                }
+            } catch {
                 lastBlockedReason = 'build';
                 continue;
             }
-            leaf = built.leaf;
-            if (cappedTip !== undefined) {
-                leaf.contactCone = applyExplicitTipCapToCone(leaf.contactCone, cappedTip)!;
+
+            if (leafPathCrossesSupports(
+                parentKnot.pos,
+                leaf.contactCone?.pos ?? target,
+                0.25,
+                draft,
+                sp.hostId,
+                excludeHostIds,
+            )) {
+                lastBlockedReason = 'cross';
+                continue;
             }
-        } catch {
-            lastBlockedReason = 'build';
-            continue;
-        }
+            if (maxAttachments > 0 && isHostAtAttachmentCapacity(sp.hostTypeId, sp.hostId, maxAttachments, draft)) {
+                lastBlockedReason = 'capacity';
+                continue;
+            }
 
-        if (leafPathCrossesSupports(
-            parentKnot.pos,
-            leaf.contactCone?.pos ?? target,
-            0.25,
-            draft,
-            sp.hostId,
-            excludeHostIds,
-        )) {
-            lastBlockedReason = 'cross';
-            continue;
+            const next = draftAddPrimitive(draft, 'knots', parentKnot);
+            if (origin) leaf.origin = origin;
+            const memberTypeId = builtMemberTypeId(leaf);
+            return {
+                ok: true as const,
+                kind: memberTypeId,
+                draft: draftAddEntity(next, memberTypeId, leaf),
+                hostTypeId: sp.hostTypeId,
+                hostId: sp.hostId,
+                entityId: leaf.id,
+                distMm: spanMm,
+                angleDeg,
+            };
         }
-        if (maxAttachments > 0 && isHostAtAttachmentCapacity(sp.hostTypeId, sp.hostId, maxAttachments, draft)) {
-            lastBlockedReason = 'capacity';
-            continue;
-        }
+        return { ok: false as const, reason: lastBlockedReason ?? refusal };
+    };
 
-        const next = draftAddPrimitive(draft, 'knots', parentKnot);
-        if (origin) leaf.origin = origin;
-        const memberTypeId = builtMemberTypeId(leaf);
-        return {
-            ok: true,
-            kind: memberTypeId,
-            draft: draftAddEntity(next, memberTypeId, leaf),
-            hostTypeId: sp.hostTypeId,
-            hostId: sp.hostId,
-            entityId: leaf.id,
-            distMm: Math.sqrt(dist2),
-            angleDeg,
-        };
-    }
-    return { ok: false, reason: lastBlockedReason ?? refusal };
+    const primary = tryAttachPool(MAX_LEAF_SPAN_BEFORE_BRANCH_MM, true);
+    if (primary.ok) return primary;
+    // Fallback for the 4.5–5.5 mm transition band where tipLengthMm leaves no
+    // legal branch shaft rise (e.g. near-plate contacts): prefer a slim leaf
+    // over spawning a redundant standalone trunk. Never exceeds 5.5 mm.
+    const fallback = tryAttachPool(MAX_LEAF_FALLBACK_SPAN_MM, false);
+    if (fallback.ok) return fallback;
+    return primary;
 }
 
 // ---------------------------------------------------------------------------
@@ -3524,9 +3572,12 @@ export function computeAutoSupportPlan(
     reportPhase('Placing supports', 0, candidates.length);
     timingStart('placement');
 
-    const placeOne = (candidate: CandidatePoint): string => {
+    const placeOne = (candidate: CandidatePoint, deferTrunkError = false): string => {
         try {
             const result = placeOneCandidate(candidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx, false, preResolvedCandidates);
+            if (deferTrunkError && result.kind === 'reject' && result.rejectedReason === 'trunk_build_error') {
+                return 'defer_rescue';
+            }
             draft = result.draft;
             // A fan host is a type whose shaft the pool offers, which is what
             // `canBeGridHost` declares. Recorded so later candidates fan to a
@@ -3603,18 +3654,307 @@ export function computeAutoSupportPlan(
         }
     };
 
-    // The placement pass is most of a run's wall clock, so it is what the
-    // modal's progress bar follows. Reported in batches: one postMessage per
-    // candidate would cost more than the placement does.
+    // ── Phase 2: Cluster-First Tree Synthesis ────────────────────────
+    // Partition candidates into near-plate/interior, well-spaced plate-clear
+    // trunk anchors, clustered members, and vertically occluded contacts.
+    // Placing ALL trunk anchors first builds a sparse, well-spaced skeleton
+    // before any leaves or branches are attached.
+    const liveGrid = getSettings().grid;
+    const synthesisGridConfig: TreeSynthesisGridConfig | undefined = gridEnabled
+        ? { enabled: true, spacingMm: liveGrid?.spacingMm ?? 2.0 }
+        : undefined;
+    const synthesisMaxAngleDeg = memberMaxAngleFromVerticalDeg(Boolean(gridEnabled));
+    const treePlan = synthesizeTreeClusters(candidates, {
+        maxAngleFromVerticalDeg: synthesisMaxAngleDeg,
+        maxReachMm: gridEnabled
+            ? Math.max(GRID_HOST_FAN_RADIUS_MM, (liveGrid?.spacingMm ?? 2.0) * 1.5)
+            : Math.max(autoSettings.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM, CONSOLIDATION_FAN_RADIUS_MM),
+        maxAttachmentsPerTrunk: autoSettings.maxAttachmentsPerTrunk,
+        minTrunkSpacingMm: MIN_TRUNK_SPACING_MM,
+        grid: synthesisGridConfig,
+        mesh: resolvedMesh ?? undefined,
+    });
+
+    const occludedRescueQueue: CandidatePoint[] = [...treePlan.occludedQueue];
     let placementIndex = 0;
     const placementTotal = candidates.length;
-    for (const candidate of candidates) {
+    const tickProgress = () => {
         if (onProgress !== undefined
             && (placementIndex % 16 === 0 || placementIndex + 1 === placementTotal)) {
             onProgress({ phase: 'Placing supports', done: placementIndex + 1, total: placementTotal });
         }
         placementIndex++;
+    };
+
+    // Pass 2a: Near-plate overrides (stumps / interior bridges) + ALL cluster trunk anchors.
+    // Track anchorId -> placed hostId so Pass 2b can target each member's
+    // assigned cluster trunk first before searching the wider skeleton.
+    const anchorHostIdByCandidateId = new Map<string, string>();
+    for (const candidate of treePlan.nearPlate) {
+        tickProgress();
         placeOne(candidate);
+    }
+    for (const anchor of treePlan.trunkAnchors) {
+        tickProgress();
+        const prevLedgerLen = forestLedger.length;
+        const outcome = placeOne(anchor, Boolean(resolvedMesh));
+        if (outcome === 'defer_rescue') {
+            occludedRescueQueue.push(anchor);
+        } else if (forestLedger.length > prevLedgerLen) {
+            const placedEntry = forestLedger[forestLedger.length - 1];
+            if (placedEntry.kind === 'trunk') {
+                anchorHostIdByCandidateId.set(anchor.id, placedEntry.entityId);
+            }
+        }
+    }
+
+    // Pass 2b: Clustered members attach directly onto the completed trunk skeleton
+    // (trying their assigned cluster trunk first, then any clear skeleton host)
+    // instead of spawning redundant standalone trunks.
+    let clusterSkeletonPool: FanShaftPoint[] | null = null;
+    const clusterFanRadiusMm = Math.max(autoSettings.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM, CONSOLIDATION_FAN_RADIUS_MM);
+    const clusterFanMaxAngleDeg = Math.min(
+        autoSettings.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG,
+        synthesisMaxAngleDeg,
+    );
+    for (const { candidate, preferredAnchorId } of treePlan.clusteredMembers) {
+        tickProgress();
+        const anchorsMayAttach = candidate.source !== 'stabilization'
+            || autoSettings.debugSkipAutoBracing !== true;
+
+        if (!gridEnabled && anchorsMayAttach && !candidate.interior) {
+            if (!clusterSkeletonPool) clusterSkeletonPool = collectFanShaftPoints(draft);
+            const preferredHostId = anchorHostIdByCandidateId.get(preferredAnchorId);
+            const targetPool = preferredHostId
+                ? clusterSkeletonPool.filter((sp) => sp.hostId === preferredHostId)
+                : [];
+            const attachOrigin = hostedOriginForSource(candidate.source);
+            const preset = presetForArea(candidate.islandAreaMm2);
+
+            const tryAttach = (poolToUse: FanShaftPoint[]) => poolToUse.length > 0
+                ? fanLeafToHost(
+                    candidate.tipPos,
+                    candidate.modelId,
+                    poolToUse,
+                    new Set(),
+                    `auto-cluster-${candidate.id}`,
+                    clusterFanRadiusMm,
+                    clusterFanRadiusMm,
+                    clusterFanMaxAngleDeg,
+                    autoSettings.maxAttachmentsPerTrunk,
+                    draft,
+                    resolvedMesh ?? undefined,
+                    attachOrigin,
+                    'nearest',
+                    undefined,
+                    undefined,
+                    autoSettings,
+                    candidate.tipDiameterMm,
+                )
+                : ({ ok: false as const, reason: 'noHost' as const });
+
+            let attached = tryAttach(targetPool);
+            if (!attached.ok) {
+                attached = tryAttach(clusterSkeletonPool);
+            }
+            if (attached.ok) {
+                draft = attached.draft;
+                placed[attached.kind]++;
+                presets[preset]++;
+                diagnostics.candidatesBySource[candidate.source] =
+                    (diagnostics.candidatesBySource[candidate.source] ?? 0) + 1;
+                if (attached.entityId && isLedgerKind(attached.kind)) {
+                    forestLedger.push({
+                        displayId: candidate.id,
+                        kind: attached.kind,
+                        entityId: attached.entityId,
+                        areaMm2: candidate.islandAreaMm2,
+                        zHeight: candidate.zHeight,
+                        preset,
+                        bandShaftMm: activeSizingBand(autoSettings).shaftDiameterMm,
+                    });
+                }
+                continue;
+            }
+        }
+
+        const outcome = placeOne(candidate, Boolean(resolvedMesh));
+        if (outcome === 'defer_rescue') {
+            occludedRescueQueue.push(candidate);
+        } else if (outcome === 'trunk') {
+            // A fallback trunk joined the skeleton; refresh pool lazily.
+            clusterSkeletonPool = null;
+        }
+    }
+
+    // ── Phase 3: Plate-First Occluded Rescue Ladder ──────────────────
+    // (1) Wide clear-trunk branch/leaf across the completed skeleton (<=12mm),
+    // (2) Silhouette offset/dogleg trunk around lower mesh (0 extra scars),
+    // (3) Short cavity bridge (twig/stick <=12mm) via placeOne fallback.
+    const collectModelRootPoints = (): Array<{ x: number; y: number }> => {
+        const pts: Array<{ x: number; y: number }> = [];
+        for (const r of Object.values(draft.roots)) {
+            if (r.modelId === modelId) {
+                pts.push({ x: r.transform.pos.x, y: r.transform.pos.y });
+            }
+        }
+        return pts;
+    };
+
+    let rescuePool: FanShaftPoint[] | null = null;
+    for (const candidate of occludedRescueQueue) {
+        tickProgress();
+        const preset = presetForArea(candidate.islandAreaMm2);
+
+        // Tier 1: Wide branch/leaf onto any unobstructed trunk in the full skeleton.
+        if (resolvedMesh && !candidate.interior) {
+            if (!rescuePool) rescuePool = collectFanShaftPoints(draft);
+            const fan = fanLeafToHost(
+                candidate.tipPos,
+                candidate.modelId,
+                rescuePool,
+                gridHostIds,
+                `auto-rescue-fan-${candidate.id}`,
+                CAVITY_FAN_RADIUS_MM,
+                CAVITY_FAN_RADIUS_MM,
+                synthesisMaxAngleDeg,
+                autoSettings.maxAttachmentsPerTrunk,
+                draft,
+                resolvedMesh,
+                hostedOriginForSource(candidate.source),
+                'steepest',
+                Number.POSITIVE_INFINITY,
+                undefined,
+                autoSettings,
+                candidate.tipDiameterMm,
+            );
+            if (fan.ok) {
+                draft = fan.draft;
+                placed[fan.kind]++;
+                presets[preset]++;
+                diagnostics.candidatesBySource[candidate.source] =
+                    (diagnostics.candidatesBySource[candidate.source] ?? 0) + 1;
+                if (fan.entityId && isLedgerKind(fan.kind)) {
+                    forestLedger.push({
+                        displayId: candidate.id,
+                        kind: fan.kind,
+                        entityId: fan.entityId,
+                        areaMm2: candidate.islandAreaMm2,
+                        zHeight: candidate.zHeight,
+                        preset,
+                        bandShaftMm: activeSizingBand(autoSettings).shaftDiameterMm,
+                    });
+                }
+                continue;
+            }
+
+            // Tier 2: Silhouette offset / dogleg trunk routed around the lower mesh.
+            const overrides = sizeParameters(candidate, autoSettings.sizeScale, modelCtx, autoSettings);
+            const supportSettings = getSettings();
+            const tipProfile = {
+                type: 'disk' as const,
+                contactDiameterMm: overrides.tipContactDiameterMm ?? supportSettings.tip.contactDiameterMm,
+                bodyDiameterMm: overrides.tipBodyDiameterMm ?? supportSettings.tip.bodyDiameterMm,
+                lengthMm: overrides.tipLengthMm ?? supportSettings.tip.lengthMm,
+                penetrationMm: overrides.tipPenetrationMm ?? supportSettings.tip.penetrationMm,
+                diskThicknessMm: supportSettings.tip.diskThicknessMm ?? 0.1,
+                maxStandoffMm: supportSettings.tip.maxStandoffMm ?? 1.5,
+                standoffAngleThreshold: supportSettings.tip.standoffAngleThreshold ?? Math.PI / 4,
+            };
+            const socketPos = getSocketPosition(candidate.tipPos, candidate.tipNormal, tipProfile);
+            const escapeRoute = findOffsetSilhouetteRoute(
+                socketPos,
+                resolvedMesh,
+                (overrides.shaftDiameterMm ?? activeSizingBand(autoSettings).shaftDiameterMm) * 0.5,
+                synthesisMaxAngleDeg,
+                collectModelRootPoints(),
+                synthesisGridConfig,
+                MIN_TRUNK_SPACING_MM,
+            );
+            if (escapeRoute) {
+                const trunkBuilt = buildTrunkDataFromPlacement(
+                    {
+                        tipPos: candidate.tipPos,
+                        tipNormal: candidate.tipNormal,
+                        modelId: candidate.modelId,
+                        mesh: resolvedMesh,
+                        overrides,
+                        ignoreGrid: !gridEnabled,
+                    },
+                    {
+                        basePos: escapeRoute.basePos,
+                        joints: [escapeRoute.bendJoint],
+                        socketPos,
+                        coneAxis: candidate.tipNormal,
+                    },
+                );
+                let doglegBlocked = false;
+                if (!trunkBuilt.error && trunkBuilt.trunk && trunkBuilt.root) {
+                    const rootTopZ = trunkBuilt.root.transform.pos.z
+                        + trunkBuilt.root.diskHeight
+                        + trunkBuilt.root.coneHeight;
+                    let prevPos: Vec3 = {
+                        x: trunkBuilt.root.transform.pos.x,
+                        y: trunkBuilt.root.transform.pos.y,
+                        z: rootTopZ,
+                    };
+                    for (const seg of trunkBuilt.trunk.segments) {
+                        const a = seg.bottomJoint?.pos ?? prevPos;
+                        const b = seg.topJoint?.pos;
+                        if (b) {
+                            const rad = Math.max(0.2, (seg.diameter ?? 1.0) * 0.5);
+                            if (isShaftBlocked(a, b, rad, resolvedMesh)) {
+                                doglegBlocked = true;
+                                break;
+                            }
+                            prevPos = b;
+                        }
+                    }
+                }
+                if (!doglegBlocked && !trunkBuilt.error && trunkBuilt.trunk && trunkBuilt.root) {
+                    const rescuedTrunk = {
+                        ...trunkBuilt.trunk,
+                        origin: candidate.gridPoint ? ('overhang' as SupportOrigin) : ORIGIN_BY_SOURCE[candidate.source],
+                    };
+                    if (candidate.tipDiameterMm !== undefined && rescuedTrunk.contactCone) {
+                        rescuedTrunk.contactCone = applyExplicitTipCapToCone(
+                            rescuedTrunk.contactCone,
+                            Math.max(MIN_CONTACT_TIP_DIAMETER_MM, candidate.tipDiameterMm),
+                        );
+                    }
+                    draft = draftAddPrimitive(draft, 'roots', trunkBuilt.root);
+                    draft = draftAddEntity(draft, 'trunk', rescuedTrunk);
+                    // Invalidate pool so subsequent occluded neighbors on the same
+                    // feature can branch off this new dogleg trunk in Tier 1.
+                    rescuePool = null;
+                    placed.trunk++;
+                    presets[preset]++;
+                    diagnostics.candidatesBySource[candidate.source] =
+                        (diagnostics.candidatesBySource[candidate.source] ?? 0) + 1;
+                    if (candidate.gridPoint) {
+                        gridHostIds.add(rescuedTrunk.id);
+                        diagnostics.hostsByKind.gridInfill++;
+                        hostOriginById.set(rescuedTrunk.id, 'gridInfill');
+                    } else {
+                        diagnostics.hostsByKind.standalone++;
+                    }
+                    forestLedger.push({
+                        displayId: candidate.id,
+                        kind: 'trunk',
+                        entityId: rescuedTrunk.id,
+                        areaMm2: candidate.islandAreaMm2,
+                        zHeight: candidate.zHeight,
+                        preset,
+                        bandShaftMm: activeSizingBand(autoSettings).shaftDiameterMm,
+                    });
+                    continue;
+                }
+            }
+        }
+
+        // Tier 3: Standard placement fallback (short cavity bridge <=12mm or reject).
+        placeOne(candidate, false);
+        rescuePool = null;
     }
 
     timingEnd('placement');
@@ -3809,7 +4149,7 @@ export function computeAutoSupportPlan(
         let placedThisPass = 0;
         for (const c of gapCandidates) {
             const kind = placeOne(c) as PlacementOutcomeKind;
-            if (kind !== 'reject' && getSupportTypeDescriptor(kind).placementRule?.metric === 'tipHeight') placedThisPass++;
+            if (kind !== 'reject') placedThisPass++;
         }
         gapFilledTrunks += placedThisPass;
         if (placedThisPass === 0) break;
@@ -3849,7 +4189,7 @@ export function computeAutoSupportPlan(
         // already-supported surfaces (redundant "floating" leaves).
         let fraction: number;
         if (island.contactVoxels && island.contactVoxels.count > 0) {
-            fraction = computeRegionCoverage(island, allTips, coverageRadiusForArea(area, SUPPORT_COVERAGE_RADIUS_MM), resolvedMesh);
+            fraction = computeRegionCoverage(island, allTips, coverageRadiusForRegion(island, SUPPORT_COVERAGE_RADIUS_MM), resolvedMesh);
         } else {
             // No footprint (minima islands): centroid proximity fallback.
             let hit = false;
@@ -4399,6 +4739,82 @@ export function computeAutoSupportPlan(
                             ];
                         }
                     }
+
+                    // Active `cross` resolution: re-host leaves/branches that cross
+                    // another shaft after thickening onto a clear non-crossing host
+                    // (often the exact shaft they crossed) instead of leaving
+                    // intersecting geometry in the forest.
+                    const crossOrphans = orphanInfos.filter((o) => o.reason === 'cross');
+                    if (crossOrphans.length > 0) {
+                        let crossResolved = 0;
+                        const resolvedCrossIds = new Set<string>();
+                        const crossMaxAngleDeg = memberMaxAngleFromVerticalDeg(Boolean(gridEnabled));
+                        const crossPool = collectFanShaftPoints(draft);
+                        for (const o of crossOrphans) {
+                            let member: ShaftHostedMemberEntity | undefined;
+                            let memberTypeId: ShaftHostedMemberTypeId | undefined;
+                            for (const mt of SHAFT_HOSTED_MEMBER_TYPES) {
+                                const found = hostedMemberEntities(draft, mt.collectionKey)[o.id];
+                                if (found) {
+                                    member = found;
+                                    memberTypeId = mt.typeId;
+                                    break;
+                                }
+                            }
+                            const cone = member?.contactCone;
+                            if (!member || !memberTypeId || !cone?.pos || member.modelId !== modelId) continue;
+
+                            const excludeOldHost = o.hostId ? new Set<string>([o.hostId]) : undefined;
+                            const rehost = fanLeafToHost(
+                                cone.pos,
+                                modelId,
+                                crossPool,
+                                gridHostIds,
+                                `auto-cross-rehost-${o.id}`,
+                                CAVITY_FAN_RADIUS_MM,
+                                CAVITY_FAN_RADIUS_MM,
+                                crossMaxAngleDeg,
+                                autoSettings.maxAttachmentsPerTrunk,
+                                draft,
+                                resolvedMesh ?? undefined,
+                                member.origin ?? 'overhang',
+                                'nearest',
+                                undefined,
+                                excludeOldHost,
+                                autoSettings,
+                                cone.profile?.maxContactDiameterMm,
+                            );
+                            if (rehost.ok) {
+                                let nextD = draftRemoveEntity(rehost.draft, memberTypeId, o.id);
+                                if (o.knotId && nextD.knots[o.knotId]) {
+                                    nextD = draftRemovePrimitive(nextD, 'knots', o.knotId);
+                                }
+                                draft = nextD;
+                                resolvedCrossIds.add(o.id);
+                                crossResolved++;
+                                if (rehost.entityId && isLedgerKind(rehost.kind)) {
+                                    forestLedger.push({
+                                        displayId: `${o.id}-rehost`,
+                                        kind: rehost.kind,
+                                        entityId: rehost.entityId,
+                                        areaMm2: 0.05,
+                                        zHeight: cone.pos.z,
+                                        preset: presetForArea(0.05),
+                                        bandShaftMm: activeSizingBand(autoSettings).shaftDiameterMm,
+                                    });
+                                }
+                            }
+                        }
+                        if (crossResolved > 0) {
+                            console.log(LOG_PREFIX, `Cross re-host: resolved ${crossResolved}/${crossOrphans.length} shaft-crossing members.`);
+                            const postCrossCheck = validateAndCullOrphans(draft, resolvedMesh ?? undefined, modelId);
+                            draft = postCrossCheck.draft;
+                            orphanInfos = [
+                                ...orphanInfos.filter((o) => !resolvedCrossIds.has(o.id) && o.reason !== 'cross'),
+                                ...postCrossCheck.orphans.filter((o) => o.reason === 'cross'),
+                            ];
+                        }
+                    }
                 }
             } catch (e) {
                 console.warn(LOG_PREFIX, `Orphan validation failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
@@ -4428,7 +4844,7 @@ export function computeAutoSupportPlan(
             // Clicking the support rebuilt the cone from the shaft and
             // "snapped it correct"; do that globally instead of waiting
             // for a click.
-            const coneSynced = syncContactConeDiameters(draft, modelId);
+            const coneSynced = syncContactConeDiameters(draft, modelId, autoSettings);
             if (coneSynced !== draft) {
                 draft = coneSynced;
                 console.log(LOG_PREFIX, 'Contact cone sync: matched cone bodies to their host shafts.');

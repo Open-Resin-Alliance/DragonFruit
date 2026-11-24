@@ -110,15 +110,21 @@ test('coverage target constant is below 1 so edge voxels do not force infinite f
     assert.ok(REGION_COVERAGE_TARGET > 0 && REGION_COVERAGE_TARGET < 1);
 });
 
-test('tip influence grows with height above the tip', () => {
-    const region = rectRegion('o0', -10, 10, -10, 10);
-    // Same center tip at the region plane: 3mm disc.
-    const flat = computeRegionCoverage(region, [{ x: 0, y: 0, z: 10 }]);
-    // Same tip 15mm below the region: 5mm disc covers ~2.8× the area.
-    const grown = computeRegionCoverage(region, [{ x: 0, y: 0, z: -5 }]);
+test('tip influence grows with height above the tip on sloped overhangs and stays tight on flats', () => {
+    const slopedRegion = { ...rectRegion('o0', -10, 10, -10, 10), overhangAngleDeg: 35 };
+    // Same center tip at the sloped region plane: 3mm disc.
+    const flat = computeRegionCoverage(slopedRegion, [{ x: 0, y: 0, z: 10 }]);
+    // Same tip 15mm below the sloped region: capped +1.5mm growth -> 4.5mm disc (~2.25× area).
+    const grown = computeRegionCoverage(slopedRegion, [{ x: 0, y: 0, z: -5 }]);
     assert.ok(grown > flat * 2, `grown coverage ${grown} > 2× flat ${flat}`);
-    const expected = (Math.PI * 25) / 400;
+    const expected = (Math.PI * 4.5 * 4.5) / 400;
     assert.ok(Math.abs(grown - expected) < 0.02, `grown coverage ${grown} ≈ ${expected}`);
+
+    // Flat ceiling (0°): zero upward growth so lower tips never falsely cover higher flats.
+    const flatCeiling = { ...rectRegion('f0', -10, 10, -10, 10), overhangAngleDeg: 0 };
+    const flatAtZ = computeRegionCoverage(flatCeiling, [{ x: 0, y: 0, z: 10 }]);
+    const flatBelow = computeRegionCoverage(flatCeiling, [{ x: 0, y: 0, z: -5 }]);
+    assert.equal(flatBelow, flatAtZ, 'flat overhang does not grow influence upward with diffZ');
 });
 
 test('coverageRadiusForArea shrinks discs on large regions', () => {
@@ -127,10 +133,10 @@ test('coverageRadiusForArea shrinks discs on large regions', () => {
     assert.equal(coverageRadiusForArea(32), TIP_COVERAGE_RADIUS_MM / 2, '32mm² halves the radius');
     assert.equal(coverageRadiusForArea(400), TIP_COVERAGE_RADIUS_MM / 2, 'floored at half radius');
 });
-test('gap-fill packs large flats denser than small regions', () => {
-    // 4mm tip grid over a 20×20 footprint: at the small-region radius
-    // (3mm) the discs overlap to full coverage → no fills; at the
-    // large-region radius (1.5mm) only ~44% is covered → fills emitted.
+test('gap-fill packs large flats denser than small sloped regions', () => {
+    // 4mm tip grid over a 20×20 footprint: on a small steep overhang (3mm bridge
+    // radius) the discs overlap to full coverage → no fills; on a large flat
+    // (1.5mm area-shrunk radius) only ~44% is covered → fills emitted.
     const tips = [];
     for (let x = -10; x <= 10; x += 4) {
         for (let y = -10; y <= 10; y += 4) {
@@ -139,10 +145,10 @@ test('gap-fill packs large flats denser than small regions', () => {
     }
     const settings = createDefaultAutoSupportSettings();
     const smallGaps = buildGapFillCandidates(
-        [{ ...rectRegion('small', -10, 10, -10, 10), areaMm2: 4 }], settings, tips);
+        [{ ...rectRegion('small', -10, 10, -10, 10), areaMm2: 4, overhangAngleDeg: 35 }], settings, tips);
     const bigGaps = buildGapFillCandidates(
-        [{ ...rectRegion('big', -10, 10, -10, 10), areaMm2: 400 }], settings, tips);
-    assert.equal(smallGaps.length, 0, 'small region fully covered at 3mm discs');
+        [{ ...rectRegion('big', -10, 10, -10, 10), areaMm2: 400, overhangAngleDeg: 0 }], settings, tips);
+    assert.equal(smallGaps.length, 0, 'small sloped region fully covered at 3mm discs');
     assert.ok(bigGaps.length > 0, 'large flat needs fills at 1.5mm discs');
 });
 

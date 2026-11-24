@@ -339,11 +339,12 @@ export function deduplicateCandidates(
                             }
                             continue;
                         }
-                        // Discrete islands (voxel/minima/intersection) and near-base
-                        // overhang points (e.g. slightly sloped soles) use the flat
-                        // 3D ball only so higher-Z points on a sloped foot aren't
-                        // erased by the vertical influence-radius growth.
-                        if (c.source !== 'overhang' || r.source !== 'overhang' || (c.nearBase && r.nearBase)) {
+                        // Discrete islands (voxel/minima/intersection), near-base
+                        // overhang points, and shallow/flat overhang faces (|nz| > 0.90)
+                        // use the flat 3D ball only so a heel contact never erases
+                        // higher-Z toe contacts on a gently tilted foot sole.
+                        const bothShallowOverhang = Math.abs(c.tipNormal.z) > 0.90 && Math.abs(r.tipNormal.z) > 0.90;
+                        if (c.source !== 'overhang' || r.source !== 'overhang' || (c.nearBase && r.nearBase) || bothShallowOverhang) {
                             const ddz = c.tipPos.z - r.tipPos.z;
                             if (ddx * ddx + ddy * ddy + ddz * ddz <= baseRadiusSq) {
                                 duplicate = true;

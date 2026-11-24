@@ -123,10 +123,10 @@ test('angle-aware density: flat anchor surfaces grid denser than slopes', () => 
 
 test('skips regions below the grid area threshold', () => {
     const settings = { ...createDefaultAutoSupportSettings(), gridAreaThresholdMm2: 25 };
-    // A compact patch: 3 × 3 mm, under the gate and shorter than the two-point
-    // band, so it keeps the single-candidate path. (Longer footprints go to
-    // the grid path on shape — see the rib test below.)
-    const candidates = generateGridCandidates([rectRegion('o0', -1.5, 1.5, -1.5, 1.5, 9)], settings);
+    // A compact patch: 2 × 2 mm, under the gate and shorter than the shape-grid
+    // span threshold (3 mm), so it keeps the single-candidate path. (Longer
+    // footprints go to the grid path on shape — see the rib test below.)
+    const candidates = generateGridCandidates([rectRegion('o0', -1.0, 1.0, -1.0, 1.0, 4)], settings);
     assert.equal(candidates.length, 0, 'small region gets a single support, not a grid');
 });
 
@@ -352,19 +352,19 @@ test('MED-04: suction-boosted overflow (> 800) falls back to angle-only spacing 
  */
 test('a long thin rib under the area threshold gets its edge supported', () => {
     const settings = createDefaultAutoSupportSettings();
-    const plank = rectRegion('p0', -7.5, 7.5, -0.65, 0.65, 19.5); // 15 × 1.3 mm
+    const plank = rectRegion('p0', -3.0, 3.0, -0.25, 0.25, 3.0); // 6 × 0.5 mm (< 4 mm² area gate, >= 3 mm span)
 
     assert.ok((plank.areaMm2 ?? 0) < settings.gridAreaThresholdMm2, 'fixture sits under the area gate');
     assert.equal(shouldUseDensityGrid(plank, settings), true, 'shape, not area, decides');
 
     const candidates = generateGridCandidates([plank], settings);
     const xs = candidates.map((c) => c.tipPos.x);
-    assert.ok(candidates.length >= 5, `an edge line, not one pillar (${candidates.length})`);
-    assert.ok(Math.max(...xs) - Math.min(...xs) > 10,
+    assert.ok(candidates.length >= 3, `an edge line, not one pillar (${candidates.length})`);
+    assert.ok(Math.max(...xs) - Math.min(...xs) > 3.5,
         `supports span the rib (${(Math.max(...xs) - Math.min(...xs)).toFixed(1)}mm)`);
 
-    // ...and a compact patch stays on the single-candidate path.
-    const patch = rectRegion('p1', -2, 2, -2, 2, 16);
+    // ...and a compact patch under both area and span stays on the single-candidate path.
+    const patch = rectRegion('p1', -0.75, 0.75, -0.75, 0.75, 2.25);
     assert.equal(shouldUseDensityGrid(patch, settings), false, 'small patches keep the pillar path');
 });
 
@@ -536,7 +536,7 @@ test('near-plate flat overhangs (e.g. 32mm mini feet) get perimeter and infill b
 });
 
 test('lifted modelMinZ preserves base-overhang density window and deduplicateCandidates keeps sloped grid points', () => {
-    const settings = createDefaultAutoSupportSettings();
+    const settings = { ...createDefaultAutoSupportSettings(), gridAreaThresholdMm2: 25 };
     const liftedFoot: DetectedIsland = {
         ...rectRegion('foot-lifted', -1, 1, -1, 1, 4, 6.5), // z = 6.5mm (> 5mm world, <= 5mm above modelMinZ = 5mm)
         perimeterLoops: [[[-1, -1, 6.5], [1, -1, 6.5], [1, 1, 6.5], [-1, 1, 6.5]]],

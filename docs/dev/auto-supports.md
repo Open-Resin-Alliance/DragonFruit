@@ -26,10 +26,10 @@ Six phases inside `computeAutoSupportPlan` (`autoPlace.ts`):
 | # | Phase | What happens |
 | - | ----- | ------------ |
 | 0 | Settings | Normalize; bail out returning `null` when disabled |
-| 1 | Generate candidates | Turn detected islands into `CandidatePoint`s, then the two anchor-broadening passes: stabilization anchors, minima reinforcement |
-| 2 | Deduplicate | Collapse candidates that would support the same spot |
-| 3 | Place | The bulk of the work — fixed-density ring + grid infill distribution, trunk/leaf decisions, collision checks, gap filling |
-| 4 | Forest resize | Re-derive every trunk's stepwise diameter now that the forest is known |
+| 1 | Generate candidates | Turn detected islands into `CandidatePoint`s (with corner-first perimeter + interior sampling on overhangs `≥ 4 mm²` or `≥ 3 mm` span), then stabilization anchors and minima reinforcement |
+| 2 | Deduplicate | Collapse nearby candidates (flat overhang pairs keep a 3D ball so lower heels never erase higher toes; sloped overhangs use grown influence) |
+| 3 | Synthesize & place | Cluster-first tree synthesis (`treeSynthesis.ts`) places all well-spaced cluster trunks first (`MIN_TRUNK_SPACING_MM` or distinct grid nodes), attaches clustered contacts, runs the 3-tier plate-first occluded rescue ladder, then chunk consolidation and angle-aware gap filling |
+| 4 | Forest resize & cross-fix | Re-derive stepwise trunk diameters, sync member-proportioned leaf cone bodies (`syncContactConeDiameters`), validate/cull orphans, and actively re-host shaft-crossing (`cross`) members onto clear hosts |
 | 5 | Auto-bracing | Braces computed into the same draft, so they ride the one commit |
 
 ## Candidates
@@ -133,25 +133,31 @@ There is no anchor selection, no bake-off, and no grid/Poisson split. Every
 overhang region above `gridAreaThresholdMm2` gets the same treatment in
 `generateGridCandidates` (`gridPlacement.ts`):
 
-- **Boundary ring** — the region's perimeter resampled at fixed spacing in the
-  2D-projected plane (`sampleBoundary2D`). Projection is the point: Z does
-  not lengthen a boundary, so a sliver's ring is a short line and can never
-  climb a limb. Each sample's Z comes from the surface sampler.
+- **Boundary ring (corner-first)** — the region's perimeter resampled at fixed
+  spacing in the 2D-projected plane (`sampleBoundary2D`). Pass 1 pins sharp
+  convex corners (turning angle ≥ 35°, e.g., toe tips and rim corners) and local
+  Z minima first (deduped at `max(1.1, 0.55 × spacing)` so bottom-layer tips do
+  not fuse under UV bleed); Pass 2 fills remaining arc-length spans at the ring
+  spacing. Projection is the point: Z does not lengthen a boundary, so a
+  sliver's ring is a short line and can never climb a limb. Each sample's Z
+  comes from the surface sampler.
 - **Grid infill** — a lattice over the footprint bbox at `computeRegionSpacing`
-  (angle + suction curve; the spacing holds at the flat end until
+  (angle + suction curve; its suction reference area is decoupled from
+  `gridAreaThresholdMm2` so small soles entering the perimeter path do not
+  compress large-slab spacing, and the spacing holds at the flat end until
   `SLOPE_RELAX_RAMP_START` of the way to the self-support angle — see the rules
   below), skipped for slivers and for footprints thinner than
   one lattice cell (`Math.min(width, height) < spacing`), where the rows would
   land a fraction of a millimeter apart and double the density of a rib the
   ring already carries end to end. The lattice spans the region with integer
   rows/columns, inset by the contact radius.
-- **Shape handles degenerate cases**: below the area threshold the region keeps
-  its single-candidate path (one pillar) *unless* `shouldUseDensityGrid` routes
-  it here on shape — a footprint longer than `ISLAND_TWO_POINT_MAX_MM` (6 mm).
-  A thin rib can sit well under the area gate (a 15 × 1.3 mm plank underside is
-  19.5 mm²) and one centre pillar leaves both ends of the anchoring edge
-  unsupported; the ring is what it needs, and the two-point band already
-  handles anything shorter. Sliver → ring only; normal face → ring + infill.
+- **Shape handles degenerate cases**: `shouldUseDensityGrid` routes any overhang
+  at or above `gridAreaThresholdMm2` (default `OVERHANG_GRID_MIN_AREA_MM2`,
+  4 mm²) **or** with major footprint span at or above
+  `OVERHANG_GRID_MIN_SPAN_MM` (3 mm) to perimeter + interior sampling — catching
+  miniature soles, chins, cuffs, and thin ribs that a 25 mm² gate used to leave
+  on one center pillar. Compact patches under both thresholds keep the
+  single-candidate path. Sliver → ring only; normal face → ring + infill.
   `MAX_GRID_CANDIDATES_PER_REGION` (800) caps each region, falling back to
   angle-only spacing and even subsampling — never silently denser.
 
@@ -178,7 +184,68 @@ anchor density, and the anchor girth multiplier. Density is one knob:
 
 ## Coverage and gap filling
 
-A tip covers surface within `TIP_COVERAGE_RADIUS_MM` (3 mm) at its own height, widening along the `influenceRadiusMm` support curve above (4mm by 3.9mm up, 5mm by 15mm, capped 6mm) — tall regions need fewer fresh tips. Large flat regions pack denser: `coverageRadiusForArea` shrinks the effective disc sublinearly with footprint area (traction ∝ cross-section), floored at half radius. A region needs no gap filling once `REGION_COVERAGE_TARGET` (95%) is met; uncovered clusters below `MIN_GAP_CLUSTER_MM2` (2 mm²) are not worth filling, and there are at most `MAX_GAP_FILL_PASSES` (3) passes per run. Dedup uses the grown disc in 2D for overhang-lattice pairs, except pairs more than `SUPPORT_RESTSTACK_DELTA_MM` (5 mm) apart in Z never suppress each other (staircase shelves keep their supports). Discrete islands (voxel/minima/intersection) always use the flat 3D ball — neighboring islands must never eat each other.
+Coverage uses an underside-angle bridge radius (`bridgeRadiusForAngleDeg`,
+combined with footprint area via `coverageRadiusForRegion`) rather than a single
+3→6 mm disc everywhere:
+
+- Flat ceilings (0–15°) peel hard and bridge only `FLAT_OVERHANG_BRIDGE_RADIUS_MM`
+  (1.8 mm) in green-state resin, with **zero upward influence growth** across
+  flat faces (`coverRadiusSq` disables `influenceRadiusMm` growth at ≤ 15° and
+  caps it at +1.5 mm above 15°).
+- Moderate slopes (15–35°) ramp linearly from 1.8 mm to 2.6 mm; steep
+  self-supporting faces (≥ 35°) keep `TIP_COVERAGE_RADIUS_MM` (3.0 mm).
+- Large flat regions still pack denser via `coverageRadiusForArea` (floored at
+  half radius).
+
+A region needs no gap filling once `REGION_COVERAGE_TARGET` (95%) is met;
+uncovered clusters below `MIN_GAP_CLUSTER_MM2` (1.5 mm²) are skipped, and there
+are at most `MAX_GAP_FILL_PASSES` (3) passes per run. In `deduplicateCandidates`,
+flat overhang pairs (`|nz| > 0.90`) use the flat 3D ball so a lower heel never
+erases higher-Z toe tips on gently tilted soles; sloped overhang pairs still use
+the grown 2D disc (subject to `SUPPORT_RESTSTACK_DELTA_MM`, 5 mm), and discrete
+islands (voxel/minima/intersection) always keep the flat 3D ball.
+
+## Cluster-first tree synthesis and occluded rescue
+
+Before placing shafts, `computeAutoSupportPlan` runs **Phase 2: Cluster-First
+Tree Synthesis** (`src/supports/autoSupport/treeSynthesis.ts`) for both organic
+and grid modes:
+
+- **Public surface**: `synthesizeTreeClusters(candidates, options)` (options:
+  `TreeSynthesisOptions`, `TreeSynthesisGridConfig`; returns `TreeClusterPlan`
+  with `nearPlate`, `trunkAnchors`, `clusteredMembers: ClusteredMemberAssignment[]`,
+  and `occludedQueue`), `computePlateReachability`, `isTooCloseToExistingTrunk`,
+  and `findOffsetSilhouetteRoute` (returning `SilhouetteEscapeRoute | null`).
+- **Two-pass skeleton build**: `synthesizeTreeClusters` runs a batch downward
+  raycast (`computePlateReachability`), then a deterministic greedy downward-cone
+  set cover over plate-clear elevated contacts — prioritizing primary discrete
+  islands and lower-Z leading edges on slopes — while enforcing
+  `MIN_TRUNK_SPACING_MM` (2.5 mm) in organic mode or distinct grid intersections
+  in grid mode. **Pass 2a** builds near-plate overrides and *all* cluster trunk
+  anchors first; **Pass 2b** attaches clustered contacts onto the completed
+  trunk skeleton (preferring each contact's assigned anchor trunk) before falling
+  back to standalone placement. `collectFanShaftPoints` resolves every segment
+  through `hostSegmentSpan` so bottom trunk segments (rising from the root top
+  with no `bottomJoint`) are available to Pass 2b, fanning, consolidation, and
+  rescue.
+- **Phase 3 plate-first occluded rescue ladder**: vertically blocked contacts
+  retry in strict priority order: (1) wide clear-trunk branch search across the
+  full skeleton up to `CAVITY_FAN_RADIUS_MM` (12 mm); (2) a collision-free
+  2-segment silhouette dogleg trunk via `findOffsetSilhouetteRoute` (8 azimuths
+  × 3 tight radial offsets 2.5 / 4.0 / 5.5 mm, verified against the SDF and
+  `isShaftBlocked`, leaving zero extra model scars); (3) short model-to-model
+  cavity bridge (`twig`/`stick`, `buildCavityBridge`) only when neither plate
+  route clears.
+
+```ts
+const plan = synthesizeTreeClusters(candidates, {
+    maxAngleFromVerticalDeg: 45,
+    maxReachMm: 8,
+    maxAttachmentsPerTrunk: 12,
+    minTrunkSpacingMm: MIN_TRUNK_SPACING_MM,
+    mesh,
+});
+```
 ## Sizing is empirical, not physics
 
 > [!WARNING]
@@ -296,7 +363,7 @@ The three model factors above ride on the **trunk**, which is built from the can
 
 **The floor never costs a placement.** A thicker member can fail the clearance test its band diameter passed, and the first version of this change did exactly that: on the scaled harness it turned 5 consolidation links into `blocked` refusals and cost 2 branches and 1 trunk (a refused candidate degrades to a standalone pillar, which on a real part then culls as `hostBlocked` and strands its members as `missingHost` — the "went sideways" report). `buildHostedBranch` (`autoPlace.ts`) therefore builds at the floor first and, **only if the built member is rejected by the site's clearance gate**, rebuilds at `band.shaftDiameterMm` — the member the pre-floor run placed. The predicate is deliberately the clearance gate alone (build error, SDF collision): the departure angle, the cross check and the host capacity are properties of the chord and the snapshot, identical at either diameter, so they stay where they were. Measured on the scaled harness with the fallback in place, floor-on and floor-off differ in **exactly nothing** but the member diameters — same entities, same fan/merge/consolidation refusals, same orphan counts, same host diameters. Without it the same harness loses 2 branches, 1 trunk and 7 refusals at 0.65, 0.70 and 0.80.
 
-All five branch sites carry it — the merge path, `fanLeafToHost`, `buildConsolidationBranch`, the coverage-stub branch, and the grid attach in `PlacementLogic/Grid/gridPlacement.ts` (which also uses the floored radius for its own clearance check before falling back). A leaf needs nothing: its cone body already **is** the host shaft, by `syncContactConeDiameters`.
+All five branch sites carry it — the merge path, `fanLeafToHost`, `buildConsolidationBranch`, the coverage-stub branch, and the grid attach in `PlacementLogic/Grid/gridPlacement.ts` (which also uses the floored radius for its own clearance check before falling back). `syncContactConeDiameters` applies the same member proportion (`memberHostShaftRatio`, capped at host shaft and floored at the active band) to leaf cone bodies so detail leaves never bloat into full thickened trunk-diameter clubs while keeping solid knot junctions.
 
 This is the member-side counterpart of the forest resize, which runs the other way: the resize thickens a **host** to match its fattest member, the floor thickens a **member** to stay within `memberHostShaftRatio` of its host. Neither can feed the other — a member at 0.7 of its host is never the fattest thing on it, and the host diameter measured identical with the floor on and off.
 
@@ -341,7 +408,7 @@ The overlay ramps its colour by that share (`IslandOverhangOverlay`), and it sho
 - **Every member must clear the branch-angle rule — and the gate looks at the shaft, not the chord.** `memberMaxAngleFromVerticalDeg()` derives the steepest lean a member may take from the user's branch angle (`grid.minBranchAngleDeg`, **60° above horizontal** ⇒ ≤30° from vertical) — the same rule the grid attach path enforces through `getLengthAwareMaxAngleFromVerticalDeg`. It bounds every auto path: the placement fan (`min(leafFanMaxAngleDeg, 30°)`), the merge knot search (`STEEP_MIN_RISE_DEG = max(45°, minBranchAngleDeg)`), the routed-branch caps, and the chunk-consolidation relaxation below. `branchDepartureAngleDeg()` then re-checks the **built** branch where it actually leaves the host (knot → first shaft joint): the contact cone is clamped toward the surface normal, so a branch can pass the knot→tip gate and still run out nearly level, bending into a steep cone only at the tip — on a speck field every branch chord read 30° while every shaft left at 42°. A member that would sag is refused and its pillar stays standalone instead. The consolidation routed-branch host pick therefore aims at the *steepest* eligible sample rather than the nearest: the cone bend eats the last couple of millimetres of rise, and reaching further down the shaft buys it back. Before this the fan used 45°, merge 45° rise and consolidation 75° from vertical, and nothing consulted the configured branch angle at all.
 - **Overhang pillars consolidate into chunk trees.** After placement, neighbouring ring/infill/standalone pillars (and the reinforcement origin, the one non-overhang host flagged convertible) fan into each other (`CONSOLIDATION_FAN_RADIUS_MM`, 8 mm — an upper bound, not a target, capacity `maxAttachmentsPerTrunk`) — supports release in chunks with one plate contact per chunk. Consolidation asks `fanLeafToHost` for the **nearest** eligible host (`hostOrder: 'nearest'`), where placement fanning asks for the steepest: a chunk link is a local tie between neighbouring pillars, and steepest-in-reach skips the adjacent pillar for a taller one up to the full 8 mm, which reads as a stray 6–8 mm diagonal across the lattice. The consolidation angle is relaxed past the placement fan — `min(max(leafFanMaxAngleDeg, CONSOLIDATION_MAX_ANGLE_DEG = 75°), 90° − minBranchAngleDeg)` — because on a surface sloped <45° from horizontal, neighbouring pillars can never satisfy the placement gate (the link angle is always 90° − surface slope), so chunking would be geometrically impossible. The branch-angle rule still caps the relaxation, so links shallower than it leave the pillar standalone. The chunk's interior hosts carry the load; the links that survive are connective tissue. Same-height pillars (vertical drop < 0.4 mm) never straight-fan; when the straight leaf is blocked, crosses, or the surface is too flat AND the tip sits at ≥ `CONSOLIDATION_BRANCH_MIN_HEIGHT_MM` (10 mm), a **routed branch** attaches it to a host shaft instead — high above the plate that reads as a tree; near the plate it is suppressed (it would read as a zig-zag web). Near-plate contacts (tip Z < `ANCHOR_HEIGHT_THRESHOLD_MM`, 5 mm) place as [stump](../reference/support-anatomy/stump.md) primitives and stay standalone.
 - **Grid trunks are fanning hosts only up close.** `GRID_HOST_FAN_RADIUS_MM` (2.5 mm) is deliberately tighter than the general `LEAF_FAN_RADIUS_MM` (8 mm, matching the `leafFanRadiusMm` default/min of 8 mm), so fan leaves do not sweep across the grid forest and puncture its shafts.
-- **Long spans become branches, not leaves.** A leaf is a seg-less tapered cone (host-diameter body → ~0.28 mm contact), so past ~6 mm it reads as a spindly spike next to its trunk. Island spans over `MAX_LEAF_SPAN_BEFORE_BRANCH_MM` (6 mm) route to branches with real shafts in both the merge path and `fanLeafToHost` — measured knot→tip (the span the member actually bridges), not tip-to-host-tip, which understates it when the knot sits low on the shaft. Failed branch attempts fall through to the next candidate or the standalone-trunk path, never to a long cone. **Every origin routes, overhang included.** Overhang fanning used to stay a leaf by rule past the threshold, which is how a merged 11.6 mm tapered spike got built next to its trunk: the threshold is about the *member's* shape, not about which surface the tip touches, and `buildConsolidationBranch` has always built overhang-origin branches. A candidate whose link is past the threshold now gets a branch or (when no host sample gives one a legal departure) a pillar of its own — the consolidation pass merges pillars into chunk trees, which is the designed remedy for pillars standing next to fan leaves.
+- **Long spans become branches, not leaves.** A leaf is a seg-less tapered cone (member-proportioned body → ~0.28 mm contact), so spans past `MAX_LEAF_SPAN_BEFORE_BRANCH_MM` (4.5 mm) route to branches with real shafts in both the merge path and `fanLeafToHost` — measured knot→tip (the span the member actually bridges), not tip-to-host-tip, which understates it when the knot sits low on the shaft. In `fanLeafToHost`, when no legal branch shaft fits below the contact cone (for example a low near-plate contact where `tipLengthMm` consumes the available rise), a secondary slim-leaf fallback is permitted strictly up to `MAX_LEAF_FALLBACK_SPAN_MM` (5.9 mm) rather than spawning a redundant trunk; 6+ mm spikes are never built. **Every origin routes, overhang included.** Overhang fanning used to stay a leaf by rule past the threshold, which is how a merged 11.6 mm tapered spike got built next to its trunk: the threshold is about the *member's* shape, not about which surface the tip touches, and `buildConsolidationBranch` has always built overhang-origin branches. A candidate whose link cannot legally attach gets a pillar of its own — the consolidation pass merges pillars into chunk trees, which is the designed remedy for pillars standing next to fan leaves.
 - **A short grid span may lean past the configured angle; the allowance is length-aware.** The grid attach path applies `getLengthAwareMaxAngleFromVerticalDeg` to the **built shaft's first segment** (knot → first joint), not to the knot→tip chord: under 3 mm the configured angle is a floor and the member may lean to 60° from vertical, 3–5 mm tapers back, and past 5 mm only the configured angle passes. **60° is the whole allowance, occupied node included**: an occupied node used to add the socket elbow on top (75° from vertical, 15° above flat) on the argument that refusing the graft leaves the tip unplaced, and that extra is what put a near-horizontal member at a junction. Dropping it costs nothing — the flat-region case, a host standing only as tall as its clearance with tips beside it, is served entirely by the 60° below, and 55° is where the tips start being refused (35 attachments against 60+). A leaf is gated on its own span too, because a leaf is one tapered cone and its chord *is* the member. The knot→tip chord is only a pre-filter, and it has to use the **loosest** allowance that gate can grant (75° at an occupied node, 60° otherwise): measured against the length-aware allowance instead, it dropped knots the gate would have taken, so a tip 3 mm off its host and 1 mm under its top grafted 6 mm down the shaft, because every knot above it had a straight line to the tip shallower than the branch angle while its built shaft left at 31.7° against the 60° it is allowed. It is the same allowance the socket elbow and the short-span detour slack are justified by — a strut under 3 mm leaning to 60° from vertical is mechanically sound. Flat mode needed it because a flat region's hosts are only as tall as the region's clearance, so a tip on a 1.5 mm tip lattice 4 mm from any node could not leave its host at the configured 60° above horizontal: on a 20×20 flat underside, 155 of 224 tips were refused and the region ended at 86% area coverage with 25 lonely pillars. Length-aware, the same fixture is 67 attachments and 99% coverage — the tips still refused are the ones no legal member reaches from their node, which is the rule working, not a gap. `satisfiesMinAngleFromHorizontal` (the flat test) is gone with this.
 - **The run reports a load budget, and changes nothing with it.** `computeLoadBudget`
   (`loadBudget.ts`) gives every island a demand in **mm² of unsupported surface** (its own
@@ -373,7 +440,7 @@ The overlay ramps its colour by that share (`IslandOverhangOverlay`), and it sho
 - **A host, and therefore its knots, belong to one model.** The snapshot holds every model's forest and `collectFanShaftPoints` samples all of it, so host selection filters on the host's `modelId`: `fanLeafToHost`, `buildConsolidationBranch`, the consolidation conversion loop and the flat-island stub pass all `continue` when the host belongs to another model. Unfiltered, a run for one model attached its leaves to a neighbouring model's shafts, created knots on that model's segments, and -- worst -- *converted that model's bare standalone pillars into its own leaves* (conversion deletes the pillar). `findMergeHost` is the one path that always filtered.
 - **Auto knot ids must be free in the draft.** `draftAddPrimitive` REPLACES on an id collision instead of failing, and auto knot ids derive from candidate/island ids -- which restart per scan (`v0`/`m0`/`o0`, so two models rebuild the same ids) and repeat across gap-fill passes. A reused id silently re-parents the member that already owned that knot onto this run's host shaft, rendering as a long member reaching across from the other model's structure. `freeKnotId` allocates the free id at every member-creating site: the two fan paths, `buildConsolidationBranch`, and the merge path.
 - **Relaxation toward the slope spacing is a last stretch, not a ramp from flat.** `computeRegionSpacing` blends `flatDensityBoost` (0.7 ⇒ ~2× the supports) to `slopeRelaxFactor` (1.3 ⇒ ~0.6×) by the region's angle from horizontal, and it used to blend **linearly from 0°** to the self-support threshold: a 25° underside — a shallow *formation* overhang, which peels and needs the density exactly as a flat ceiling does — took 56% of the relaxation. Only the end of the band prints by itself, which is what relaxation is for, so the ramp now starts at `SLOPE_RELAX_RAMP_START` (0.6 ⇒ 27° at the 45° default) and runs from there to the threshold. It is continuous (the flat value holds *at* the start, so the spacing does not step) and the knob keeps its meaning at the end of the band it names. Measured on the corpus's own 25° underside (`sloped-cantilever`: 215 → 337 candidates, 183 → 313 contacts, member volume 1299 → 2087 mm³) while **every other entry stayed byte-identical** — the 0° ceilings and the 60° steep flat included. That last part is the shape such a change has to have: one angle band moving, not the whole density curve. The consequence to know: below the ramp's start `slopeRelaxFactor` has no effect, because nothing there is a slope in the sense the knob means.
-- **Orphan validation after resize.** After `computeForestDiameterProfile` the pipeline rehosts legacy knots and runs `validateAndCullOrphans` (drift >0.5 mm, missing host/segment, and `blocked` members culled — `return false`; only `cross` is kept and reported — `return true`). A knot on a top segment is valid — top segments carry no `topJoint` by design, so the host trunk's contact cone stands in as the segment top. Culled leaves/branches and their orphan knots are removed, `ForestReport.orphans[]` lists `id/kind/reason/hostId/knotId/detail`, and `forestReportToText` emits `ORPHANS CULLED`. This is where the "leaf attached to nowhere" (drifted knot after a host trunk’s diameter split) is caught — check the report before the render.
+- **Orphan validation and active `cross` re-hosting after resize.** After `computeForestDiameterProfile` the pipeline rehosts legacy knots and runs `validateAndCullOrphans` (drift >0.5 mm, missing host/segment, and `blocked` members culled — `return false`; only `cross` is kept and reported — `return true`). When `cross` orphans exist on the current model, `computeAutoSupportPlan` attempts to actively re-host each crossing leaf or branch via `fanLeafToHost` (excluding its old host) onto a clear non-crossing shaft, removing the old crossing entity and knot when re-hosting succeeds, and re-runs `validateAndCullOrphans` so resolved crosses drop out of the report. A knot on a top segment is valid — top segments carry no `topJoint` by design, so the host trunk's contact cone stands in as the segment top. Culled leaves/branches and their orphan knots are removed, `ForestReport.orphans[]` lists `id/kind/reason/hostId/knotId/detail`, and `forestReportToText` emits `ORPHANS CULLED`. This is where the "leaf attached to nowhere" (drifted knot after a host trunk’s diameter split) is caught — check the report before the render.
   - **A knot must be placed on the same line the drift check measures.** `hostSegmentSpan` is the single resolver for a host segment's world span (root top when the bottom segment carries no `bottomJoint`, contact cone when the top segment carries no `topJoint`), and both the merge knot search and `validateAndCullOrphans` go through it. Do not give either side its own fallback: they used to differ — the search fabricated `(0, 0, rootTopZ)` — and the two lines coincide only for a trunk rooted at the world origin, so every member merged onto an off-origin host was placed beside its shaft and then culled as `drift`. A support that is placed and then silently culled leaves its island unsupported with only a `drift` line in the report to show for it; the members are not re-placed, so the coverage number is the only other clue.
 - **Contact resolution is hole-tolerant.** `resolveSurfaceNormal` casts upward from just below the candidate (underside contact), then downward from above (top-surface contact, normal flipped), and walks a small disc of lateral offsets (radii 0, 0.75, 1.5, 2.25 mm) before giving up. A punched drain hole directly above the candidate used to swallow the single upward ray, after which the downward fallback landed on the far side of the wall — in a cavity, on the floor with a flipped normal — and the candidate was rejected outright, so the interior ceiling lost every support the moment a hole was punched through it. A hit below the candidate is never accepted, in either direction.
 - **A candidate within `ALREADY_SUPPORTED_RADIUS_MM` (3 mm) of an existing tip is already supported** and is skipped.

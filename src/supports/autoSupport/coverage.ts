@@ -5,14 +5,14 @@ import type { AutoSupportSettings } from './settings';
 import type { SupportState } from '../types';
 import { SUPPORT_STATE_TYPES, contactEndpointsFor } from '../supportTypeRegistry';
 import { cellKey, footprintX, footprintY, footprintZ } from '@/volumeAnalysis/Islands/voxelFootprint';
-import { influenceRadiusMm } from './constants';
+import { bridgeRadiusForAngleDeg, influenceRadiusMm } from './constants';
 
 /** A tip covers surface within this radius (mm) — mirrors ALREADY_SUPPORTED_RADIUS_MM. */
 export const TIP_COVERAGE_RADIUS_MM = 3.0;
 /** Region coverage fraction at which no gap-filling is needed. */
 export const REGION_COVERAGE_TARGET = 0.95;
-/** Minimum uncovered cluster area (mm²) worth filling. */
-export const MIN_GAP_CLUSTER_MM2 = 2.0;
+/** Minimum uncovered cluster area (mm²) worth filling (catches bare toe pads & ledges). */
+export const MIN_GAP_CLUSTER_MM2 = 1.5;
 /** Max gap-fill passes per run. */
 export const MAX_GAP_FILL_PASSES = 3;
 
@@ -28,6 +28,20 @@ export function coverageRadiusForArea(areaMm2: number, baseRadiusMm: number = TI
     if (!(areaMm2 > 0)) return baseRadiusMm;
     const scale = Math.sqrt(8 / Math.max(areaMm2, 8));
     return baseRadiusMm * Math.max(0.5, scale);
+}
+
+/**
+ * Angle- and area-aware effective bridge radius (mm) for an overhang region.
+ * Flat ceilings (0–15°) bridge only ~1.8 mm laterally in green-state resin;
+ * steeper slopes bridge further up to `baseRadiusMm` (3.0 mm).
+ */
+export function coverageRadiusForRegion(
+    region: Pick<DetectedIsland, 'areaMm2' | 'overhangAngleDeg'>,
+    baseRadiusMm: number = TIP_COVERAGE_RADIUS_MM,
+): number {
+    const angleCap = Math.min(baseRadiusMm, bridgeRadiusForAngleDeg(region.overhangAngleDeg));
+    const areaRadius = coverageRadiusForArea(region.areaMm2 ?? 0, baseRadiusMm);
+    return Math.min(angleCap, areaRadius);
 }
 
 /** Collect support-tip world positions from a support snapshot. */
@@ -69,11 +83,14 @@ const MAX_INFLUENCE_GROWTH_MM = Math.max(
     influenceRadiusMm(Number.POSITIVE_INFINITY) - TIP_COVERAGE_RADIUS_MM,
 );
 
-/** Square of the disc a tip covers at a voxel `vz` above `tipZ` (-1 when `tipZ` lies >1 mm above `vz`). */
-function coverRadiusSq(vz: number, tipZ: number, radiusMm: number): number {
+/** Square of the disc a tip covers at a voxel `vz` above `tipZ` (-1 when `tipZ` lies >1 mm above `vz`).
+ *  Flat/shallow ceilings (≤15°) do not get upward influence growth across the face,
+ *  so a heel tip cannot falsely claim a forefoot 4 mm away as covered. */
+function coverRadiusSq(vz: number, tipZ: number, radiusMm: number, shallowRegion: boolean): number {
     if (tipZ - vz > 1.0) return -1;
-    const growth = influenceRadiusMm(vz - tipZ) - TIP_COVERAGE_RADIUS_MM;
-    const r = radiusMm + Math.max(0, growth);
+    if (shallowRegion) return radiusMm * radiusMm;
+    const growth = Math.min(1.5, Math.max(0, influenceRadiusMm(vz - tipZ) - TIP_COVERAGE_RADIUS_MM));
+    const r = radiusMm + growth;
     return r * r;
 }
 
@@ -144,6 +161,7 @@ function visitVoxelCoverage(
 
     const index = new TipIndex(tips, radiusMm);
     const flatRegion = (region.overhangAngleDeg ?? 0) <= 5;
+    const shallowRegion = (region.overhangAngleDeg ?? 0) <= 15;
     let minTipZ = Infinity;
     let maxVoxelZ = -Infinity;
     if (mesh) {
@@ -187,7 +205,7 @@ function visitVoxelCoverage(
         const probe = (tip: TipPos): boolean => {
             const dx = vx - tip.x;
             const dy = vy - tip.y;
-            const rSq = coverRadiusSq(vz ?? tip.z, tip.z, radiusMm);
+            const rSq = coverRadiusSq(vz ?? tip.z, tip.z, radiusMm, shallowRegion);
             if (rSq < 0 || dx * dx + dy * dy > rSq) return false;
 
             if (vz !== null && vz - tip.z > 0.5) {
@@ -407,7 +425,7 @@ export function buildGapFillCandidates(
         const regionTips = mesh
             ? tips
             : tips.filter((t) => !tipBelongsToLowerFlatRegion(t, region, overhangIslands));
-        const radius = coverageRadiusForArea(region.areaMm2 ?? 0);
+        const radius = coverageRadiusForRegion(region);
         if (computeRegionCoverage(region, regionTips, radius, mesh) >= coverageTarget) continue;
 
         const clusters = findUncoveredClusters(region, regionTips, radius, MIN_GAP_CLUSTER_MM2, true, layerHeightMm, mesh);

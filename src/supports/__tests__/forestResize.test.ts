@@ -239,9 +239,10 @@ test('syncContactConeDiameters lifts leaf cones to thickened hosts', () => {
     };
 
     const synced = syncContactConeDiameters(s);
-    assert.equal(synced.leaves['l1'].contactCone?.profile?.bodyDiameterMm, 1.6, 'leaf cone body follows the host shaft');
-    assert.ok(Math.abs(synced.leaves['l1'].contactCone!.profile!.contactDiameterMm! - 1.6 * TIP_CONTACT_MIN_SHAFT_RATIO) < 1e-9,
-        'leaf contact rises to the 20% floor of the host it splays from');
+    assert.equal(synced.leaves['l1'].contactCone?.profile?.bodyDiameterMm, 1.12,
+        'leaf cone body stays member-proportioned (0.7× host shaft) instead of bloating to full trunk width');
+    assert.ok(Math.abs(synced.leaves['l1'].contactCone!.profile!.contactDiameterMm! - 1.12 * TIP_CONTACT_MIN_SHAFT_RATIO) < 1e-9,
+        'leaf contact rises to the floor of its member-proportioned body');
 });
 
 test('syncContactConeDiameters is a no-op when bodies already match', () => {
@@ -457,7 +458,9 @@ test('computeForestDiameterProfile and syncContactConeDiameters re-encode settin
     assert.equal(decodedBranch.tip.contactDiameterMm, expectedFloor);
 
     const decodedLeaf = decodeSupportSettingsHex(synced.leaves['l1'].settingsCodeHex!, base)!;
-    assert.equal(decodedLeaf.tip.bodyDiameterMm, 1.6);
-    assert.equal(decodedLeaf.tip.contactDiameterMm, expectedFloor);
+    const expectedLeafBody = 1.12; // member-proportioned (0.7× host 1.6mm)
+    const expectedLeafFloor = expectedLeafBody * TIP_CONTACT_MIN_SHAFT_RATIO;
+    assert.equal(decodedLeaf.tip.bodyDiameterMm, expectedLeafBody);
+    assert.equal(decodedLeaf.tip.contactDiameterMm, expectedLeafFloor);
 });
 

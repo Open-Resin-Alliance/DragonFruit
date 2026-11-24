@@ -101,12 +101,12 @@ function trunkEntities(state: SupportState, modelId: string): string {
 
 test('fanLeafToHost never hosts on another model\'s shaft', () => {
     const draft = emptySnapshot();
-    addTrunk(draft, 'a', 'model-a', 8.25, 0, 0, 20);
+    addTrunk(draft, 'a', 'model-a', 9.0, 0.85, 0, 20);
     addTrunk(draft, 'b', 'model-b', 8, 0, 0, 20);
 
-    // (9, 0, 12) is in reach of both shafts; model-a's is marginally closer,
-    // so its sample is the steeper one and a global pool picks the foreign
-    // shaft.
+    // (9, 0, 12) is in reach of both shafts; model-a's is closer (0.85mm vs 1.0mm
+    // plan) without intersecting model-b's line to (9, 0, 12), so a global pool
+    // would pick the steeper foreign shaft.
     const result = fanLeafToHost(
         { x: 9, y: 0, z: 12 },
         'model-b',
@@ -137,20 +137,20 @@ test('an auto knot id already taken by another member is not reused', () => {
     // model (or a re-run) rebuilds the same knot id. Reusing it REPLACES the
     // existing knot, re-parenting the member that already owned it.
     const draft = emptySnapshot();
-    addTrunk(draft, 'a', 'model-a', 8.25, 0, 0, 20);
+    addTrunk(draft, 'a', 'model-a', 9.0, 0.85, 0, 20);
     addTrunk(draft, 'b', 'model-b', 8, 0, 0, 20);
     (draft.knots as Record<string, unknown>)['auto-fan-v2'] = {
         id: 'auto-fan-v2',
         parentShaftId: 'seg-a',
         t: 0.5,
-        pos: { x: 8.25, y: 0, z: 10 },
+        pos: { x: 9.0, y: 0.85, z: 10 },
         diameter: 1.125,
     };
     (draft.leaves as Record<string, unknown>)['leaf-a'] = {
         id: 'leaf-a',
         modelId: 'model-a',
         parentKnotId: 'auto-fan-v2',
-        contactCone: { id: 'cone-a', pos: { x: 8.25, y: 0, z: 6 }, normal: { x: 0, y: 0, z: -1 } },
+        contactCone: { id: 'cone-a', pos: { x: 9.0, y: 0.85, z: 6 }, normal: { x: 0, y: 0, z: -1 } },
     };
 
     const result = fanLeafToHost(
@@ -176,7 +176,7 @@ test('an auto knot id already taken by another member is not reused', () => {
     assert.ok(member, 'the new member exists');
 
     assert.equal(after.knots['auto-fan-v2'].parentShaftId, 'seg-a', 'model-a\'s knot is untouched');
-    assert.deepEqual(after.knots['auto-fan-v2'].pos, { x: 8.25, y: 0, z: 10 });
+    assert.deepEqual(after.knots['auto-fan-v2'].pos, { x: 9.0, y: 0.85, z: 10 });
     assert.equal(after.leaves['leaf-a'].parentKnotId, 'auto-fan-v2');
     assert.equal(modelIdOfParentShaft(after, after.knots['auto-fan-v2'].parentShaftId), 'model-a');
 

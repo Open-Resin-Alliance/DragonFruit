@@ -8,6 +8,7 @@ import {
     SLOPE_RELAX_RAMP_START,
     GRID_SPACING_MAX_FACTOR,
     ISLAND_TWO_POINT_MAX_MM,
+    OVERHANG_GRID_MIN_SPAN_MM,
     INTERIOR_CAVITY_SPACING_SCALE,
 } from './constants';
 import type { AutoSupportSettings } from './settings';
@@ -291,6 +292,11 @@ export const MAX_GRID_CANDIDATES_PER_REGION = 800;
  * - Suction term: large shallow ceilings densify sublinearly with projected
  *   area (peel grows with cross-section; direction physical, curve empirical).
  */
+/** Reference footprint area (mm²) above which suction densification kicks in.
+ *  Decoupled from `gridAreaThresholdMm2` (4 mm²) so small miniature soles get
+ *  perimeter sampling without triggering large-slab suction compaction. */
+const SUCTION_REFERENCE_AREA_MM2 = 25;
+
 export function computeRegionSpacing(
     island: DetectedIsland,
     settings: AutoSupportSettings,
@@ -309,7 +315,7 @@ export function computeRegionSpacing(
     const maxFactor = settings.slopeRelaxFactor ?? GRID_SPACING_MAX_FACTOR;
 
     const area = island.areaMm2 ?? 0;
-    const threshold = settings.gridAreaThresholdMm2;
+    const threshold = Math.max(SUCTION_REFERENCE_AREA_MM2, settings.gridAreaThresholdMm2);
     const exponent = settings.suctionAreaExponent ?? 0;
     const areaScale = exponent > 0 && area > threshold
         ? Math.pow(threshold / area, exponent)
@@ -333,6 +339,10 @@ export function computeRegionSpacing(
  * across overlapping projected loops are deduped. Returns null when the
  * region carries no usable loops (caller falls back to the voxel boundary).
  */
+/** Turning angle (deg) above which a 2D boundary vertex counts as a sharp convex corner (e.g. toe tips, rim corners). */
+const BOUNDARY_CONVEX_CORNER_COS = Math.cos((35 * Math.PI) / 180);
+const BOUNDARY_CORNER_MIN_EDGE_MM = 0.25;
+
 export function sampleBoundary2D(
     loops: Array<Array<[number, number, number]>> | undefined,
     spacing: number,
@@ -341,6 +351,99 @@ export function sampleBoundary2D(
     if (!loops || loops.length === 0 || spacing <= 0) return null;
     if (!loops.some((l) => l.length >= 2)) return null;
 
+    const deduped: Array<{ x: number; y: number; z: number; faceIndex?: number }> = [];
+    const cornerMinDist = Math.max(1.1, spacing * 0.55);
+    const cornerMinDistSq = cornerMinDist * cornerMinDist;
+    const minDistSq = (spacing * 0.5) * (spacing * 0.5);
+
+    const tryPush = (p: { x: number; y: number; z: number; faceIndex?: number }, distSq: number): void => {
+        for (const q of deduped) {
+            const dx = p.x - q.x;
+            const dy = p.y - q.y;
+            if (dx * dx + dy * dy < distSq) return;
+        }
+        deduped.push(p);
+    };
+
+    // Pass 1: Pin sharp convex corners and local Z minima along each closed loop
+    // first so scalloped leading edges (toe tips, heel crests, sharp cuffs) are
+    // anchored before uniform arc-length resampling fills the spans between them.
+    for (let li = 0; li < loops.length; li++) {
+        const loop = loops[li];
+        const n = loop.length;
+        if (n < 3) continue;
+
+        let depth = 0;
+        const sx = loop[0][0];
+        const sy = loop[0][1];
+        for (let lj = 0; lj < loops.length; lj++) {
+            if (lj === li || loops[lj].length < 3) continue;
+            if (pointInPolygon2D(sx, sy, loops[lj])) depth++;
+        }
+        const isHole = depth % 2 === 1;
+
+        let area2 = 0;
+        for (let i = 0; i < n; i++) {
+            const a = loop[i];
+            const b = loop[(i + 1) % n];
+            area2 += a[0] * b[1] - b[0] * a[1];
+        }
+        const windingSign = area2 >= 0 ? 1 : -1;
+
+        const sampledVerts: Array<{ x: number; y: number; z: number; faceIndex?: number } | null> = new Array(n);
+        for (let i = 0; i < n; i++) {
+            const s = surfaceAt(loop[i][0], loop[i][1]);
+            sampledVerts[i] = s ? { x: loop[i][0], y: loop[i][1], z: s.z, faceIndex: s.faceIndex } : null;
+        }
+
+        const priorityCorners: Array<{ pt: { x: number; y: number; z: number; faceIndex?: number }; score: number }> = [];
+        for (let i = 0; i < n; i++) {
+            const cur = sampledVerts[i];
+            if (!cur) continue;
+            const prev = loop[(i + n - 1) % n];
+            const curr = loop[i];
+            const next = loop[(i + 1) % n];
+            const e1x = curr[0] - prev[0];
+            const e1y = curr[1] - prev[1];
+            const e2x = next[0] - curr[0];
+            const e2y = next[1] - curr[1];
+            const len1 = Math.hypot(e1x, e1y);
+            const len2 = Math.hypot(e2x, e2y);
+
+            let isConvexCorner = false;
+            let sharpness = 0;
+            if (len1 >= BOUNDARY_CORNER_MIN_EDGE_MM && len2 >= BOUNDARY_CORNER_MIN_EDGE_MM) {
+                const dot = (e1x * e2x + e1y * e2y) / (len1 * len2);
+                const cross = (e1x * e2y - e1y * e2x) * windingSign;
+                // On an outer loop, convex turns share the loop's winding sign;
+                // on a hole, inward protrusions have the opposite sign.
+                const outwardTurn = isHole ? cross < 0 : cross > 0;
+                if (outwardTurn && dot <= BOUNDARY_CONVEX_CORNER_COS) {
+                    isConvexCorner = true;
+                    sharpness = 1 - dot; // [0.18, 2.0] — sharper tips score higher
+                }
+            }
+
+            const prevS = sampledVerts[(i + n - 1) % n];
+            const nextS = sampledVerts[(i + 1) % n];
+            const isLocalZMin = prevS !== null && nextS !== null
+                && cur.z <= prevS.z - 0.05
+                && cur.z <= nextS.z - 0.05;
+
+            if (isConvexCorner || isLocalZMin) {
+                priorityCorners.push({
+                    pt: cur,
+                    score: (isLocalZMin ? 2 : 0) + sharpness,
+                });
+            }
+        }
+        priorityCorners.sort((a, b) => b.score - a.score || a.pt.z - b.pt.z);
+        for (const item of priorityCorners) {
+            tryPush(item.pt, cornerMinDistSq);
+        }
+    }
+
+    // Pass 2: Uniform arc-length resampling fills the spans between pinned corners.
     const raw: Array<{ x: number; y: number; z: number; faceIndex?: number }> = [];
     for (const loop of loops) {
         let acc = 0;
@@ -366,19 +469,8 @@ export function sampleBoundary2D(
         }
     }
 
-    const deduped: Array<{ x: number; y: number; z: number; faceIndex?: number }> = [];
-    const minDistSq = (spacing * 0.5) * (spacing * 0.5);
     for (const p of raw) {
-        let dup = false;
-        for (const q of deduped) {
-            const dx = p.x - q.x;
-            const dy = p.y - q.y;
-            if (dx * dx + dy * dy < minDistSq) {
-                dup = true;
-                break;
-            }
-        }
-        if (!dup) deduped.push(p);
+        tryPush(p, minDistSq);
     }
     return deduped.length > 0 ? deduped : null;
 }
@@ -527,11 +619,10 @@ export function shouldUseDensityGrid(
         && ((island.areaMm2 ?? 0) >= 2.0 || major >= 2.0)) {
         return true;
     }
-    // Longer than the two-point band: a thin rib (a plank's underside) needs
-    // its edge sampled, whether or not it erodes away completely. The lattice
-    // is skipped for it below — a footprint thinner than one lattice cell has
-    // nothing to infill.
-    return major >= ISLAND_TWO_POINT_MAX_MM;
+    // Any overhang at least OVERHANG_GRID_MIN_SPAN_MM (3mm) across — such as a
+    // miniature foot sole, chin, or thin rib — needs its perimeter sampled so
+    // leading edges and corners are pinned instead of getting 1–2 center tips.
+    return major >= Math.min(ISLAND_TWO_POINT_MAX_MM, OVERHANG_GRID_MIN_SPAN_MM);
 }
 
 /**

@@ -24,6 +24,34 @@ export const SMALL_ISLAND_TIP_AREA_MM2 = 0.15;
  *  is a no-op, which is the correct answer for a feature wider than the tip. */
 export const CONTACT_WIDTH_PROBE_MM = 0.5;
 
+/** Minimum overhang footprint area (mm²) that enters perimeter + interior contact sampling. */
+export const OVERHANG_GRID_MIN_AREA_MM2 = 4.0;
+
+/** Minimum overhang footprint span (mm) that enters perimeter sampling even below the area threshold. */
+export const OVERHANG_GRID_MIN_SPAN_MM = 3.0;
+
+/** Minimum XY spacing (mm) between cluster-synthesized trunks in organic mode. */
+export const MIN_TRUNK_SPACING_MM = 2.5;
+
+/** Lateral bridge radius (mm) a single support tip reliably covers on a flat (0–15°) overhang. */
+export const FLAT_OVERHANG_BRIDGE_RADIUS_MM = 1.8;
+
+/**
+ * Angle-dependent lateral coverage / bridge radius (mm) for an overhang region.
+ * Flat ceilings (0–15°) peel hard and bridge only ~1.8 mm in green-state resin;
+ * moderate slopes (15–35°) ramp linearly to 2.6 mm; steep self-supporting faces
+ * (≥35°) keep the full 3.0 mm radius.
+ */
+export function bridgeRadiusForAngleDeg(overhangAngleDeg?: number): number {
+    const angle = Number.isFinite(overhangAngleDeg) ? Math.max(0, overhangAngleDeg!) : 0;
+    if (angle <= 15) return FLAT_OVERHANG_BRIDGE_RADIUS_MM;
+    if (angle < 35) {
+        const t = (angle - 15) / 20;
+        return FLAT_OVERHANG_BRIDGE_RADIUS_MM + t * (2.6 - FLAT_OVERHANG_BRIDGE_RADIUS_MM);
+    }
+    return 3.0;
+}
+
 /** Islands with bbox extent at/below this (mm) get a single tip at the bbox
  *  center — robust for specks where centroid/medial math is noise. */
 export const ISLAND_SUB_HEAD_MM = 0.5;
@@ -36,10 +64,15 @@ export const ISLAND_TWO_POINT_MAX_MM = 6.0;
 export const ISLAND_TWO_POINT_MAX_WIDTH_MM = 2.5;
 
 /** Leaf spans above this (mm) route to branches with real shafts instead of
- *  long tapered leaf cones — an 8–11 mm leaf reads as a spindly spike next
- *  to its trunk. Applies to merge + fan paths (island origins; overhang
- *  fanning stays leaves by rule). */
-export const MAX_LEAF_SPAN_BEFORE_BRANCH_MM = 6.0;
+ *  long tapered leaf cones — 4.5 mm sits above tipLengthMm (2.5 mm) + a real
+ *  >= 2 mm branch shaft so promoted branches build cleanly without leaving
+ *  6 mm tapered spikes. */
+export const MAX_LEAF_SPAN_BEFORE_BRANCH_MM = 4.5;
+
+/** Hard upper span (mm) for a slim-leaf fallback when a 4.5–5.9 mm link has no
+ *  legal branch shaft (e.g. a low near-plate contact where tipLengthMm consumes
+ *  the available vertical drop). Strictly under 6 mm — never permits 6+ mm spikes. */
+export const MAX_LEAF_FALLBACK_SPAN_MM = 5.9;
 /** Support influence growth with height (mm): a tip's coverage disc widens
  *  the higher above it you go — Prusa's SLA support curve, adapted to our
  *  3.0 mm birth radius. Piecewise-linear through (diffZ, radius):

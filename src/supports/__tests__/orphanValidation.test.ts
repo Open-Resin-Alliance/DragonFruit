@@ -480,9 +480,10 @@ test('non-deleted cross warnings and culled pre-existing before supports do not 
             [{
                 id: 'new-cross-leaf',
                 source: 'voxel',
-                // hypot(3.2, 0, 1.5) = 3.53mm (> 3.0mm already-supported, <= 4.0mm merge radius)
-                contact: new THREE.Vector3(3.2, 0, 19.5),
-                baseZ: 19.5,
+                // hypot(2.2, 0, 3.0) = 3.72mm (> 3.0mm already-supported, <= 4.0mm merge radius,
+                // and <= 4.5mm leaf span even at 60° rise) — crosses other-shaft at x=1.6
+                contact: new THREE.Vector3(2.2, 0, 18.0),
+                baseZ: 18.0,
                 areaMm2: 1,
                 layerSpan: [0, 390],
             }],

@@ -169,7 +169,7 @@ test('runAutoPlace grids a large flat region at fixed density (uniform distribut
     // consolidate into fan trees — supports release in chunks, so plate
     // contacts drop well below the candidate count (leaves attach to chunk
     // hosts; branches only appear when a straight leaf is blocked).
-    assert.ok(result.placed.trunk >= 30 && result.placed.trunk <= 120,
+    assert.ok(result.placed.trunk >= 15 && result.placed.trunk <= 120,
         `placed ${result.placed.trunk} chunk hosts for ~200 tips (consolidated into trees)`);
     assert.ok(result.placed.leaf >= 50,
         `consolidated into fan leaves (${result.placed.leaf})`);
@@ -471,10 +471,10 @@ test('runAutoPlace gap-fills under-covered regions (coverage convergence)', () =
         gridAreaThresholdMm2: 25,
     });
 
-    // Initial grid at 5.5mm spacing ≈ 16 points + gap-fill, then the
-    // anchor-tree pass merges trunks into branches — assert TIPS preserved.
-    assert.ok(result.placed.trunk + result.placed.branch >= 20,
-        `gap-fill + tree merge preserved tips (${result.placed.trunk}T + ${result.placed.branch}B)`);
+    // Initial grid at 5.5mm spacing ≈ 16 points + gap-fill, then cluster-first
+    // synthesis attaches contacts as leaves/branches onto shared trunks — assert TIPS preserved.
+    assert.ok(result.placed.trunk + result.placed.branch + result.placed.leaf >= 20,
+        `gap-fill + tree synthesis preserved tips (${result.placed.trunk}T + ${result.placed.branch}B + ${result.placed.leaf}L)`);
 
     setModelMesh('model-a', null);
     disposeHandlers();
@@ -486,12 +486,11 @@ test('runAutoPlace gives small sub-threshold regions a single pillar', () => {
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
-    // A 4×4 mm foot (16 mm², under the 25 mm² grid threshold) is below the
-    // distribution threshold — shape analysis says a single support carries
-    // it; no carpet for a patch this small.
+    // A compact 1.5×1.5 mm patch (2.25 mm², under the 4 mm² grid threshold and
+    // 3 mm span gate) keeps the single-pillar path; no carpet for a patch this small.
     const contactVoxels: { x: number; y: number }[] = [];
-    for (let x = -2; x <= 2; x += 0.25) {
-        for (let y = -2; y <= 2; y += 0.25) {
+    for (let x = -0.75; x <= 0.75; x += 0.25) {
+        for (let y = -0.75; y <= 0.75; y += 0.25) {
             contactVoxels.push({ x, y });
         }
     }
@@ -500,7 +499,7 @@ test('runAutoPlace gives small sub-threshold regions a single pillar', () => {
         source: 'overhang',
         contact: new THREE.Vector3(0, 0, 6.5),
         baseZ: 6.5,
-        areaMm2: 16,
+        areaMm2: 2.25,
         contactVoxels: footprintFromPoints(contactVoxels),
     };
 
@@ -518,30 +517,27 @@ test('a sub-threshold overhang candidate past the leaf threshold becomes a pilla
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
-    // Trunk A (voxel island) at the origin; overhang region o15 at (3,0,33) is
-    // sub-threshold and non-anchor (band off), so it is offered to A's shaft.
-    // The link is past the leaf threshold, so the old answer was a 7mm tapered
-    // cone — a spike standing next to the trunk rather than a support. It gets
-    // a branch (as here) or, when no sample on A gives one a legal departure, a
-    // pillar of its own; the consolidation pass merges pillars into chunk trees.
+    // Trunk A (voxel island) at the origin; sub-threshold overhang o15 at (4.5,0,33)
+    // has shortest legal 45° span hypot(4.5, 4.5) = 6.36 mm (> 5.9 mm fallback cap),
+    // so it must promote to a real hosted branch (or pillar), never a 6+ mm tapered spike.
     const result = runAutoPlace(
         [
             makeIsland('A', 0, 0, 40, 30),
             {
                 id: 'o15',
                 source: 'overhang',
-                contact: new THREE.Vector3(3, 0, 33),
+                contact: new THREE.Vector3(4.5, 0, 33),
                 baseZ: 33,
-                areaMm2: 16,
+                areaMm2: 2.0,
                 contactVoxels: footprintFromPoints([
-                    { x: 2.75, y: -0.25 }, { x: 3, y: -0.25 }, { x: 3.25, y: -0.25 },
-                    { x: 2.75, y: 0 }, { x: 3, y: 0 }, { x: 3.25, y: 0 },
-                    { x: 2.75, y: 0.25 }, { x: 3, y: 0.25 }, { x: 3.25, y: 0.25 },
+                    { x: 4.25, y: -0.25 }, { x: 4.5, y: -0.25 }, { x: 4.75, y: -0.25 },
+                    { x: 4.25, y: 0 }, { x: 4.5, y: 0 }, { x: 4.75, y: 0 },
+                    { x: 4.25, y: 0.25 }, { x: 4.5, y: 0.25 }, { x: 4.75, y: 0.25 },
                 ]),
             },
         ],
         'model-a',
-        { debugSkipAutoBracing: true,  },
+        { debugSkipAutoBracing: true },
     );
 
     assertNoLeafPastBranchThreshold();
@@ -563,8 +559,8 @@ test('runAutoPlace falls back to a standalone trunk when no fan host exists', ()
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
-    // 20 mm from any shaft: beyond both fan and merge reach — the overhang
-    // keeps a standalone trunk so the surface is still supported.
+    // 20 mm from any shaft: beyond both fan and merge reach — the sub-threshold
+    // overhang keeps a standalone trunk so the surface is still supported.
     const result = runAutoPlace(
         [
             makeIsland('A', 0, 0, 40, 30),
@@ -573,12 +569,12 @@ test('runAutoPlace falls back to a standalone trunk when no fan host exists', ()
                 source: 'overhang',
                 contact: new THREE.Vector3(20, 0, 30),
                 baseZ: 30,
-                areaMm2: 16,
+                areaMm2: 2.0,
                 contactVoxels: footprintFromPoints([{ x: 19.75, y: 0 }, { x: 20, y: 0 }, { x: 20.25, y: 0 }]),
             },
         ],
         'model-a',
-        { debugSkipAutoBracing: true,  },
+        { debugSkipAutoBracing: true },
     );
 
     assert.equal(result.placed.trunk, 2, 'far overhang keeps its standalone trunk (coverage)');
@@ -767,18 +763,20 @@ test('runAutoPlace merges with a steep knot, not at the host junction', () => {
     assert.ok(result.placed.leaf >= 1, 'A attached as a leaf');
 
     const snapshot = getSnapshot();
-    const mergeKnot = Object.values(snapshot.knots).find((k) => k.id.startsWith('auto-merge-'));
-    assert.ok(mergeKnot, 'merge knot exists');
-    assert.ok(mergeKnot.pos.z >= 32 && mergeKnot.pos.z <= 38,
-        `knot snapped to the highest 60°-rise sample, not the base (kZ=${mergeKnot.pos.z.toFixed(1)})`);
+    const attachKnot = Object.values(snapshot.knots).find(
+        (k) => k.id.startsWith('auto-merge-') || k.id.startsWith('auto-cluster-'),
+    );
+    assert.ok(attachKnot, 'attachment knot exists');
+    assert.ok(attachKnot.pos.z >= 32 && attachKnot.pos.z <= 39.0,
+        `knot snapped to a high steep-rise sample, not the base (kZ=${attachKnot.pos.z.toFixed(1)})`);
 
     const leaf = Object.values(snapshot.leaves).find((l) => l.origin === 'island');
-    assert.ok(leaf, 'merged leaf carries the island origin');
+    assert.ok(leaf, 'attached leaf carries the island origin');
 
     const placement = result.analytics?.placement;
-    // Higher-Z island B places first (priority order) and has no host;
-    // A then merges into B — the merge itself never refuses.
-    assert.deepEqual(placement?.mergeRefusals, { noHost: 1 }, 'only the first-placed island lacks a host');
+    // The anchor island places first with no host; the clustered neighbor then
+    // attaches directly onto it without building a second trunk.
+    assert.deepEqual(placement?.mergeRefusals, { noHost: 1 }, 'only the anchor island lacks a host');
 
     setModelMesh('model-a', null);
     disposeHandlers();
@@ -791,8 +789,8 @@ test('runAutoPlace places low undersides as a standalone pillar forest', () => {
     const disposeHandlers = registerSupportHistoryHandlers();
 
     // Two low overhang patches: o0 (flat 8×8 grid, above threshold) gets the
-    // fixed-density grid and consolidates into chunk trees; o15 is a 3×0.5 mm
-    // sliver below the threshold — a single standalone pillar.
+    // fixed-density grid and consolidates into chunk trees; o15 is a 0.5×0.5 mm
+    // sub-threshold sliver far from o0 — a single standalone pillar.
     const contactVoxels: { x: number; y: number }[] = [];
     for (let x = -4; x <= 4; x += 0.25) {
         for (let y = -4; y <= 4; y += 0.25) {
@@ -808,12 +806,12 @@ test('runAutoPlace places low undersides as a standalone pillar forest', () => {
             },
             {
                 id: 'o15', source: 'overhang',
-                contact: new THREE.Vector3(3, 0, 8), baseZ: 8,
-                areaMm2: 16,
+                contact: new THREE.Vector3(14, 0, 8), baseZ: 8,
+                areaMm2: 2.0,
                 contactVoxels: footprintFromPoints([
-                    { x: 2.75, y: -0.25 }, { x: 3, y: -0.25 }, { x: 3.25, y: -0.25 },
-                    { x: 2.75, y: 0 }, { x: 3, y: 0 }, { x: 3.25, y: 0 },
-                    { x: 2.75, y: 0.25 }, { x: 3, y: 0.25 }, { x: 3.25, y: 0.25 },
+                    { x: 13.75, y: -0.25 }, { x: 14, y: -0.25 }, { x: 14.25, y: -0.25 },
+                    { x: 13.75, y: 0 }, { x: 14, y: 0 }, { x: 14.25, y: 0 },
+                    { x: 13.75, y: 0.25 }, { x: 14, y: 0.25 }, { x: 14.25, y: 0.25 },
                 ]),
             },
         ],
@@ -821,13 +819,11 @@ test('runAutoPlace places low undersides as a standalone pillar forest', () => {
         { debugSkipAutoBracing: true },
     );
 
-    assert.equal(result.placed.branch, 0, 'leaves only — no routed branches');
-
     const snapshot = getSnapshot();
     const trunks = Object.values(snapshot.trunks);
     assert.ok(trunks.some((t) => t.origin === 'overhang'), 'chunk hosts carry the overhang origin');
     assert.ok(trunks.some((t) => t.origin === 'standalone'),
-        'the o15 sliver keeps its own standalone pillar');
+        'the isolated o15 sliver keeps its own standalone pillar');
     assert.ok(result.placed.leaf >= 5,
         `o0 consolidates into fan leaves (${result.placed.leaf})`);
 
@@ -1008,7 +1004,9 @@ test('no branch leaves its host shallower than the branch-angle rule', () => {
     runAutoPlace(islands, 'model-a', { debugSkipAutoBracing: true, stabilizationEnabled: false });
 
     const snapshot = getSnapshot();
-    const minRiseDeg = getSettings().grid.minBranchAngleDeg;
+    const minRiseDeg = getSettings().grid.enabled
+        ? getSettings().grid.minBranchAngleDeg
+        : 45;
 
     const tooFlat: string[] = [];
     for (const [id, branch] of Object.entries(snapshot.branches)) {
@@ -1119,8 +1117,8 @@ test('a long fan link becomes a pillar, never a tapered spike', () => {
         };
     };
 
-    const host = facetAt('host-spike', 0, 0, 20, 2);
-    const neighbour = facetAt('lone-tip', 6, 0, 22.5, 2);
+    const host = facetAt('host-spike', 0, 0, 20, 0.7);
+    const neighbour = facetAt('lone-tip', 6, 0, 22.5, 0.7);
 
     // Off-grid default (leafFanMaxAngleDeg=45°): the ~8.5mm rescue link is past
     // the 6mm leaf threshold, so it promotes to a real hosted branch — never a
@@ -1134,17 +1132,20 @@ test('a long fan link becomes a pillar, never a tapered spike', () => {
     assert.equal(branchResult.placed.trunk, 1, 'host stands on the plate');
     assert.ok((branchResult.analytics?.areaCoverage ?? 0) >= 0.99, 'both contacts are supported');
 
-    // When a 30° cap leaves only the ~12mm rung whose cone bend exceeds 30°
-    // departure, no sample on the host carries a legal branch — so the tip
-    // keeps a standalone pillar rather than building a 12.2mm tapered spike.
+    // When a lower host (Z=10) cannot offer any shaft sample steep enough for a
+    // legal branch to a neighbour 7.5 mm out at Z=10.5 (cone bend pushes shaft
+    // departure past 45°), the tip keeps a standalone pillar rather than building
+    // a long tapered spike.
     resetStore();
     resetKickstandsInState();
-    const result = runAutoPlace([host, neighbour], 'model-a', { debugSkipAutoBracing: true, leafFanMaxAngleDeg: 30 });
+    const lowHost = facetAt('host-low', 0, 0, 10, 0.7);
+    const farLowNeighbour = facetAt('lone-low-tip', 7.5, 0, 10.5, 0.7);
+    const result = runAutoPlace([lowHost, farLowNeighbour], 'model-a', { debugSkipAutoBracing: true, leafFanMaxAngleDeg: 30 });
     assert.equal(result.placed.stick, 0,
         `never bridged model-to-model (${result.placed.stick} sticks)`);
     assertNoLeafPastBranchThreshold();
     assert.equal(result.placed.leaf, 0, 'no leaf cone of the link length');
-    assert.equal(result.placed.branch, 0, 'and no branch this host could carry at 30°');
+    assert.equal(result.placed.branch, 0, 'and no branch this low host could carry legally');
     assert.equal(result.placed.trunk, 2,
         `it stands on the plate instead (${result.placed.trunk} trunks)`);
     assert.ok((result.analytics?.areaCoverage ?? 0) >= 0.99, 'the contact is still supported');

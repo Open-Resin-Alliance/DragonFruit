@@ -270,6 +270,7 @@ test('computeAutoSupportPlan merges settingsOverride undefined-safely over live 
             islands,
             'model-override',
             {
+                gridAreaThresholdMm2: 25,
                 modelScaleEnabled: false,
                 sizingPreset: 'detail',
                 tipContactMarginScale: 0.5,
@@ -295,6 +296,7 @@ test('computeAutoSupportPlan merges settingsOverride undefined-safely over live 
             'model-override',
             {
                 areaPerSupportMm2: 10,
+                gridAreaThresholdMm2: 25,
                 modelScaleEnabled: false,
                 sizingPreset: 'detail',
                 tipContactMarginScale: 0.5,
