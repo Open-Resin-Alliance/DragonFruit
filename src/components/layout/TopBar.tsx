@@ -406,13 +406,19 @@ export function TopBar({
       node = node.parentElement;
     }
 
+    // Linux: the window manager never sees clicks on this custom titlebar, so double-click maximizes here.
+    if (isLinux && event.detail === 2) {
+      void handleDesktopWindowToggleMaximize();
+      return;
+    }
+
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       await getCurrentWindow().startDragging();
     } catch {
       // no-op if not available in current runtime/capability
     }
-  }, [isDesktopWindow]);
+  }, [handleDesktopWindowToggleMaximize, isDesktopWindow, isLinux]);
 
   React.useEffect(() => {
     hydrateProfilesFromStorage();
