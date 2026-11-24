@@ -217,6 +217,9 @@ import { Toast } from '@/components/atoms';
 import { getCenteredPositionSource, type CenteredPositionSource } from '@/utils/modelBounds';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 import { SupportPathfindingDebugHud, SupportPathfindingDebugOverlay } from '@/components/scene/SupportPathfindingDebugOverlay';
+import { SupportStressOverlay } from '@/components/scene/SupportStressOverlay';
+import { CenterOfMassOverlay } from '@/components/scene/CenterOfMassOverlay';
+import { getFrameStressSnapshot, subscribeFrameStress } from '@/supports/autoSupport';
 import {
   getSupportPathfindingDebugState,
   subscribeToSupportPathfindingDebugState,
@@ -947,6 +950,11 @@ export function SceneCanvas({
     getSupportPathfindingDebugState,
     getSupportPathfindingDebugState,
   );
+  const frameStressSnap = React.useSyncExternalStore(
+    subscribeFrameStress,
+    getFrameStressSnapshot,
+    getFrameStressSnapshot,
+  );
   const supportPathfindingDebugLastTapMsRef = React.useRef<number>(0);
   const [showSupportPathfindingTuningSuggestions, setShowSupportPathfindingTuningSuggestions] = React.useState(false);
 
@@ -1176,6 +1184,18 @@ export function SceneCanvas({
   }, [activeModelId, visualActiveModelId]);
 
   const colorActiveModelId = React.useMemo(() => committedActiveModelId, [committedActiveModelId]);
+
+  const stressOverlayActive = mode === 'support'
+    && frameStressSnap.overlayEnabled
+    && Boolean(activeModelId);
+  const activeStressReport = stressOverlayActive && activeModelId
+    ? frameStressSnap.byModelId[activeModelId] ?? null
+    : null;
+  // The demand-side paint does not need a solved frame: an unsupported model is
+  // exactly the case with no stress report to show.
+  const activePrintabilityReport = stressOverlayActive && activeModelId
+    ? frameStressSnap.printabilityByModelId[activeModelId] ?? null
+    : null;
 
   const meshRefs = React.useRef<Record<string, THREE.Group | null>>({});
   const actualMeshRefs = React.useRef<Record<string, THREE.Mesh | null>>({});
@@ -7027,6 +7047,8 @@ export function SceneCanvas({
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
                       supportNonSelectedOpacity={supportNonSelectedOpacity}
+                      stressHeatmapReport={isActive ? activeStressReport : null}
+                      printabilityHeatmap={isActive ? activePrintabilityReport : null}
                       interactionLodActive={interactionLodEnabled}
                       showOutOfBoundsOverlay={showOutOfBoundsOverlay}
                       outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
@@ -7113,7 +7135,7 @@ export function SceneCanvas({
                         />
                       )}
 
-                      {isActive && (mode === 'support' || mode === 'analysis') && showOverhangs && overhangIslands && overhangIslands.length > 0 && (
+                      {isActive && !stressOverlayActive && (mode === 'support' || mode === 'analysis') && showOverhangs && overhangIslands && overhangIslands.length > 0 && (
                         <IslandOverhangOverlay
                           geometry={model.geometry.geometry}
                           regions={overhangIslands}
@@ -7402,7 +7424,8 @@ export function SceneCanvas({
                   excludeModelId={duplicateSourceSupportPreviewModelId}
                   excludeModelIds={supportBaseExcludeModelIds}
                   supportExcludeModelIds={prepareMergedSupportProxyExcludeModelIds}
-                  hideRaftPrimitives={hideRaftPrimitives}
+                  hideSupports={stressOverlayActive}
+                  hideRaftPrimitives={hideRaftPrimitives || stressOverlayActive}
                   hideRaftPrimitivesForInactiveModels={mode === 'support' && !!activeModelId}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
                   supportColorsByModelId={supportColorsByModelId}
@@ -8132,7 +8155,7 @@ export function SceneCanvas({
                   via the GPU picking system. Supplied by the host (page.tsx). */}
               {organicCutKeyGizmo}
 
-              {selectedMarker && (
+              {selectedMarker && !stressOverlayActive && (
                 <IslandOverlay
                   markers={[selectedMarker]}
                   brushRadiusMm={overlayBrushRadius ?? 2}
@@ -8147,7 +8170,7 @@ export function SceneCanvas({
                   (the frame the detectors emit), so this must stay OUTSIDE the
                   model group — mounting it inside would apply the model
                   transform twice. */}
-              {islandInstances && islandInstances.count > 0 && (mode === 'support' || mode === 'analysis') && (
+              {islandInstances && islandInstances.count > 0 && (mode === 'support' || mode === 'analysis') && !stressOverlayActive && (
                 <IslandInstancesOverlay
                   instances={islandInstances}
                   selectedIslandId={overlaySelectedIslandId}
@@ -8158,7 +8181,7 @@ export function SceneCanvas({
               <IslandVoxelVisualization
                 scanResults={scanResults ?? null}
                 layerHeightMm={layerHeightMm ?? 0.05}
-                enabled={voxelEnabled ?? false}
+                enabled={(voxelEnabled ?? false) && !stressOverlayActive}
                 opacity={voxelOpacity}
                 colorScheme={voxelColorScheme}
                 selectedIslandId={voxelSelectedIslandId}
@@ -8173,7 +8196,7 @@ export function SceneCanvas({
                   islands={scanResults.islands}
                   scanResults={scanResults}
                   layerHeightMm={layerHeightMm ?? 0.05}
-                  enabled={showIslandIdLabels ?? false}
+                  enabled={(showIslandIdLabels ?? false) && !stressOverlayActive}
                   bboxMinZ={scanBBox?.min.z ?? 0}
                 />
               )}
@@ -8392,6 +8415,12 @@ export function SceneCanvas({
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} onClearSelection={onClearSelection} />
         {mode === 'support' && supportPathfindingDebugState.enabled && (
           <SupportPathfindingDebugOverlay snapshot={supportPathfindingDebugState.snapshot} />
+        )}
+        {mode === 'support' && (
+          <SupportStressOverlay activeModelId={activeModelId ?? null} />
+        )}
+        {mode === 'support' && (
+          <CenterOfMassOverlay activeModelId={activeModelId ?? null} meshRefs={actualMeshRefs} />
         )}
         {children}
         </React.Profiler>

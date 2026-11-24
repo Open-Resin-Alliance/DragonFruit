@@ -268,6 +268,7 @@ import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { useIslands } from '@/volumeAnalysis/Islands/useIslands';
 import { IslandsPanel } from '@/components/controls/IslandsPanel';
 import { AutoSupportPanel, getAutoSupportBusy, subscribeAutoSupportBusy, autoSupportDrivingScan, getAutoSupportProgress, subscribeAutoSupportProgress } from '@/components/controls/AutoSupportPanel';
+import { SupportStressPanel } from '@/components/controls/autoSupport/SupportStressPanel';
 import { installPerfConsoleAPI } from '@/supports/PlacementLogic/Pathfinding/pathfindingPerf';
 import { getUnappliedModifiers } from '@/features/mesh-modifiers/unappliedModifiers';
 import type { UnappliedModifierAction } from '@/components/organisms/modals/ModifierModals';
@@ -10811,20 +10812,36 @@ export default function Home() {
               <SupportSidebar activeModelId={scene.activeModelId} />
             </div>
             {autoSupportsExperimentEnabled && (
-              <div
-                key="support-auto"
-                style={{ display: supportRailMode === 'auto' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
-              >
-                <AutoSupportPanel
-                  islands={islandsPoc}
-                  hasGeometry={!!scene.geom}
-                  activeModelId={scene.activeModelId ?? undefined}
-                  autoLift={selectionLifted}
-                  onAutoLiftChange={handleAutoLiftChange}
-                  onBeforeRun={requestModifierDecisionBeforeSupports}
-                  getCavityGeometry={getCavityGeometryForModel}
-                />
-              </div>
+              <>
+                <div
+                  key="support-auto"
+                  style={{ display: supportRailMode === 'auto' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
+                >
+                  <AutoSupportPanel
+                    islands={islandsPoc}
+                    hasGeometry={!!scene.geom}
+                    activeModelId={scene.activeModelId ?? undefined}
+                    autoLift={selectionLifted}
+                    onAutoLiftChange={handleAutoLiftChange}
+                    onBeforeRun={requestModifierDecisionBeforeSupports}
+                    getCavityGeometry={getCavityGeometryForModel}
+                  />
+                </div>
+                <div
+                  key="support-stress"
+                  style={{ display: supportRailMode === 'auto' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
+                >
+                  <SupportStressPanel
+                    activeModelId={scene.activeModelId ?? undefined}
+                    hasGeometry={!!scene.geom}
+                    hasScanned={islandsPoc.hasScanned}
+                    poseKey={islandsPoc.poseKey}
+                    islands={islandsPoc.structuralIslands ?? islandsPoc.filteredIslands}
+                    poseDragMomentMm3={islandsPoc.dragTotalMm3}
+                    toppleCoverageNeeded={islandsPoc.toppleCoverage}
+                  />
+                </div>
+              </>
             )}
             <div
               key="support-islands"

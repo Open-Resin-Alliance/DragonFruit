@@ -234,7 +234,7 @@ export function ModelAttachedSupportLayer({
       )}
       </group>
 
-      <group ref={supportRendererRef ?? undefined}>
+      <group ref={supportRendererRef ?? undefined} visible={!hideSupports}>
         {useProxy && !hideSupports && perfLayerEnabled('proxy') ? (
           <SupportProxyMeshLayer
             mode={mode}

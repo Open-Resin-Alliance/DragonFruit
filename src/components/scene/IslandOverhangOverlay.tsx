@@ -18,114 +18,22 @@ export const OVERHANG_OVERLAY_RENDER_ORDER = 995;
 export const OVERHANG_POLYGON_OFFSET = { factor: -1, units: -2 } as const;
 
 const OVERHANG_COLOR = '#ffa500';
+const STEEP_FLAT_COLOR = '#ffd28a';
 const OVERHANG_OPACITY = 0.4;
 /** ...and what a patch gets when the pose needs no topple coverage: visible
  *  enough to read the classification, quiet enough not to promise support. */
 const MUTED_OPACITY = 0.12;
-/** A topple patch carrying little of the pose's drag moment: light amber, so it
- *  stays clearly visible on the model. The ramp encodes the share in
- *  saturation, never in brightness — a dim end reads as "the overlay is broken"
- *  rather than as "this patch matters less". */
-const TOPPLE_COOL = new THREE.Color('#ffd28a');
-/** ...and the patch carrying the most: saturated orange-red. */
-const TOPPLE_HOT = new THREE.Color('#ff3d00');
 
-/**
- * Per-vertex topple weight: the average of the load shares carried by the faces
- * meeting at that vertex.
- *
- * Painting whole regions leaves the boundary between two of them running along
- * a triangle edge, which on a coarse mesh reads as a staircase. A vertex weight
- * shared by both sides of that boundary is what removes it: the rasteriser then
- * interpolates from one patch's value to the other's across the adjacent
- * triangles instead of stepping at the edge. Faces are matched by welded
- * position, so the shared corners of two patches average.
- *
- * `faceShare` is one share per triangle (the patch's fraction of the pose's
- * drag moment, normalised by the largest patch in the scan, so no calibrated
- * constant is involved).
- */
-export function toppleVertexWeights(
-  positions: ArrayLike<number>,
-  faceShare: ArrayLike<number>,
-): Float32Array {
-  const triCount = Math.floor(positions.length / 9);
-  const sums = new Map<string, { sum: number; count: number }>();
-  const keys: string[] = new Array(triCount * 3);
-  const keyAt = (i: number): string => vertexKey(positions[i], positions[i + 1], positions[i + 2]);
-  for (let t = 0; t < triCount; t++) {
-    const share = faceShare[t] ?? 0;
-    for (let c = 0; c < 3; c++) {
-      const v = t * 3 + c;
-      const key = keyAt(v * 3);
-      keys[v] = key;
-      const acc = sums.get(key);
-      if (acc) {
-        acc.sum += share;
-        acc.count += 1;
-      } else {
-        sums.set(key, { sum: share, count: 1 });
-      }
-    }
-  }
-  const out = new Float32Array(triCount * 3);
-  for (let v = 0; v < triCount * 3; v++) {
-    const acc = sums.get(keys[v]);
-    out[v] = acc && acc.count > 0 ? acc.sum / acc.count : 0;
-  }
-  return out;
-}
-
-/** Quantized position key. Shared by the weight field and the boundary test, so
- *  the two agree on what "the same vertex" means. */
-export function vertexKey(x: number, y: number, z: number): string {
-  return `${Math.round(x * 1e3)},${Math.round(y * 1e3)},${Math.round(z * 1e3)}`;
-}
-
-/**
- * Shader injection for an overlay material.
- *
- * `aWeight`, when ramped, blends the colour across the seams inside the
- * painted set. An alpha feather at the set's outer edge was tried and removed:
- * semi-transparent overlay triangles glitch against the model.
- *
- * The colours travel as uniforms, not as a vertex colour attribute: three
- * converts a uniform Color exactly as it converts material.color, so the ramp
- * lands in the same space as the flat material that already rendered correctly.
- * Only the weights are per-vertex, and a scalar has no colour space.
- */
-function applyOverhangShader(material: THREE.MeshBasicMaterial, ramped: boolean): void {
-  material.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader
-      .replace(
-        '#include <common>',
-        `#include <common>\n${ramped ? 'attribute float aWeight;\nvarying float vWeight;' : ''}`,
-      )
-      .replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>\n${ramped ? 'vWeight = aWeight;' : ''}`,
-      );
-    shader.fragmentShader = shader.fragmentShader
-      .replace(
-        '#include <common>',
-        `#include <common>\n${ramped ? 'varying float vWeight;\nuniform vec3 uCool;\nuniform vec3 uHot;' : ''}`,
-      )
-      .replace(
-        '#include <color_fragment>',
-        `${ramped ? 'diffuseColor.rgb = mix( uCool, uHot, clamp( vWeight, 0.0, 1.0 ) );' : ''}`,
-      );
-    if (ramped) {
-      shader.uniforms.uCool = { value: TOPPLE_COOL };
-      shader.uniforms.uHot = { value: TOPPLE_HOT };
-    }
-  };
-  material.customProgramCacheKey = () => (ramped ? 'overhang-topple-ramp' : 'overhang-fade');
-}
-
-/** Formation overhangs keep a flat colour: they are a different mechanism from
- *  topple patches, and the two should not look alike. */
+/** Formation overhangs keep a flat colour: they print on their own mechanism
+ *  (unsupported material formation) distinct from steep-flat anchoring. */
 export function formationOverhangColor(): THREE.Color {
   return new THREE.Color(OVERHANG_COLOR);
+}
+
+/** Uniform colour for steep self-supporting flat patches (`StressForceHeatmapMaterial`
+ *  carries the spatial peel/stress field separately). */
+export function steepFlatOverlayColor(): THREE.Color {
+  return new THREE.Color(STEEP_FLAT_COLOR);
 }
 
 interface IslandOverhangOverlayProps {
@@ -138,9 +46,7 @@ interface IslandOverhangOverlayProps {
    *  showing everything that was classified reads as "this will be supported",
    *  and it is not. */
   toppleCoverage?: boolean;
-  /** The pose's total drag moment (mm³). A patch whose share of it clears the
-   *  floor keeps its contacts, because a large flat is the best anchoring
-   *  surface the part has, so it is drawn at full strength too. */
+  /** Deprecated geometric drag moment prop kept optional for caller compatibility. */
   dragTotalMm3?: number;
   /** Cross-section planes: the overlay must disappear with the solid it marks. */
 }
@@ -149,7 +55,6 @@ export function IslandOverhangOverlay({
   geometry,
   regions,
   toppleCoverage = true,
-  dragTotalMm3 = 0,
 }: IslandOverhangOverlayProps) {
   const centerOffset = useMemo(() => {
     if (!geometry) return new THREE.Vector3();
@@ -164,18 +69,11 @@ export function IslandOverhangOverlay({
     if (!pos) return { meshes: [], toppleGeometry: null as THREE.BufferGeometry | null, mutedGeometry: null as THREE.BufferGeometry | null };
     const index = geometry.index;
     const meshes: Array<{ id: string; geometry: THREE.BufferGeometry; color: THREE.Color }> = [];
-    // The ramp is normalised by the largest patch in the scan, so it needs no
-    // calibrated constant and every scan shows its own relative loads.
-    const maxMomentMm3 = regions.reduce((m, r) => Math.max(m, r.dragMomentMm3 ?? 0), 0);
 
-    // Topple patches go into ONE mesh so a shared boundary vertex can carry the
-    // average of both sides: per-region meshes cannot blend across an edge.
-    // Patches the placement will not touch go into a second one, drawn muted:
-    // a covered patch and an ignored one must not look alike.
+    // Combine steep-flat patches into covered vs muted geometries with uniform
+    // color so symmetrical greedy patches render symmetrically across seams.
     const topplePositions: number[] = [];
-    const toppleShares: number[] = [];
     const mutedPositions: number[] = [];
-    const mutedShares: number[] = [];
     const copyRegion = (region: DetectedIsland): Float32Array => {
       const ids = region.triangleIds as number[];
       const arr = new Float32Array(ids.length * 9);
@@ -203,12 +101,9 @@ export function IslandOverhangOverlay({
 
       if (region.steepFlat) {
         const arr = copyRegion(region);
-        const share = maxMomentMm3 > 0 ? Math.min(1, Math.max(0, (region.dragMomentMm3 ?? 0) / maxMomentMm3)) : 0;
         const covered = steepFlatNeedsCoverage(region.surfaceAreaMm2, toppleCoverage);
         const into = covered ? topplePositions : mutedPositions;
-        const shares = covered ? toppleShares : mutedShares;
         for (let i = 0; i < arr.length; i++) into.push(arr[i]);
-        for (let t = 0; t < ids.length; t++) shares.push(share);
         continue;
       }
 
@@ -218,74 +113,50 @@ export function IslandOverhangOverlay({
       meshes.push({ id: region.id, geometry: g, color: formationOverhangColor() });
     }
 
-    const buildTopple = (positions: number[], shares: number[]): THREE.BufferGeometry | null => {
+    const buildFlat = (positions: number[]): THREE.BufferGeometry | null => {
       if (positions.length === 0) return null;
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      g.setAttribute('aWeight', new THREE.BufferAttribute(toppleVertexWeights(positions, shares), 1));
       g.computeVertexNormals();
       return g;
     };
-    const mutedGeometry = buildTopple(mutedPositions, mutedShares);
-    let toppleGeometry: THREE.BufferGeometry | null = null;
-    if (topplePositions.length > 0) {
-      toppleGeometry = new THREE.BufferGeometry();
-      toppleGeometry.setAttribute('position', new THREE.Float32BufferAttribute(topplePositions, 3));
-      toppleGeometry.setAttribute(
-        'aWeight',
-        new THREE.BufferAttribute(toppleVertexWeights(topplePositions, toppleShares), 1),
-      );
-      toppleGeometry.computeVertexNormals();
-    }
+    const mutedGeometry = buildFlat(mutedPositions);
+    const toppleGeometry = buildFlat(topplePositions);
     return { meshes, toppleGeometry, mutedGeometry };
-  }, [geometry, regions, toppleCoverage, dragTotalMm3]);
+  }, [geometry, regions, toppleCoverage]);
 
-  // Colours travel as uniforms, not as a vertex colour attribute: three
-  // converts a uniform Color exactly as it converts material.color, so the
-  // ramp lands in the same space as the flat material that already rendered
-  // correctly. Only the weight is per-vertex, and a scalar has no colour space.
-  const toppleMaterial = useMemo(() => {
-    const material = new THREE.MeshBasicMaterial({
-      transparent: true,
-      opacity: OVERHANG_OPACITY,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: OVERHANG_POLYGON_OFFSET.factor,
-      polygonOffsetUnits: OVERHANG_POLYGON_OFFSET.units,
-    });
-    applyOverhangShader(material, true);
-    return material;
-  }, []);
+  const toppleMaterial = useMemo(() => new THREE.MeshBasicMaterial({
+    color: steepFlatOverlayColor(),
+    transparent: true,
+    opacity: OVERHANG_OPACITY,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: OVERHANG_POLYGON_OFFSET.factor,
+    polygonOffsetUnits: OVERHANG_POLYGON_OFFSET.units,
+  }), []);
 
-  const mutedMaterial = useMemo(() => {
-    const material = new THREE.MeshBasicMaterial({
-      transparent: true,
-      opacity: MUTED_OPACITY,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: OVERHANG_POLYGON_OFFSET.factor,
-      polygonOffsetUnits: OVERHANG_POLYGON_OFFSET.units,
-    });
-    applyOverhangShader(material, true);
-    return material;
-  }, []);
+  const mutedMaterial = useMemo(() => new THREE.MeshBasicMaterial({
+    color: steepFlatOverlayColor(),
+    transparent: true,
+    opacity: MUTED_OPACITY,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: OVERHANG_POLYGON_OFFSET.factor,
+    polygonOffsetUnits: OVERHANG_POLYGON_OFFSET.units,
+  }), []);
 
-  const formationMaterial = useMemo(() => {
-    const material = new THREE.MeshBasicMaterial({
-      color: formationOverhangColor(),
-      transparent: true,
-      opacity: OVERHANG_OPACITY,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: OVERHANG_POLYGON_OFFSET.factor,
-      polygonOffsetUnits: OVERHANG_POLYGON_OFFSET.units,
-    });
-    applyOverhangShader(material, false);
-    return material;
-  }, []);
+  const formationMaterial = useMemo(() => new THREE.MeshBasicMaterial({
+    color: formationOverhangColor(),
+    transparent: true,
+    opacity: OVERHANG_OPACITY,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: OVERHANG_POLYGON_OFFSET.factor,
+    polygonOffsetUnits: OVERHANG_POLYGON_OFFSET.units,
+  }), []);
 
   // The scene's shared planes: stable identity and length, so a scrub moves
   // their constants without recompiling these materials.

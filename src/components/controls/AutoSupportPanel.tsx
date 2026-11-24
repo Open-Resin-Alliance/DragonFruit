@@ -13,7 +13,7 @@ import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import type { UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
-import { forestReportToText, runAutoPlaceInWorker } from '@/supports/autoSupport';
+import { clearModelFrameStress, clearModelToppleRisk, forestReportToText, runAutoPlaceInWorker, setModelFrameStress, setModelToppleRisk } from '@/supports/autoSupport';
 import type { SizingDebugInfo, ForestReport } from '@/supports/autoSupport';
 import { getSettings, subscribeToSettings, updateAutoSupportDiagnostic, updateDebugSimpleSupportRender } from '@/supports/Settings/state';
 import {
@@ -240,7 +240,21 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
       );
       handleReplaceSupportsOutcome(replaceBefore, result);
       if (result.analytics?.sizingDebug) setSizingDebugState(result.analytics.sizingDebug);
-      if (result.analytics?.forestReport) setForestReportState(result.analytics.forestReport);
+      if (result.analytics?.forestReport) {
+        setForestReportState(result.analytics.forestReport);
+        if (result.analytics.forestReport.frameStress) {
+          setModelFrameStress(activeModelId, result.analytics.forestReport.frameStress);
+        } else {
+          clearModelFrameStress(activeModelId);
+        }
+        // Pose-dependent, so it belongs to the run: a later edit only refreshes
+        // the compliance term, which the panel takes from the live frame report.
+        if (result.analytics.forestReport.toppleRisk) {
+          setModelToppleRisk(activeModelId, result.analytics.forestReport.toppleRisk);
+        } else {
+          clearModelToppleRisk(activeModelId);
+        }
+      }
     } catch (e) {
       handleReplaceSupportsError(replaceBefore, e);
       console.error('[AutoSupport] runAutoPlace failed:', e);
