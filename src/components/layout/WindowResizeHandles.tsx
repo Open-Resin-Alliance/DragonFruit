@@ -2,7 +2,6 @@
 
 import React from 'react';
 import type { Window } from '@tauri-apps/api/window';
-import { useIsLinux } from '@/hooks/usePlatform';
 
 type ResizeDirection = Parameters<Window['startResizeDragging']>[0];
 
@@ -30,49 +29,16 @@ async function startResize(direction: ResizeDirection): Promise<void> {
 }
 
 /**
- * Resize zones along the window's edges and corners (Linux only).
+ * Resize zones along the window's edges and corners.
  *
  * On Linux the main window is undecorated for the custom titlebar, and the
  * window manager gives an undecorated window no resize borders, so it could
  * only be maximized or minimized. A press in one of these thin zones hands the
- * resize to the window manager through `startResizeDragging`. Windows and macOS
- * keep their native resize behaviour. The zones are hidden while the window is
- * maximized, where they would only take clicks from the UI at the screen edges.
+ * resize to the window manager through `startResizeDragging`. TopBar renders
+ * this only on Linux and only while the window is not maximized; Windows and
+ * macOS keep their native resize behaviour.
  */
 export function WindowResizeHandles() {
-  const isLinux = useIsLinux();
-  const [maximized, setMaximized] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!isLinux) return;
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void (async () => {
-      try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        const currentWindow = getCurrentWindow();
-        const sync = async () => {
-          const value = await currentWindow.isMaximized();
-          if (!disposed) setMaximized(value);
-        };
-        await sync();
-        const off = await currentWindow.onResized(() => {
-          void sync();
-        });
-        if (disposed) off();
-        else unlisten = off;
-      } catch {
-        // not running in the desktop shell
-      }
-    })();
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [isLinux]);
-
-  if (!isLinux || maximized) return null;
-
   return (
     <>
       {ZONES.map((zone) => (

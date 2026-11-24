@@ -38,6 +38,7 @@ import type { SlicingThumbnailRenderSettings } from '@/components/settings/Perfo
 import { useSceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
 import { formatTopbarPrinterAriaLabel, formatTopbarPrinterTitle } from '@/components/layout/topBarMessages';
 import { WindowResizeHandles } from '@/components/layout/WindowResizeHandles';
+import { useIsLinux } from '@/hooks/usePlatform';
 
 interface TopBarProps {
   meshColor: string;
@@ -176,6 +177,7 @@ export function TopBar({
   useEscapeToClose(showProfileChangeWarning, () => setShowProfileChangeWarning(false));
   const [isDesktopWindow, setIsDesktopWindow] = useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = useState(false);
+  const isLinux = useIsLinux();
   const [isLightTheme, setIsLightTheme] = useState(() => {
     if (typeof document === 'undefined') return false;
     const attr = document.documentElement.getAttribute('data-theme');
@@ -221,6 +223,7 @@ export function TopBar({
     if (typeof window === 'undefined') return;
 
     let cancelled = false;
+    let unlistenResized: (() => void) | undefined;
 
     const hydrateDesktopWindowState = async () => {
       const isLikelyDesktopRuntime =
@@ -244,6 +247,19 @@ export function TopBar({
           setIsDesktopWindow(true);
           setIsDesktopWindowMaximized(maximized);
         }
+        // The window manager can maximize or restore the window too (double-click
+        // on the title, Super+Up), so follow every resize, not only our button.
+        try {
+          const off = await currentWindow.onResized(() => {
+            void currentWindow.isMaximized().then((value) => {
+              if (!cancelled) setIsDesktopWindowMaximized(value);
+            }, () => {});
+          });
+          if (cancelled) off();
+          else unlistenResized = off;
+        } catch {
+          // Without resize events the maximize button still keeps the state.
+        }
       } catch {
         if (!cancelled) {
           setIsDesktopWindow(false);
@@ -255,6 +271,7 @@ export function TopBar({
 
     return () => {
       cancelled = true;
+      unlistenResized?.();
     };
   }, []);
 
@@ -701,7 +718,7 @@ export function TopBar({
 
   return (
     <>
-      {isDesktopWindow && <WindowResizeHandles />}
+      {isDesktopWindow && isLinux && !isDesktopWindowMaximized && <WindowResizeHandles />}
       <div className={`ui-topbar-blur ${hideWorkflowControls ? 'ui-topbar-blur-transparent' : ''}`} aria-hidden="true" />
       <div
         className={`ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative ${hideWorkflowControls ? 'justify-between ui-topbar-transparent' : ''}`}
