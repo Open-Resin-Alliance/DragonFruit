@@ -84,6 +84,7 @@ export interface TractionOptimizationStats {
 export interface TractionOptimizationResult {
     candidates: CandidatePoint[];
     stats: TractionOptimizationStats;
+    profile: RepresentativeLayerProfile;
 }
 
 /** Modified Bessel function I_0(x) via power series (machine precision for x <= 10). */
@@ -704,6 +705,7 @@ export function optimizeContactsByTraction(
                 added: 0,
                 pruned: 0,
             },
+            profile,
         };
     }
 
@@ -1109,6 +1111,7 @@ export function optimizeContactsByTraction(
                     added: addedCandidates.length,
                     pruned: prunedSet.size + globalPruned,
                 },
+                profile,
             };
         }
     }
@@ -1122,6 +1125,7 @@ export function optimizeContactsByTraction(
                 added: 0,
                 pruned: 0,
             },
+            profile,
         };
     }
 
@@ -1133,5 +1137,6 @@ export function optimizeContactsByTraction(
             added: addedCandidates.length,
             pruned: prunedSet.size,
         },
+        profile,
     };
 }

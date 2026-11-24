@@ -1,5 +1,6 @@
 import type { Vec3, SupportState } from '../types';
 import { AUTO_PLACED_TYPE_IDS, type AutoPlacedTypeId, type ShaftHostedMemberTypeId, type SupportTypeId } from '../supportTypeRegistry';
+import type { SupportFrameStressReport } from './supportGraphStress';
 
 export type { AutoPlacedTypeId };
 
@@ -134,6 +135,8 @@ export interface ForestReport {
     orphans?: OrphanInfo[];
     /** What a deficit budget would add and cull, when the run computed one. */
     loadBudget?: LoadBudgetReport;
+    /** 3D support+brace beam-frame & rigid-body peel stress summary on critical layers. */
+    frameStress?: SupportFrameStressReport;
     /** Placement diagnostics: why trunks are where they are, fan/merge refusal counts */
     diagnostics?: {
         candidatesBySource: { voxel: number; minima: number; intersection: number; overhang: number; stabilization: number; reinforcement: number };

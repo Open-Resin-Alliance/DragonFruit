@@ -317,12 +317,12 @@ and grid modes:
 - **Phase 3 plate-first occluded rescue ladder**: vertically blocked contacts
   retry in strict priority order: (1) wide clear-trunk branch search across the
   full skeleton up to `CAVITY_FAN_RADIUS_MM` (12 mm); (2) a collision-free
-  2-segment silhouette dogleg trunk via `findOffsetSilhouetteRoute` (8 azimuths
-  × 3 tight radial offsets 2.5 / 4.0 / 5.0 mm, selecting the clear route closest
-  to existing trunks for compact bracing and verifying against the SDF and
-  `isShaftBlocked`, leaving zero extra model scars); (3) short model-to-model
-  cavity bridge (`twig`/`stick`, `buildCavityBridge`) only when neither plate
-  route clears.
+  2-segment silhouette dogleg trunk via `findOffsetSilhouetteRoute` (12 azimuths
+  × 4 radial offsets 2.5 / 4.0 / 5.0 / 6.0 mm across two bend-rise heights,
+  selecting the clear route closest to existing trunks for compact bracing and
+  verifying against both the SDF and exact BVH `isShaftBlocked` clearance,
+  leaving zero extra model scars); (3) short model-to-model cavity bridge
+  (`twig`/`stick`, `buildCavityBridge`) only when neither plate route clears.
 
 ```ts
 const plan = synthesizeTreeClusters(candidates, {
@@ -331,6 +331,48 @@ const plan = synthesizeTreeClusters(candidates, {
     maxAttachmentsPerTrunk: 12,
     minTrunkSpacingMm: MIN_TRUNK_SPACING_MM,
     mesh,
+});
+```
+
+## Support graph rigid-body & 3D beam frame stress analysis
+
+After auto-bracing completes, `computeAutoSupportPlan` optionally evaluates
+whole-frame structural stress on the assembled forest via
+`src/supports/autoSupport/supportGraphStress.ts` and records the result on
+`ForestReport.frameStress` (surfaced in `forestReportToText`):
+
+- **Public surface**: `buildSupportGraph(snapshot, modelId)`,
+  `distributeRigidBodyPeelLoads(tips, totalForceN, copX, copY)`,
+  `solveSupportFrameStress(graph, profile, options)`, `GREEN_RESIN_UTS_MPA`, and
+  types `SupportGraph`, `SupportGraphNode`, `SupportGraphMember`,
+  `SupportFrameStressReport`, `FrameStressHotspot`.
+- **Graph construction**: `buildSupportGraph` collects all plate-rooted shafts
+  (`trunk`, `stump`, `kickstand`), hosted members (`branch`, `leaf`), and
+  `brace` struts for `modelId` using `resolveSegmentEndpoints`, splitting host
+  segments at every hosted `knot` so triangulated X-braced multi-bay frames are
+  represented accurately. Model-to-model `twig` / `stick` bridges are omitted.
+- **Rigid-body peel distribution & 3D frame solve**:
+  - Selects up to 3 critical layers from `RepresentativeLayerProfile` (peak
+    integrated Screened Stefan force, peak `areaJumpRatio · areaMm2`, and
+    highest populated layer) and integrates peel force and Center of Pressure
+    from `stefanField` (calibrated against `referenceStefanMeanPressureMm2` and
+    `NOMINAL_TIP_PEEL_LOAD_N`).
+  - `distributeRigidBodyPeelLoads` solves 3-DOF rigid-body vertical + moment
+    equilibrium weighted by tip stiffness `d²` with an active-set non-negativity
+    clamp so compressive tips shed load onto pulling tips.
+  - When grounded free nodes are at most `1200` (`solverMode: 'frame3d'`),
+    `solveSupportFrameStress` assembles a 6-DOF per-node 3D Euler-Bernoulli beam
+    stiffness matrix and solves `K u = f` with Block-Jacobi Preconditioned
+    Conjugate Gradient to compute tip deflection, combined axial + bending stress
+    vs `GREEN_RESIN_UTS_MPA`, and Euler column buckling utilization (`hotspots`).
+  - **Constraints**: entity walks sort deterministically by coordinates so worker
+    and main-thread plans produce bit-identical `frameStress` reports; forests
+    above the free-node cap fall back cleanly to `solverMode: 'rigidBodyOnly'`.
+
+```ts
+const graph = buildSupportGraph(draft, modelId);
+const frameStress = solveSupportFrameStress(graph, tractionProfile, {
+    areaPerSupportMm2: settings.areaPerSupportMm2,
 });
 ```
 ## Sizing is empirical, not physics

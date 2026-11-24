@@ -26,9 +26,9 @@ export const TWO_LEVEL_BRANCH_REACH_MM = 8.0;
 // Green-state photopolymer beam & buckling constants (SI: N, mm, MPa = N/mm²)
 // ---------------------------------------------------------------------------
 /** Young's modulus E_green (MPa) of green-state cured UV photopolymer resin. */
-const GREEN_RESIN_MODULUS_MPA = 850;
+export const GREEN_RESIN_MODULUS_MPA = 850;
 /** Nominal single-support peel traction load F_tip (N) (~15 kPa nFEP × 10 mm²). */
-const NOMINAL_TIP_PEEL_LOAD_N = 0.15;
+export const NOMINAL_TIP_PEEL_LOAD_N = 0.15;
 /** Guided-cantilever lateral tip deflection limit δ_max (mm) (~2.8 × 50 µm layers). */
 const MAX_TIP_DEFLECTION_MM = 0.14;
 /** Factored axial compressive squeeze load SF·F_return (N) on vat Z-return. */
@@ -655,10 +655,10 @@ export interface SilhouetteEscapeRoute {
  * Phase 3 Tier-2 Rescue: find a collision-free 2-segment dogleg trunk route
  * from the build plate around an obstructing lower mesh up to `socketPos`.
  *
- * Samples 8 azimuths × 3 tight radial offsets (`2.5, 4.0, 5.5 mm`), checks SDF
- * clearance along both the vertical riser and angled upper segment, respects
- * minimum trunk spacing / grid alignment, and picks the clear route closest to
- * existing trunks at the smallest clearing radius so doglegs tuck compactly for bracing.
+ * Samples 12 azimuths × 4 compact radial offsets (`2.5, 4.0, 5.0, 6.0 mm`) across
+ * two bend-rise heights, checks SDF + optional exact BVH clearance along both the
+ * vertical riser and inset upper angled segment, respects minimum trunk spacing /
+ * grid alignment, and picks the clearest tucked route near existing trunks.
  */
 export function findOffsetSilhouetteRoute(
     socketPos: Vec3,
@@ -668,14 +668,16 @@ export function findOffsetSilhouetteRoute(
     existingRoots: ReadonlyArray<{ x: number; y: number }>,
     grid?: TreeSynthesisGridConfig,
     minTrunkSpacingMm: number = MIN_TRUNK_SPACING_MM,
+    isSegmentBlocked?: (a: Vec3, b: Vec3, radiusMm: number) => boolean,
 ): SilhouetteEscapeRoute | null {
     if (socketPos.z < 3.5) return null;
 
     const sdf = getOrCreateSDFCache(mesh);
-    const baseMaxAngleDeg = Math.max(5, Math.min(80, maxAngleFromVerticalDeg));
+    const baseMaxAngleDeg = Math.max(45, Math.min(80, maxAngleFromVerticalDeg));
     const shaftDiaMm = Math.max(0.4, shaftRadiusMm * 2);
     const maxDoglegSpanMm = Math.min(MAX_ROUTED_TRUNK_DIAGONAL_SPAN_MM, maxEulerBucklingSpanMm(shaftDiaMm));
     const clearanceMm = Math.max(0.25, shaftRadiusMm + 0.15);
+    const bvhRadiusMm = Math.max(0.2, shaftRadiusMm);
 
     const isSegmentClear = (a: Vec3, b: Vec3, skipEndFraction = 0): boolean => {
         const dx = b.x - a.x;
@@ -693,6 +695,16 @@ export function findOffsetSilhouetteRoute(
         return true;
     };
 
+    const insetEndpoint = (a: Vec3, b: Vec3, insetMm: number): Vec3 => {
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dz = b.z - a.z;
+        const len = Math.hypot(dx, dy, dz);
+        if (len <= insetMm + 1e-4) return a;
+        const scale = (len - insetMm) / len;
+        return { x: a.x + dx * scale, y: a.y + dy * scale, z: a.z + dz * scale };
+    };
+
     const nearestRootDistSq = (rx: number, ry: number): number => {
         if (existingRoots.length === 0) return 0;
         let best = Infinity;
@@ -705,11 +717,11 @@ export function findOffsetSilhouetteRoute(
         return best;
     };
 
-    const radii = [2.5, 4.0, 5.0];
-    const azimuthCount = 8;
+    const radii = [2.5, 4.0, 5.0, 6.0];
+    const azimuthCount = 12;
 
     for (const radius of radii) {
-        const nominalRise = minStableRiseForLateralMm(radius, baseMaxAngleDeg, maxDoglegSpanMm, shaftDiaMm);
+        const nominalRise = minStableRiseForLateralMm(radius, baseMaxAngleDeg, maxDoglegSpanMm, shaftDiaMm * 1.19);
         if (nominalRise === null) continue;
         const bendZ = socketPos.z - Math.max(1.0, nominalRise);
         if (bendZ < 1.8) continue;
@@ -726,21 +738,37 @@ export function findOffsetSilhouetteRoute(
                 ry = snapToGridIndex(ry, grid.spacingMm) * grid.spacingMm;
             }
             const actualH = Math.hypot(socketPos.x - rx, socketPos.y - ry);
-            if (actualH < 1.5 || actualH > 5.5) continue;
-            const actualMinRise = minStableRiseForLateralMm(actualH, baseMaxAngleDeg, maxDoglegSpanMm, shaftDiaMm);
+            if (actualH < 1.5 || actualH > 6.5) continue;
+            const actualMinRise = minStableRiseForLateralMm(actualH, baseMaxAngleDeg, maxDoglegSpanMm, shaftDiaMm * 1.19);
             if (actualMinRise === null) continue;
-            const actualBendZ = socketPos.z - Math.max(1.0, actualMinRise);
-            if (actualBendZ < 1.8 || actualBendZ >= socketPos.z - 0.5) continue;
 
             if (isTooCloseToExistingTrunk(rx, ry, existingRoots, minTrunkSpacingMm, grid)) {
                 continue;
             }
 
             const baseTop: Vec3 = { x: rx, y: ry, z: 0.8 };
-            const bendJoint: Vec3 = { x: rx, y: ry, z: actualBendZ };
-            // Both vertical riser and upper angled leg must clear the model SDF.
-            if (!isSegmentClear(baseTop, bendJoint, 0)) continue;
-            if (!isSegmentClear(bendJoint, socketPos, 0.04)) continue;
+            const riseCandidates = [actualMinRise, actualMinRise + 2.0];
+            let chosenBendJoint: Vec3 | null = null;
+
+            for (const rise of riseCandidates) {
+                if (Math.hypot(actualH, rise) > maxDoglegSpanMm) continue;
+                const actualBendZ = socketPos.z - Math.max(1.0, rise);
+                if (actualBendZ < 1.8 || actualBendZ >= socketPos.z - 0.5) continue;
+
+                const bendJoint: Vec3 = { x: rx, y: ry, z: actualBendZ };
+                // Both vertical riser and upper angled leg must clear SDF and exact BVH checks.
+                if (!isSegmentClear(baseTop, bendJoint, 0)) continue;
+                if (!isSegmentClear(bendJoint, socketPos, 0.04)) continue;
+                if (isSegmentBlocked) {
+                    if (isSegmentBlocked(baseTop, bendJoint, bvhRadiusMm)) continue;
+                    const insetSocket = insetEndpoint(bendJoint, socketPos, 0.15);
+                    if (isSegmentBlocked(bendJoint, insetSocket, bvhRadiusMm)) continue;
+                }
+                chosenBendJoint = bendJoint;
+                break;
+            }
+
+            if (!chosenBendJoint) continue;
 
             // Prefer tucking near an existing trunk group (compact bracing, low visual footprint).
             const tuckScore = actualH * 2.0 + Math.sqrt(nearestRootDistSq(rx, ry));
@@ -748,7 +776,7 @@ export function findOffsetSilhouetteRoute(
                 bestTuckScore = tuckScore;
                 bestRoute = {
                     basePos: { x: rx, y: ry, z: 0 },
-                    bendJoint,
+                    bendJoint: chosenBendJoint,
                 };
             }
         }

@@ -88,7 +88,12 @@ import {
     maxStableAngleForSpanDeg,
     type TreeSynthesisGridConfig,
 } from './treeSynthesis';
-import { optimizeContactsByTraction, type TractionOptimizationStats } from './tractionOptimization';
+import {
+    optimizeContactsByTraction,
+    type RepresentativeLayerProfile,
+    type TractionOptimizationStats,
+} from './tractionOptimization';
+import { buildSupportGraph, solveSupportFrameStress } from './supportGraphStress';
 import { buildCavityBridge } from '../SupportTypes/Trunk/useTrunkPlacement';
 import { createCavityTester } from '../interiorSupportGeometry';
 import { closestSurfaceNormal } from './closestSurfaceNormal';
@@ -3299,6 +3304,32 @@ export function forestReportToText(report: ForestReport, autoSettings?: Partial<
         }
         lines.push('');
     }
+    if (report.frameStress) {
+        const fs = report.frameStress;
+        const modeTag = fs.solverMode === 'frame3d' ? '3D frame' : 'rigid-body';
+        lines.push('FRAME STRESS (SUPPORT GRAPH)');
+        lines.push(
+            `  Graph: ${fs.nodeCount} nodes (${fs.rootCount} roots, ${fs.tipCount} tips) · `
+            + `${fs.memberCount} beams (${fs.braceCount} braces) [${modeTag}]`,
+        );
+        lines.push(
+            `  Critical layers (${fs.layersEvaluated}): peak ${fs.peakLayerPeelForceN.toFixed(2)}N @ Z=${fs.peakLayerZMm.toFixed(1)}mm · `
+            + `tip util max ${fs.maxTipUtilizationPct.toFixed(0)}% (${fs.overloadedTips} overloaded) · `
+            + `member util max ${fs.maxMemberUtilizationPct.toFixed(0)}% (${fs.overloadedMembers} overloaded) · `
+            + `max defl ${fs.maxTipDeflectionMm.toFixed(3)}mm`,
+        );
+        const warmSpots = fs.hotspots.filter((h) => h.utilizationPct >= 75);
+        for (const h of warmSpots) {
+            const stressInfo = h.peakStressMpa !== undefined
+                ? ` ${h.peakStressMpa.toFixed(1)}MPa`
+                : (h.tipLoadN !== undefined ? ` ${h.tipLoadN.toFixed(2)}N` : '');
+            lines.push(
+                `    ${h.kind} ${h.entityKind} ${h.entityId.slice(0, 8)} `
+                + `${h.utilizationPct.toFixed(0)}%${stressInfo} @ (${h.pos.x.toFixed(1)}, ${h.pos.y.toFixed(1)}, Z${h.pos.z.toFixed(1)}) [layer Z${h.layerZMm.toFixed(1)}]`,
+            );
+        }
+        lines.push('');
+    }
     lines.push(`${report.hostCount} ${hostLabel.toLowerCase()} · ${report.leafCount} leaves · ${report.branchCount} branches · ` +
         `${report.bareHosts.length} bare ${hostLabel.toLowerCase()}`);
     if (report.trees.length > 0) {
@@ -3701,6 +3732,7 @@ export function computeAutoSupportPlan(
     //     and before tip capping so pruned candidates skip SDF probes.
     // ------------------------------------------------------------------
     let tractionStats: TractionOptimizationStats | undefined;
+    let tractionProfile: RepresentativeLayerProfile | undefined;
     if (overhangIslands.length > 0) {
         const tractionResult = optimizeContactsByTraction(
             candidates,
@@ -3711,6 +3743,7 @@ export function computeAutoSupportPlan(
         );
         candidates = tractionResult.candidates;
         tractionStats = tractionResult.stats;
+        tractionProfile = tractionResult.profile;
         if (resolvedMesh) {
             for (const c of candidates) {
                 if (!preResolvedCandidates.has(c)) {
@@ -4276,6 +4309,7 @@ export function computeAutoSupportPlan(
                 collectModelRootPoints(),
                 synthesisGridConfig,
                 MIN_TRUNK_SPACING_MM,
+                (a, b, rad) => isShaftBlocked(a, b, rad, resolvedMesh),
             );
             if (escapeRoute) {
                 const trunkBuilt = buildTrunkDataFromPlacement(
@@ -5447,6 +5481,28 @@ export function computeAutoSupportPlan(
         }
     } else if (changed) {
         console.log(LOG_PREFIX, 'Auto-brace skipped (debug setting).');
+    }
+
+    if (changed && analytics.forestReport) {
+        try {
+            const supportGraph = buildSupportGraph(draft, modelId);
+            if (supportGraph.rootCount > 0 && supportGraph.tipCount > 0) {
+                const frameStress = solveSupportFrameStress(supportGraph, tractionProfile, {
+                    areaPerSupportMm2: autoSettings.areaPerSupportMm2,
+                });
+                analytics.forestReport.frameStress = frameStress;
+                console.log(LOG_PREFIX,
+                    `Frame stress (${frameStress.solverMode}): `
+                    + `${frameStress.nodeCount} nodes · ${frameStress.memberCount} beams (${frameStress.braceCount} braces) · `
+                    + `peak ${frameStress.peakLayerPeelForceN.toFixed(2)}N @ Z${frameStress.peakLayerZMm.toFixed(1)}mm · `
+                    + `tip max ${frameStress.maxTipUtilizationPct.toFixed(0)}% (${frameStress.overloadedTips} over) · `
+                    + `member max ${frameStress.maxMemberUtilizationPct.toFixed(0)}% (${frameStress.overloadedMembers} over) · `
+                    + `max defl ${frameStress.maxTipDeflectionMm.toFixed(3)}mm`);
+            }
+        } catch (e) {
+            console.warn(LOG_PREFIX,
+                `Frame stress analysis failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+        }
     }
 
     timingEnd('bracing');
