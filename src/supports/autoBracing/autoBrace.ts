@@ -339,6 +339,7 @@ function buildGroupPairs(
     maxLen: number,
     gridSettings?: { enabled: boolean; spacingMm: number },
     minSpanMm = 0,
+    ladderFilter?: { initialDistanceMm: number; patternIntervalMm: number; isZigZag: boolean },
 ): Edge[] {
     if (group.length < 2) return [];
 
@@ -364,6 +365,18 @@ function buildGroupPairs(
             // below minSpanMm the two supports are one post: bracing between
             // them is material with no stiffness to show for it
             if (hDist < Math.max(0.001, minSpanMm) || hDist > maxRun) continue;
+
+            const overlapLow = Math.max(group[i].bottomReferenceZ, group[j].bottomReferenceZ);
+            const overlapHigh = Math.min(group[i].topReferenceZ, group[j].topReferenceZ);
+            const minNeededRise = Math.max(AUTO_BRACING_HARD_RULES.minZigZagRiseMm, hDist);
+            if (overlapHigh - overlapLow <= minNeededRise + 0.1) continue;
+            if (ladderFilter && !ladderFilter.isZigZag) {
+                const interval = Math.max(EPS, ladderFilter.patternIntervalMm);
+                const kMin = Math.max(0, Math.ceil((overlapLow - EPS - ladderFilter.initialDistanceMm) / interval));
+                const firstTierZ = ladderFilter.initialDistanceMm + kMin * interval;
+                if (firstTierZ + minNeededRise >= overlapHigh - 0.1) continue;
+            }
+
             const edge: Edge = {
                 a: group[i],
                 b: group[j],
@@ -378,8 +391,10 @@ function buildGroupPairs(
             }
         }
     }
-    cardinalEdges.sort((x, y) => x.hDist - y.hDist);
-    diagonalFallbackEdges.sort((x, y) => x.hDist - y.hDist);
+    const edgeTier = (e: Edge) => (e.a.supportKind === 'trunk' && e.b.supportKind === 'trunk' ? 0 : 1);
+    const compareEdges = (x: Edge, y: Edge) => (edgeTier(x) - edgeTier(y)) || (x.hDist - y.hDist);
+    cardinalEdges.sort(compareEdges);
+    diagonalFallbackEdges.sort(compareEdges);
     const cardinalCount = cardinalEdges.length;
     const edges: Edge[] = [...cardinalEdges, ...diagonalFallbackEdges];
 
@@ -700,12 +715,18 @@ export function buildAutoBracedSnapshot(
         list.push(trunk);
         trunksByModel.set(trunk.modelId, list);
     }
+    const ladderFilter = {
+        initialDistanceMm: settings.initialDistanceMm,
+        patternIntervalMm: settings.patternIntervalMm,
+        isZigZag: settings.initialPattern === 'zigZag' || settings.repeatingPattern === 'zigZag',
+    };
     for (const modelTrunks of trunksByModel.values()) {
         const pairs = buildGroupPairs(
             modelTrunks,
             settings.maxBraceLengthMm,
             activeGridSettings,
             autoBracingMinPairSpanMm(settings),
+            ladderFilter,
         );
         for (const pair of pairs) {
             existingTrunkEdges.push({
@@ -1093,6 +1114,7 @@ export function buildAutoBracedSnapshot(
                 settings.maxBraceLengthMm,
                 activeGridSettings,
                 autoBracingMinPairSpanMm(settings),
+                ladderFilter,
             );
             for (const e of pairs) {
                 if (e.diagonalFallback) {

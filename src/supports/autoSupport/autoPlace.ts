@@ -81,8 +81,14 @@ import { getSocketPosition } from '../SupportPrimitives/ContactCone/contactConeU
 import {
     synthesizeTreeClusters,
     findOffsetSilhouetteRoute,
+    TWO_LEVEL_BRANCH_REACH_MM,
+    MAX_UNBRACED_BRANCH_SPAN_MM,
+    MAX_ROUTED_TRUNK_DIAGONAL_SPAN_MM,
+    maxEulerBucklingSpanMm,
+    maxStableAngleForSpanDeg,
     type TreeSynthesisGridConfig,
 } from './treeSynthesis';
+import { optimizeContactsByTraction, type TractionOptimizationStats } from './tractionOptimization';
 import { buildCavityBridge } from '../SupportTypes/Trunk/useTrunkPlacement';
 import { createCavityTester } from '../interiorSupportGeometry';
 import { closestSurfaceNormal } from './closestSurfaceNormal';
@@ -147,6 +153,24 @@ function memberMaxAngleFromVerticalDeg(gridEnabled: boolean = Boolean(getSetting
  * read 30° while every shaft left the host at 42°. Gate the shaft, not the
  * chord.
  */
+/** The angle and length of a branch's shaft leaving its host knot. */
+function branchDepartureShaftExceedsStability(
+    branch: Branch,
+    knotPos: { x: number; y: number; z: number },
+    baseMaxAngleDeg: number,
+    shaftDiameterMm: number,
+): boolean {
+    const firstJoint = branch.segments[0]?.topJoint?.pos;
+    if (!firstJoint) return false;
+    const shaftLenMm = Math.hypot(
+        firstJoint.x - knotPos.x,
+        firstJoint.y - knotPos.y,
+        firstJoint.z - knotPos.z,
+    );
+    const depAngleDeg = memberDepartureAngleFromVerticalDeg(knotPos, firstJoint);
+    return depAngleDeg > maxStableAngleForSpanDeg(shaftLenMm, baseMaxAngleDeg, shaftDiameterMm);
+}
+
 /** The angle this branch's shaft leaves its host at. 0 when it has no joints yet. */
 function branchDepartureAngleDeg(
     branch: Branch,
@@ -155,6 +179,49 @@ function branchDepartureAngleDeg(
     const firstJoint = branch.segments[0]?.topJoint?.pos;
     if (!firstJoint) return 0;
     return memberDepartureAngleFromVerticalDeg(knotPos, firstJoint);
+}
+
+/**
+ * True when an auto-placed routed trunk contains an angled diagonal leg that
+ * exceeds the cantilever stability envelope (`MAX_ROUTED_TRUNK_DIAGONAL_SPAN_MM`
+ * or `maxStableAngleForSpanDeg`). Vertical risers (`lateral <= 0.5 mm`) are always
+ * stable and skipped.
+ */
+function trunkHasUnstableDiagonal(
+    trunk: { segments: Array<{ diameter?: number; bottomJoint?: { pos: Vec3 } | null; topJoint?: { pos: Vec3 } | null }>; contactCone?: { pos: Vec3 } },
+    root: { transform: { pos: Vec3 }; diskHeight?: number; coneHeight?: number } | undefined,
+    baseMaxAngleDeg: number,
+): boolean {
+    let prevPos: Vec3 | undefined = root
+        ? {
+            x: root.transform.pos.x,
+            y: root.transform.pos.y,
+            z: root.transform.pos.z + (root.diskHeight ?? 0) + (root.coneHeight ?? 0),
+        }
+        : undefined;
+
+    for (const seg of trunk.segments ?? []) {
+        const start = seg.bottomJoint?.pos ?? prevPos;
+        const end = seg.topJoint?.pos ?? trunk.contactCone?.pos;
+        if (start && end) {
+            const lateral = Math.hypot(end.x - start.x, end.y - start.y);
+            if (lateral > 0.5) {
+                const vertical = Math.abs(end.z - start.z);
+                const span = Math.hypot(lateral, vertical);
+                const segDia = seg.diameter ?? 1.0;
+                const maxSpan = Math.min(MAX_ROUTED_TRUNK_DIAGONAL_SPAN_MM, maxEulerBucklingSpanMm(segDia));
+                const angleDeg = vertical > 1e-4 ? (Math.atan2(lateral, vertical) * 180) / Math.PI : 90;
+                if (
+                    span > maxSpan
+                    || angleDeg > maxStableAngleForSpanDeg(span, baseMaxAngleDeg, segDia * 1.19) + 0.5
+                ) {
+                    return true;
+                }
+            }
+            prevPos = end;
+        }
+    }
+    return false;
 }
 
 // Per-entity placement logging (Trunk/Leaf/Merge lines) is OFF by default —
@@ -811,6 +878,8 @@ export function buildConsolidationBranch(args: {
     // millimeters of rise to the cone bend and a link picked at the angle cap
     // always leaves the host a few degrees too flat. Reaching further down the
     // shaft buys that rise back; the angle cap keeps the link short anyway.
+    const bandShaftDiaMm = activeSizingBand(autoSettings).shaftDiameterMm;
+    const maxBranchBuckleMm = maxEulerBucklingSpanMm(bandShaftDiaMm);
     let best: FanShaftPoint | null = null;
     let bestAngleDeg = Infinity;
     let currentHostId: string | null = null;
@@ -828,11 +897,15 @@ export function buildConsolidationBranch(args: {
         const ddx = sp.pos.x - tip.x;
         const ddy = sp.pos.y - tip.y;
         const ddz = sp.pos.z - tip.z;
-        if (ddx * ddx + ddy * ddy + ddz * ddz > radiusMm * radiusMm) continue;
+        const spanSq = ddx * ddx + ddy * ddy + ddz * ddz;
+        if (spanSq > radiusMm * radiusMm) continue;
+        const spanMm = Math.sqrt(spanSq);
+        if (spanMm > maxBranchBuckleMm) continue;
         const vDist = tip.z - sp.pos.z;
         if (vDist < 1.5) continue;
         const angleDeg = (Math.atan2(Math.hypot(ddx, ddy), vDist) * 180) / Math.PI;
-        if (angleDeg > Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled))) continue;
+        const maxAllowedAngle = maxStableAngleForSpanDeg(spanMm, Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled)), bandShaftDiaMm);
+        if (angleDeg > maxAllowedAngle) continue;
         if (angleDeg < bestAngleDeg) {
             bestAngleDeg = angleDeg;
             best = sp;
@@ -871,7 +944,7 @@ export function buildConsolidationBranch(args: {
             autoSettings,
         );
         if (!built) return null;
-        if (branchDepartureAngleDeg(built.branch, parentKnot.pos) > Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled))) return null;
+        if (branchDepartureShaftExceedsStability(built.branch, parentKnot.pos, Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled)), bandShaftDiaMm)) return null;
         if (leafPathCrossesSupports(parentKnot.pos, built.branch.contactCone?.pos ?? tip, 0.25, pruned, best.hostId, excludeHostIds)) return null;
 
         if (cappedTip !== undefined && built.branch.contactCone) {
@@ -1051,6 +1124,7 @@ function placeOneCandidate(
      */
     ignoreGrid = false,
     preResolvedCandidates?: WeakSet<CandidatePoint>,
+    deferUnstableRoutedTrunk = false,
 ): { kind: PlacementOutcomeKind; draft: SupportState; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number; fanRefusal?: FanLeafRefusal; mergeRefusal?: 'noHost' | 'rejected'; cavityFanRefusal?: string; gridFallback?: boolean } {
     const supportSettings = getSettings();
     const auto: Partial<AutoSupportSettings> = autoSettings ?? supportSettings.autoSupport ?? {};
@@ -1381,9 +1455,16 @@ function placeOneCandidate(
                     );
                     const vDist2 = tipPos.z - knotPos.z;
                     const mergeAngleDeg = (Math.atan2(hDist2, vDist2) * 180) / Math.PI;
-                    if (mergeAngleDeg > Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled))) {
+                    const mergeBandDiaMm = activeSizingBand(auto).shaftDiameterMm;
+                    const maxMergeSpanMm = maxEulerBucklingSpanMm(mergeBandDiaMm);
+                    const maxMergeAngleDeg = maxStableAngleForSpanDeg(
+                        leafSpanMm,
+                        Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled)),
+                        mergeBandDiaMm,
+                    );
+                    if (leafSpanMm > maxMergeSpanMm || mergeAngleDeg > maxMergeAngleDeg) {
                         logPlacement(
-                            `Merge skip ${candidate.id}: angle too shallow (${mergeAngleDeg.toFixed(0)}° from vertical > 50°) span=${leafSpanMm.toFixed(1)}mm`);
+                            `Merge skip ${candidate.id}: cantilever unstable (${mergeAngleDeg.toFixed(0)}° > ${maxMergeAngleDeg.toFixed(0)}° @ span=${leafSpanMm.toFixed(1)}mm)`);
                     } else try {
                         const band = activeSizingBand(auto);
                         const cappedTip = candidate.tipDiameterMm !== undefined
@@ -1403,7 +1484,7 @@ function placeOneCandidate(
                         );
                         if (!built) {
                             logPlacement(`Branch (merge) ${candidate.id}: collision, falling back`);
-                        } else if (branchDepartureAngleDeg(built.branch, knotPos) > Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled))) {
+                        } else if (branchDepartureShaftExceedsStability(built.branch, knotPos, Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled)), mergeBandDiaMm)) {
                             logPlacement(
                                 `Merge skip ${candidate.id}: shaft leaves the host too flat ` +
                                 `(${branchDepartureAngleDeg(built.branch, knotPos).toFixed(0)}° from vertical) span=${leafSpanMm.toFixed(1)}mm`);
@@ -1501,7 +1582,7 @@ function placeOneCandidate(
                     mesh,
                     hostedOriginForSource(candidate.source),
                     'steepest',
-                    Number.POSITIVE_INFINITY,
+                    MAX_UNBRACED_BRANCH_SPAN_MM,
                     undefined,
                     auto,
                     candidate.tipDiameterMm,
@@ -1583,6 +1664,51 @@ function placeOneCandidate(
             if (isSideWallContact(n, settings.tip.coneAngleMode ?? 'normal', settings.tip.adaptiveConeAngleOffsetDeg)) {
                 logPlacement(`Rejected ${candidate.id}: side-wall trunk too shallow (cone within ${90 - MAX_SIDE_WALL_CONTACT_LEAN_DEG}° of flat)`);
                 return { kind: 'reject', rejectedReason: 'trunk_build_error', preset, draft: d };
+            }
+        }
+    }
+
+    // Cantilever stability guard on routed trunks: `SmartPlacementV3` can route a
+    // long 45° diagonal detour around a lower obstacle (e.g. a 12 mm sideways boom
+    // across a limb). During Pass 2a/2b (`deferUnstableRoutedTrunk`), defer it to
+    // Phase 3 rescue so a stable steep branch or compact silhouette dogleg wins;
+    // on final fallback, prefer a short `<= MAX_CAVITY_BRIDGE_MM` bridge when available,
+    // keeping the routed trunk only as last resort so no island is left uncovered.
+    if (
+        mesh
+        && !deferToTypeOverride
+        && trunkHasUnstableDiagonal(
+            trunkResult.trunk,
+            trunkResult.root,
+            Math.max(OFF_GRID_MAX_MEMBER_ANGLE_FROM_VERTICAL_DEG, memberMaxAngleFromVerticalDeg(gridEnabled)),
+        )
+    ) {
+        if (deferUnstableRoutedTrunk) {
+            logPlacement(`Deferred ${candidate.id}: routed trunk diagonal exceeds cantilever stability envelope`);
+            return { kind: 'reject', rejectedReason: 'trunk_build_error', preset, draft: d };
+        }
+        const band = activeSizingBand(auto);
+        const cappedBridgeTip = candidate.tipDiameterMm !== undefined
+            ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, candidate.tipDiameterMm)
+            : (overrides.tipContactDiameterMm ?? band.tipContactDiameterMm);
+        const cavityResult = buildCavityBridge(tipPos, tipNormal, candidate.modelId, mesh, {
+            shaftDiameterMm: overrides.shaftDiameterMm ?? band.shaftDiameterMm,
+            tipContactDiameterMm: cappedBridgeTip,
+        });
+        if (cavityResult) {
+            const entity = cavityResult.entity;
+            const record = entity as unknown as Record<string, { pos?: Vec3 } | undefined>;
+            let maxSpanMm = -1;
+            for (const { field } of contactEndpointsFor(cavityResult.kind)) {
+                const p = record[field]?.pos;
+                if (!p) continue;
+                const dist = Math.hypot(tipPos.x - p.x, tipPos.y - p.y, tipPos.z - p.z);
+                if (dist > maxSpanMm) maxSpanMm = dist;
+            }
+            if (maxSpanMm >= 0 && maxSpanMm <= MAX_CAVITY_BRIDGE_MM) {
+                d = draftAddEntity(d, cavityResult.kind, entity);
+                logPlacement(`${cavityResult.kind} (unstable-diagonal-bridge) ${candidate.id} Z=${candidate.zHeight.toFixed(1)}mm`);
+                return { kind: cavityResult.kind, preset, draft: d, entityId: entity.id };
             }
         }
     }
@@ -1893,6 +2019,47 @@ export function collectFanShaftPoints(draft: SupportState): FanShaftPoint[] {
 }
 
 /**
+ * Sample upper shaft points (`t ∈ [0.35, 0.90]`) on placed Branches for
+ * 2-level `Trunk -> Branch -> Leaf` crown attachments. Excludes the lowest
+ * 35% of the branch shaft so child leaves sprout near the upper crown rather
+ * than bunching onto the trunk's parent knot.
+ */
+export function collectBranchFanShaftPoints(
+    draft: SupportState,
+    modelId: string,
+    onlyBranchIds?: ReadonlySet<string>,
+): FanShaftPoint[] {
+    const shaftPoints: FanShaftPoint[] = [];
+    for (const [branchId, branch] of Object.entries(draft.branches ?? {})) {
+        if (branch.modelId !== modelId) continue;
+        if (onlyBranchIds && !onlyBranchIds.has(branchId)) continue;
+        for (const seg of branch.segments ?? []) {
+            const span = hostSegmentSpan(draft, branch, seg);
+            if (!span) continue;
+            const { start, end } = span;
+            const diameter = seg.diameter ?? 1.0;
+            const sampleCount = 7;
+            for (let i = 0; i <= sampleCount; i++) {
+                const t = 0.45 + (i / sampleCount) * 0.55;
+                shaftPoints.push({
+                    hostTypeId: 'branch',
+                    hostId: branchId,
+                    segmentId: seg.id,
+                    t,
+                    pos: {
+                        x: start.x + (end.x - start.x) * t,
+                        y: start.y + (end.y - start.y) * t,
+                        z: start.z + (end.z - start.z) * t,
+                    },
+                    diameter,
+                });
+            }
+        }
+    }
+    return shaftPoints;
+}
+
+/**
  * Where a fan attempt attached, and the id of the entity it built there.
  *
  * `entityId` names the place, not the type; the caller indexes by `kind`.
@@ -1953,23 +2120,19 @@ function pointToSegmentDistanceSq(
  */
 function hostSegmentSpan(
     draft: SupportState,
-    host: { rootId?: string; segments: Array<{ bottomJoint?: { pos: { x: number; y: number; z: number } } | null; topJoint?: { pos: { x: number; y: number; z: number } } | null }>; contactCone?: { pos: { x: number; y: number; z: number } } },
+    host: { rootId?: string; parentKnotId?: string; segments: Array<{ bottomJoint?: { pos: { x: number; y: number; z: number } } | null; topJoint?: { pos: { x: number; y: number; z: number } } | null }>; contactCone?: { pos: { x: number; y: number; z: number } } },
     seg: { bottomJoint?: { pos: { x: number; y: number; z: number } } | null; topJoint?: { pos: { x: number; y: number; z: number } } | null },
 ): { start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } } | null {
-    // Bottom segments carry no bottomJoint by design (they rise from the root
-    // plate, not a joint entity) — the root top IS the segment start. Using
-    // anything else here is what produced the `drift` culls: the merge search
-    // used to fabricate `(0, 0, rootTopZ)`, which is the same line only for a
-    // trunk rooted at the world origin, so on the reported model every minima
-    // member merged onto an off-origin host landed beside its shaft and was
-    // culled — leaving the model's lowest edge, the edge that anchors the
-    // print, with no supports at all.
+    // Bottom segments carry no bottomJoint by design (trunks rise from the root
+    // plate; branches rise from their parentKnot). Using anything else here is
+    // what produced the `drift` culls.
     const root = draft.roots[host.rootId ?? ''];
+    const parentKnot = host.parentKnotId ? draft.knots[host.parentKnotId] : undefined;
     const start = seg.bottomJoint?.pos ?? (root ? {
         x: root.transform.pos.x,
         y: root.transform.pos.y,
         z: root.transform.pos.z + (root.diskHeight ?? 0) + (root.coneHeight ?? 0),
-    } : undefined);
+    } : parentKnot?.pos);
     // Top segments connect to the contact cone and carry no topJoint by design
     // — the cone position IS the segment top. Without this fallback every knot
     // hosted high on a trunk (the best, shortest spans) was culled as
@@ -2400,33 +2563,54 @@ export function validateAndCullOrphans(
             if (!checkAttachment(memberId, typeId, knotField, member, tipPos)) removal.add(memberId);
         }
     }
-    // Members whose host was culled (hostBlocked) are also orphaned
-    for (const { typeId, knotField, collectionKey } of SHAFT_HOSTED_MEMBER_TYPES) {
-        const removal = removedFor(typeId);
-        for (const [memberId, member] of Object.entries(hostedMemberEntities(nextDraft, collectionKey))) {
-            if (modelId !== undefined && member.modelId !== modelId) continue;
-            if (removal.has(memberId)) continue;
-            const knotId = memberKnotId(member, knotField);
-            const knot = knotId ? nextDraft.knots[knotId] : undefined;
-            if (!knot) continue;
-            const host = findHostSegment(nextDraft, knot.parentShaftId);
-            // A member whose host was culled: the host resolves through the
-            // knot's segment, or -- for a legacy knot keyed to the entity
-            // itself -- is the parent id. Either way the cull recorded the type
-            // by name.
-            const culledHostId = host?.hostId ?? knot.parentShaftId;
-            const culledTypeName = culledHostTypeNameById.get(culledHostId);
-            if (culledTypeName) {
-                orphans.push({
-                    id: memberId,
-                    kind: typeId,
-                    reason: 'missingHost',
-                    hostId: culledHostId,
-                    knotId: knot.id,
-                    detail: `${culledTypeName} culled (blocked)`,
-                    hostCulled: true,
-                });
-                removal.add(memberId);
+    // Members whose host was culled (hostBlocked trunk, or a culled 1st-level
+    // branch hosting 2nd-level leaves) are also orphaned. Propagate to fixpoint
+    // so multi-level Trunk -> Branch -> Leaf cascades never leave stranded leaves.
+    for (const { typeId } of SHAFT_HOSTED_MEMBER_TYPES) {
+        if (!getSupportTypeDescriptor(typeId).hasSegments) continue;
+        const typeName = typeWord(typeId);
+        for (const culledMemberId of removedFor(typeId)) {
+            if (!culledHostTypeNameById.has(culledMemberId)) {
+                culledHostTypeNameById.set(culledMemberId, typeName);
+            }
+        }
+    }
+    let propagatedHostCull = true;
+    while (propagatedHostCull) {
+        propagatedHostCull = false;
+        for (const { typeId, knotField, collectionKey } of SHAFT_HOSTED_MEMBER_TYPES) {
+            const removal = removedFor(typeId);
+            const hasSegments = getSupportTypeDescriptor(typeId).hasSegments;
+            const typeName = typeWord(typeId);
+            for (const [memberId, member] of Object.entries(hostedMemberEntities(nextDraft, collectionKey))) {
+                if (modelId !== undefined && member.modelId !== modelId) continue;
+                if (removal.has(memberId)) continue;
+                const knotId = memberKnotId(member, knotField);
+                const knot = knotId ? nextDraft.knots[knotId] : undefined;
+                if (!knot) continue;
+                const host = findHostSegment(nextDraft, knot.parentShaftId);
+                // A member whose host was culled: the host resolves through the
+                // knot's segment, or -- for a legacy knot keyed to the entity
+                // itself -- is the parent id. Either way the cull recorded the type
+                // by name.
+                const culledHostId = host?.hostId ?? knot.parentShaftId;
+                const culledTypeName = culledHostTypeNameById.get(culledHostId);
+                if (culledTypeName) {
+                    orphans.push({
+                        id: memberId,
+                        kind: typeId,
+                        reason: 'missingHost',
+                        hostId: culledHostId,
+                        knotId: knot.id,
+                        detail: `${culledTypeName} culled (blocked)`,
+                        hostCulled: true,
+                    });
+                    removal.add(memberId);
+                    if (hasSegments && !culledHostTypeNameById.has(memberId)) {
+                        culledHostTypeNameById.set(memberId, typeName);
+                        propagatedHostCull = true;
+                    }
+                }
             }
         }
     }
@@ -2580,6 +2764,13 @@ export function fanLeafToHost(
     let currentHostModelId: string | undefined;
     let currentHostIsGrid = false;
 
+    const fanBand = activeSizingBand(autoSettings);
+    const fanBandShaftDiaMm = fanBand.shaftDiameterMm;
+    const fanBandTipLenMm = fanBand.tipLengthMm;
+    const explicitUnlimitedRescue = rescueSpanOverrideMm === Number.POSITIVE_INFINITY;
+    const maxUnbracedSpanMm = maxEulerBucklingSpanMm(fanBandShaftDiaMm);
+    const maxUnbracedSpanSq = maxUnbracedSpanMm * maxUnbracedSpanMm;
+
     for (const sp of shaftPoints) {
         // Host-level answers are cached per host: the pool holds tens of
         // thousands of samples from a few hundred hosts, in host order.
@@ -2606,9 +2797,12 @@ export function fanLeafToHost(
         const lateralMm = Math.sqrt(lateral2);
         if (lateralMm < nearestHostMm) nearestHostMm = lateralMm;
         if (lateral2 > limit * limit) continue;
-        const inReach = dist2 <= limit * limit;
-        const rescueSpanMm = rescueSpanOverrideMm
-            ?? (maxAngleDeg > 0 ? limit / Math.sin((maxAngleDeg * Math.PI) / 180) : Infinity);
+        const inReach = dist2 <= limit * limit && dist2 <= maxUnbracedSpanSq;
+        const derivedRescueSpanMm = rescueSpanOverrideMm
+            ?? (maxAngleDeg > 0 ? limit / Math.sin((maxAngleDeg * Math.PI) / 180) : maxUnbracedSpanMm);
+        const rescueSpanMm = explicitUnlimitedRescue
+            ? Number.POSITIVE_INFINITY
+            : Math.min(maxUnbracedSpanMm, derivedRescueSpanMm);
         const inRescue = dist2 <= rescueSpanMm * rescueSpanMm;
         if (!inReach && !inRescue) continue;
 
@@ -2623,8 +2817,13 @@ export function fanLeafToHost(
             if (refusal === 'noHost') refusal = 'sameZ';
             continue;
         }
-        const angleDeg = (Math.atan2(Math.sqrt(ddx * ddx + ddy * ddy), vDist) * 180) / Math.PI;
-        if (angleDeg > maxAngleDeg) {
+        const spanMm = Math.sqrt(dist2);
+        const angleDeg = (Math.atan2(lateralMm, vDist) * 180) / Math.PI;
+        const estShaftLenMm = Math.max(0.5, spanMm - fanBandTipLenMm);
+        const effectiveMaxAngleDeg = explicitUnlimitedRescue
+            ? maxAngleDeg
+            : maxStableAngleForSpanDeg(estShaftLenMm, maxAngleDeg, fanBandShaftDiaMm);
+        if (angleDeg > effectiveMaxAngleDeg) {
             if (refusal === 'noHost') refusal = 'angle';
             continue;
         }
@@ -2684,7 +2883,9 @@ export function fanLeafToHost(
              * branch, which is a real shaft, still has to reach a point short of the
              * tip, because its own collision test runs after it is built.
              */
-            const isBranchAttempt = allowBranch && spanMm > leafSpanCeilingMm;
+            const isBranchHost = sp.hostTypeId === 'branch';
+            if (isBranchHost && spanMm > MAX_LEAF_FALLBACK_SPAN_MM) continue;
+            const isBranchAttempt = allowBranch && !isBranchHost && spanMm > leafSpanCeilingMm;
             if (mesh) {
                 const toTip = {
                     x: target.x - sp.pos.x,
@@ -2718,7 +2919,10 @@ export function fanLeafToHost(
                 ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, tipDiameterMm)
                 : undefined;
             if (isBranchAttempt) {
-                const branchMaxAngleDeg = Math.min(50, maxAngleDeg);
+                const estShaftLenMm = Math.max(0.5, spanMm - fanBandTipLenMm);
+                const branchMaxAngleDeg = explicitUnlimitedRescue
+                    ? Math.min(50, maxAngleDeg)
+                    : maxStableAngleForSpanDeg(estShaftLenMm, Math.min(50, maxAngleDeg), fanBandShaftDiaMm);
                 if (angleDeg > branchMaxAngleDeg) {
                     lastBlockedReason = 'angle';
                     continue;
@@ -2745,7 +2949,10 @@ export function fanLeafToHost(
                         lastBlockedReason = 'blocked';
                         continue;
                     }
-                    if (branchDepartureAngleDeg(built.branch, parentKnot.pos) > branchMaxAngleDeg) {
+                    const depTooFlat = explicitUnlimitedRescue
+                        ? branchDepartureAngleDeg(built.branch, parentKnot.pos) > Math.min(50, maxAngleDeg)
+                        : branchDepartureShaftExceedsStability(built.branch, parentKnot.pos, Math.min(50, maxAngleDeg), fanBandShaftDiaMm);
+                    if (depTooFlat) {
                         lastBlockedReason = 'angle';
                         continue;
                     }
@@ -3061,6 +3268,13 @@ export function forestReportToText(report: ForestReport, autoSettings?: Partial<
         }
         if ((d.gridFallbacks ?? 0) > 0) {
             lines.push(`  Grid fallbacks: ${d.gridFallbacks} — the lattice could not serve these tips, so they were placed without it`);
+        }
+        if (d.tractionOptimization) {
+            const tr = d.tractionOptimization;
+            lines.push(
+                `  Traction Voronoi: ${tr.representativeLayers} representative layers `
+                + `(peak ${tr.peakCrossSectionMm2.toFixed(0)}mm²) · +${tr.added} added, −${tr.pruned} pruned`,
+            );
         }
         if (report.loadBudget) {
             const budget = report.loadBudget;
@@ -3478,6 +3692,47 @@ export function computeAutoSupportPlan(
             }
             preResolvedCandidates.add(c);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 2c. Phase 1c: Representative-layer Voronoi traction optimization
+    //     Runs after normal resolution so Pass C's global cross-region
+    //     pruner reads exact underside angles and normal compatibility,
+    //     and before tip capping so pruned candidates skip SDF probes.
+    // ------------------------------------------------------------------
+    let tractionStats: TractionOptimizationStats | undefined;
+    if (overhangIslands.length > 0) {
+        const tractionResult = optimizeContactsByTraction(
+            candidates,
+            eligible,
+            autoSettings,
+            resolvedMesh,
+            modelId,
+        );
+        candidates = tractionResult.candidates;
+        tractionStats = tractionResult.stats;
+        if (resolvedMesh) {
+            for (const c of candidates) {
+                if (!preResolvedCandidates.has(c)) {
+                    const resolved = resolveSurfaceNormal(c.tipPos, resolvedMesh);
+                    c.tipNormal = resolved.normal;
+                    if (resolved.hit) {
+                        c.tipPos = resolved.point;
+                        c.zHeight = resolved.point.z;
+                    }
+                    preResolvedCandidates.add(c);
+                }
+            }
+        }
+        if (tractionStats.added > 0 || tractionStats.pruned > 0 || tractionStats.representativeLayers > 0) {
+            console.log(LOG_PREFIX,
+                `Step 2c (Traction Voronoi): ${tractionStats.representativeLayers} rep layers ` +
+                `(peak ${tractionStats.peakCrossSectionMm2.toFixed(0)}mm²) · ` +
+                `+${tractionStats.added} added, −${tractionStats.pruned} pruned → ${candidates.length} candidates`);
+        }
+    }
+
+    if (resolvedMesh) {
         applyContactTipCaps(candidates, resolvedMesh, autoSettings.tipContactMarginScale, autoSettings);
     }
 
@@ -3574,7 +3829,7 @@ export function computeAutoSupportPlan(
 
     const placeOne = (candidate: CandidatePoint, deferTrunkError = false): string => {
         try {
-            const result = placeOneCandidate(candidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx, false, preResolvedCandidates);
+            const result = placeOneCandidate(candidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx, false, preResolvedCandidates, deferTrunkError);
             if (deferTrunkError && result.kind === 'reject' && result.rejectedReason === 'trunk_build_error') {
                 return 'defer_rescue';
             }
@@ -3671,6 +3926,7 @@ export function computeAutoSupportPlan(
             : Math.max(autoSettings.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM, CONSOLIDATION_FAN_RADIUS_MM),
         maxAttachmentsPerTrunk: autoSettings.maxAttachmentsPerTrunk,
         minTrunkSpacingMm: MIN_TRUNK_SPACING_MM,
+        shaftDiameterMm: activeSizingBand(autoSettings).shaftDiameterMm,
         grid: synthesisGridConfig,
         mesh: resolvedMesh ?? undefined,
     });
@@ -3787,6 +4043,156 @@ export function computeAutoSupportPlan(
         }
     }
 
+    // Pass 2c: 2-level `Trunk -> Branch -> Leaf` crown synthesis for elevated
+    // and occluded upper clusters (chin/snout/jaw/hilt). Routes ONE angled arm
+    // Branch from a nearby clear trunk up to the cluster's anchor contact, then
+    // fans close sibling contacts (<=4.5mm) as slim 2nd-level Leaves off that
+    // branch's upper shaft — avoiding parallel vertical flagpoles across the model.
+    if (treePlan.upperClusters.length > 0) {
+        if (!clusterSkeletonPool) clusterSkeletonPool = collectFanShaftPoints(draft);
+        for (const group of treePlan.upperClusters) {
+            tickProgress();
+            const anchorCand = group.anchor;
+            const preferredHostId = anchorHostIdByCandidateId.get(group.preferredTrunkAnchorId);
+            const preferredPool = preferredHostId
+                ? clusterSkeletonPool.filter((sp) => sp.hostId === preferredHostId)
+                : [];
+            const attachOrigin = hostedOriginForSource(anchorCand.source);
+            const anchorPreset = presetForArea(anchorCand.islandAreaMm2);
+
+            const tryArm = (poolToUse: FanShaftPoint[]) => poolToUse.length > 0
+                ? fanLeafToHost(
+                    anchorCand.tipPos,
+                    anchorCand.modelId,
+                    poolToUse,
+                    new Set(),
+                    `auto-crown-arm-${anchorCand.id}`,
+                    TWO_LEVEL_BRANCH_REACH_MM,
+                    TWO_LEVEL_BRANCH_REACH_MM,
+                    clusterFanMaxAngleDeg,
+                    autoSettings.maxAttachmentsPerTrunk,
+                    draft,
+                    resolvedMesh ?? undefined,
+                    attachOrigin,
+                    'nearest',
+                    MAX_UNBRACED_BRANCH_SPAN_MM,
+                    undefined,
+                    autoSettings,
+                    anchorCand.tipDiameterMm,
+                )
+                : ({ ok: false as const, reason: 'noHost' as const });
+
+            let arm = tryArm(preferredPool);
+            if (!arm.ok) arm = tryArm(clusterSkeletonPool);
+
+            if (arm.ok) {
+                draft = arm.draft;
+                placed[arm.kind]++;
+                presets[anchorPreset]++;
+                diagnostics.candidatesBySource[anchorCand.source] =
+                    (diagnostics.candidatesBySource[anchorCand.source] ?? 0) + 1;
+                if (arm.entityId && isLedgerKind(arm.kind)) {
+                    forestLedger.push({
+                        displayId: anchorCand.id,
+                        kind: arm.kind,
+                        entityId: arm.entityId,
+                        areaMm2: anchorCand.islandAreaMm2,
+                        zHeight: anchorCand.zHeight,
+                        preset: anchorPreset,
+                        bandShaftMm: activeSizingBand(autoSettings).shaftDiameterMm,
+                    });
+                }
+
+                // Fan sibling contacts as 2nd-level slim Leaves off the new Branch arm.
+                const branchPool = arm.kind === 'branch' && arm.entityId
+                    ? collectBranchFanShaftPoints(draft, modelId, new Set([arm.entityId]))
+                    : [];
+                for (const sib of group.siblings) {
+                    tickProgress();
+                    const sibOrigin = hostedOriginForSource(sib.source);
+                    const sibPreset = presetForArea(sib.islandAreaMm2);
+                    let sibAttached = branchPool.length > 0
+                        ? fanLeafToHost(
+                            sib.tipPos,
+                            sib.modelId,
+                            branchPool,
+                            new Set(),
+                            `auto-crown-leaf-${sib.id}`,
+                            MAX_LEAF_FALLBACK_SPAN_MM,
+                            MAX_LEAF_FALLBACK_SPAN_MM,
+                            clusterFanMaxAngleDeg,
+                            6,
+                            draft,
+                            resolvedMesh ?? undefined,
+                            sibOrigin,
+                            'nearest',
+                            undefined,
+                            undefined,
+                            autoSettings,
+                            sib.tipDiameterMm,
+                        )
+                        : ({ ok: false as const, reason: 'noHost' as const });
+                    // If the branch shaft couldn't catch this sibling, try the main trunk skeleton.
+                    if (!sibAttached.ok && clusterSkeletonPool.length > 0) {
+                        sibAttached = fanLeafToHost(
+                            sib.tipPos,
+                            sib.modelId,
+                            clusterSkeletonPool,
+                            new Set(),
+                            `auto-crown-trunk-${sib.id}`,
+                            TWO_LEVEL_BRANCH_REACH_MM,
+                            TWO_LEVEL_BRANCH_REACH_MM,
+                            clusterFanMaxAngleDeg,
+                            autoSettings.maxAttachmentsPerTrunk,
+                            draft,
+                            resolvedMesh ?? undefined,
+                            sibOrigin,
+                            'nearest',
+                            MAX_UNBRACED_BRANCH_SPAN_MM,
+                            undefined,
+                            autoSettings,
+                            sib.tipDiameterMm,
+                        );
+                    }
+                    if (sibAttached.ok) {
+                        draft = sibAttached.draft;
+                        placed[sibAttached.kind]++;
+                        presets[sibPreset]++;
+                        diagnostics.candidatesBySource[sib.source] =
+                            (diagnostics.candidatesBySource[sib.source] ?? 0) + 1;
+                        if (sibAttached.entityId && isLedgerKind(sibAttached.kind)) {
+                            forestLedger.push({
+                                displayId: sib.id,
+                                kind: sibAttached.kind,
+                                entityId: sibAttached.entityId,
+                                areaMm2: sib.islandAreaMm2,
+                                zHeight: sib.zHeight,
+                                preset: sibPreset,
+                                bandShaftMm: activeSizingBand(autoSettings).shaftDiameterMm,
+                            });
+                        }
+                    } else {
+                        const sibOutcome = placeOne(sib, Boolean(resolvedMesh));
+                        if (sibOutcome === 'defer_rescue') occludedRescueQueue.push(sib);
+                        else if (sibOutcome === 'trunk') clusterSkeletonPool = null;
+                        if (!clusterSkeletonPool) clusterSkeletonPool = collectFanShaftPoints(draft);
+                    }
+                }
+            } else {
+                // Primary arm blocked/unreachable — fall back cleanly for anchor and siblings.
+                const anchorOutcome = placeOne(anchorCand, Boolean(resolvedMesh));
+                if (anchorOutcome === 'defer_rescue') occludedRescueQueue.push(anchorCand);
+                else if (anchorOutcome === 'trunk') clusterSkeletonPool = collectFanShaftPoints(draft);
+                for (const sib of group.siblings) {
+                    tickProgress();
+                    const sibOutcome = placeOne(sib, Boolean(resolvedMesh));
+                    if (sibOutcome === 'defer_rescue') occludedRescueQueue.push(sib);
+                    else if (sibOutcome === 'trunk') clusterSkeletonPool = collectFanShaftPoints(draft);
+                }
+            }
+        }
+    }
+
     // ── Phase 3: Plate-First Occluded Rescue Ladder ──────────────────
     // (1) Wide clear-trunk branch/leaf across the completed skeleton (<=12mm),
     // (2) Silhouette offset/dogleg trunk around lower mesh (0 extra scars),
@@ -3823,7 +4229,7 @@ export function computeAutoSupportPlan(
                 resolvedMesh,
                 hostedOriginForSource(candidate.source),
                 'steepest',
-                Number.POSITIVE_INFINITY,
+                MAX_UNBRACED_BRANCH_SPAN_MM,
                 undefined,
                 autoSettings,
                 candidate.tipDiameterMm,
@@ -4659,9 +5065,47 @@ export function computeAutoSupportPlan(
                 draft = rehosted;
                 console.log(LOG_PREFIX, 'Legacy knot rehost: entity id → segment id');
             }
+            const preResizeTrunks = draft.trunks;
             const resized = computeForestDiameterProfile(draft, modelId);
             if (resized !== draft) {
-                draft = resized;
+                if (resolvedMesh) {
+                    // Guard against self-inflicted `hostBlocked` culls: if thickening
+                    // a trunk pushed a previously clear shaft into the model mesh,
+                    // keep that trunk at its collision-free pre-resize diameter instead
+                    // of thickening it into a collision and culling the whole tree.
+                    let revertedCount = 0;
+                    let safeTrunks: SupportState['trunks'] | null = null;
+                    for (const [tid, trunk] of Object.entries(resized.trunks)) {
+                        if (trunk.modelId !== modelId) continue;
+                        const prevTrunk = preResizeTrunks[tid];
+                        if (!prevTrunk || trunk === prevTrunk) continue;
+                        const prevMaxDia = Math.max(0, ...prevTrunk.segments.map((s) => s.diameter ?? 0));
+                        const nextMaxDia = Math.max(0, ...trunk.segments.map((s) => s.diameter ?? 0));
+                        if (nextMaxDia <= prevMaxDia + 1e-4) continue;
+                        const trunkBlocked = (candidateTrunk: typeof trunk): boolean => {
+                            for (const seg of candidateTrunk.segments) {
+                                const span = hostSegmentSpan(resized, candidateTrunk, seg);
+                                if (!span) continue;
+                                const radius = (seg.diameter ?? 1.0) / 2 + 0.15;
+                                if (isShaftBlocked(span.start, span.end, radius, resolvedMesh)) {
+                                    return true;
+                                }
+                            }
+                            return false;
+                        };
+                        if (trunkBlocked(trunk) && !trunkBlocked(prevTrunk)) {
+                            if (!safeTrunks) safeTrunks = { ...resized.trunks };
+                            safeTrunks[tid] = prevTrunk;
+                            revertedCount++;
+                        }
+                    }
+                    draft = safeTrunks ? { ...resized, trunks: safeTrunks } : resized;
+                    if (revertedCount > 0) {
+                        console.log(LOG_PREFIX, `Forest resize clearance guard: kept ${revertedCount} tight-clearance trunk(s) at placed diameter.`);
+                    }
+                } else {
+                    draft = resized;
+                }
                 console.log(LOG_PREFIX, 'Forest resize pass applied (attachment-loaded trunks thickened).');
             }
             // Post-resize validation: drift (>0.5mm), cross after thickening, or missing host.
@@ -4891,6 +5335,7 @@ export function computeAutoSupportPlan(
                 gridFallbacks: diagnostics.gridFallbacks,
                 consolidationRefusals: { ...conRefusals },
                 cavityFallbacks: [...diagnostics.cavityFallbacks],
+                ...(tractionStats ? { tractionOptimization: tractionStats } : {}),
             };
             // Report only: what a deficit budget would add and cull, in mm² of
             // unsupported surface. Nothing here changes the forest.

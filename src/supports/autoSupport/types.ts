@@ -150,6 +150,13 @@ export interface ForestReport {
          *  model-to-model instead, by whichever type registered a bridge
          *  builder. Tip = where the bridge starts. */
         cavityFallbacks: Array<{ id: string; kind: SupportTypeId; tip: { x: number; y: number; z: number }; fanRefusal?: string }>;
+        /** Phase 1c representative-layer Voronoi traction optimization stats. */
+        tractionOptimization?: {
+            representativeLayers: number;
+            peakCrossSectionMm2: number;
+            added: number;
+            pruned: number;
+        };
     };
 }
 

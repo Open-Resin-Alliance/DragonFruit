@@ -26,10 +26,10 @@ Six phases inside `computeAutoSupportPlan` (`autoPlace.ts`):
 | # | Phase | What happens |
 | - | ----- | ------------ |
 | 0 | Settings | Normalize; bail out returning `null` when disabled |
-| 1 | Generate candidates | Turn detected islands into `CandidatePoint`s (with corner-first perimeter + interior sampling on overhangs `≥ 4 mm²` or `≥ 3 mm` span), then stabilization anchors and minima reinforcement |
+| 1 | Generate candidates | Turn detected islands into `CandidatePoint`s (with corner-first perimeter + interior sampling on overhangs `≥ 4 mm²` or `≥ 3 mm` span), stabilization anchors, minima reinforcement, and Phase 1c representative-layer Voronoi traction optimization (`tractionOptimization.ts`) |
 | 2 | Deduplicate | Collapse nearby candidates (flat overhang pairs keep a 3D ball so lower heels never erase higher toes; sloped overhangs use grown influence) |
-| 3 | Synthesize & place | Cluster-first tree synthesis (`treeSynthesis.ts`) places all well-spaced cluster trunks first (`MIN_TRUNK_SPACING_MM` or distinct grid nodes), attaches clustered contacts, runs the 3-tier plate-first occluded rescue ladder, then chunk consolidation and angle-aware gap filling |
-| 4 | Forest resize & cross-fix | Re-derive stepwise trunk diameters, sync member-proportioned leaf cone bodies (`syncContactConeDiameters`), validate/cull orphans, and actively re-host shaft-crossing (`cross`) members onto clear hosts |
+| 3 | Synthesize & place | Cluster-first tree synthesis (`treeSynthesis.ts`) places well-spaced cluster trunks first (`MIN_TRUNK_SPACING_MM` or distinct grid nodes) with a tall-solo flagpole penalty, attaches 1-level contacts (Pass 2b), builds 2-level `Trunk → Branch → Leaf` crowns for upper/occluded clusters (Pass 2c), runs the 3-tier plate-first occluded rescue ladder, then chunk consolidation and angle-aware gap filling |
+| 4 | Forest resize & cross-fix | Re-derive stepwise trunk diameters, sync member-proportioned leaf cone bodies (`syncContactConeDiameters`), validate/cascade-cull orphans across 2-level trees, and actively re-host shaft-crossing (`cross`) members onto clear hosts |
 | 5 | Auto-bracing | Braces computed into the same draft, so they ride the one commit |
 
 ## Candidates
@@ -205,6 +205,59 @@ erases higher-Z toe tips on gently tilted soles; sloped overhang pairs still use
 the grown 2D disc (subject to `SUPPORT_RESTSTACK_DELTA_MM`, 5 mm), and discrete
 islands (voxel/minima/intersection) always keep the flat 3D ball.
 
+## Representative-layer Voronoi traction optimization (`tractionOptimization.ts`)
+
+Between candidate filtering (`filterAlreadySupported`) and normal/tip resolution,
+`computeAutoSupportPlan` runs **Phase 1c** (`src/supports/autoSupport/tractionOptimization.ts`),
+adapting Cao et al. (2025) to run interactively inside the auto-support worker:
+
+- **Public surface**: `extractRepresentativeLayers(mesh, planeCountOverride?)`
+  (returning `RepresentativeLayerProfile` of `RepresentativeLayer` peaks with
+  solved `StefanPressureField`), `solveStefanFieldFromSegments`,
+  `sampleStefanPressure`, `referenceStefanMeanPressureMm2`,
+  `STEFAN_FEP_SCREENING_LENGTH_MM` (4.5 mm), `stefanTractionFactorAt`,
+  `tractionMultiplierAtZ(profile, zMm)`, and
+  `optimizeContactsByTraction(candidates, overhangRegions, settings, mesh?, modelId?)`
+  (returning `TractionOptimizationResult` with `TractionOptimizationStats`).
+- **Representative-layer slicing & Screened Stefan suction**: a single triangle
+  pass slices 24–72 horizontal Z planes, computes exact closed cross-section
+  area per slice via Green's theorem, and clusters adjacent slices whose coarse
+  2D silhouette IoU is ≥ 0.85 and relative area delta ≤ 20%. On each emitted
+  peak-load representative layer, `solveStefanFieldFromSegments` scanline-fills
+  the closed 2D slice and solves the **Screened Stefan (Helmholtz) PDE**
+  `(∇² − κ²)p̃ = −1` (`p̃ = 0` on `∂Ω`, `κ = 1 / λ_FEP`) via Red-Black SOR.
+  `stefanTractionFactorAt` normalizes `sqrt(p̃(x,y) / p̄_ref(A_0))` against the
+  analytical Bessel mean pressure of a single-support disc (`A_0` =
+  `areaPerSupportMm2`), so thin blades/snouts evaluate to low suction
+  (`~0.65–0.85×`) while broad solid interiors peak smoothly up to `1.55×`. A
+  downward multi-layer load check protects lower contacts carrying a broad upper
+  representative layer's Stefan demand from being pruned away.
+- **Discrete Voronoi add, per-region prune, and global cross-region prune**:
+  each eligible overhang region's 0.25 mm `contactVoxels` are partitioned into
+  discrete Voronoi cells integrating per-voxel `stefanTractionFactorAt`. Cells
+  exceeding the traction budget or `bridgeRadiusForAngleDeg` receive a
+  reinforcement contact at their furthest point (respecting a 1.2 mm UV-bleed
+  spacing floor). Within each region, redundant interior `grid-*` points are
+  pruned when neighbors absorb 100% of their voxels within ≤ 80% capacity and
+  ≤ 90% reach. A final **Pass C global cross-region Voronoi pruner** then runs
+  across all candidates (using exact mesh-resolved normals, local
+  `stefanTractionFactorAt`, and measured Voronoi areas) to collapse crammed
+  micro-overhang fragments (`o*`) and tight upper perimeters (`fill-*`) that sit
+  within `0.85 × bridgeRadiusForAngleDeg` of a same-or-lower-Z
+  compatible-normal contact whose accumulated traction area stays below `85%` of
+  tip capacity. Same-region pairs inside large (`≥ 25 mm²`) overhangs are
+  skipped so Pass B's exact `0.25 mm` voxel Voronoi coverage is preserved.
+  Primary discrete islands (`voxel`/`minima`/`intersection`),
+  `stabilization`/`reinforcement`, `nearBase` flat soles,
+  downward-load-protected anchors, and Pass-A additions are hard-protected, and
+  any contact that absorbs a neighbor locks as an anchor to prevent transitivity
+  drift.
+- **Forest resize clearance guard**: after `computeForestDiameterProfile`
+  thickens attachment-loaded trunks, any trunk whose thickened shaft would now
+  fail `isShaftBlocked` while its placed pre-resize shaft cleared the mesh is
+  reverted to its placed diameter rather than thickening into a `hostBlocked`
+  cull.
+
 ## Cluster-first tree synthesis and occluded rescue
 
 Before placing shafts, `computeAutoSupportPlan` runs **Phase 2: Cluster-First
@@ -214,25 +267,59 @@ and grid modes:
 - **Public surface**: `synthesizeTreeClusters(candidates, options)` (options:
   `TreeSynthesisOptions`, `TreeSynthesisGridConfig`; returns `TreeClusterPlan`
   with `nearPlate`, `trunkAnchors`, `clusteredMembers: ClusteredMemberAssignment[]`,
-  and `occludedQueue`), `computePlateReachability`, `isTooCloseToExistingTrunk`,
-  and `findOffsetSilhouetteRoute` (returning `SilhouetteEscapeRoute | null`).
-- **Two-pass skeleton build**: `synthesizeTreeClusters` runs a batch downward
-  raycast (`computePlateReachability`), then a deterministic greedy downward-cone
-  set cover over plate-clear elevated contacts — prioritizing primary discrete
-  islands and lower-Z leading edges on slopes — while enforcing
-  `MIN_TRUNK_SPACING_MM` (2.5 mm) in organic mode or distinct grid intersections
-  in grid mode. **Pass 2a** builds near-plate overrides and *all* cluster trunk
-  anchors first; **Pass 2b** attaches clustered contacts onto the completed
-  trunk skeleton (preferring each contact's assigned anchor trunk) before falling
-  back to standalone placement. `collectFanShaftPoints` resolves every segment
-  through `hostSegmentSpan` so bottom trunk segments (rising from the root top
-  with no `bottomJoint`) are available to Pass 2b, fanning, consolidation, and
-  rescue.
+  `upperClusters: UpperClusterGroup[]`, and `occludedQueue`),
+  `computePlateReachability`, `isTooCloseToExistingTrunk`,
+  `findOffsetSilhouetteRoute` (returning `SilhouetteEscapeRoute | null`),
+  `maxEulerBucklingSpanMm`, `maxStableAngleForSpanDeg`,
+  `minStableRiseForLateralMm`,
+  `MAX_UNBRACED_BRANCH_SPAN_MM` (nominal `Ø1.0 mm` Euler buckling ceiling ~11.6 mm),
+  `MAX_ROUTED_TRUNK_DIAGONAL_SPAN_MM` (10.5 mm),
+  `TWO_LEVEL_BRANCH_REACH_MM` (8 mm), `UPPER_CLUSTER_MIN_Z_MM` (18 mm), and
+  `UPPER_CLUSTER_SIBLING_RADIUS_MM` (4.5 mm).
+- **Euler-Bernoulli cantilever & Euler buckling envelope**: auto-bracing braces
+  Trunks, not Branches or upper dogleg diagonals, so every unbraced angled
+  member is gated by actual green-state photopolymer beam mechanics parameterized
+  by its shaft diameter `d`:
+  - Guided-cantilever bending (`maxStableAngleForSpanDeg(L, baseMaxAngleDeg, d)`):
+    `sin θ_max = (12 π E δ_max d⁴) / (64 F_tip L³)` — short spans (`≤ 8.7 mm` at
+    `Ø1.0 mm`) keep the full 45°/30° lean while longer cantilevers steepen as
+    `1/L³` and thicker shafts scale with `d⁴`.
+  - Euler column buckling (`maxEulerBucklingSpanMm(d)`):
+    `L_max(d) = (d² / K) · sqrt(π³ E / (64 · SF · F_return))` (`~11.6 mm` at
+    `Ø1.0 mm`, `~7.5 mm` at `Ø0.8 mm`, capped at `14.5 mm` for heavy shafts).
+  - If `buildTrunkData` produces an unstable long diagonal during Pass 2a/2b,
+    `placeOneCandidate` defers it to Phase 3 rescue (trying a stable steep
+    branch, a compact `2.5 / 4.0 / 5.0 mm` silhouette dogleg, or a short
+    `≤ 12 mm` cavity bridge first, keeping the routed trunk only as last resort).
+- **Three-pass skeleton & 2-level crown build**: `synthesizeTreeClusters` runs a
+  batch downward raycast (`computePlateReachability`), then a deterministic
+  greedy downward-cone set cover over plate-clear elevated contacts —
+  prioritizing primary discrete islands and lower-Z leading edges on slopes —
+  while enforcing `MIN_TRUNK_SPACING_MM` (2.5 mm) in organic mode or distinct
+  grid intersections in grid mode. In organic mode, tall sparse candidates
+  (`Z ≥ UPPER_CLUSTER_MIN_Z_MM`, covering ≤ 2 neighbors) within
+  `TWO_LEVEL_BRANCH_REACH_MM` of an already-chosen trunk incur a flagpole
+  penalty and are grouped (along with elevated occluded clusters) into
+  `upperClusters`:
+  - **Pass 2a** builds near-plate overrides and *all* cluster trunk anchors first.
+  - **Pass 2b** attaches clustered contacts onto the completed trunk skeleton
+    (preferring each contact's assigned anchor trunk). `collectFanShaftPoints`
+    resolves every segment through `hostSegmentSpan` so bottom trunk segments
+    (rising from the root top with no `bottomJoint`) are available to Pass 2b,
+    fanning, consolidation, and rescue.
+  - **Pass 2c** builds **2-level `Trunk → Branch → Leaf` crowns** for
+    `upperClusters`: one primary angled `Branch` climbs from a nearby trunk to
+    the cluster's lowest contact, and `collectBranchFanShaftPoints` samples the
+    branch's upper shaft (`t ∈ [0.45, 1.00]`) so close sibling contacts fan off
+    as slim 2nd-level `Leaf`s. `hostSegmentSpan` resolves a branch's first
+    segment from `parentKnotId`, and `validateAndCullOrphans` propagates culled
+    branch hosts to fixpoint so 2nd-level leaves cascade-cull cleanly.
 - **Phase 3 plate-first occluded rescue ladder**: vertically blocked contacts
   retry in strict priority order: (1) wide clear-trunk branch search across the
   full skeleton up to `CAVITY_FAN_RADIUS_MM` (12 mm); (2) a collision-free
   2-segment silhouette dogleg trunk via `findOffsetSilhouetteRoute` (8 azimuths
-  × 3 tight radial offsets 2.5 / 4.0 / 5.5 mm, verified against the SDF and
+  × 3 tight radial offsets 2.5 / 4.0 / 5.0 mm, selecting the clear route closest
+  to existing trunks for compact bracing and verifying against the SDF and
   `isShaftBlocked`, leaving zero extra model scars); (3) short model-to-model
   cavity bridge (`twig`/`stick`, `buildCavityBridge`) only when neither plate
   route clears.

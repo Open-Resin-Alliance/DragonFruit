@@ -5,7 +5,14 @@ import * as THREE from 'three';
 import { accelerateGeometry, initializeBVH } from '@/utils/bvh';
 import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
-import { computeAutoSupportPlan, syncContactConeDiameters } from '../autoSupport/autoPlace';
+import {
+    collectBranchFanShaftPoints,
+    collectFanShaftPoints,
+    computeAutoSupportPlan,
+    fanLeafToHost,
+    syncContactConeDiameters,
+    validateAndCullOrphans,
+} from '../autoSupport/autoPlace';
 import {
     MIN_TRUNK_SPACING_MM,
     bridgeRadiusForAngleDeg,
@@ -23,6 +30,10 @@ import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
 import {
     findOffsetSilhouetteRoute,
     isTooCloseToExistingTrunk,
+    MAX_UNBRACED_BRANCH_SPAN_MM,
+    maxEulerBucklingSpanMm,
+    maxStableAngleForSpanDeg,
+    minStableRiseForLateralMm,
     synthesizeTreeClusters,
 } from '../autoSupport/treeSynthesis';
 import type { CandidatePoint } from '../autoSupport/types';
@@ -315,4 +326,223 @@ test('Phase 4: syncContactConeDiameters keeps leaf bodies slim on thickened trun
     } finally {
         setSettings(prevSettings);
     }
+});
+
+test('Path C: elevated occluded chin cluster synthesizes a compact 2-level Trunk -> Branch -> Leaf crown', () => {
+    const prevSettings = getSettings();
+    try {
+        const s = createDefaultSettings();
+        s.grid.enabled = false;
+        setSettings(s);
+        resetStore();
+        resetKickstandsInState();
+        initializeBVH();
+
+        // Small chest obstacle directly under the chin (X = 3..9, Z = 10..12) so
+        // the chin contacts are vertically occluded while the waist trunk at X = 0
+        // has a clear vertical path to the build plate.
+        const chestGeo = new THREE.BoxGeometry(6, 6, 2).translate(6, 0, 11).toNonIndexed();
+        chestGeo.computeVertexNormals();
+        accelerateGeometry(chestGeo);
+        const chestMesh = new THREE.Mesh(chestGeo, new THREE.MeshBasicMaterial());
+        chestMesh.updateMatrixWorld(true);
+
+        const waistCluster: CandidatePoint[] = [
+            makeCandidate('w0', 0, 0, 21, { source: 'voxel', priority: 1.0 }),
+            makeCandidate('w1', 0, -1.2, 22, { source: 'overhang', priority: 0.6 }),
+            makeCandidate('w2', -1.2, 0, 22, { source: 'overhang', priority: 0.6 }),
+            makeCandidate('w3', 0, 1.2, 22, { source: 'overhang', priority: 0.6 }),
+        ];
+        // Compact chin cluster 3.2 mm laterally out, Z = 27.2..28.8 (span 9.27 mm @ 20.2°
+        // from waist topJoint Z = 18.5 — beyond 8 mm 1-level span, inside Ø1.0 mm Euler-Bernoulli).
+        const chinCluster: CandidatePoint[] = [
+            makeCandidate('chin-0', 3.2, 0, 27.2, { source: 'voxel', priority: 0.7 }),
+            makeCandidate('chin-1', 4.3, 0.8, 28.8, { source: 'voxel', priority: 0.6 }),
+            makeCandidate('chin-2', 4.3, -0.8, 28.8, { source: 'voxel', priority: 0.6 }),
+        ];
+
+        const treePlan = synthesizeTreeClusters([...waistCluster, ...chinCluster], {
+            maxAngleFromVerticalDeg: 45,
+            maxReachMm: 8,
+            maxAttachmentsPerTrunk: 12,
+            mesh: chestMesh,
+        });
+        assert.equal(treePlan.trunkAnchors.length, 1, 'waist trunk chosen without spawning a solo front chin flagpole');
+        assert.equal(treePlan.upperClusters.length, 1, 'occluded chin contacts grouped into one 2-level upper cluster');
+        assert.equal(treePlan.upperClusters[0].siblings.length, 2, 'two sibling contacts grouped onto the chin arm');
+
+        // Run the full pipeline end-to-end and verify 1 trunk + angled branch + 2nd-level leaves.
+        // Waist cluster puts `w1..w5` at X = -2.4..-2.5 so `w0` covers 5 neighbors while `chin-0`
+        // at X = 3.2 cannot reach them (>= 5.69 mm laterally), deferring cleanly into Pass 2c.
+        const islands: DetectedIsland[] = [
+            { id: 'w0', source: 'voxel', contact: new THREE.Vector3(0, 0, 21), baseZ: 21, areaMm2: 5 },
+            { id: 'w1', source: 'voxel', contact: new THREE.Vector3(-2.4, -1.0, 22), baseZ: 22, areaMm2: 1 },
+            { id: 'w2', source: 'voxel', contact: new THREE.Vector3(-2.5, 0, 22), baseZ: 22, areaMm2: 1 },
+            { id: 'w3', source: 'voxel', contact: new THREE.Vector3(-2.4, 1.0, 22), baseZ: 22, areaMm2: 1 },
+            { id: 'w4', source: 'voxel', contact: new THREE.Vector3(-2.4, 2.0, 22), baseZ: 22, areaMm2: 1 },
+            { id: 'w5', source: 'voxel', contact: new THREE.Vector3(-2.4, -2.0, 22), baseZ: 22, areaMm2: 1 },
+            { id: 'chin-0', source: 'voxel', contact: new THREE.Vector3(3.2, 0, 27.2), baseZ: 27.2, areaMm2: 1 },
+            { id: 'chin-1', source: 'voxel', contact: new THREE.Vector3(4.3, 0.8, 28.8), baseZ: 28.8, areaMm2: 1 },
+            { id: 'chin-2', source: 'voxel', contact: new THREE.Vector3(4.3, -0.8, 28.8), baseZ: 28.8, areaMm2: 1 },
+        ];
+        const plan = computeAutoSupportPlan(islands, 'm', {
+            debugSkipAutoBracing: true,
+            stabilizationEnabled: false,
+            minimaReinforcementEnabled: false,
+        });
+        assert.ok(plan, '2-level plan computed');
+        assert.equal(plan.result.placed.trunk, 1, 'only 1 plate trunk placed — zero solo chin flagpoles');
+        assert.ok(plan.result.placed.branch >= 1, 'angled branch climbs to the chin cluster');
+
+        const branchSegIds = new Set(
+            Object.values(plan.support.branches).flatMap((b) => b.segments.map((sg) => sg.id)),
+        );
+        const secondLevelLeaves = Object.values(plan.support.leaves).filter((l) => {
+            const k = plan.support.knots[l.parentKnotId];
+            return k && branchSegIds.has(k.parentShaftId);
+        });
+        assert.ok(secondLevelLeaves.length >= 1, 'sibling chin contacts attach as 2nd-level leaves off the branch');
+        assert.equal((plan.result.analytics?.forestReport?.orphans ?? []).length, 0, '2-level leaves pass orphan validation cleanly');
+    } finally {
+        setSettings(prevSettings);
+    }
+});
+
+test('Path C: Euler-Bernoulli cantilever & Euler buckling envelope blocks long 45° traversals and 18mm+ unbraced branches', () => {
+    // 1. Short spans keep full 45°; longer spans steepen via arcsin(K·d⁴/L³),
+    //    and buckling length scales as d².
+    assert.equal(maxStableAngleForSpanDeg(4.5, 45, 1.0), 45, 'short 4.5 mm leaf keeps full 45°');
+    assert.equal(maxStableAngleForSpanDeg(6.0, 45, 1.0), 45, '6.0 mm keeps 45°');
+    assert.ok(maxStableAngleForSpanDeg(10.0, 45, 1.0) <= 30, 'Ø1.0 mm 10 mm cantilever steepens via 1/L³');
+    assert.ok(
+        maxStableAngleForSpanDeg(10.0, 45, 1.3) > maxStableAngleForSpanDeg(10.0, 45, 1.0),
+        'thicker Ø1.3 mm shaft gains d⁴ bending stiffness',
+    );
+    assert.ok(
+        maxEulerBucklingSpanMm(0.8) < maxEulerBucklingSpanMm(1.0) && maxEulerBucklingSpanMm(1.0) < maxEulerBucklingSpanMm(1.2),
+        'Euler buckling ceiling scales monotonically with shaft diameter d²',
+    );
+    assert.equal(minStableRiseForLateralMm(8.0, 45, MAX_UNBRACED_BRANCH_SPAN_MM), null, '8 mm lateral cantilever is rejected outright');
+    assert.ok((minStableRiseForLateralMm(4.0, 45, MAX_UNBRACED_BRANCH_SPAN_MM) ?? 0) >= 4.0, '4 mm lateral run has valid rise');
+
+    // 2. With the default/production finite rescue span (MAX_UNBRACED_BRANCH_SPAN_MM),
+    //    fanLeafToHost refuses BOTH a 9 mm @ 45° sideways boom AND a 19 mm near-vertical
+    //    unbraced branch rising off a tiny low foot stub (while Number.POSITIVE_INFINITY
+    //    remains an explicit caller override).
+    const draft: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            rLow: { id: 'rLow', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 3, diskHeight: 0.5, coneHeight: 0.5 } as never,
+            rTall: { id: 'rTall', modelId: 'm', transform: { pos: { x: 20, y: 0, z: 0 } }, diameter: 3, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            tLow: {
+                id: 'tLow', modelId: 'm', rootId: 'rLow',
+                segments: [{ id: 'segLow', diameter: 1.0, bottomJoint: { id: 'lj0', pos: { x: 0, y: 0, z: 1 }, diameter: 1.0 }, topJoint: { id: 'lj1', pos: { x: 0, y: 0, z: 3.5 }, diameter: 1.0 } }],
+                contactCone: { id: 'lc1', pos: { x: 0, y: 0, z: 3.5 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.3, bodyDiameterMm: 1.0, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+            tTall: {
+                id: 'tTall', modelId: 'm', rootId: 'rTall',
+                segments: [{ id: 'segTall', diameter: 1.0, bottomJoint: { id: 'tj0', pos: { x: 20, y: 0, z: 1 }, diameter: 1.0 }, topJoint: { id: 'tj1', pos: { x: 20, y: 0, z: 22 }, diameter: 1.0 } }],
+                contactCone: { id: 'tc1', pos: { x: 20, y: 0, z: 22 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.3, bodyDiameterMm: 1.0, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+    };
+    const pool = collectFanShaftPoints(draft);
+
+    // Unbraced 19 mm climb off the tiny z=3.5 mm foot stub -> must be rejected.
+    const noodle = fanLeafToHost(
+        { x: 3.0, y: 0, z: 22.0 },
+        'm',
+        pool,
+        new Set(),
+        'test-noodle',
+        12,
+        12,
+        45,
+        12,
+        draft,
+        undefined,
+        'island',
+        'steepest',
+        MAX_UNBRACED_BRANCH_SPAN_MM,
+    );
+    assert.equal(noodle.ok, false, '19 mm unbraced branch off low stub is refused');
+
+    // Long 9 mm sideways 45° boom off the tall trunk -> must be rejected.
+    const long45 = fanLeafToHost(
+        { x: 29.0, y: 0, z: 25.0 },
+        'm',
+        pool,
+        new Set(),
+        'test-long45',
+        12,
+        12,
+        45,
+        12,
+        draft,
+        undefined,
+        'island',
+        'nearest',
+        MAX_UNBRACED_BRANCH_SPAN_MM,
+    );
+    assert.equal(long45.ok, false, '9 mm lateral 45° traversal is refused by cantilever stability envelope');
+});
+
+test('Path C: collectBranchFanShaftPoints samples branch upper shaft and validateAndCullOrphans cascades culled branches to child leaves', () => {
+    const draft: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            r1: { id: 'r1', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 3, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            t1: {
+                id: 't1', modelId: 'm', rootId: 'r1',
+                segments: [{ id: 'tseg-1', diameter: 1.2, bottomJoint: { id: 'tj0', pos: { x: 0, y: 0, z: 1 }, diameter: 1.2 }, topJoint: { id: 'tj1', pos: { x: 0, y: 0, z: 22 }, diameter: 1.2 } }],
+                contactCone: { id: 'tc1', pos: { x: 0, y: 0, z: 22 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.3, bodyDiameterMm: 1.2, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+        knots: {
+            kBranch: { id: 'kBranch', parentShaftId: 'tseg-1', t: 0.7, pos: { x: 0, y: 0, z: 15.7 }, diameter: 1.325 } as never,
+            kChildLeaf: { id: 'kChildLeaf', parentShaftId: 'bseg-1', t: 0.7, pos: { x: 5.6, y: 0, z: 22.91 }, diameter: 1.125 } as never,
+        },
+        branches: {
+            b1: {
+                id: 'b1', modelId: 'm', parentKnotId: 'kBranch',
+                segments: [{ id: 'bseg-1', diameter: 1.0, topJoint: { id: 'bj1', pos: { x: 8, y: 0, z: 26 }, diameter: 1.0 } }],
+                contactCone: { id: 'bc1', pos: { x: 8, y: 0, z: 28 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.3, bodyDiameterMm: 1.0, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+        leaves: {
+            lChild: {
+                id: 'lChild', modelId: 'm', parentKnotId: 'kChildLeaf',
+                contactCone: { id: 'lc1', pos: { x: 7, y: 0.8, z: 25.5 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.25, bodyDiameterMm: 1.0, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+    };
+
+    const branchPoints = collectBranchFanShaftPoints(draft, 'm');
+    assert.ok(branchPoints.length === 8, `upper branch shaft sampled (got ${branchPoints.length})`);
+    assert.ok(branchPoints.every((sp) => sp.hostTypeId === 'branch' && sp.hostId === 'b1' && (sp.t ?? 0) >= 0.45));
+
+    // Valid 2-level leaf passes orphan validation with zero drift.
+    const validCheck = validateAndCullOrphans(draft, undefined, 'm');
+    assert.equal(validCheck.orphans.length, 0, 'valid 2-level branch-hosted leaf passes validation');
+
+    // If the branch's own knot drifts off the trunk, both the branch AND its
+    // 2nd-level child leaf must cascade-cull cleanly.
+    const drifted: SupportState = {
+        ...draft,
+        knots: {
+            ...draft.knots,
+            kBranch: { ...draft.knots.kBranch, pos: { x: 5, y: 0, z: 15.7 } },
+        },
+    };
+    const cascade = validateAndCullOrphans(drifted, undefined, 'm');
+    assert.equal(cascade.draft.branches.b1, undefined, 'drifted branch culled');
+    assert.equal(cascade.draft.leaves.lChild, undefined, '2nd-level child leaf cascade-culled with its parent branch');
 });
