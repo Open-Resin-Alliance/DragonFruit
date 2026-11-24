@@ -133,24 +133,32 @@ There is no anchor selection, no bake-off, and no grid/Poisson split. Every
 overhang region above `gridAreaThresholdMm2` gets the same treatment in
 `generateGridCandidates` (`gridPlacement.ts`):
 
-- **Boundary ring (corner-first)** — the region's perimeter resampled at fixed
-  spacing in the 2D-projected plane (`sampleBoundary2D`). Pass 1 pins sharp
-  convex corners (turning angle ≥ 35°, e.g., toe tips and rim corners) and local
-  Z minima first (deduped at `max(1.1, 0.55 × spacing)` so bottom-layer tips do
-  not fuse under UV bleed); Pass 2 fills remaining arc-length spans at the ring
-  spacing. Projection is the point: Z does not lengthen a boundary, so a
-  sliver's ring is a short line and can never climb a limb. Each sample's Z
-  comes from the surface sampler.
-- **Grid infill** — a lattice over the footprint bbox at `computeRegionSpacing`
+- **Boundary ring (perimeter-first, corner-to-corner)** — when `perimeterLoops`
+  are present, the inset loop (`insetPolygonLoops2D`) is resampled in the
+  2D-projected plane (`sampleBoundary2D`, configurable via
+  `BoundarySampleOptions`). Pass 1 pins sharp convex corners (turning angle
+  ≥ 35°, e.g., toe tips and rim corners) and local Z minima first (falling
+  back to each closed loop's lowest-Z vertex on smooth rounded lobes, deduped
+  so bottom-layer tips do not fuse under UV bleed); Pass 2 subdivides each
+  corner-to-corner chain uniformly using Z-graded edge factors on tilted flats
+  (`leadingEdgeFactor` 0.72× along the lower-Z peeling edge,
+  `trailingEdgeFactor` 1.12× along the upper-Z trailing edge when
+  `tiltEnabled` holds). Projection is the point: Z does not lengthen a boundary,
+  so a sliver's ring is a short line and can never climb a limb. Each sample's
+  Z comes from the surface sampler.
+- **Hexagonal infill & rectangular fallback** — over `computeRegionSpacing`
   (angle + suction curve; its suction reference area is decoupled from
   `gridAreaThresholdMm2` so small soles entering the perimeter path do not
   compress large-slab spacing, and the spacing holds at the flat end until
   `SLOPE_RELAX_RAMP_START` of the way to the self-support angle — see the rules
-  below), skipped for slivers and for footprints thinner than
+  below), regions with `perimeterLoops` place staggered hexagonal interior
+  rows inside the inset polygon with ring proximity suppression and a
+  single center fallback when narrow near-plate feet suppress every grid corner;
+  regions without `perimeterLoops` keep the rectangular lattice + voxel-mask
+  fallback. Infill is still skipped for slivers and for footprints thinner than
   one lattice cell (`Math.min(width, height) < spacing`), where the rows would
   land a fraction of a millimeter apart and double the density of a rib the
-  ring already carries end to end. The lattice spans the region with integer
-  rows/columns, inset by the contact radius.
+  ring already carries end to end.
 - **Shape handles degenerate cases**: `shouldUseDensityGrid` routes any overhang
   at or above `gridAreaThresholdMm2` (default `OVERHANG_GRID_MIN_AREA_MM2`,
   4 mm²) **or** with major footprint span at or above
@@ -343,28 +351,71 @@ whole-frame structural stress on the assembled forest via
 
 - **Public surface**: `buildSupportGraph(snapshot, modelId)`,
   `distributeRigidBodyPeelLoads(tips, totalForceN, copX, copY)`,
-  `solveSupportFrameStress(graph, profile, options)`, `GREEN_RESIN_UTS_MPA`, and
-  types `SupportGraph`, `SupportGraphNode`, `SupportGraphMember`,
-  `SupportFrameStressReport`, `FrameStressHotspot`.
+  `solveSupportFrameStress(graph, profile, options)`,
+  `reinforceOverloadedFrameMembers(snapshot, report, mesh, modelId)`,
+  `GREEN_RESIN_UTS_MPA`, types `SupportGraph`, `SupportGraphNode`,
+  `SupportGraphMember`, `SupportFrameStressReport`, `FrameStressHotspot`,
+  `LayerPeelPoint`, `StressSegment`, `StressTipPoint`, and reactive UI state
+  helpers in `src/supports/autoSupport/frameStressState.ts`
+  (`getFrameStressSnapshot`, `subscribeFrameStress`, `setModelFrameStress`,
+  `clearModelFrameStress`, `getStressOverlayEnabled`,
+  `setStressOverlayEnabled`, `getHoveredStressLayerZ`,
+  `setHoveredStressLayerZ`, `subscribeHoveredStressLayerZ`,
+  `getCachedRepresentativeLayers`), rendered in the
+  UI by `src/components/controls/autoSupport/SupportStressPanel.tsx` (which
+  debounces live re-solves on structural support edits), as
+  line-only 3D stress vectors (`LineSegments2` + hidden supports/raft) in
+  `src/components/scene/SupportStressOverlay.tsx`, and as Z-axis peel-force
+  bands, the graph-hover Z-slice contour ring, pinpoint overload anchor highlights,
+  and the plan-space Stefan adhesion paint (cool/teal/amber by pressure, stronger
+  on the peel face and a lighter wash above) on the active mesh via
+  `StressForceHeatmapMaterial`
+  (`src/features/shaders/mesh/stressForceHeatmap.tsx`). Model-to-model `twig`
+  and `stick` bridges are outside the plate-load frame (`buildSupportGraph`
+  omits them), so the overlay draws them from the live snapshot in a neutral
+  blue-grey instead of the utilization ramp — they have no solved utilization,
+  and leaving them out read as "the overlay forgot these supports".
 - **Graph construction**: `buildSupportGraph` collects all plate-rooted shafts
   (`trunk`, `stump`, `kickstand`), hosted members (`branch`, `leaf`), and
   `brace` struts for `modelId` using `resolveSegmentEndpoints`, splitting host
   segments at every hosted `knot` so triangulated X-braced multi-bay frames are
   represented accurately. Model-to-model `twig` / `stick` bridges are omitted.
-- **Rigid-body peel distribution & 3D frame solve**:
-  - Selects up to 3 critical layers from `RepresentativeLayerProfile` (peak
-    integrated Screened Stefan force, peak `areaJumpRatio · areaMm2`, and
-    highest populated layer) and integrates peel force and Center of Pressure
+- **Rigid-body peel distribution, 3D frame solve & weak-spot reinforcement**:
+  - Selects up to 3 global critical layers from `RepresentativeLayerProfile`
+    (peak integrated Screened Stefan force, peak `areaJumpRatio · areaMm2`, and
+    highest populated layer) plus up to `MAX_COMPONENT_STAGE_LAYERS` extra
+    stages: each disconnected support sub-assembly (`tipComponents`, grounded
+    through its own roots) that no chosen global layer reaches gets its own peak
+    peel and expansion layer. A short limb on its own support tree can otherwise
+    sit below all three global picks and never see a load at all. Selection is
+    bounded and deterministic, and integrates peel force and Center of Pressure
     from `stefanField` (calibrated against `referenceStefanMeanPressureMm2` and
-    `NOMINAL_TIP_PEEL_LOAD_N`).
+    `NOMINAL_TIP_PEEL_LOAD_N`), while recording `layerProfile` across all
+    sampled representative layers plus per-beam `memberSegments` and per-tip
+    `tipPoints`.
   - `distributeRigidBodyPeelLoads` solves 3-DOF rigid-body vertical + moment
     equilibrium weighted by tip stiffness `d²` with an active-set non-negativity
-    clamp so compressive tips shed load onto pulling tips.
+    clamp so compressive tips shed load onto pulling tips; lateral peel drag is
+    applied as coherent unidirectional shear across the rigid layer.
   - When grounded free nodes are at most `1200` (`solverMode: 'frame3d'`),
     `solveSupportFrameStress` assembles a 6-DOF per-node 3D Euler-Bernoulli beam
     stiffness matrix and solves `K u = f` with Block-Jacobi Preconditioned
     Conjugate Gradient to compute tip deflection, combined axial + bending stress
     vs `GREEN_RESIN_UTS_MPA`, and Euler column buckling utilization (`hotspots`).
+  - `reinforceOverloadedFrameMembers` scales overloaded `trunk` (`≤ 2.2 mm`),
+    `branch` (`≤ 1.65 mm`), `leaf` cone body (`≤ 1.55 mm`), and `brace`
+    (`≤ 1.6 mm`) members by `clamp((util / 90)^(1/3), 1.10, 1.35)` with stepped
+    `isShaftBlocked` clearance fallbacks, preserves tip `contactDiameterMm`,
+    and upgrades host knots before updating `reinforcedCount` and re-solving.
+  - **The run closes the loop before it hands over a report.** After bracing,
+    `computeAutoSupportPlan` solves the frame, thickens what is over limit, and
+    re-solves — up to `MAX_STRESS_REINFORCE_PASSES` (3) rounds, stopping when no
+    member is overloaded or nothing changes. A single pass left members over
+    limit whenever thickening one shaft pushed its neighbour over; the report
+    the panel receives is the post-loop solve, with the cumulative
+    `reinforcedCount`. Tips that are still overloaded are logged — the contact
+    pull-off limit is a placement/diameter question, not something thickening a
+    shaft can fix.
   - **Constraints**: entity walks sort deterministically by coordinates so worker
     and main-thread plans produce bit-identical `frameStress` reports; forests
     above the free-node cap fall back cleanly to `solverMode: 'rigidBodyOnly'`.
@@ -527,13 +578,13 @@ This is the member-side counterpart of the forest resize, which runs the other w
 - **Zero-area triangles never define the plate plane or the bearing locus.** A genuinely collapsed face (a stray vertex on two zero-area triangles) otherwise puts the 2 mm contact band on the stray vertex alone, and `computeStabilizationAnchors` climbs the defect's own edges instead of the part's base. Both now skip degenerate triangles — the gate tests degeneracy in the *raw* frame (an affine world transform preserves collinearity, so it costs one cross product there), and the report counts them (`degenerate faces ignored (defective mesh)`). A no-op for any mesh without such triangles; it fires on real models (a 505k-triangle part reported 2). **Do not read an odd extent or an empty bearing polygon as a defect without checking the pose**: a 20 mm cube auto-oriented onto its side legitimately measures 30.8 mm tall with no bearing polygon (it touches on a corner), and the report's `centroid_mm` is world-absolute — read it against `plate_z_mm`, not against `height_mm / 2`, which is what made a clean cube look like a broken mesh. The same cube is a clean 12-triangle box on disk, and the loader's `refine_coarse_faces` pass (14 triangles, 9 vertices) leaves its bbox and volume untouched.
 - **Gravity is a driving term, not a restoring one.** A bottom-up printer hangs the part from the plate, so in the model frame gravity points +z — away from the plate. It PEELS, and it adds to the drag instead of opposing it: the honest form is `tip iff M_drag + ρg·V·d_e > σ·A·d̄_e`. The report labels it that way (`gravity lever … · peel …MPa (driving, not restoring)`) and prints the term as a pressure so it can be read against `p`: `ρg·V·d_e/M_e`, which is ~1.9e-5 MPa on a 79 cm³ part — 0.06 % of a 30 kPa peel. Negligible, but not zero, and the sign was wrong: the earlier "margin = V·d/M against L* = p/(ρg)" framing was an FDM frame convention. The *binary* verdict survives the flip (a centroid outside the bearing patch peels in either frame), which is why the placement gate has behaved sanely throughout.
 - **The bearing patch is the raft's, when there is a raft.** Without one the patch is the hull of the 2 mm contact band, which on a domed bottom is a spherical cap whose CENTRE WANDERS with the tilt while the centroid stays on the axis: a fraction of a degree moves the nearest hull edge past the centroid and flips the verdict (measured on one tool across five tilts: depth −9.43, −10.61, −1.14, +9.98, +10.58, adhesion 0.016 to 0.064). With a raft the printed contact is not that cap at all, it is the raft's footprint, centred under the part. The raft is built around supports that do not exist at scan time, so the report uses the model's **XY shadow** (the hull of its projection, `SHADOW_CELL_MM` quantized) as a lower bound on it: smooth under rotation, and it under-estimates the adhesion, which errs toward covering. The flag comes from `RaftSettings.bottomMode !== 'off'`, threaded from the page into `scan_overhangs` and read directly by `computeAutoSupportPlan` for the gate. The log names which one was used (`raft footprint` versus `band 2.0mm`).
-- **Anti-topple coverage is gated on the adhesion verdict alone.** A steep flat is worth contact only if the pose can actually peel, so `needsToppleCoverage` (the conservative adhesion bound, in `poseStability.ts`) is asked by both consumers: `computeStabilizationAnchors` decides whether to lay anchors at all, and `computeAutoSupportPlan` drops `steepFlat` islands from the candidate set when it says no. The static "is the centroid over the base" test is deliberately NOT part of it: that is the FDM frame's rule, and it over-fires badly on a bottom-up printer where the part hangs from the plate. Gravity's share of the peel is measurable and tiny (`peel +4.7e-5MPa` on a 97 cm³ part, three orders below a real peel), so the pose it fires on, a part leaning with its centroid outside a small patch, is usually fine, and the adhesion ratio already covers the cases the static test stood in for (a point or edge contact has almost no area, so its ratio collapses toward zero). Measured on a cam seal tool: `bearing 310.2mm²`, `centroid depth -8.36mm`, `adhesion 0.067` against a conservative `p/σ` of 0.05, so no coverage, and it logs why: `Topple coverage not needed — 16 steep flats left uncovered (adhesion 0.067, centroid depth -8.36mm, bearing 310.2mm²)`.
+- **Anti-topple coverage is gated on solved Stefan topple risk.** When a layer profile exists, `computeAutoSupportPlan` evaluates `evaluateToppleRisk` before candidate generation against the pose's worst bearing edge and gates both `steepFlatNeedsCoverage` and `computeStabilizationAnchors` (`toppleCoverageNeeded`) via `toppleRiskNeedsCoverage` (`TOPPLE_ADHESION_THRESHOLD_MPA` (0.30 MPa, or `pastEdge` / `rocking`, falling back to `needsToppleCoverage` in `poseStability.ts` when no profile is available). The static "is the centroid over the base" test alone over-fires on bottom-up parts because gravity's peel contribution is tiny relative to plate adhesion, while `measurePoseStability` + `evaluateToppleRisk` share the bearing hull and cover point/edge contacts as zero bearing area.
 - **Steep flats are braced, not carpeted.** A large planar face past the self-support angle forms fine on its own, so the density curve — tuned for formation, densest on flat ceilings — overstates what it needs: a `steepFlat` island keeps the density grid but at `STEEP_FLAT_SPACING_MULTIPLIER` (2.5) times the spacing, a sparse field of contacts rather than a lattice, and the topple job goes to `computeStabilizationAnchors`. On a low-poly model that distinction is everything — a 12-triangle plank's 81° side is one 500 mm² patch carrying 84 % of the pose's drag, and gridding it carpets the whole face. The braces are steered by the report the same pass measures: the drag pushes the part over the edge on `pushDirDeg`, so the material that *lifts* is on the far side and that is where the lever arm from the tipping edge is longest — teeth there rank above the rest under the anchor cap, and a lone-point contact stays symmetric because a point has no static margin in any direction. They climb to `dragTopMm` (the highest face that drags) rather than a fraction of the part's height, and a buttress is spaced `BUTTRESS_SPACING_MM` (8 mm) apart, not the 2.5 mm the continuous base line needs. The gate also fires on the adhesion verdict, conservatively (`CONSERVATIVE_P_SIGMA = 0.05`): a part can stand on its base and still lift off it, and the logged ratio is computed from the model's own bearing patch, which is smaller than the printed contact whenever a raft is used.
 - **A region carries the drag moment it owns.** `OverhangRegion` reports `drag_moment_mm3` (`Σ A·sinθ·z` over its triangles, `z` above the part's own base — the sum `compute_stability_report` totals for the pose), `drag_dir_deg` (the XY direction its drag pushes the part, i.e. the side that lifts) and `steep_flat` (whether it came from `classify_steep_flats`). A steep face is self-supporting for formation, so contact on it only resists toppling, and the patch's share of the pose total is the constant-free measure of how much of that job it owns — which is the number a placement rule needs to stop carpeting a face that carries almost none of it. A large flat is also the best ANCHORING surface a part has, which is why coverage is not left to the verdict alone: `steepFlatNeedsCoverage` keeps the contacts of any flat at least `STEEP_FLAT_ANCHOR_MIN_AREA_MM2` (150 mm², 3D) whether or not the pose needs rescuing. Size and not share of the drag, because anchoring value is about room: planar, so a contact on it has a well-defined normal and cannot graze; large, so contacts spread instead of crowding an edge; and facing the direction the part would move, so holding it holds the part. The floor is where a flat stops having room for contacts at all (a tip covers ~3mm, so a handful want ~100mm²); above it the band and the spacing make the judgement, so a 465mm² face on a 42mm figurine and a 400mm² face on a 22mm cube both get a low band. An earlier 1000mm² floor refused both.
 
 Anchoring contacts stay LOW (`steepFlatAnchorBandTop`) on a squat part: the lowest third of the flat, or 6 mm, whichever is more. **A slender part is the exception, and the reason is a third failure mode.** Formation, rigid-body toppling and elastic sway are three different problems, and only the first two had mechanisms: a wall tall and thin enough (past `SLENDER_RATIO` = 4 times its own thickness, `height / (volume / footprint)`) flexes under the peel's lateral load while it prints, which is what shows up as wiggling and Z lines on a 126 mm plate 7 mm thick. A contact only stops the sway at its own height, so a slender part's anchoring ladders up the steep flat instead of banding at the bottom, and the spacing between those contacts is capped by the part's own thickness (`steepFlatSpacingMultiplier`). That cap is the physics, not a switch on shape: the rung spacing is a beam span, and the sag between two contacts goes as the span to the fourth power, so it has to stay under the thickness whatever the sparse field would like. A 7mm wall lands at 7mm, a 30mm-thick part keeps the full 2.5x sparse field, and anything thinner than the formation spacing is floored there. The 2.5x exists because a face past the self-support angle needs no formation contact; a swaying wall is the opposite case, and the density moves continuously with the part instead of jumping at a ratio. Both the report (`slenderness` in the log, `height 126.2mm (11.3x)`) and the placement (`isSlenderPart`) read the same ratio. A tip's job is to stop the part moving, and low contacts are short, stiff and cheap, while the reach that resists a topple moment is the stabilization braces' job. Without the band the grid climbs the face, because a near-vertical patch has a thin XY footprint whose cells map up its height, which is how a leaning 20 mm cube sprouted supports two thirds of the way up. Formation overhangs are not banded: they have to hold material at height.
 
-The overlay ramps its colour by that share (`IslandOverhangOverlay`), and it shows what the placement will actually cover: `scan_overhangs` returns the topple report alongside the regions (`OverhangScan`), `scanNeedsCoverage` reduces it to the placement's own rule, and patches the placement will not touch render muted (`MUTED_OPACITY`) instead of at full strength, per patch, using the placement's own `steepFlatNeedsCoverage`. Painting everything that was classified reads as "this will be supported", which is exactly what it is not. It ramps: a formation overhang stays flat orange, a topple patch runs cool-to-hot with the fraction of the pose's drag moment it carries, normalised by the largest patch in the scan so no constant is involved. A vertex weight shared by the patches meeting there (`toppleVertexWeights`) keeps it from reading as triangle painting: the rasteriser interpolates from one patch's colour to the other's instead of stepping at the shared edge. The colours travel as shader uniforms, never as a vertex colour attribute: three converts a uniform exactly as it converts `material.color`, and only the scalar weights are per-vertex. An alpha feather at the painted set's outer edge was tried and removed, because semi-transparent overlay triangles glitch against the model. `scan_overhangs` logs the top four: `[stability] regions by drag moment (pose total 179063mm³): #2 steep 62° 1180mm² z 8.5-46.2 M 98000 (55%) dir 175° · …`. See `docs/dev/backlog.md` for the placement rule this is meant to feed.
+`IslandOverhangOverlay` shows what placement will cover: `scan_overhangs` returns `OverhangScan`, `scanNeedsCoverage` checks whether anti-topple contact is needed, and steep-flat patches that placement skips render muted (`MUTED_OPACITY`) instead of at full strength, per patch, via `steepFlatNeedsCoverage`. Formation overhangs use flat orange (`formationOverhangColor`), while covered steep-flat patches use uniform amber (`steepFlatOverlayColor`) so greedy triangle-growth boundaries never create asymmetric per-patch shading; spatial peel stress lives instead on `StressForceHeatmapMaterial`. `scan_overhangs` logs the top four: `[stability] regions by drag moment (pose total 179063mm³): #2 steep 62° 1180mm² z 8.5-46.2 M 98000 (55%) dir 175° · …`. See `docs/dev/backlog.md` for background.
 - **Every member must clear the branch-angle rule — and the gate looks at the shaft, not the chord.** `memberMaxAngleFromVerticalDeg()` derives the steepest lean a member may take from the user's branch angle (`grid.minBranchAngleDeg`, **60° above horizontal** ⇒ ≤30° from vertical) — the same rule the grid attach path enforces through `getLengthAwareMaxAngleFromVerticalDeg`. It bounds every auto path: the placement fan (`min(leafFanMaxAngleDeg, 30°)`), the merge knot search (`STEEP_MIN_RISE_DEG = max(45°, minBranchAngleDeg)`), the routed-branch caps, and the chunk-consolidation relaxation below. `branchDepartureAngleDeg()` then re-checks the **built** branch where it actually leaves the host (knot → first shaft joint): the contact cone is clamped toward the surface normal, so a branch can pass the knot→tip gate and still run out nearly level, bending into a steep cone only at the tip — on a speck field every branch chord read 30° while every shaft left at 42°. A member that would sag is refused and its pillar stays standalone instead. The consolidation routed-branch host pick therefore aims at the *steepest* eligible sample rather than the nearest: the cone bend eats the last couple of millimetres of rise, and reaching further down the shaft buys it back. Before this the fan used 45°, merge 45° rise and consolidation 75° from vertical, and nothing consulted the configured branch angle at all.
 - **Overhang pillars consolidate into chunk trees.** After placement, neighbouring ring/infill/standalone pillars (and the reinforcement origin, the one non-overhang host flagged convertible) fan into each other (`CONSOLIDATION_FAN_RADIUS_MM`, 8 mm — an upper bound, not a target, capacity `maxAttachmentsPerTrunk`) — supports release in chunks with one plate contact per chunk. Consolidation asks `fanLeafToHost` for the **nearest** eligible host (`hostOrder: 'nearest'`), where placement fanning asks for the steepest: a chunk link is a local tie between neighbouring pillars, and steepest-in-reach skips the adjacent pillar for a taller one up to the full 8 mm, which reads as a stray 6–8 mm diagonal across the lattice. The consolidation angle is relaxed past the placement fan — `min(max(leafFanMaxAngleDeg, CONSOLIDATION_MAX_ANGLE_DEG = 75°), 90° − minBranchAngleDeg)` — because on a surface sloped <45° from horizontal, neighbouring pillars can never satisfy the placement gate (the link angle is always 90° − surface slope), so chunking would be geometrically impossible. The branch-angle rule still caps the relaxation, so links shallower than it leave the pillar standalone. The chunk's interior hosts carry the load; the links that survive are connective tissue. Same-height pillars (vertical drop < 0.4 mm) never straight-fan; when the straight leaf is blocked, crosses, or the surface is too flat AND the tip sits at ≥ `CONSOLIDATION_BRANCH_MIN_HEIGHT_MM` (10 mm), a **routed branch** attaches it to a host shaft instead — high above the plate that reads as a tree; near the plate it is suppressed (it would read as a zig-zag web). Near-plate contacts (tip Z < `ANCHOR_HEIGHT_THRESHOLD_MM`, 5 mm) place as [stump](../reference/support-anatomy/stump.md) primitives and stay standalone.
 - **Grid trunks are fanning hosts only up close.** `GRID_HOST_FAN_RADIUS_MM` (2.5 mm) is deliberately tighter than the general `LEAF_FAN_RADIUS_MM` (8 mm, matching the `leafFanRadiusMm` default/min of 8 mm), so fan leaves do not sweep across the grid forest and puncture its shafts.
@@ -567,9 +618,58 @@ The overlay ramps its colour by that share (`IslandOverhangOverlay`), and it sho
 - **Fanning attaches to segments, not entities.** `collectFanShaftPoints` samples per-segment (`segmentId` + `t`) and `fanLeafToHost`/`buildConsolidationBranch` create knots with `parentShaftId: segmentId, t` — not the entity id. Legacy knots keyed to the entity are rehosted to the nearest segment before `computeForestDiameterProfile` so diameter demands include fan leaves and drift checks use segment geometry. `countAttachmentsOnHost` handles both for backward compat. The host pool, merge search and capacity checks all walk `GRID_HOST_TYPES` — the types declaring `canBeGridHost` — so a second hostable type is offered as a host without a second edit.
 - **The merge search reaches in plan, and snaps the knot to the highest legal sample.** `findMergeHost` admits a host by its **plan** distance for the same reason the fan does (above), and unlike the fan it selects only a *host*: the attachment is then snapped to the highest legal sample on that host's shaft (`ATTACH_SEARCH_STEP_MM`, 0.5 mm), so a candidate level with, or above, the host's joints still attaches lower down its shaft. Before either change, two pillars of equal height 2–4 mm apart reported `noHost` — every legal attachment was further down the neighbour's shaft than a 3D ball around its tip reached — and stood as two plate contacts. The knot walk also used to take the highest of 11 fixed fractions of the shaft, which on a 20 mm shaft lands up to 2 mm below the rung it was after: enough to push a member across the 6 mm leaf/branch threshold by sampling error alone, after which the branch path's departure rule refuses it and the whole link falls back to a standalone pillar.
 - **A host, and therefore its knots, belong to one model.** The snapshot holds every model's forest and `collectFanShaftPoints` samples all of it, so host selection filters on the host's `modelId`: `fanLeafToHost`, `buildConsolidationBranch`, the consolidation conversion loop and the flat-island stub pass all `continue` when the host belongs to another model. Unfiltered, a run for one model attached its leaves to a neighbouring model's shafts, created knots on that model's segments, and -- worst -- *converted that model's bare standalone pillars into its own leaves* (conversion deletes the pillar). `findMergeHost` is the one path that always filtered.
+- **Gap-fill is perimeter-first, not centroid-only.** `buildGapFillCandidates`
+  (`coverage.ts`) still adds a contact at each uncovered cluster centroid, but it
+  also walks the region's own triangle-accurate `perimeterLoops` at
+  `max(1.2 mm, coverageRadius × 1.1)` of arc length and adds one contact at every
+  point no tip reaches (`isPlanPointCovered`, with the same influence growth the
+  footprint coverage uses), capped at `MAX_PERIMETER_CANDIDATES_PER_REGION` (12)
+  per pass. A centroid alone leaves a long flat foot's sole and its toe/heel
+  corners bare — the first thing a flat overhang tears — and the arc walk both
+  spaces contacts evenly on smooth polygons and visits corners. Regions with a
+  tip already covering the middle keep only the uncovered ends.
+- **Co-located and mid-shaft close trunks merge across nearby hosts.** After
+  gap-fill and before the diameter resize, `mergeNearbyTrunkRoots` dissolves a
+  trunk whose plate root stands within `ROOT_MERGE_RADIUS_MM` (3 mm) of a
+  taller one **or** whose leaning shaft passes within
+  `MID_SHAFT_MERGE_DISTANCE_MM` (1.6 mm) in 3D: its own tip and every hosted
+  member's tip are re-fanned onto the primary survivor first (preferring steepest
+  legal knots via `fanLeafToHost`, with overflow contacts absorbed by other
+  nearby non-consumed trunks if the primary survivor hits capacity or angle/reach
+  limits), excluding victim shafts and soon-to-be-removed hosted members from
+  crossing checks before removing the victim's members, knots, trunk, and
+  unreferenced root. The merge commits only if *every* contact can be re-served
+  without colliding (`contactConeCollides` / `branchCollidesWithSDF` against
+  the mesh); a refusal keeps the victim trunk intact and tallies the reason
+  (`blocked`, `angle`, `capacity`, `noHost`, `noTips`) in
+  `ForestReport.diagnostics.rootMerges` and the text report. Every choice
+  (survivor, pair order) is geometric — entity ids are random UUIDs, so an id
+  tie-break made the worker and main thread pick different survivors and broke
+  plan parity.
 - **Auto knot ids must be free in the draft.** `draftAddPrimitive` REPLACES on an id collision instead of failing, and auto knot ids derive from candidate/island ids -- which restart per scan (`v0`/`m0`/`o0`, so two models rebuild the same ids) and repeat across gap-fill passes. A reused id silently re-parents the member that already owned that knot onto this run's host shaft, rendering as a long member reaching across from the other model's structure. `freeKnotId` allocates the free id at every member-creating site: the two fan paths, `buildConsolidationBranch`, and the merge path.
 - **Relaxation toward the slope spacing is a last stretch, not a ramp from flat.** `computeRegionSpacing` blends `flatDensityBoost` (0.7 ⇒ ~2× the supports) to `slopeRelaxFactor` (1.3 ⇒ ~0.6×) by the region's angle from horizontal, and it used to blend **linearly from 0°** to the self-support threshold: a 25° underside — a shallow *formation* overhang, which peels and needs the density exactly as a flat ceiling does — took 56% of the relaxation. Only the end of the band prints by itself, which is what relaxation is for, so the ramp now starts at `SLOPE_RELAX_RAMP_START` (0.6 ⇒ 27° at the 45° default) and runs from there to the threshold. It is continuous (the flat value holds *at* the start, so the spacing does not step) and the knob keeps its meaning at the end of the band it names. Measured on the corpus's own 25° underside (`sloped-cantilever`: 215 → 337 candidates, 183 → 313 contacts, member volume 1299 → 2087 mm³) while **every other entry stayed byte-identical** — the 0° ceilings and the 60° steep flat included. That last part is the shape such a change has to have: one angle band moving, not the whole density curve. The consequence to know: below the ramp's start `slopeRelaxFactor` has no effect, because nothing there is a slope in the sense the knob means.
-- **Orphan validation and active `cross` re-hosting after resize.** After `computeForestDiameterProfile` the pipeline rehosts legacy knots and runs `validateAndCullOrphans` (drift >0.5 mm, missing host/segment, and `blocked` members culled — `return false`; only `cross` is kept and reported — `return true`). When `cross` orphans exist on the current model, `computeAutoSupportPlan` attempts to actively re-host each crossing leaf or branch via `fanLeafToHost` (excluding its old host) onto a clear non-crossing shaft, removing the old crossing entity and knot when re-hosting succeeds, and re-runs `validateAndCullOrphans` so resolved crosses drop out of the report. A knot on a top segment is valid — top segments carry no `topJoint` by design, so the host trunk's contact cone stands in as the segment top. Culled leaves/branches and their orphan knots are removed, `ForestReport.orphans[]` lists `id/kind/reason/hostId/knotId/detail`, and `forestReportToText` emits `ORPHANS CULLED`. This is where the "leaf attached to nowhere" (drifted knot after a host trunk’s diameter split) is caught — check the report before the render.
+- **Full cross-support interference checks, knot spreading, and active `cross` re-hosting.**
+  `leafPathCrossesSupports` and `branchPathCrossesSupports` guard `fanLeafToHost`,
+  `buildConsolidationBranch`, and `validateAndCullOrphans` against crossings
+  with every support entity class across the forest: `GRID_HOST_TYPES`
+  (including bottom trunk risers without `bottomJoint` via
+  `hostSegmentSpan`), hosted `branches`, `leaves`, and inter-support `braces`.
+  A parent branch skips its own hosted child members via `excludeMemberId`,
+  while siblings sharing the same host apply a launch-hub trim and core
+  clearance so dense fan crowns do not self-false-trigger on shared parent
+  knots. On `'steepest'` placements, `fanLeafToHost` also applies a mild
+  angle penalty when multiple attachments share similar Z and azimuth on a
+  host so fan knots spread cleanly around the shaft. After
+  `computeForestDiameterProfile` and orphan culling (drift >0.5 mm, missing
+  host/segment, and `blocked` members culled — only `cross` is kept and
+  reported), `computeAutoSupportPlan` actively re-hosts each `cross` member via
+  `fanLeafToHost`, trying clearer alternate hosts first and falling back to a
+  clearer knot on the same host before re-running `validateAndCullOrphans`.
+  Culled leaves/branches and their orphan knots are removed,
+  `ForestReport.orphans[]` lists `id/kind/reason/hostId/knotId/detail`, and
+  `forestReportToText` emits `ORPHANS CULLED`. This is where the "leaf attached
+  to nowhere" (drifted knot after a host trunk’s diameter split) is caught — check
+  the report before the render.
   - **A knot must be placed on the same line the drift check measures.** `hostSegmentSpan` is the single resolver for a host segment's world span (root top when the bottom segment carries no `bottomJoint`, contact cone when the top segment carries no `topJoint`), and both the merge knot search and `validateAndCullOrphans` go through it. Do not give either side its own fallback: they used to differ — the search fabricated `(0, 0, rootTopZ)` — and the two lines coincide only for a trunk rooted at the world origin, so every member merged onto an off-origin host was placed beside its shaft and then culled as `drift`. A support that is placed and then silently culled leaves its island unsupported with only a `drift` line in the report to show for it; the members are not re-placed, so the coverage number is the only other clue.
 - **Contact resolution is hole-tolerant.** `resolveSurfaceNormal` casts upward from just below the candidate (underside contact), then downward from above (top-surface contact, normal flipped), and walks a small disc of lateral offsets (radii 0, 0.75, 1.5, 2.25 mm) before giving up. A punched drain hole directly above the candidate used to swallow the single upward ray, after which the downward fallback landed on the far side of the wall — in a cavity, on the floor with a flipped normal — and the candidate was rejected outright, so the interior ceiling lost every support the moment a hole was punched through it. A hit below the candidate is never accepted, in either direction.
 - **A candidate within `ALREADY_SUPPORTED_RADIUS_MM` (3 mm) of an existing tip is already supported** and is skipped.
@@ -757,7 +857,7 @@ Both halves are the **panel's**, on the Auto Supports card under the preset row,
   - `drift` — knot >0.5mm from host shaft (split offset, `pointToSegmentDistanceSq >0.25`)
   - `cross` — leaf/branch crosses another shaft after thickening (`leafPathCrossesSupports` `radius 0.25`, kept but flagged)
   - `host culled (blocked)` — a member on a host that was itself `hostBlocked`
-- **PLACEMENT DIAGNOSTICS** — `Trunks by kind: grid 44 (ring + infill), gap-fill 0, standalone 41 (sub-threshold overhang, no host)`; `Candidates by source: voxel 49 · minima 21 · intersection 47 · overhang 98 · stabilization 12 · reinforcement 18`; `Fan refusals: noHost=1 (too far >8mm/2.5mm grid, angle >45°, sameZ|cross|blocked|capacity)`; `Merge refusals: noHost=22, rejected=20`; `Consolidation refusals: blocked=99, cross=3 (sameZ=surface too flat for side-leaves — chunking needs ≥0.4 mm neighbour height rise)`. Sourced from `diagnostics` captured in `computeAutoSupportPlan`.
+- **PLACEMENT DIAGNOSTICS** — `Trunks by kind: grid 44 (ring + infill), gap-fill 0, standalone 41 (sub-threshold overhang, no host)`; `Candidates by source: voxel 49 · minima 21 · intersection 47 · overhang 98 · stabilization 12 · reinforcement 18`; `Fan refusals: noHost=1 (too far >8mm/2.5mm grid, angle >45°, sameZ|cross|blocked|capacity)`; `Merge refusals: noHost=22, rejected=20`; `Consolidation refusals: blocked=99, cross=3 (sameZ=surface too flat for side-leaves — chunking needs ≥0.4 mm neighbour height rise)`; `Root merges: 1 co-located trunk(s) dissolved into a shared host (refusals: blocked=17, capacity=3, noHost=3)`. Sourced from `diagnostics` captured in `computeAutoSupportPlan`.
 - **Counts** — `56 trunks · 70 leaves … | 16 trees, 40 bare` — `trees` are hosts with members, `bare` are 1:1 pillars.
 - **FAN-OUT GROUPS** — `v115 @ Z=26.6mm Ø1.03mm [area 0.53mm² …] → 12: v116(L 2.8mm/20° Ø1.03) …`, headed by the gates that admitted its members: placement fans `≤leafFanMaxAngleDeg` within `LEAF_FAN_RADIUS_MM` (`GRID_HOST_FAN_RADIUS_MM` for grid hosts), chunk-consolidation links `≤CONSOLIDATION_MAX_ANGLE_DEG` within `CONSOLIDATION_FAN_RADIUS_MM`, and the `maxAttachmentsPerTrunk` cap in force — so a group is readable without re-deriving which pass attached each member. `spanMm`/`angleDeg` are `knot→tip` distance and angle from vertical, measured **after** the resize/orphan passes: segment splits and rehosting can drift a knot down its host, so a link can read shallower than the gate that admitted it. Each member's own `Ø` follows the angle — the diameter the member contributes, from `memberDiameterOf`, the same number the resize demand reads (a branch's widest segment; a leaf's cone body, which `syncContactConeDiameters` matches to its host) — so the member-vs-host ratio is readable off one line instead of inferred from the render.
 - **STANDALONE TRUNKS** — `grid-o0-… @ Z=5.1mm Ø1.21mm [area 10mm² …]` plus `— region ring + grid infill` or `— standalone voxel/minima (below threshold or consolidated)` based on `id` prefix.
@@ -766,6 +866,168 @@ Both halves are the **panel's**, on the Auto Supports card under the preset row,
 **Orphan reporting:** post-resize `rehostLegacyKnots` + `validateAndCullOrphans` cull `drift`/`missingHost`/`missingSegment`/`blocked` (`return false`, including orphan knots >0.5 mm off their host segment) and keep/report `cross` (`return true`). `ForestReport.orphans[]` (`OrphanInfo`) and `forestReportToText` `ORPHANS CULLED` surface them. Drift is the "leaf attached to nowhere" case — host segment split rehost failed or knot was placed on a trunk that later split.
 
 **Diagnostics reporting:** `ForestReport.diagnostics` captures `diagnostics.candidatesBySource`, `hostsByKind`, `fanRefusals`, `mergeRefusals`, and `consolidationRefusals` so the text report can explain *why* a candidate became a trunk/leaf/standalone vs fanned/merged — and why a region did not chunk (`sameZ` = surface too flat for side-leaves).
+
+## Live printability (demand side)
+
+The frame solver answers "do the placed supports hold?" from the members that
+exist — remove supports and the beam solve simply has less to carry. The demand
+side lives in `src/supports/autoSupport/printability.ts`
+(`evaluatePrintability`), which evaluates the islands the scan already produced
+against the tips actually placed:
+
+| Signal | Source | Unit |
+|---|---|---|
+| Region coverage | `computeRegionCoverage` with `coverageRadiusForRegion` | fraction of footprint |
+| Uncovered area | footprint area × (1 − coverage) | mm² |
+| Area deficit | `computeLoadBudget` rows by island id | mm² |
+| Unsupported span | plan distance from each footprint cell to the nearest tip at or below it, capped at `MAX_FREE_SPAN_MM` | mm |
+| Peak peel / area jump | `buildPeelCurve` over `RepresentativeLayerProfile` | N / unitless |
+
+`PrintabilityReport.verdict` is one of `ready`, `underSupported`, `overloaded`,
+`critical`: bare or short regions make it under-supported, a frame utilization
+above 100 % from the same edit makes it overloaded, and the pair — or an
+uncovered fraction of `CRITICAL_UNCOVERED_FRACTION` at
+`CRITICAL_UNCOVERED_AREA_MM2` or more — reads critical. Region severity is
+area-driven: a hole at or above `CRITICAL_UNCOVERED_AREA_MM2` is critical,
+anything else short of `REGION_COVERAGE_TARGET` is a warning.
+
+**Constraints:**
+
+- Tips and shaft widths are read from the snapshot's typed collections (trunks,
+  branches, leaves, stumps, sticks, twigs). Braces and kickstands carry no model
+  contact and are not contacts.
+- Coverage is computed without the occlusion mesh on the live path; pass `mesh`
+  only when the vertical-shelf correctness is worth the raycast cost.
+- The peel signal is context, not a verdict term. Per-region peel demand needs
+  the 2D Stefan field for *that region's* slice, and the representative-layer
+  profile only retains a handful of global layers; the frame report's per-layer
+  tip utilization owns tip-load sufficiency in the meantime.
+
+The verdict is stored beside the frame report in `frameStressState.ts`
+(`printabilityByModelId`, `setModelPrintability`, `clearModelPrintability`) and
+summarized by `src/supports/autoSupport/supportStressReport.ts`
+(`summarizeSupportStress`, `supportStressReportToText`,
+`SupportStressReportInput`, `SupportStressSummary`, `SupportStressStatusLevel`,
+`FLOATING_Z_THRESHOLD_MM`).
+`SupportStressPanel` (titled **Printability** in the UI) renders a plain-language
+hero verdict banner (`Checks Passed` / `Needs Attention` / `Action Needed` /
+`Not Checked`), a unified three-row Coverage / Support load / Stability checklist,
+the interactive peel profile graph, a collapsed-by-default Details disclosure
+(metrics + hotspots), a **Printability Report** modal (`StructuredDialogModal`)
+displaying and copying the full plain-text diagnostic report, and a footer action
+bar (`Overlay` + `Reinforce` / `Analyze`). Models sitting above
+`FLOATING_Z_THRESHOLD_MM` (0.5 mm) with no supports evaluate to `critical`
+(`floatingUnsupported`) instead of measuring plate adhesion against their own
+floating base, and unscanned models (`hasScan: false`) never report green
+coverage or `Checks Passed` before an overhang scan has run. **Every structural support edit re-analyses the
+model** — placement, move, thickness, and twig/stick bridges included:
+`captureStructuralRefs` covers every geometry collection and the subscription
+coalesces edits on a 160 ms debounce, re-solving the frame and re-evaluating
+printability. The effect also analyses once on setup when the current state is
+not the solved one, because the island set changes on every edit and an edit can
+land while the subscription is being rebuilt (that is how a Generate run used to
+produce supports with no stress report). The demand side is evaluated on **mesh
+mount**, not on a scan: the panel subscribes to `subscribeModelMesh` and runs
+`evaluatePrintability` with the layer profile as soon as the model exists, so
+the peel curve and spatial adhesion overlay are available on a freshly imported
+model — pre-supported or bare — before any scan, and are then refreshed with the
+scan's islands when it runs. Without that, a pre-supported import had only a
+frame report and the shader fell back to the 1D Z band, which reads as a purely
+vertical gradient. With no frame report the panel graphs
+`PrintabilityReport.peelCurve` and the shader builds its band from the same
+curve.
+
+**Peel overlay (Stefan adhesion only).** `PrintabilityReport.peelOverlay` is a
+plan-resolution `PeelOverlay`: the peak Screened Stefan pressure `p̃` over the
+sampled layers, normalized to the model's own hottest cell, on a
+`OVERLAY_MIN_CELL_MM` 0.5 mm grid (capped at 1024 a side). It is the *only* surface
+paint — uncovered footprints are panel data (uncovered mm², max span, short
+regions), not model colour. The fields exist per sampled plane, so this is a max
+projection: it says *where* the part peels, while the graph-hover ring still
+carries *at which Z*. `StressForceHeatmapMaterial` uploads it as a world-space
+DataTexture (`uPeelTex`, `uPeelMin`, `uPeelInvSize`, `uPeelEnabled`) and paints
+the cool → teal → amber ramp on the model, weighted by pressure and strongest on
+downward-facing surface (upward faces keep a lighter wash so the field reads
+from the working view);
+when the overlay is present the 1D Z band is not drawn (it is the fallback for a
+stress report with no sampled fields), and the rings and overload spots still
+apply. The material takes `report` and `printability` independently, so an
+unsupported model with no stress report still shows its adhesion. While the
+overlay is enabled, `SceneCanvas` suppresses the island 3D overlays too —
+selected-island marker, contact-footprint instances, overhang patches, voxel
+visualization and island id labels — on the same `stressOverlayActive` flag that
+already hides supports and rafts, so the paint never competes with scan debug.
+
+**Layer resolution.** `extractRepresentativeLayers(mesh, planeCount?, { layerHeightMm })`
+slices at the print profile's layer height when the caller supplies it
+(`getCachedRepresentativeLayers(mesh, getActiveMaterialProfile()?.layerHeightMm)`
+in `SupportStressPanel`), capped at `MAX_SAMPLED_PLANES` (1024). The **placement
+run** takes the same height: `runAutoPlace` / `computeAutoSupportPlan` accept a
+`layerHeightMm`, the worker payload carries it (`AutoPlaceWorkerPayload`), and it
+reaches `optimizeContactsByTraction` → `extractRepresentativeLayers`. Without
+that the run's traction profile — and the `frameStress` report it attaches — was
+sampled on the ~1 mm default grid, so the peel profile read coarse right after
+Generate until the next edit re-solved with the panel's 50 µm profile. It
+returns `profile.samples` — one `{ zMm, areaMm2 }` per printed layer — alongside
+the IoU-clustered `layers` that carry the Stefan PDE fields. The stress report's
+`layerProfile`, the panel's peel graph and `buildPeelCurve` all read `samples`
+when present, so the Z ladder is the selected profile's layer height rather than
+the cluster peaks; hand-built profiles (tests, fixtures) fall back to `layers`.
+
+**Per-layer force, not per-cluster force.** `computePeelLayerSamples`
+(`supportGraphStress.ts`) gives every sample a force: the field-derived pressure
+ratio (`mean p̃ / p̃_ref`) is anchored at the representative layers and
+interpolated across the samples between them, then multiplied by that sample's
+own area. At a representative layer this equals the field force exactly, so the
+critical-layer solve is unchanged; between them the neighbours inherit the same
+scale. Before this, a representative layer used its saturated field force while
+its 50 µm neighbours used nominal pressure, and every cluster peak rendered as a
+spike on the peel graph (a broad cross-section's mean suction is up to ~16× the
+reference disc).
+
+**Topple risk from the solved demand.** `evaluateToppleRisk`
+(`src/supports/autoSupport/toppleRisk.ts`) evaluates the **worst single-layer**
+peel moment: per sampled layer, the Stefan peel force
+(`computePeelLayerSamples`) at that layer's centre of pressure, measured about
+the pose's worst bearing edge (so multi-layer profiles never inflate moments
+with finer layer heights). It returns `comDepthMm` (how far the centre of
+mass sits inside the edge), `peelMomentNmm`, `requiredAdhesionMpa` (the plate
+pressure that would lift the contact patch against the conservative
+`TOPPLE_ADHESION_THRESHOLD_MPA` 0.30 MPa band, `Infinity` when bearing area is
+zero), and `complianceMm` from the frame solve; `classifyToppleRisk` turns
+those into `pastEdge` / `rocking` (`> ROCKING_THRESHOLD_MM` 0.15 mm tip
+deflection) / `adhesionBound`, and `toppleRiskNeedsCoverage` turns the report
+into the placement and coverage boolean.
+
+The edge now travels with the pose: the Rust `StabilityReport` exposes
+`worst_edge_point_mm` / `worst_edge_normal` (pinned by the analytic fixture
+test), `PoseStabilityWire` carries them, and the TS `PoseStability` exposes
+`worstEdgePoint` / `worstEdgeNormal`. Both `computeAutoSupportPlan` and
+`SupportStressPanel` evaluate `evaluateToppleRisk` live from the mesh's world
+centroid (`geometryCentroidMm`) and bearing edge, logging it and storing
+`ForestReport.toppleRisk` / `toppleRiskByModelId`. The panel re-evaluates
+live deflection on every structural support edit via `setModelToppleRisk` and
+`clearModelToppleRisk`.
+
+**Per-layer growth masks.** The same pass derives `profile.growth` (with
+`profile.growthGrid`): every plane that added solid area over the last plane
+that actually had material, holding the *added plan cells* (`addedCells`, row-major
+indices at `GROWTH_CELL_MM` 0.5 mm) plus `addedAreaMm2` and `growthRatio`. This
+is the input for consecutive-layer overhang detection — the added cells are
+*where* the new surface is, which the area curve alone cannot say. `fillPlaneMask`
+uses an even-odd scanline fill of the plane's own contour segments, so a plane
+is a closed region, not a boundary band. Constraints:
+
+- Growth is measured against the last plane with area > 0.05 mm², because a
+  plane exactly on a feature boundary can cut no triangles and read as zero.
+- Retained entries are capped (`MAX_GROWTH_LAYERS` 128, largest addition first;
+  `MAX_GROWTH_CELLS` 2 M indices) and re-sorted by Z.
+- Cost is bounded by the fills: a 40 mm sphere at 50 µm (800 planes) slices and
+  derives growth in ~57 ms, a torus knot in ~87 ms; the profile is cached per
+  geometry, transform and layer height.
+- At 50 µm a smooth surface adds a sliver every layer, so growth entries alone
+  are not overhangs. Filtering added cells by self-support angle and by whether
+  the layer below carries them is the placement step that consumes this.
 
 ## Related pages
 
