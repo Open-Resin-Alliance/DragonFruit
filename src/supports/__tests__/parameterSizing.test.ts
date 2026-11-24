@@ -254,23 +254,24 @@ test('sizing without a model context is exactly the band', () => {
     assert.equal(s.rootsDiameterMm, activeSizingBand().rootDiameterMm, 'roots too');
 });
 
-test('tip contact never drops below 20% of the shaft', () => {
+test('tip contact never drops below TIP_CONTACT_MIN_SHAFT_RATIO (25%) of the shaft', () => {
     const heavyShaftBand: SizingBand = {
         ...SIZING_BANDS.structure,
         shaftDiameterMm: 1.6,
         tipContactDiameterMm: 0.28,
     };
     withBand(heavyShaftBand, () => {
+        const expectedFloor = 1.6 * TIP_CONTACT_MIN_SHAFT_RATIO;
         const flat = sizeParameters(makeCandidate({ islandAreaMm2: 8, tipNormal: { x: 0, y: 0, z: -1 } }))!;
         const slope = sizeParameters(makeCandidate({
             islandAreaMm2: 8,
             tipNormal: { x: 0, y: -0.5, z: -0.866 }, // 30° from straight-down
         }))!;
-        assert.ok(Math.abs(flat.tipContactDiameterMm! - 0.32) < 1e-9,
-            `flat contact at the 20% floor (${flat.tipContactDiameterMm})`);
-        assert.ok(Math.abs(slope.tipContactDiameterMm! - 0.32) < 1e-9,
+        assert.ok(Math.abs(flat.tipContactDiameterMm! - expectedFloor) < 1e-9,
+            `flat contact at the 25% floor (${flat.tipContactDiameterMm})`);
+        assert.ok(Math.abs(slope.tipContactDiameterMm! - expectedFloor) < 1e-9,
             `slope contact floored identically (${slope.tipContactDiameterMm})`);
-        assert.ok(slope.tipContactDiameterMm! >= 1.6 * TIP_CONTACT_MIN_SHAFT_RATIO - 1e-9, 'floor = 20% of shaft');
+        assert.ok(slope.tipContactDiameterMm! >= expectedFloor - 1e-9, 'floor = 25% of shaft');
     });
 });
 

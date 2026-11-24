@@ -159,13 +159,12 @@ export function isSlenderPart(s: {
  * not the pose needs rescuing today.
  *
  * A SIZE and not a share of the drag, because anchoring value is about room.
- * Rust classifies steep flats starting at 150mm² so moderate `[150, 400)` mm²
+ * Rust classifies steep flats starting at 150mm² so moderate `[150, 200)` mm²
  * faces are available when `verdictNeedsCoverage` fires, while unconditional
- * anchoring starts at 400mm²: a 465mm² face on a 42mm figurine gets a low band,
- * and so does a 400mm² face on a 20mm cube, which is the pair that killed an
- * earlier 1000mm² floor.
+ * anchoring starts at 200mm² so medium flat walls (`~14×14 mm` and up) resist
+ * elastic peel wobble and Z-banding even on globally stable poses.
  */
-export const STEEP_FLAT_ANCHOR_MIN_AREA_MM2 = 400;
+export const STEEP_FLAT_ANCHOR_MIN_AREA_MM2 = 200;
 
 /**
  * Should this steep flat be covered, given the pose's verdict?

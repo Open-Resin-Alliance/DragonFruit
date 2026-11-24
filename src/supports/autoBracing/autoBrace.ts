@@ -84,6 +84,7 @@ type AnchorCandidate = {
 
 type PairDistanceOverride = {
     ignoreMaxDistance: boolean;
+    allowDiagonal?: boolean;
 };
 
 /**
@@ -268,7 +269,7 @@ function resolveAnchorAtZ(support: SupportSample, targetZ: number): AnchorPoint 
     };
 }
 
-type Edge = { a: SupportSample; b: SupportSample; hDist: number; angleRad: number };
+type Edge = { a: SupportSample; b: SupportSample; hDist: number; angleRad: number; diagonalFallback?: boolean };
 
 const KICKSTAND_MAX_EDGES_PER_TRUNK = 2;
 const KICKSTAND_MAX_EDGES_PER_KICKSTAND = 2;
@@ -349,26 +350,38 @@ function buildGroupPairs(
     // the inner call of an O(n²) loop.
     const points = group.map((s) => getGridCorrelatedPoint(s, gridSettings));
 
-    const edges: Edge[] = [];
+    const cardinalEdges: Edge[] = [];
+    const diagonalFallbackEdges: Edge[] = [];
     for (let i = 0; i < group.length; i++) {
         const aPoint = points[i];
         for (let j = i + 1; j < group.length; j++) {
             const bPoint = points[j];
             const dx = bPoint.x - aPoint.x;
             const dy = bPoint.y - aPoint.y;
-
-            if (gridCardinalOnly && Math.abs(dx) > axisToleranceMm && Math.abs(dy) > axisToleranceMm) {
-                continue;
-            }
+            const isDiagonalInGrid = gridCardinalOnly && Math.abs(dx) > axisToleranceMm && Math.abs(dy) > axisToleranceMm;
 
             const hDist = Math.sqrt(dx * dx + dy * dy);
             // below minSpanMm the two supports are one post: bracing between
             // them is material with no stiffness to show for it
             if (hDist < Math.max(0.001, minSpanMm) || hDist > maxRun) continue;
-            edges.push({ a: group[i], b: group[j], hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) });
+            const edge: Edge = {
+                a: group[i],
+                b: group[j],
+                hDist,
+                angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)),
+                ...(isDiagonalInGrid ? { diagonalFallback: true } : {}),
+            };
+            if (isDiagonalInGrid) {
+                diagonalFallbackEdges.push(edge);
+            } else {
+                cardinalEdges.push(edge);
+            }
         }
     }
-    edges.sort((x, y) => x.hDist - y.hDist);
+    cardinalEdges.sort((x, y) => x.hDist - y.hDist);
+    diagonalFallbackEdges.sort((x, y) => x.hDist - y.hDist);
+    const cardinalCount = cardinalEdges.length;
+    const edges: Edge[] = [...cardinalEdges, ...diagonalFallbackEdges];
 
     const result: Edge[] = [];
     const adjacency = new Map<string, Edge[]>();
@@ -467,7 +480,7 @@ function buildGroupPairs(
             for (const existing of axes) {
                 const sep = axisSeparationDeg(existing, e.angleRad);
                 if (sep >= AUTO_BRACING_HARD_RULES.minAxisSeparationDeg) {
-                    const score = 90 - Math.abs(90 - sep);
+                    const score = (ei < cardinalCount ? 100 : 0) + (90 - Math.abs(90 - sep));
                     if (score > bestScore) {
                         bestScore = score;
                         bestCandidate = ei;
@@ -1081,6 +1094,14 @@ export function buildAutoBracedSnapshot(
                 activeGridSettings,
                 autoBracingMinPairSpanMm(settings),
             );
+            for (const e of pairs) {
+                if (e.diagonalFallback) {
+                    pairDistanceOverrides.set(pairKey(e.a.supportId, e.b.supportId), {
+                        ignoreMaxDistance: false,
+                        allowDiagonal: true,
+                    });
+                }
+            }
             if (modelId) pairsByModel.set(modelId, pairs);
         }
         const extra = groupMembers.filter((s) => isLateralStabiliserType(s.supportKind));
@@ -1315,6 +1336,7 @@ export function buildAutoBracedSnapshot(
             ) => {
                 const distanceOverride = pairDistanceOverrides.get(pairKey(lowS.supportId, highS.supportId));
                 const ignoreMaxDistance = Boolean(distanceOverride?.ignoreMaxDistance);
+                const allowDiagonal = Boolean(distanceOverride?.allowDiagonal);
                 const lowAnchor = resolveAnchorAtZ(lowS, atZ);
                 if (!lowAnchor) return;
 
@@ -1358,7 +1380,7 @@ export function buildAutoBracedSnapshot(
                 const dz = highAnchor.pos.z - lowAnchor.pos.z;
 
                 if (activeGridSettings.enabled) {
-                    if (!ignoreMaxDistance && !isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) return;
+                    if (!ignoreMaxDistance && !allowDiagonal && !isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) return;
                 }
 
                 const horizontalSpan = Math.sqrt(dx * dx + dy * dy);

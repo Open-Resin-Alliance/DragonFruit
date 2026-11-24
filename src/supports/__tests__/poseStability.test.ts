@@ -150,7 +150,7 @@ test('a flat anchors if it has room for contacts, and the band keeps it low', ()
     // The cam seal tool's 2752mm² face is worth anchoring: planar, room to
     // spread, facing the way the part would move.
     assert.equal(steepFlatNeedsCoverage(2752, false), true, 'the tool anchors on its big face');
-    assert.equal(STEEP_FLAT_ANCHOR_MIN_AREA_MM2, 400, 'unconditional anchor floor sits above Rust 150mm² classifier floor');
+    assert.equal(STEEP_FLAT_ANCHOR_MIN_AREA_MM2, 200, 'unconditional anchor floor sits above Rust 150mm² classifier floor');
     assert.equal(
         steepFlatNeedsCoverage(STEEP_FLAT_ANCHOR_MIN_AREA_MM2, false),
         true,
@@ -159,12 +159,12 @@ test('a flat anchors if it has room for contacts, and the band keeps it low', ()
     // A 42mm figurine's 465mm² face, on a part whose whole footprint is 738mm².
     // Worth a low band, which is what the band rule then keeps it to.
     assert.equal(steepFlatNeedsCoverage(465, false), true, 'a figurine face anchors');
-    // A 20mm cube's 400mm² face likewise: covering it low is fine, and the
-    // complaint about it was the height, not the contact.
+    // A 20mm cube's 400mm² face and medium 250mm² flat wall likewise anchor.
     assert.equal(steepFlatNeedsCoverage(400, false), true, 'and so does a small cube face');
-    // Moderate [150, 400) mm² steep flats classified by Rust are gated by the pose verdict.
-    assert.equal(steepFlatNeedsCoverage(250, false), false, 'moderate steep flat stays uncovered on stable pose');
-    assert.equal(steepFlatNeedsCoverage(250, true), true, 'moderate steep flat is covered when pose needs rescue');
+    assert.equal(steepFlatNeedsCoverage(250, false), true, 'medium 250mm² flat wall anchors against peel wobble');
+    // Small [150, 200) mm² steep flats classified by Rust are gated by the pose verdict.
+    assert.equal(steepFlatNeedsCoverage(175, false), false, 'sub-200mm² steep flat stays uncovered on stable pose');
+    assert.equal(steepFlatNeedsCoverage(175, true), true, 'sub-200mm² steep flat is covered when pose needs rescue');
     // Below the floor there is no room to spread anything across.
     assert.equal(steepFlatNeedsCoverage(120, false), false, 'a speck gets nothing');
     assert.equal(steepFlatNeedsCoverage(undefined, false), false, 'no area, no claim');

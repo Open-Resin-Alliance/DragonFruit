@@ -100,7 +100,6 @@ import {
     LEAF_FAN_MAX_ANGLE_DEG,
     CONSOLIDATION_FAN_RADIUS_MM,
     CAVITY_FAN_RADIUS_MM,
-    CONSOLIDATION_MAX_ANGLE_DEG,
     FAN_LINK_TIP_INSET_MM,
     CONSOLIDATION_BRANCH_MIN_HEIGHT_MM,
     MAX_LEAF_SPAN_BEFORE_BRANCH_MM,
@@ -119,8 +118,14 @@ const LOG_PREFIX = '[AutoSupport]';
  * near-level bars came from: a member at 45° from vertical carries almost
  * nothing along its axis and reads as a stray branch off the host.
  */
+/** Physical self-supporting photopolymer printability ceiling when grid mode
+ *  is off: every member must rise at least 45° above horizontal (≤45° from
+ *  vertical), preventing sagging 75° consolidation leaves and overly shallow
+ *  off-grid branches while still honoring `leafFanMaxAngleDeg` (45°). */
+const OFF_GRID_MAX_MEMBER_ANGLE_FROM_VERTICAL_DEG = 45;
+
 function memberMaxAngleFromVerticalDeg(gridEnabled: boolean = Boolean(getSettings().grid?.enabled)): number {
-    if (!gridEnabled) return 90;
+    if (!gridEnabled) return OFF_GRID_MAX_MEMBER_ANGLE_FROM_VERTICAL_DEG;
     const minRiseDeg = getSettings().grid?.minBranchAngleDeg ?? DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG;
     return Math.max(0, Math.min(90, 90 - minRiseDeg));
 }
@@ -3042,10 +3047,10 @@ export function forestReportToText(report: ForestReport, autoSettings?: Partial<
             const cap = autoSettings?.maxAttachmentsPerTrunk ?? getSettings().autoSupport?.maxAttachmentsPerTrunk ?? 12;
             const maxFromVertical = memberMaxAngleFromVerticalDeg();
             const effectiveFan = Math.min(fanMaxDeg, maxFromVertical);
-            const effectiveLink = Math.min(Math.max(fanMaxDeg, CONSOLIDATION_MAX_ANGLE_DEG), maxFromVertical);
-            const riseClause = maxFromVertical < 90
+            const effectiveLink = Math.min(fanMaxDeg, maxFromVertical);
+            const riseClause = getSettings().grid?.enabled
                 ? `Every member must rise ≥${90 - maxFromVertical}° above horizontal (grid.minBranchAngleDeg), so placement `
-                : `Placement `;
+                : `Every member must rise ≥${90 - maxFromVertical}° above horizontal (photopolymer self-support floor), so placement `;
             lines.push(
                 `  (host trunk → its leaves/branches. ${riseClause}fans ≤${effectiveFan}° from vertical within 5mm ` +
                 `(2.5mm for grid hosts) and chunk-consolidation links ≤${effectiveLink}° within ` +
@@ -3627,8 +3632,9 @@ export function computeAutoSupportPlan(
     // chunk (see constants.ts for why). Same-height pillars (vDist ≈ 0)
     // still cannot fan and stay as their own trunks.
     const conFanRadiusMm = Math.max(autoSettings.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM, CONSOLIDATION_FAN_RADIUS_MM);
+    const configuredFanAngleDeg = autoSettings.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG;
     const conFanMaxAngleDeg = Math.min(
-        Math.max(autoSettings.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG, CONSOLIDATION_MAX_ANGLE_DEG),
+        configuredFanAngleDeg,
         memberMaxAngleFromVerticalDeg(Boolean(gridEnabled)),
     );
     let consolidated = 0;

@@ -316,7 +316,7 @@ test('syncContactConeDiameters respects maxContactDiameterMm ceiling while allow
             profile: {
                 type: 'disk',
                 contactDiameterMm: 0.23,
-                maxContactDiameterMm: 0.35,
+                maxContactDiameterMm: 0.45,
                 bodyDiameterMm: 1.0,
                 lengthMm: 2.5,
                 penetrationMm: 0,
@@ -347,9 +347,10 @@ test('syncContactConeDiameters respects maxContactDiameterMm ceiling while allow
     };
 
     const synced = syncContactConeDiameters(s);
-    assert.ok(Math.abs(synced.trunks['t-room'].contactCone!.profile.contactDiameterMm - 0.32) < 1e-6,
-        `grows to 0.32mm when maxContactDiameterMm=0.35mm allows it (${synced.trunks['t-room'].contactCone!.profile.contactDiameterMm})`);
-    assert.equal(synced.trunks['t-room'].contactCone!.profile.maxContactDiameterMm, 0.35);
+    const expectedFloor = 1.6 * TIP_CONTACT_MIN_SHAFT_RATIO;
+    assert.ok(Math.abs(synced.trunks['t-room'].contactCone!.profile.contactDiameterMm - expectedFloor) < 1e-6,
+        `grows to ${expectedFloor}mm when maxContactDiameterMm=0.45mm allows it (${synced.trunks['t-room'].contactCone!.profile.contactDiameterMm})`);
+    assert.equal(synced.trunks['t-room'].contactCone!.profile.maxContactDiameterMm, 0.45);
     assert.ok(Math.abs(synced.trunks['t-tight'].contactCone!.profile.contactDiameterMm - 0.26) < 1e-6,
         `clamps at maxContactDiameterMm=0.26mm (${synced.trunks['t-tight'].contactCone!.profile.contactDiameterMm})`);
     assert.equal(synced.trunks['t-tight'].contactCone!.profile.maxContactDiameterMm, 0.26);
@@ -444,18 +445,19 @@ test('computeForestDiameterProfile and syncContactConeDiameters re-encode settin
     assert.equal(decodedTrunkAfterProfile.shaft.diameterMm, 1.6, 'trunk hex shaft updated after forest resize');
 
     const synced = syncContactConeDiameters(afterProfile);
+    const expectedFloor = 1.6 * TIP_CONTACT_MIN_SHAFT_RATIO;
     const decodedTrunk = decodeSupportSettingsHex(synced.trunks['t1'].settingsCodeHex!, base)!;
     assert.equal(decodedTrunk.shaft.diameterMm, 1.6);
     assert.equal(decodedTrunk.tip.bodyDiameterMm, 1.6);
-    assert.equal(decodedTrunk.tip.contactDiameterMm, 0.32);
+    assert.equal(decodedTrunk.tip.contactDiameterMm, expectedFloor);
 
     const decodedBranch = decodeSupportSettingsHex(synced.branches['b1'].settingsCodeHex!, base)!;
     assert.equal(decodedBranch.shaft.diameterMm, 1.6);
     assert.equal(decodedBranch.tip.bodyDiameterMm, 1.6);
-    assert.equal(decodedBranch.tip.contactDiameterMm, 0.32);
+    assert.equal(decodedBranch.tip.contactDiameterMm, expectedFloor);
 
     const decodedLeaf = decodeSupportSettingsHex(synced.leaves['l1'].settingsCodeHex!, base)!;
     assert.equal(decodedLeaf.tip.bodyDiameterMm, 1.6);
-    assert.equal(decodedLeaf.tip.contactDiameterMm, 0.32);
+    assert.equal(decodedLeaf.tip.contactDiameterMm, expectedFloor);
 });
 

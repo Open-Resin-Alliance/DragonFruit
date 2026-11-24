@@ -524,17 +524,15 @@ test('near-plate flat overhangs (e.g. 32mm mini feet) get perimeter and infill b
     assert.ok(narrowCandidates.some((c) => c.id.startsWith('grid-')), 'narrow near-plate foot emits infill');
     assert.ok(narrowCandidates.some((c) => c.id.startsWith('fill-')), 'narrow near-plate foot emits perimeter');
 
-    // Smaller-model foot (1.2×1.2 mm) near the plate also receives both infill and perimeter.
+    // Tiny sub-2mm near-plate patches (1.2×1.2 mm) stay off the density grid so
+    // closely packed bottom-layer tips do not bloom/fuse under UV bleed.
     const smallFoot: DetectedIsland = {
         ...rectRegion('foot-small-plate', -0.6, 0.6, -0.6, 0.6, 1.44, 1.0),
         perimeterLoops: [[[-0.6, -0.6, 1.0], [0.6, -0.6, 1.0], [0.6, 0.6, 1.0], [-0.6, 0.6, 1.0]]],
         steepFlat: false,
         interior: false,
     };
-    assert.equal(shouldUseDensityGrid(smallFoot, settings), true);
-    const smallCandidates = generateGridCandidates([smallFoot], settings);
-    assert.ok(smallCandidates.some((c) => c.id.startsWith('grid-')), 'small near-plate foot emits infill');
-    assert.ok(smallCandidates.some((c) => c.id.startsWith('fill-')), 'small near-plate foot emits perimeter');
+    assert.equal(shouldUseDensityGrid(smallFoot, settings), false, 'sub-2mm near-plate patch stays on discrete 1-2 point path');
 });
 
 test('lifted modelMinZ preserves base-overhang density window and deduplicateCandidates keeps sloped grid points', () => {

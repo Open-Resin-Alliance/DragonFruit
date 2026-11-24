@@ -524,7 +524,7 @@ export function shouldUseDensityGrid(
         && (island.contact.z - modelMinZ) <= baseWindowMm
         && ((island.maxZ ?? island.contact.z) - modelMinZ) <= baseWindowMm * 1.5
         && voxels !== undefined && voxels.count > 1
-        && ((island.areaMm2 ?? 0) >= 0.8 || major >= 0.8)) {
+        && ((island.areaMm2 ?? 0) >= 2.0 || major >= 2.0)) {
         return true;
     }
     // Longer than the two-point band: a thin rib (a plank's underside) needs
@@ -744,7 +744,7 @@ export function generateGridCandidates(
             && (island.contact.z - resolvedMinZ) <= resolvedWindowMm
             && ((island.maxZ ?? island.contact.z) - resolvedMinZ) <= resolvedWindowMm * 1.5;
         if (nearPlateFlat) {
-            spacing = Math.max(0.85, Math.min(spacing * 0.75, 1.15));
+            spacing = Math.max(1.35, Math.min(spacing * 0.8, 1.75));
         }
 
         const voxels = island.contactVoxels;
@@ -869,7 +869,7 @@ export function generateGridCandidates(
             }
         }
 
-        const ringFloor = nearPlateFlat ? 0.75 : PERIMETER_SPACING_FLOOR_MM;
+        const ringFloor = nearPlateFlat ? 1.2 : PERIMETER_SPACING_FLOOR_MM;
         const ringSpacing = Math.max(ringFloor, spacing * PERIMETER_RING_FACTOR) * stride;
         const anchorBackoffSq = Math.max(settings.tipInfluenceRadiusMm, 0.6 * ringSpacing) ** 2;
         const isNearPinnedAnchor = (x: number, y: number, z: number): boolean => {
@@ -890,7 +890,7 @@ export function generateGridCandidates(
         // A footprint thinner than one lattice cell gets no infill: the rows
         // would land a fraction of a millimeter apart, doubling the density on
         // a rib the ring already carries end to end.
-        if (!isSliver && (nearPlateFlat || Math.min(width, height) >= spacing)) {
+        if (!isSliver && Math.min(width, height) >= spacing) {
             for (let i = 0; i <= nx; i += stride) {
                 for (let j = 0; j <= ny; j += stride) {
                     const x = minX + inset + i * spacingX;

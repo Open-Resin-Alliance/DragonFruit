@@ -22,9 +22,9 @@ import { GRIDLESS_MERGE_RADIUS_MM } from './constants';
 // light end is untouched.
 //
 // Tip contact: band × underside angle (flat ceilings get the full contact,
-// steeper slopes less), floored at 20% of the shaft so a thick shaft keeps a
-// proportional tip. Roots ride with the shaft; tip length and penetration are
-// the band, flat.
+// steeper slopes less), floored at 25% of the shaft so a thick shaft keeps a
+// proportional tip and never forms a brittle stress-concentrated needle. Roots
+// ride with the shaft; tip length and penetration are the band, flat.
 //
 // The forest resize pass (post-placement, before commit) thickens trunks
 // that actually carry branches — a trunk with four branches gets thicker, a
@@ -185,7 +185,7 @@ export const HEIGHT_REFERENCE_MM = 20;
 export const HEIGHT_EXPONENT = 0.35;
 
 /** Contact tip never narrower than this fraction of the shaft it sits on. */
-export const TIP_CONTACT_MIN_SHAFT_RATIO = 0.2;
+export const TIP_CONTACT_MIN_SHAFT_RATIO = 0.25;
 
 // The three caps are no longer constants: they are the `autoSupport`
 // `modelSizeFactorCap` / `modelLoadFactorCap` / `heightFactorCap` settings, so a
@@ -387,10 +387,16 @@ export function sizeParameters(
     // Underside normal z = cos(angle from straight-down). Flat ceilings
     // (|nz| ≈ 1) peel hardest → full band contact; steep slopes are closer
     // to self-supporting → smaller contact. Bounded to [0.6, 1.0]× band.
+    // Primary initiation and anchoring contacts (minima, stabilization, near-base
+    // soles) keep full band contact so peel fracture never shears a lone start point.
     const nz = Math.abs(candidate.tipNormal?.z ?? -1);
-    const angleFactor = clamp(0.6 + 0.4 * nz, 0.6, 1.0);
+    const keepFullTipContact =
+        candidate.source === 'minima'
+        || candidate.source === 'stabilization'
+        || candidate.nearBase === true;
+    const angleFactor = keepFullTipContact ? 1.0 : clamp(0.6 + 0.4 * nz, 0.6, 1.0);
     // Per-point override (small-island shrunk tip) bypasses the band and
-    // its 20%-of-shaft floor — explicit means explicit.
+    // its 25%-of-shaft floor — explicit means explicit.
     const tipContactDiameterMm = round(
         Math.max(
             MIN_CONTACT_TIP_DIAMETER_MM,

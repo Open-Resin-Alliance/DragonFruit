@@ -580,8 +580,12 @@ export function generateRequiredKickstands(
                         }
                     }
 
-                    // Tier 3: Continuous radial fallback when all grid slots in [kMin, kMax] are occupied or obstructed
-                    if (!selectedBuild) {
+                    // Tier 3: Continuous radial fallback only when this trunk/group
+                    // started with zero trunk-to-trunk bracing axes and all grid slots
+                    // in [kMin, kMax] are occupied or obstructed — prevents squeezing
+                    // off-grid kickstands into an already-partially-braced grid slab
+                    // while still giving isolated tall trunks full 2-axis stability.
+                    if (!selectedBuild && decisionAxes.length === 0) {
                         const radialStart = MIN_ROOT_PROXIMITY_CLEARANCE_MM + 0.25;
                         const radialStep = 1.0;
                         const angleCandidates = [
