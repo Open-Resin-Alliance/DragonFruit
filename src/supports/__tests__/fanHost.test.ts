@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { pickFanHost, leafPathCrossesSupports, collectFanShaftPoints, fanLeafToHost, findMergeHost, buildConsolidationBranch, type FanShaftPoint } from '../autoSupport/autoPlace';
+import { pickFanHost, leafPathCrossesSupports, branchPathCrossesSupports, collectFanShaftPoints, fanLeafToHost, findMergeHost, buildConsolidationBranch, type FanShaftPoint } from '../autoSupport/autoPlace';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import type { SupportState } from '../types';
@@ -445,4 +445,140 @@ test('a cavity rescue links a low host that the normal span cap refuses', () => 
         assert.ok(rescued.angleDeg < 10, `the link is near-vertical (${rescued.angleDeg.toFixed(1)}deg)`);
         assert.ok(rescued.distMm > 25, `it reaches the low sample (${rescued.distMm.toFixed(1)}mm)`);
     }
+});
+
+test('leafPathCrossesSupports catches branches, leaves, braces, and bottom risers, while skipping own children', () => {
+    // 1. Hosted branch on another trunk.
+    const withBranch = trunkWithShaft('host', 0, 0, 0, 20);
+    withBranch.knots['k-other'] = { id: 'k-other', parentShaftId: 'seg-other', pos: { x: 2, y: -3, z: 12 }, diameter: 1 } as never;
+    withBranch.branches['b-other'] = {
+        id: 'b-other',
+        modelId: 'm',
+        parentKnotId: 'k-other',
+        segments: [{
+            id: 'bseg-other',
+            diameter: 0.9,
+            bottomJoint: { id: 'bj0', pos: { x: 2, y: -3, z: 12 }, diameter: 0.9 },
+            topJoint: { id: 'bj1', pos: { x: 2, y: 3, z: 14 }, diameter: 0.9 },
+        }],
+    } as never;
+    assert.equal(
+        leafPathCrossesSupports({ x: 0, y: 0, z: 13 }, { x: 5, y: 0, z: 13 }, 0.4, withBranch, 'host'),
+        true,
+        'detects crossing a hosted branch on another trunk',
+    );
+
+    // 2. Hosted leaf on another trunk.
+    const withLeaf = trunkWithShaft('host', 0, 0, 0, 20);
+    withLeaf.knots['k-leaf'] = { id: 'k-leaf', parentShaftId: 'seg-other', pos: { x: 2, y: -2, z: 12 }, diameter: 1 } as never;
+    withLeaf.leaves['l-other'] = {
+        id: 'l-other',
+        modelId: 'm',
+        parentKnotId: 'k-leaf',
+        contactCone: {
+            id: 'c-other',
+            pos: { x: 2, y: 2, z: 14 },
+            normal: { x: 0, y: 0, z: -1 },
+            profile: { type: 'disk', contactDiameterMm: 0.3, bodyDiameterMm: 0.9, lengthMm: 2, penetrationMm: 0 },
+        },
+    } as never;
+    assert.equal(
+        leafPathCrossesSupports({ x: 0, y: 0, z: 13 }, { x: 5, y: 0, z: 13 }, 0.4, withLeaf, 'host'),
+        true,
+        'detects crossing a hosted leaf on another trunk',
+    );
+
+    // 3. Inter-support X-brace between two knots.
+    const withBrace = trunkWithShaft('host', 0, 0, 0, 20);
+    withBrace.knots['kb1'] = { id: 'kb1', parentShaftId: 'seg-a', pos: { x: 2, y: -3, z: 13 }, diameter: 1 } as never;
+    withBrace.knots['kb2'] = { id: 'kb2', parentShaftId: 'seg-b', pos: { x: 2, y: 3, z: 13 }, diameter: 1 } as never;
+    withBrace.braces['br-1'] = {
+        id: 'br-1',
+        modelId: 'm',
+        startKnotId: 'kb1',
+        endKnotId: 'kb2',
+        profile: { diameter: 0.9 },
+    } as never;
+    assert.equal(
+        leafPathCrossesSupports({ x: 0, y: 0, z: 13 }, { x: 5, y: 0, z: 13 }, 0.4, withBrace, 'host'),
+        true,
+        'detects crossing a brace',
+    );
+
+    // 4. Bottom trunk riser segment with no bottomJoint (resolved via rootId / hostSegmentSpan).
+    const withRiser = trunkWithShaft('host', 0, 0, 0, 20);
+    withRiser.roots['r-riser'] = { id: 'r-riser', modelId: 'm', transform: { pos: { x: 2, y: 0, z: 0 } }, diameter: 2.5 } as never;
+    withRiser.trunks['riser'] = {
+        id: 'riser',
+        modelId: 'm',
+        rootId: 'r-riser',
+        segments: [{
+            id: 'seg-riser',
+            diameter: 1.0,
+            topJoint: { id: 'rt', pos: { x: 2, y: 0, z: 15 }, diameter: 1.0 },
+        }],
+    } as never;
+    assert.equal(
+        leafPathCrossesSupports({ x: 0, y: 0, z: 6 }, { x: 5, y: 0, z: 8 }, 0.4, withRiser, 'host'),
+        true,
+        'detects crossing a bottom riser segment that omits bottomJoint',
+    );
+
+    // 5. Parent branch ignores its own hosted child leaf when excludeMemberId matches the branch.
+    const ownChild = trunkWithShaft('host', 0, 0, 0, 20);
+    ownChild.knots['k-b1'] = { id: 'k-b1', parentShaftId: 'seg-host', pos: { x: 0, y: 0, z: 12 }, diameter: 1.1 } as never;
+    ownChild.branches['b1'] = {
+        id: 'b1',
+        modelId: 'm',
+        parentKnotId: 'k-b1',
+        segments: [{
+            id: 'bseg-1',
+            diameter: 0.9,
+            topJoint: { id: 'bj-top', pos: { x: 3, y: 0, z: 18 }, diameter: 0.9 },
+        }],
+    } as never;
+    ownChild.knots['k-child'] = { id: 'k-child', parentShaftId: 'bseg-1', pos: { x: 2, y: 0, z: 16 }, diameter: 1.0 } as never;
+    ownChild.leaves['l-child'] = {
+        id: 'l-child',
+        modelId: 'm',
+        parentKnotId: 'k-child',
+        contactCone: {
+            id: 'c-child',
+            pos: { x: 3.5, y: 1.5, z: 19 },
+            normal: { x: 0, y: 0, z: -1 },
+            profile: { type: 'disk', contactDiameterMm: 0.3, bodyDiameterMm: 0.8, lengthMm: 2, penetrationMm: 0 },
+        },
+    } as never;
+    assert.equal(
+        leafPathCrossesSupports({ x: 0, y: 0, z: 12 }, { x: 3, y: 0, z: 18 }, 0.45, ownChild, 'host', undefined, 'b1'),
+        false,
+        'parent branch does not self-collide with a leaf hosted on its own segment',
+    );
+});
+
+test('branchPathCrossesSupports checks pre-commit seg[0] without bottomJoint when parentKnotPos is provided', () => {
+    const draft = trunkWithShaft('host', 0, 0, 0, 20);
+    draft.trunks['other'] = trunkWithShaft('other', 2.5, 0, 0, 20).trunks['other'];
+
+    const preCommitBranch = {
+        id: 'b-pre',
+        parentKnotId: 'k-uncommitted',
+        segments: [{
+            id: 'bseg-pre',
+            diameter: 0.9,
+            topJoint: { id: 'tj-pre', pos: { x: 5, y: 0, z: 16 }, diameter: 0.9 },
+        }],
+        contactCone: {
+            id: 'c-pre',
+            pos: { x: 5, y: 0, z: 18 },
+            normal: { x: 0, y: 0, z: -1 },
+            profile: { type: 'disk' as const, contactDiameterMm: 0.3, bodyDiameterMm: 0.9, lengthMm: 2, penetrationMm: 0 },
+        },
+    };
+
+    assert.equal(
+        branchPathCrossesSupports(preCommitBranch as never, draft, 'host', undefined, undefined, { x: 0, y: 0, z: 12 }),
+        true,
+        'catches pre-commit seg[0] crossing another trunk when parentKnotPos is supplied',
+    );
 });

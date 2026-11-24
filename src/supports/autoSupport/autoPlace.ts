@@ -89,12 +89,19 @@ import {
     type TreeSynthesisGridConfig,
 } from './treeSynthesis';
 import {
+    extractRepresentativeLayers,
     optimizeContactsByTraction,
     type RepresentativeLayerProfile,
     type TractionOptimizationStats,
 } from './tractionOptimization';
-import { buildSupportGraph, solveSupportFrameStress } from './supportGraphStress';
+import {
+    buildSupportGraph,
+    reinforceOverloadedFrameMembers,
+    solveSupportFrameStress,
+} from './supportGraphStress';
 import { buildCavityBridge } from '../SupportTypes/Trunk/useTrunkPlacement';
+import { geometryCentroidMm } from '@/features/printing/modelResinVolume';
+import { evaluateToppleRisk, toppleRiskNeedsCoverage, type ToppleRiskReport } from './toppleRisk';
 import { createCavityTester } from '../interiorSupportGeometry';
 import { closestSurfaceNormal } from './closestSurfaceNormal';
 import { computeForestDiameterProfile, memberDiameterOf } from '../SupportTypes/Trunk/TrunkReplacement/maxConnectedDiameter';
@@ -127,6 +134,15 @@ import {
 } from './constants';
 
 const LOG_PREFIX = '[AutoSupport]';
+
+/** Thicken→re-solve rounds after bracing. Three is enough to absorb the
+ *  neighbour coupling (one shaft crossing its limit when the next thickens);
+ *  more would churn on members that are at the clearance cap. */
+const MAX_STRESS_REINFORCE_PASSES = 3;
+/** Most trunk-build failures retried as wide fans after gap-fill. The retry is
+ *  a rescue, not a second placement pass; a run with dozens of blocked pillars
+ *  should not spend its budget here. */
+const MAX_TRUNK_ERROR_RETRIES = 48;
 
 /**
  * The steepest angle from vertical an auto member or chunk link may lean —
@@ -950,7 +966,7 @@ export function buildConsolidationBranch(args: {
         );
         if (!built) return null;
         if (branchDepartureShaftExceedsStability(built.branch, parentKnot.pos, Math.min(50, memberMaxAngleFromVerticalDeg(gridEnabled)), bandShaftDiaMm)) return null;
-        if (leafPathCrossesSupports(parentKnot.pos, built.branch.contactCone?.pos ?? tip, 0.25, pruned, best.hostId, excludeHostIds)) return null;
+        if (branchPathCrossesSupports(built.branch, pruned, best.hostId, excludeHostIds, undefined, parentKnot.pos)) return null;
 
         if (cappedTip !== undefined && built.branch.contactCone) {
             built.branch.contactCone = applyExplicitTipCapToCone(built.branch.contactCone, cappedTip);
@@ -1946,6 +1962,49 @@ function segmentDistanceSq(
  * the link is built, so it has to be ignored here or every link would cross
  * the pillar it is converting.
  */
+/**
+ * Fast AABB + segment distance test against an obstacle segment `(start, end)`.
+ */
+function pathIntersectsSegment(
+    pMinX: number,
+    pMinY: number,
+    pMinZ: number,
+    pMaxX: number,
+    pMaxY: number,
+    pMaxZ: number,
+    pStart: { x: number; y: number; z: number },
+    pEnd: { x: number; y: number; z: number },
+    pathRadiusMm: number,
+    segStart: { x: number; y: number; z: number },
+    segEnd: { x: number; y: number; z: number },
+    segRadiusMm: number,
+): boolean {
+    const clearance = pathRadiusMm + segRadiusMm;
+    const sMinX = Math.min(segStart.x, segEnd.x);
+    const sMaxX = Math.max(segStart.x, segEnd.x);
+    if (pMaxX + clearance < sMinX || pMinX - clearance > sMaxX) return false;
+    const sMinY = Math.min(segStart.y, segEnd.y);
+    const sMaxY = Math.max(segStart.y, segEnd.y);
+    if (pMaxY + clearance < sMinY || pMinY - clearance > sMaxY) return false;
+    const sMinZ = Math.min(segStart.z, segEnd.z);
+    const sMaxZ = Math.max(segStart.z, segEnd.z);
+    if (pMaxZ + clearance < sMinZ || pMinZ - clearance > sMaxZ) return false;
+    return segmentDistanceSq(pStart, pEnd, segStart, segEnd) < clearance * clearance;
+}
+
+/**
+ * True when a segment (`knotPos → tipPos`) passes within `leafRadiusMm + segRadiusMm`
+ * of any OTHER support member across the forest:
+ * - all host shafts (`trunks` / `GRID_HOST_TYPES`, resolving bottom root spans via `hostSegmentSpan`),
+ * - all `branches` (actual segments),
+ * - all `leaves` (knot → cone body),
+ * - all `braces` (knot → knot),
+ * trimming the root `<= 0.6 mm` launch zone on same-host sibling branches/leaves so
+ * non-overlapping members fanning off one trunk never false-trigger at the host surface.
+ *
+ * `excludedHostIds` ignores hosts about to be replaced (chunk consolidation / trunk merge).
+ * `excludeMemberId` ignores the entity currently being re-validated or re-hosted.
+ */
 export function leafPathCrossesSupports(
     knotPos: { x: number; y: number; z: number },
     tipPos: { x: number; y: number; z: number },
@@ -1953,27 +2012,229 @@ export function leafPathCrossesSupports(
     draft: SupportState,
     hostId: string | null,
     excludedHostIds?: ReadonlySet<string>,
+    excludeMemberId?: string,
 ): boolean {
-    // Walks the host collections directly: a consolidation attempt runs this
-    // once per candidate host (hundreds of times), and `collectHostEntities`
-    // allocated a ref object per host on every call.
-    for (const descriptor of GRID_HOST_TYPES) {
-        const collection = draft[descriptor.location.key] as unknown as
-            Record<string, { segments: { bottomJoint?: { pos?: { x: number; y: number; z: number } }; topJoint?: { pos?: { x: number; y: number; z: number } }; diameter?: number }[] }> | undefined;
-        if (!collection) continue;
-        for (const candidateId in collection) {
-            if (candidateId === hostId) continue;
-            if (excludedHostIds?.has(candidateId)) continue;
-            for (const seg of collection[candidateId].segments ?? []) {
-                const start = seg.bottomJoint?.pos;
-                const end = seg.topJoint?.pos;
-                if (!start || !end) continue;
-                const shaftRadius = (seg.diameter ?? 1.0) / 2;
-                const clearance = leafRadiusMm + shaftRadius;
-                if (segmentDistanceSq(knotPos, tipPos, start, end) < clearance * clearance) return true;
+    const pMinX = Math.min(knotPos.x, tipPos.x);
+    const pMaxX = Math.max(knotPos.x, tipPos.x);
+    const pMinY = Math.min(knotPos.y, tipPos.y);
+    const pMaxY = Math.max(knotPos.y, tipPos.y);
+    const pMinZ = Math.min(knotPos.z, tipPos.z);
+    const pMaxZ = Math.max(knotPos.z, tipPos.z);
+
+    // Trimmed ray beyond the host knot junction for checking siblings anchored on the same host.
+    const dx = tipPos.x - knotPos.x;
+    const dy = tipPos.y - knotPos.y;
+    const dz = tipPos.z - knotPos.z;
+    const spanLen = Math.hypot(dx, dy, dz);
+    const trimFrac = spanLen > 0.5 ? Math.min(0.45, 1.5 / spanLen) : 0;
+    const trimmedStart = trimFrac > 0
+        ? { x: knotPos.x + dx * trimFrac, y: knotPos.y + dy * trimFrac, z: knotPos.z + dz * trimFrac }
+        : knotPos;
+    const tMinX = Math.min(trimmedStart.x, tipPos.x);
+    const tMaxX = Math.max(trimmedStart.x, tipPos.x);
+    const tMinY = Math.min(trimmedStart.y, tipPos.y);
+    const tMaxY = Math.max(trimmedStart.y, tipPos.y);
+    const tMinZ = Math.min(trimmedStart.z, tipPos.z);
+    const tMaxZ = Math.max(trimmedStart.z, tipPos.z);
+
+    const sameHostSegmentIds = new Set<string>();
+    if (hostId) {
+        sameHostSegmentIds.add(hostId);
+        const hostTrunk = draft.trunks?.[hostId];
+        if (hostTrunk) {
+            for (const s of hostTrunk.segments ?? []) sameHostSegmentIds.add(s.id);
+        } else {
+            const hostBranch = draft.branches?.[hostId];
+            if (hostBranch) {
+                for (const s of hostBranch.segments ?? []) sameHostSegmentIds.add(s.id);
             }
         }
     }
+
+    const excludeOwnSegmentIds = new Set<string>();
+    if (excludeMemberId) {
+        excludeOwnSegmentIds.add(excludeMemberId);
+        const exBranch = draft.branches?.[excludeMemberId];
+        if (exBranch) {
+            for (const s of exBranch.segments ?? []) excludeOwnSegmentIds.add(s.id);
+        } else {
+            const exTrunk = draft.trunks?.[excludeMemberId];
+            if (exTrunk) {
+                for (const s of exTrunk.segments ?? []) excludeOwnSegmentIds.add(s.id);
+            }
+        }
+    }
+
+    const trimSameHostStart = (
+        start: { x: number; y: number; z: number },
+        end: { x: number; y: number; z: number },
+    ) => {
+        const sx = end.x - start.x;
+        const sy = end.y - start.y;
+        const sz = end.z - start.z;
+        const len = Math.hypot(sx, sy, sz);
+        const frac = len > 0.5 ? Math.min(0.45, 1.5 / len) : 0;
+        return frac > 0
+            ? { x: start.x + sx * frac, y: start.y + sy * frac, z: start.z + sz * frac }
+            : start;
+    };
+
+    // 1. Plate-rooted and grid host trunks (via hostSegmentSpan so root-to-first-joint risers are covered).
+    for (const descriptor of GRID_HOST_TYPES) {
+        const collection = draft[descriptor.location.key] as unknown as
+            Record<string, { rootId?: string; parentKnotId?: string; segments: Segment[]; contactCone?: { pos: { x: number; y: number; z: number } } }> | undefined;
+        if (!collection) continue;
+        for (const candidateId in collection) {
+            if (candidateId === hostId || candidateId === excludeMemberId) continue;
+            if (excludedHostIds?.has(candidateId)) continue;
+            const entity = collection[candidateId];
+            for (const seg of entity.segments ?? []) {
+                const span = hostSegmentSpan(draft, entity, seg);
+                if (!span) continue;
+                const shaftRadius = (seg.diameter ?? 1.0) * 0.5;
+                if (pathIntersectsSegment(
+                    pMinX, pMinY, pMinZ, pMaxX, pMaxY, pMaxZ,
+                    knotPos, tipPos, leafRadiusMm,
+                    span.start, span.end, shaftRadius,
+                )) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    const knots = draft.knots ?? {};
+
+    // 2. Hosted multi-segment branches.
+    const branches = draft.branches;
+    if (branches) {
+        for (const branchId in branches) {
+            if (branchId === hostId || branchId === excludeMemberId) continue;
+            if (excludedHostIds?.has(branchId)) continue;
+            const branch = branches[branchId];
+            if (!branch) continue;
+            const parentShaftId = branch.parentKnotId ? knots[branch.parentKnotId]?.parentShaftId : undefined;
+            if (parentShaftId && (excludedHostIds?.has(parentShaftId) || excludeOwnSegmentIds.has(parentShaftId))) continue;
+            const sameHost = Boolean(parentShaftId && sameHostSegmentIds.has(parentShaftId));
+            const rStart = sameHost ? trimmedStart : knotPos;
+            const rMinX = sameHost ? tMinX : pMinX;
+            const rMaxX = sameHost ? tMaxX : pMaxX;
+            const rMinY = sameHost ? tMinY : pMinY;
+            const rMaxY = sameHost ? tMaxY : pMaxY;
+            const rMinZ = sameHost ? tMinZ : pMinZ;
+            const rMaxZ = sameHost ? tMaxZ : pMaxZ;
+
+            const segs = branch.segments ?? [];
+            for (let segIdx = 0; segIdx < segs.length; segIdx++) {
+                const seg = segs[segIdx];
+                const span = hostSegmentSpan(draft, branch, seg);
+                if (!span) continue;
+                const segStart = sameHost && segIdx === 0 ? trimSameHostStart(span.start, span.end) : span.start;
+                const pathR = sameHost ? Math.min(leafRadiusMm, 0.18) : leafRadiusMm;
+                const segRadius = sameHost ? 0.18 : (seg.diameter ?? 0.9) * 0.5;
+                if (pathIntersectsSegment(
+                    rMinX, rMinY, rMinZ, rMaxX, rMaxY, rMaxZ,
+                    rStart, tipPos, pathR,
+                    segStart, span.end, segRadius,
+                )) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // 3. Hosted tapered leaves.
+    const leaves = draft.leaves;
+    if (leaves) {
+        for (const leafId in leaves) {
+            if (leafId === excludeMemberId) continue;
+            const leaf = leaves[leafId];
+            const tip = leaf?.contactCone?.pos;
+            const parentKnot = leaf?.parentKnotId ? knots[leaf.parentKnotId] : undefined;
+            if (!tip || !parentKnot) continue;
+            if (excludedHostIds?.has(parentKnot.parentShaftId) || excludeOwnSegmentIds.has(parentKnot.parentShaftId)) continue;
+            const sameHost = sameHostSegmentIds.has(parentKnot.parentShaftId);
+            const rStart = sameHost ? trimmedStart : knotPos;
+            const rMinX = sameHost ? tMinX : pMinX;
+            const rMaxX = sameHost ? tMaxX : pMaxX;
+            const rMinY = sameHost ? tMinY : pMinY;
+            const rMaxY = sameHost ? tMaxY : pMaxY;
+            const rMinZ = sameHost ? tMinZ : pMinZ;
+            const rMaxZ = sameHost ? tMaxZ : pMaxZ;
+            const sibStart = sameHost ? trimSameHostStart(parentKnot.pos, tip) : parentKnot.pos;
+            const pathR = sameHost ? Math.min(leafRadiusMm, 0.18) : leafRadiusMm;
+            const effRadius = sameHost ? 0.18 : Math.max(0.18, (leaf.contactCone.profile?.bodyDiameterMm ?? 0.8) * 0.25);
+            if (pathIntersectsSegment(
+                rMinX, rMinY, rMinZ, rMaxX, rMaxY, rMaxZ,
+                rStart, tipPos, pathR,
+                sibStart, tip, effRadius,
+            )) {
+                return true;
+            }
+        }
+    }
+
+    // 4. Inter-support X-braces / ties.
+    const braces = draft.braces;
+    if (braces) {
+        for (const braceId in braces) {
+            const brace = braces[braceId];
+            if (!brace || brace.id === excludeMemberId) continue;
+            const a = knots[brace.startKnotId]?.pos;
+            const b = knots[brace.endKnotId]?.pos;
+            if (!a || !b) continue;
+            const braceRadius = (brace.profile?.diameter ?? 0.9) * 0.5;
+            if (pathIntersectsSegment(
+                pMinX, pMinY, pMinZ, pMaxX, pMaxY, pMaxZ,
+                knotPos, tipPos, leafRadiusMm,
+                a, b, braceRadius,
+            )) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Multi-segment crossing check for a hosted Branch (every shaft segment plus
+ * final contact cone chord) against all other supports in the draft.
+ */
+export function branchPathCrossesSupports(
+    branch: { id?: string; parentKnotId?: string; segments: Segment[]; contactCone?: { pos: { x: number; y: number; z: number }; profile?: { bodyDiameterMm?: number } } },
+    draft: SupportState,
+    hostId: string | null,
+    excludedHostIds?: ReadonlySet<string>,
+    excludeMemberId?: string,
+    parentKnotPos?: { x: number; y: number; z: number },
+): boolean {
+    const memberExclude = excludeMemberId ?? branch.id;
+    let lastEnd: { x: number; y: number; z: number } | undefined =
+        parentKnotPos ?? (branch.parentKnotId ? draft.knots?.[branch.parentKnotId]?.pos : undefined);
+    let lastRadius = 0.25;
+
+    for (const seg of branch.segments ?? []) {
+        const span = hostSegmentSpan(draft, branch, seg);
+        const segStart = span?.start ?? seg.bottomJoint?.pos ?? lastEnd;
+        const segEnd = span?.end ?? seg.topJoint?.pos ?? branch.contactCone?.pos;
+        if (!segStart || !segEnd) continue;
+        const segRadius = Math.max(0.2, (seg.diameter ?? 0.9) * 0.5);
+        if (leafPathCrossesSupports(segStart, segEnd, segRadius, draft, hostId, excludedHostIds, memberExclude)) {
+            return true;
+        }
+        lastEnd = segEnd;
+        lastRadius = segRadius;
+    }
+
+    const tipPos = branch.contactCone?.pos;
+    if (tipPos && lastEnd && Math.hypot(tipPos.x - lastEnd.x, tipPos.y - lastEnd.y, tipPos.z - lastEnd.z) > 1e-3) {
+        const coneRadius = Math.max(0.18, (branch.contactCone?.profile?.bodyDiameterMm ?? lastRadius * 2) * 0.25);
+        if (leafPathCrossesSupports(lastEnd, tipPos, coneRadius, draft, hostId, excludedHostIds, memberExclude)) {
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -2399,6 +2660,54 @@ function memberKnotId(member: ShaftHostedMemberEntity, knotField: string): strin
     return typeof value === 'string' ? value : undefined;
 }
 
+const HOST_SHAFT_CLEARANCE_MARGIN_MM = 0.15;
+const HOST_TIP_PULLBACK_MM = 0.35;
+
+/**
+ * True when any shaft segment of a host support pierces the model mesh within
+ * `radius + HOST_SHAFT_CLEARANCE_MARGIN_MM`. Checks each segment's actual
+ * `bottomJoint -> topJoint` endpoints without pulling routed intermediate knees
+ * sideways toward `contactCone.pos`.
+ */
+function isHostShaftBlocked(
+    entity: {
+        segments: ReadonlyArray<{
+            diameter?: number;
+            bottomJoint?: { pos: Vec3 } | null;
+            topJoint?: { pos: Vec3 } | null;
+        }>;
+        contactCone?: { pos: Vec3 };
+    },
+    mesh: THREE.Mesh,
+): boolean {
+    const tip = entity.contactCone?.pos;
+    for (const seg of entity.segments) {
+        const start = seg.bottomJoint?.pos;
+        const end = seg.topJoint?.pos;
+        if (!start || !end) continue;
+        let checkEnd = end;
+        if (tip && Math.hypot(end.x - tip.x, end.y - tip.y, end.z - tip.z) < HOST_TIP_PULLBACK_MM) {
+            const dx = start.x - end.x;
+            const dy = start.y - end.y;
+            const dz = start.z - end.z;
+            const segLen = Math.hypot(dx, dy, dz);
+            if (segLen > 1e-4) {
+                const pull = Math.min(HOST_TIP_PULLBACK_MM, segLen * 0.25) / segLen;
+                checkEnd = {
+                    x: end.x + dx * pull,
+                    y: end.y + dy * pull,
+                    z: end.z + dz * pull,
+                };
+            }
+        }
+        const radius = (seg.diameter ?? 1.0) / 2;
+        if (isShaftBlocked(start, checkEnd, radius + HOST_SHAFT_CLEARANCE_MARGIN_MM, mesh)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Validate hosted members' attachment after forest resize; cull orphans and return them for reporting. */
 export function validateAndCullOrphans(
     draft: SupportState,
@@ -2425,26 +2734,7 @@ export function validateAndCullOrphans(
             if (modelId !== undefined && entity.modelId !== modelId) continue;
             // A host is a vertical pillar — any segment that is blocked (excluding the tip contact itself)
             // is a mis-placed pillar that would print through the model.
-            let blocked = false;
-            for (const seg of entity.segments) {
-                const start = seg.bottomJoint?.pos;
-                const end = seg.topJoint?.pos;
-                if (!start || !end) continue;
-                const radius = (seg.diameter ?? 1.0) / 2;
-                // Offset the check slightly inward from the tip so the contact itself is not counted as blocked
-                const tip = entity.contactCone?.pos ?? end;
-                const checkEnd = {
-                    x: end.x * 0.9 + tip.x * 0.1,
-                    y: end.y * 0.9 + tip.y * 0.1,
-                    z: end.z * 0.9 + tip.z * 0.1,
-                };
-                // Use a slightly larger radius for the check to catch near-misses that render as crash
-                if (isShaftBlocked(start, checkEnd, radius + 0.15, mesh)) {
-                    blocked = true;
-                    break;
-                }
-            }
-            if (blocked) {
+            if (isHostShaftBlocked(entity, mesh)) {
                 const tip = entity.contactCone?.pos;
                 const where = tip ? ` @ (${tip.x.toFixed(1)}, ${tip.y.toFixed(1)}, Z${tip.z.toFixed(1)})` : '';
                 const typeName = getSupportTypeDescriptor(hostTypeId).singular;
@@ -2536,7 +2826,16 @@ export function validateAndCullOrphans(
                     return false;
                 }
             }
-            if (leafPathCrossesSupports(knot.pos, tipPos, 0.25, nextDraft, host.hostId)) {
+            const crosses = getSupportTypeDescriptor(kind).hasSegments
+                ? branchPathCrossesSupports(
+                    member as unknown as { id: string; parentKnotId?: string; segments: Segment[]; contactCone?: { pos: { x: number; y: number; z: number }; profile?: { bodyDiameterMm?: number } } },
+                    nextDraft,
+                    host.hostId,
+                    undefined,
+                    id,
+                )
+                : leafPathCrossesSupports(knot.pos, tipPos, 0.25, nextDraft, host.hostId, undefined, id);
+            if (crosses) {
                 orphans.push({ id, kind, reason: 'cross', hostId: host.hostId, knotId: knot.id, detail: 'leaf/branch crosses another shaft after thickening' });
                 return true;
             }
@@ -2734,6 +3033,8 @@ export function fanLeafToHost(
     excludeHostIds?: ReadonlySet<string>,
     autoSettings?: Partial<AutoSupportSettings>,
     tipDiameterMm?: number,
+    /** Existing hosted member ID to ignore during cross-support collision checks (used during re-hosting). */
+    excludeMemberId?: string,
 ): FanLeafResult {
     // Single pass over the shaft pool: the ELIGIBLE sample (grid hosts accept
     // only up close) that is geometrically VALID (not same-Z, within the max
@@ -2852,16 +3153,68 @@ export function fanLeafToHost(
         };
     }
 
-    // Steepest first (placement fanning) or nearest first (chunk consolidation);
-    // cap rescue fallthrough to the 6 shortest samples when Tier-1 candidates
-    // already existed so dense forests never spend seconds probing deep shafts.
-    candidates.sort((a, b) => (hostOrder === 'nearest'
-        ? a.dist2 - b.dist2 || a.angleDeg - b.angleDeg
-        : a.angleDeg - b.angleDeg || a.dist2 - b.dist2));
+    // Spread crowded fan crowns around each host: penalize candidate spots sitting
+    // close in Z AND aligned in azimuth with an already attached sibling leaf/branch.
+    const crowdPenaltyByIndex = new Float64Array(candidates.length);
+    if (hostOrder === 'steepest' && candidates.length > 1) {
+        const siblingsByHost = new Map<string, Array<{ z: number; ux: number; uy: number }>>();
+        const knots = draft.knots ?? {};
+        const hostBySegmentId = new Map<string, string>();
+        for (const { hostId, entity } of collectHostEntities(draft)) {
+            if (entity.modelId !== modelId) continue;
+            hostBySegmentId.set(hostId, hostId);
+            for (const s of entity.segments ?? []) hostBySegmentId.set(s.id, hostId);
+        }
+        for (const { collectionKey, knotField } of SHAFT_HOSTED_MEMBER_TYPES) {
+            const coll = hostedMemberEntities(draft, collectionKey);
+            for (const [mId, member] of Object.entries(coll)) {
+                if (mId === excludeMemberId || member.modelId !== modelId) continue;
+                const knotId = memberKnotId(member, knotField);
+                const knot = knotId ? knots[knotId] : undefined;
+                const tip = member.contactCone?.pos;
+                if (!knot || !tip) continue;
+                const hId = hostBySegmentId.get(knot.parentShaftId);
+                if (!hId) continue;
+                const ox = tip.x - knot.pos.x;
+                const oy = tip.y - knot.pos.y;
+                const oLen = Math.hypot(ox, oy);
+                if (oLen < 1e-4) continue;
+                const list = siblingsByHost.get(hId);
+                const entry = { z: knot.pos.z, ux: ox / oLen, uy: oy / oLen };
+                if (list) list.push(entry);
+                else siblingsByHost.set(hId, [entry]);
+            }
+        }
+        const cosSector = Math.cos((45 * Math.PI) / 180);
+        for (let i = 0; i < candidates.length; i++) {
+            const c = candidates[i];
+            const sibs = siblingsByHost.get(c.sp.hostId);
+            if (!sibs || sibs.length === 0) continue;
+            const lx = target.x - c.sp.pos.x;
+            const ly = target.y - c.sp.pos.y;
+            const lLen = Math.hypot(lx, ly);
+            if (lLen < 1e-4) continue;
+            const ux = lx / lLen;
+            const uy = ly / lLen;
+            let penalty = 0;
+            for (const sib of sibs) {
+                if (Math.abs(sib.z - c.sp.pos.z) <= 1.2 && (ux * sib.ux + uy * sib.uy) >= cosSector) {
+                    penalty += 3.5;
+                }
+            }
+            crowdPenaltyByIndex[i] = penalty;
+        }
+    }
+
+    const rankedCandidates = hostOrder === 'steepest'
+        ? candidates
+            .map((c, idx) => ({ ...c, scoreAngle: c.angleDeg + crowdPenaltyByIndex[idx] }))
+            .sort((a, b) => a.scoreAngle - b.scoreAngle || a.dist2 - b.dist2)
+        : [...candidates].sort((a, b) => a.dist2 - b.dist2 || a.angleDeg - b.angleDeg);
     rescue.sort((a, b) => a.dist2 - b.dist2 || a.angleDeg - b.angleDeg);
-    const pool = candidates.length > 0 && rescue.length > 0
-        ? [...candidates, ...rescue.slice(0, 6)]
-        : (candidates.length > 0 ? candidates : rescue);
+    const pool = rankedCandidates.length > 0 && rescue.length > 0
+        ? [...rankedCandidates, ...rescue.slice(0, 6)]
+        : (rankedCandidates.length > 0 ? rankedCandidates : rescue);
 
     const tryAttachPool = (leafSpanCeilingMm: number, allowBranch: boolean) => {
         let lastBlockedReason: FanLeafRefusal | null = null;
@@ -2961,13 +3314,13 @@ export function fanLeafToHost(
                         lastBlockedReason = 'angle';
                         continue;
                     }
-                    if (leafPathCrossesSupports(
-                        parentKnot.pos,
-                        built.branch.contactCone?.pos ?? target,
-                        0.25,
+                    if (branchPathCrossesSupports(
+                        built.branch,
                         draft,
                         sp.hostId,
                         excludeHostIds,
+                        excludeMemberId,
+                        parentKnot.pos,
                     )) {
                         lastBlockedReason = 'cross';
                         continue;
@@ -3029,6 +3382,7 @@ export function fanLeafToHost(
                 draft,
                 sp.hostId,
                 excludeHostIds,
+                excludeMemberId,
             )) {
                 lastBlockedReason = 'cross';
                 continue;
@@ -3082,6 +3436,310 @@ export function forestSizingNote(entry: ForestLedgerEntry, actualShaftMm: number
     const sized = entry.bandShaftMm > 0 ? actualShaftMm / entry.bandShaftMm : 1;
     return `area ${areaInput.toFixed(2)}mm² · base Ø${entry.bandShaftMm.toFixed(2)} · sized ×${sized.toFixed(2)}` +
         ` → Ø${actualShaftMm.toFixed(2)}mm`;
+}
+
+/**
+ * Root-merge radius: trunks whose plate roots stand this close are candidates
+ * for sharing one host. Kept tight so this is a de-duplication of columns that
+ * already touch, not a re-layout.
+ */
+export const ROOT_MERGE_RADIUS_MM = 3;
+/** Mid-air shaft clearance threshold (mm) below which two trunks are also merge candidates. */
+export const MID_SHAFT_MERGE_DISTANCE_MM = 1.6;
+
+export interface RootMergeOptions {
+    mesh?: THREE.Mesh;
+    maxRootDistanceMm?: number;
+    maxShaftDistanceMm?: number;
+    /** Angle ceiling for the re-fanned members (same rule as placement). */
+    maxAngleDeg: number;
+    /** Per-host attachment cap (`maxAttachmentsPerTrunk`). */
+    maxAttachments: number;
+    fanRadiusMm: number;
+    gridHostFanRadiusMm: number;
+    /** Trunks placed on the density grid fan only up close. */
+    gridHostIds: ReadonlySet<string>;
+    autoSettings?: Partial<AutoSupportSettings>;
+}
+
+export interface RootMergeResult {
+    draft: SupportState;
+    merged: number;
+    mergedTrunkIds: string[];
+    refusals: Partial<Record<FanLeafRefusal | 'noTips', number>>;
+}
+
+/**
+ * Co-located and mid-shaft crossing trunks share existing hosts.
+ *
+ * The consolidation pass only converts *bare* pillars; two established trunks
+ * that both carry members, or whose routed shafts pass within
+ * `MID_SHAFT_MERGE_DISTANCE_MM` mid-air, stand side by side and read as one
+ * intersecting cluster. For each pair within root or mid-shaft distance, the
+ * shorter trunk is dissolved: every contact it served — its own tip and each
+ * hosted member's tip — is re-fanned onto the taller survivor (or across nearby
+ * clear hosts if the survivor hits capacity/angle gates) using SDF/cone mesh
+ * collision checks instead of raw shaft-to-tip rays.
+ *
+ * Deterministic: pairs sorted by min(rootDist, midShaftDist) then coordinates.
+ */
+export function mergeNearbyTrunkRoots(
+    draftIn: SupportState,
+    modelId: string,
+    options: RootMergeOptions,
+): RootMergeResult {
+    const maxRootDistanceMm = options.maxRootDistanceMm ?? ROOT_MERGE_RADIUS_MM;
+    const maxShaftDistanceMm = options.maxShaftDistanceMm ?? MID_SHAFT_MERGE_DISTANCE_MM;
+    const maxShaftDistSq = maxShaftDistanceMm * maxShaftDistanceMm;
+    const refusals: RootMergeResult['refusals'] = {};
+    const mergedTrunkIds: string[] = [];
+    let draft = draftIn;
+    const consumed = new Set<string>();
+
+    const tipOf = (entity: { contactCone?: { pos: { x: number; y: number; z: number } } }) => entity.contactCone?.pos;
+
+    const trunks = () => Object.values(draft.trunks).filter((trunk) => trunk.modelId === modelId);
+
+    const rootPos = (trunk: { rootId?: string }) => {
+        const root = trunk.rootId ? draft.roots[trunk.rootId] : undefined;
+        return root ? root.transform.pos : null;
+    };
+
+    const trunkSpans = (trunk: { rootId?: string; segments: Segment[]; contactCone?: { pos: { x: number; y: number; z: number } } }) => {
+        const spans: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }> = [];
+        for (const seg of trunk.segments ?? []) {
+            const sp = hostSegmentSpan(draft, trunk, seg);
+            if (sp) spans.push(sp);
+        }
+        return spans;
+    };
+
+    interface Pair {
+        survivorId: string;
+        victimId: string;
+        distanceMm: number;
+        survivorRoot: { x: number; y: number; z: number };
+        victimRoot: { x: number; y: number; z: number };
+        survivorTipZ: number;
+    }
+    const pairs: Pair[] = [];
+    const current = trunks();
+    const spansByTrunkId = new Map<string, Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>>();
+    for (const t of current) spansByTrunkId.set(t.id, trunkSpans(t));
+
+    for (let i = 0; i < current.length; i++) {
+        const a = current[i];
+        const ta = tipOf(a);
+        const spansA = spansByTrunkId.get(a.id) ?? [];
+        for (let j = i + 1; j < current.length; j++) {
+            const b = current[j];
+            const tb = tipOf(b);
+            if (!ta || !tb) continue;
+            const ra = rootPos(a);
+            const rb = rootPos(b);
+            if (!ra || !rb) continue;
+            const rootDist = Math.hypot(ra.x - rb.x, ra.y - rb.y);
+            let minDist = rootDist;
+            if (rootDist > maxRootDistanceMm) {
+                const spansB = spansByTrunkId.get(b.id) ?? [];
+                let bestShaftSq = Infinity;
+                for (const sa of spansA) {
+                    for (const sb of spansB) {
+                        const d2 = segmentDistanceSq(sa.start, sa.end, sb.start, sb.end);
+                        if (d2 < bestShaftSq) bestShaftSq = d2;
+                    }
+                }
+                if (bestShaftSq > maxShaftDistSq) continue;
+                minDist = Math.sqrt(bestShaftSq);
+            }
+            // Taller tip survives; more attachments then root/tip position
+            // break ties, so the choice never depends on generated ids.
+            const aCount = countAttachmentsOnHost('trunk', a.id, draft);
+            const bCount = countAttachmentsOnHost('trunk', b.id, draft);
+            const aWins = ta.z !== tb.z
+                ? ta.z > tb.z
+                : aCount !== bCount
+                    ? aCount > bCount
+                    : ra.x !== rb.x
+                        ? ra.x < rb.x
+                        : ra.y !== rb.y
+                            ? ra.y < rb.y
+                            : ta.x !== tb.x
+                                ? ta.x < tb.x
+                                : ta.y !== tb.y
+                                    ? ta.y < tb.y
+                                    : a.id < b.id;
+            pairs.push(aWins
+                ? { survivorId: a.id, victimId: b.id, distanceMm: minDist, survivorRoot: ra, victimRoot: rb, survivorTipZ: ta.z }
+                : { survivorId: b.id, victimId: a.id, distanceMm: minDist, survivorRoot: rb, victimRoot: ra, survivorTipZ: tb.z });
+        }
+    }
+    pairs.sort((x, y) => x.distanceMm - y.distanceMm
+        || x.survivorRoot.x - y.survivorRoot.x
+        || x.survivorRoot.y - y.survivorRoot.y
+        || x.victimRoot.x - y.victimRoot.x
+        || x.victimRoot.y - y.victimRoot.y
+        || y.survivorTipZ - x.survivorTipZ
+        || x.survivorId.localeCompare(y.survivorId));
+
+    for (const pair of pairs) {
+        if (consumed.has(pair.survivorId) || consumed.has(pair.victimId)) continue;
+        const survivor = draft.trunks[pair.survivorId];
+        const victim = draft.trunks[pair.victimId];
+        if (!survivor || !victim) continue;
+
+        const victimSegmentIds = new Set(victim.segments.map((segment) => segment.id));
+        victimSegmentIds.add(victim.id);
+        const victimKnots = Object.values(draft.knots).filter((knot) => victimSegmentIds.has(knot.parentShaftId));
+        const victimKnotIds = new Set(victimKnots.map((knot) => knot.id));
+
+        type Contact = { tip: { x: number; y: number; z: number }; origin?: SupportOrigin; tipDiameterMm?: number };
+        const contacts: Contact[] = [];
+        const ownedMembers: Array<{ id: string; typeId: SupportTypeId }> = [];
+        for (const memberType of SHAFT_HOSTED_MEMBER_TYPES) {
+            const collection = draft[memberType.collectionKey] as unknown as
+                | Record<string, { id: string; modelId?: string; origin?: SupportOrigin; contactCone?: { pos: { x: number; y: number; z: number }; profile?: { maxContactDiameterMm?: number } } }>
+                | undefined;
+            for (const member of Object.values(collection ?? {})) {
+                if (member.modelId !== modelId) continue;
+                const knotId = (member as unknown as Record<string, string | undefined>)[memberType.knotField];
+                if (!knotId || !victimKnotIds.has(knotId)) continue;
+                const tip = member.contactCone?.pos;
+                if (tip) {
+                    contacts.push({ tip, origin: member.origin, tipDiameterMm: member.contactCone?.profile?.maxContactDiameterMm });
+                }
+                ownedMembers.push({ id: member.id, typeId: memberType.typeId as SupportTypeId });
+            }
+        }
+        const ownTip = tipOf(victim);
+        if (ownTip) {
+            contacts.unshift({
+                tip: ownTip,
+                origin: victim.origin,
+                tipDiameterMm: victim.contactCone?.profile?.maxContactDiameterMm,
+            });
+        }
+        if (contacts.length === 0) {
+            refusals.noTips = (refusals.noTips ?? 0) + 1;
+            continue;
+        }
+        contacts.sort((x, y) => y.tip.z - x.tip.z);
+
+        const allModelTrunkSamples = collectFanShaftPoints(draft).filter(
+            (sample) => sample.hostTypeId === 'trunk' && sample.hostId !== pair.victimId && !consumed.has(sample.hostId),
+        );
+        const survivorPool = allModelTrunkSamples.filter((sample) => sample.hostId === pair.survivorId);
+        const excluded = new Set<string>([pair.victimId, ...victimSegmentIds, ...ownedMembers.map((m) => m.id)]);
+        for (const m of ownedMembers) {
+            if (m.typeId === 'branch') {
+                for (const s of draft.branches?.[m.id]?.segments ?? []) excluded.add(s.id);
+            }
+        }
+        let attempt = draft;
+        let refused: FanLeafRefusal | null = null;
+        const created: Array<{ entityId: string; kind: SupportTypeId }> = [];
+        for (const contact of contacts) {
+            // Try primary survivor first (local deduplication), then allow nearby
+            // clear trunks in the forest to absorb overflow when survivor is full/steep.
+            let result = fanLeafToHost(
+                contact.tip,
+                modelId,
+                survivorPool,
+                options.gridHostIds,
+                'rm',
+                options.fanRadiusMm,
+                options.gridHostFanRadiusMm,
+                options.maxAngleDeg,
+                options.maxAttachments,
+                attempt,
+                options.mesh,
+                contact.origin,
+                'steepest',
+                undefined,
+                excluded,
+                options.autoSettings,
+                contact.tipDiameterMm,
+            );
+            if (!result.ok && allModelTrunkSamples.length > survivorPool.length) {
+                const multiResult = fanLeafToHost(
+                    contact.tip,
+                    modelId,
+                    allModelTrunkSamples,
+                    options.gridHostIds,
+                    'rm',
+                    options.fanRadiusMm,
+                    options.gridHostFanRadiusMm,
+                    options.maxAngleDeg,
+                    options.maxAttachments,
+                    attempt,
+                    options.mesh,
+                    contact.origin,
+                    'steepest',
+                    undefined,
+                    excluded,
+                    options.autoSettings,
+                    contact.tipDiameterMm,
+                );
+                if (multiResult.ok) result = multiResult;
+            }
+            if (!result.ok) {
+                refused = result.reason;
+                break;
+            }
+            created.push({ entityId: result.entityId, kind: result.kind });
+            attempt = result.draft;
+        }
+        if (!refused && options.mesh) {
+            // Validate built members with contactConeCollides / branchCollidesWithSDF
+            // rather than raw isShaftBlocked-to-tip (which falsely flagged the tip surface).
+            for (const member of created) {
+                const branch = attempt.branches?.[member.entityId];
+                if (branch) {
+                    if (branchCollidesWithSDF(branch, options.mesh)) {
+                        refused = 'blocked';
+                        break;
+                    }
+                    continue;
+                }
+                const leaf = attempt.leaves?.[member.entityId];
+                const cone = leaf?.contactCone;
+                const knot = leaf?.parentKnotId ? attempt.knots[leaf.parentKnotId] : undefined;
+                if (!cone?.pos || !knot) continue;
+                if (contactConeCollides(
+                    knot.pos,
+                    { pos: cone.pos, normal: cone.normal ?? { x: 0, y: 0, z: -1 }, surfaceNormal: cone.surfaceNormal },
+                    options.mesh,
+                )) {
+                    refused = 'blocked';
+                    break;
+                }
+            }
+        }
+        if (refused) {
+            refusals[refused] = (refusals[refused] ?? 0) + 1;
+            continue;
+        }
+
+        let next = attempt;
+        for (const member of ownedMembers) {
+            next = draftRemoveEntity(next, member.typeId, member.id);
+        }
+        for (const knot of victimKnots) {
+            next = draftRemovePrimitive(next, 'knots', knot.id);
+        }
+        next = draftRemoveEntity(next, 'trunk', pair.victimId);
+        const rootStillUsed = Object.values(next.trunks).some((trunk) => trunk.rootId === victim.rootId)
+            || Object.values(next.kickstands ?? {}).some((kickstand) => kickstand.rootId === victim.rootId);
+        if (!rootStillUsed && victim.rootId) {
+            next = draftRemovePrimitive(next, 'roots', victim.rootId);
+        }
+
+        draft = next;
+        consumed.add(pair.victimId);
+        mergedTrunkIds.push(pair.victimId);
+    }
+
+    return { draft, merged: mergedTrunkIds.length, mergedTrunkIds, refusals };
 }
 
 export function buildForestReport(draft: SupportState, ledger: ForestLedgerEntry[], modelId?: string): ForestReport {
@@ -3268,6 +3926,15 @@ export function forestReportToText(report: ForestReport, autoSettings?: Partial<
                 lines.push(`  Consolidation refusals: ${conStr} (sameZ=surface too flat for side-leaves — chunking needs ≥0.4 mm neighbour height rise)`);
             }
             lines.push(`  Merge refusals: ${mergeStr} (noHost=no host within 4mm, rejected=host at capacity or collision)`);
+            if (d.trunkErrorRetries) {
+                lines.push(`  Trunk-error retry: ${d.trunkErrorRetries.rescued}/${d.trunkErrorRetries.attempted} rescued as wide fans (pillar occluded, contact kept)`);
+            }
+            if (d.rootMerges) {
+                const rmEntries = Object.entries(d.rootMerges.refusals).filter(([, v]) => v);
+                const rmStr = rmEntries.length > 0 ? rmEntries.map(([k, v]) => `${k}=${v}`).join(', ') : 'none';
+                lines.push(`  Root merges: ${d.rootMerges.merged} co-located trunk(s) dissolved into a shared host` +
+                    (d.rootMerges.merged > 0 || rmEntries.length > 0 ? ` (refusals: ${rmStr})` : ''));
+            }
         } else {
             lines.push(`  Fan/Merge refusals: none (all fanned or standalone)`);
         }
@@ -3316,7 +3983,8 @@ export function forestReportToText(report: ForestReport, autoSettings?: Partial<
             `  Critical layers (${fs.layersEvaluated}): peak ${fs.peakLayerPeelForceN.toFixed(2)}N @ Z=${fs.peakLayerZMm.toFixed(1)}mm · `
             + `tip util max ${fs.maxTipUtilizationPct.toFixed(0)}% (${fs.overloadedTips} overloaded) · `
             + `member util max ${fs.maxMemberUtilizationPct.toFixed(0)}% (${fs.overloadedMembers} overloaded) · `
-            + `max defl ${fs.maxTipDeflectionMm.toFixed(3)}mm`,
+            + `max defl ${fs.maxTipDeflectionMm.toFixed(3)}mm`
+            + ((fs.reinforcedCount ?? 0) > 0 ? ` · reinforced ${fs.reinforcedCount}` : ''),
         );
         const warmSpots = fs.hotspots.filter((h) => h.utilizationPct >= 75);
         for (const h of warmSpots) {
@@ -3398,6 +4066,9 @@ export function computeAutoSupportPlan(
     mesh?: THREE.Mesh,
     onProgress?: AutoPlaceProgressCallback,
     cavityMesh?: THREE.Mesh,
+    /** Print profile layer height for the peel/traction sampling and the stress
+     *  report this run attaches. Omitted → the slicer's default ~1 mm grid. */
+    layerHeightMm?: number,
 ): AutoSupportPlan | null {
     // ------------------------------------------------------------------
     // 0. Settings
@@ -3535,7 +4206,39 @@ export function computeAutoSupportPlan(
               hasRaft,
           )
         : null;
-    const toppleCoverageNeeded = poseStability === null || needsToppleCoverage(poseStability);
+    let toppleProfile: RepresentativeLayerProfile | undefined;
+    let prePlacementTopple: ToppleRiskReport | undefined;
+    if (
+        resolvedMesh
+        && poseStability
+        && poseStability.bearingEdges > 0
+        && poseStability.bearingAreaMm2 > 0
+        && poseStability.dragMomentMm3 > 1e-9
+        && poseStability.worstEdgePoint
+        && poseStability.worstEdgeNormal
+        && Math.hypot(poseStability.worstEdgeNormal.x, poseStability.worstEdgeNormal.y) > 1e-6
+    ) {
+        toppleProfile = extractRepresentativeLayers(resolvedMesh, undefined, { layerHeightMm });
+        const localCentroid = geometryCentroidMm(resolvedMesh.geometry);
+        if (localCentroid) {
+            const worldCentroid = new THREE.Vector3(localCentroid.x, localCentroid.y, localCentroid.z)
+                .applyMatrix4(resolvedMesh.matrixWorld);
+            prePlacementTopple = evaluateToppleRisk({
+                profile: toppleProfile,
+                centroid: { x: worldCentroid.x, y: worldCentroid.y },
+                edge: { point: poseStability.worstEdgePoint, normal: poseStability.worstEdgeNormal },
+                bearingAreaMm2: poseStability.bearingAreaMm2,
+                contactDepthMm: poseStability.contactDepthMm,
+            });
+        }
+    }
+    const toppleCoverageNeeded = (!poseStability || poseStability.bearingEdges === 0 || poseStability.bearingAreaMm2 <= 0)
+        ? true
+        : poseStability.dragMomentMm3 <= 1e-9
+            ? false
+            : prePlacementTopple
+                ? toppleRiskNeedsCoverage(prePlacementTopple)
+                : needsToppleCoverage(poseStability);
     const islandsToCover = islands.filter(
         (i) =>
             !i.steepFlat ||
@@ -3554,9 +4257,12 @@ export function computeAutoSupportPlan(
     const steepFlats = islands.filter((i) => i.steepFlat).length;
     const dropped = steepFlats - islandsToCover.filter((i) => i.steepFlat).length;
     if (dropped > 0) {
+        const liftNote = prePlacementTopple
+            ? `lift ${(prePlacementTopple.requiredAdhesionMpa * 1000).toFixed(1)}kPa, `
+            : `adhesion ${poseStability?.adhesionRatio.toFixed(3)}, `;
         console.log(LOG_PREFIX,
             `Topple coverage not needed — ${dropped} of ${steepFlats} steep flats left uncovered ` +
-            `(adhesion ${poseStability?.adhesionRatio.toFixed(3)}, ` +
+            `(${liftNote}` +
             `centroid depth ${poseStability?.centroidDepthMm.toFixed(2)}mm, ` +
             `bearing ${poseStability?.bearingAreaMm2.toFixed(1)}mm²; ` +
             `any flat at least ${STEEP_FLAT_ANCHOR_MIN_AREA_MM2.toFixed(0)}mm² keeps its anchoring contacts)`);
@@ -3578,7 +4284,7 @@ export function computeAutoSupportPlan(
     // will not (see the placement gate below).
     let stabilizationAnchors = 0;
     if (autoSettings.stabilizationEnabled !== false && resolvedMesh) {
-        const anchors = computeStabilizationAnchors(resolvedMesh, { hasRaft });
+        const anchors = computeStabilizationAnchors(resolvedMesh, { hasRaft, toppleCoverageNeeded });
         if (anchors.length > 0) {
             const stabilizationCandidates: CandidatePoint[] = anchors.map((a, i) => ({
                 id: `stab-${i}`,
@@ -3740,6 +4446,7 @@ export function computeAutoSupportPlan(
             autoSettings,
             resolvedMesh,
             modelId,
+            { layerHeightMm, profile: toppleProfile },
         );
         candidates = tractionResult.candidates;
         tractionStats = tractionResult.stats;
@@ -3866,6 +4573,11 @@ export function computeAutoSupportPlan(
             if (deferTrunkError && result.kind === 'reject' && result.rejectedReason === 'trunk_build_error') {
                 return 'defer_rescue';
             }
+            if (result.kind === 'reject' && result.rejectedReason === 'trunk_build_error'
+                && !trunkErrorBacklogIds.has(candidate.id)) {
+                trunkErrorBacklogIds.add(candidate.id);
+                trunkErrorBacklog.push(candidate);
+            }
             draft = result.draft;
             // A fan host is a type whose shaft the pool offers, which is what
             // `canBeGridHost` declares. Recorded so later candidates fan to a
@@ -3965,6 +4677,10 @@ export function computeAutoSupportPlan(
     });
 
     const occludedRescueQueue: CandidatePoint[] = [...treePlan.occludedQueue];
+    /** Candidates a trunk build refused and that were not already deferred to
+     *  the rescue queue; retried as wide fans after gap-fill. */
+    const trunkErrorBacklog: CandidatePoint[] = [];
+    const trunkErrorBacklogIds = new Set<string>();
     let placementIndex = 0;
     const placementTotal = candidates.length;
     const tickProgress = () => {
@@ -4240,6 +4956,108 @@ export function computeAutoSupportPlan(
         return pts;
     };
 
+    const tryBuildSilhouetteDogleg = (candidate: CandidatePoint) => {
+        if (!resolvedMesh || candidate.interior) return null;
+        const overrides = sizeParameters(candidate, autoSettings.sizeScale, modelCtx, autoSettings);
+        const supportSettings = getSettings();
+        const tipProfile = {
+            type: 'disk' as const,
+            contactDiameterMm: overrides.tipContactDiameterMm ?? supportSettings.tip.contactDiameterMm,
+            bodyDiameterMm: overrides.tipBodyDiameterMm ?? supportSettings.tip.bodyDiameterMm,
+            lengthMm: overrides.tipLengthMm ?? supportSettings.tip.lengthMm,
+            penetrationMm: overrides.tipPenetrationMm ?? supportSettings.tip.penetrationMm,
+            diskThicknessMm: supportSettings.tip.diskThicknessMm ?? 0.1,
+            maxStandoffMm: supportSettings.tip.maxStandoffMm ?? 1.5,
+            standoffAngleThreshold: supportSettings.tip.standoffAngleThreshold ?? Math.PI / 4,
+        };
+        const socketPos = getSocketPosition(candidate.tipPos, candidate.tipNormal, tipProfile);
+        const escapeRoute = findOffsetSilhouetteRoute(
+            socketPos,
+            resolvedMesh,
+            (overrides.shaftDiameterMm ?? activeSizingBand(autoSettings).shaftDiameterMm) * 0.5,
+            synthesisMaxAngleDeg,
+            collectModelRootPoints(),
+            synthesisGridConfig,
+            MIN_TRUNK_SPACING_MM,
+            (a, b, rad) => isShaftBlocked(a, b, rad, resolvedMesh),
+        );
+        if (!escapeRoute) return null;
+        const trunkBuilt = buildTrunkDataFromPlacement(
+            {
+                tipPos: candidate.tipPos,
+                tipNormal: candidate.tipNormal,
+                modelId: candidate.modelId,
+                mesh: resolvedMesh,
+                overrides,
+                ignoreGrid: !gridEnabled,
+            },
+            {
+                basePos: escapeRoute.basePos,
+                joints: [escapeRoute.bendJoint],
+                socketPos,
+                coneAxis: candidate.tipNormal,
+            },
+        );
+        if (trunkBuilt.error || !trunkBuilt.trunk || !trunkBuilt.root) return null;
+        const rootTop: Vec3 = {
+            x: trunkBuilt.root.transform.pos.x,
+            y: trunkBuilt.root.transform.pos.y,
+            z: trunkBuilt.root.transform.pos.z
+                + trunkBuilt.root.diskHeight
+                + trunkBuilt.root.coneHeight,
+        };
+        const firstSeg = trunkBuilt.trunk.segments[0];
+        if (firstSeg && !firstSeg.bottomJoint && firstSeg.topJoint?.pos) {
+            const rad = Math.max(0.2, (firstSeg.diameter ?? 1.0) * 0.5) + HOST_SHAFT_CLEARANCE_MARGIN_MM;
+            if (isShaftBlocked(rootTop, firstSeg.topJoint.pos, rad, resolvedMesh)) {
+                return null;
+            }
+        }
+        if (isHostShaftBlocked(trunkBuilt.trunk, resolvedMesh)) {
+            return null;
+        }
+        const rescuedTrunk = {
+            ...trunkBuilt.trunk,
+            origin: candidate.gridPoint ? ('overhang' as SupportOrigin) : ORIGIN_BY_SOURCE[candidate.source],
+        };
+        if (candidate.tipDiameterMm !== undefined && rescuedTrunk.contactCone) {
+            rescuedTrunk.contactCone = applyExplicitTipCapToCone(
+                rescuedTrunk.contactCone,
+                Math.max(MIN_CONTACT_TIP_DIAMETER_MM, candidate.tipDiameterMm),
+            );
+        }
+        return { root: trunkBuilt.root, trunk: rescuedTrunk };
+    };
+
+    const commitDoglegTrunk = (
+        candidate: CandidatePoint,
+        built: { root: NonNullable<ReturnType<typeof tryBuildSilhouetteDogleg>>['root']; trunk: NonNullable<ReturnType<typeof tryBuildSilhouetteDogleg>>['trunk'] },
+        preset: SizingPreset,
+    ) => {
+        draft = draftAddPrimitive(draft, 'roots', built.root);
+        draft = draftAddEntity(draft, 'trunk', built.trunk);
+        placed.trunk++;
+        presets[preset]++;
+        diagnostics.candidatesBySource[candidate.source] =
+            (diagnostics.candidatesBySource[candidate.source] ?? 0) + 1;
+        if (candidate.gridPoint) {
+            gridHostIds.add(built.trunk.id);
+            diagnostics.hostsByKind.gridInfill++;
+            hostOriginById.set(built.trunk.id, 'gridInfill');
+        } else {
+            diagnostics.hostsByKind.standalone++;
+        }
+        forestLedger.push({
+            displayId: candidate.id,
+            kind: 'trunk',
+            entityId: built.trunk.id,
+            areaMm2: candidate.islandAreaMm2,
+            zHeight: candidate.zHeight,
+            preset,
+            bandShaftMm: activeSizingBand(autoSettings).shaftDiameterMm,
+        });
+    };
+
     let rescuePool: FanShaftPoint[] | null = null;
     for (const candidate of occludedRescueQueue) {
         tickProgress();
@@ -4288,107 +5106,13 @@ export function computeAutoSupportPlan(
             }
 
             // Tier 2: Silhouette offset / dogleg trunk routed around the lower mesh.
-            const overrides = sizeParameters(candidate, autoSettings.sizeScale, modelCtx, autoSettings);
-            const supportSettings = getSettings();
-            const tipProfile = {
-                type: 'disk' as const,
-                contactDiameterMm: overrides.tipContactDiameterMm ?? supportSettings.tip.contactDiameterMm,
-                bodyDiameterMm: overrides.tipBodyDiameterMm ?? supportSettings.tip.bodyDiameterMm,
-                lengthMm: overrides.tipLengthMm ?? supportSettings.tip.lengthMm,
-                penetrationMm: overrides.tipPenetrationMm ?? supportSettings.tip.penetrationMm,
-                diskThicknessMm: supportSettings.tip.diskThicknessMm ?? 0.1,
-                maxStandoffMm: supportSettings.tip.maxStandoffMm ?? 1.5,
-                standoffAngleThreshold: supportSettings.tip.standoffAngleThreshold ?? Math.PI / 4,
-            };
-            const socketPos = getSocketPosition(candidate.tipPos, candidate.tipNormal, tipProfile);
-            const escapeRoute = findOffsetSilhouetteRoute(
-                socketPos,
-                resolvedMesh,
-                (overrides.shaftDiameterMm ?? activeSizingBand(autoSettings).shaftDiameterMm) * 0.5,
-                synthesisMaxAngleDeg,
-                collectModelRootPoints(),
-                synthesisGridConfig,
-                MIN_TRUNK_SPACING_MM,
-                (a, b, rad) => isShaftBlocked(a, b, rad, resolvedMesh),
-            );
-            if (escapeRoute) {
-                const trunkBuilt = buildTrunkDataFromPlacement(
-                    {
-                        tipPos: candidate.tipPos,
-                        tipNormal: candidate.tipNormal,
-                        modelId: candidate.modelId,
-                        mesh: resolvedMesh,
-                        overrides,
-                        ignoreGrid: !gridEnabled,
-                    },
-                    {
-                        basePos: escapeRoute.basePos,
-                        joints: [escapeRoute.bendJoint],
-                        socketPos,
-                        coneAxis: candidate.tipNormal,
-                    },
-                );
-                let doglegBlocked = false;
-                if (!trunkBuilt.error && trunkBuilt.trunk && trunkBuilt.root) {
-                    const rootTopZ = trunkBuilt.root.transform.pos.z
-                        + trunkBuilt.root.diskHeight
-                        + trunkBuilt.root.coneHeight;
-                    let prevPos: Vec3 = {
-                        x: trunkBuilt.root.transform.pos.x,
-                        y: trunkBuilt.root.transform.pos.y,
-                        z: rootTopZ,
-                    };
-                    for (const seg of trunkBuilt.trunk.segments) {
-                        const a = seg.bottomJoint?.pos ?? prevPos;
-                        const b = seg.topJoint?.pos;
-                        if (b) {
-                            const rad = Math.max(0.2, (seg.diameter ?? 1.0) * 0.5);
-                            if (isShaftBlocked(a, b, rad, resolvedMesh)) {
-                                doglegBlocked = true;
-                                break;
-                            }
-                            prevPos = b;
-                        }
-                    }
-                }
-                if (!doglegBlocked && !trunkBuilt.error && trunkBuilt.trunk && trunkBuilt.root) {
-                    const rescuedTrunk = {
-                        ...trunkBuilt.trunk,
-                        origin: candidate.gridPoint ? ('overhang' as SupportOrigin) : ORIGIN_BY_SOURCE[candidate.source],
-                    };
-                    if (candidate.tipDiameterMm !== undefined && rescuedTrunk.contactCone) {
-                        rescuedTrunk.contactCone = applyExplicitTipCapToCone(
-                            rescuedTrunk.contactCone,
-                            Math.max(MIN_CONTACT_TIP_DIAMETER_MM, candidate.tipDiameterMm),
-                        );
-                    }
-                    draft = draftAddPrimitive(draft, 'roots', trunkBuilt.root);
-                    draft = draftAddEntity(draft, 'trunk', rescuedTrunk);
-                    // Invalidate pool so subsequent occluded neighbors on the same
-                    // feature can branch off this new dogleg trunk in Tier 1.
-                    rescuePool = null;
-                    placed.trunk++;
-                    presets[preset]++;
-                    diagnostics.candidatesBySource[candidate.source] =
-                        (diagnostics.candidatesBySource[candidate.source] ?? 0) + 1;
-                    if (candidate.gridPoint) {
-                        gridHostIds.add(rescuedTrunk.id);
-                        diagnostics.hostsByKind.gridInfill++;
-                        hostOriginById.set(rescuedTrunk.id, 'gridInfill');
-                    } else {
-                        diagnostics.hostsByKind.standalone++;
-                    }
-                    forestLedger.push({
-                        displayId: candidate.id,
-                        kind: 'trunk',
-                        entityId: rescuedTrunk.id,
-                        areaMm2: candidate.islandAreaMm2,
-                        zHeight: candidate.zHeight,
-                        preset,
-                        bandShaftMm: activeSizingBand(autoSettings).shaftDiameterMm,
-                    });
-                    continue;
-                }
+            const dogleg = tryBuildSilhouetteDogleg(candidate);
+            if (dogleg) {
+                commitDoglegTrunk(candidate, dogleg, preset);
+                // Invalidate pool so subsequent occluded neighbors on the same
+                // feature can branch off this new dogleg trunk in Tier 1.
+                rescuePool = null;
+                continue;
             }
         }
 
@@ -4596,6 +5320,88 @@ export function computeAutoSupportPlan(
     }
     if (gapFilledTrunks > 0) {
         console.log(LOG_PREFIX, `Coverage convergence: ${gapFilledTrunks} gap-fill trunks placed`);
+    }
+
+    // ── Trunk-error retry ────────────────────────────────────────────
+    // A candidate whose trunk cannot be built used to be dropped whenever it did
+    // not come through the trunk-anchor pass (gap-fill, near-plate, clustered
+    // members). Retry those as a wide fan onto any clear host: the same leaf/
+    // branch the rescue queue builds for anchors, so a contact whose pillar is
+    // occluded still gets a load path instead of nothing.
+    let trunkErrorRetriesAttempted = 0;
+    let trunkErrorRetriesRescued = 0;
+    if (trunkErrorBacklog.length > 0 && resolvedMesh) {
+        let retryPool: FanShaftPoint[] | null = null;
+        for (const candidate of trunkErrorBacklog.slice(0, MAX_TRUNK_ERROR_RETRIES)) {
+            trunkErrorRetriesAttempted++;
+            const preset = presetForArea(candidate.islandAreaMm2);
+            try {
+                if (!retryPool) retryPool = collectFanShaftPoints(draft);
+                const fan = fanLeafToHost(
+                    candidate.tipPos,
+                    candidate.modelId,
+                    retryPool,
+                    gridHostIds,
+                    `auto-retry-${candidate.id}`,
+                    CAVITY_FAN_RADIUS_MM,
+                    CAVITY_FAN_RADIUS_MM,
+                    synthesisMaxAngleDeg,
+                    autoSettings.maxAttachmentsPerTrunk,
+                    draft,
+                    resolvedMesh,
+                    hostedOriginForSource(candidate.source),
+                    'steepest',
+                    MAX_UNBRACED_BRANCH_SPAN_MM,
+                    undefined,
+                    autoSettings,
+                    candidate.tipDiameterMm,
+                );
+                if (fan.ok) {
+                    draft = fan.draft;
+                    trunkErrorRetriesRescued++;
+                    placed[fan.kind]++;
+                    presets[preset]++;
+                    diagnostics.candidatesBySource[candidate.source] =
+                        (diagnostics.candidatesBySource[candidate.source] ?? 0) + 1;
+                    if (rejectionReasons.trunk_build_error) {
+                        rejectionReasons.trunk_build_error--;
+                        rejectedCount = Math.max(0, rejectedCount - 1);
+                    }
+                    if (fan.entityId && isLedgerKind(fan.kind)) {
+                        forestLedger.push({
+                            displayId: candidate.id,
+                            kind: fan.kind,
+                            entityId: fan.entityId,
+                            areaMm2: candidate.islandAreaMm2,
+                            zHeight: candidate.zHeight,
+                            preset,
+                            bandShaftMm: activeSizingBand(autoSettings).shaftDiameterMm,
+                        });
+                    }
+                    continue;
+                }
+                const dogleg = tryBuildSilhouetteDogleg(candidate);
+                if (dogleg) {
+                    commitDoglegTrunk(candidate, dogleg, preset);
+                    retryPool = null;
+                    trunkErrorRetriesRescued++;
+                    if (rejectionReasons.trunk_build_error) {
+                        rejectionReasons.trunk_build_error--;
+                        rejectedCount = Math.max(0, rejectedCount - 1);
+                    }
+                }
+            } catch {
+                // A rescue is best-effort; the original rejection stands.
+            }
+        }
+        if (trunkErrorRetriesAttempted > 0) {
+            diagnostics.trunkErrorRetries = {
+                attempted: trunkErrorRetriesAttempted,
+                rescued: trunkErrorRetriesRescued,
+            };
+            console.log(LOG_PREFIX,
+                `Trunk-error retry: ${trunkErrorRetriesRescued}/${trunkErrorRetriesAttempted} rescued as fan/dogleg links`);
+        }
     }
 
     console.log(LOG_PREFIX,
@@ -5081,6 +5887,39 @@ export function computeAutoSupportPlan(
 
     timingEnd('surface-coverage');
     reportPhase('Checking coverage', 1, 1);
+
+    // ── Root merge: trunks whose plate roots stand together share one host ──
+    let rootMergeStats: { merged: number; refusals: Partial<Record<string, number>> } | undefined;
+    if (changed) {
+        try {
+            const mergeResult = mergeNearbyTrunkRoots(draft, modelId, {
+                mesh: resolvedMesh ?? undefined,
+                gridHostIds,
+                maxAttachments: autoSettings.maxAttachmentsPerTrunk ?? 12,
+                maxAngleDeg: Math.min(
+                    autoSettings.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG,
+                    memberMaxAngleFromVerticalDeg(Boolean(gridEnabled)),
+                ),
+                fanRadiusMm: Math.max(MIN_LEAF_FAN_RADIUS_MM, autoSettings.leafFanRadiusMm ?? LEAF_FAN_RADIUS_MM),
+                gridHostFanRadiusMm: GRID_HOST_FAN_RADIUS_MM,
+                autoSettings,
+            });
+            if (mergeResult.merged > 0) {
+                draft = mergeResult.draft;
+                rootMergeStats = { merged: mergeResult.merged, refusals: mergeResult.refusals };
+                const refusalText = Object.entries(mergeResult.refusals)
+                    .map(([reason, count]) => `${reason}=${count}`)
+                    .join(', ');
+                console.log(LOG_PREFIX,
+                    `Root merge: ${mergeResult.merged} co-located trunk(s) re-fanned onto a shared host`
+                    + (refusalText ? ` | refusals: ${refusalText}` : ''));
+            }
+        } catch (e) {
+            console.warn(LOG_PREFIX,
+                `Root merge failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
     reportPhase('Resizing supports', 0, 1);
     timingStart('resize');
 
@@ -5116,18 +5955,7 @@ export function computeAutoSupportPlan(
                         const prevMaxDia = Math.max(0, ...prevTrunk.segments.map((s) => s.diameter ?? 0));
                         const nextMaxDia = Math.max(0, ...trunk.segments.map((s) => s.diameter ?? 0));
                         if (nextMaxDia <= prevMaxDia + 1e-4) continue;
-                        const trunkBlocked = (candidateTrunk: typeof trunk): boolean => {
-                            for (const seg of candidateTrunk.segments) {
-                                const span = hostSegmentSpan(resized, candidateTrunk, seg);
-                                if (!span) continue;
-                                const radius = (seg.diameter ?? 1.0) / 2 + 0.15;
-                                if (isShaftBlocked(span.start, span.end, radius, resolvedMesh)) {
-                                    return true;
-                                }
-                            }
-                            return false;
-                        };
-                        if (trunkBlocked(trunk) && !trunkBlocked(prevTrunk)) {
+                        if (isHostShaftBlocked(trunk, resolvedMesh) && !isHostShaftBlocked(prevTrunk, resolvedMesh)) {
                             if (!safeTrunks) safeTrunks = { ...resized.trunks };
                             safeTrunks[tid] = prevTrunk;
                             revertedCount++;
@@ -5152,32 +5980,56 @@ export function computeAutoSupportPlan(
                     draft = culled.draft;
                     orphanInfos = culled.orphans;
                     console.log(LOG_PREFIX, `Orphan cull: ${culled.orphans.length} leaves/branches removed — ${culled.orphans.map((o) => `${o.id}:${o.reason}${o.hostId ? `@${o.hostId.slice(0,8)}` : ''}`).join(', ')}`);
-                    // Re-place members orphaned by a culled (blocked) host: the
-                    // island still needs a support — run it back through
-                    // standard placement (merge/fan/trunk decide fresh). Single
-                    // pass; re-placed members are not themselves re-queued.
-                    const requeue = culled.orphans.filter((o) =>
-                        o.reason === 'missingHost' && o.hostCulled === true);
-                    if (requeue.length > 0) {
-                        let replaced = 0;
-                        for (const o of requeue) {
-                            let member: ShaftHostedMemberEntity | undefined;
-                            for (const { collectionKey } of SHAFT_HOSTED_MEMBER_TYPES) {
-                                member = hostedMemberEntities(preCullDraft, collectionKey)[o.id];
-                                if (member) break;
+                    // Re-place members orphaned by a culled (blocked) host as well
+                    // as run-created hosts culled for `hostBlocked`: their islands
+                    // still need supports. Single re-place pass followed by one
+                    // bounded Wave-2 fan-only rescue if a re-placed host culls.
+                    const extractRequeueContacts = (
+                        orphans: ReadonlyArray<OrphanInfo>,
+                        sourceDraft: SupportState,
+                    ): Array<{ id: string; cone: ContactCone; origin?: SupportOrigin }> => {
+                        const items: Array<{ id: string; cone: ContactCone; origin?: SupportOrigin }> = [];
+                        for (const o of orphans) {
+                            if (o.reason === 'missingHost' && o.hostCulled === true) {
+                                let member: ShaftHostedMemberEntity | undefined;
+                                for (const { collectionKey } of SHAFT_HOSTED_MEMBER_TYPES) {
+                                    member = hostedMemberEntities(sourceDraft, collectionKey)[o.id];
+                                    if (member) break;
+                                }
+                                if (member?.contactCone?.pos && member.modelId === modelId) {
+                                    items.push({ id: o.id, cone: member.contactCone, origin: member.origin });
+                                }
+                            } else if (o.reason === 'hostBlocked') {
+                                const descriptor = getSupportTypeDescriptor(o.kind);
+                                const beforeColl = (before[descriptor.location.key] ?? {}) as Record<string, unknown>;
+                                if (o.id in beforeColl) continue;
+                                const sourceColl = (sourceDraft[descriptor.location.key] ?? {}) as Record<
+                                    string,
+                                    { modelId?: string; origin?: SupportOrigin; contactCone?: ContactCone }
+                                >;
+                                const hostEnt = sourceColl[o.id];
+                                if (hostEnt?.contactCone?.pos && hostEnt.modelId === modelId) {
+                                    items.push({ id: o.id, cone: hostEnt.contactCone, origin: hostEnt.origin });
+                                }
                             }
-                            const cone = member?.contactCone;
-                            if (!member || !cone?.pos || member.modelId !== modelId) continue;
+                        }
+                        return items;
+                    };
+
+                    const requeueItems = extractRequeueContacts(culled.orphans, preCullDraft);
+                    if (requeueItems.length > 0) {
+                        let replaced = 0;
+                        for (const item of requeueItems) {
                             const recandidate: CandidatePoint = {
-                                id: `${o.id}-requeue`,
-                                tipPos: cone.pos,
-                                tipNormal: cone.surfaceNormal ?? cone.normal,
-                                modelId: member.modelId,
-                                source: member.origin === 'overhang' ? 'overhang' : member.origin === 'reinforcement' ? 'reinforcement' : 'voxel',
+                                id: `${item.id}-requeue`,
+                                tipPos: item.cone.pos,
+                                tipNormal: item.cone.surfaceNormal ?? item.cone.normal,
+                                modelId,
+                                source: item.origin === 'overhang' ? 'overhang' : item.origin === 'reinforcement' ? 'reinforcement' : 'voxel',
                                 islandAreaMm2: 0.05,
-                                zHeight: cone.pos.z,
+                                zHeight: item.cone.pos.z,
                                 priority: 0,
-                                tipDiameterMm: cone.profile?.maxContactDiameterMm,
+                                tipDiameterMm: item.cone.profile?.maxContactDiameterMm,
                             };
                             preResolvedCandidates.add(recandidate);
                             try {
@@ -5202,7 +6054,8 @@ export function computeAutoSupportPlan(
                                 rejectedCount++;
                             }
                         }
-                        console.log(LOG_PREFIX, `Orphan re-place: ${replaced}/${requeue.length} culled-host members re-placed.`);
+                        console.log(LOG_PREFIX, `Orphan re-place: ${replaced}/${requeueItems.length} culled contacts re-placed.`);
+                        const preRecheckDraft = draft;
                         const recheck = validateAndCullOrphans(draft, resolvedMesh ?? undefined, modelId);
                         if (recheck.draft !== draft) {
                             draft = recheck.draft;
@@ -5215,6 +6068,61 @@ export function computeAutoSupportPlan(
                                 ...orphanInfos,
                                 ...recheck.orphans.filter((o) => !reported.has(o.id)),
                             ];
+                            const wave2Items = extractRequeueContacts(recheck.orphans, preRecheckDraft);
+                            if (wave2Items.length > 0 && resolvedMesh) {
+                                const wave2Pool = collectFanShaftPoints(draft);
+                                let wave2Rescued = 0;
+                                for (const item of wave2Items) {
+                                    const source: CandidatePoint['source'] = item.origin === 'overhang'
+                                        ? 'overhang'
+                                        : item.origin === 'reinforcement'
+                                            ? 'reinforcement'
+                                            : 'voxel';
+                                    try {
+                                        const fan = fanLeafToHost(
+                                            item.cone.pos,
+                                            modelId,
+                                            wave2Pool,
+                                            gridHostIds,
+                                            `auto-wave2-${item.id}`,
+                                            CAVITY_FAN_RADIUS_MM,
+                                            CAVITY_FAN_RADIUS_MM,
+                                            memberMaxAngleFromVerticalDeg(Boolean(gridEnabled)),
+                                            autoSettings.maxAttachmentsPerTrunk,
+                                            draft,
+                                            resolvedMesh,
+                                            hostedOriginForSource(source),
+                                            'steepest',
+                                            MAX_UNBRACED_BRANCH_SPAN_MM,
+                                            undefined,
+                                            autoSettings,
+                                            item.cone.profile?.maxContactDiameterMm,
+                                        );
+                                        if (!fan.ok) continue;
+                                        draft = fan.draft;
+                                        placed[fan.kind]++;
+                                        const wPreset = presetForArea(0.05);
+                                        presets[wPreset]++;
+                                        if (fan.entityId && isLedgerKind(fan.kind)) {
+                                            forestLedger.push({
+                                                displayId: `${item.id}-wave2`,
+                                                kind: fan.kind,
+                                                entityId: fan.entityId,
+                                                areaMm2: 0.05,
+                                                zHeight: item.cone.pos.z,
+                                                preset: wPreset,
+                                                bandShaftMm: activeSizingBand(autoSettings).shaftDiameterMm,
+                                            });
+                                        }
+                                        wave2Rescued++;
+                                    } catch {
+                                        // Best-effort fan rescue only.
+                                    }
+                                }
+                                if (wave2Rescued > 0) {
+                                    console.log(LOG_PREFIX, `Orphan wave-2 fan rescue: ${wave2Rescued}/${wave2Items.length} re-hosted.`);
+                                }
+                            }
                         }
                     }
 
@@ -5226,7 +6134,10 @@ export function computeAutoSupportPlan(
                     if (crossOrphans.length > 0) {
                         let crossResolved = 0;
                         const resolvedCrossIds = new Set<string>();
-                        const crossMaxAngleDeg = memberMaxAngleFromVerticalDeg(Boolean(gridEnabled));
+                        const crossMaxAngleDeg = Math.max(
+                            autoSettings.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG,
+                            memberMaxAngleFromVerticalDeg(Boolean(gridEnabled)),
+                        );
                         const crossPool = collectFanShaftPoints(draft);
                         for (const o of crossOrphans) {
                             let member: ShaftHostedMemberEntity | undefined;
@@ -5242,8 +6153,23 @@ export function computeAutoSupportPlan(
                             const cone = member?.contactCone;
                             if (!member || !memberTypeId || !cone?.pos || member.modelId !== modelId) continue;
 
+                            if (memberTypeId === 'branch') {
+                                const hostedSegIds = new Set<string>([
+                                    o.id,
+                                    ...((member as { segments?: Segment[] }).segments ?? []).map((s) => s.id),
+                                ]);
+                                if (Object.values(draft.knots).some((k) => hostedSegIds.has(k.parentShaftId))) {
+                                    continue;
+                                }
+                            }
+
+                            let draftWithoutOld = draftRemoveEntity(draft, memberTypeId, o.id);
+                            if (o.knotId && draftWithoutOld.knots[o.knotId]) {
+                                draftWithoutOld = draftRemovePrimitive(draftWithoutOld, 'knots', o.knotId);
+                            }
+
                             const excludeOldHost = o.hostId ? new Set<string>([o.hostId]) : undefined;
-                            const rehost = fanLeafToHost(
+                            let rehost = fanLeafToHost(
                                 cone.pos,
                                 modelId,
                                 crossPool,
@@ -5253,7 +6179,7 @@ export function computeAutoSupportPlan(
                                 CAVITY_FAN_RADIUS_MM,
                                 crossMaxAngleDeg,
                                 autoSettings.maxAttachmentsPerTrunk,
-                                draft,
+                                draftWithoutOld,
                                 resolvedMesh ?? undefined,
                                 member.origin ?? 'overhang',
                                 'nearest',
@@ -5262,12 +6188,30 @@ export function computeAutoSupportPlan(
                                 autoSettings,
                                 cone.profile?.maxContactDiameterMm,
                             );
+                            if (!rehost.ok && o.hostId) {
+                                // Fall back to a different non-crossing Z knot on the same host.
+                                rehost = fanLeafToHost(
+                                    cone.pos,
+                                    modelId,
+                                    crossPool,
+                                    gridHostIds,
+                                    `auto-cross-rehost-${o.id}`,
+                                    CAVITY_FAN_RADIUS_MM,
+                                    CAVITY_FAN_RADIUS_MM,
+                                    crossMaxAngleDeg,
+                                    autoSettings.maxAttachmentsPerTrunk,
+                                    draftWithoutOld,
+                                    resolvedMesh ?? undefined,
+                                    member.origin ?? 'overhang',
+                                    'steepest',
+                                    undefined,
+                                    undefined,
+                                    autoSettings,
+                                    cone.profile?.maxContactDiameterMm,
+                                );
+                            }
                             if (rehost.ok) {
-                                let nextD = draftRemoveEntity(rehost.draft, memberTypeId, o.id);
-                                if (o.knotId && nextD.knots[o.knotId]) {
-                                    nextD = draftRemovePrimitive(nextD, 'knots', o.knotId);
-                                }
-                                draft = nextD;
+                                draft = rehost.draft;
                                 resolvedCrossIds.add(o.id);
                                 crossResolved++;
                                 if (rehost.entityId && isLedgerKind(rehost.kind)) {
@@ -5367,8 +6311,10 @@ export function computeAutoSupportPlan(
                 fanRefusals: { ...diagnostics.fanRefusals },
                 mergeRefusals: { ...diagnostics.mergeRefusals },
                 gridFallbacks: diagnostics.gridFallbacks,
+                ...(diagnostics.trunkErrorRetries ? { trunkErrorRetries: diagnostics.trunkErrorRetries } : {}),
                 consolidationRefusals: { ...conRefusals },
                 cavityFallbacks: [...diagnostics.cavityFallbacks],
+                ...(rootMergeStats ? { rootMerges: rootMergeStats } : {}),
                 ...(tractionStats ? { tractionOptimization: tractionStats } : {}),
             };
             // Report only: what a deficit budget would add and cull, in mm² of
@@ -5485,19 +6431,75 @@ export function computeAutoSupportPlan(
 
     if (changed && analytics.forestReport) {
         try {
-            const supportGraph = buildSupportGraph(draft, modelId);
+            let supportGraph = buildSupportGraph(draft, modelId);
             if (supportGraph.rootCount > 0 && supportGraph.tipCount > 0) {
-                const frameStress = solveSupportFrameStress(supportGraph, tractionProfile, {
+                let frameStress = solveSupportFrameStress(supportGraph, tractionProfile, {
                     areaPerSupportMm2: autoSettings.areaPerSupportMm2,
                 });
+                // Close the loop with the stress solver: thicken, re-solve, and
+                // repeat until the frame is inside limits or nothing moves.
+                // A single pass left members overloaded whenever the first
+                // thickening pushed a neighbouring shaft over its own limit.
+                let reinforcedTotal = 0;
+                for (let pass = 0; pass < MAX_STRESS_REINFORCE_PASSES; pass++) {
+                    if (frameStress.overloadedMembers === 0) break;
+                    if (autoSettings.modelScaleEnabled === false) break;
+                    const reinforced = reinforceOverloadedFrameMembers(
+                        draft,
+                        frameStress,
+                        resolvedMesh ?? undefined,
+                        modelId,
+                    );
+                    if (!reinforced.changed) break;
+                    draft = reinforced.snapshot;
+                    reinforcedTotal += reinforced.totalReinforced;
+                    supportGraph = buildSupportGraph(draft, modelId);
+                    frameStress = solveSupportFrameStress(supportGraph, tractionProfile, {
+                        areaPerSupportMm2: autoSettings.areaPerSupportMm2,
+                    });
+                    console.log(LOG_PREFIX,
+                        `Stress feedback pass ${pass + 1}: reinforced ${reinforced.totalReinforced} member(s) → `
+                        + `${frameStress.overloadedMembers} member(s), ${frameStress.overloadedTips} tip(s) still overloaded`);
+                }
+                if (reinforcedTotal > 0) {
+                    frameStress = { ...frameStress, reinforcedCount: reinforcedTotal };
+                }
                 analytics.forestReport.frameStress = frameStress;
+                // Solved-demand topple margin about the pose's worst edge: the
+                // per-layer Stefan force at its own CoP, not the nominal
+                // area-drag moment, with the frame's compliance as the rocking
+                // check.
+                const edgeNormal = poseStability?.worstEdgeNormal;
+                if (resolvedMesh && poseStability?.worstEdgePoint && edgeNormal
+                    && Math.hypot(edgeNormal.x, edgeNormal.y) > 1e-6) {
+                    const localCentroid = geometryCentroidMm(resolvedMesh.geometry);
+                    if (localCentroid) {
+                        const worldCentroid = new THREE.Vector3(localCentroid.x, localCentroid.y, localCentroid.z)
+                            .applyMatrix4(resolvedMesh.matrixWorld);
+                        const toppleRisk = evaluateToppleRisk({
+                            profile: tractionProfile,
+                            centroid: { x: worldCentroid.x, y: worldCentroid.y },
+                            edge: { point: poseStability.worstEdgePoint, normal: edgeNormal },
+                            bearingAreaMm2: poseStability.bearingAreaMm2,
+                            contactDepthMm: poseStability.contactDepthMm,
+                            frameDeflectionMm: frameStress.maxTipDeflectionMm,
+                        });
+                        analytics.forestReport.toppleRisk = toppleRisk;
+                        console.log(LOG_PREFIX,
+                            `Topple risk: COM ${toppleRisk.comDepthMm.toFixed(2)}mm inside the worst edge · `
+                            + `peel moment ${toppleRisk.peelMomentNmm.toFixed(1)}N·mm · `
+                            + `lifts at ${(toppleRisk.requiredAdhesionMpa * 1000).toFixed(1)}kPa · `
+                            + `rocking ${toppleRisk.complianceMm.toFixed(2)}mm · ${toppleRisk.outcome}`);
+                    }
+                }
                 console.log(LOG_PREFIX,
                     `Frame stress (${frameStress.solverMode}): `
                     + `${frameStress.nodeCount} nodes · ${frameStress.memberCount} beams (${frameStress.braceCount} braces) · `
                     + `peak ${frameStress.peakLayerPeelForceN.toFixed(2)}N @ Z${frameStress.peakLayerZMm.toFixed(1)}mm · `
                     + `tip max ${frameStress.maxTipUtilizationPct.toFixed(0)}% (${frameStress.overloadedTips} over) · `
                     + `member max ${frameStress.maxMemberUtilizationPct.toFixed(0)}% (${frameStress.overloadedMembers} over) · `
-                    + `max defl ${frameStress.maxTipDeflectionMm.toFixed(3)}mm`);
+                    + `max defl ${frameStress.maxTipDeflectionMm.toFixed(3)}mm`
+                    + ((frameStress.reinforcedCount ?? 0) > 0 ? ` · reinforced ${frameStress.reinforcedCount}` : ''));
             }
         } catch (e) {
             console.warn(LOG_PREFIX,
@@ -5590,9 +6592,10 @@ export function runAutoPlace(
     settingsOverride?: Partial<AutoSupportSettings>,
     cavityMesh?: THREE.Mesh,
     beforeOverride?: SupportState,
+    layerHeightMm?: number,
 ): AutoPlaceResult {
     return commitAutoPlacePlan(
-        computeAutoSupportPlan(islands, modelId, settingsOverride, undefined, undefined, undefined, cavityMesh),
+        computeAutoSupportPlan(islands, modelId, settingsOverride, undefined, undefined, undefined, cavityMesh, layerHeightMm),
         beforeOverride,
     );
 }

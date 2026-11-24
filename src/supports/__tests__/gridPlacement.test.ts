@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 
-import { baseOverhangWindowMm, generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, steepFlatAnchorBandTop, steepFlatSpacingMultiplier, STEEP_FLAT_SPACING_MULTIPLIER, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
+import { baseOverhangWindowMm, generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, sampleBoundary2D, steepFlatAnchorBandTop, steepFlatSpacingMultiplier, STEEP_FLAT_SPACING_MULTIPLIER, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
 import { deduplicateCandidates } from '../autoSupport/candidateGeneration';
 import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
 import { SLOPE_RELAX_RAMP_START } from '../autoSupport/constants';
@@ -587,4 +587,80 @@ test('lifted modelMinZ preserves base-overhang density window and deduplicateCan
     };
     const climbingCandidates = generateGridCandidates([climbingOverhang], settings, undefined, undefined, false, 0, 0, miniWindow);
     assert.ok(climbingCandidates.every((c) => !c.nearBase), 'climbing overhang does not inherit nearBase dedup bypass');
+});
+
+test('perimeter-first corner preservation, uniform edge subdivision, and hex interior infill', () => {
+    const settings = createDefaultAutoSupportSettings();
+    settings.areaPerSupportMm2 = 6;
+    settings.gridAreaThresholdMm2 = 4;
+
+    const flatRect: DetectedIsland = {
+        ...rectRegion('flat-perim-hex', -6, 6, -4, 4, 96, 10, 0),
+        perimeterLoops: [[[-6, -4, 10], [6, -4, 10], [6, 4, 10], [-6, 4, 10]]],
+    };
+    const candidates = generateGridCandidates([flatRect], settings, undefined, undefined, false, 0, 0);
+    const ring = candidates.filter((c) => c.id.startsWith('fill-'));
+    const interior = candidates.filter((c) => c.id.startsWith('grid-'));
+
+    assert.ok(ring.length >= 8, `perimeter emits ring candidates (got ${ring.length})`);
+    assert.ok(interior.length >= 4, `staggered hex infill emits interior candidates (got ${interior.length})`);
+
+    // Sharp inset rectangle corners (~ ±5.75, ±3.75) are preserved on the ring.
+    for (const [cx, cy] of [[-5.75, -3.75], [5.75, -3.75], [5.75, 3.75], [-5.75, 3.75]]) {
+        assert.ok(
+            ring.some((p) => Math.hypot(p.tipPos.x - cx, p.tipPos.y - cy) < 0.45),
+            `sharp corner near (${cx}, ${cy}) is preserved on perimeter`,
+        );
+    }
+
+    // Bottom edge samples between adjacent corners have near-uniform X spacing.
+    const bottomEdge = ring
+        .filter((p) => p.tipPos.y < -3.3)
+        .sort((a, b) => a.tipPos.x - b.tipPos.x);
+    assert.ok(bottomEdge.length >= 4, 'bottom edge subdivided between corners');
+    const gaps = bottomEdge.slice(1).map((p, idx) => p.tipPos.x - bottomEdge[idx].tipPos.x);
+    const minGap = Math.min(...gaps);
+    const maxGap = Math.max(...gaps);
+    assert.ok(maxGap / minGap <= 1.25, `bottom edge spacing stays uniform (${minGap.toFixed(2)}..${maxGap.toFixed(2)}mm)`);
+
+    // Hex interior rows stagger alternating X positions rather than lining up identically.
+    const byRow = new Map<number, number[]>();
+    for (const p of interior) {
+        const key = Math.round(p.tipPos.y * 10);
+        const xs = byRow.get(key) ?? [];
+        xs.push(p.tipPos.x);
+        byRow.set(key, xs);
+    }
+    const rowFirstXs = [...byRow.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, xs]) => Math.min(...xs));
+    assert.ok(rowFirstXs.length >= 2, 'multiple interior hex rows generated');
+    assert.ok(
+        rowFirstXs.some((x, i) => i > 0 && Math.abs(x - rowFirstXs[i - 1]) > 0.2),
+        'hex infill staggers X across adjacent rows',
+    );
+});
+
+test('sampleBoundary2D densifies lower-Z leading edge over higher-Z trailing edge on tilted flats', () => {
+    const zLow = 10;
+    const zHigh = 13.2; // ~15° tilt across 12mm in X
+    const tiltedLoop: Array<[number, number, number]> = [
+        [-6, -6, zLow],
+        [6, -6, zHigh],
+        [6, 6, zHigh],
+        [-6, 6, zLow],
+    ];
+    const samples = sampleBoundary2D(
+        [tiltedLoop],
+        2.2,
+        (x) => ({ z: zLow + ((x + 6) / 12) * (zHigh - zLow) }),
+        { tiltEnabled: true },
+    );
+    assert.ok(samples && samples.length > 0, 'tilted loop sampled');
+    const leadingCount = samples.filter((p) => p.x < -5.5).length;
+    const trailingCount = samples.filter((p) => p.x > 5.5).length;
+    assert.ok(
+        leadingCount > trailingCount,
+        `lower-Z leading edge gets denser sampling than trailing edge (${leadingCount} vs ${trailingCount})`,
+    );
 });

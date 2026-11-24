@@ -506,3 +506,122 @@ test('non-deleted cross warnings and culled pre-existing before supports do not 
     }
 });
 
+test('validateAndCullOrphans keeps routed trunk whose knee clears an obstacle offset toward the tip', () => {
+    initializeBVH();
+    // Obstacle sits at X=[0.5, 1.5], Y=[-1, 1], Z=[9, 13].
+    // Trunk segment runs vertically from (0,0,1) to knee (0,0,10) (1.0mm+ clear of obstacle X>=0.5?
+    // Put obstacle at X=[0.8, 1.8]? Wait: routed trunk diameter 0.8 => radius 0.4 + 0.15 = 0.55.
+    // Put knee at (0, 0, 10), tip at (12, 0, 22), obstacle at X=[0.7, 2.5], Z=[9, 13].
+    // Real segment (0,0,1)->(0,0,10) stays 0.7mm away (> 0.55mm clear).
+    // Legacy buggy checkEnd = 0.9*(0,0,10) + 0.1*(12,0,22) = (1.2, 0, 11.2) -> lands inside X=[0.7, 2.5]!).
+    const boxGeom = new THREE.BoxGeometry(1.8, 2.0, 4.0).translate(1.6, 0, 11.0);
+    accelerateGeometry(boxGeom);
+    const mesh = new THREE.Mesh(boxGeom);
+    mesh.updateMatrixWorld(true);
+
+    const draft = trunkWithShaft('t-routed', 0, 0, 1, 10, 0.8);
+    (draft.trunks['t-routed'] as unknown as { contactCone: unknown }).contactCone = {
+        id: 'c-routed',
+        pos: { x: 12, y: 0, z: 22 },
+        normal: { x: 0, y: 0, z: -1 },
+    };
+
+    const { draft: kept, orphans } = validateAndCullOrphans(draft, mesh, 'm');
+    assert.equal(orphans.length, 0, 'knee segment clear of obstacle must not be culled as hostBlocked');
+    assert.ok(kept.trunks['t-routed'], 'routed trunk survives validation');
+});
+
+test('validateAndCullOrphans keeps top segment ending at socket clear of ceiling contactCone', () => {
+    initializeBVH();
+    // Ceiling slab sits at Z=[11, 13]; trunk top segment ends at socket (0, 0, 10)
+    // while contactCone.pos touches the ceiling at (0, 0, 11).
+    const ceilingGeom = new THREE.BoxGeometry(10, 10, 2).translate(0, 0, 12);
+    accelerateGeometry(ceilingGeom);
+    const mesh = new THREE.Mesh(ceilingGeom);
+    mesh.updateMatrixWorld(true);
+
+    const draft = trunkWithShaft('t-socket', 0, 0, 1, 10, 0.8);
+    (draft.trunks['t-socket'] as unknown as { contactCone: unknown }).contactCone = {
+        id: 'c-socket',
+        pos: { x: 0, y: 0, z: 11 },
+        normal: { x: 0, y: 0, z: -1 },
+    };
+
+    const { draft: kept, orphans } = validateAndCullOrphans(draft, mesh, 'm');
+    assert.equal(orphans.length, 0, 'socket at 1.0mm below ceiling stays clear of ceiling mesh');
+    assert.ok(kept.trunks['t-socket'], 'top-segment trunk survives validation');
+});
+
+test('forest resize clearance guard keeps tight-clearance loaded trunk from self-culling as hostBlocked', () => {
+    initializeBVH();
+    const prevSettings = getSettings();
+    try {
+        const settings = createDefaultSettings();
+        settings.grid.enabled = false;
+        setSettings(settings);
+
+        resetStore();
+        resetKickstandsInState();
+
+        // Ceiling shelf at Z=[22, 24] plus a side obstacle at X=[1.25, 3.25], Z=[4, 16]:
+        // A seeded 0.8mm trunk at (0, 0, 1..20.5) has 1.25mm gap (radius 0.4 + 0.15 = 0.55 < 1.25 clear,
+        // even if thickened to 1.8mm => 0.9 + 0.15 = 1.05 < 1.25; let's place obstacle at X=[0.95, 2.95]:
+        // at 0.8mm: 0.4 + 0.15 = 0.55 <= 0.95 (CLEAR). If thickened >= 1.65mm: 0.825 + 0.15 = 0.975 > 0.95 (BLOCKED)).
+        const geom = mergeGeometries([
+            new THREE.BoxGeometry(16, 16, 2).translate(0, 0, 23),
+            new THREE.BoxGeometry(2, 2, 12).translate(1.95, 0, 10),
+        ])!;
+        accelerateGeometry(geom);
+        const mesh = new THREE.Mesh(geom);
+        mesh.updateMatrixWorld(true);
+
+        const seeded = emptySnapshot();
+        seeded.roots['r-tight'] = {
+            id: 'r-tight',
+            modelId: 'm',
+            transform: { pos: { x: 0, y: 0, z: 0 } },
+            diameter: 3,
+            diskHeight: 0.5,
+            coneHeight: 0.5,
+        } as unknown as SupportState['roots'][string];
+        seeded.trunks['t-tight'] = {
+            id: 't-tight',
+            modelId: 'm',
+            rootId: 'r-tight',
+            segments: [{
+                id: 'seg-tight',
+                diameter: 0.8,
+                bottomJoint: { id: 'j-b', pos: { x: 0, y: 0, z: 1 }, diameter: 1.0 },
+                topJoint: { id: 'j-t', pos: { x: 0, y: 0, z: 20.5 }, diameter: 1.0 },
+            }],
+            contactCone: { id: 'c-tight', pos: { x: 0, y: 0, z: 22 }, normal: { x: 0, y: 0, z: -1 } },
+        } as unknown as SupportState['trunks'][string];
+        setSnapshot(seeded);
+
+        // Place multiple neighboring islands within fan radius so t-tight gets heavy
+        // attachment load and resize wants to thicken it past 1.65mm.
+        const islands: DetectedIsland[] = [
+            { id: 'n1', source: 'voxel', contact: new THREE.Vector3(-3.2, 0, 22), baseZ: 22, areaMm2: 1, layerSpan: [0, 440] },
+            { id: 'n2', source: 'voxel', contact: new THREE.Vector3(0, 3.2, 22), baseZ: 22, areaMm2: 1, layerSpan: [0, 440] },
+            { id: 'n3', source: 'voxel', contact: new THREE.Vector3(0, -3.2, 22), baseZ: 22, areaMm2: 1, layerSpan: [0, 440] },
+        ];
+
+        const plan = computeAutoSupportPlan(
+            islands,
+            'm',
+            { debugSkipAutoBracing: true, stabilizationEnabled: false },
+            undefined,
+            mesh,
+        );
+        assert.ok(plan, 'plan computed');
+        assert.ok(plan.support.trunks['t-tight'], 'tight-clearance trunk is kept instead of self-culling after resize');
+        const hostBlocked = (plan.result.analytics?.forestReport?.orphans ?? [])
+            .filter((o) => o.id === 't-tight' && o.reason === 'hostBlocked');
+        assert.equal(hostBlocked.length, 0, 'tight-clearance trunk not reported hostBlocked');
+    } finally {
+        resetStore();
+        resetKickstandsInState();
+        setSettings(prevSettings);
+    }
+});
+

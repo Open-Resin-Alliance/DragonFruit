@@ -343,10 +343,20 @@ export function computeRegionSpacing(
 const BOUNDARY_CONVEX_CORNER_COS = Math.cos((35 * Math.PI) / 180);
 const BOUNDARY_CORNER_MIN_EDGE_MM = 0.25;
 
+export interface BoundarySampleOptions {
+    /** Spacing multiplier on the low leading edge of tilted flat-ish loops (`0.72` default). */
+    leadingEdgeFactor?: number;
+    /** Spacing multiplier on the high trailing edge of tilted flat-ish loops (`1.12` default). */
+    trailingEdgeFactor?: number;
+    /** Enable Z-graded leading/trailing spacing when loop Z span >= 0.4 mm (default `true`). */
+    tiltEnabled?: boolean;
+}
+
 export function sampleBoundary2D(
     loops: Array<Array<[number, number, number]>> | undefined,
     spacing: number,
     surfaceAt: SurfaceSampler,
+    options?: BoundarySampleOptions,
 ): Array<{ x: number; y: number; z: number; faceIndex?: number }> | null {
     if (!loops || loops.length === 0 || spacing <= 0) return null;
     if (!loops.some((l) => l.length >= 2)) return null;
@@ -354,24 +364,38 @@ export function sampleBoundary2D(
     const deduped: Array<{ x: number; y: number; z: number; faceIndex?: number }> = [];
     const cornerMinDist = Math.max(1.1, spacing * 0.55);
     const cornerMinDistSq = cornerMinDist * cornerMinDist;
-    const minDistSq = (spacing * 0.5) * (spacing * 0.5);
+    const tiltEnabled = options?.tiltEnabled !== false;
+    const leadFactor = options?.leadingEdgeFactor ?? 0.72;
+    const trailFactor = options?.trailingEdgeFactor ?? 1.12;
 
-    const tryPush = (p: { x: number; y: number; z: number; faceIndex?: number }, distSq: number): void => {
+    const tryPush = (p: { x: number; y: number; z: number; faceIndex?: number }, distSq: number): boolean => {
         for (const q of deduped) {
             const dx = p.x - q.x;
             const dy = p.y - q.y;
-            if (dx * dx + dy * dy < distSq) return;
+            if (dx * dx + dy * dy < distSq) return false;
         }
         deduped.push(p);
+        return true;
     };
+
+    const perLoopMeta: Array<{
+        sampledVerts: Array<{ x: number; y: number; z: number; faceIndex?: number } | null>;
+        pinnedIndices: number[];
+        loopMinZ: number;
+        loopZSpan: number;
+        minZIdx: number;
+    }> = [];
 
     // Pass 1: Pin sharp convex corners and local Z minima along each closed loop
     // first so scalloped leading edges (toe tips, heel crests, sharp cuffs) are
-    // anchored before uniform arc-length resampling fills the spans between them.
+    // anchored before subdividing every corner-to-corner edge chain evenly.
     for (let li = 0; li < loops.length; li++) {
         const loop = loops[li];
         const n = loop.length;
-        if (n < 3) continue;
+        if (n < 3) {
+            perLoopMeta.push({ sampledVerts: [], pinnedIndices: [], loopMinZ: 0, loopZSpan: 0, minZIdx: 0 });
+            continue;
+        }
 
         let depth = 0;
         const sx = loop[0][0];
@@ -391,12 +415,30 @@ export function sampleBoundary2D(
         const windingSign = area2 >= 0 ? 1 : -1;
 
         const sampledVerts: Array<{ x: number; y: number; z: number; faceIndex?: number } | null> = new Array(n);
+        let loopMinZ = Infinity;
+        let loopMaxZ = -Infinity;
+        let minZIdx = 0;
         for (let i = 0; i < n; i++) {
             const s = surfaceAt(loop[i][0], loop[i][1]);
-            sampledVerts[i] = s ? { x: loop[i][0], y: loop[i][1], z: s.z, faceIndex: s.faceIndex } : null;
+            const v = s ? { x: loop[i][0], y: loop[i][1], z: s.z, faceIndex: s.faceIndex } : null;
+            sampledVerts[i] = v;
+            if (v) {
+                if (v.z < loopMinZ) {
+                    loopMinZ = v.z;
+                    minZIdx = i;
+                }
+                if (v.z > loopMaxZ) loopMaxZ = v.z;
+            }
         }
+        const loopZSpan = Number.isFinite(loopMinZ) && Number.isFinite(loopMaxZ)
+            ? Math.max(0, loopMaxZ - loopMinZ)
+            : 0;
 
-        const priorityCorners: Array<{ pt: { x: number; y: number; z: number; faceIndex?: number }; score: number }> = [];
+        const priorityCorners: Array<{
+            idx: number;
+            pt: { x: number; y: number; z: number; faceIndex?: number };
+            score: number;
+        }> = [];
         for (let i = 0; i < n; i++) {
             const cur = sampledVerts[i];
             if (!cur) continue;
@@ -415,8 +457,6 @@ export function sampleBoundary2D(
             if (len1 >= BOUNDARY_CORNER_MIN_EDGE_MM && len2 >= BOUNDARY_CORNER_MIN_EDGE_MM) {
                 const dot = (e1x * e2x + e1y * e2y) / (len1 * len2);
                 const cross = (e1x * e2y - e1y * e2x) * windingSign;
-                // On an outer loop, convex turns share the loop's winding sign;
-                // on a hole, inward protrusions have the opposite sign.
                 const outwardTurn = isHole ? cross < 0 : cross > 0;
                 if (outwardTurn && dot <= BOUNDARY_CONVEX_CORNER_COS) {
                     isConvexCorner = true;
@@ -432,46 +472,121 @@ export function sampleBoundary2D(
 
             if (isConvexCorner || isLocalZMin) {
                 priorityCorners.push({
+                    idx: i,
                     pt: cur,
                     score: (isLocalZMin ? 2 : 0) + sharpness,
                 });
             }
         }
         priorityCorners.sort((a, b) => b.score - a.score || a.pt.z - b.pt.z);
+        const pinnedIndices: number[] = [];
         for (const item of priorityCorners) {
-            tryPush(item.pt, cornerMinDistSq);
+            if (tryPush(item.pt, cornerMinDistSq)) {
+                pinnedIndices.push(item.idx);
+            }
         }
+        pinnedIndices.sort((a, b) => a - b);
+        perLoopMeta.push({ sampledVerts, pinnedIndices, loopMinZ, loopZSpan, minZIdx });
     }
 
-    // Pass 2: Uniform arc-length resampling fills the spans between pinned corners.
-    const raw: Array<{ x: number; y: number; z: number; faceIndex?: number }> = [];
-    for (const loop of loops) {
-        let acc = 0;
-        for (let i = 0; i < loop.length; i++) {
-            const a = loop[i];
-            const b = loop[(i + 1) % loop.length];
-            const segLen = Math.hypot(b[0] - a[0], b[1] - a[1]);
-            if (segLen < 1e-9) continue;
-            if (acc === 0) {
-                const s = surfaceAt(a[0], a[1]);
-                if (s) raw.push({ x: a[0], y: a[1], z: s.z, faceIndex: s.faceIndex });
+    // Pass 2: Split each loop at its pinned vertices and subdivide every chain uniformly,
+    // tightening spacing on the peel-leading low edge of tilted flat-ish surfaces.
+    for (let li = 0; li < loops.length; li++) {
+        const loop = loops[li];
+        const n = loop.length;
+        if (n < 2) continue;
+
+        if (n < 3) {
+            const a = loop[0];
+            const b = loop[1];
+            const s0 = surfaceAt(a[0], a[1]);
+            if (s0) tryPush({ x: a[0], y: a[1], z: s0.z, faceIndex: s0.faceIndex }, (spacing * 0.5) ** 2);
+            const s1 = surfaceAt(b[0], b[1]);
+            if (s1) tryPush({ x: b[0], y: b[1], z: s1.z, faceIndex: s1.faceIndex }, (spacing * 0.5) ** 2);
+            continue;
+        }
+
+        const { sampledVerts, pinnedIndices, loopMinZ, loopZSpan, minZIdx } = perLoopMeta[li];
+        const hasPins = pinnedIndices.length > 0;
+        const chainStarts = hasPins ? pinnedIndices : [minZIdx];
+        const numChains = chainStarts.length;
+
+        for (let ci = 0; ci < numChains; ci++) {
+            const startIdx = chainStarts[ci];
+            const endIdx = hasPins ? chainStarts[(ci + 1) % numChains] : startIdx;
+
+            const segIndices: number[] = [];
+            let cur = startIdx;
+            for (let guard = 0; guard < n; guard++) {
+                segIndices.push(cur);
+                cur = (cur + 1) % n;
+                if (cur === endIdx) break;
             }
-            let d = spacing - acc;
-            while (d <= segLen) {
-                const t = d / segLen;
+
+            let chainLen = 0;
+            let zSum = 0;
+            let zWeight = 0;
+            const segLens: number[] = [];
+            for (const vi of segIndices) {
+                const a = loop[vi];
+                const b = loop[(vi + 1) % n];
+                const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+                segLens.push(len);
+                chainLen += len;
+                const sa = sampledVerts[vi];
+                const sb = sampledVerts[(vi + 1) % n];
+                const za = sa?.z ?? a[2];
+                const zb = sb?.z ?? b[2];
+                if (Number.isFinite(za) && Number.isFinite(zb) && len > 1e-6) {
+                    zSum += 0.5 * (za + zb) * len;
+                    zWeight += len;
+                }
+            }
+            if (chainLen < 1e-6) continue;
+
+            let localSpacing = spacing;
+            if (tiltEnabled && loopZSpan >= 0.4 && zWeight > 0) {
+                const meanZ = zSum / zWeight;
+                const leadThreshold = loopMinZ + Math.max(0.8, 0.22 * loopZSpan);
+                const trailThreshold = loopMinZ + 0.72 * loopZSpan;
+                if (meanZ <= leadThreshold) {
+                    localSpacing = Math.max(PERIMETER_SPACING_FLOOR_MM * 0.85, spacing * leadFactor);
+                } else if (meanZ >= trailThreshold) {
+                    localSpacing = spacing * trailFactor;
+                }
+            }
+
+            const steps = Math.max(1, Math.round(chainLen / localSpacing));
+            const stepDist = chainLen / steps;
+            const localMinDistSq = (localSpacing * 0.48) ** 2;
+
+            const firstStep = hasPins ? 1 : 0;
+            let walkIdx = 0;
+            let walkStart = 0;
+            let walkEnd = segLens[0] ?? 0;
+
+            for (let s = firstStep; s < steps; s++) {
+                const targetDist = s * stepDist;
+                while (targetDist > walkEnd + 1e-9 && walkIdx + 1 < segIndices.length) {
+                    walkIdx++;
+                    walkStart = walkEnd;
+                    walkEnd += segLens[walkIdx];
+                }
+                const vi = segIndices[walkIdx];
+                const a = loop[vi];
+                const b = loop[(vi + 1) % n];
+                const segLen = segLens[walkIdx];
+                const t = segLen > 1e-9 ? Math.min(1, Math.max(0, (targetDist - walkStart) / segLen)) : 0;
                 const x = a[0] + (b[0] - a[0]) * t;
                 const y = a[1] + (b[1] - a[1]) * t;
-                const s = surfaceAt(x, y);
-                if (s) raw.push({ x, y, z: s.z, faceIndex: s.faceIndex });
-                d += spacing;
+                const surf = surfaceAt(x, y);
+                if (surf) {
+                    tryPush({ x, y, z: surf.z, faceIndex: surf.faceIndex }, localMinDistSq);
+                }
             }
-            acc = (acc + segLen) % spacing;
         }
     }
 
-    for (const p of raw) {
-        tryPush(p, minDistSq);
-    }
     return deduped.length > 0 ? deduped : null;
 }
 
@@ -974,63 +1089,113 @@ export function generateGridCandidates(
             return false;
         };
 
-        // Grid infill — the lattice spans the region with integer rows and
-        // columns (never cut off by a leftover margin), inset by the contact
-        // radius so a support never hangs half its disc past the edge.
-        const lattice: Array<{ x: number; y: number; z: number }> = [];
-        // A footprint thinner than one lattice cell gets no infill: the rows
-        // would land a fraction of a millimeter apart, doubling the density on
-        // a rib the ring already carries end to end.
-        if (!isSliver && Math.min(width, height) >= spacing) {
-            for (let i = 0; i <= nx; i += stride) {
-                for (let j = 0; j <= ny; j += stride) {
-                    const x = minX + inset + i * spacingX;
-                    const y = minY + inset + j * spacingY;
-                    const s = surfaceAt(x, y);
-                    if (s && !isNearPinnedAnchor(x, y, s.z)) {
-                        const pt = { x, y, z: s.z };
-                        lattice.push(pt);
-                        emitPoint(x, y, s.z, 'grid', s.faceIndex);
+        const hasPolygonLoops = Boolean(island.perimeterLoops && island.perimeterLoops.some((l) => l.length >= 2));
+        if (hasPolygonLoops) {
+            // Perimeter-first + hexagonal interior infill on real mesh boundaries:
+            // emit the corner-pinned, leading-edge-graded boundary ring first so
+            // infill never eats edge supports, then pack interior with staggered hex cells.
+            const ringPoints: Array<{ x: number; y: number; z: number }> = [];
+            const boundary = sampleBoundary2D(
+                insetPolygonLoops2D(island.perimeterLoops, extraLoopInsetMm),
+                ringSpacing,
+                surfaceAt,
+                { tiltEnabled: (island.overhangAngleDeg ?? 0) <= 30 && !island.steepFlat },
+            ) ?? [];
+            for (const b of boundary) {
+                if (isNearPinnedAnchor(b.x, b.y, b.z)) continue;
+                ringPoints.push({ x: b.x, y: b.y, z: b.z });
+                emitPoint(b.x, b.y, b.z, 'fill', b.faceIndex ?? null);
+            }
+
+            if (!isSliver && Math.min(width, height) >= spacing) {
+                const hexRowTarget = spacing * Math.sqrt(3) * 0.5;
+                const nyHex = Math.max(1, Math.round(spanY / hexRowTarget));
+                const hexRowStep = spanY / nyHex;
+                const ringExclusionSq = (ringSpacing * 0.62) ** 2;
+                let emittedInfill = 0;
+                for (let j = 0; j <= nyHex; j += stride) {
+                    const rowShift = (Math.floor(j / stride) % 2 === 1) ? 0.5 * spacingX * stride : 0;
+                    const y = minY + inset + j * hexRowStep;
+                    for (let i = 0; i <= nx; i += stride) {
+                        const x = minX + inset + i * spacingX + rowShift;
+                        if (x > maxX - inset + 1e-6) continue;
+                        let nearRing = false;
+                        for (const rp of ringPoints) {
+                            const dx = x - rp.x;
+                            const dy = y - rp.y;
+                            if (dx * dx + dy * dy <= ringExclusionSq) {
+                                nearRing = true;
+                                break;
+                            }
+                        }
+                        if (nearRing) continue;
+                        const s = surfaceAt(x, y);
+                        if (s && !isNearPinnedAnchor(x, y, s.z)) {
+                            emitPoint(x, y, s.z, 'grid', s.faceIndex);
+                            emittedInfill++;
+                        }
+                    }
+                }
+                if (emittedInfill === 0) {
+                    const cx = minX + inset + 0.5 * spanX;
+                    const cy = minY + inset + 0.5 * spanY;
+                    const centerExclusionSq = (ringSpacing * 0.55) ** 2;
+                    let nearRing = false;
+                    for (const rp of ringPoints) {
+                        const dx = cx - rp.x;
+                        const dy = cy - rp.y;
+                        if (dx * dx + dy * dy <= centerExclusionSq) {
+                            nearRing = true;
+                            break;
+                        }
+                    }
+                    if (!nearRing) {
+                        const s = surfaceAt(cx, cy);
+                        if (s && !isNearPinnedAnchor(cx, cy, s.z)) {
+                            emitPoint(cx, cy, s.z, 'grid', s.faceIndex);
+                        }
                     }
                 }
             }
-        }
-        // Pinned anchors are checked via Z-aware `isNearPinnedAnchor` below — never
-        // flatten them into the 2D `lattice`, which would strip Z-distant boundary points.
-        // Boundary ring — deliberately TIGHTER than the infill (the edge
-        // engages peel first) and deduped against the lattice at half the
-        // ring spacing, so the outline is traced even on small regions where
-        // every ring point sits within a lattice cell of some interior point.
-        const ringCoverageSq = (ringSpacing * 0.5) * (ringSpacing * 0.5);
-        const boundary: Array<{ x: number; y: number; z: number; faceIndex?: number }> = sampleBoundary2D(
-            insetPolygonLoops2D(island.perimeterLoops, extraLoopInsetMm),
-            ringSpacing,
-            surfaceAt,
-        )
-            ?? buildBoundaryPoints(
+        } else {
+            // Voxel-only fallback (no perimeter loops): uniform rectangular lattice + voxel perimeter.
+            const lattice: Array<{ x: number; y: number; z: number }> = [];
+            if (!isSliver && Math.min(width, height) >= spacing) {
+                for (let i = 0; i <= nx; i += stride) {
+                    for (let j = 0; j <= ny; j += stride) {
+                        const x = minX + inset + i * spacingX;
+                        const y = minY + inset + j * spacingY;
+                        const s = surfaceAt(x, y);
+                        if (s && !isNearPinnedAnchor(x, y, s.z)) {
+                            const pt = { x, y, z: s.z };
+                            lattice.push(pt);
+                            emitPoint(x, y, s.z, 'grid', s.faceIndex);
+                        }
+                    }
+                }
+            }
+            const ringCoverageSq = (ringSpacing * 0.5) * (ringSpacing * 0.5);
+            const boundary: Array<{ x: number; y: number; z: number; faceIndex?: number }> = buildBoundaryPoints(
                 eroded.count > 0 ? eroded : voxels,
                 ringSpacing,
                 minZ,
             );
-        for (const b of boundary) {
-            let covered = false;
-            for (const p of lattice) {
-                const dx = b.x - p.x;
-                const dy = b.y - p.y;
-                if (dx * dx + dy * dy <= ringCoverageSq) {
-                    covered = true;
-                    break;
+            for (const b of boundary) {
+                let covered = false;
+                for (const p of lattice) {
+                    const dx = b.x - p.x;
+                    const dy = b.y - p.y;
+                    if (dx * dx + dy * dy <= ringCoverageSq) {
+                        covered = true;
+                        break;
+                    }
                 }
+                if (covered) continue;
+                const sampled = surfaceAt(b.x, b.y);
+                if (!sampled) continue;
+                if (isNearPinnedAnchor(b.x, b.y, sampled.z)) continue;
+                emitPoint(b.x, b.y, sampled.z, 'fill', sampled.faceIndex ?? b.faceIndex ?? null);
             }
-            if (covered) continue;
-            // Reuse faceIndex from sampleBoundary2D when already sampled; otherwise
-            // raycast voxel fallback points so the ring matches lattice Z and normal.
-            const sampled = b.faceIndex !== undefined
-                ? { z: b.z, faceIndex: b.faceIndex }
-                : surfaceAt(b.x, b.y);
-            if (!sampled) continue;
-            if (isNearPinnedAnchor(b.x, b.y, sampled.z)) continue;
-            emitPoint(b.x, b.y, sampled.z, 'fill', sampled.faceIndex ?? b.faceIndex ?? null);
         }
 
         if (emittedForRegion === 0) {
