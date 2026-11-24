@@ -34,7 +34,9 @@ import { reportAddressesTriangleSoup } from '../src/features/scene/voxl/classifi
 import {
   DYNAMIC_PLATE_ORDERING,
   VOXL_PLATE_ORDERING_EXTENSION,
+  VOXL_PLATE_ORIGIN_EXTENSION,
   readPlateOrdering,
+  readPlateOriginMode,
 } from '../src/features/scene/plates/plateCascade';
 import { computePlateFrames, plateSliceScope, resolveModelPlateId, type PlateSliceScope } from '../src/features/scene/plates/plateLayout';
 import type {
@@ -1286,7 +1288,8 @@ async function sceneArrange(args: ReturnType<typeof parseArgs>): Promise<void> {
     sceneModels: arrangeModels,
     widthMm: plateW,
     depthMm: plateD,
-    originMode: 'center',
+    // Positions are written in the frame the scene's are measured in.
+    originMode: readPlateOriginMode(doc.extensions?.[VOXL_PLATE_ORIGIN_EXTENSION]) ?? 'center',
     arrangeSpacingMm: spacing,
     arrangeAllowRotateOnZ: false,
     arrangeAnchorMode: anchorMode,
@@ -1484,8 +1487,9 @@ function loadSceneSliceMesh(): typeof import('./cli/sceneSliceMesh') {
 /**
  * The plate `scene slice` covers: `--plate` (an id, or a number from 1), else the
  * plate the scene was being worked on, else the first. Plates are laid out the way
- * the app lays them out, from the printer's footprint and the scene's ordering;
- * the origin is taken as the plate's centre, the app's default.
+ * the app lays them out, from the printer's footprint and the scene's ordering
+ * and origin; a scene that does not record its origin was laid out from the
+ * plate's centre, the app's default.
  */
 function resolveSlicePlate(
   doc: VoxlDocumentV1,
@@ -1495,7 +1499,10 @@ function resolveSlicePlate(
   const plates = doc.scene.plates?.length ? doc.scene.plates : [{ id: 'plate-1' }];
   const frames = computePlateFrames({
     plates,
-    footprint: { ...footprint, originMode: 'center' },
+    footprint: {
+      ...footprint,
+      originMode: readPlateOriginMode(doc.extensions?.[VOXL_PLATE_ORIGIN_EXTENSION]) ?? 'center',
+    },
     ordering: readPlateOrdering(doc.extensions?.[VOXL_PLATE_ORDERING_EXTENSION]) ?? DYNAMIC_PLATE_ORDERING,
   });
   const frame = plateFlag !== undefined

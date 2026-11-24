@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import test, { after, before, describe } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { VOXL_PLATE_ORDERING_EXTENSION } from '@/features/scene/plates/plateCascade';
+import { VOXL_PLATE_ORDERING_EXTENSION, VOXL_PLATE_ORIGIN_EXTENSION } from '@/features/scene/plates/plateCascade';
 import { payloadOf, supportsOf } from '@/supports/__tests__/helpers/modelSupportFixtures';
 import { IMPORT_PAYLOAD_COLLECTION_ORDER } from '@/supports/supportCollections';
 import { parseVoxlBinaryV2, serializeVoxlDocumentV2 } from '../codec-v2';
@@ -78,7 +78,10 @@ function appScene(): { input: BuildVoxlDocumentInput; meshBytes: Map<number, Uin
     plates: [{ id: 'plate-1', name: 'First' }, { id: 'plate-2', name: 'Second' }],
     activePlateId: 'plate-2',
     supports: payloadOf(supportsOf('m-a'), supportsOf('m-b')),
-    extensions: { [VOXL_PLATE_ORDERING_EXTENSION]: { mode: 'fixed', columns: 2 } },
+    extensions: {
+      [VOXL_PLATE_ORDERING_EXTENSION]: { mode: 'fixed', columns: 2 },
+      [VOXL_PLATE_ORIGIN_EXTENSION]: 'front_left',
+    },
     materials: MATERIALS,
     meta: { generator: 'DragonFruit', generatorVersion: '0.0.0-test' },
   };

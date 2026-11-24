@@ -59,6 +59,41 @@ export function plateLocalRect({ widthMm, depthMm, originMode }: PlateFootprint)
   };
 }
 
+/** How far in from each edge of a plate models are kept, in millimetres. */
+export interface PlateSafetyMargin {
+  front?: number;
+  back?: number;
+  left?: number;
+  right?: number;
+}
+
+/**
+ * Where models may go on one plate: its build volume, moved by `offsetMm` (a plate's
+ * cascade offset, or none for the plate's own frame), less the safety margin on each
+ * side. A negative margin keeps nothing clear.
+ */
+export function plateBuildArea({
+  footprint,
+  offsetMm,
+  safetyMarginMm,
+}: {
+  footprint: PlateFootprint;
+  offsetMm?: { dxMm: number; dyMm: number };
+  safetyMarginMm?: PlateSafetyMargin;
+}): PlateRect {
+  const local = plateLocalRect(footprint);
+  // Summed in this order on purpose: the packers' results are compared exactly, and this
+  // is the order they were written with.
+  const minX = local.minX + (offsetMm?.dxMm ?? 0);
+  const minY = local.minY + (offsetMm?.dyMm ?? 0);
+  return {
+    minX: minX + Math.max(0, safetyMarginMm?.left ?? 0),
+    maxX: minX + footprint.widthMm - Math.max(0, safetyMarginMm?.right ?? 0),
+    minY: minY + Math.max(0, safetyMarginMm?.front ?? 0),
+    maxY: minY + footprint.depthMm - Math.max(0, safetyMarginMm?.back ?? 0),
+  };
+}
+
 /** Every plate's world rect and cascade offset, in display order. */
 export function computePlateFrames({
   plates,
@@ -144,6 +179,24 @@ export function plateFrameFor({
   plateId: string | null | undefined;
 }): PlateFrame | undefined {
   return frames.find((frame) => frame.id === plateId) ?? frames[0];
+}
+
+/**
+ * The middle of the plate `plateId` in world coordinates, or of the first plate when
+ * the id is gone: where new work lands, and where centring a selection puts it.
+ */
+export function plateCenterFor({
+  frames,
+  plateId,
+  footprint,
+}: {
+  frames: readonly PlateFrame[];
+  plateId: string | null | undefined;
+  footprint: PlateFootprint;
+}): { x: number; y: number } {
+  const { centerX, centerY } = plateLocalRect(footprint);
+  const frame = plateFrameFor({ frames, plateId });
+  return { x: centerX + (frame?.dxMm ?? 0), y: centerY + (frame?.dyMm ?? 0) };
 }
 
 /**
@@ -252,6 +305,29 @@ export function plateSliceScope<M extends PlateMember & { id: string }>({
 export interface PlateShift {
   dxMm: number;
   dyMm: number;
+}
+
+/**
+ * How far every model moves when a scene laid out under one origin mode is opened under
+ * another: by how far the middle of a bed moves between the two frames, so a model keeps
+ * its place on its bed. Every bed's frame moves by the same amount, so one shift serves
+ * every model, on every plate.
+ *
+ * `was` is the footprint and origin the file was laid out with, `now` the viewer's. With
+ * the same origin there is nothing to do here: a change of build volume alone is
+ * `relaidPlateShifts`'s, which keeps each model where it was from its plate's origin.
+ */
+export function originModeShift({
+  was,
+  now,
+}: {
+  was: PlateFootprint;
+  now: PlateFootprint;
+}): PlateShift {
+  if (was.originMode === now.originMode) return { dxMm: 0, dyMm: 0 };
+  const from = plateLocalRect(was);
+  const to = plateLocalRect(now);
+  return { dxMm: to.centerX - from.centerX, dyMm: to.centerY - from.centerY };
 }
 
 /**

@@ -252,8 +252,7 @@ import {
   type ArrangeModel as HighPrecisionArrangeModel,
 } from '@/features/scene/arrange/highPrecisionArrange';
 import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
-import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
-import { modelsOnPlate, plateCanBeRemoved } from '@/features/scene/plates/plateLayout';
+import { appendedPlateSlots, modelsOnPlate, plateBuildArea, plateCanBeRemoved, plateCenterFor, plateLocalRect } from '@/features/scene/plates/plateLayout';
 
 // Domain Features
 import { useSceneCollectionManager, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
@@ -1431,6 +1430,7 @@ export default function Home() {
     plateName: scene.plateName,
     printer: scene.voxlPrinterBundle ?? undefined,
     plateOrdering: scene.plateOrdering,
+    plateOriginMode: scene.view3dSettings.originMode,
     enabled: sceneAutosaveEnabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
     cooldownMs: sceneAutosaveSettings.cooldownMs,
@@ -3305,14 +3305,15 @@ export default function Home() {
   const resinBuildVolumeBounds = React.useMemo(() => {
     if (!scene.view3dSettings.enabled) return null;
 
-    const width = scene.view3dSettings.widthMm;
-    const depth = scene.view3dSettings.depthMm;
-    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -width * 0.5;
-    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
+    const { minX, minY, maxX, maxY } = plateLocalRect({
+      widthMm: scene.view3dSettings.widthMm,
+      depthMm: scene.view3dSettings.depthMm,
+      originMode: scene.view3dSettings.originMode,
+    });
 
     return new THREE.Box3(
       new THREE.Vector3(minX, minY, 0),
-      new THREE.Vector3(minX + width, minY + depth, scene.view3dSettings.maxZMm),
+      new THREE.Vector3(maxX, maxY, scene.view3dSettings.maxZMm),
     );
   }, [
     scene.view3dSettings.depthMm,
@@ -4597,6 +4598,7 @@ export default function Home() {
           plateName: scene.plateName,
           printer: scene.voxlPrinterBundle ?? undefined,
           plateOrdering: scene.plateOrdering,
+          plateOriginMode: scene.view3dSettings.originMode,
         },
         exportThumbnailPng,
       ),
@@ -4658,6 +4660,7 @@ export default function Home() {
     scene.plateOrdering,
     scene.plates,
     scene.selectedModelIds,
+    scene.view3dSettings.originMode,
     scene.voxlPrinterBundle,
     setExportSuccessToast,
     setIsExportSuccessToastVisible,
@@ -7501,14 +7504,15 @@ export default function Home() {
   const buildVolumeBounds = React.useMemo(() => {
     if (!scene.view3dSettings.enabled) return null;
 
-    const width = scene.view3dSettings.widthMm;
-    const depth = scene.view3dSettings.depthMm;
-    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -width * 0.5;
-    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
+    const { minX, minY, maxX, maxY } = plateLocalRect({
+      widthMm: scene.view3dSettings.widthMm,
+      depthMm: scene.view3dSettings.depthMm,
+      originMode: scene.view3dSettings.originMode,
+    });
 
     return new THREE.Box3(
       new THREE.Vector3(minX, minY, 0),
-      new THREE.Vector3(minX + width, minY + depth, scene.view3dSettings.maxZMm),
+      new THREE.Vector3(maxX, maxY, scene.view3dSettings.maxZMm),
     );
   }, [
     scene.view3dSettings.depthMm,
@@ -9300,14 +9304,25 @@ export default function Home() {
       selectedModelIds: scene.selectedModelIds,
       activeModelId: scene.activeModelId,
     });
-    const targetCenter = scene.view3dSettings.originMode === 'front_left'
-      ? new THREE.Vector2(scene.view3dSettings.widthMm * 0.5, scene.view3dSettings.depthMm * 0.5)
-      : new THREE.Vector2(0, 0);
+    // The middle of the plate being worked on: on plate 3, centring the selection
+    // used to send it to the middle of plate 1.
+    const { x, y } = plateCenterFor({
+      frames: scene.plateFrames,
+      plateId: scene.activePlateId,
+      footprint: {
+        widthMm: scene.view3dSettings.widthMm,
+        depthMm: scene.view3dSettings.depthMm,
+        originMode: scene.view3dSettings.originMode,
+      },
+    });
+    const targetCenter = new THREE.Vector2(x, y);
     applySelectionPositionUpdates(buildCenterSelectionUpdates(scene.models, targetIds, targetCenter));
   }, [
     applySelectionPositionUpdates,
     scene.activeModelId,
+    scene.activePlateId,
     scene.models,
+    scene.plateFrames,
     scene.selectedModelIds,
     scene.view3dSettings.depthMm,
     scene.view3dSettings.originMode,
@@ -9768,15 +9783,10 @@ export default function Home() {
       // Spacing may be negative (nesting); clamp so a step never collapses.
       const spacing = Math.max(-Math.min(width, depth) + 0.1, duplicateSpacingMm);
 
-      const rawDupMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-      const rawDupMaxX = rawDupMinX + scene.view3dSettings.widthMm;
-      const rawDupMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-      const rawDupMaxY = rawDupMinY + scene.view3dSettings.depthMm;
-      const dupSm = scene.view3dSettings.safetyMarginMm;
-      const minX = rawDupMinX + Math.max(0, dupSm?.left ?? 0);
-      const maxX = rawDupMaxX - Math.max(0, dupSm?.right ?? 0);
-      const minY = rawDupMinY + Math.max(0, dupSm?.front ?? 0);
-      const maxY = rawDupMaxY - Math.max(0, dupSm?.back ?? 0);
+      const { minX, maxX, minY, maxY } = plateBuildArea({
+        footprint: scene.view3dSettings,
+        safetyMarginMm: scene.view3dSettings.safetyMarginMm,
+      });
 
       const plateWidth = Math.max(1, maxX - minX);
       const plateDepth = Math.max(1, maxY - minY);
@@ -9878,17 +9888,17 @@ export default function Home() {
       const remaining = Math.max(0, totalCount - chosenCenters.length);
       const perBed = Math.max(1, maxCols * maxRows);
       const ghostBeds = remaining > 0 ? Math.ceil(remaining / perBed) : 0;
-      const footprint = { widthMm: scene.view3dSettings.widthMm, depthMm: scene.view3dSettings.depthMm };
       const ghostOffsets: Array<{ dxMm: number; dyMm: number }> = [];
       let placedOnGhostBeds = 0;
+      const ghostSlots = appendedPlateSlots({
+        plates: scene.plates,
+        count: ghostBeds,
+        footprint: scene.view3dSettings,
+        ordering: scene.plateOrdering,
+      });
 
-      for (let bed = 0; bed < ghostBeds; bed += 1) {
-        const offset = plateCascadeOffsetMm(
-          scene.plates.length + bed,
-          footprint,
-          scene.plates.length + ghostBeds,
-          scene.plateOrdering,
-        );
+      for (const { dxMm, dyMm } of ghostSlots) {
+        const offset = { dxMm, dyMm };
         ghostOffsets.push(offset);
 
         // Nearest the middle of that bed first, which is where the eye looks for them.

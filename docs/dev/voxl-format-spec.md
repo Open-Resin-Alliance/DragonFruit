@@ -435,6 +435,17 @@ Extensions location:
 
 Unknown extension keys should be ignored.
 
+Plate layout extensions (both optional, read by `src/features/scene/plates/plateCascade.ts`):
+
+| Key | Value | Without it |
+| --- | --- | --- |
+| `plateOrdering` | the grid the beds were laid out on, `{ "mode": "dynamic" | "fixed", "columns": n }` (`columns` is read by `fixed` alone) | the dynamic grid |
+| `plateOriginMode` | `"center"` or `"front_left"`: the point of a bed model positions are measured from | the reader keeps its own (the app: the viewer's origin mode; the CLI: `center`) |
+
+Model positions are in the frame these two describe, spaced by the recorded printer's
+`buildVolumeMm`. A reader whose own layout differs moves each model with its bed, so a model
+keeps its place on the bed it stands on.
+
 ## Implementation notes
 
 - The current writer (`src/features/scene/voxl/codec-v2.ts`) emits 3.7 semantics: raw mesh bytes into `MESH` chunks with per-chunk zlib and no base64, which makes files roughly 60-65% smaller than the old JSON container for typical scenes and faster to write and read. It stamps the container floor `2`, or `3` when dedup shared a MESH chunk.

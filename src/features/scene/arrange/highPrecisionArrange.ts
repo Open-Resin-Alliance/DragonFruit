@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { convexHull2d } from '@/supports/Rafts/Crenelated/geometry/convexHull2d';
 import type { ArrangeAnchorMode } from '@/components/controls/ArrangePanel';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { plateBuildArea } from '@/features/scene/plates/plateLayout';
 
 /**
  * High-Precision Arrange (2.5D SAT Nesting)
@@ -121,16 +122,11 @@ export function computeHighPrecisionArrangeResult(input: HighPrecisionArrangeInp
   const minSpacing = spacing + SAT_EPS_MM;
   const PERF_COMPLEX_SCENE = visibleModels.length >= 30;
 
-  const plateDxMm = input.plateOffsetMm?.dxMm ?? 0;
-  const plateDyMm = input.plateOffsetMm?.dyMm ?? 0;
-  const rawMinX = (originMode === 'front_left' ? 0 : -widthMm * 0.5) + plateDxMm;
-  const rawMaxX = rawMinX + widthMm;
-  const rawMinY = (originMode === 'front_left' ? 0 : -depthMm * 0.5) + plateDyMm;
-  const rawMaxY = rawMinY + depthMm;
-  const minX = rawMinX + Math.max(0, input.safetyMarginMm?.left ?? 0);
-  const maxX = rawMaxX - Math.max(0, input.safetyMarginMm?.right ?? 0);
-  const minY = rawMinY + Math.max(0, input.safetyMarginMm?.front ?? 0);
-  const maxY = rawMaxY - Math.max(0, input.safetyMarginMm?.back ?? 0);
+  const { minX, maxX, minY, maxY } = plateBuildArea({
+    footprint: { widthMm, depthMm, originMode },
+    offsetMm: input.plateOffsetMm,
+    safetyMarginMm: input.safetyMarginMm,
+  });
 
   const modelTransformById = new Map(
     sceneModels.map((model) => [model.id, getArrangeTransform(model)] as const),
