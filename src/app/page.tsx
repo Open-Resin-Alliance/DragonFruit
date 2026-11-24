@@ -253,6 +253,7 @@ import {
 } from '@/features/scene/arrange/highPrecisionArrange';
 import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
 import { appendedPlateSlots, modelsOnPlate, plateBuildArea, plateCanBeRemoved, plateCenterFor, plateLocalRect } from '@/features/scene/plates/plateLayout';
+import { scrubPreviewScope } from '@/features/printing/scrubPreviewScope';
 
 // Domain Features
 import { useSceneCollectionManager, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
@@ -1253,6 +1254,8 @@ export default function Home() {
   }, [scene.mode, transformMgr.transformMode]);
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
   const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
+  /** The supports and rafts of the plate the scrub preview is of, moved with its models (#867). */
+  const printingScrubSupportGroupRef = React.useRef<THREE.Group | null>(null);
   const supportDragResetRafRef = React.useRef<number | null>(null);
   const supportDragResetSecondRafRef = React.useRef<number | null>(null);
   const [holdSupportDragDeltaUntilSupportSync, setHoldSupportDragDeltaUntilSupportSync] = React.useState(false);
@@ -3225,28 +3228,28 @@ export default function Home() {
   }, [completedSaveDestinationPath, completedSaveDirectory, completedSliceIntent, printingSlicingBenchmark?.totalElapsedMs]);
 
   /**
-   * What the fast scrub preview draws: the models of the bed being worked on, moved to the
-   * origin the way the slice itself is taken.
-   *
-   * The preview is a top-down look at one bed's build volume, drawn around the origin. Handed
-   * the scene as it stands, it shows the bed that sits at the origin — plate 1 — whatever bed
-   * the preview is really of, which is why scrubbing showed the wrong model on plate 2.
+   * What the fast scrub preview draws: the bed being worked on, which is the one the
+   * workspace shows the slice of, moved to the origin the way the slice itself is taken —
+   * its models, and through `printingScrubSupportGroupRef` its supports and rafts.
    */
-  const printingScrubPreviewModels = React.useMemo(() => {
-    const activeFrame = scene.plateFrames.find((frame) => frame.id === scene.activePlateId);
-    const onPlate = modelsOnPlate({ models: scene.models, plateId: scene.activePlateId, frames: scene.plateFrames });
-    if (!activeFrame || (activeFrame.dxMm === 0 && activeFrame.dyMm === 0)) return onPlate;
-
-    return onPlate.map((model) => ({
-      ...model,
-      transform: {
-        ...model.transform,
-        position: model.transform.position.clone().add(
-          new THREE.Vector3(-activeFrame.dxMm, -activeFrame.dyMm, 0),
-        ),
-      },
-    }));
-  }, [scene.activePlateId, scene.models, scene.plateFrames]);
+  const printingScrubScope = React.useMemo(
+    () => scrubPreviewScope({ models: scene.models, frames: scene.plateFrames, plateId: scene.activePlateId }),
+    [scene.activePlateId, scene.models, scene.plateFrames],
+  );
+  /**
+   * The scrub preview gathers the plate's support meshes once and cuts those. It gathers
+   * them again on a support edit, on another plate, and when a drag of the slider starts
+   * or ends, which by then sees whatever the canvas has drawn since.
+   */
+  const printingScrubSupportVersion = `${supportRenderRefreshNonce}|${scene.activePlateId}|${isPrintingLayerScrubbing ? 'scrub' : 'still'}`;
+  /** The canvas draws the plate's supports for the scrub preview only in the printing workspace. */
+  const printingPlateSupports = React.useMemo(() => (scene.mode === 'printing'
+    ? {
+        groupRef: printingScrubSupportGroupRef,
+        excludeModelIds: printingScrubScope.supportExcludeModelIds,
+        offsetMm: printingScrubScope.offsetMm,
+      }
+    : null), [printingScrubScope, scene.mode]);
 
   /**
    * The scene shot a plate's file carries, framed on that plate.
@@ -11185,6 +11188,7 @@ export default function Home() {
             selectedTintStrength={effectiveSelectedTintStrengthForScene}
             supportsRef={supportsRef}
             supportDragGroupRef={supportDragGroupRef}
+            printingPlateSupports={printingPlateSupports}
             holdSupportDragDelta={holdSupportDragDeltaUntilSupportSync}
             supportDragTransactionId={supportDragTransactionId}
             customPrepareLassoSelection={{
@@ -11369,9 +11373,9 @@ export default function Home() {
             printingPreviewTargetResolution={printingPreviewTargetResolution}
             activePrinterProfile={activePrinterProfile}
             printingPreviewVisualTransform={printingPreviewVisualTransform}
-            models={printingScrubPreviewModels}
-            supportDragGroupRef={supportDragGroupRef}
-            supportRenderRefreshNonce={supportRenderRefreshNonce}
+            models={printingScrubScope.models}
+            supportGroupRef={printingScrubSupportGroupRef}
+            supportVersion={printingScrubSupportVersion}
             printingPreviewScrubUpscaleTransform={printingPreviewScrubUpscaleTransform}
             printingPreviewPngUrlForDisplay={printingPreviewPngUrlForDisplay}
             isPrintingPngLoaded={isPrintingPngLoaded}

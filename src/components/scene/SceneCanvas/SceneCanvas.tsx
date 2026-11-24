@@ -615,6 +615,7 @@ export function SceneCanvas({
   blockSupportPlacement,
   supportsRef,
   supportDragGroupRef,
+  printingPlateSupports = null,
   holdSupportDragDelta,
   supportDragTransactionId = 0,
   renderSceneOverlays,
@@ -808,6 +809,16 @@ export function SceneCanvas({
   blockSupportPlacement?: boolean;
   supportsRef?: React.RefObject<THREE.Group | null>;
   supportDragGroupRef?: React.RefObject<THREE.Group | null>;
+  /**
+   * The supports and rafts of one plate, for the printing workspace's scrub preview to
+   * cut: every model's but `excludeModelIds`', moved back by the plate's offset as its
+   * models are. Drawn hidden, under `groupRef`; null draws nothing (#867).
+   */
+  printingPlateSupports?: {
+    groupRef: React.RefObject<THREE.Group | null>;
+    excludeModelIds: string[];
+    offsetMm: { dxMm: number; dyMm: number };
+  } | null;
   holdSupportDragDelta?: boolean;
   supportDragTransactionId?: number;
   renderSceneOverlays?: (context: {
@@ -7417,6 +7428,37 @@ export function SceneCanvas({
                 />
               )}
               </group>{/* end supportDragGroupRef */}
+
+              {/* The scrub preview cuts one plate at the origin, so it needs that plate's
+                  supports and rafts alone, moved as its models are; the world layer above
+                  holds every plate's where they stand (#867). The group is hidden, not the
+                  meshes: the preview's stencil reads each mesh's own visibility, and this
+                  scene never draws them. */}
+              {printingPlateSupports && (
+                <group
+                  ref={printingPlateSupports.groupRef}
+                  visible={false}
+                  position={[-printingPlateSupports.offsetMm.dxMm, -printingPlateSupports.offsetMm.dyMm, 0]}
+                  raycast={() => null}
+                >
+                  <ModelAttachedSupportLayer
+                    plateClearanceTargets={plateClearanceTargets}
+                    mode={mode}
+                    excludeModelIds={printingPlateSupports.excludeModelIds}
+                    hideRaftPrimitives={hideRaftPrimitives}
+                    hidePlateContactPrimitives={hidePlateContactPrimitives}
+                    activeModelId={null}
+                    selectedModelIds={emptySelectedModelIds}
+                    hoverModelId={null}
+                    modelDropOffsetsById={emptyModelDropOffsets}
+                    disableSelectionAndHover
+                    raftColorized={false}
+                    raftHoverized={false}
+                    passive
+                    supportRenderRefreshNonce={supportRenderRefreshNonce}
+                  />
+                </group>
+              )}
 
               {(clipUpper != null || indicatorPlaneZ != null) && !hideCrossSectionCap && (
                 <CrossSectionStencilCap
