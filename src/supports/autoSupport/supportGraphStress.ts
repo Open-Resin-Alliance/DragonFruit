@@ -1,4 +1,6 @@
+import type * as THREE from 'three';
 import type { SupportTypeId } from '../supportTypeRegistry';
+import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { resolveSegmentEndpoints } from '../SupportPrimitives/Knot/segmentEndpoints';
 import type { Knot, Roots, Segment, SupportState, Vec3 } from '../types';
 import { referenceStefanMeanPressureMm2, type RepresentativeLayer, type RepresentativeLayerProfile } from './tractionOptimization';
@@ -10,8 +12,10 @@ export const GREEN_RESIN_UTS_MPA = 12.0;
 const GREEN_RESIN_POISSON = 0.35;
 /** Above this free-node threshold, report rigid-body tip overload only to keep solve time tiny. */
 const MAX_FRAME_SOLVE_FREE_NODES = 1200;
+/** Extra stages the per-component pass may add beyond the global critical layers. */
+const MAX_COMPONENT_STAGE_LAYERS = 8;
 /** Nominal peel stress calibration (MPa = N/mm²): `0.15 N` per `10 mm²` reference disc. */
-const NOMINAL_PEEL_PRESSURE_MPA = NOMINAL_TIP_PEEL_LOAD_N / 10.0;
+export const NOMINAL_PEEL_PRESSURE_MPA = NOMINAL_TIP_PEEL_LOAD_N / 10.0;
 /** Lateral peel drag fraction during release from flexible FEP film. */
 const LATERAL_PEEL_DRAG_RATIO = 0.08;
 /** Minimum spatial merge tolerance (mm) when connecting shared endpoints & knots. */
@@ -58,6 +62,32 @@ export interface FrameStressHotspot {
     pos: Vec3;
 }
 
+export interface LayerPeelPoint {
+    zMm: number;
+    areaMm2: number;
+    peelForceN: number;
+    maxTipUtilPct: number;
+    maxMemberUtilPct: number;
+    critical: boolean;
+}
+
+export interface StressSegment {
+    entityId: string;
+    entityKind: SupportTypeId;
+    a: Vec3;
+    b: Vec3;
+    diameterMm: number;
+    utilizationPct: number;
+}
+
+export interface StressTipPoint {
+    entityId: string;
+    entityKind: SupportTypeId;
+    pos: Vec3;
+    utilizationPct: number;
+    loadN: number;
+}
+
 export interface SupportFrameStressReport {
     nodeCount: number;
     rootCount: number;
@@ -74,6 +104,10 @@ export interface SupportFrameStressReport {
     maxTipDeflectionMm: number;
     solverMode: 'frame3d' | 'rigidBodyOnly';
     hotspots: FrameStressHotspot[];
+    layerProfile: LayerPeelPoint[];
+    memberSegments: StressSegment[];
+    tipPoints: StressTipPoint[];
+    reinforcedCount?: number;
 }
 
 function compareVec3(a: Vec3, b: Vec3): number {
@@ -679,7 +713,7 @@ function globalToLocal12(el: ElementBasisAndLocalK, uGlob: Float64Array, outLoc:
     }
 }
 
-function computeLayerPeelForceAndCop(
+export function computeLayerPeelForceAndCop(
     layer: RepresentativeLayer,
     fallbackAreaMm2: number,
 ): { forceN: number; copX: number; copY: number } {
@@ -730,12 +764,181 @@ function computeLayerPeelForceAndCop(
     return { forceN, copX: 0, copY: 0 };
 }
 
+export interface PeelLayerSample {
+    zMm: number;
+    areaMm2: number;
+    forceN: number;
+    copX: number;
+    copY: number;
+}
+
+/**
+ * Peel force at every sampled layer, not only the ones with a solved field.
+ *
+ * The field-derived pressure ratio (`mean p̃ / p̃_ref`) is anchored at the
+ * representative layers and interpolated across the layers between them, then
+ * multiplied by each layer's own area. The alternative — field force at
+ * representative layers, nominal pressure elsewhere — makes every cluster peak
+ * a spike on the peel graph, because a broad cross-section's saturated suction
+ * is up to ~16× the reference disc's mean while its neighbours read nominal.
+ *
+ * At a representative layer the result equals `computeLayerPeelForceAndCop`
+ * exactly (the ratio is computed from that same integral), so the critical-layer
+ * solve is unaffected; only the layers in between move onto the same scale.
+ */
+export function computePeelLayerSamples(
+    samples: ReadonlyArray<{ zMm: number; areaMm2: number }>,
+    layers: readonly RepresentativeLayer[],
+    fallbackAreaMm2: number,
+): PeelLayerSample[] {
+    const pRef = Math.max(1e-4, referenceStefanMeanPressureMm2(10.0));
+    const anchors = layers
+        .filter((layer) => layer.areaMm2 > 0)
+        .map((layer) => ({
+            zMm: layer.zMm,
+            ratio: layer.stefanField && layer.stefanField.integratedForceMm4 > 0
+                ? (layer.stefanField.integratedForceMm4 / pRef) / Math.max(0.05, layer.areaMm2)
+                : 1,
+        }))
+        .sort((a, b) => a.zMm - b.zMm);
+    const representativeByZ = new Map<number, RepresentativeLayer>();
+    for (const layer of layers) representativeByZ.set(Math.round(layer.zMm * 1000), layer);
+
+    const out: PeelLayerSample[] = [];
+    let anchorIndex = 0;
+    for (const sample of samples) {
+        while (anchorIndex + 1 < anchors.length && anchors[anchorIndex + 1].zMm <= sample.zMm) anchorIndex++;
+        let ratio = 1;
+        if (anchors.length > 0) {
+            const before = anchors[anchorIndex];
+            const after = anchors[Math.min(anchors.length - 1, anchorIndex + 1)];
+            if (sample.zMm <= before.zMm || anchors.length === 1 || after.zMm <= before.zMm) {
+                ratio = before.ratio;
+            } else if (sample.zMm >= after.zMm) {
+                ratio = after.ratio;
+            } else {
+                const t = (sample.zMm - before.zMm) / (after.zMm - before.zMm);
+                ratio = before.ratio + (after.ratio - before.ratio) * t;
+            }
+        }
+        const representative = representativeByZ.get(Math.round(sample.zMm * 1000));
+        const cop = representative
+            ? computeLayerPeelForceAndCop(representative, fallbackAreaMm2)
+            : { copX: 0, copY: 0 };
+        out.push({
+            zMm: sample.zMm,
+            areaMm2: sample.areaMm2,
+            forceN: Math.max(0.01, sample.areaMm2 * ratio) * NOMINAL_PEEL_PRESSURE_MPA,
+            copX: cop.copX,
+            copY: cop.copY,
+        });
+    }
+    return out;
+}
+
+/**
+ * Connected support sub-assemblies, each with at least one tip and grounded
+ * through its own plate roots. Braces merge assemblies, so a limb braced to the
+ * main tower is one component; the split this looks for is a part standing on
+ * its own support tree.
+ */
+function tipComponents(graph: SupportGraph): number[][] {
+    const adjacency: number[][] = Array.from({ length: graph.nodes.length }, () => []);
+    for (const member of graph.members) {
+        adjacency[member.nodeA].push(member.nodeB);
+        adjacency[member.nodeB].push(member.nodeA);
+    }
+    const seen = new Uint8Array(graph.nodes.length);
+    const components: number[][] = [];
+    for (let start = 0; start < graph.nodes.length; start++) {
+        if (seen[start]) continue;
+        const stack = [start];
+        seen[start] = 1;
+        const tips: number[] = [];
+        let grounded = false;
+        while (stack.length > 0) {
+            const ni = stack.pop()!;
+            const node = graph.nodes[ni];
+            if (node.fixed) grounded = true;
+            if (node.kind === 'tip') tips.push(ni);
+            for (const next of adjacency[ni]) {
+                if (!seen[next]) {
+                    seen[next] = 1;
+                    stack.push(next);
+                }
+            }
+        }
+        if (grounded && tips.length > 0) components.push(tips);
+    }
+    return components;
+}
+
+/**
+ * One stage per disconnected sub-assembly at its own peak peel and expansion
+ * layer, for assemblies no global stage reaches. Global selection samples the
+ * model's three worst layers; a short limb hanging on its own support tree can
+ * sit entirely below them, and its tips would then never see a load at all.
+ *
+ * A component already exercised by a chosen global stage is skipped: the global
+ * stage activates its tips, and the extra solve would only re-sample the same
+ * cross-section.
+ */
+function selectComponentStages(
+    graph: SupportGraph,
+    profile: RepresentativeLayerProfile,
+    eligibleIndices: readonly number[],
+    chosenPositions: ReadonlySet<number>,
+): number[] {
+    const stages = new Set<number>();
+    for (const tips of tipComponents(graph)) {
+        let lowestZ = Infinity;
+        let highestZ = -Infinity;
+        for (const ni of tips) {
+            const z = graph.nodes[ni].pos.z;
+            if (z < lowestZ) lowestZ = z;
+            if (z > highestZ) highestZ = z;
+        }
+        let covered = false;
+        for (const pos of chosenPositions) {
+            const zMm = profile.layers[eligibleIndices[pos]].zMm;
+            if (zMm >= lowestZ - 0.5 && zMm <= highestZ + 1.0) {
+                covered = true;
+                break;
+            }
+        }
+        if (covered) continue;
+
+        let bestForcePos = -1;
+        let bestForceScore = -1;
+        let bestJumpPos = -1;
+        let bestJumpScore = -1;
+        for (let pos = 0; pos < eligibleIndices.length; pos++) {
+            const layer = profile.layers[eligibleIndices[pos]];
+            if (layer.zMm < lowestZ - 0.5 || layer.zMm > highestZ + 1.0) continue;
+            const score = layer.stefanField?.integratedForceMm4 ?? layer.areaMm2;
+            if (score > bestForceScore) {
+                bestForceScore = score;
+                bestForcePos = pos;
+            }
+            const jump = layer.areaJumpRatio * layer.areaMm2;
+            if (jump > bestJumpScore) {
+                bestJumpScore = jump;
+                bestJumpPos = pos;
+            }
+        }
+        if (bestForcePos >= 0) stages.add(bestForcePos);
+        if (bestJumpPos >= 0) stages.add(bestJumpPos);
+        if (stages.size >= MAX_COMPONENT_STAGE_LAYERS) break;
+    }
+    return [...stages];
+}
+
 function selectCriticalLayers(
     graph: SupportGraph,
     profile: RepresentativeLayerProfile | undefined,
     areaPerSupportMm2: number,
     maxCriticalLayers: number,
-): Array<{ zMm: number; peelForceN: number; copX: number; copY: number }> {
+): Array<{ zMm: number; areaMm2: number; peelForceN: number; copX: number; copY: number; repIndex: number }> {
     let minTipZ = Infinity;
     let maxTipZ = -Infinity;
     let sumX = 0;
@@ -752,59 +955,86 @@ function selectCriticalLayers(
     if (tipCnt === 0) return [];
 
     if (!profile || profile.layers.length === 0) {
+        const areaMm2 = tipCnt * areaPerSupportMm2;
         return [{
             zMm: maxTipZ,
-            peelForceN: tipCnt * areaPerSupportMm2 * NOMINAL_PEEL_PRESSURE_MPA,
+            areaMm2,
+            peelForceN: areaMm2 * NOMINAL_PEEL_PRESSURE_MPA,
             copX: sumX / tipCnt,
             copY: sumY / tipCnt,
+            repIndex: -1,
         }];
     }
 
-    const eligible = profile.layers.filter((l) => l.zMm >= minTipZ - 0.5 && l.areaMm2 > 0.05);
-    if (eligible.length === 0) {
-        const last = profile.layers[profile.layers.length - 1];
+    const eligibleIndices: number[] = [];
+    for (let i = 0; i < profile.layers.length; i++) {
+        const l = profile.layers[i];
+        if (l.zMm >= minTipZ - 0.5 && l.areaMm2 > 0.05) eligibleIndices.push(i);
+    }
+    if (eligibleIndices.length === 0) {
+        const lastIdx = profile.layers.length - 1;
+        const last = profile.layers[lastIdx];
         const peel = computeLayerPeelForceAndCop(last, tipCnt * areaPerSupportMm2);
-        return [{ zMm: Math.max(last.zMm, maxTipZ), peelForceN: peel.forceN, copX: peel.copX, copY: peel.copY }];
+        return [{
+            zMm: Math.max(last.zMm, maxTipZ),
+            areaMm2: last.areaMm2,
+            peelForceN: peel.forceN,
+            copX: peel.copX,
+            copY: peel.copY,
+            repIndex: lastIdx,
+        }];
     }
 
     const chosenIndices = new Set<number>();
     // 1. Peak integrated Stefan force (or cross-section area)
-    let bestForceIdx = 0;
+    let bestForcePos = 0;
     let bestForceScore = -1;
-    for (let i = 0; i < eligible.length; i++) {
-        const score = eligible[i].stefanField?.integratedForceMm4 ?? eligible[i].areaMm2;
+    for (let pos = 0; pos < eligibleIndices.length; pos++) {
+        const layer = profile.layers[eligibleIndices[pos]];
+        const score = layer.stefanField?.integratedForceMm4 ?? layer.areaMm2;
         if (score > bestForceScore) {
             bestForceScore = score;
-            bestForceIdx = i;
+            bestForcePos = pos;
         }
     }
-    chosenIndices.add(bestForceIdx);
+    chosenIndices.add(bestForcePos);
 
     // 2. Peak area-jump expansion shock layer
     if (chosenIndices.size < maxCriticalLayers) {
-        let bestJumpIdx = -1;
+        let bestJumpPos = -1;
         let bestJumpScore = -1;
-        for (let i = 0; i < eligible.length; i++) {
-            const score = eligible[i].areaJumpRatio * eligible[i].areaMm2;
-            if (!chosenIndices.has(i) && score > bestJumpScore) {
+        for (let pos = 0; pos < eligibleIndices.length; pos++) {
+            const layer = profile.layers[eligibleIndices[pos]];
+            const score = layer.areaJumpRatio * layer.areaMm2;
+            if (!chosenIndices.has(pos) && score > bestJumpScore) {
                 bestJumpScore = score;
-                bestJumpIdx = i;
+                bestJumpPos = pos;
             }
         }
-        if (bestJumpIdx >= 0) chosenIndices.add(bestJumpIdx);
+        if (bestJumpPos >= 0) chosenIndices.add(bestJumpPos);
     }
 
     // 3. Highest layer below/near the top of supports
-    if (chosenIndices.size < maxCriticalLayers && !chosenIndices.has(eligible.length - 1)) {
-        chosenIndices.add(eligible.length - 1);
+    const lastPos = eligibleIndices.length - 1;
+    if (chosenIndices.size < maxCriticalLayers && !chosenIndices.has(lastPos)) {
+        chosenIndices.add(lastPos);
+    }
+
+    // 4. Disconnected sub-assemblies no global stage reaches get their own peak
+    // peel / expansion layers, bounded so a many-tower forest cannot multiply
+    // the solve count.
+    for (const pos of selectComponentStages(graph, profile, eligibleIndices, chosenIndices)) {
+        if (chosenIndices.size >= maxCriticalLayers + MAX_COMPONENT_STAGE_LAYERS) break;
+        chosenIndices.add(pos);
     }
 
     return [...chosenIndices]
         .sort((a, b) => a - b)
-        .map((idx) => {
-            const layer = eligible[idx];
+        .map((pos) => {
+            const repIndex = eligibleIndices[pos];
+            const layer = profile.layers[repIndex];
             const peel = computeLayerPeelForceAndCop(layer, tipCnt * areaPerSupportMm2);
-            return { zMm: layer.zMm, peelForceN: peel.forceN, copX: peel.copX, copY: peel.copY };
+            return { zMm: layer.zMm, areaMm2: layer.areaMm2, peelForceN: peel.forceN, copX: peel.copX, copY: peel.copY, repIndex };
         });
 }
 
@@ -1034,7 +1264,7 @@ export function solveSupportFrameStress(
 
     const explicitLoads = options?.explicitNodalLoads;
     const criticalLayers = explicitLoads
-        ? [{ zMm: 0, peelForceN: 0, copX: 0, copY: 0 }]
+        ? [{ zMm: 0, areaMm2: 0, peelForceN: 0, copX: 0, copY: 0, repIndex: -1 }]
         : selectCriticalLayers(graph, profile, areaPerSupportMm2, maxCriticalLayers);
 
     let peakLayerZMm = 0;
@@ -1045,6 +1275,10 @@ export function solveSupportFrameStress(
     const overloadedTipIds = new Set<string>();
     const overloadedMemberIds = new Set<string>();
     const candidateHotspots: FrameStressHotspot[] = [];
+    const memberMaxUtil = new Float64Array(graph.members.length);
+    const tipPeakUtil = new Map<number, { utilPct: number; loadN: number }>();
+    const criticalStatsByRepIndex = new Map<number, { maxTipUtilPct: number; maxMemberUtilPct: number }>();
+    const syntheticLayerPoints: LayerPeelPoint[] = [];
 
     for (const layer of criticalLayers) {
         if (layer.peelForceN > peakLayerPeelForceN) {
@@ -1052,6 +1286,8 @@ export function solveSupportFrameStress(
             peakLayerZMm = layer.zMm;
         }
         rhs.fill(0);
+        let layerMaxTipUtilPct = 0;
+        let layerMaxMemberUtilPct = 0;
 
         if (explicitLoads) {
             for (const [nodeIdx, f6] of explicitLoads.entries()) {
@@ -1080,8 +1316,13 @@ export function solveSupportFrameStress(
                 const tipStressMpa = fz / Math.max(1e-4, tipArea);
                 const tipUtilPct = (100 * tipStressMpa) / GREEN_RESIN_UTS_MPA;
 
+                if (tipUtilPct > layerMaxTipUtilPct) layerMaxTipUtilPct = tipUtilPct;
                 if (tipUtilPct > maxTipUtilizationPct) maxTipUtilizationPct = tipUtilPct;
                 if (tipUtilPct > 100 && node.entityId) overloadedTipIds.add(node.entityId);
+                const prevTip = tipPeakUtil.get(ni);
+                if (!prevTip || tipUtilPct > prevTip.utilPct) {
+                    tipPeakUtil.set(ni, { utilPct: tipUtilPct, loadN: fz });
+                }
                 if (node.entityId && node.entityKind) {
                     candidateHotspots.push({
                         entityId: node.entityId,
@@ -1097,15 +1338,12 @@ export function solveSupportFrameStress(
 
                 const fIdx = freeMap[ni];
                 if (fIdx >= 0 && solverMode === 'frame3d') {
-                    const dx = node.pos.x - layer.copX;
-                    const dy = node.pos.y - layer.copY;
-                    const rPlan = Math.hypot(dx, dy);
-                    const ux = rPlan > 1e-4 ? dx / rPlan : 1;
-                    const uy = rPlan > 1e-4 ? dy / rPlan : 0;
+                    // Coherent unidirectional peel shear: a solid cured layer acts as a rigid
+                    // diaphragm rather than stretching opposing X-braces radially apart.
                     const latF = fz * LATERAL_PEEL_DRAG_RATIO;
                     const base = fIdx * 6;
-                    rhs[base] = latF * ux;
-                    rhs[base + 1] = latF * uy;
+                    rhs[base] = latF * Math.SQRT1_2;
+                    rhs[base + 1] = latF * Math.SQRT1_2;
                     rhs[base + 2] = fz;
                 }
             }
@@ -1161,6 +1399,8 @@ export function solveSupportFrameStress(
                 const buckleUtilPct = (100 * axialCompN) / Math.max(1e-6, el.bucklingCritN);
                 const utilPct = Math.max(stressUtilPct, buckleUtilPct);
 
+                if (utilPct > layerMaxMemberUtilPct) layerMaxMemberUtilPct = utilPct;
+                if (utilPct > memberMaxUtil[el.memberIdx]) memberMaxUtil[el.memberIdx] = utilPct;
                 const m = graph.members[el.memberIdx];
                 if (utilPct > maxMemberUtilizationPct) maxMemberUtilizationPct = utilPct;
                 if (utilPct > 100) overloadedMemberIds.add(m.entityId);
@@ -1183,7 +1423,95 @@ export function solveSupportFrameStress(
                 });
             }
         }
+
+        if (layer.repIndex >= 0) {
+            criticalStatsByRepIndex.set(layer.repIndex, {
+                maxTipUtilPct: layerMaxTipUtilPct,
+                maxMemberUtilPct: layerMaxMemberUtilPct,
+            });
+        } else {
+            syntheticLayerPoints.push({
+                zMm: Math.round(layer.zMm * 1000) / 1000,
+                areaMm2: Math.round(layer.areaMm2 * 100) / 100,
+                peelForceN: Math.round(layer.peelForceN * 1000) / 1000,
+                maxTipUtilPct: Math.round(layerMaxTipUtilPct * 100) / 100,
+                maxMemberUtilPct: Math.round(layerMaxMemberUtilPct * 100) / 100,
+                critical: true,
+            });
+        }
     }
+
+    // Build the force & stress curve for UI visualization at the sampled-layer
+    // resolution (`profile.samples`, one point per printed layer) and fall back
+    // to the cluster peaks for hand-built profiles.
+    const layerProfile: LayerPeelPoint[] = [];
+    if (!explicitLoads && profile && profile.layers.length > 0) {
+        const fallbackArea = Math.max(1, tipNodes.length) * areaPerSupportMm2;
+        const representativeByZ = new Map<number, { layer: RepresentativeLayer; index: number }>();
+        profile.layers.forEach((layer, index) => {
+            representativeByZ.set(Math.round(layer.zMm * 1000), { layer, index });
+        });
+        const samples = profile.samples ?? profile.layers.map((layer) => ({ zMm: layer.zMm, areaMm2: layer.areaMm2 }));
+        const sampled = computePeelLayerSamples(samples, profile.layers, fallbackArea);
+        for (const sample of sampled) {
+            const representative = representativeByZ.get(Math.round(sample.zMm * 1000));
+            const crit = representative ? criticalStatsByRepIndex.get(representative.index) : undefined;
+            let maxTipUtil = crit?.maxTipUtilPct ?? 0;
+            if (!crit && sample.areaMm2 > 0.05) {
+                const activeTips = tipNodes.filter((ni) => graph.nodes[ni].pos.z <= sample.zMm + 0.5);
+                if (activeTips.length > 0) {
+                    const rigidInput = activeTips.map((ni) => ({
+                        x: graph.nodes[ni].pos.x,
+                        y: graph.nodes[ni].pos.y,
+                        contactDiameterMm: graph.nodes[ni].tipContactDiameterMm ?? 0.28,
+                    }));
+                    const tipForces = distributeRigidBodyPeelLoads(rigidInput, sample.forceN, sample.copX, sample.copY);
+                    for (let ti = 0; ti < activeTips.length; ti++) {
+                        const tipDia = graph.nodes[activeTips[ti]].tipContactDiameterMm ?? 0.28;
+                        const tipArea = Math.PI * (0.5 * tipDia) ** 2;
+                        const util = (100 * (tipForces[ti] / Math.max(1e-4, tipArea))) / GREEN_RESIN_UTS_MPA;
+                        if (util > maxTipUtil) maxTipUtil = util;
+                    }
+                }
+            }
+            layerProfile.push({
+                zMm: Math.round(sample.zMm * 1000) / 1000,
+                areaMm2: Math.round(sample.areaMm2 * 100) / 100,
+                peelForceN: Math.round(sample.forceN * 1000) / 1000,
+                maxTipUtilPct: Math.round(maxTipUtil * 100) / 100,
+                maxMemberUtilPct: Math.round((crit?.maxMemberUtilPct ?? 0) * 100) / 100,
+                critical: Boolean(crit),
+            });
+        }
+        layerProfile.sort((a, b) => a.zMm - b.zMm);
+    } else {
+        layerProfile.push(...syntheticLayerPoints.sort((a, b) => a.zMm - b.zMm));
+    }
+
+    const memberSegments: StressSegment[] = graph.members
+        .map((m, mi) => ({
+            entityId: m.entityId,
+            entityKind: m.entityKind,
+            a: graph.nodes[m.nodeA].pos,
+            b: graph.nodes[m.nodeB].pos,
+            diameterMm: m.diameterMm,
+            utilizationPct: memberMaxUtil[mi],
+        }))
+        .sort((x, y) => compareVec3(x.a, y.a) || compareVec3(x.b, y.b));
+
+    const tipPoints: StressTipPoint[] = tipNodes
+        .map((ni) => {
+            const node = graph.nodes[ni];
+            const peak = tipPeakUtil.get(ni);
+            return {
+                entityId: node.entityId ?? node.id,
+                entityKind: node.entityKind ?? 'trunk',
+                pos: node.pos,
+                utilizationPct: peak?.utilPct ?? 0,
+                loadN: peak?.loadN ?? 0,
+            };
+        })
+        .sort((x, y) => compareVec3(x.pos, y.pos));
 
     // Deduplicate to peak utilization per (kind, entityId) with deterministic coordinate ordering.
     const bestHotspotByKey = new Map<string, FrameStressHotspot>();
@@ -1218,5 +1546,377 @@ export function solveSupportFrameStress(
         maxTipDeflectionMm,
         solverMode,
         hotspots,
+        layerProfile,
+        memberSegments,
+        tipPoints,
+    };
+}
+
+/** Max strengthened diameter (mm) applied by automatic weak-spot reinforcement. */
+const MAX_REINFORCED_TRUNK_DIA_MM = 2.2;
+const MAX_REINFORCED_BRANCH_DIA_MM = 1.65;
+const MAX_REINFORCED_LEAF_BODY_DIA_MM = 1.55;
+const MAX_REINFORCED_BRACE_DIA_MM = 1.6;
+const REINFORCE_JOINT_OFFSET_MM = 0.125;
+
+function insetSegmentEnd(start: Vec3, end: Vec3, maxInsetMm = 1.5): Vec3 {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dz = end.z - start.z;
+    const len = Math.hypot(dx, dy, dz);
+    if (len <= 1e-4) return end;
+    const inset = Math.min(maxInsetMm, len * 0.35);
+    const keep = (len - inset) / len;
+    return {
+        x: start.x + dx * keep,
+        y: start.y + dy * keep,
+        z: start.z + dz * keep,
+    };
+}
+
+function tryClearedScale(idealScale: number, testScale: (scale: number) => boolean): number | null {
+    const candidates = [
+        idealScale,
+        Math.max(1.08, 1 + (idealScale - 1) * 0.5),
+        1.08,
+    ];
+    for (let i = 0; i < candidates.length; i++) {
+        const s = candidates[i];
+        if (i > 0 && Math.abs(s - candidates[i - 1]) < 1e-4) continue;
+        if (testScale(s)) return s;
+    }
+    return null;
+}
+
+export interface ReinforceFrameMembersResult {
+    snapshot: SupportState;
+    reinforcedTrunks: number;
+    reinforcedBranches: number;
+    reinforcedLeaves: number;
+    reinforcedBraces: number;
+    totalReinforced: number;
+    skippedCount: number;
+    changed: boolean;
+}
+
+/**
+ * Thicken overloaded `trunk`, `branch`, `leaf`, and `brace` members identified
+ * by `solveSupportFrameStress` (`utilizationPct > 100%`), scaling diameters by
+ * `clamp((util / 90)^(1/3), 1.10, 1.35)` with stepped clearance fallbacks
+ * (`isShaftBlocked`) so thickening never introduces mesh intersections and
+ * host knots track upgraded child diameters for consistent 3D rendering.
+ */
+export function reinforceOverloadedFrameMembers(
+    snapshot: SupportState,
+    report: SupportFrameStressReport,
+    mesh?: THREE.Mesh,
+    modelId?: string,
+): ReinforceFrameMembersResult {
+    const peakUtilByTrunkId = new Map<string, number>();
+    const peakUtilByBranchId = new Map<string, number>();
+    const peakUtilByLeafId = new Map<string, number>();
+    const peakUtilByBraceId = new Map<string, number>();
+
+    for (const seg of report.memberSegments) {
+        if (seg.utilizationPct <= 100) continue;
+        if (seg.entityKind === 'trunk') {
+            const prev = peakUtilByTrunkId.get(seg.entityId) ?? 0;
+            if (seg.utilizationPct > prev) peakUtilByTrunkId.set(seg.entityId, seg.utilizationPct);
+        } else if (seg.entityKind === 'branch') {
+            const prev = peakUtilByBranchId.get(seg.entityId) ?? 0;
+            if (seg.utilizationPct > prev) peakUtilByBranchId.set(seg.entityId, seg.utilizationPct);
+        } else if (seg.entityKind === 'leaf') {
+            const prev = peakUtilByLeafId.get(seg.entityId) ?? 0;
+            if (seg.utilizationPct > prev) peakUtilByLeafId.set(seg.entityId, seg.utilizationPct);
+        } else if (seg.entityKind === 'brace') {
+            const prev = peakUtilByBraceId.get(seg.entityId) ?? 0;
+            if (seg.utilizationPct > prev) peakUtilByBraceId.set(seg.entityId, seg.utilizationPct);
+        }
+    }
+
+    if (
+        peakUtilByTrunkId.size === 0
+        && peakUtilByBranchId.size === 0
+        && peakUtilByLeafId.size === 0
+        && peakUtilByBraceId.size === 0
+    ) {
+        return {
+            snapshot,
+            reinforcedTrunks: 0,
+            reinforcedBranches: 0,
+            reinforcedLeaves: 0,
+            reinforcedBraces: 0,
+            totalReinforced: 0,
+            skippedCount: 0,
+            changed: false,
+        };
+    }
+
+    let nextTrunks: SupportState['trunks'] | null = null;
+    let nextBranches: SupportState['branches'] | null = null;
+    let nextLeaves: SupportState['leaves'] | null = null;
+    let nextBraces: SupportState['braces'] | null = null;
+    let nextKnots: SupportState['knots'] | null = null;
+    const upgradedSegmentDia = new Map<string, number>();
+    const minKnotDia = new Map<string, number>();
+    let reinforcedTrunks = 0;
+    let reinforcedBranches = 0;
+    let reinforcedLeaves = 0;
+    let reinforcedBraces = 0;
+    let skippedCount = 0;
+
+    const bumpKnotMinDia = (knotId: string | undefined, targetDia: number) => {
+        if (!knotId) return;
+        const prev = minKnotDia.get(knotId) ?? 0;
+        if (targetDia > prev) minKnotDia.set(knotId, targetDia);
+    };
+
+    for (const [trunkId, utilPct] of peakUtilByTrunkId.entries()) {
+        const trunk = snapshot.trunks?.[trunkId];
+        if (!trunk || trunk.segments.length === 0) continue;
+        if (modelId && trunk.modelId !== modelId) continue;
+
+        const root = snapshot.roots?.[trunk.rootId];
+        const idealScale = Math.min(1.35, Math.max(1.10, Math.cbrt(utilPct / 90)));
+        const typedTrunk = trunk.typeId ? trunk : { ...trunk, typeId: 'trunk' as const };
+
+        const computeTargetDias = (scale: number) => trunk.segments.map((seg) =>
+            Math.min(MAX_REINFORCED_TRUNK_DIA_MM, Math.max(seg.diameter, Number((seg.diameter * scale).toFixed(2)))));
+
+        const acceptedScale = tryClearedScale(idealScale, (scale) => {
+            const targetDias = computeTargetDias(scale);
+            if (targetDias.every((d, i) => d <= trunk.segments[i].diameter + 1e-4)) return false;
+            if (!mesh || !root) return true;
+            for (let i = 0; i < trunk.segments.length; i++) {
+                const seg = trunk.segments[i];
+                const ep = resolveSegmentEndpoints(typedTrunk, seg, i, { root });
+                if (!ep) continue;
+                const endsAtTip = !seg.topJoint && Boolean(trunk.contactCone?.pos);
+                const checkEnd = endsAtTip ? insetSegmentEnd(ep.start, ep.end) : ep.end;
+                if (isShaftBlocked(ep.start, checkEnd, Math.max(0.2, targetDias[i] * 0.5), mesh)) {
+                    return false;
+                }
+            }
+            return true;
+        });
+
+        if (acceptedScale === null) {
+            skippedCount++;
+            continue;
+        }
+
+        const targetDias = computeTargetDias(acceptedScale);
+        if (!nextTrunks) nextTrunks = { ...snapshot.trunks };
+        const updatedSegments = trunk.segments.map((seg, i) => {
+            const newDia = targetDias[i];
+            upgradedSegmentDia.set(seg.id, newDia);
+            return {
+                ...seg,
+                diameter: newDia,
+                ...(seg.bottomJoint ? { bottomJoint: { ...seg.bottomJoint, diameter: Math.max(seg.bottomJoint.diameter, newDia + REINFORCE_JOINT_OFFSET_MM) } } : {}),
+                ...(seg.topJoint ? { topJoint: { ...seg.topJoint, diameter: Math.max(seg.topJoint.diameter, newDia + REINFORCE_JOINT_OFFSET_MM) } } : {}),
+            };
+        });
+        const topSegDia = updatedSegments[updatedSegments.length - 1]?.diameter;
+        const nextCone = trunk.contactCone && topSegDia !== undefined && trunk.contactCone.profile
+            ? {
+                ...trunk.contactCone,
+                profile: {
+                    ...trunk.contactCone.profile,
+                    bodyDiameterMm: Math.max(trunk.contactCone.profile.bodyDiameterMm, topSegDia),
+                },
+            }
+            : trunk.contactCone;
+        nextTrunks[trunkId] = {
+            ...trunk,
+            segments: updatedSegments,
+            ...(nextCone ? { contactCone: nextCone } : {}),
+        };
+        reinforcedTrunks++;
+    }
+
+    for (const [branchId, utilPct] of peakUtilByBranchId.entries()) {
+        const branch = snapshot.branches?.[branchId];
+        if (!branch || branch.segments.length === 0) continue;
+        if (modelId && branch.modelId !== modelId) continue;
+
+        const hostKnot = snapshot.knots?.[branch.parentKnotId];
+        const idealScale = Math.min(1.35, Math.max(1.10, Math.cbrt(utilPct / 90)));
+        const typedBranch = branch.typeId ? branch : { ...branch, typeId: 'branch' as const };
+
+        const computeTargetDias = (scale: number) => branch.segments.map((seg) =>
+            Math.min(MAX_REINFORCED_BRANCH_DIA_MM, Math.max(seg.diameter, Number((seg.diameter * scale).toFixed(2)))));
+
+        const acceptedScale = tryClearedScale(idealScale, (scale) => {
+            const targetDias = computeTargetDias(scale);
+            if (targetDias.every((d, i) => d <= branch.segments[i].diameter + 1e-4)) return false;
+            if (!mesh || !hostKnot) return true;
+            for (let i = 0; i < branch.segments.length; i++) {
+                const seg = branch.segments[i];
+                const ep = resolveSegmentEndpoints(typedBranch, seg, i, { hostKnot });
+                if (!ep) continue;
+                const endsAtTip = !seg.topJoint && Boolean(branch.contactCone?.pos);
+                const checkEnd = endsAtTip ? insetSegmentEnd(ep.start, ep.end) : ep.end;
+                if (isShaftBlocked(ep.start, checkEnd, Math.max(0.2, targetDias[i] * 0.5), mesh)) {
+                    return false;
+                }
+            }
+            return true;
+        });
+
+        if (acceptedScale === null) {
+            skippedCount++;
+            continue;
+        }
+
+        const targetDias = computeTargetDias(acceptedScale);
+        if (!nextBranches) nextBranches = { ...snapshot.branches };
+        const updatedSegments = branch.segments.map((seg, i) => {
+            const newDia = targetDias[i];
+            upgradedSegmentDia.set(seg.id, newDia);
+            return {
+                ...seg,
+                diameter: newDia,
+                ...(seg.bottomJoint ? { bottomJoint: { ...seg.bottomJoint, diameter: Math.max(seg.bottomJoint.diameter, newDia + REINFORCE_JOINT_OFFSET_MM) } } : {}),
+                ...(seg.topJoint ? { topJoint: { ...seg.topJoint, diameter: Math.max(seg.topJoint.diameter, newDia + REINFORCE_JOINT_OFFSET_MM) } } : {}),
+            };
+        });
+        const firstSegDia = updatedSegments[0]?.diameter;
+        const nextCone = branch.contactCone && firstSegDia !== undefined && branch.contactCone.profile
+            ? {
+                ...branch.contactCone,
+                profile: {
+                    ...branch.contactCone.profile,
+                    bodyDiameterMm: Math.max(branch.contactCone.profile.bodyDiameterMm, firstSegDia),
+                },
+            }
+            : branch.contactCone;
+        nextBranches[branchId] = {
+            ...branch,
+            segments: updatedSegments,
+            ...(nextCone ? { contactCone: nextCone } : {}),
+        };
+        if (firstSegDia !== undefined) {
+            bumpKnotMinDia(branch.parentKnotId, firstSegDia + REINFORCE_JOINT_OFFSET_MM);
+        }
+        reinforcedBranches++;
+    }
+
+    for (const [leafId, utilPct] of peakUtilByLeafId.entries()) {
+        const leaf = snapshot.leaves?.[leafId];
+        if (!leaf?.contactCone?.profile) continue;
+        if (modelId && leaf.modelId !== modelId) continue;
+
+        const hostKnot = snapshot.knots?.[leaf.parentKnotId];
+        const curBodyDia = leaf.contactCone.profile.bodyDiameterMm ?? 0.9;
+        const idealScale = Math.min(1.35, Math.max(1.10, Math.cbrt(utilPct / 90)));
+
+        const computeTargetBodyDia = (scale: number) =>
+            Math.min(MAX_REINFORCED_LEAF_BODY_DIA_MM, Math.max(curBodyDia, Number((curBodyDia * scale).toFixed(2))));
+
+        const acceptedScale = tryClearedScale(idealScale, (scale) => {
+            const newBodyDia = computeTargetBodyDia(scale);
+            if (newBodyDia <= curBodyDia + 1e-4) return false;
+            if (!mesh || !hostKnot) return true;
+            const checkEnd = insetSegmentEnd(hostKnot.pos, leaf.contactCone.pos);
+            return !isShaftBlocked(hostKnot.pos, checkEnd, Math.max(0.2, newBodyDia * 0.35), mesh);
+        });
+
+        if (acceptedScale === null) {
+            skippedCount++;
+            continue;
+        }
+
+        const newBodyDia = computeTargetBodyDia(acceptedScale);
+        if (!nextLeaves) nextLeaves = { ...snapshot.leaves };
+        nextLeaves[leafId] = {
+            ...leaf,
+            contactCone: {
+                ...leaf.contactCone,
+                profile: {
+                    ...leaf.contactCone.profile,
+                    bodyDiameterMm: newBodyDia,
+                },
+            },
+        };
+        bumpKnotMinDia(leaf.parentKnotId, newBodyDia + REINFORCE_JOINT_OFFSET_MM);
+        reinforcedLeaves++;
+    }
+
+    for (const [braceId, utilPct] of peakUtilByBraceId.entries()) {
+        const brace = snapshot.braces?.[braceId];
+        if (!brace) continue;
+        if (modelId && brace.modelId !== modelId) continue;
+
+        const idealScale = Math.min(1.35, Math.max(1.10, Math.cbrt(utilPct / 90)));
+        const curDia = brace.profile?.diameter ?? 1.0;
+        const startPos = snapshot.knots?.[brace.startKnotId]?.pos;
+        const endPos = snapshot.knots?.[brace.endKnotId]?.pos;
+
+        const computeTargetDia = (scale: number) =>
+            Math.min(MAX_REINFORCED_BRACE_DIA_MM, Math.max(curDia, Number((curDia * scale).toFixed(2))));
+
+        const acceptedScale = tryClearedScale(idealScale, (scale) => {
+            const newDia = computeTargetDia(scale);
+            if (newDia <= curDia + 1e-4) return false;
+            if (!mesh || !startPos || !endPos) return true;
+            return !isShaftBlocked(startPos, endPos, Math.max(0.2, newDia * 0.5), mesh);
+        });
+
+        if (acceptedScale === null) {
+            skippedCount++;
+            continue;
+        }
+
+        const newDia = computeTargetDia(acceptedScale);
+        if (!nextBraces) nextBraces = { ...snapshot.braces };
+        nextBraces[braceId] = { ...brace, profile: { ...brace.profile, diameter: newDia } };
+        bumpKnotMinDia(brace.startKnotId, newDia + REINFORCE_JOINT_OFFSET_MM);
+        bumpKnotMinDia(brace.endKnotId, newDia + REINFORCE_JOINT_OFFSET_MM);
+        reinforcedBraces++;
+    }
+
+    if (upgradedSegmentDia.size > 0 || minKnotDia.size > 0) {
+        for (const [knotId, knot] of Object.entries(snapshot.knots ?? {})) {
+            const hostDia = upgradedSegmentDia.get(knot.parentShaftId);
+            const hostedTarget = hostDia !== undefined ? hostDia + REINFORCE_JOINT_OFFSET_MM : 0;
+            const childTarget = minKnotDia.get(knotId) ?? 0;
+            const targetKnotDia = Math.max(hostedTarget, childTarget);
+            if (targetKnotDia <= 0 || (knot.diameter ?? 0) >= targetKnotDia - 1e-4) continue;
+            if (!nextKnots) nextKnots = { ...snapshot.knots };
+            nextKnots[knotId] = { ...knot, diameter: targetKnotDia };
+        }
+    }
+
+    const totalReinforced = reinforcedTrunks + reinforcedBranches + reinforcedLeaves + reinforcedBraces;
+    if (totalReinforced === 0) {
+        return {
+            snapshot,
+            reinforcedTrunks: 0,
+            reinforcedBranches: 0,
+            reinforcedLeaves: 0,
+            reinforcedBraces: 0,
+            totalReinforced: 0,
+            skippedCount,
+            changed: false,
+        };
+    }
+
+    return {
+        snapshot: {
+            ...snapshot,
+            ...(nextTrunks ? { trunks: nextTrunks } : {}),
+            ...(nextBranches ? { branches: nextBranches } : {}),
+            ...(nextLeaves ? { leaves: nextLeaves } : {}),
+            ...(nextBraces ? { braces: nextBraces } : {}),
+            ...(nextKnots ? { knots: nextKnots } : {}),
+        },
+        reinforcedTrunks,
+        reinforcedBranches,
+        reinforcedLeaves,
+        reinforcedBraces,
+        totalReinforced,
+        skippedCount,
+        changed: true,
     };
 }

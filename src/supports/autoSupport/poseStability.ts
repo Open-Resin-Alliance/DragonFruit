@@ -83,6 +83,11 @@ export interface PoseStability {
      *  load is at the top edge of that face and a brace only resists once it
      *  reaches there; `dragMomentMm3` alone cannot say how tall that is. */
     dragTopMm: number;
+    /** Worst bearing edge, world XY (mm): a point on the edge line and its
+     *  outward unit normal. The topple-risk evaluation measures solved peel
+     *  moments about this line, so it needs the line, not just the azimuth. */
+    worstEdgePoint?: { x: number; y: number };
+    worstEdgeNormal?: { x: number; y: number };
     /** Azimuth of the worst edge's outward normal (deg, 0 = +X, 90 = +Y): the
      *  direction the drag pushes the part, i.e. the side the tipping edge is
      *  on. Braces belong on the opposite side — that is where the lever arm
@@ -413,6 +418,8 @@ export function measurePoseStability(
     let worstContactDepth = 0;
     let worstSum = 0;
     let worstDirDeg = 0;
+    let worstEdgePoint = { x: 0, y: 0 };
+    let worstEdgeNormal = { x: 0, y: 0 };
     let haveWorst = false;
     let dragTopMm = 0;
     let totalDragMomentMm3 = 0;
@@ -487,6 +494,10 @@ export function measurePoseStability(
             worstContactDepth = contactDepth;
             worstSum = sum;
             worstDirDeg = (Math.atan2(edgeNy[e], edgeNx[e]) * 180) / Math.PI;
+            // The edge line the margin was measured about. `edgeX/edgeY` is a
+            // point on it; the outward normal is unit by construction.
+            worstEdgePoint = { x: edgeX[e], y: edgeY[e] };
+            worstEdgeNormal = { x: edgeNx[e], y: edgeNy[e] };
         }
     }
     if (edgeSum.length === 0) {
@@ -518,6 +529,8 @@ export function measurePoseStability(
                 : edgeSum.length === 0 && totalDragMomentMm3 > 1e-9
                   ? 0
                   : Infinity,
+        worstEdgePoint,
+        worstEdgeNormal,
         pushDirDeg: (((worstDirDeg % 360) + 360) % 360) || 0,
         heightMm: Number.isFinite(zMax) ? zMax - zMin : 0,
         thicknessMm: bearingAreaMm2 > 0 ? volumeMm3 / bearingAreaMm2 : 0,

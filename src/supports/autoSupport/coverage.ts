@@ -407,6 +407,58 @@ function tipBelongsToLowerFlatRegion(
  * trunk candidates (gridPoint) at uncovered footprint cluster centroids,
  * using the region's surface normal so placement skips the wrong-face raycast.
  */
+/** Most perimeter contacts one region may contribute per gap-fill pass. */
+const MAX_PERIMETER_CANDIDATES_PER_REGION = 12;
+
+/**
+ * Walk a closed plan loop and emit a point every `spacingMm` of arc length.
+ * Spacing is measured along the loop, not per edge: `perimeterLoops` are
+ * triangle-accurate polygons whose edges can be far shorter than a support
+ * disc, so one point per vertex would flood a flat foot with contacts.
+ */
+function sampleLoopByArc(
+    loop: readonly [number, number, number][],
+    spacingMm: number,
+): Array<{ x: number; y: number; z: number }> {
+    const points: Array<{ x: number; y: number; z: number }> = [];
+    if (loop.length < 2 || !(spacingMm > 0)) return points;
+    let carry = 0;
+    for (let i = 0; i < loop.length; i++) {
+        const a = loop[i];
+        const b = loop[(i + 1) % loop.length];
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        if (len < 1e-6) continue;
+        for (let d = carry; d < len; d += spacingMm) {
+            const t = d / len;
+            points.push({ x: a[0] + (b[0] - a[0]) * t, y: a[1] + (b[1] - a[1]) * t, z: a[2] });
+        }
+        carry = (carry - len) % spacingMm;
+        if (carry < 0) carry += spacingMm;
+    }
+    return points;
+}
+
+/** Whether a plan point is inside any placed tip's coverage disc, using the
+ *  same influence growth the footprint coverage applies. */
+function isPlanPointCovered(
+    point: { x: number; y: number; z: number },
+    tips: Array<{ x: number; y: number; z: number }>,
+    radiusMm: number,
+    shallowRegion: boolean,
+): boolean {
+    for (const tip of tips) {
+        if (tip.z - point.z > 1.0) continue;
+        const growth = shallowRegion
+            ? 0
+            : Math.min(1.5, Math.max(0, influenceRadiusMm(point.z - tip.z) - TIP_COVERAGE_RADIUS_MM));
+        const reach = radiusMm + growth;
+        const dx = point.x - tip.x;
+        const dy = point.y - tip.y;
+        if (dx * dx + dy * dy <= reach * reach) return true;
+    }
+    return false;
+}
+
 export function buildGapFillCandidates(
     overhangIslands: DetectedIsland[],
     settings: AutoSupportSettings,
@@ -428,8 +480,10 @@ export function buildGapFillCandidates(
         const radius = coverageRadiusForRegion(region);
         if (computeRegionCoverage(region, regionTips, radius, mesh) >= coverageTarget) continue;
 
+        const emitted: Array<{ x: number; y: number; z: number }> = [];
         const clusters = findUncoveredClusters(region, regionTips, radius, MIN_GAP_CLUSTER_MM2, true, layerHeightMm, mesh);
         for (const c of clusters) {
+            emitted.push(c);
             out.push({
                 id: `gap-${region.id}-${c.x.toFixed(2)}-${c.y.toFixed(2)}`,
                 tipPos: { x: c.x, y: c.y, z: c.z },
@@ -442,6 +496,39 @@ export function buildGapFillCandidates(
                 gridPoint: true,
                 interior: region.interior,
             });
+        }
+
+        // Perimeter-first fill. A cluster centroid covers the middle of a bare
+        // patch but leaves a long foot's sole and its toe/heel corners exposed —
+        // exactly where a flat overhang tears first. Walk the region's own
+        // triangle-accurate loops at disc spacing and add a contact at every
+        // uncovered point, corners included because the arc walk visits them.
+        const loops = region.perimeterLoops;
+        if (!loops || loops.length === 0) continue;
+        const spacingMm = Math.max(1.2, radius * 1.1);
+        const shallow = (region.overhangAngleDeg ?? 0) <= 15;
+        let added = 0;
+        for (const loop of loops) {
+            if (added >= MAX_PERIMETER_CANDIDATES_PER_REGION) break;
+            for (const point of sampleLoopByArc(loop, spacingMm)) {
+                if (added >= MAX_PERIMETER_CANDIDATES_PER_REGION) break;
+                if (isPlanPointCovered(point, regionTips, radius, shallow)) continue;
+                if (emitted.some((other) => Math.hypot(other.x - point.x, other.y - point.y) < spacingMm * 0.5)) continue;
+                emitted.push(point);
+                out.push({
+                    id: `perim-${region.id}-${added}`,
+                    tipPos: { x: point.x, y: point.y, z: point.z },
+                    tipNormal: region.surfaceNormal ?? { x: 0, y: 0, z: -1 },
+                    modelId: '',
+                    source: 'overhang',
+                    islandAreaMm2: settings.areaPerSupportMm2,
+                    zHeight: point.z,
+                    priority: 0,
+                    gridPoint: true,
+                    interior: region.interior,
+                });
+                added++;
+            }
         }
     }
     return out;

@@ -11,6 +11,17 @@ const LAYER_IOU_CELL_MM = 2.0;
 /** Adjacent layers with IoU >= this and relative area change <= threshold belong to one cluster. */
 const LAYER_COHERENCE_IOU_MIN = 0.85;
 const LAYER_COHERENCE_AREA_DELTA_MAX = 0.20;
+/** Hard cap on sampled planes when slicing at the print layer height (a 200 mm part at 50 µm). */
+const MAX_SAMPLED_PLANES = 1024;
+/** Plan cell of the per-layer growth masks (mm); coarser only for very large parts. */
+const GROWTH_CELL_MM = 0.5;
+const GROWTH_MAX_SIDE = 1024;
+/** Added area below this is a layer step on a thin rim, not a new surface. */
+const GROWTH_MIN_ADDED_MM2 = 0.1;
+/** Most growth layers retained per profile, largest addition first. */
+const MAX_GROWTH_LAYERS = 128;
+/** Cap on retained added-cell indices across the profile (≈ 8 MB). */
+const MAX_GROWTH_CELLS = 2_000_000;
 /** Minimum XY spacing (mm) between a traction-added contact and any existing contact (UV-bleed guard). */
 const MIN_TRACTION_CONTACT_SPACING_MM = 1.2;
 /** Cap on greedy Voronoi deficit insertions per overhang region. */
@@ -68,10 +79,52 @@ export interface RepresentativeLayer {
 
 export interface RepresentativeLayerProfile {
     layers: RepresentativeLayer[];
+    /**
+     * Every sampled slice at the requested step (the print profile's layer
+     * height when the caller supplies it), for the peel curve and force ladder.
+     * `layers` stays the PDE-clustered subset; this is the resolution the user
+     * sees and the layer-by-layer areas the curve is built from. Absent on
+     * hand-built profiles, which fall back to `layers`.
+     */
+    samples?: LayerAreaSample[];
+    /** Layers that added area over the layer below, largest first-capped. */
+    growth?: LayerGrowth[];
+    /** The plan grid `growth[].addedCells` index into. */
+    growthGrid?: LayerGrowthGrid;
     /** Peak cross-sectional area across the entire model (mm²). */
     peakAreaMm2: number;
     /** Total raw Z planes sampled before clustering. */
     sampledPlaneCount: number;
+}
+
+/** One sampled plane: the peel curve's own resolution. */
+export interface LayerAreaSample {
+    zMm: number;
+    areaMm2: number;
+}
+
+/** Plan grid shared by every growth mask in a profile. */
+export interface LayerGrowthGrid {
+    minX: number;
+    minY: number;
+    cellMm: number;
+    nx: number;
+    ny: number;
+}
+
+/**
+ * A layer that adds solid area over the one below it: the raw material for
+ * consecutive-layer overhang detection. `addedCells` are row-major indices into
+ * the profile's `growthGrid` for the cells solid here and not below, so a
+ * consumer can ask *where* the new surface is without re-slicing.
+ */
+export interface LayerGrowth {
+    zMm: number;
+    /** Green's-theorem area difference from the layer below (mm²). */
+    addedAreaMm2: number;
+    /** `area[k] / area[k-1]` (1 = no growth). */
+    growthRatio: number;
+    addedCells: Uint32Array;
 }
 
 export interface TractionOptimizationStats {
@@ -312,16 +365,121 @@ function setIoU(a: ReadonlySet<number>, b: ReadonlySet<number>): number {
 }
 
 /**
+ * Rasterize one plane's closed contour segments into a plan occupancy mask by
+ * the even-odd rule. Segments are the same directed p→q pairs the area integral
+ * uses; only their geometry matters here.
+ */
+function fillPlaneMask(segments: readonly number[], grid: LayerGrowthGrid): Uint8Array {
+    const mask = new Uint8Array(grid.nx * grid.ny);
+    const crossings: number[][] = Array.from({ length: grid.ny }, () => []);
+    for (let s = 0; s + 3 < segments.length; s += 4) {
+        const px = segments[s];
+        const py = segments[s + 1];
+        const qx = segments[s + 2];
+        const qy = segments[s + 3];
+        if (py === qy) continue;
+        const yLo = Math.min(py, qy);
+        const yHi = Math.max(py, qy);
+        const jStart = Math.max(0, Math.ceil((yLo - grid.minY) / grid.cellMm - 0.5));
+        const jEnd = Math.min(grid.ny - 1, Math.floor((yHi - grid.minY) / grid.cellMm - 0.5));
+        for (let j = jStart; j <= jEnd; j++) {
+            const y = grid.minY + (j + 0.5) * grid.cellMm;
+            crossings[j].push(px + ((qx - px) * (y - py)) / (qy - py));
+        }
+    }
+    for (let j = 0; j < grid.ny; j++) {
+        const xs = crossings[j];
+        if (xs.length < 2) continue;
+        xs.sort((a, b) => a - b);
+        for (let i = 0; i + 1 < xs.length; i += 2) {
+            const iStart = Math.max(0, Math.ceil((xs[i] - grid.minX) / grid.cellMm - 0.5));
+            const iEnd = Math.min(grid.nx - 1, Math.floor((xs[i + 1] - grid.minX) / grid.cellMm - 0.5));
+            const row = j * grid.nx;
+            for (let ix = iStart; ix <= iEnd; ix++) mask[row + ix] = 1;
+        }
+    }
+    return mask;
+}
+
+/**
+ * Consecutive-layer growth: every plane that added area over the one below,
+ * with the added cells retained. Capped by count and total cells, largest
+ * addition first, then returned in Z order for deterministic consumers.
+ */
+function buildLayerGrowth(
+    planeZ: Float64Array,
+    areas: Float64Array,
+    sliceSegments: readonly number[][],
+    bounds: { minX: number; minY: number; maxX: number; maxY: number },
+): { growth: LayerGrowth[]; grid: LayerGrowthGrid } {
+    const spanX = Math.max(1e-3, bounds.maxX - bounds.minX);
+    const spanY = Math.max(1e-3, bounds.maxY - bounds.minY);
+    const cellMm = Math.max(GROWTH_CELL_MM, Math.max(spanX, spanY) / GROWTH_MAX_SIDE);
+    const grid: LayerGrowthGrid = {
+        minX: bounds.minX,
+        minY: bounds.minY,
+        cellMm,
+        nx: Math.floor(spanX / cellMm) + 1,
+        ny: Math.floor(spanY / cellMm) + 1,
+    };
+
+    const candidates: Array<{ index: number; previousIndex: number; addedMm2: number; ratio: number }> = [];
+    for (let k = 1; k < planeZ.length; k++) {
+        // A plane exactly at a feature boundary can cut no triangles and read as
+        // zero area; measure against the last plane that actually had material
+        // below instead of treating the gap as a birth.
+        let previousIndex = k - 1;
+        while (previousIndex >= 0 && areas[previousIndex] <= 0.05) previousIndex--;
+        if (previousIndex < 0) continue;
+        const addedMm2 = areas[k] - areas[previousIndex];
+        if (addedMm2 < GROWTH_MIN_ADDED_MM2) continue;
+        candidates.push({
+            index: k,
+            previousIndex,
+            addedMm2,
+            ratio: areas[previousIndex] > 0.5 ? areas[k] / areas[previousIndex] : 1,
+        });
+    }
+    candidates.sort((a, b) => b.addedMm2 - a.addedMm2 || a.index - b.index);
+
+    const growth: LayerGrowth[] = [];
+    let cellBudget = MAX_GROWTH_CELLS;
+    for (const candidate of candidates) {
+        if (growth.length >= MAX_GROWTH_LAYERS || cellBudget <= 0) break;
+        const current = fillPlaneMask(sliceSegments[candidate.index], grid);
+        const previous = fillPlaneMask(sliceSegments[candidate.previousIndex], grid);
+        const addedCells: number[] = [];
+        for (let i = 0; i < current.length; i++) {
+            if (current[i] === 1 && previous[i] === 0) addedCells.push(i);
+        }
+        if (addedCells.length === 0) continue;
+        cellBudget -= addedCells.length;
+        growth.push({
+            zMm: planeZ[candidate.index],
+            addedAreaMm2: candidate.addedMm2,
+            growthRatio: candidate.ratio,
+            addedCells: Uint32Array.from(addedCells),
+        });
+    }
+    growth.sort((a, b) => a.zMm - b.zMm);
+    return { growth, grid };
+}
+
+/**
  * Fast single-pass representative-layer slicer (Cao et al. 2025, Algorithm 1).
  *
- * Samples `24–72` horizontal planes through the world-frame mesh, computes exact
- * closed cross-section area per slice via Green's theorem on triangle-plane
- * intersections, and clusters consecutive coherent slices by coarse 2D IoU and
- * relative area delta. Emits the peak-load representative layer per cluster.
+ * Samples horizontal planes through the world-frame mesh — at the print
+ * profile's layer height when `options.layerHeightMm` is given, otherwise one
+ * plane per millimetre (24–72 planes) — computes exact closed cross-section
+ * area per slice via Green's theorem on triangle-plane intersections, and
+ * clusters consecutive coherent slices by coarse 2D IoU and relative area
+ * delta. Emits the peak-load representative layer per cluster for the Stefan
+ * PDE solve, plus every sampled plane as `samples` for the per-layer curve.
  */
 export function extractRepresentativeLayers(
     mesh: THREE.Mesh | undefined | null,
     planeCountOverride?: number,
+    options?: { layerHeightMm?: number },
 ): RepresentativeLayerProfile {
     if (!mesh || !mesh.geometry) {
         return { layers: [], peakAreaMm2: 0, sampledPlaneCount: 0 };
@@ -345,14 +503,24 @@ export function extractRepresentativeLayers(
 
     let minZ = Infinity;
     let maxZ = -Infinity;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
     for (let i = 0; i < vCount; i++) {
         const lx = posAttr.getX(i);
         const ly = posAttr.getY(i);
         const lz = posAttr.getZ(i);
-        wx[i] = m0 * lx + m4 * ly + m8 * lz + m12;
-        wy[i] = m1 * lx + m5 * ly + m9 * lz + m13;
+        const x = m0 * lx + m4 * ly + m8 * lz + m12;
+        const y = m1 * lx + m5 * ly + m9 * lz + m13;
+        wx[i] = x;
+        wy[i] = y;
         const z = m2 * lx + m6 * ly + m10 * lz + m14;
         wz[i] = z;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
         if (z < minZ) minZ = z;
         if (z > maxZ) maxZ = z;
     }
@@ -362,9 +530,12 @@ export function extractRepresentativeLayers(
         return { layers: [], peakAreaMm2: 0, sampledPlaneCount: 0 };
     }
 
+    const layerHeightMm = options?.layerHeightMm && options.layerHeightMm > 0 ? options.layerHeightMm : null;
     const planeCount = planeCountOverride !== undefined
         ? Math.max(4, Math.min(128, Math.round(planeCountOverride)))
-        : Math.max(24, Math.min(72, Math.round(spanZ / 1.0)));
+        : layerHeightMm !== null
+            ? Math.max(2, Math.min(MAX_SAMPLED_PLANES, Math.round(spanZ / layerHeightMm)))
+            : Math.max(24, Math.min(72, Math.round(spanZ / 1.0)));
 
     const zStart = minZ + Math.min(0.25, spanZ * 0.05);
     const zEnd = maxZ - Math.min(0.25, spanZ * 0.05);
@@ -466,9 +637,11 @@ export function extractRepresentativeLayers(
 
     const areas = new Float64Array(planeCount);
     let peakAreaMm2 = 0;
+    const samples: LayerAreaSample[] = new Array(planeCount);
     for (let k = 0; k < planeCount; k++) {
         const a = Math.abs(signedArea2[k]) * 0.5;
         areas[k] = a;
+        samples[k] = { zMm: planeZ[k], areaMm2: a };
         if (a > peakAreaMm2) peakAreaMm2 = a;
     }
 
@@ -510,7 +683,17 @@ export function extractRepresentativeLayers(
     }
     flushCluster();
 
-    return { layers, peakAreaMm2, sampledPlaneCount: planeCount };
+    const growthResult = buildLayerGrowth(planeZ, areas, sliceSegments, { minX, minY, maxX, maxY });
+    return growthResult.growth.length > 0
+        ? {
+            layers,
+            samples,
+            growth: growthResult.growth,
+            growthGrid: growthResult.grid,
+            peakAreaMm2,
+            sampledPlaneCount: planeCount,
+        }
+        : { layers, samples, peakAreaMm2, sampledPlaneCount: planeCount };
 }
 
 /**
@@ -694,8 +877,11 @@ export function optimizeContactsByTraction(
     settings: AutoSupportSettings,
     mesh?: THREE.Mesh | null,
     modelId: string = '',
+    /** The print profile's layer height; without it the slicer samples ~1 mm,
+     *  which is also the peel curve the run's stress report would carry. */
+    options?: { layerHeightMm?: number; profile?: RepresentativeLayerProfile },
 ): TractionOptimizationResult {
-    const profile = extractRepresentativeLayers(mesh);
+    const profile = options?.profile ?? extractRepresentativeLayers(mesh, undefined, { layerHeightMm: options?.layerHeightMm });
     if (candidates.length === 0) {
         return {
             candidates,

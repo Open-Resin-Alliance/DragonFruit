@@ -66,7 +66,7 @@ export interface StabilizationAnchor {
  */
 export function computeStabilizationAnchors(
     mesh: THREE.Mesh,
-    options: { hasRaft?: boolean } = {},
+    options: { hasRaft?: boolean; toppleCoverageNeeded?: boolean } = {},
 ): StabilizationAnchor[] {
     const geometry = mesh.geometry as THREE.BufferGeometry;
     const posAttr = geometry.getAttribute('position');
@@ -226,7 +226,8 @@ export function computeStabilizationAnchors(
         options.hasRaft === true,
     );
     const standsOnBase = hull.length >= 3 && bearingAreaMm2 >= MIN_BEARING_AREA_MM2 && depthMm >= -MARGIN_MM;
-    if (standsOnBase && !needsToppleCoverage(poseStability)) {
+    const needsTopple = options.toppleCoverageNeeded ?? needsToppleCoverage(poseStability);
+    if (standsOnBase && !needsTopple) {
         logVerdict('stable', 0, bearingAreaMm2, depthMm);
         return [];
     }

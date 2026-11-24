@@ -294,3 +294,34 @@ test('buildGapFillCandidates emits rescue candidates even when zero tips were pl
     assert.equal(candidates[0].gridPoint, true);
     assert.equal(candidates[0].zHeight, 10);
 });
+
+test('perimeter-first fill puts contacts on a long flat foot end to end', () => {
+    const region = rectRegion('foot', -5, 5, -1, 1, 12);
+    region.perimeterLoops = [[[-5, -1, 12], [5, -1, 12], [5, 1, 12], [-5, 1, 12]]];
+    region.overhangAngleDeg = 40;
+    const settings = createDefaultAutoSupportSettings();
+    const candidates = buildGapFillCandidates([region], settings, []);
+    const xs = candidates.map((candidate) => candidate.tipPos.x);
+    assert.ok(Math.min(...xs) <= -4.5, `toe gets a contact (min x ${Math.min(...xs)})`);
+    assert.ok(Math.max(...xs) >= 4.5, `heel gets a contact (max x ${Math.max(...xs)})`);
+    assert.ok(candidates.length >= 5, `perimeter sampled (${candidates.length} candidates)`);
+    assert.ok(candidates.length <= 12, 'bounded per region');
+    for (let i = 0; i < candidates.length; i++) {
+        for (let j = i + 1; j < candidates.length; j++) {
+            const a = candidates[i].tipPos;
+            const b = candidates[j].tipPos;
+            assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= 1.0, 'contacts are spaced, not stacked');
+        }
+    }
+});
+
+test('perimeter fill skips the stretch already covered by a tip', () => {
+    const region = rectRegion('foot', -5, 5, -1, 1, 12);
+    region.perimeterLoops = [[[-5, -1, 12], [5, -1, 12], [5, 1, 12], [-5, 1, 12]]];
+    region.overhangAngleDeg = 40;
+    const settings = createDefaultAutoSupportSettings();
+    const candidates = buildGapFillCandidates([region], settings, [{ x: 0, y: 0, z: 12 }]);
+    assert.ok(candidates.length > 0, 'the uncovered ends still need contacts');
+    assert.ok(candidates.every((candidate) => Math.abs(candidate.tipPos.x) > 1.0),
+        'nothing is placed inside the covered middle');
+});

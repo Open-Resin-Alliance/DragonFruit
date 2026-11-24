@@ -13,10 +13,14 @@ import { computeAutoSupportPlan, forestReportToText } from '../autoSupport/autoP
 import {
     GREEN_RESIN_UTS_MPA,
     buildSupportGraph,
+    computePeelLayerSamples,
     distributeRigidBodyPeelLoads,
+    reinforceOverloadedFrameMembers,
     solveSupportFrameStress,
+    type SupportFrameStressReport,
 } from '../autoSupport/supportGraphStress';
 import { GREEN_RESIN_MODULUS_MPA } from '../autoSupport/treeSynthesis';
+import { referenceStefanMeanPressureMm2, type RepresentativeLayerProfile } from '../autoSupport/tractionOptimization';
 
 test('buildSupportGraph splits trunk shafts at branch and brace knots cleanly', () => {
     const draft: SupportState = {
@@ -251,10 +255,335 @@ test('computeAutoSupportPlan attaches deterministic frameStress report and forma
         assert.equal(report.frameStress.solverMode, 'frame3d');
         assert.ok(report.frameStress.braceCount > 0, 'X-braces included in support graph');
         assert.ok(report.frameStress.peakLayerPeelForceN > 0, 'Stefan peel force integrated onto critical layers');
+        assert.ok(report.frameStress.layerProfile.length > 0, 'layer-by-layer peel curve populated');
+        assert.equal(report.frameStress.memberSegments.length, report.frameStress.memberCount, 'every frame beam has a stress segment');
+        assert.equal(report.frameStress.tipPoints.length, report.frameStress.tipCount, 'every support tip has a stress point');
 
         const formatted = forestReportToText(report);
         assert.ok(formatted.includes('FRAME STRESS (SUPPORT GRAPH)'), 'Forest Report prints frame stress section');
     } finally {
         setSettings(prevSettings);
+    }
+});
+
+test('reinforceOverloadedFrameMembers thickens overloaded trunks and drops utilization on re-solve', () => {
+    const draft: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            rWeak: { id: 'rWeak', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            tWeak: {
+                id: 'tWeak', modelId: 'm', rootId: 'rWeak',
+                segments: [{ id: 'sWeak', diameter: 0.65, bottomJoint: { id: 'j0', pos: { x: 0, y: 0, z: 1 }, diameter: 0.65 }, topJoint: { id: 'j1', pos: { x: 0, y: 0, z: 19 }, diameter: 0.65 } }],
+                contactCone: { id: 'cWeak', pos: { x: 0, y: 0, z: 21.5 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.28, bodyDiameterMm: 0.65, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+    };
+
+    const graph = buildSupportGraph(draft, 'm');
+    const overloadedReport = solveSupportFrameStress(graph, undefined, {
+        explicitNodalLoads: new Map([[graph.nodes.length - 1, [0.12, 0, 0.25, 0, 0, 0]]]),
+    });
+    assert.ok(overloadedReport.maxMemberUtilizationPct > 100, `thin Ø0.65mm trunk exceeds 100% (got ${overloadedReport.maxMemberUtilizationPct.toFixed(0)}%)`);
+
+    const reinforced = reinforceOverloadedFrameMembers(draft, overloadedReport, undefined, 'm');
+    assert.equal(reinforced.changed, true);
+    assert.equal(reinforced.reinforcedTrunks, 1);
+    const newDia = reinforced.snapshot.trunks.tWeak.segments[0].diameter;
+    assert.ok(newDia > 0.65, `trunk thickened from 0.65mm to ${newDia}mm`);
+
+    const reGraph = buildSupportGraph(reinforced.snapshot, 'm');
+    const afterReport = solveSupportFrameStress(reGraph, undefined, {
+        explicitNodalLoads: new Map([[reGraph.nodes.length - 1, [0.12, 0, 0.25, 0, 0, 0]]]),
+    });
+    assert.ok(afterReport.maxMemberUtilizationPct < overloadedReport.maxMemberUtilizationPct * 0.6,
+        `re-solve shows steep stress drop (${afterReport.maxMemberUtilizationPct.toFixed(0)}% vs ${overloadedReport.maxMemberUtilizationPct.toFixed(0)}%)`);
+});
+
+test('reinforceOverloadedFrameMembers thickens overloaded branches, leaves, braces, and parent knots while preserving tip contacts', () => {
+    const draft: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            rA: { id: 'rA', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+            rB: { id: 'rB', modelId: 'm', transform: { pos: { x: 5, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            tA: {
+                id: 'tA', modelId: 'm', rootId: 'rA',
+                segments: [{ id: 'sA', diameter: 1.0, bottomJoint: { id: 'jA0', pos: { x: 0, y: 0, z: 1 }, diameter: 1.0 }, topJoint: { id: 'jA1', pos: { x: 0, y: 0, z: 16 }, diameter: 1.0 } }],
+            } as never,
+            tB: {
+                id: 'tB', modelId: 'm', rootId: 'rB',
+                segments: [{ id: 'sB', diameter: 1.0, bottomJoint: { id: 'jB0', pos: { x: 5, y: 0, z: 1 }, diameter: 1.0 }, topJoint: { id: 'jB1', pos: { x: 5, y: 0, z: 16 }, diameter: 1.0 } }],
+            } as never,
+        },
+        knots: {
+            kBraceA: { id: 'kBraceA', parentShaftId: 'sA', t: 0.4, pos: { x: 0, y: 0, z: 7 }, diameter: 0.9 } as never,
+            kBraceB: { id: 'kBraceB', parentShaftId: 'sB', t: 0.8, pos: { x: 5, y: 0, z: 13 }, diameter: 0.9 } as never,
+            kLeaf: { id: 'kLeaf', parentShaftId: 'sA', t: 0.85, pos: { x: 0, y: 0, z: 14 }, diameter: 0.8 } as never,
+            kBranch: { id: 'kBranch', parentShaftId: 'sB', t: 0.85, pos: { x: 5, y: 0, z: 14 }, diameter: 0.8 } as never,
+        },
+        braces: {
+            br1: { id: 'br1', modelId: 'm', startKnotId: 'kBraceA', endKnotId: 'kBraceB', profile: { diameter: 0.55 } } as never,
+        },
+        leaves: {
+            lf1: {
+                id: 'lf1', modelId: 'm', parentKnotId: 'kLeaf',
+                contactCone: { id: 'cLeaf', pos: { x: -2.4, y: 0, z: 17.5 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.24, bodyDiameterMm: 0.6, lengthMm: 2.0, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+        branches: {
+            bn1: {
+                id: 'bn1', modelId: 'm', parentKnotId: 'kBranch',
+                segments: [{ id: 'sBn1', diameter: 0.65, bottomJoint: { id: 'jBn0', pos: { x: 5, y: 0, z: 14 }, diameter: 0.65 }, topJoint: { id: 'jBn1', pos: { x: 7.5, y: 0, z: 17.5 }, diameter: 0.65 } }],
+                contactCone: { id: 'cBn1', pos: { x: 8.2, y: 0, z: 19.2 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.26, bodyDiameterMm: 0.65, lengthMm: 2.0, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+    };
+
+    const graph = buildSupportGraph(draft, 'm');
+    const loads = new Map<number, readonly [number, number, number, number, number, number]>();
+    graph.nodes.forEach((n, idx) => {
+        if (n.kind === 'tip') loads.set(idx, [0.22, 0.12, 0.45, 0, 0, 0]);
+    });
+
+    const beforeReport = solveSupportFrameStress(graph, undefined, { explicitNodalLoads: loads });
+    assert.ok(beforeReport.overloadedMembers >= 2, `expected overloaded members before reinforce, got ${beforeReport.overloadedMembers}`);
+
+    const reinforced = reinforceOverloadedFrameMembers(draft, beforeReport, undefined, 'm');
+    assert.equal(reinforced.changed, true);
+    assert.ok(reinforced.totalReinforced >= 2, `expected >=2 reinforced members, got ${reinforced.totalReinforced}`);
+    assert.equal(reinforced.reinforcedLeaves, 1, 'overloaded leaf reinforced');
+    assert.equal(reinforced.reinforcedBranches, 1, 'overloaded branch reinforced');
+
+    const newLeafBody = reinforced.snapshot.leaves.lf1.contactCone.profile.bodyDiameterMm;
+    assert.ok(newLeafBody > 0.6, `leaf body thickened from 0.6mm to ${newLeafBody}mm`);
+    assert.equal(reinforced.snapshot.leaves.lf1.contactCone.profile.contactDiameterMm, 0.24, 'leaf contact tip scar preserved');
+    assert.ok((reinforced.snapshot.knots.kLeaf.diameter ?? 0) >= newLeafBody + 0.125 - 1e-6, 'leaf host knot updated');
+
+    const newBranchDia = reinforced.snapshot.branches.bn1.segments[0].diameter;
+    assert.ok(newBranchDia > 0.65, `branch shaft thickened from 0.65mm to ${newBranchDia}mm`);
+    assert.equal(reinforced.snapshot.branches.bn1.contactCone?.profile.contactDiameterMm, 0.26, 'branch contact tip scar preserved');
+    assert.ok((reinforced.snapshot.knots.kBranch.diameter ?? 0) >= newBranchDia + 0.125 - 1e-6, 'branch host knot updated');
+
+    if (reinforced.reinforcedBraces > 0) {
+        const newBraceDia = reinforced.snapshot.braces.br1.profile.diameter;
+        assert.ok(newBraceDia > 0.55, `brace thickened from 0.55mm to ${newBraceDia}mm`);
+        assert.ok((reinforced.snapshot.knots.kBraceA.diameter ?? 0) >= newBraceDia + 0.125 - 1e-6, 'brace start knot updated for BraceRenderer');
+        assert.ok((reinforced.snapshot.knots.kBraceB.diameter ?? 0) >= newBraceDia + 0.125 - 1e-6, 'brace end knot updated for BraceRenderer');
+    }
+
+    const reGraph = buildSupportGraph(reinforced.snapshot, 'm');
+    const reLoads = new Map<number, readonly [number, number, number, number, number, number]>();
+    reGraph.nodes.forEach((n, idx) => {
+        if (n.kind === 'tip') reLoads.set(idx, [0.22, 0.12, 0.45, 0, 0, 0]);
+    });
+    const afterReport = solveSupportFrameStress(reGraph, undefined, { explicitNodalLoads: reLoads });
+    assert.ok(afterReport.maxMemberUtilizationPct < beforeReport.maxMemberUtilizationPct,
+        `re-solve shows lower stress (${afterReport.maxMemberUtilizationPct.toFixed(0)}% vs ${beforeReport.maxMemberUtilizationPct.toFixed(0)}%)`);
+});
+
+test('reinforceOverloadedFrameMembers falls back to smaller clearance-safe step and reports skippedCount at cap', () => {
+    initializeBVH();
+    // Place an obstacle box just close enough to block 1.35x scaled leaf radius (~1.22mm -> 0.427mm)
+    // while clearing the 1.08x fallback step (~0.97mm -> 0.340mm) with nearest box face at x=0.36mm.
+    const boxGeo = new THREE.BoxGeometry(1.0, 2.0, 2.0).translate(0.86, 0, 12.0).toNonIndexed();
+    boxGeo.computeVertexNormals();
+    accelerateGeometry(boxGeo);
+    const fitMesh = new THREE.Mesh(boxGeo, new THREE.MeshBasicMaterial());
+    fitMesh.updateMatrixWorld(true);
+
+    const draft: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            r1: { id: 'r1', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            t1: {
+                id: 't1', modelId: 'm', rootId: 'r1',
+                segments: [{ id: 's1', diameter: 1.6, bottomJoint: { id: 'j0', pos: { x: 0, y: 0, z: 1 }, diameter: 1.6 }, topJoint: { id: 'j1', pos: { x: 0, y: 0, z: 10 }, diameter: 1.6 } }],
+            } as never,
+        },
+        knots: {
+            k1: { id: 'k1', parentShaftId: 's1', t: 1, pos: { x: 0, y: 0, z: 10 }, diameter: 1.2 } as never,
+        },
+        leaves: {
+            lfNear: {
+                id: 'lfNear', modelId: 'm', parentKnotId: 'k1',
+                contactCone: { id: 'cNear', pos: { x: 0, y: 0, z: 14 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.24, bodyDiameterMm: 0.90, lengthMm: 2.0, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+    };
+
+    const syntheticOverloadReport: SupportFrameStressReport = {
+        nodeCount: 3, rootCount: 1, tipCount: 1, memberCount: 2, braceCount: 0,
+        layersEvaluated: 1, peakLayerZMm: 14, peakLayerPeelForceN: 1,
+        maxTipUtilizationPct: 50, overloadedTips: 0,
+        maxMemberUtilizationPct: 220, overloadedMembers: 1,
+        maxTipDeflectionMm: 0.2, solverMode: 'frame3d',
+        hotspots: [], layerProfile: [],
+        memberSegments: [
+            { entityId: 'lfNear', entityKind: 'leaf', a: { x: 0, y: 0, z: 10 }, b: { x: 0, y: 0, z: 14 }, diameterMm: 0.63, utilizationPct: 220 },
+        ],
+        tipPoints: [],
+    };
+
+    const stepped = reinforceOverloadedFrameMembers(draft, syntheticOverloadReport, fitMesh, 'm');
+    assert.equal(stepped.changed, true, 'fallback clearance step accepted');
+    assert.equal(stepped.reinforcedLeaves, 1);
+    const steppedDia = stepped.snapshot.leaves.lfNear.contactCone.profile.bodyDiameterMm;
+    assert.ok(steppedDia > 0.90 && steppedDia < 1.22, `stepped fallback diameter ${steppedDia}mm (< ideal 1.22mm)`);
+
+    // Already-capped leaf reports changed: false and skippedCount: 1.
+    const cappedDraft: SupportState = {
+        ...draft,
+        leaves: {
+            lfNear: {
+                ...draft.leaves.lfNear,
+                contactCone: {
+                    ...draft.leaves.lfNear.contactCone,
+                    profile: { ...draft.leaves.lfNear.contactCone.profile, bodyDiameterMm: 1.55 },
+                },
+            },
+        },
+    };
+    const atCap = reinforceOverloadedFrameMembers(cappedDraft, syntheticOverloadReport, undefined, 'm');
+    assert.equal(atCap.changed, false);
+    assert.equal(atCap.skippedCount, 1);
+});
+
+test('a disconnected sub-assembly below every global stage gets its own critical layer', () => {
+    const cone = (id: string, x: number, z: number) => ({
+        id,
+        pos: { x, y: 0, z },
+        normal: { x: 0, y: 0, z: -1 },
+        profile: { type: 'disk' as const, contactDiameterMm: 0.28, bodyDiameterMm: 1.0, lengthMm: 2.5, penetrationMm: 0 },
+    });
+    const tower = (id: string, x: number, tipZ: number) => ({
+        id,
+        modelId: 'm',
+        rootId: `r-${id}`,
+        segments: [{
+            id: `seg-${id}`,
+            diameter: 1.0,
+            bottomJoint: { id: `j0-${id}`, pos: { x, y: 0, z: 1 }, diameter: 1.0 },
+            topJoint: { id: `j1-${id}`, pos: { x, y: 0, z: tipZ - 0.5 }, diameter: 1.0 },
+        }],
+        contactCone: cone(`c-${id}`, x, tipZ),
+    } as never);
+    const snapshot: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            'r-short': { id: 'r-short', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+            'r-tall': { id: 'r-tall', modelId: 'm', transform: { pos: { x: 12, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            short: tower('short', 0, 13),
+            tall: tower('tall', 12, 30),
+        },
+    };
+
+    // Global picks: peak area (z=20) and the highest stage (z=30). The short
+    // tower's own peak (z=13) is below both and is only reached by the
+    // per-component pass.
+    const profile: RepresentativeLayerProfile = {
+        layers: [
+            { zMm: 13, areaMm2: 25, areaJumpRatio: 1.2, clusterSpanCount: 1 },
+            { zMm: 20, areaMm2: 40, areaJumpRatio: 3.0, clusterSpanCount: 1 },
+            { zMm: 30, areaMm2: 20, areaJumpRatio: 1.0, clusterSpanCount: 1 },
+        ],
+        peakAreaMm2: 40,
+        sampledPlaneCount: 3,
+    };
+
+    const graph = buildSupportGraph(snapshot, 'm');
+    assert.equal(graph.rootCount, 2, 'two independent towers');
+    const report = solveSupportFrameStress(graph, profile, { areaPerSupportMm2: 10 });
+
+    assert.equal(report.layersEvaluated, 3, 'two global stages plus the short tower stage');
+    const shortTowerStage = report.layerProfile.find((layer) => layer.zMm === 13);
+    assert.ok(shortTowerStage, 'the short tower layer is in the profile');
+    assert.equal(shortTowerStage.critical, true, 'and it was actually solved at its own peak');
+    assert.ok(shortTowerStage.maxTipUtilPct > 0, 'the short tower tip carried load at that stage');
+
+    const shortTip = report.tipPoints.find((tip) => tip.pos.x === 0);
+    assert.ok(shortTip && shortTip.utilizationPct > 0, 'and its tip reports the load');
+});
+
+test('the reported peel curve runs at the sampled-layer resolution, not the cluster peaks', () => {
+    const cone = {
+        id: 'c1',
+        pos: { x: 0, y: 0, z: 20 },
+        normal: { x: 0, y: 0, z: -1 },
+        profile: { type: 'disk' as const, contactDiameterMm: 0.28, bodyDiameterMm: 1.0, lengthMm: 2.5, penetrationMm: 0 },
+    };
+    const snapshot: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            r1: { id: 'r1', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            t1: {
+                id: 't1',
+                modelId: 'm',
+                rootId: 'r1',
+                segments: [{
+                    id: 's1',
+                    diameter: 1.0,
+                    bottomJoint: { id: 'j0', pos: { x: 0, y: 0, z: 1 }, diameter: 1.0 },
+                    topJoint: { id: 'j1', pos: { x: 0, y: 0, z: 19.5 }, diameter: 1.0 },
+                }],
+                contactCone: cone,
+            } as never,
+        },
+    };
+    const profile: RepresentativeLayerProfile = {
+        layers: [{ zMm: 10, areaMm2: 20, areaJumpRatio: 1.5, clusterSpanCount: 40 }],
+        samples: [
+            { zMm: 9.95, areaMm2: 10 },
+            { zMm: 10, areaMm2: 20 },
+            { zMm: 10.05, areaMm2: 30 },
+        ],
+        peakAreaMm2: 30,
+        sampledPlaneCount: 3,
+    };
+
+    const report = solveSupportFrameStress(buildSupportGraph(snapshot, 'm'), profile, { areaPerSupportMm2: 10 });
+    assert.deepEqual(report.layerProfile.map((point) => point.zMm), [9.95, 10, 10.05], 'one point per sampled layer');
+    assert.equal(report.layersEvaluated, 1, 'only the critical layer costs a solve');
+    assert.equal(report.layerProfile.find((point) => point.zMm === 10)?.critical, true);
+    // 30 mm² at the nominal calibration (0.15 N per 10 mm²) is 0.45 N.
+    assert.ok(Math.abs((report.layerProfile.find((point) => point.zMm === 10.05)?.peelForceN ?? 0) - 0.45) < 1e-6);
+});
+
+test('the peel curve interpolates the field ratio instead of spiking at cluster peaks', () => {
+    const pRef = referenceStefanMeanPressureMm2(10);
+    const field = {
+        minX: -5, minY: -5, cellMm: 0.5, nx: 20, ny: 20,
+        pressure: new Float32Array(400).fill(0.5),
+        peakPressureMm2: 1, meanPressureMm2: 0.5,
+        // Ratio 10 against the 10 mm² reference disc.
+        integratedForceMm4: 10 * 100 * pRef,
+        maskAreaMm2: 100,
+    };
+    const layers = [{ zMm: 10, areaMm2: 100, areaJumpRatio: 1, clusterSpanCount: 1, stefanField: field }];
+    const samples = [9.9, 9.95, 10, 10.05, 10.1].map((zMm) => ({ zMm, areaMm2: 100 }));
+
+    const forces = computePeelLayerSamples(samples, layers, 100).map((sample) => sample.forceN);
+    // 100 mm² × ratio 10 × 0.15 N per 10 mm² = 15 N at every neighbour too; the
+    // old nominal fallback made the layers either side of z=10 read 1.5 N.
+    for (const force of forces) {
+        assert.ok(Math.abs(force - 15) < 1e-6, `layer force ${force} should be 15 N`);
     }
 });

@@ -136,6 +136,63 @@ export function geometryVolumeMm3(geometry: BufferGeometry): number {
   return Math.abs(signedVolume);
 }
 
+export interface Vec3Mm {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * The geometry's own volume centroid in local coordinates, or null when the mesh
+ * encloses no volume (an open shell) or the sum is not finite.
+ *
+ * Same tetrahedron decomposition as `geometryVolumeMm3`: each triangle forms a
+ * tetrahedron with the origin and its signed volume weights its own centroid, so
+ * the result is independent of where the origin sits. The caller applies the
+ * model's matrix (`mesh.matrixWorld`) to get the world center of mass.
+ */
+export function geometryCentroidMm(geometry: BufferGeometry): Vec3Mm | null {
+  const position = geometry.getAttribute('position') as unknown as ResinVolumePositionAttribute | undefined;
+  if (!position) return null;
+  const index = geometry.getIndex() as unknown as ResinVolumeIndexAttribute | null;
+
+  let volume = 0;
+  let momentX = 0;
+  let momentY = 0;
+  let momentZ = 0;
+
+  const addTriangle = (ia: number, ib: number, ic: number) => {
+    const ax = position.getX(ia);
+    const ay = position.getY(ia);
+    const az = position.getZ(ia);
+    const bx = position.getX(ib);
+    const by = position.getY(ib);
+    const bz = position.getZ(ib);
+    const cx = position.getX(ic);
+    const cy = position.getY(ic);
+    const cz = position.getZ(ic);
+    const signedVolume = signedTetraVolume(ax, ay, az, bx, by, bz, cx, cy, cz);
+    volume += signedVolume;
+    momentX += signedVolume * (ax + bx + cx) * 0.25;
+    momentY += signedVolume * (ay + by + cy) * 0.25;
+    momentZ += signedVolume * (az + bz + cz) * 0.25;
+  };
+
+  if (index) {
+    for (let i = 0; i < index.count; i += 3) addTriangle(index.getX(i), index.getX(i + 1), index.getX(i + 2));
+  } else {
+    for (let i = 0; i < position.count; i += 3) addTriangle(i, i + 1, i + 2);
+  }
+
+  const scale = Math.abs(volume) > 1e-9 && Number.isFinite(volume) ? 1 / volume : 0;
+  if (scale === 0) return null;
+  const x = momentX * scale;
+  const y = momentY * scale;
+  const z = momentZ * scale;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+  return { x, y, z };
+}
+
 /**
  * The enclosed volume of one geometry in millilitres, or null when the sum is not
  * a finite number (a mesh with NaN coordinates).

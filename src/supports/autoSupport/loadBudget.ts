@@ -123,28 +123,42 @@ export function computeLoadBudget(input: LoadBudgetInput): LoadBudgetReport {
     for (const island of withArea) cellsById.set(island.id, footprintCells(island));
     const withCells = withArea.filter((island) => cellsById.get(island.id) !== null);
     const descending = [...withCells].sort((a, b) => b.baseZ - a.baseZ);
-    for (const upper of descending) {
+
+    // Cell → the islands that carry it, in descending baseZ order. A cell is
+    // credited to the first lower island that intercepts it, so this replaces a
+    // full island × island × cell scan with one walk of the upper island's own
+    // cells. Same numbers, same tie order (`descending` is stable).
+    const ownerIndicesByCell = new Map<number, number[]>();
+    for (let index = 0; index < descending.length; index++) {
+        const cells = cellsById.get(descending[index].id)!;
+        for (const cell of cells) {
+            const owners = ownerIndicesByCell.get(cell);
+            if (owners) owners.push(index);
+            else ownerIndicesByCell.set(cell, [index]);
+        }
+    }
+
+    for (let upperIndex = 0; upperIndex < descending.length; upperIndex++) {
+        const upper = descending[upperIndex];
         if (upper.baseZ <= LEVEL_EPSILON_MM) continue;
         const upperCells = cellsById.get(upper.id)!;
         if (upperCells.size === 0) continue;
         const carried = demandById.get(upper.id) ?? 0;
-        const unoccluded = new Set(upperCells);
-        for (const lower of descending) {
-            if (lower.id === upper.id) continue;
-            if (lower.baseZ >= upper.baseZ - LEVEL_EPSILON_MM) continue;
-            const lowerCells = cellsById.get(lower.id)!;
-            let intercepted = 0;
-            for (const cell of unoccluded) {
-                if (lowerCells.has(cell)) {
-                    intercepted++;
-                    unoccluded.delete(cell);
-                }
+        const interceptedBy = new Map<number, number>();
+        for (const cell of upperCells) {
+            const owners = ownerIndicesByCell.get(cell);
+            if (!owners) continue;
+            for (const lowerIndex of owners) {
+                if (lowerIndex === upperIndex) continue;
+                const lower = descending[lowerIndex];
+                if (lower.baseZ >= upper.baseZ - LEVEL_EPSILON_MM) continue;
+                interceptedBy.set(lowerIndex, (interceptedBy.get(lowerIndex) ?? 0) + 1);
+                break;
             }
-            const fraction = intercepted / upperCells.size;
-            if (fraction > 0) {
-                demandById.set(lower.id, (demandById.get(lower.id) ?? 0) + carried * fraction);
-            }
-            if (unoccluded.size === 0) break;
+        }
+        for (const [lowerIndex, intercepted] of interceptedBy) {
+            const lower = descending[lowerIndex];
+            demandById.set(lower.id, (demandById.get(lower.id) ?? 0) + carried * (intercepted / upperCells.size));
         }
     }
 

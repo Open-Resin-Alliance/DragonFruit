@@ -1,6 +1,7 @@
 import type { Vec3, SupportState } from '../types';
 import { AUTO_PLACED_TYPE_IDS, type AutoPlacedTypeId, type ShaftHostedMemberTypeId, type SupportTypeId } from '../supportTypeRegistry';
 import type { SupportFrameStressReport } from './supportGraphStress';
+import type { ToppleRiskReport } from './toppleRisk';
 
 export type { AutoPlacedTypeId };
 
@@ -137,6 +138,8 @@ export interface ForestReport {
     loadBudget?: LoadBudgetReport;
     /** 3D support+brace beam-frame & rigid-body peel stress summary on critical layers. */
     frameStress?: SupportFrameStressReport;
+    /** Solved-demand topple margin about the pose's worst bearing edge. */
+    toppleRisk?: ToppleRiskReport;
     /** Placement diagnostics: why trunks are where they are, fan/merge refusal counts */
     diagnostics?: {
         candidatesBySource: { voxel: number; minima: number; intersection: number; overhang: number; stabilization: number; reinforcement: number };
@@ -145,6 +148,8 @@ export interface ForestReport {
         mergeRefusals: Partial<Record<string, number>>;
         /** Candidates the grid refused and the fallback then placed without it. */
         gridFallbacks: number;
+        /** Trunk-build failures retried as wide fans after gap-fill. */
+        trunkErrorRetries?: { attempted: number; rescued: number };
         /** Why consolidation (chunk fanning) refused candidates — sameZ means
          *  the surface is too flat for side-leaves at the consolidation
          *  angle (raft/connector territory). */
@@ -159,6 +164,13 @@ export interface ForestReport {
             peakCrossSectionMm2: number;
             added: number;
             pruned: number;
+        };
+        /** Co-located trunk roots that were dissolved into a taller host, and
+         *  why a pair could not be (`noHost`, `angle`, `blocked`, `capacity`,
+         *  `cross`, `noTips`, `build`). */
+        rootMerges?: {
+            merged: number;
+            refusals: Partial<Record<string, number>>;
         };
     };
 }
@@ -313,6 +325,8 @@ export interface PlacementDiagnostics {
     mergeRefusals: Partial<Record<'noHost' | 'rejected', number>>;
     /** Candidates the grid refused and the fallback then placed without it. */
     gridFallbacks: number;
+    /** Trunk-build failures retried as wide fans after gap-fill. */
+    trunkErrorRetries?: { attempted: number; rescued: number };
     /** Candidates whose trunk could not reach the plate and were bridged
      *  model-to-model instead -- by whichever type registered a bridge
      *  builder. Tip = where the bridge

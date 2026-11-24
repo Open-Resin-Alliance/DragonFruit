@@ -80,6 +80,9 @@ export type AutoPlaceWorkerPayload = {
     modelId: string;
     islands: SerializedIsland[];
     settingsOverride?: Partial<AutoSupportSettings>;
+    /** Print profile layer height; the worker has no profile store, so the
+     *  sampling resolution must travel with the request. */
+    layerHeightMm?: number;
     /** The app's full settings, which the plan reads through `getSettings()`. */
     appSettings: SupportSettings;
     /** Global and per-model raft settings snapshot from the main thread. */
@@ -353,5 +356,6 @@ export function runAutoPlaceRequest(
         mesh,
         onProgress,
         cavityMesh,
+        payload.layerHeightMm,
     );
 }

@@ -1068,6 +1068,13 @@ pub struct StabilityReport {
     /// Worst hull edge: outward normal angle in XY (deg, 0 = +X, 90 = +Y,
     /// wrapped to [0, 360)).
     pub worst_edge_dir_deg: f32,
+    /// Worst hull edge, world XY (mm): a point on the edge line. Paired with
+    /// `worst_edge_normal` it defines the line the drag/topple moments are
+    /// measured about — a consumer adding the solved Stefan peel moment (the TS
+    /// topple risk) needs the line, not just the direction.
+    pub worst_edge_point_mm: [f32; 2],
+    /// Worst hull edge outward unit normal in XY.
+    pub worst_edge_normal: [f32; 2],
     /// Worst hull edge: how far the centroid sits inside it (mm). Negative
     /// means the centroid is already outside the bearing polygon.
     pub centroid_depth_mm: f32,
@@ -1448,7 +1455,7 @@ pub fn compute_stability_report(
     // INWARD, so it is positive while the mass is still over the edge. A mesh
     // with no enclosed volume has no restoring moment at all, so its margin is
     // 0 (least stable) rather than infinite — the drag never even enters.
-    let mut worst: Option<(f32, f32, f32, f32, f64)> = None;
+    let mut worst: Option<(f32, f32, f32, f32, f64, [f32; 2], [f32; 2])> = None;
     for (ei, e) in edges.iter().enumerate() {
         let depth = (e.2 - centroid_mm[0] as f64) * e.0 + (e.3 - centroid_mm[1] as f64) * e.1;
         let contact_depth = contact_centroid
@@ -1466,17 +1473,32 @@ pub fn compute_stability_report(
         // otherwise reports -180 for the same edge as +180.
         let dir_deg = e.1.atan2(e.0).to_degrees().rem_euclid(360.0) as f32;
         if worst.is_none_or(|w| margin < w.0) {
-            worst = Some((margin, dir_deg, depth as f32, contact_depth as f32, sum));
+            worst = Some((
+                margin,
+                dir_deg,
+                depth as f32,
+                contact_depth as f32,
+                sum,
+                [e.2 as f32, e.3 as f32],
+                [e.0 as f32, e.1 as f32],
+            ));
         }
     }
-    let (margin_mm, worst_edge_dir_deg, centroid_depth_mm, contact_depth_mm, worst_edge_drag_mm3) =
-        match worst {
-            // A point or edge contact has no bearing polygon: no static margin.
-            Some((margin, dir, depth, contact_depth, sum)) => {
-                (margin, dir, depth, contact_depth, sum)
-            }
-            None => (0.0, 0.0, 0.0, 0.0, 0.0),
-        };
+    let (
+        margin_mm,
+        worst_edge_dir_deg,
+        centroid_depth_mm,
+        contact_depth_mm,
+        worst_edge_drag_mm3,
+        worst_edge_point_mm,
+        worst_edge_normal,
+    ) = match worst {
+        // A point or edge contact has no bearing polygon: no static margin.
+        Some((margin, dir, depth, contact_depth, sum, point, normal)) => {
+            (margin, dir, depth, contact_depth, sum, point, normal)
+        }
+        None => (0.0, 0.0, 0.0, 0.0, 0.0, [0.0, 0.0], [0.0, 0.0]),
+    };
     let adhesion_ratio = if worst_edge_drag_mm3 > 1e-9 {
         (bearing_area_mm2 as f64 * contact_depth_mm as f64) / worst_edge_drag_mm3
     } else if edges.is_empty() && drag_total > 1e-9 {
@@ -1501,6 +1523,8 @@ pub fn compute_stability_report(
         bearing_area_mm2,
         bearing_edges: edges.len(),
         worst_edge_dir_deg,
+        worst_edge_point_mm,
+        worst_edge_normal,
         centroid_depth_mm,
         contact_depth_mm,
         drag_moment_mm3: drag_total,
@@ -2340,6 +2364,23 @@ mod tests {
             (short.worst_edge_dir_deg - 180.0).abs() < 0.01,
             "{}",
             short.worst_edge_dir_deg
+        );
+        // The exposed edge line must describe the same edge the margin is
+        // measured about: unit normal, pointing along `worst_edge_dir_deg`, and
+        // the centroid's inward depth reproduces from it.
+        let n = short.worst_edge_normal;
+        assert!(
+            (n[0] * n[0] + n[1] * n[1] - 1.0).abs() < 1e-4,
+            "normal {n:?}"
+        );
+        let dir = n[1].atan2(n[0]).to_degrees().rem_euclid(360.0);
+        assert!((dir - short.worst_edge_dir_deg).abs() < 0.01, "{dir}");
+        let depth = (short.worst_edge_point_mm[0] - short.centroid_mm[0]) * n[0]
+            + (short.worst_edge_point_mm[1] - short.centroid_mm[1]) * n[1];
+        assert!(
+            (depth - short.centroid_depth_mm).abs() < 1e-3,
+            "depth {depth} vs {}",
+            short.centroid_depth_mm
         );
         assert!(
             (short.drag_moment_mm3 - 300.0).abs() < 1.0,

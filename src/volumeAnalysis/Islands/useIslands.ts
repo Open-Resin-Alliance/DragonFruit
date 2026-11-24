@@ -519,6 +519,7 @@ async function reportSlowStep(label: string, elapsedMs: number): Promise<void> {
 
 export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, modelId, sourcePath, activeTab, hasRaft = false }: UseIslandsInput) {
   const [scanning, setScanning] = useState(false);
+  const [hasScanned, setHasScanned] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number; phase?: string; phaseNumber?: number; phaseCount?: number } | null>(null);
   const [voxelIslands, setVoxelIslands] = useState<DetectedIsland[]>([]);
   const [minimaIslands, setMinimaIslands] = useState<DetectedIsland[]>([]);
@@ -743,6 +744,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       setToppleCoverage(topple);
       setDragTotalMm3(drag);
       setOverhangIslands(overhangMapped);
+      setHasScanned(true);
 
       if (cacheKey) {
         scanCacheRef.current.set(cacheKey, {
@@ -972,6 +974,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         }
         if (scanEpochRef.current !== epoch) return;
         setMinimaIslands(minima);
+        setHasScanned(true);
         if (cacheKey) {
           scanCacheRef.current.set(cacheKey, {
             voxel,
@@ -1383,6 +1386,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     setVoxelIslands([]);
     setMinimaIslands([]);
     setOverhangIslands([]);
+    setHasScanned(false);
     setToppleCoverage(true);
     setDragTotalMm3(0);
     setSelectedMarkerId(null);
@@ -1405,6 +1409,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         setVoxelIslands(cached.voxel);
         setMinimaIslands(cached.minima);
         setOverhangIslands(cached.overhang);
+        setHasScanned(true);
         setToppleCoverage(cached.toppleCoverage);
         setDragTotalMm3(cached.dragTotalMm3);
         setSelectedMarkerId(null);
@@ -1423,6 +1428,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         setVoxelIslands(cached.voxel);
         setMinimaIslands(cached.minima);
         setOverhangIslands(cached.overhang);
+        setHasScanned(true);
         setToppleCoverage(cached.toppleCoverage);
         setDragTotalMm3(cached.dragTotalMm3);
         setSelectedMarkerId(null);
@@ -1538,6 +1544,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
 
   return {
     scanning,
+    hasScanned,
+    poseKey: cacheKey,
     scanProgress,
     elapsedLabel,
     voxelIslands,

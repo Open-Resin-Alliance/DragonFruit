@@ -219,3 +219,65 @@ test('Screened Stefan PDE: equal-area solid block has much higher suction than t
     assert.ok(centerTau > rimTau, `cap center traction (${centerTau.toFixed(2)}) > outer corner (${rimTau.toFixed(2)})`);
     assert.ok(centerTau > 1.25, `broad 16×16 cap center develops elevated peel traction (${centerTau.toFixed(2)})`);
 });
+
+test('the sampled planes follow the print profile layer height', () => {
+    const mesh = makeSteppedTBlockMesh();
+    const profile = extractRepresentativeLayers(mesh, undefined, { layerHeightMm: 0.05 });
+    assert.ok(profile.samples, 'samples are emitted alongside the clustered layers');
+    // 20 mm tall block at 50 µm → 400 planes (span excludes the 0.25 mm end margin).
+    assert.ok(profile.samples.length >= 380 && profile.samples.length <= 400,
+        `sampled ${profile.samples.length} planes at 0.05 mm`);
+    const first = profile.samples[0];
+    const second = profile.samples[1];
+    assert.ok(Math.abs((second.zMm - first.zMm) - (profile.samples[profile.samples.length - 1].zMm - profile.samples[profile.samples.length - 2].zMm)) < 1e-6,
+        'uniform layer step');
+    assert.ok(second.zMm - first.zMm < 0.06, `step ${second.zMm - first.zMm} mm is layer-height scale`);
+    assert.ok(profile.layers.length <= 6, 'clustering still emits only the PDE representatives');
+});
+
+test('consecutive layers retain the added plan cells where the cross-section grows', () => {
+    const mesh = makeSteppedTBlockMesh();
+    const profile = extractRepresentativeLayers(mesh, undefined, { layerHeightMm: 0.05 });
+    const grid = profile.growthGrid;
+    assert.ok(grid, 'a growing part gets a growth grid');
+    assert.equal(grid.cellMm, 0.5);
+    assert.ok(profile.growth && profile.growth.length === 1,
+        `one growth layer at the stem→cap jump (got ${profile.growth?.length ?? 0})`);
+
+    const jump = profile.growth![0];
+    assert.ok(Math.abs(jump.zMm - 10) < 0.2, `growth at the cap underside (z=${jump.zMm})`);
+    assert.ok(Math.abs(jump.addedAreaMm2 - 240) < 20, `added area ~240 mm² (got ${jump.addedAreaMm2.toFixed(1)})`);
+    assert.ok(jump.growthRatio > 10, `area jump ratio reflects 16→256 (got ${jump.growthRatio.toFixed(1)})`);
+
+    // The added cells are the cap ring around the stem: same footprint as the
+    // 240 mm² difference, none of it inside the 4×4 stem.
+    const cellArea = grid.cellMm * grid.cellMm;
+    assert.ok(Math.abs(jump.addedCells.length * cellArea - jump.addedAreaMm2) < 24,
+        `${jump.addedCells.length} cells ≈ ${jump.addedAreaMm2.toFixed(1)} mm²`);
+    let insideStem = 0;
+    for (const cell of jump.addedCells) {
+        const ix = cell % grid.nx;
+        const iy = Math.floor(cell / grid.nx);
+        const x = Math.abs(grid.minX + (ix + 0.5) * grid.cellMm);
+        const y = Math.abs(grid.minY + (iy + 0.5) * grid.cellMm);
+        if (Math.max(x, y) < 2) insideStem++;
+    }
+    assert.equal(insideStem, 0, 'no added cell inside the 4×4 stem footprint');
+});
+
+test('the traction profile samples at the print layer height when the run provides it', () => {
+    const mesh = makeSteppedTBlockMesh();
+    const region = makeRectOverhang('o1', 5, 5, 10);
+    const candidate = makeCandidate('c1', 0, 0, 10);
+    const result = optimizeContactsByTraction(
+        [candidate],
+        [region],
+        createDefaultAutoSupportSettings(),
+        mesh,
+        'm',
+        { layerHeightMm: 0.05 },
+    );
+    const samples = result.profile.samples;
+    assert.ok(samples && samples.length > 300,
+        `expected ~400 planes at 50 µm, got ${samples?.length ?? 0}`);
+});

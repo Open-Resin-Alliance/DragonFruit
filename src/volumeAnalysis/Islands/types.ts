@@ -80,6 +80,10 @@ export interface PoseStabilityWire {
   pushDirDeg: number;
   dragTopMm: number;
   bearingIsRaft: boolean;
+  /** Worst bearing edge line, world XY (mm): a point on it and its outward unit
+   *  normal. The solved topple-risk evaluation measures peel moments about it. */
+  worstEdgePointMm?: [number, number];
+  worstEdgeNormal?: [number, number];
 }
 
 /** Classification once the voxel and minima sets are intersected (Part C). */
