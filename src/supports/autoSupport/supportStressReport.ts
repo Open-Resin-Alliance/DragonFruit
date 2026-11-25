@@ -113,7 +113,7 @@ export function summarizeSupportStress(input: SupportStressReportInput): Support
     if (scanned && printability && printability.verdict === 'underSupported') {
         return {
             level: 'attention',
-            primaryIssue: 'uncoveredOverhangs',
+            primaryIssue: printability.uncoveredRegions > 0 ? 'uncoveredOverhangs' : 'deficientRegions',
             peakUtilizationPct,
             overloadedCount,
         };

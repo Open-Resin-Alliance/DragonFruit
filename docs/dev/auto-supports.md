@@ -969,17 +969,23 @@ against the tips actually placed:
 | Peak peel / area jump | `buildPeelCurve` over `RepresentativeLayerProfile` | N / unitless |
 
 `PrintabilityReport.verdict` is one of `ready`, `underSupported`, `overloaded`,
-`critical`: bare or short regions make it under-supported, a frame utilization
-above 100 % from the same edit makes it overloaded, and the pair — or an
-uncovered fraction of `CRITICAL_UNCOVERED_FRACTION` at
-`CRITICAL_UNCOVERED_AREA_MM2` or more — reads critical. Region severity requires
-**both** a mass (`CRITICAL_UNCOVERED_AREA_MM2`, 8 mm²) and a bridge
-(`HIGH_LEVERAGE_SPAN_MM`, 4 mm) before it is critical; a 13.3 mm² patch whose
-max free span is 3.9 mm is a warning. The hand-supported Puck print has exactly
-that patch and prints, so area alone cannot be the verdict. The summary maps a
-`critical` verdict to **Action Needed**, but `underSupported` (and its
-uncovered-area warning) to **Needs Attention**; it no longer promotes any
-uncovered area over 0.02 mm² to critical. A `topple.outcome === 'rocking'` with
+`critical`: a material uncovered region or a warning region makes it
+under-supported, a frame utilization above 100 % from the same edit makes it
+overloaded, and the pair — or an uncovered fraction of
+`CRITICAL_UNCOVERED_FRACTION` at `CRITICAL_UNCOVERED_AREA_MM2` or more — reads
+critical. Region severity requires **both** a mass
+(`CRITICAL_UNCOVERED_AREA_MM2`, 8 mm²) and a bridge (`HIGH_LEVERAGE_SPAN_MM`,
+4 mm) to be critical. A region is **ok** when its free span is below the bridge
+**and** either its coverage reaches `REGION_COVERAGE_TARGET` or its uncovered
+area is below `MIN_MATERIAL_UNCOVERED_MM2` (0.5 mm²); otherwise it is a
+warning. The hand-supported Puck print's 13.3 mm² patch at 3.9 mm is a warning;
+a 0.25 mm²/331.6 mm² (0.1 %) rim and 30 fully covered regions with sub-2.4 mm
+spans but **zero per-island budget capacity** are ready. The per-island load
+budget is context, not a verdict term — a covered region whose own row has no
+assigned capacity is not unsupported. The summary maps a `critical` verdict to
+**Action Needed**, `underSupported` to **Needs Attention** (uncovered when a
+material uncovered region exists, otherwise the short regions), and it no longer
+promotes any uncovered area over 0.02 mm² to critical. A `topple.outcome === 'rocking'` with
 a solved frame and no overload is **elastic support/resin compliance** — the
 part/forest flexes during peel and recovers — so the summary is **ready** with
 a reference note, not attention. The auto-backed Puck reads 0.533 mm with tip

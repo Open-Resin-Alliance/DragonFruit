@@ -281,3 +281,32 @@ test('the peel curve exists with no supports at all', () => {
     assert.ok(Math.abs(report.peakPeelLayerZMm - 10.05) < 1e-6, 'peak is the larger per-layer area');
     assert.equal(report.peelCurve.filter((point) => point.critical).length, 1, 'peak layer is marked');
 });
+
+test('a tiny uncovered rim inside the bridge span reads ready', () => {
+    const pad = overhang('o1', 10, square(0, 0, 0.25, 0.25, 10));
+    const report = evaluatePrintability({
+        islands: [pad],
+        snapshot: stateWithTip(3.8, 0, 10),
+        modelId: 'm',
+        areaPerSupportMm2: AREA_PER_SUPPORT_MM2,
+    });
+
+    assert.equal(report.regions[0].severity, 'ok');
+    assert.equal(report.uncoveredRegions, 0);
+    assert.equal(report.verdict, 'ready');
+});
+
+test('a fully covered region is not short because its own budget row has no capacity', () => {
+    const pad = overhang('o1', 10, square(0, 0, 1, 1, 10));
+    const report = evaluatePrintability({
+        islands: [pad],
+        snapshot: stateWithTip(0, 2.3, 10),
+        modelId: 'm',
+        areaPerSupportMm2: AREA_PER_SUPPORT_MM2,
+    });
+
+    assert.equal(report.regions[0].coverage, 1);
+    assert.equal(report.regions[0].severity, 'ok');
+    assert.equal(report.deficientRegions, 0);
+    assert.equal(report.verdict, 'ready');
+});

@@ -12,9 +12,11 @@
  * - **Geometric sufficiency** — each overhang footprint's coverage by the tips
  *   actually placed (`computeRegionCoverage`), and the uncovered area that no
  *   disc reaches.
- * - **Budget sufficiency** — the same deficit the placement run reports
+ * - **Budget context** — the same deficit the placement run reports
  *   (`computeLoadBudget`): demand mm² against the capacity the placed shafts
- *   are credited with.
+ *   are credited with. It is reported per region but is not a verdict term: a
+ *   fully covered region whose own row has no assigned capacity is not a
+ *   coverage failure.
  * - **Unsupported span** — plan distance from each footprint cell to the
  *   nearest holding tip below it, capped at `MAX_FREE_SPAN_MM`. This is the
  *   Tier 1 cantilever proxy: a long unbraced extension keeps its moment no
@@ -57,6 +59,9 @@ const SPAN_BUCKET_MM = MAX_FREE_SPAN_MM;
 const CRITICAL_UNCOVERED_FRACTION = 0.25;
 /** An uncovered footprint at least this large is a hole, not a cosmetic rim. */
 const CRITICAL_UNCOVERED_AREA_MM2 = 8;
+/** Below this uncovered area a rim is cosmetic when its free span is short;
+ *  0.25 mm² on a 331 mm² footprint must not make the whole model unsupported. */
+export const MIN_MATERIAL_UNCOVERED_MM2 = 0.5;
 /** Span at which a footprint yields to bending rather than to coverage alone. */
 export const HIGH_LEVERAGE_SPAN_MM = 4;
 /** Smallest peel texel: one texel per 0.5 mm of plan surface. */
@@ -329,7 +334,7 @@ function buildPeelCurve(profile: RepresentativeLayerProfile | undefined): {
     return { curve, peakPeelForceN, peakPeelLayerZMm, peakAreaJumpRatio };
 }
 
-function severityFor(region: PrintabilityRegion, structureCapacityMm2: number): PrintabilitySeverity {
+function severityFor(region: PrintabilityRegion): PrintabilitySeverity {
     // A hole is critical only when it is both large and beyond the bridgeable
     // span. An 8 mm² rim with a 3.9 mm span is a warning: the hand-supported
     // Puck print has a 13.3 mm² uncovered patch at 3.9 mm and prints.
@@ -337,11 +342,9 @@ function severityFor(region: PrintabilityRegion, structureCapacityMm2: number): 
         region.uncoveredAreaMm2 >= CRITICAL_UNCOVERED_AREA_MM2
         && region.freeSpanMm >= HIGH_LEVERAGE_SPAN_MM
     ) return 'critical';
-    if (
-        region.coverage >= REGION_COVERAGE_TARGET
-        && region.deficitMm2 <= 0.5 * structureCapacityMm2
-        && region.freeSpanMm < HIGH_LEVERAGE_SPAN_MM
-    ) {
+    if (region.freeSpanMm < HIGH_LEVERAGE_SPAN_MM
+        && (region.coverage >= REGION_COVERAGE_TARGET
+            || region.uncoveredAreaMm2 < MIN_MATERIAL_UNCOVERED_MM2)) {
         return 'ok';
     }
     return 'warn';
@@ -437,7 +440,6 @@ export function evaluatePrintability(input: PrintabilityInput): PrintabilityRepo
         poseTotalDragMomentMm3: input.poseTotalDragMomentMm3,
         toppleCoverageNeeded: input.toppleCoverageNeeded ?? false,
     });
-    const structureCapacityMm2 = Math.max(1, areaPerSupportMm2);
     const budgetByIsland = new Map(loadBudget.rows.map((row) => [row.islandId, row]));
 
     const regions: PrintabilityRegion[] = [];
@@ -479,7 +481,7 @@ export function evaluatePrintability(input: PrintabilityInput): PrintabilityRepo
             deficitMm2: row?.deficitMm2 ?? areaMm2,
             severity: 'ok',
         };
-        region.severity = severityFor(region, structureCapacityMm2);
+        region.severity = severityFor(region);
         regions.push(region);
     }
 
@@ -493,8 +495,8 @@ export function evaluatePrintability(input: PrintabilityInput): PrintabilityRepo
     for (const region of regions) {
         totalFootprintAreaMm2 += region.footprintAreaMm2;
         uncoveredAreaMm2 += region.uncoveredAreaMm2;
-        if (region.uncoveredAreaMm2 > 0.02) uncoveredRegions++;
-        if (region.deficitMm2 > 0.5 * structureCapacityMm2) deficientRegions++;
+        if (region.uncoveredAreaMm2 >= MIN_MATERIAL_UNCOVERED_MM2) uncoveredRegions++;
+        if (region.severity === 'warn') deficientRegions++;
         if (region.severity === 'critical') criticalRegions++;
         if (region.freeSpanMm > maxFreeSpanMm) maxFreeSpanMm = region.freeSpanMm;
         if (
@@ -511,7 +513,10 @@ export function evaluatePrintability(input: PrintabilityInput): PrintabilityRepo
         input.frame?.maxTipUtilizationPct ?? 0,
         input.frame?.maxMemberUtilizationPct ?? 0,
     );
-    const underSupported = uncoveredRegions > 0 || loadBudget.islandsInDeficit > 0;
+    // The per-island load budget is a report: a fully covered region whose own
+    // row has no assigned capacity is not a coverage failure. Only a material
+    // uncovered/warn region decides the verdict.
+    const underSupported = uncoveredRegions > 0 || deficientRegions > 0;
     const overloaded = frameMaxUtilizationPct > 100;
     const structuralllyHollow = uncoveredFraction >= CRITICAL_UNCOVERED_FRACTION
         && uncoveredAreaMm2 >= CRITICAL_UNCOVERED_AREA_MM2;
