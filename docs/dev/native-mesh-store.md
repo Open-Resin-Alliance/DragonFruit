@@ -12,8 +12,8 @@ that use it can run at the same time on different meshes, which the staging regi
 `stage_mesh_binary_set` writes one process-wide slot, and the next command that reads staging
 reads whatever is there. Two passes in flight on two meshes read each other's mesh and nothing
 errors, so the frontend had to queue every pass. The register stays for the families not yet
-migrated (hollowing, hole punch, organic cut, islands, shrink-wrap, slicing); new code should not
-add callers to it.
+migrated (hole punch, organic cut, islands, shrink-wrap, slicing); new code should not add
+callers to it.
 
 ## Public surface
 
@@ -21,18 +21,26 @@ add callers to it.
 
 - `MeshStore` with `put`, `get`, `take`, `owner_of`, `drop_ids`, `drop_other_frontend_clients`
   and `stats`; `mesh_store::global()` is the process's store.
-- `Entry`: what an entry holds, a closed enum. `Entry::Soup` is a little-endian `f32` triangle
-  soup, nine floats per triangle.
+- Readers that check the kind: `get_soup`, `read_bytes` and `take_bytes` (a soup or a buffer),
+  and `hollow_source`.
+- `Entry`: what an entry holds, a closed enum.
+  - `Entry::Soup`: a little-endian `f32` triangle soup, nine floats per triangle.
+  - `Entry::Buffer`: an output that is not a mesh, as raw little-endian bytes. The command
+    that returns its id says what is in it.
+  - `Entry::Session`: what a long-lived operation keeps between calls.
+    `Session::Hollow` holds a `HollowSource` (`hollow_source.rs`).
 - `Owner`: who an entry belongs to. `Owner::Frontend` is one page load.
-- `StoreError`: `Expired` (released to stay inside the budget) or `Unknown` (never stored, or
-  dropped). Its string form starts with `mesh-store/<code>:`.
+- `StoreError`, whose string form starts with `mesh-store/<code>:`:
+  - `Expired`: released to stay inside the budget.
+  - `Unknown`: never stored, or dropped.
+  - `WrongKind`: the id holds another kind than the reader asked for.
 
 **Commands** (`src-tauri/src/mesh_store_ipc.rs`):
 
 | Command | Does |
 | --- | --- |
 | `mesh_store_put` | Stores the raw request body as a soup; the client id rides in the `x-mesh-client-id` header. Returns the id. |
-| `mesh_store_read(meshId, release?)` | Returns the soup bytes. With `release` the entry is dropped as it is read, without a copy when no operation holds it. |
+| `mesh_store_read(meshId, release?)` | Returns the bytes of a soup or a buffer. With `release` the entry is dropped as it is read, without a copy when no operation holds it. A session fails with `wrong_kind` and stays. |
 | `mesh_store_drop(meshIds)` | Drops ids, returns how many were still there. A missing id is not an error. |
 | `mesh_store_open_client(clientId)` | Announces a page load's client and drops the entries of earlier ones. |
 | `mesh_store_stats` | `entries`, `bytes`, `peakBytes`, `budgetBytes`, `evictions`, `expiredReads`. |
@@ -50,6 +58,21 @@ the command uses the staging register as before.
 | `mesh_repair_from_path`, `mesh_repair_parts_from_path` | a file path | `meshId` in the report, with `clientId` |
 | `mesh_load_from_path` | a file path | the id itself, with `clientId` |
 
+**Hollowing** runs on the store only. No caller is left on the register, so its commands
+require their ids. Every result belongs to the owner of the input, or of the session.
+
+| Command | Input | Result |
+| --- | --- | --- |
+| `mesh_hollow_staged(optionsJson, meshId)` | `meshId` | `meshId`, and `cavityId` when the mode leaves an interior surface |
+| `mesh_hollow_session_open(meshId)` | `meshId` | the session's id |
+| `mesh_hollow_session_preview(sessionId, optionsJson)` | `sessionId` | `meshId`, `cavityId`, `infillId`, and four buffers (see below) |
+| `mesh_hollow_session_apply(sessionId, optionsJson)` | `sessionId` | `meshId` and `cavityId`, as `mesh_hollow_staged` |
+| `mesh_hollow_session_select_removed_voxels(sessionId, requestJson)` | `sessionId` | the selected voxel indices (`u32`), directly |
+
+The preview's buffers are `removedVoxelCentersId` and `blockedVoxelCentersId` (`f32`, three
+per voxel) and `removedVoxelIndicesId` and `blockedVoxelIndicesId` (`u32`). `cavityId` and
+`infillId` appear only when the mode produces them.
+
 **TypeScript** (`src/utils/nativeMeshStore.ts`) is the only frontend module that calls the
 primitives:
 
@@ -57,10 +80,37 @@ primitives:
   afterwards, whether the pass succeeds or not.
 - `takeResultPositions(core, commandResult, command)` reads a command's result and drops it.
 - `openNativeMeshClient(core)` returns this page load's client id, opening it on first use.
-- `putNativeMesh`, `readNativeMesh`, `dropNativeMeshes`, `nativeMeshStoreStats` for the cases the
-  two helpers above do not cover.
-- `NativeMeshStoreError` with `code` `expired` or `unknown`, and `asNativeMeshStoreError` to
-  recognise one in a rejected command.
+- `putNativeMesh`, `readNativeMesh`, `readNativeBuffer`, `dropNativeMeshes`,
+  `nativeMeshStoreStats` for the cases the two helpers above do not cover.
+- `NativeMeshStoreError` with `code` `expired`, `unknown` or `wrong_kind`, and
+  `asNativeMeshStoreError` to recognise one in a rejected command.
+
+`src/utils/meshHollowing.ts` holds the hollow session on the frontend:
+
+- `openHollowSession(geometry, sourceKey)` returns the open session for that key, or opens a
+  new one and drops the previous.
+- `previewHollowSession`, `applyHollowSession` and `selectRemovedVoxelsInPolygon` take its id.
+- Every output id a command returns is read once and dropped, including the ones the caller
+  does not use. When the store has lost the session, it is forgotten, so the next
+  `openHollowSession` opens a new one; the error still reaches the caller.
+
+## Sessions
+
+A session is an entry that keeps an operation's expensive state between calls. Hollowing
+opens one per source geometry: the session parses the mesh once and keeps the voxel grid it
+builds, and the grid is rebuilt only when the resolution or the rotation changes. Changing the
+shell, the infill or the blockers reuses it.
+
+- **A session keeps its own copy of the source.** Once it is open, the mesh it was opened from
+  can be dropped; `openHollowSession` drops it straight away. Pinning a stored source, so that
+  two families can share one, comes when hole punching moves.
+- **A session is dropped like any id.** `openHollowSession` drops the previous session when
+  the source changes. Commands already running on the old one hold their own reference and
+  finish; a command sent with its id afterwards fails with `unknown`.
+- **The budget counts the parsed source, not the grid.** The grid is built on first use and
+  its size depends on the resolution, so `HollowSource::byte_len` leaves it out for now.
+- **Two sessions never see each other's mesh.** `hollow_sessions_on_two_meshes_never_see_each_other`
+  in `mesh_repair.rs` previews two sessions from several threads at once.
 
 ## Usage
 
@@ -89,8 +139,9 @@ register and the store behind one code path while families move.
 ## Constraints
 
 - **Drop what you put.** Use `withNativeMesh` for inputs and `takeResultPositions` (or
-  `readNativeMesh` with `release`) for results. A forgotten id is held until the budget
-  releases it or the page reloads.
+  `readNativeMesh` with `release`) for results. A command that returns several ids needs each
+  one read or dropped, sessions included. A forgotten id is held until the budget releases it
+  or the page reloads.
 - **Entries do not change.** An operation reads its input and stores a new result; it never
   writes into the entry it was given.
 - **No retry on `expired`.** It means an id was held longer than the budget allowed. The error is

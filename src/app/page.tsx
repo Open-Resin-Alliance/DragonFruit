@@ -432,13 +432,6 @@ import { uploadPrintJobWithProgress, type PluginUploadProgressEvent } from '@/fe
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { fetchRtspRelayStatus } from '@/utils/rtspRelayBridge';
 import {
-  hollowApplyFromCapturedSource,
-  hollowFromGeometry,
-  hollowPreviewFromCapturedSource,
-  stageHollowPreviewSource,
-  type HollowReport,
-} from '@/utils/meshHollowing';
-import {
   punchFromCapturedSource,
   stagePunchSource,
   type PunchOptions,

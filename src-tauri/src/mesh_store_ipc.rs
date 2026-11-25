@@ -1,6 +1,6 @@
-//! The native mesh store's commands: put a mesh, read one back, drop ids, open a client, and
-//! the counters. The store itself is `mesh_store.rs`; `docs/dev/native-mesh-store.md` has the
-//! contract.
+//! The native mesh store's commands: put a mesh, read an entry's bytes back, drop ids, open a
+//! client, and the counters. The store itself is `mesh_store.rs`;
+//! `docs/dev/native-mesh-store.md` has the contract.
 
 use tauri::ipc::{InvokeBody, Response};
 
@@ -40,15 +40,16 @@ pub async fn mesh_store_put(request: tauri::ipc::Request<'_>) -> Result<String, 
     Ok(mesh_store::global().put(Owner::Frontend(client), Entry::Soup(bytes.to_vec())))
 }
 
-/// Returns a stored mesh's soup bytes. With `release`, the entry is dropped as it is read, and
-/// its bytes leave without a copy when no operation still holds them.
+/// Returns the bytes of a stored soup or buffer. With `release`, the entry is dropped as it is
+/// read, and its bytes leave without a copy when no operation still holds them. A session id
+/// fails with `wrong_kind` and stays in the store.
 #[tauri::command]
 pub async fn mesh_store_read(mesh_id: String, release: Option<bool>) -> Result<Response, String> {
     let store = mesh_store::global();
     let bytes = if release.unwrap_or(false) {
-        store.take(&mesh_id)?.into_soup_bytes()
+        store.take_bytes(&mesh_id)?
     } else {
-        store.get(&mesh_id)?.soup_bytes().to_vec()
+        store.read_bytes(&mesh_id)?
     };
     Ok(Response::new(bytes))
 }
