@@ -869,6 +869,122 @@ function computeDownwardLoadProtected(
     return protectedSet;
 }
 
+export interface CvtSamplePoint {
+    x: number;
+    y: number;
+    z: number;
+    weight: number;
+}
+
+/**
+ * One CVT/Lloyd repositioning step of the paper's `E_f` term on a discrete
+ * footprint. Each sample cell is assigned to its nearest support point in plan;
+ * a movable point moves toward the weight centroid of its cell, but only to a
+ * footprint sample (so the contact stays on the surface) and at most
+ * `maxStepMm` per iteration. Fixed points still own cells and constrain the
+ * partition.
+ */
+export function cvtRepositionPoints(
+    points: ReadonlyArray<{ x: number; y: number; z: number }>,
+    samples: ReadonlyArray<CvtSamplePoint>,
+    iterations = 3,
+    maxStepMm = 2,
+    movable?: ReadonlyArray<boolean>,
+    /** Coverage disc; when a cell extends past it the move is blended toward
+     *  that cell's furthest sample (the paper's E_o term) instead of pure
+     *  density centroid. */
+    coverageRadiusMm?: number,
+): Array<{ x: number; y: number; z: number }> {
+    const next = points.map((p) => ({ ...p }));
+    if (points.length === 0 || samples.length === 0 || iterations <= 0) return next;
+    for (let iter = 0; iter < iterations; iter++) {
+        const count = next.length;
+        const sumW = new Float64Array(count);
+        const sumX = new Float64Array(count);
+        const sumY = new Float64Array(count);
+        const cells: number[][] = Array.from({ length: count }, () => []);
+        for (let i = 0; i < samples.length; i++) {
+            const sample = samples[i];
+            let best = 0;
+            let bestD2 = Infinity;
+            for (let j = 0; j < count; j++) {
+                const dx = sample.x - next[j].x;
+                const dy = sample.y - next[j].y;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < bestD2) {
+                    bestD2 = d2;
+                    best = j;
+                }
+            }
+            const weight = Math.max(0.05, sample.weight);
+            cells[best].push(i);
+            sumW[best] += weight;
+            sumX[best] += weight * sample.x;
+            sumY[best] += weight * sample.y;
+        }
+        const updated = next.map((p, j) => {
+            if (movable && !movable[j]) return p;
+            if (cells[j].length === 0 || sumW[j] <= 0) return p;
+            const cx = sumX[j] / sumW[j];
+            const cy = sumY[j] / sumW[j];
+            // Move to the continuous weighted centroid; the cell sample
+            // nearest it supplies the surface Z. Snapping the XY to a cell
+            // centroid quantizes the step and leaves grid-aligned points
+            // exactly where they started.
+            let nearestZ = p.z;
+            let bestD2 = Infinity;
+            let furthestIndex = cells[j][0] ?? -1;
+            let furthestD2 = -1;
+            for (const index of cells[j]) {
+                const sample = samples[index];
+                const dToCentroid = (sample.x - cx) ** 2 + (sample.y - cy) ** 2;
+                if (dToCentroid < bestD2) {
+                    bestD2 = dToCentroid;
+                    nearestZ = sample.z;
+                }
+                const dToPoint = (sample.x - p.x) ** 2 + (sample.y - p.y) ** 2;
+                if (dToPoint > furthestD2) {
+                    furthestD2 = dToPoint;
+                    furthestIndex = index;
+                }
+            }
+            let target = { x: cx, y: cy, z: nearestZ };
+            if (coverageRadiusMm !== undefined && furthestIndex >= 0 && furthestD2 > coverageRadiusMm * coverageRadiusMm) {
+                const furthest = samples[furthestIndex];
+                target = {
+                    x: cx * 0.5 + furthest.x * 0.5,
+                    y: cy * 0.5 + furthest.y * 0.5,
+                    z: furthest.z,
+                };
+            }
+            const dx = target.x - p.x;
+            const dy = target.y - p.y;
+            const dist = Math.hypot(dx, dy);
+            const scale = dist > maxStepMm && dist > 1e-9 ? maxStepMm / dist : 1;
+            return { x: p.x + dx * scale, y: p.y + dy * scale, z: target.z };
+        });
+        next.splice(0, next.length, ...updated);
+    }
+    // Land on an actual footprint sample at the end: an off-surface centroid
+    // can miss the region's triangle on a rotated/irregular face and be
+    // rejected at placement.
+    for (let j = 0; j < next.length; j++) {
+        if (movable && !movable[j]) continue;
+        let best = -1;
+        let bestD2 = Infinity;
+        for (let i = 0; i < samples.length; i++) {
+            const sample = samples[i];
+            const d2 = (sample.x - next[j].x) ** 2 + (sample.y - next[j].y) ** 2;
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                best = i;
+            }
+        }
+        if (best >= 0) next[j] = { x: samples[best].x, y: samples[best].y, z: samples[best].z };
+    }
+    return next;
+}
+
 interface VoronoiSeed {
     candidate: CandidatePoint;
     prunable: boolean;
@@ -1026,6 +1142,48 @@ export function optimizeContactsByTraction(
         // are different constraints on the same cell.
         const addRadiusSq = (angleBridgeRadiusMm * 1.05) ** 2;
         const minAddSpacingSq = MIN_TRACTION_CONTACT_SPACING_MM * MIN_TRACTION_CONTACT_SPACING_MM;
+
+        // CVT repositioning (paper E_f): move the organic, non-grid points
+        // toward the traction-weighted centroid of their Voronoi cells before
+        // adding/pruning. Grid points stay on their lattice; starts are moved
+        // here too, but the start closure later restores their recipe count.
+        const cvtSamples: CvtSamplePoint[] = new Array(si);
+        for (let i = 0; i < si; i++) {
+            cvtSamples[i] = { x: sx[i], y: sy[i], z: sz[i], weight: Math.max(0.05, sTraction[i]) };
+        }
+        // The lattice (`grid-*`) stays on its nodes. Organic coverage and
+        // fill points (`fill-`, `perim-`, `gap-`, `start-`, `island-`, `span-`)
+        // are the paper's free support points and are the ones CVT moves.
+        const organicId = (id: string): boolean => id.startsWith('fill-')
+            || id.startsWith('perim-')
+            || id.startsWith('gap-')
+            || id.startsWith('start-')
+            || id.startsWith('island-')
+            || id.startsWith('span-');
+        // Only large overhangs have enough footprint cells for a Lloyd step
+        // to preserve edge coverage; a small region loses its perimeter when a
+        // handful of points move to a density centroid. Large flats are where
+        // the paper's E_f term pays off.
+        const cvTRegion = (region.areaMm2 ?? 0) >= 50 && (region.overhangAngleDeg ?? 0) <= 15;
+        const cvtMovable = cvTRegion
+            ? seeds.map((seed) => organicId(seed.candidate.id) && !seed.candidate.nearBase)
+            : [];
+        if (cvtMovable.some(Boolean)) {
+            const moved = cvtRepositionPoints(
+                seeds.map((seed) => seed.candidate.tipPos),
+                cvtSamples,
+                3,
+                2,
+                cvtMovable,
+                angleBridgeRadiusMm,
+            );
+            for (let j = 0; j < seeds.length; j++) {
+                if (!cvtMovable[j]) continue;
+                const p = moved[j];
+                seeds[j].candidate.tipPos = { x: p.x, y: p.y, z: p.z };
+                seeds[j].candidate.zHeight = p.z;
+            }
+        }
 
         const nearestIdx = new Int32Array(si);
         const secondIdx = new Int32Array(si);

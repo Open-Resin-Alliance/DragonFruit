@@ -308,6 +308,19 @@ adapting Cao et al. (2025) to run interactively inside the auto-support worker:
   (`~0.65–0.85×`) while broad solid interiors peak smoothly up to `1.55×`. A
   downward multi-layer load check protects lower contacts carrying a broad upper
   representative layer's Stefan demand from being pruned away.
+- **CVT repositioning on large flat ceilings.** `cvtRepositionPoints`
+  (`tractionOptimization.ts`) is the geometric `E_f` half of the paper's
+  optimisation: 3 Lloyd iterations, 2 mm max step, density weighted by the
+  local Stefan traction. The objective also carries the paper's coverage term:
+  when a point's Voronoi cell extends past the bridge radius, the move is
+  blended 50/50 toward that cell's furthest sample so density does not pull
+  the perimeter in. The final position snaps to an actual footprint sample,
+  because an off-surface centroid misses the region triangle on a rotated
+  face and is rejected at placement. It runs only on **large flat regions
+  (≥ 50 mm², ≤ 15°)**; below that the footprint is too small for a Lloyd step
+  to keep edge coverage, and the discrete add/prune below does the work. On
+  `overhang-slab` this removed 6 trunks and 18 cross orphans at 3.6 % less
+  member volume.
 - **Discrete Voronoi add, per-region prune, and global cross-region prune**:
   each eligible overhang region's 0.25 mm `contactVoxels` are partitioned into
   discrete Voronoi cells integrating per-voxel `stefanTractionFactorAt`. Demand
@@ -345,6 +358,25 @@ adapting Cao et al. (2025) to run interactively inside the auto-support worker:
   demand rewrote the placed diameter (normalizing a deliberately tapered pillar
   back to its base) and re-encoded its settings for no load story. A bare
   pillar's slenderness belongs to the stress loop and the placement sizing.
+
+### Cao et al. (2025) completion map
+
+| paper component | DragonFruit |
+| --- | --- |
+| representative layer clustering + max-load layer | `extractRepresentativeLayers`: IoU/area-coherent clusters, max integrated Stefan force per cluster |
+| separation-force prediction per slice | 2D Screened Stefan PDE per representative layer (no MLP; gravity is negligible at these scales) |
+| support traction → stress/density field | Stefan traction plus nearest-support Voronoi allocation in `computeForceBudget` |
+| capacity-constrained circle covering | discrete Voronoi add/prune (0.25 mm voxels, break load per tip) |
+| CVT / `E_f` + `E_o` geometric optimisation | `cvtRepositionPoints` on large flat ceilings, density centroid + coverage blend |
+| force-augmented overhang regions | one-shot `tractionCovering` adds outside the covered area from the deficit field |
+| support generation / trusses | cluster trees, consolidation, braces/kickstands, thin contact cones (MST-equivalent objective, not the paper's MST) |
+| verification on representative layers | beam-frame FEA on the placed forest + Stefan profile (not voxel CZM FE per layer) |
+
+The two deliberate substitutions are the MLP (we solve the local PDE directly,
+which is cheap on a few dozen representative layers) and the CZM voxel FE
+verification (the beam frame is the fast support check; full solid FEA remains
+the separate Phase 1/2 track). Everything the paper uses to choose support
+points is now present.
 
 ## Cluster-first tree synthesis and occluded rescue
 

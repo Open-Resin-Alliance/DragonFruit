@@ -7,6 +7,7 @@ import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
 import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
 import {
+    cvtRepositionPoints,
     extractRepresentativeLayers,
     optimizeContactsByTraction,
     referenceStefanMeanPressureMm2,
@@ -280,4 +281,28 @@ test('the traction profile samples at the print layer height when the run provid
     const samples = result.profile.samples;
     assert.ok(samples && samples.length > 300,
         `expected ~400 planes at 50 µm, got ${samples?.length ?? 0}`);
+});
+
+
+test('CVT repositioning pulls movable points toward the traction centroid and leaves fixed points alone', () => {
+    const samples: Array<{ x: number; y: number; z: number; weight: number }> = [];
+    for (let x = -5; x <= 5; x += 1) {
+        for (let y = -5; y <= 5; y += 1) {
+            samples.push({ x, y, z: 10, weight: x >= -2 ? 10 : 1 });
+        }
+    }
+    const points = [
+        { x: -4, y: 0, z: 10 },
+        { x: 0, y: 0, z: 10 },
+        { x: 4, y: 0, z: 10 },
+    ];
+    const moved = cvtRepositionPoints(points, samples, 4, 2, [true, false, true]);
+    assert.equal(moved.length, 3);
+    assert.deepEqual(moved[1], points[1], 'the fixed point does not move');
+    assert.ok(moved[0].x > points[0].x, `left point follows the traction field (${moved[0].x} > ${points[0].x})`);
+    const sampleKeys = new Set(samples.map((s) => `${s.x}:${s.y}`));
+    for (const p of moved) {
+        assert.ok(sampleKeys.has(`${p.x}:${p.y}`), 'a moved point lands on a footprint sample');
+        assert.equal(p.z, 10);
+    }
 });
