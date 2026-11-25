@@ -292,8 +292,14 @@ adapting Cao et al. (2025) to run interactively inside the auto-support worker:
 - **Representative-layer slicing & Screened Stefan suction**: a single triangle
   pass slices 24–72 horizontal Z planes, computes exact closed cross-section
   area per slice via Green's theorem, and clusters adjacent slices whose coarse
-  2D silhouette IoU is ≥ 0.85 and relative area delta ≤ 20%. On each emitted
-  peak-load representative layer, `solveStefanFieldFromSegments` scanline-fills
+  2D silhouette IoU is ≥ 0.85 and relative area delta ≤ 20% (the paper's
+  relative-distance clustering, with a coarse silhouette instead of a
+  downsampled image). Within a cluster the emitted layer is the **peak-load**
+  one: the area maxima are the candidates, at most four Stefan fields are
+  solved, and the field with the largest `integratedForceMm4` wins. That is the
+  paper's max-load representative layer with our PDE as the force model in place
+  of its MLP; a coherent run usually costs one solve per cluster. On each emitted
+  layer, `solveStefanFieldFromSegments` scanline-fills
   the closed 2D slice and solves the **Screened Stefan (Helmholtz) PDE**
   `(∇² − κ²)p̃ = −1` (`p̃ = 0` on `∂Ω`, `κ = 1 / λ_FEP`) via Red-Black SOR.
   `stefanTractionFactorAt` normalizes `sqrt(p̃(x,y) / p̄_ref(A_0))` against the

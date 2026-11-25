@@ -13,6 +13,8 @@ const LAYER_IOU_CELL_MM = 2.0;
 /** Adjacent layers with IoU >= this and relative area change <= threshold belong to one cluster. */
 const LAYER_COHERENCE_IOU_MIN = 0.85;
 const LAYER_COHERENCE_AREA_DELTA_MAX = 0.20;
+/** Bound the extra Stefan solves spent picking a cluster's peak-load layer. */
+const MAX_CLUSTER_LOAD_CANDIDATES = 4;
 /** Hard cap on sampled planes when slicing at the print layer height (a 200 mm part at 50 µm). */
 const MAX_SAMPLED_PLANES = 1024;
 /** Plan cell of the per-layer growth masks (mm); coarser only for very large parts. */
@@ -647,26 +649,54 @@ export function extractRepresentativeLayers(
         if (a > peakAreaMm2) peakAreaMm2 = a;
     }
 
-    // Cluster consecutive coherent slices and emit the peak-area representative layer per cluster.
+    // Cluster consecutive coherent slices and emit the MAX-LOAD representative
+    // layer per cluster. The paper picks the layer that maximises separation
+    // force; our 2D Screened Stefan solve is that force model, so the load is
+    // the field's integrated force. Candidate layers are the cluster's area
+    // maxima (the force scale is area first); at most four fields are solved,
+    // so a coherent run still costs roughly one solve per cluster.
     const layers: RepresentativeLayer[] = [];
-    let clusterBestIdx = 0;
-    let clusterCount = 1;
+    let clusterStart = 0;
     let prevClusterArea = 0;
 
-    const flushCluster = () => {
-        const area = areas[clusterBestIdx];
-        if (area > 0.05) {
-            const areaJumpRatio = prevClusterArea > 0.5 ? area / prevClusterArea : 1.0;
-            const stefanField = solveStefanFieldFromSegments(sliceSegments[clusterBestIdx]);
-            layers.push({
-                zMm: planeZ[clusterBestIdx],
-                areaMm2: area,
-                areaJumpRatio,
-                clusterSpanCount: clusterCount,
-                stefanField,
-            });
-            prevClusterArea = area;
+    const peakLoadLayerInCluster = (start: number, end: number): { index: number; field: StefanPressureField } | null => {
+        const candidates = new Set<number>();
+        let areaPeak = start;
+        for (let k = start; k <= end; k++) {
+            if (areas[k] > areas[areaPeak]) areaPeak = k;
         }
+        candidates.add(areaPeak);
+        for (let k = start + 1; k < end; k++) {
+            if (areas[k] > areas[k - 1] && areas[k] >= areas[k + 1]) candidates.add(k);
+        }
+        const ordered = [...candidates]
+            .sort((a, b) => areas[b] - areas[a] || a - b)
+            .slice(0, MAX_CLUSTER_LOAD_CANDIDATES);
+        let best: { index: number; field: StefanPressureField } | null = null;
+        for (const index of ordered) {
+            if (areas[index] <= 0.05) continue;
+            const field = solveStefanFieldFromSegments(sliceSegments[index]);
+            if (!field) continue;
+            if (!best || field.integratedForceMm4 > best.field.integratedForceMm4) {
+                best = { index, field };
+            }
+        }
+        return best;
+    };
+
+    const flushCluster = (end: number) => {
+        const best = peakLoadLayerInCluster(clusterStart, end);
+        if (!best) return;
+        const area = areas[best.index];
+        const areaJumpRatio = prevClusterArea > 0.5 ? area / prevClusterArea : 1.0;
+        layers.push({
+            zMm: planeZ[best.index],
+            areaMm2: area,
+            areaJumpRatio,
+            clusterSpanCount: end - clusterStart + 1,
+            stefanField: best.field,
+        });
+        prevClusterArea = area;
     };
 
     for (let k = 1; k < planeCount; k++) {
@@ -674,16 +704,12 @@ export function extractRepresentativeLayers(
         const relDelta = Math.abs(areas[k] - areas[k - 1]) / maxA;
         const iou = setIoU(occSets[k], occSets[k - 1]);
         const coherent = iou >= LAYER_COHERENCE_IOU_MIN && relDelta <= LAYER_COHERENCE_AREA_DELTA_MAX;
-        if (coherent) {
-            clusterCount++;
-            if (areas[k] > areas[clusterBestIdx]) clusterBestIdx = k;
-        } else {
-            flushCluster();
-            clusterBestIdx = k;
-            clusterCount = 1;
+        if (!coherent) {
+            flushCluster(k - 1);
+            clusterStart = k;
         }
     }
-    flushCluster();
+    flushCluster(planeCount - 1);
 
     const growthResult = buildLayerGrowth(planeZ, areas, sliceSegments, { minX, minY, maxX, maxY });
     return growthResult.growth.length > 0
