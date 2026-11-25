@@ -1,5 +1,5 @@
 import type * as THREE from 'three';
-import type { SupportTypeId } from '../supportTypeRegistry';
+import { contactEndpointsFor, type SupportTypeId } from '../supportTypeRegistry';
 import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { resolveSegmentEndpoints } from '../SupportPrimitives/Knot/segmentEndpoints';
 import type { Knot, Roots, Segment, SupportState, Vec3 } from '../types';
@@ -29,7 +29,7 @@ const KNOT_MERGE_TOL_MM = 0.5;
 export interface SupportGraphNode {
     id: string;
     pos: Vec3;
-    kind: 'root' | 'joint' | 'knot' | 'tip';
+    kind: 'root' | 'joint' | 'knot' | 'tip' | 'model';
     fixed: boolean;
     entityId?: string;
     entityKind?: SupportTypeId;
@@ -468,6 +468,45 @@ export function buildSupportGraph(snapshot: SupportState, modelId?: string): Sup
         const nB = ensureKnotNode(endKnot);
         addBeamMember(brace.id, 'brace', nA, nB, clampDiameterMm(brace.profile?.diameter, 1.0));
         braceCount++;
+    }
+
+    // 7. Model-coupled twig/stick struts. These are usually model-to-model
+    // bridges and do not touch a support, so the frame keeps ignoring them.
+    // When one end coincides with a support tip/joint, however, the bridge is
+    // a secondary load path: model the member and pin the model end. That is
+    // what lets a capped shaft with no brace host take a twig/strut to the
+    // part instead of staying over its limit.
+    const contactNodeCache = new Map<string, number>();
+    const contactNode = (pos: Vec3): number => {
+        const key = `${pos.x.toFixed(3)}:${pos.y.toFixed(3)}:${pos.z.toFixed(3)}`;
+        const cached = contactNodeCache.get(key);
+        if (cached !== undefined) return cached;
+        const near = nodes.find((node) => !node.fixed
+            && (node.kind === 'tip' || node.kind === 'joint' || node.kind === 'knot')
+            && (node.pos.x - pos.x) ** 2 + (node.pos.y - pos.y) ** 2 + (node.pos.z - pos.z) ** 2 <= NODE_MERGE_TOL_MM ** 2);
+        const index = near ? nodes.indexOf(near) : internNode(pos, 'model', true, undefined, NODE_MERGE_TOL_MM);
+        contactNodeCache.set(key, index);
+        return index;
+    };
+    const bridgeCollections: Array<[SupportTypeId, Record<string, { id: string; modelId?: string; segments?: Segment[] }> | undefined]> = [
+        ['twig', snapshot.twigs as never],
+        ['stick', snapshot.sticks as never],
+    ];
+    for (const [kind, collection] of bridgeCollections) {
+        for (const entity of Object.values(collection ?? {})) {
+            if (!matchesModel(entity.modelId)) continue;
+            const points: Vec3[] = [];
+            for (const { field } of contactEndpointsFor(kind)) {
+                const pos = (entity as unknown as Record<string, { pos?: Vec3 } | undefined>)[field]?.pos;
+                if (pos) points.push(pos);
+            }
+            if (points.length < 2) continue;
+            const nodeA = contactNode(points[0]);
+            const nodeB = contactNode(points[1]);
+            if (nodes[nodeA].fixed && nodes[nodeB].fixed) continue;
+            const diameter = clampDiameterMm(entity.segments?.[0]?.diameter, 0.8);
+            addBeamMember(entity.id, kind, nodeA, nodeB, diameter);
+        }
     }
 
     return { nodes, members, rootCount, tipCount, braceCount };

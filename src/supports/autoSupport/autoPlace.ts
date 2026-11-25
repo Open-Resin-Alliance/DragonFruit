@@ -7495,6 +7495,8 @@ export function computeAutoSupportPlan(
                 let stressBracesAdded = 0;
                 let stressLeafPromotions = 0;
                 let stressKickstandsAdded = 0;
+                let stressTwigStruts = 0;
+                const struttedEntityIds = new Set<string>();
                 const autoBracingSettings = getSettings().autoBracing;
                 for (let pass = 0; pass < MAX_STRESS_REINFORCE_PASSES; pass++) {
                     const memberOverloaded = frameStress.overloadedMembers > 0;
@@ -7505,6 +7507,7 @@ export function computeAutoSupportPlan(
                     let reinforcedThisPass = 0;
                     let bracedThisPass = 0;
                     let bracedIds: ReadonlySet<string> = new Set();
+                    const cappedStrutTargets: Array<{ entityId: string; entityKind: SupportTypeId }> = [];
                     // Reset per pass: a member braced in pass 1 may still be
                     // over after the verification solve and can be thickened in
                     // pass 2.
@@ -7531,6 +7534,9 @@ export function computeAutoSupportPlan(
                                     ) + 1),
                                 });
                             } else if (action.kind === 'brace-member') {
+                                if (memberAtReinforcementCap(draft, action.entityKind, action.entityId)) {
+                                    cappedStrutTargets.push({ entityId: action.entityId, entityKind: action.entityKind });
+                                }
                                 if (action.entityKind === 'leaf') {
                                     // A leaf has no shaft to knot a brace onto.
                                     // Promote it to a branch first; the next
@@ -7553,6 +7559,7 @@ export function computeAutoSupportPlan(
                                     }
                                 } else if (requests.length < MAX_STRESS_BRACES_PER_PASS) {
                                     const capped = memberAtReinforcementCap(draft, action.entityKind, action.entityId);
+                                    if (capped) cappedStrutTargets.push({ entityId: action.entityId, entityKind: action.entityKind });
                                     requests.push({
                                         aEntityId: action.entityId,
                                         // A member's own midpoint is where the
@@ -7573,6 +7580,9 @@ export function computeAutoSupportPlan(
                                 if (requests.length >= MAX_STRESS_BRACES_PER_PASS) continue;
                                 if (autoSettings.modelScaleEnabled === false
                                     || memberAtReinforcementCap(draft, action.entityKind, action.entityId)) {
+                                    if (memberAtReinforcementCap(draft, action.entityKind, action.entityId)) {
+                                        cappedStrutTargets.push({ entityId: action.entityId, entityKind: action.entityKind });
+                                    }
                                     requests.push({
                                         aEntityId: action.entityId,
                                         atZMm: action.layerZMm,
@@ -7658,6 +7668,57 @@ export function computeAutoSupportPlan(
                         }
                     }
 
+                    // A capped member whose brace did not land gets a
+                    // model-coupled twig/stick strut from its own contact to
+                    // the model below. The frame graph now models such a bridge
+                    // (the model end is fixed, the tip is shared), so this is a
+                    // real secondary load path rather than decoration.
+                    let twigStrutsThisPass = 0;
+                    if (resolvedMesh) {
+                        for (const target of cappedStrutTargets) {
+                            if (bracedIds.has(target.entityId) || struttedEntityIds.has(target.entityId)) continue;
+                            const descriptor = getSupportTypeDescriptor(target.entityKind);
+                            const entity = (draft[descriptor.location.key] as unknown as Record<string, {
+                                contactCone?: { pos: Vec3; normal?: Vec3; surfaceNormal?: Vec3; profile?: { maxContactDiameterMm?: number; bodyDiameterMm?: number } };
+                                segments?: Segment[];
+                            }>)[target.entityId];
+                            const cone = entity?.contactCone;
+                            if (!cone?.pos) continue;
+                            const shaftDiameterMm = entity.segments?.[0]?.diameter
+                                ?? cone.profile?.bodyDiameterMm
+                                ?? activeSizingBand(autoSettings).shaftDiameterMm;
+                            const bridge = buildCavityBridge(
+                                cone.pos,
+                                cone.surfaceNormal ?? cone.normal ?? { x: 0, y: 0, z: -1 },
+                                modelId,
+                                resolvedMesh,
+                                {
+                                    shaftDiameterMm,
+                                    tipContactDiameterMm: cone.profile?.maxContactDiameterMm
+                                        ?? activeSizingBand(autoSettings).tipContactDiameterMm,
+                                },
+                            );
+                            if (!bridge) continue;
+                            const record = bridge.entity as unknown as Record<string, { pos?: Vec3 } | undefined>;
+                            let maxSpanMm = 0;
+                            for (const { field } of contactEndpointsFor(bridge.kind)) {
+                                const p = record[field]?.pos;
+                                if (!p) continue;
+                                maxSpanMm = Math.max(maxSpanMm, Math.hypot(p.x - cone.pos.x, p.y - cone.pos.y, p.z - cone.pos.z));
+                            }
+                            if (maxSpanMm > MAX_CAVITY_BRIDGE_MM) continue;
+                            draft = draftAddEntity(draft, bridge.kind, bridge.entity);
+                            struttedEntityIds.add(target.entityId);
+                            twigStrutsThisPass++;
+                            stressTwigStruts++;
+                            changedThisPass = true;
+                        }
+                        if (twigStrutsThisPass > 0) {
+                            console.log(LOG_PREFIX,
+                                `Stress strut: ${twigStrutsThisPass} model-coupled twig/stick(s) for capped members`);
+                        }
+                    }
+
                     // Every action is applied from the same first solve: members
                     // that got a brace/promotion/kickstand are left to the
                     // verification solve, the rest take one thickening step up
@@ -7694,10 +7755,11 @@ export function computeAutoSupportPlan(
                 if (reinforcedTotal > 0) {
                     frameStress = { ...frameStress, reinforcedCount: reinforcedTotal };
                 }
-                if (stressBracesAdded > 0 || stressLeafPromotions > 0 || stressKickstandsAdded > 0) {
+                if (stressBracesAdded > 0 || stressLeafPromotions > 0 || stressKickstandsAdded > 0 || stressTwigStruts > 0) {
                     console.log(LOG_PREFIX,
                         `Stress closed loop: ${stressBracesAdded} brace(s), `
                         + `${stressKickstandsAdded} kickstand buttress(es), `
+                        + `${stressTwigStruts} model-coupled twig/stick(s), `
                         + `${stressLeafPromotions} leaf promotion(s) applied`);
                 }
                 analytics.forestReport.frameStress = frameStress;

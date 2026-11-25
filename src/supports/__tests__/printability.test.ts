@@ -10,11 +10,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 
-import { evaluatePrintability } from '../autoSupport/printability';
+import { coverageCheckStatus, evaluatePrintability } from '../autoSupport/printability';
 import { createEmptySupportCollections } from '../supportTypeRegistry';
 import type { SupportState } from '../types';
 import { footprintFromPoints, type VoxelFootprint } from '../../volumeAnalysis/Islands/voxelFootprint';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
+import type { PrintabilityReport } from '../autoSupport/printability';
 import type { RepresentativeLayerProfile } from '../autoSupport/tractionOptimization';
 
 const AREA_PER_SUPPORT_MM2 = 10;
@@ -309,4 +310,20 @@ test('a fully covered region is not short because its own budget row has no capa
     assert.equal(report.regions[0].severity, 'ok');
     assert.equal(report.deficientRegions, 0);
     assert.equal(report.verdict, 'ready');
+});
+
+
+test('a sub-material uncovered area stays green while checks pass', () => {
+    const base = {
+        verdict: 'ready',
+        uncoveredRegions: 0,
+        deficientRegions: 0,
+        maxFreeSpanMm: 0,
+        uncoveredAreaMm2: 0.2,
+    } as PrintabilityReport;
+    assert.equal(coverageCheckStatus(base), 'ok', '0.2 mm² below the 0.5 mm² material floor is green');
+    assert.equal(coverageCheckStatus({ ...base, uncoveredRegions: 1 }), 'fail');
+    assert.equal(coverageCheckStatus({ ...base, deficientRegions: 1 }), 'warn');
+    assert.equal(coverageCheckStatus({ ...base, maxFreeSpanMm: 4 }), 'warn');
+    assert.equal(coverageCheckStatus({ ...base, verdict: 'critical' }), 'fail');
 });

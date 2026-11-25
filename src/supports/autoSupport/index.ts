@@ -105,6 +105,8 @@ export {
 } from "./toppleRisk";
 export {
   evaluatePrintability,
+  coverageCheckStatus,
+  type CoverageCheckStatus,
   MAX_FREE_SPAN_MM,
   HIGH_LEVERAGE_SPAN_MM,
   type PeelOverlay,

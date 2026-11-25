@@ -489,11 +489,11 @@ whole-frame structural stress on the assembled forest via
   and the plan-space Stefan adhesion paint (cool/teal/amber by pressure, stronger
   on the peel face and a lighter wash above) on the active mesh via
   `StressForceHeatmapMaterial`
-  (`src/features/shaders/mesh/stressForceHeatmap.tsx`). Model-to-model `twig`
-  and `stick` bridges are outside the plate-load frame (`buildSupportGraph`
-  omits them), so the overlay draws them from the live snapshot in a neutral
-  blue-grey instead of the utilization ramp — they have no solved utilization,
-  and leaving them out read as "the overlay forgot these supports".
+  (`src/features/shaders/mesh/stressForceHeatmap.tsx`). A purely model-to-model
+  `twig`/`stick` bridge is outside the plate-load frame, so the overlay draws it
+  from the live snapshot in a neutral blue-grey. A bridge whose endpoint
+  coincides with a support tip/joint **is** in the frame (next bullet) and gets
+  the utilization ramp like any other member.
 - **Graph construction**: `buildSupportGraph` collects all plate-rooted shafts
   (`trunk`, `stump`, `kickstand`), hosted members (`branch`, `leaf`), and
   `brace` struts for `modelId` using `resolveSegmentEndpoints`, splitting host
@@ -503,7 +503,10 @@ whole-frame structural stress on the assembled forest via
   brace knot a fraction of a millimetre below a branch knot cannot split off a
   sub-millimetre "member": a 0.2 mm stub at the 2.2 mm diameter cap measured
   231 % purely because its length/curvature ratio is joint geometry, not beam
-  length. Model-to-model `twig` / `stick` bridges are omitted.
+  length. A `twig`/`stick` is included when one endpoint coincides with a free
+  support node: that end shares the tip/joint, the other model contact becomes a
+  fixed `model` node, and the bridge is a real secondary load path. A bridge
+  whose both ends are model contacts is omitted — it adds no support load.
 - **Rigid-body peel distribution, 3D frame solve & weak-spot reinforcement**:
   - Selects up to 3 global critical layers from `RepresentativeLayerProfile`
     (peak integrated Screened Stefan force, peak `areaJumpRatio · areaMm2`, and
@@ -602,6 +605,15 @@ whole-frame structural stress on the assembled forest via
     two. If neither a host inside 16 mm nor a second legal plate azimuth
     exists, the member remains over its limit at the cap and the report says
     so; that residual is a geometric limit, not a missing solve pass.
+  - **A capped member can take a model-coupled twig strut.** When a member is
+    at its diameter cap and its brace request does not land, the stress loop
+    calls `buildCavityBridge` from that member's own contact to the model below
+    (capped at `MAX_CAVITY_BRIDGE_MM`, 12 mm). The bridge is added to the draft
+    only when it reaches a surface and clears the builder's gates; the graph
+    then ties its model end to a fixed node and shares its support end with the
+    member tip. This is the fallback for a capped shaft with no brace host. If
+    the geometry offers no downward model surface inside 12 mm, no bridge is
+    added and the residual stays visible.
   - **The tip contact check is biaxial.** `biaxialContactStressMpa` compares
     `√(σ_n² + 3τ²)` — the vertical peel plus the layer's lateral drag — against
     the support break strength, so a contact sheared by the diaphragm is counted
@@ -1245,6 +1257,15 @@ carries the support snapshot, serialized islands, and the mesh (through the
 worker's confirmed-key cache); the main thread pays that serialization once, not
 the solve. Without a `Worker` (tests, plain browser) the client falls back to
 the same in-process body.
+
+The Coverage row's colour uses `coverageCheckStatus` from `printability.ts`,
+the same materiality the verdict uses: an uncovered area below the
+`MIN_MATERIAL_UNCOVERED_MM2` (0.5 mm²) per-region floor is still shown as a
+number, but stays green while the banner says **Checks Passed**. Only a
+material uncovered region, a deficient region/short span (amber), or a critical
+verdict turns the row red; the Details `Uncovered area` value uses the same
+colour. This stops a 0.2 mm² sub-material patch from reading as a failure next
+to a passing verdict.
 
 `SupportStressPanel` (titled **Printability** in the UI) renders a plain-language
 hero verdict banner (`Checks Passed` / `Needs Attention` / `Action Needed` /

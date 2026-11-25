@@ -33,6 +33,7 @@ import {
   getFrameStressSnapshot,
   getModelMesh,
   HIGH_LEVERAGE_SPAN_MM,
+  coverageCheckStatus,
   reinforceOverloadedFrameMembers,
   setHoveredStressLayerZ,
   setModelFrameStress,
@@ -337,8 +338,9 @@ function formatLayerInspection(
 }
 
 function coverageRowColor(printability: PrintabilityReport): string {
-  if (printability.uncoveredAreaMm2 > 0.02 || printability.verdict === 'critical') return 'var(--danger)';
-  if (printability.deficientRegions > 0 || printability.maxFreeSpanMm >= HIGH_LEVERAGE_SPAN_MM) return '#f59e0b';
+  const status = coverageCheckStatus(printability);
+  if (status === 'fail') return 'var(--danger)';
+  if (status === 'warn') return '#f59e0b';
   return 'var(--success)';
 }
 
@@ -1194,7 +1196,7 @@ function SupportStressPanelImpl({
                       <div className="border-t pt-1.5 space-y-1" style={{ borderColor: 'var(--border-subtle)' }}>
                         <div className="flex justify-between">
                           <span>{_(msg`Uncovered area`)}</span>
-                          <span style={{ color: printability.uncoveredAreaMm2 > 0.02 ? 'var(--danger)' : 'var(--success)' }}>
+                          <span style={{ color: coverageRowColor(printability) }}>
                             {fmt.quantity(printability.uncoveredAreaMm2, 1, 'mm2')}
                           </span>
                         </div>

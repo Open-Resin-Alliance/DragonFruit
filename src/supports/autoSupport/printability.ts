@@ -67,6 +67,8 @@ const OVERLAY_MAX_SIDE = 1024;
 /** Full-intensity byte of the peel channel. */
 const PEEL_FULL = 255;
 
+export type CoverageCheckStatus = 'ok' | 'warn' | 'fail';
+
 export type PrintabilityVerdict = 'ready' | 'underSupported' | 'overloaded' | 'critical';
 export type PrintabilitySeverity = 'ok' | 'warn' | 'critical';
 
@@ -487,4 +489,16 @@ export function evaluatePrintability(input: PrintabilityInput): PrintabilityRepo
         frameMaxUtilizationPct,
         peelOverlay: buildPeelOverlay(input.profile),
     };
+}
+
+/**
+ * The Coverage row's own status, using the same materiality the verdict uses.
+ * A sub-material uncovered area (below `MIN_MATERIAL_UNCOVERED_MM2` per
+ * region) is reported as a number but is not a coverage failure, so it must
+ * not paint the row red while the banner says Checks Passed.
+ */
+export function coverageCheckStatus(report: PrintabilityReport): CoverageCheckStatus {
+    if (report.verdict === 'critical' || report.uncoveredRegions > 0) return 'fail';
+    if (report.deficientRegions > 0 || report.maxFreeSpanMm >= HIGH_LEVERAGE_SPAN_MM) return 'warn';
+    return 'ok';
 }

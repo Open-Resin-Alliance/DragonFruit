@@ -911,3 +911,36 @@ test('a member already structurally addressed is not thickened in the same batch
     assert.equal(skipped.reinforcedTrunks, 0);
     assert.equal(skipped.snapshot.trunks.tSkip.segments[0].diameter, 0.65);
 });
+
+test('a twig sharing a support tip becomes a model-coupled frame member', () => {
+    const draft: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            rT: { id: 'rT', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            tT: {
+                id: 'tT', modelId: 'm', rootId: 'rT',
+                segments: [{ id: 'sT', diameter: 1, bottomJoint: { id: 'jt0', pos: { x: 0, y: 0, z: 1 }, diameter: 1 }, topJoint: { id: 'jt1', pos: { x: 0, y: 0, z: 19 }, diameter: 1 } }],
+                contactCone: { id: 'cT', pos: { x: 0, y: 0, z: 21 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.28, bodyDiameterMm: 1, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+        twigs: {
+            w1: {
+                id: 'w1', modelId: 'm',
+                segments: [{ id: 'ws1', diameter: 0.8, bottomJoint: { id: 'wj0', pos: { x: 0, y: 0, z: 21 }, diameter: 0.8 }, topJoint: { id: 'wj1', pos: { x: 4, y: 0, z: 12 }, diameter: 0.8 } }],
+                contactDiskA: { pos: { x: 0, y: 0, z: 21 } },
+                contactDiskB: { pos: { x: 4, y: 0, z: 12 } },
+            } as never,
+        },
+    };
+    const graph = buildSupportGraph(draft, 'm');
+    const twig = graph.members.find((m) => m.entityId === 'w1');
+    assert.ok(twig, 'twig is in the frame');
+    assert.equal(twig.entityKind, 'twig');
+    const tipNode = graph.nodes.find((n) => n.kind === 'tip');
+    assert.ok(tipNode && !tipNode.fixed, 'support tip stays free and is shared');
+    assert.ok(graph.nodes.some((n) => n.kind === 'model' && n.fixed), 'model end is a fixed node');
+});
