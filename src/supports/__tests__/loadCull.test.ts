@@ -65,6 +65,22 @@ test('a bare standalone overhang pillar on a non-deficit island is culled', () =
     assert.equal(result.ledger.length, 0);
 });
 
+test('a sub-0.75 mm² sliver is culled even when its contact is not credited to the island row', () => {
+    // The eye-socket case: the pillar's tip does not land on the region's own
+    // footprint, so the load budget sees demand with no capacity and calls it a
+    // deficit. A sliver that small is not a load path either way.
+    const misplaced = island('o217', 0.5);
+    misplaced.contactVoxels = footprintFromPoints([
+        { x: 99.75, y: -0.25 }, { x: 100, y: -0.25 }, { x: 100.25, y: -0.25 },
+        { x: 99.75, y: 0 }, { x: 100, y: 0 }, { x: 100.25, y: 0 },
+        { x: 99.75, y: 0.25 }, { x: 100, y: 0.25 }, { x: 100.25, y: 0.25 },
+    ]);
+    const result = cullLoadSurplusStandaloneOverhangs(
+        draftWithStandalone(), LEDGER, [misplaced], 'm', 5.5,
+    );
+    assert.deepEqual(result.removed, ['o217-a']);
+});
+
 test('a 2 mm² overhang keeps its standalone pillar', () => {
     const result = cullLoadSurplusStandaloneOverhangs(
         draftWithStandalone(), LEDGER, [island('o217', 2)], 'm', 5.5,

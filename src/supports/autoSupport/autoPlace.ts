@@ -841,9 +841,13 @@ function collectPlacedContactsForBudget(
  *
  * Only sub-millimetre overhang slivers are culled. A 2 mm² patch is a real
  * unsupported surface and keeps its pillar even when its per-island load is
- * under the contact capacity; the eye-socket case is 0.5 mm².
+ * under the contact capacity; the eye-socket case is 0.5 mm². The smallest
+ * slivers (<= 0.75 mm²) are not a load path at all — their own demand is below
+ * half a contact's capacity — so they go regardless of which budget row the
+ * contact did or did not land on.
  */
 const LOAD_CULL_MAX_ISLAND_AREA_MM2 = 1.0;
+const LOAD_CULL_TINY_ISLAND_AREA_MM2 = 0.75;
 
 export function cullLoadSurplusStandaloneOverhangs(
     draft: SupportState,
@@ -895,15 +899,18 @@ export function cullLoadSurplusStandaloneOverhangs(
         }
         const island = islandById.get(islandId);
         const row = rowById.get(islandId);
-        if (!island || island.source !== 'overhang' || island.startIsland || !row
-            || (island.areaMm2 ?? 0) > LOAD_CULL_MAX_ISLAND_AREA_MM2) {
+        const areaMm2 = island?.areaMm2 ?? 0;
+        if (!island || island.source !== 'overhang' || island.startIsland
+            || areaMm2 > LOAD_CULL_MAX_ISLAND_AREA_MM2) {
             kept.push(entry);
             continue;
         }
+        // A sliver at or below 0.75 mm² is cosmetic coverage: remove it even
+        // when the contact was not credited to this island's budget row (the
+        // eye-socket case). Between 0.75 and 1 mm² the load row decides.
         const alreadyRemoved = removedCapacityById.get(islandId) ?? 0;
-        // Removing the pillar reduces that island's capacity. Cull only while
-        // what remains is still not a real deficit (inside half a contact).
-        if (row.deficitMm2 + alreadyRemoved + capacityFloorMm2 >= nonDeficitMm2) {
+        if (areaMm2 > LOAD_CULL_TINY_ISLAND_AREA_MM2
+            && (!row || row.deficitMm2 + alreadyRemoved + capacityFloorMm2 >= nonDeficitMm2)) {
             kept.push(entry);
             continue;
         }

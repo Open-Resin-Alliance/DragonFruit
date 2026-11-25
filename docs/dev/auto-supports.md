@@ -988,9 +988,11 @@ Anchoring contacts stay LOW (`steepFlatAnchorBandTop`) on a squat part: the lowe
 
   The exception is `cullLoadSurplusStandaloneOverhangs`: a **bare, standalone,
   overhang-origin trunk** (`origin: 'standalone'`, no leaf/branch attachment, not a start
-  island) on an overhang **no larger than 1 mm²** is removed while its island remains out of
-  real deficit after the removal (the remaining deficit stays inside half a contact's
-  capacity). A 2 mm² patch is a real unsupported surface and keeps its pillar. This is what deletes a 1:1 pillar on a small eye-socket
+  island) on an overhang **no larger than 1 mm²** is removed. Sub-0.75 mm² slivers go
+  unconditionally (their own demand is below half a contact's capacity); between 0.75 and
+  1 mm² the island must remain out of real deficit after the removal (the remaining deficit
+  stays inside half a contact's capacity). A 2 mm² patch is a real unsupported surface and
+  keeps its pillar. This is what deletes a 1:1 pillar on a small eye-socket
   overhang that the load budget already has in surplus; without it, the coverage pass treats
   every uncovered overhang as needing a plate contact even when no force does. Hosted trunks,
   leaves, branches, starts and every other surplus contact are still never culled: culling a
