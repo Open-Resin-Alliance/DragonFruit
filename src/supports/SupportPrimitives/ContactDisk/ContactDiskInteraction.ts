@@ -12,6 +12,14 @@ const CONTACT_CONE_COLLISION_SAFETY_MM = 0.3;
 const LEGACY_MAX_STANDOFF_MM = 1.5;
 const LEGACY_CLAMPED_MAX_STANDOFF_MM = 0.35;
 
+/**
+ * Collision-aware disk thickness is a pure function of the contact, normal,
+ * socket, section and the model mesh. The fan/branch searches ask it repeatedly
+ * for the same contact while they choose a host, and moving/resizing a support
+ * re-asks it for an unchanged contact; the SDF probe was the hot part.
+ */
+const diskThicknessCache = new WeakMap<THREE.Mesh, Map<string, number>>();
+
 function resolveCollisionAwareDiskThickness(
     cone: ContactCone,
     surfaceNormal: THREE.Vector3,
@@ -41,6 +49,23 @@ function resolveCollisionAwareDiskThickness(
         return angleThickness;
     }
 
+    // The world matrix and geometry are part of the thickness: the same mesh
+    // object is reused when the model is moved or its geometry is replaced.
+    const meshKey = `${collisionMesh.matrixWorld.elements.join(',')}|${collisionMesh.geometry?.uuid ?? ''}`;
+    const cacheKey = `${meshKey}`
+        + `|${cone.pos.x},${cone.pos.y},${cone.pos.z}`
+        + `|${surfaceNormal.x},${surfaceNormal.y},${surfaceNormal.z}`
+        + `|${socketTarget.x},${socketTarget.y},${socketTarget.z}`
+        + `|${cone.profile.contactDiameterMm},${cone.profile.bodyDiameterMm}`
+        + `|${maxStandoff},${angleThickness}`;
+    let cache = diskThicknessCache.get(collisionMesh);
+    if (!cache) {
+        cache = new Map<string, number>();
+        diskThicknessCache.set(collisionMesh, cache);
+    }
+    const cached = cache.get(cacheKey);
+    if (cached !== undefined) return cached;
+
     const safeThickness = calculateSafeOffset(
         cone.pos,
         { x: surfaceNormal.x, y: surfaceNormal.y, z: surfaceNormal.z },
@@ -57,9 +82,11 @@ function resolveCollisionAwareDiskThickness(
     );
 
     const capEps = 1e-6;
-    return safeThickness >= (maxStandoff - capEps)
+    const thickness = safeThickness >= (maxStandoff - capEps)
         ? angleThickness
         : safeThickness;
+    cache.set(cacheKey, thickness);
+    return thickness;
 }
 
 

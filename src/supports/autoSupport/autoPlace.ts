@@ -75,7 +75,7 @@ import {
 } from '../PlacementLogic/ConeAxisPolicy';
 import { DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG } from '../Settings/defaults';
 import { cloneSupportState, getSnapshot, setSnapshot } from '../state';
-import { createOwnedDraft, draftAddEntity, draftAddPrimitive, draftCommitSupport, draftRemoveEntity, draftRemovePrimitive, sealOwnedDraft } from './supportDraft';
+import { createOwnedDraft, draftAddEntity, draftAddPrimitive, draftCommitSupport, draftRemoveEntity, draftRemovePrimitive, draftVersion, bumpDraftVersion, sealOwnedDraft } from './supportDraft';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import { buildTrunkData, buildTrunkDataFromPlacement } from '../SupportTypes/Trunk/trunkBuilder';
 import { getSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
@@ -2127,6 +2127,218 @@ function pathIntersectsSegment(
  * `excludedHostIds` ignores hosts about to be replaced (chunk consolidation / trunk merge).
  * `excludeMemberId` ignores the entity currently being re-validated or re-hosted.
  */
+
+/** A broad-phase record for the support-vs-path crossing test. The exact
+ *  pathIntersectsSegment checks are unchanged; this only narrows which
+ *  supports are worth testing. `hostSegmentSpan` runs once per draft, not once
+ *  per fan host and candidate. */
+type LeafPathRecord =
+    | {
+        kind: 'host';
+        id: string;
+        hostTypeId: SupportTypeId;
+        segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number }; radius: number }>;
+        minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number;
+    }
+    | {
+        kind: 'branch';
+        id: string;
+        parentShaftId?: string;
+        segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number }; radius: number }>;
+        minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number;
+    }
+    | {
+        kind: 'leaf';
+        id: string;
+        parentShaftId?: string;
+        parentKnotPos: { x: number; y: number; z: number };
+        tip: { x: number; y: number; z: number };
+        bodyDiameterMm: number;
+        minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number;
+    }
+    | {
+        kind: 'brace';
+        id: string;
+        a: { x: number; y: number; z: number };
+        b: { x: number; y: number; z: number };
+        radius: number;
+        minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number;
+    };
+
+interface LeafPathIndex {
+    records: LeafPathRecord[];
+    buckets: Map<string, number[]>;
+}
+
+const LEAF_PATH_CELL_MM = 8;
+const leafPathIndexCache = new WeakMap<SupportState, { version: number; index: LeafPathIndex }>();
+
+function leafPathCellKey(ix: number, iy: number, iz: number): string {
+    return `${ix},${iy},${iz}`;
+}
+
+function buildLeafPathIndex(draft: SupportState): LeafPathIndex {
+    const records: LeafPathRecord[] = [];
+    const push = (record: LeafPathRecord) => { records.push(record); };
+
+    for (const descriptor of GRID_HOST_TYPES) {
+        const collection = draft[descriptor.location.key] as unknown as
+            Record<string, { rootId?: string; parentKnotId?: string; segments: Segment[]; contactCone?: { pos: { x: number; y: number; z: number } } }> | undefined;
+        if (!collection) continue;
+        for (const candidateId in collection) {
+            const entity = collection[candidateId];
+            const segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number }; radius: number }> = [];
+            let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+            for (const seg of entity.segments ?? []) {
+                const span = hostSegmentSpan(draft, entity, seg);
+                if (!span) continue;
+                const radius = (seg.diameter ?? 1.0) * 0.5;
+                segments.push({ start: span.start, end: span.end, radius });
+                minX = Math.min(minX, span.start.x - radius, span.end.x - radius);
+                minY = Math.min(minY, span.start.y - radius, span.end.y - radius);
+                minZ = Math.min(minZ, span.start.z - radius, span.end.z - radius);
+                maxX = Math.max(maxX, span.start.x + radius, span.end.x + radius);
+                maxY = Math.max(maxY, span.start.y + radius, span.end.y + radius);
+                maxZ = Math.max(maxZ, span.start.z + radius, span.end.z + radius);
+            }
+            if (segments.length > 0) {
+                push({ kind: 'host', id: candidateId, hostTypeId: descriptor.id, segments, minX, minY, minZ, maxX, maxY, maxZ });
+            }
+        }
+    }
+
+    const knots = draft.knots ?? {};
+    for (const branchId in draft.branches ?? {}) {
+        const branch = draft.branches[branchId];
+        if (!branch) continue;
+        const parentShaftId = branch.parentKnotId ? knots[branch.parentKnotId]?.parentShaftId : undefined;
+        const segments: Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number }; radius: number }> = [];
+        let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        for (const seg of branch.segments ?? []) {
+            const span = hostSegmentSpan(draft, branch, seg);
+            if (!span) continue;
+            const radius = (seg.diameter ?? 0.9) * 0.5;
+            segments.push({ start: span.start, end: span.end, radius });
+            minX = Math.min(minX, span.start.x - radius, span.end.x - radius);
+            minY = Math.min(minY, span.start.y - radius, span.end.y - radius);
+            minZ = Math.min(minZ, span.start.z - radius, span.end.z - radius);
+            maxX = Math.max(maxX, span.start.x + radius, span.end.x + radius);
+            maxY = Math.max(maxY, span.start.y + radius, span.end.y + radius);
+            maxZ = Math.max(maxZ, span.start.z + radius, span.end.z + radius);
+        }
+        if (segments.length > 0) {
+            push({ kind: 'branch', id: branchId, parentShaftId, segments, minX, minY, minZ, maxX, maxY, maxZ });
+        }
+    }
+
+    for (const leafId in draft.leaves ?? {}) {
+        const leaf = draft.leaves[leafId];
+        const tip = leaf?.contactCone?.pos;
+        const parentKnot = leaf?.parentKnotId ? knots[leaf.parentKnotId] : undefined;
+        if (!tip || !parentKnot) continue;
+        const bodyDiameterMm = leaf.contactCone.profile?.bodyDiameterMm ?? 0.8;
+        const radius = Math.max(0.18, bodyDiameterMm * 0.25);
+        push({
+            kind: 'leaf',
+            id: leafId,
+            parentShaftId: parentKnot.parentShaftId,
+            parentKnotPos: parentKnot.pos,
+            tip,
+            bodyDiameterMm,
+            minX: Math.min(parentKnot.pos.x, tip.x) - radius,
+            minY: Math.min(parentKnot.pos.y, tip.y) - radius,
+            minZ: Math.min(parentKnot.pos.z, tip.z) - radius,
+            maxX: Math.max(parentKnot.pos.x, tip.x) + radius,
+            maxY: Math.max(parentKnot.pos.y, tip.y) + radius,
+            maxZ: Math.max(parentKnot.pos.z, tip.z) + radius,
+        });
+    }
+
+    for (const braceId in draft.braces ?? {}) {
+        const brace = draft.braces[braceId];
+        if (!brace) continue;
+        const a = knots[brace.startKnotId]?.pos;
+        const b = knots[brace.endKnotId]?.pos;
+        if (!a || !b) continue;
+        const radius = (brace.profile?.diameter ?? 0.9) * 0.5;
+        push({
+            kind: 'brace', id: braceId, a, b, radius,
+            minX: Math.min(a.x, b.x) - radius,
+            minY: Math.min(a.y, b.y) - radius,
+            minZ: Math.min(a.z, b.z) - radius,
+            maxX: Math.max(a.x, b.x) + radius,
+            maxY: Math.max(a.y, b.y) + radius,
+            maxZ: Math.max(a.z, b.z) + radius,
+        });
+    }
+
+    const buckets = new Map<string, number[]>();
+    for (let i = 0; i < records.length; i++) {
+        const r = records[i];
+        const x0 = Math.floor(r.minX / LEAF_PATH_CELL_MM);
+        const x1 = Math.floor(r.maxX / LEAF_PATH_CELL_MM);
+        const y0 = Math.floor(r.minY / LEAF_PATH_CELL_MM);
+        const y1 = Math.floor(r.maxY / LEAF_PATH_CELL_MM);
+        const z0 = Math.floor(r.minZ / LEAF_PATH_CELL_MM);
+        const z1 = Math.floor(r.maxZ / LEAF_PATH_CELL_MM);
+        for (let ix = x0; ix <= x1; ix++) {
+            for (let iy = y0; iy <= y1; iy++) {
+                for (let iz = z0; iz <= z1; iz++) {
+                    const key = leafPathCellKey(ix, iy, iz);
+                    const list = buckets.get(key);
+                    if (list) list.push(i);
+                    else buckets.set(key, [i]);
+                }
+            }
+        }
+    }
+    return { records, buckets };
+}
+
+function queryLeafPathIndex(index: LeafPathIndex, minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number): LeafPathRecord[] {
+    const x0 = Math.floor(minX / LEAF_PATH_CELL_MM);
+    const x1 = Math.floor(maxX / LEAF_PATH_CELL_MM);
+    const y0 = Math.floor(minY / LEAF_PATH_CELL_MM);
+    const y1 = Math.floor(maxY / LEAF_PATH_CELL_MM);
+    const z0 = Math.floor(minZ / LEAF_PATH_CELL_MM);
+    const z1 = Math.floor(maxZ / LEAF_PATH_CELL_MM);
+    const seen = new Set<number>();
+    const out: LeafPathRecord[] = [];
+    for (let ix = x0; ix <= x1; ix++) {
+        for (let iy = y0; iy <= y1; iy++) {
+            for (let iz = z0; iz <= z1; iz++) {
+                const list = index.buckets.get(leafPathCellKey(ix, iy, iz));
+                if (!list) continue;
+                for (const idx of list) {
+                    if (seen.has(idx)) continue;
+                    seen.add(idx);
+                    const r = index.records[idx];
+                    if (r.maxX < minX || r.minX > maxX || r.maxY < minY || r.minY > maxY || r.maxZ < minZ || r.minZ > maxZ) continue;
+                    out.push(r);
+                }
+            }
+        }
+    }
+    return out;
+}
+
+function leafPathIndexFor(draft: SupportState): LeafPathIndex {
+    const version = draftVersion(draft);
+    const cached = leafPathIndexCache.get(draft);
+    if (cached && cached.version === version) return cached.index;
+    const index = buildLeafPathIndex(draft);
+    leafPathIndexCache.set(draft, { version, index });
+    return index;
+}
+
+/**
+ * Does the line from a knot to a leaf tip cross any other support?
+ *
+ * A cached broad phase (one WeakMap per draft) narrows the support set by the
+ * path's AABB; the exact `pathIntersectsSegment` checks and same-host trimming
+ * below are unchanged. Fanning asks this once per candidate host, so walking
+ * every support segment there made placement O(candidates × supports).
+ */
 export function leafPathCrossesSupports(
     knotPos: { x: number; y: number; z: number },
     tipPos: { x: number; y: number; z: number },
@@ -2143,7 +2355,6 @@ export function leafPathCrossesSupports(
     const pMinZ = Math.min(knotPos.z, tipPos.z);
     const pMaxZ = Math.max(knotPos.z, tipPos.z);
 
-    // Trimmed ray beyond the host knot junction for checking siblings anchored on the same host.
     const dx = tipPos.x - knotPos.x;
     const dy = tipPos.y - knotPos.y;
     const dz = tipPos.z - knotPos.z;
@@ -2201,41 +2412,31 @@ export function leafPathCrossesSupports(
             : start;
     };
 
-    // 1. Plate-rooted and grid host trunks (via hostSegmentSpan so root-to-first-joint risers are covered).
-    for (const descriptor of GRID_HOST_TYPES) {
-        const collection = draft[descriptor.location.key] as unknown as
-            Record<string, { rootId?: string; parentKnotId?: string; segments: Segment[]; contactCone?: { pos: { x: number; y: number; z: number } } }> | undefined;
-        if (!collection) continue;
-        for (const candidateId in collection) {
-            if (candidateId === hostId || candidateId === excludeMemberId) continue;
-            if (excludedHostIds?.has(candidateId)) continue;
-            const entity = collection[candidateId];
-            for (const seg of entity.segments ?? []) {
-                const span = hostSegmentSpan(draft, entity, seg);
-                if (!span) continue;
-                const shaftRadius = (seg.diameter ?? 1.0) * 0.5;
+    const index = leafPathIndexFor(draft);
+    const candidates = queryLeafPathIndex(
+        index,
+        pMinX - leafRadiusMm, pMinY - leafRadiusMm, pMinZ - leafRadiusMm,
+        pMaxX + leafRadiusMm, pMaxY + leafRadiusMm, pMaxZ + leafRadiusMm,
+    );
+
+    for (const record of candidates) {
+        if (record.kind === 'host') {
+            if (record.id === hostId || record.id === excludeMemberId) continue;
+            if (excludedHostIds?.has(record.id)) continue;
+            for (const seg of record.segments) {
                 if (pathIntersectsSegment(
                     pMinX, pMinY, pMinZ, pMaxX, pMaxY, pMaxZ,
                     knotPos, tipPos, leafRadiusMm,
-                    span.start, span.end, shaftRadius,
-                )) {
-                    return true;
-                }
+                    seg.start, seg.end, seg.radius,
+                )) return true;
             }
+            continue;
         }
-    }
 
-    const knots = draft.knots ?? {};
-
-    // 2. Hosted multi-segment branches.
-    const branches = draft.branches;
-    if (branches) {
-        for (const branchId in branches) {
-            if (branchId === hostId || branchId === excludeMemberId) continue;
-            if (excludedHostIds?.has(branchId)) continue;
-            const branch = branches[branchId];
-            if (!branch) continue;
-            const parentShaftId = branch.parentKnotId ? knots[branch.parentKnotId]?.parentShaftId : undefined;
+        if (record.kind === 'branch') {
+            if (record.id === hostId || record.id === excludeMemberId) continue;
+            if (excludedHostIds?.has(record.id)) continue;
+            const parentShaftId = record.parentShaftId;
             if (parentShaftId && (excludedHostIds?.has(parentShaftId) || excludeOwnSegmentIds.has(parentShaftId))) continue;
             const sameHost = Boolean(parentShaftId && sameHostSegmentIds.has(parentShaftId));
             const rStart = sameHost ? trimmedStart : knotPos;
@@ -2245,37 +2446,24 @@ export function leafPathCrossesSupports(
             const rMaxY = sameHost ? tMaxY : pMaxY;
             const rMinZ = sameHost ? tMinZ : pMinZ;
             const rMaxZ = sameHost ? tMaxZ : pMaxZ;
-
-            const segs = branch.segments ?? [];
-            for (let segIdx = 0; segIdx < segs.length; segIdx++) {
-                const seg = segs[segIdx];
-                const span = hostSegmentSpan(draft, branch, seg);
-                if (!span) continue;
-                const segStart = sameHost && segIdx === 0 ? trimSameHostStart(span.start, span.end) : span.start;
+            for (let segIdx = 0; segIdx < record.segments.length; segIdx++) {
+                const seg = record.segments[segIdx];
+                const segStart = sameHost && segIdx === 0 ? trimSameHostStart(seg.start, seg.end) : seg.start;
                 const pathR = sameHost ? Math.min(leafRadiusMm, 0.18) : leafRadiusMm;
-                const segRadius = sameHost ? 0.18 : (seg.diameter ?? 0.9) * 0.5;
+                const segRadius = sameHost ? 0.18 : seg.radius;
                 if (pathIntersectsSegment(
                     rMinX, rMinY, rMinZ, rMaxX, rMaxY, rMaxZ,
                     rStart, tipPos, pathR,
-                    segStart, span.end, segRadius,
-                )) {
-                    return true;
-                }
+                    segStart, seg.end, segRadius,
+                )) return true;
             }
+            continue;
         }
-    }
 
-    // 3. Hosted tapered leaves.
-    const leaves = draft.leaves;
-    if (leaves) {
-        for (const leafId in leaves) {
-            if (leafId === excludeMemberId) continue;
-            const leaf = leaves[leafId];
-            const tip = leaf?.contactCone?.pos;
-            const parentKnot = leaf?.parentKnotId ? knots[leaf.parentKnotId] : undefined;
-            if (!tip || !parentKnot) continue;
-            if (excludedHostIds?.has(parentKnot.parentShaftId) || excludeOwnSegmentIds.has(parentKnot.parentShaftId)) continue;
-            const sameHost = sameHostSegmentIds.has(parentKnot.parentShaftId);
+        if (record.kind === 'leaf') {
+            if (record.id === excludeMemberId) continue;
+            if (excludedHostIds?.has(record.parentShaftId ?? '') || excludeOwnSegmentIds.has(record.parentShaftId ?? '')) continue;
+            const sameHost = Boolean(record.parentShaftId && sameHostSegmentIds.has(record.parentShaftId));
             const rStart = sameHost ? trimmedStart : knotPos;
             const rMinX = sameHost ? tMinX : pMinX;
             const rMaxX = sameHost ? tMaxX : pMaxX;
@@ -2283,37 +2471,23 @@ export function leafPathCrossesSupports(
             const rMaxY = sameHost ? tMaxY : pMaxY;
             const rMinZ = sameHost ? tMinZ : pMinZ;
             const rMaxZ = sameHost ? tMaxZ : pMaxZ;
-            const sibStart = sameHost ? trimSameHostStart(parentKnot.pos, tip) : parentKnot.pos;
+            const sibStart = sameHost ? trimSameHostStart(record.parentKnotPos, record.tip) : record.parentKnotPos;
             const pathR = sameHost ? Math.min(leafRadiusMm, 0.18) : leafRadiusMm;
-            const effRadius = sameHost ? 0.18 : Math.max(0.18, (leaf.contactCone.profile?.bodyDiameterMm ?? 0.8) * 0.25);
+            const effRadius = sameHost ? 0.18 : Math.max(0.18, record.bodyDiameterMm * 0.25);
             if (pathIntersectsSegment(
                 rMinX, rMinY, rMinZ, rMaxX, rMaxY, rMaxZ,
                 rStart, tipPos, pathR,
-                sibStart, tip, effRadius,
-            )) {
-                return true;
-            }
+                sibStart, record.tip, effRadius,
+            )) return true;
+            continue;
         }
-    }
 
-    // 4. Inter-support X-braces / ties.
-    const braces = draft.braces;
-    if (braces) {
-        for (const braceId in braces) {
-            const brace = braces[braceId];
-            if (!brace || brace.id === excludeMemberId) continue;
-            const a = knots[brace.startKnotId]?.pos;
-            const b = knots[brace.endKnotId]?.pos;
-            if (!a || !b) continue;
-            const braceRadius = (brace.profile?.diameter ?? 0.9) * 0.5;
-            if (pathIntersectsSegment(
-                pMinX, pMinY, pMinZ, pMaxX, pMaxY, pMaxZ,
-                knotPos, tipPos, leafRadiusMm,
-                a, b, braceRadius,
-            )) {
-                return true;
-            }
-        }
+        if (record.id === excludeMemberId) continue;
+        if (pathIntersectsSegment(
+            pMinX, pMinY, pMinZ, pMaxX, pMaxY, pMaxZ,
+            knotPos, tipPos, leafRadiusMm,
+            record.a, record.b, record.radius,
+        )) return true;
     }
 
     return false;
@@ -6166,6 +6340,7 @@ export function computeAutoSupportPlan(
             });
             if (mergeResult.merged > 0) {
                 draft = mergeResult.draft;
+                bumpDraftVersion(draft);
                 rootMergeStats = { merged: mergeResult.merged, refusals: mergeResult.refusals };
                 const refusalText = Object.entries(mergeResult.refusals)
                     .map(([reason, count]) => `${reason}=${count}`)
@@ -6198,6 +6373,7 @@ export function computeAutoSupportPlan(
                 draft = rehosted;
                 console.log(LOG_PREFIX, 'Legacy knot rehost: entity id → segment id');
             }
+            bumpDraftVersion(draft);
             const preResizeTrunks = draft.trunks;
             const resized = computeForestDiameterProfile(draft, modelId);
             if (resized !== draft) {
@@ -6531,6 +6707,7 @@ export function computeAutoSupportPlan(
             // "snapped it correct"; do that globally instead of waiting
             // for a click.
             const coneSynced = syncContactConeDiameters(draft, modelId, autoSettings);
+            bumpDraftVersion(coneSynced);
             if (coneSynced !== draft) {
                 draft = coneSynced;
                 console.log(LOG_PREFIX, 'Contact cone sync: matched cone bodies to their host shafts.');

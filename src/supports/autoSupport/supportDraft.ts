@@ -18,6 +18,7 @@ import type { Knot, Roots, SupportState } from '../types';
  */
 
 const OWNED_DRAFT = Symbol('dragonfruitOwnedSupportDraft');
+const DRAFT_VERSION = Symbol('dragonfruitSupportDraftVersion');
 
 /** Collections this draft may mutate directly; they are its own copies. */
 type OwnedCollections = Set<string>;
@@ -36,7 +37,29 @@ export function createOwnedDraft(source: SupportState): SupportState {
         enumerable: false,
         configurable: true,
     });
+    Object.defineProperty(draft, DRAFT_VERSION, {
+        value: 0,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+    });
     return draft;
+}
+
+/** Monotonic version for the leaf-path broad-phase cache. An owned draft is
+ *  mutated in place, so object identity alone does not say it is unchanged. */
+export function draftVersion(state: SupportState): number {
+    return (state as SupportState & { [DRAFT_VERSION]?: number })[DRAFT_VERSION] ?? 0;
+}
+
+export function bumpDraftVersion(state: SupportState): void {
+    const current = draftVersion(state);
+    Object.defineProperty(state, DRAFT_VERSION, {
+        value: current + 1,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+    });
 }
 
 /** Check whether a state is an owned draft that may be mutated in place. */
@@ -83,6 +106,7 @@ export function draftAddEntity(
     const collection = writableCollection(draft, key);
     if (!collection) return { ...draft, [key]: { ...draft[key], [entity.id]: { ...entity, typeId } } };
     collection[entity.id] = { ...entity, typeId };
+    bumpDraftVersion(draft);
     return draft;
 }
 
@@ -95,6 +119,7 @@ export function draftAddPrimitive<K extends 'roots' | 'knots'>(
     const collection = writableCollection(draft, key);
     if (!collection) return { ...draft, [key]: { ...draft[key], [primitive.id]: primitive } };
     collection[primitive.id] = primitive;
+    bumpDraftVersion(draft);
     return draft;
 }
 
@@ -111,10 +136,12 @@ export function draftRemoveEntity(
     const collection = writableCollection(draft, key);
     if (collection) {
         delete collection[id];
+        bumpDraftVersion(draft);
         return draft;
     }
     const copy = { ...(draft[key] as unknown as Record<string, unknown>) };
     delete copy[id];
+    bumpDraftVersion(draft);
     return { ...draft, [key]: copy };
 }
 
