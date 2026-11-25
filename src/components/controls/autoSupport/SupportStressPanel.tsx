@@ -220,9 +220,7 @@ function formatPrimaryIssueSubtitle(
 ): string {
   switch (summary.primaryIssue) {
     case 'none':
-      return topple?.outcome === 'rocking'
-        ? _(msg`Support loads and coverage are within limits. Elastic part rotation during peel is reported below; it is not a support failure.`)
-        : _(msg`Coverage, support load, and stability are within limits.`);
+      return '';
     case 'unanalyzed':
       return _(msg`Scan overhangs or generate supports to check printability.`);
     case 'notScanned':
@@ -961,6 +959,8 @@ function SupportStressPanelImpl({
     [activeModelId, report, printability, topple, isFloatingUnsupported, modelMinZMm, hasScanned],
   );
 
+  const issueSubtitle = formatPrimaryIssueSubtitle(_, fmt, summary, printability, topple, modelMinZMm);
+
   const reportText = React.useMemo(
     () => (showStressReport
       ? supportStressReportToText({
@@ -1036,9 +1036,11 @@ function SupportStressPanelImpl({
                   <div className="text-xs font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
                     {formatStatusTitle(_, summary.level)}
                   </div>
-                  <div className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-                    {formatPrimaryIssueSubtitle(_, fmt, summary, printability, topple, modelMinZMm)}
-                  </div>
+                  {issueSubtitle && (
+                    <div className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                      {issueSubtitle}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1422,7 +1424,7 @@ function SupportStressPanelImpl({
         open={showStressReport}
         ariaLabel={_(msg`Printability Report`)}
         title={_(msg`Printability Report`)}
-        subtitle={formatPrimaryIssueSubtitle(_, fmt, summary, printability, topple, modelMinZMm)}
+        subtitle={issueSubtitle}
         icon={<StatusGlyph level={summary.level} className="h-4 w-4" />}
         iconTone={modalTone}
         maxWidthClassName="max-w-[56rem]"

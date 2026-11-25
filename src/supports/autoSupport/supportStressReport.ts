@@ -185,13 +185,7 @@ function primaryIssueSentence(summary: SupportStressSummary, input: SupportStres
     const { frame, printability, topple, modelMinZMm } = input;
     switch (summary.primaryIssue) {
         case 'none':
-            return input.topple?.outcome === 'rocking'
-                ? `Support loads and coverage are within limits. The frame's fitted part rotation is `
-                    + `${input.topple.complianceMm.toFixed(3)}mm during peel: that is elastic support/resin `
-                    + `compliance and recovers, not a layer shift or a contact failure. The `
-                    + `${ROCKING_THRESHOLD_MM.toFixed(2)}mm figure is a reference for layer-shift `
-                    + `sensitivity, not a break limit.`
-                : 'All checked overhangs, support loads, and stability metrics are within limits.';
+            return 'All checks passed.';
         case 'unanalyzed':
             return 'Scan overhangs or generate supports to check printability.';
         case 'notScanned':

@@ -159,7 +159,6 @@ test('summarizeSupportStress ranks critical, attention, ready, and unanalyzed co
         topple: makeTopple({ outcome: 'rocking', complianceMm: 0.533 }),
     });
     assert.ok(elasticText.includes('CHECKS PASSED'));
-    assert.ok(elasticText.includes('elastic support/resin compliance'));
     assert.ok(elasticText.includes('elastic flex'));
     assert.ok(!elasticText.includes('RECOMMENDED ACTIONS'));
 
