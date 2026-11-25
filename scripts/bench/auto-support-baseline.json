@@ -13,12 +13,12 @@
       "exercises": "a large flat underside with a pedestal in the middle: boundary ring, lattice infill, routed drops around the pedestal, chunk consolidation",
       "islands": 1,
       "islandSource": "authored",
-      "candidates": 624,
-      "entities": 911,
+      "candidates": 625,
+      "entities": 918,
       "placedByType": {
         "trunk": 60,
         "branch": 150,
-        "leaf": 414,
+        "leaf": 415,
         "twig": 0,
         "stick": 0,
         "brace": 0,
@@ -28,15 +28,15 @@
       "entitiesByType": {
         "trunk": 60,
         "branch": 150,
-        "leaf": 414,
-        "brace": 287
+        "leaf": 415,
+        "brace": 293
       },
-      "contacts": 624,
+      "contacts": 625,
       "roots": 60,
-      "joints": 1430,
+      "joints": 1431,
       "curvedSegments": 0,
-      "memberLengthMm": 3449.7284331364735,
-      "memberVolumeMm3": 4719.418401033702,
+      "memberLengthMm": 3488.3466968513108,
+      "memberVolumeMm3": 4753.7708917178525,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
       "coveragePct": 100,
@@ -44,10 +44,10 @@
       "islandsUncovered": 0,
       "gridFallbacks": 0,
       "budgetAdd": 0,
-      "budgetCull": 541,
-      "orphans": 33,
+      "budgetCull": 542,
+      "orphans": 32,
       "orphansByReason": {
-        "cross": 33
+        "cross": 32
       },
       "refusals": {
         "fan": 0,
@@ -57,23 +57,23 @@
       },
       "rejections": {},
       "deterministic": true,
-      "routerPlacements": 60,
-      "routerCones": 195,
-      "routerProbes": 203,
-      "totalMs": 2502.7215,
+      "routerPlacements": 61,
+      "routerCones": 196,
+      "routerProbes": 207,
+      "totalMs": 2698.7097,
       "phases": {
-        "candidates": 77,
-        "dedup": 18,
-        "support-filter": 55,
-        "placement": 967,
-        "consolidation": 51,
-        "gap-fill": 70,
-        "analytics": 4,
+        "candidates": 89,
+        "dedup": 23,
+        "support-filter": 60,
+        "placement": 1113,
+        "consolidation": 69,
+        "gap-fill": 77,
+        "analytics": 3,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 569,
-        "report": 20,
-        "bracing": 412
+        "resize": 531,
+        "report": 23,
+        "bracing": 445
       }
     },
     {
@@ -131,20 +131,20 @@
       "routerPlacements": 10,
       "routerCones": 285,
       "routerProbes": 109,
-      "totalMs": 143.79070000000047,
+      "totalMs": 160.94830000000002,
       "phases": {
-        "candidates": 10,
-        "dedup": 0,
-        "support-filter": 3,
-        "placement": 51,
-        "consolidation": 6,
-        "gap-fill": 4,
+        "candidates": 8,
+        "dedup": 1,
+        "support-filter": 4,
+        "placement": 60,
+        "consolidation": 7,
+        "gap-fill": 6,
         "analytics": 0,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 34,
+        "resize": 41,
         "report": 1,
-        "bracing": 29
+        "bracing": 28
       }
     },
     {
@@ -197,12 +197,12 @@
       "routerPlacements": 2,
       "routerCones": 2,
       "routerProbes": 0,
-      "totalMs": 34.72769999999946,
+      "totalMs": 52.36169999999947,
       "phases": {
-        "candidates": 7,
+        "candidates": 11,
         "dedup": 1,
-        "support-filter": 2,
-        "placement": 10,
+        "support-filter": 3,
+        "placement": 21,
         "consolidation": 0,
         "gap-fill": 1,
         "analytics": 0,
@@ -210,7 +210,7 @@
         "surface-coverage": 0,
         "resize": 1,
         "report": 1,
-        "bracing": 12
+        "bracing": 13
       }
     },
     {
@@ -218,7 +218,7 @@
       "exercises": "a 25 degree underside: cells sample the real face normal, so the cone axis policy and the contact gates run on sloped geometry",
       "islands": 1,
       "islandSource": "authored",
-      "candidates": 402,
+      "candidates": 403,
       "entities": 475,
       "placedByType": {
         "trunk": 47,
@@ -263,26 +263,26 @@
         "cavityFallbacks": 76
       },
       "rejections": {
-        "trunk_build_error": 84
+        "trunk_build_error": 85
       },
       "deterministic": true,
-      "routerPlacements": 255,
-      "routerCones": 11519,
+      "routerPlacements": 256,
+      "routerCones": 11569,
       "routerProbes": 18125,
-      "totalMs": 4698.1206999999995,
+      "totalMs": 5357.6434,
       "phases": {
-        "candidates": 21,
-        "dedup": 14,
-        "support-filter": 43,
-        "placement": 2295,
-        "consolidation": 346,
-        "gap-fill": 173,
-        "analytics": 5,
+        "candidates": 22,
+        "dedup": 8,
+        "support-filter": 46,
+        "placement": 2646,
+        "consolidation": 429,
+        "gap-fill": 220,
+        "analytics": 6,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 224,
+        "resize": 258,
         "report": 11,
-        "bracing": 1009
+        "bracing": 1074
       }
     },
     {
@@ -339,20 +339,20 @@
       "routerPlacements": 36,
       "routerCones": 1262,
       "routerProbes": 8637,
-      "totalMs": 149.9310999999998,
+      "totalMs": 159.80409999999938,
       "phases": {
         "candidates": 16,
         "dedup": 1,
         "support-filter": 1,
-        "placement": 50,
+        "placement": 55,
         "consolidation": 1,
-        "gap-fill": 26,
+        "gap-fill": 31,
         "analytics": 3,
         "fanning": 0,
         "surface-coverage": 0,
         "resize": 0,
         "report": 3,
-        "bracing": 47
+        "bracing": 46
       }
     },
     {
@@ -404,15 +404,15 @@
       "routerPlacements": 135,
       "routerCones": 6750,
       "routerProbes": 760990,
-      "totalMs": 1042.6900999999998,
+      "totalMs": 1061.7104999999992,
       "phases": {
         "candidates": 14,
         "dedup": 1,
-        "support-filter": 20,
-        "placement": 972,
+        "support-filter": 19,
+        "placement": 990,
         "consolidation": 0,
-        "gap-fill": 27,
-        "analytics": 6,
+        "gap-fill": 26,
+        "analytics": 8,
         "fanning": 0,
         "surface-coverage": 0,
         "resize": 0,
@@ -465,7 +465,7 @@
       "routerPlacements": 0,
       "routerCones": 0,
       "routerProbes": 0,
-      "totalMs": 0.7559000000001106,
+      "totalMs": 0.8597000000008848,
       "phases": {}
     }
   ]
