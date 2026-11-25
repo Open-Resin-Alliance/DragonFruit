@@ -234,6 +234,9 @@ test('1: overhang-only scan emits zero pucks, zero orderedIslands, and keeps has
     assert.equal(readBreakdownCell(harness.container, 'Voxels'), '0');
     assert.equal(readBreakdownCell(harness.container, 'Minima'), '0');
     assert.equal(readBreakdownCell(harness.container, 'Coincident'), '0');
+    const exportButton = harness.container.querySelector('button[title="Export islands as JSON"]');
+    assert.ok(exportButton, 'the Islands panel offers the harness island export');
+    assert.equal((exportButton as HTMLButtonElement).disabled, false, 'overhang-only data is exportable');
 
     // Toggling showOverhangs false still preserves overhangTotal so hasData remains true
     await act(async () => {

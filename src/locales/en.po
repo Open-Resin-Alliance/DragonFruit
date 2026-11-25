@@ -53,11 +53,11 @@ msgstr "{0, plural, one {Add # printer} other {Add # printers}}"
 msgid "{0} of {1, plural, one {# model carries an interior cavity.} other {# models carry an interior cavity.}}"
 msgstr "{0} of {1, plural, one {# model carries an interior cavity.} other {# models carry an interior cavity.}}"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:226
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:227
 msgid "{area} of overhang surface is unsupported."
 msgstr "{area} of overhang surface is unsupported."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:255
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:256
 msgid "{area} uncovered"
 msgstr "{area} uncovered"
 
@@ -205,19 +205,19 @@ msgctxt "Undo history entry"
 msgid "{count, plural, one {Unlink # model} other {Unlink # models}}"
 msgstr "{count, plural, one {Unlink # model} other {Unlink # models}}"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:316
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:317
 msgid "{count} hotspots"
 msgstr "{count} hotspots"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:302
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:303
 msgid "{count} overloaded"
 msgstr "{count} overloaded"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:260
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:261
 msgid "{count} short regions"
 msgstr "{count} short regions"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:220
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:221
 msgid "{count} support elements exceed limit ({peak})."
 msgstr "{count} support elements exceed limit ({peak})."
 
@@ -241,11 +241,11 @@ msgstr "{done}/{total} processed"
 msgid "{downloaded} / {total} ({pct}%)"
 msgstr "{downloaded} / {total} ({pct}%)"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:328
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:329
 msgid "{entity} shaft"
 msgstr "{entity} shaft"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:326
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:327
 msgid "{entity} tip"
 msgstr "{entity} tip"
 
@@ -327,7 +327,7 @@ msgstr "{name}: {megabytes} MB compressed"
 msgid "{pct}%"
 msgstr "{pct}%"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:279
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:280
 msgid "{peak} · {count} over"
 msgstr "{peak} · {count} over"
 
@@ -357,7 +357,7 @@ msgstr "{printer} is offline"
 msgid "{rate} layers/s"
 msgstr "{rate} layers/s"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:239
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:240
 msgid "{regions} overhang regions are short on support."
 msgstr "{regions} overhang regions are short on support."
 
@@ -621,19 +621,19 @@ msgstr "~{hours} h {mins} min"
 msgid "~{mins} min"
 msgstr "~{mins} min"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:315
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:316
 msgid "1 hotspot"
 msgstr "1 hotspot"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:238
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:239
 msgid "1 overhang region is short on support."
 msgstr "1 overhang region is short on support."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:259
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:260
 msgid "1 short region"
 msgstr "1 short region"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:219
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:220
 msgid "1 support element exceeds limit ({peak})."
 msgstr "1 support element exceeds limit ({peak})."
 
@@ -702,7 +702,7 @@ msgstr "A sideloaded package is a native program, not a profile pack."
 msgid "About"
 msgstr "About"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:188
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:189
 msgid "Action Needed"
 msgstr "Action Needed"
 
@@ -891,7 +891,7 @@ msgstr "Adjust curve tension"
 msgid "Advanced (calibration)"
 msgstr "Advanced (calibration)"
 
-#: src/components/controls/IslandsPanel.tsx:328
+#: src/components/controls/IslandsPanel.tsx:347
 msgid "Advanced mode"
 msgstr "Advanced mode"
 
@@ -909,7 +909,7 @@ msgstr "After an autosave, defer further automatic saves until this interval end
 msgid "After updating .env, restart the app, then click “I configured it”."
 msgstr "After updating .env, restart the app, then click “I configured it”."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:266
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:267
 msgid "All covered"
 msgstr "All covered"
 
@@ -970,11 +970,11 @@ msgstr "Analysing supports"
 msgid "Analysis"
 msgstr "Analysis"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:963
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:965
 msgid "Analyzing"
 msgstr "Analyzing"
 
-#: src/app/page.tsx:11881
+#: src/app/page.tsx:11882
 msgid "Analyzing Model Islands & Minima"
 msgstr "Analyzing Model Islands & Minima"
 
@@ -1008,7 +1008,7 @@ msgstr "Applied {0, plural, one {# automated repair step} other {# automated rep
 msgid "Applied immediately across the app."
 msgstr "Applied immediately across the app."
 
-#: src/components/controls/IslandsPanel.tsx:311
+#: src/components/controls/IslandsPanel.tsx:330
 #: src/features/hole-punching/HolePunchPanel.tsx:253
 #: src/features/hollowing/HollowingPanel.tsx:371
 #: src/supports/autoBracing/AutoBracingSettingsCard.tsx:213
@@ -1073,7 +1073,7 @@ msgstr "Applying to model {current} of {total}"
 msgid "Applying…"
 msgstr "Applying…"
 
-#: src/app/page.tsx:12022
+#: src/app/page.tsx:12023
 msgid "Are you sure you want to remove every model from the plate?"
 msgstr "Are you sure you want to remove every model from the plate?"
 
@@ -1609,7 +1609,7 @@ msgctxt "Mesh analysis row"
 msgid "Boundary loops"
 msgstr "Boundary loops"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:134
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:135
 msgid "Brace"
 msgstr "Brace"
 
@@ -1626,7 +1626,7 @@ msgstr "Bracing"
 msgid "Bracing supports"
 msgstr "Bracing supports"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:132
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:133
 msgid "Branch"
 msgstr "Branch"
 
@@ -1750,13 +1750,13 @@ msgstr "Camera view mode: {currentLabel}"
 msgid "Can't open this scene"
 msgstr "Can't open this scene"
 
-#: src/app/page.tsx:11936
-#: src/app/page.tsx:11985
+#: src/app/page.tsx:11937
+#: src/app/page.tsx:11986
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:470
 #: src/components/controls/autoSupport/AutoSupportPresets.tsx:666
 #: src/components/controls/AutoSupportPanel.tsx:661
 #: src/components/controls/IslandScanCard.tsx:184
-#: src/components/controls/IslandsPanel.tsx:302
+#: src/components/controls/IslandsPanel.tsx:321
 #: src/components/controls/ModelManagerPanel.tsx:870
 #: src/components/modals/DestructiveTransformModal.tsx:44
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:41
@@ -1896,7 +1896,7 @@ msgctxt "Placement anchor"
 msgid "Center"
 msgstr "Center"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1225
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1227
 msgid "Center of Mass depth"
 msgstr "Center of Mass depth"
 
@@ -1904,7 +1904,7 @@ msgstr "Center of Mass depth"
 msgid "Center Selection"
 msgstr "Center Selection"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:223
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:224
 msgid "Centre of mass sits past the bearing edge."
 msgstr "Centre of mass sits past the bearing edge."
 
@@ -1951,7 +1951,7 @@ msgstr "Checking coverage"
 msgid "Checking for Updates…"
 msgstr "Checking for Updates…"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:184
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:185
 msgid "Checks Passed"
 msgstr "Checks Passed"
 
@@ -2084,12 +2084,12 @@ msgstr "Clear All failed. Check console for details."
 
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
 #. Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.
-#: src/app/page.tsx:11096
+#: src/app/page.tsx:11097
 #: src/components/scene/SceneCanvas/SceneCanvas.tsx:1963
 msgid "Clear build plate"
 msgstr "Clear build plate"
 
-#: src/app/page.tsx:11974
+#: src/app/page.tsx:11975
 msgid "Clear Build Plate?"
 msgstr "Clear Build Plate?"
 
@@ -2107,7 +2107,7 @@ msgstr "Clear hollowing"
 msgid "Clear Override"
 msgstr "Clear Override"
 
-#: src/app/page.tsx:12013
+#: src/app/page.tsx:12014
 msgid "Clear Plate"
 msgstr "Clear Plate"
 
@@ -2164,7 +2164,7 @@ msgstr "Click to show Detailed View"
 msgid "Client ID"
 msgstr "Client ID"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1350
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1352
 #: src/components/controls/AutoSupportPanel.tsx:514
 #: src/components/layout/TopBar.tsx:1142
 #: src/components/modals/IslandHierarchyModal.tsx:93
@@ -2177,7 +2177,7 @@ msgstr "Client ID"
 msgid "Close"
 msgstr "Close"
 
-#: src/app/page.tsx:11980
+#: src/app/page.tsx:11981
 msgid "Close clear-plate confirmation"
 msgstr "Close clear-plate confirmation"
 
@@ -2272,7 +2272,7 @@ msgstr "Close rename curve profile dialog"
 msgid "Close repair mesh dialog"
 msgstr "Close repair mesh dialog"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1319
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1321
 msgid "Close report"
 msgstr "Close report"
 
@@ -2313,7 +2313,7 @@ msgstr "Close tank material comparison"
 msgid "Close the dialog and discard the edits"
 msgstr "Close the dialog and discard the edits"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1348
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1350
 #: src/components/controls/AutoSupportPanel.tsx:512
 msgid "Close the report"
 msgstr "Close the report"
@@ -2378,12 +2378,12 @@ msgstr "Closing the surface"
 msgid "Cluster Spacing"
 msgstr "Cluster Spacing"
 
-#: src/components/controls/IslandsPanel.tsx:384
+#: src/components/controls/IslandsPanel.tsx:403
 msgid "Clustering"
 msgstr "Clustering"
 
-#: src/components/controls/IslandsPanel.tsx:190
-#: src/components/controls/IslandsPanel.tsx:257
+#: src/components/controls/IslandsPanel.tsx:209
+#: src/components/controls/IslandsPanel.tsx:276
 msgid "Coincident"
 msgstr "Coincident"
 
@@ -2478,7 +2478,7 @@ msgstr "Cone H"
 msgid "Cone Height"
 msgstr "Cone Height"
 
-#: src/components/controls/IslandsPanel.tsx:290
+#: src/components/controls/IslandsPanel.tsx:309
 msgid "Configure island detection parameters"
 msgstr "Configure island detection parameters"
 
@@ -2494,7 +2494,7 @@ msgstr "Confirm Cancel"
 msgid "Confirm cancel print"
 msgstr "Confirm cancel print"
 
-#: src/app/page.tsx:11973
+#: src/app/page.tsx:11974
 msgid "Confirm clearing the build plate"
 msgstr "Confirm clearing the build plate"
 
@@ -2514,7 +2514,7 @@ msgstr "Confirm delete recent file"
 msgid "Confirm delete snapshot"
 msgstr "Confirm delete snapshot"
 
-#: src/app/page.tsx:11972
+#: src/app/page.tsx:11973
 msgid "Confirm deleting the plate"
 msgstr "Confirm deleting the plate"
 
@@ -2586,7 +2586,7 @@ msgstr "Connection"
 msgid "Connectivity"
 msgstr "Connectivity"
 
-#: src/components/controls/IslandsPanel.tsx:403
+#: src/components/controls/IslandsPanel.tsx:422
 msgid "Consolidate"
 msgstr "Consolidate"
 
@@ -2627,7 +2627,7 @@ msgid "Contents"
 msgstr "Contents"
 
 #. Confirms proceeding with the profile change despite the re-slice warning above (paired with "Keep current profiles", which cancels).
-#: src/app/page.tsx:11948
+#: src/app/page.tsx:11949
 #: src/components/layout/FirstRunOnboarding.tsx:287
 #: src/components/layout/TopBar.tsx:1181
 #: src/components/organisms/modals/SceneFileModals.tsx:528
@@ -2644,7 +2644,7 @@ msgstr "Continue to Slicing"
 msgid "Contour"
 msgstr "Contour"
 
-#: src/components/controls/IslandsPanel.tsx:425
+#: src/components/controls/IslandsPanel.tsx:444
 msgid "Contoured regions"
 msgstr "Contoured regions"
 
@@ -2661,7 +2661,7 @@ msgstr "Converting support data and model metadata"
 msgid "Cool"
 msgstr "Cool"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1339
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1341
 #: src/components/settings/PluginsSettingsTab.tsx:1406
 msgid "Copied"
 msgstr "Copied"
@@ -2670,7 +2670,7 @@ msgstr "Copied"
 msgid "Copied!"
 msgstr "Copied!"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1339
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1341
 #: src/components/controls/AutoSupportPanel.tsx:506
 #: src/components/ui/EditorContextMenu.tsx:118
 msgid "Copy"
@@ -2697,7 +2697,7 @@ msgstr "Copy template"
 msgid "Copy the Client ID and Client Secret into your local <0>.env</0>."
 msgstr "Copy the Client ID and Client Secret into your local <0>.env</0>."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1335
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1337
 msgid "Copy the full printability report to the clipboard"
 msgstr "Copy the full printability report to the clipboard"
 
@@ -2748,9 +2748,9 @@ msgstr "Couldn't connect to {host}."
 msgid "Count"
 msgstr "Count"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:84
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1029
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1384
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:85
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1031
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1386
 #: src/features/slicing/components/SlicingPanel.tsx:1461
 msgid "Coverage"
 msgstr "Coverage"
@@ -3008,7 +3008,7 @@ msgstr "Default Raft Wall"
 msgid "Defective — {0} errors"
 msgstr "Defective — {0} errors"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:306
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:307
 msgid "Defl. {formattedDefl}"
 msgstr "Defl. {formattedDefl}"
 
@@ -3087,7 +3087,7 @@ msgctxt "Undo history entry"
 msgid "Delete models and plates"
 msgstr "Delete models and plates"
 
-#: src/app/page.tsx:12013
+#: src/app/page.tsx:12014
 #: src/components/controls/ModelManagerPanel.tsx:486
 #: src/components/controls/ModelManagerPanel.tsx:858
 #: src/components/controls/ModelManagerPanel.tsx:879
@@ -3157,11 +3157,11 @@ msgid "Delete this model's existing supports and place the new ones"
 msgstr "Delete this model's existing supports and place the new ones"
 
 #. Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.
-#: src/app/page.tsx:11095
+#: src/app/page.tsx:11096
 msgid "Delete this plate"
 msgstr "Delete this plate"
 
-#: src/app/page.tsx:11974
+#: src/app/page.tsx:11975
 #: src/components/controls/ModelManagerPanel.tsx:859
 msgid "Delete this plate?"
 msgstr "Delete this plate?"
@@ -3208,7 +3208,7 @@ msgstr "Detail"
 msgid "Detail View"
 msgstr "Detail View"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1129
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1131
 msgid "Details"
 msgstr "Details"
 
@@ -3315,7 +3315,7 @@ msgstr "Disconnected GitHub account."
 msgid "Discovered Printers"
 msgstr "Discovered Printers"
 
-#: src/app/page.tsx:12070
+#: src/app/page.tsx:12071
 #: src/components/modals/ManifoldWarningModal.tsx:38
 #: src/components/organisms/SystemNotificationStack.tsx:285
 #: src/components/scene/MeshRepairReportModal.tsx:347
@@ -3323,7 +3323,7 @@ msgstr "Discovered Printers"
 msgid "Dismiss"
 msgstr "Dismiss"
 
-#: src/components/controls/IslandsPanel.tsx:320
+#: src/components/controls/IslandsPanel.tsx:339
 msgid "Display"
 msgstr "Display"
 
@@ -3484,7 +3484,7 @@ msgctxt "Drop button"
 msgid "Drop"
 msgstr "Drop"
 
-#: src/app/page.tsx:11041
+#: src/app/page.tsx:11042
 msgid "Drop supported files to import"
 msgstr "Drop supported files to import"
 
@@ -3602,11 +3602,11 @@ msgstr "Elapsed {slicingElapsedLabel}"
 msgid "Elapsed: {elapsed}"
 msgstr "Elapsed: {elapsed}"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1237
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1239
 msgid "Elastic rotation"
 msgstr "Elastic rotation"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:294
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:295
 msgid "Elastic rotation · {defl}"
 msgstr "Elastic rotation · {defl}"
 
@@ -3841,6 +3841,10 @@ msgstr "Export failed. Check console for details."
 msgid "Export format"
 msgstr "Export format"
 
+#: src/components/controls/IslandsPanel.tsx:151
+msgid "Export islands as JSON"
+msgstr "Export islands as JSON"
+
 #: src/features/export/components/ExportPanel.tsx:698
 msgid "Export layout"
 msgstr "Export layout"
@@ -3865,7 +3869,7 @@ msgstr "Export selected curve"
 msgid "Export the selected preset as a JSON file"
 msgstr "Export the selected preset as a JSON file"
 
-#: src/app/page.tsx:11914
+#: src/app/page.tsx:11915
 #: src/features/export/components/ExportPanel.tsx:761
 msgid "Exporting…"
 msgstr "Exporting…"
@@ -4035,7 +4039,7 @@ msgstr "Filling gaps"
 msgid "Filtering supports"
 msgstr "Filtering supports"
 
-#: src/components/controls/IslandsPanel.tsx:359
+#: src/components/controls/IslandsPanel.tsx:378
 msgid "Filters"
 msgstr "Filters"
 
@@ -4139,8 +4143,8 @@ msgstr "Flip model stats card"
 msgid "Flip Tenon"
 msgstr "Flip Tenon"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1108
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1399
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1110
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1401
 msgid "Floating"
 msgstr "Floating"
 
@@ -4173,15 +4177,15 @@ msgstr "Forget all stored panel positions and return to seeded layout."
 msgid "Found!"
 msgstr "Found!"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:82
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:83
 msgid "Frame"
 msgstr "Frame"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1181
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1183
 msgid "Frame max"
 msgstr "Frame max"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:971
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:973
 msgid "Frame, coverage and stability checks"
 msgstr "Frame, coverage and stability checks"
 
@@ -4241,7 +4245,7 @@ msgstr "Generate a secret…"
 msgid "Generate Supports"
 msgstr "Generate Supports"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1165
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1167
 msgid "Generate supports or analyze existing ones to inspect peel loads."
 msgstr "Generate supports or analyze existing ones to inspect peel loads."
 
@@ -4249,7 +4253,7 @@ msgstr "Generate supports or analyze existing ones to inspect peel loads."
 msgid "Generated file"
 msgstr "Generated file"
 
-#: src/app/page.tsx:11893
+#: src/app/page.tsx:11894
 msgid "Generating Supports"
 msgstr "Generating Supports"
 
@@ -4282,7 +4286,7 @@ msgstr "Give this build plate a name"
 msgid "Go back to the settings dialog"
 msgstr "Go back to the settings dialog"
 
-#: src/app/page.tsx:12062
+#: src/app/page.tsx:12063
 msgid "Go to Settings → 3D Mouse to configure or block it."
 msgstr "Go to Settings → 3D Mouse to configure or block it."
 
@@ -4532,7 +4536,7 @@ msgstr "Horizontal angles are not good for holding up overhangs. They are only g
 msgid "Hotkeys"
 msgstr "Hotkeys"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1250
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1252
 msgid "Hotspots"
 msgstr "Hotspots"
 
@@ -4814,7 +4818,7 @@ msgstr "Increase spacing"
 msgid "Increase value"
 msgstr "Increase value"
 
-#: src/components/controls/IslandsPanel.tsx:256
+#: src/components/controls/IslandsPanel.tsx:275
 msgid "Individual lowest-vertex triangles on the mesh surface"
 msgstr "Individual lowest-vertex triangles on the mesh surface"
 
@@ -4870,7 +4874,7 @@ msgstr "Initial Zig Zag climbs continuously to the top — repeating tiers have 
 msgid "Inner"
 msgstr "Inner"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1124
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1126
 msgid "Inspect peel loads, coverage, frame stress, stability metrics, and hotspots"
 msgstr "Inspect peel loads, coverage, frame stress, stability metrics, and hotspots"
 
@@ -4997,7 +5001,7 @@ msgid "Island Voxels"
 msgstr "Island Voxels"
 
 #. Tool rail label in Support mode. Short for the Islands panel, which scans the model for unsupported islands.
-#: src/components/controls/IslandsPanel.tsx:133
+#: src/components/controls/IslandsPanel.tsx:142
 #: src/components/controls/toolRailEntries.ts:163
 msgid "Islands"
 msgstr "Islands"
@@ -5024,7 +5028,7 @@ msgstr "It's a trap! ...just kidding, drop your STL."
 msgid "Iterations"
 msgstr "Iterations"
 
-#: src/app/page.tsx:11955
+#: src/app/page.tsx:11956
 msgid "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene and its models are shown in their normal colour while this printer is selected."
 msgstr "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene and its models are shown in their normal colour while this printer is selected."
 
@@ -5032,7 +5036,7 @@ msgstr "Its materials are split across several tanks, which the printer selected
 msgid "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene, hidden while this printer is selected — switch to a multi-material printer to print them."
 msgstr "Its materials are split across several tanks, which the printer selected now cannot print. The assignments stay with the scene, hidden while this printer is selected — switch to a multi-material printer to print them."
 
-#: src/app/page.tsx:11925
+#: src/app/page.tsx:11926
 msgid "Its materials stay hidden until you switch back"
 msgstr "Its materials stay hidden until you switch back"
 
@@ -5122,7 +5126,7 @@ msgstr "Keep the existing supports and do nothing"
 msgid "Keep the existing supports and place the new ones around them"
 msgstr "Keep the existing supports and place the new ones around them"
 
-#: src/app/page.tsx:11928
+#: src/app/page.tsx:11929
 msgid "Keep the Multi-Tank printer"
 msgstr "Keep the Multi-Tank printer"
 
@@ -5138,7 +5142,7 @@ msgstr "Keeping the largest pieces"
 msgid "Keyboard bindings and presets"
 msgstr "Keyboard bindings and presets"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:136
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:137
 msgid "Kickstand"
 msgstr "Kickstand"
 
@@ -5277,7 +5281,7 @@ msgid "Layer:"
 msgstr "Layer:"
 
 #. Sort order for the island list: by layer span. One of three narrow buttons (ID / Volume / Layers).
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:80
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:81
 #: src/components/controls/IslandListCard.tsx:177
 #: src/features/slicing/components/SlicingPanel.tsx:2384
 msgid "Layers"
@@ -5291,15 +5295,15 @@ msgstr "Layers:"
 msgid "Layout Mode"
 msgstr "Layout Mode"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:133
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:134
 msgid "Leaf"
 msgstr "Leaf"
 
-#: src/app/page.tsx:12080
+#: src/app/page.tsx:12081
 msgid "Leaf Fanning Active: Click model to sprout leaf"
 msgstr "Leaf Fanning Active: Click model to sprout leaf"
 
-#: src/app/page.tsx:12081
+#: src/app/page.tsx:12082
 msgid "Leaf Fanning: Click a support shaft to lock anchor knot"
 msgstr "Leaf Fanning: Click a support shaft to lock anchor knot"
 
@@ -5359,7 +5363,7 @@ msgstr "Lift"
 msgid "Lift the selected models to this distance so a support can stand under them; off returns them to the height they were at."
 msgstr "Lift the selected models to this distance so a support can stand under them; off returns them to the height they were at."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1231
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1233
 msgid "Lift threshold"
 msgstr "Lift threshold"
 
@@ -5604,7 +5608,7 @@ msgstr "Logical Volumes: Include Event Nodes"
 msgid "Logical Volumes: Show Ownership Leaves Only"
 msgstr "Logical Volumes: Show Ownership Leaves Only"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:243
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:244
 msgid "Long unsupported span ({span})."
 msgstr "Long unsupported span ({span})."
 
@@ -5773,7 +5777,7 @@ msgstr "Max Brace Distance"
 msgid "Max branches + leaves one trunk may carry before new trunks are started — the cap on chunk consolidation"
 msgstr "Max branches + leaves one trunk may carry before new trunks are started — the cap on chunk consolidation"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1187
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1189
 msgid "Max deflection"
 msgstr "Max deflection"
 
@@ -5785,7 +5789,7 @@ msgstr "Max horizontal distance a fan-out leaf may span from a trunk shaft"
 msgid "Max Overhang"
 msgstr "Max Overhang"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1202
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1204
 msgid "Max span"
 msgstr "Max span"
 
@@ -5801,7 +5805,7 @@ msgstr "Maximize window"
 msgid "Maximum autosave interval"
 msgstr "Maximum autosave interval"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:290
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:291
 msgid "May tip"
 msgstr "May tip"
 
@@ -5926,8 +5930,8 @@ msgid "Min Overlap: 4"
 msgstr "Min Overlap: 4"
 
 #: src/components/controls/AutoSupportPanel.tsx:437
-#: src/components/controls/IslandsPanel.tsx:189
-#: src/components/controls/IslandsPanel.tsx:256
+#: src/components/controls/IslandsPanel.tsx:208
+#: src/components/controls/IslandsPanel.tsx:275
 msgid "Minima"
 msgstr "Minima"
 
@@ -5969,7 +5973,7 @@ msgstr "Mirror in {axes}"
 msgid "Mode"
 msgstr "Mode"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:79
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:80
 msgid "Model"
 msgstr "Model"
 
@@ -6002,11 +6006,11 @@ msgstr "Model actions…"
 msgid "Model details"
 msgstr "Model details"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:212
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:213
 msgid "Model floats {height} above the build plate with no supports."
 msgstr "Model floats {height} above the build plate with no supports."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:214
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:215
 msgid "Model floats above the build plate with no supports."
 msgstr "Model floats above the build plate with no supports."
 
@@ -6133,7 +6137,7 @@ msgstr "Move, rotate, and scale"
 msgid "Moved off centre"
 msgstr "Moved off centre"
 
-#: src/app/page.tsx:11923
+#: src/app/page.tsx:11924
 msgid "Multi-Material scene on a single-material printer"
 msgstr "Multi-Material scene on a single-material printer"
 
@@ -6180,7 +6184,7 @@ msgstr "Native"
 msgid "Need at least 2 visible models to arrange"
 msgstr "Need at least 2 visible models to arrange"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:186
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:187
 msgid "Needs Attention"
 msgstr "Needs Attention"
 
@@ -6232,7 +6236,7 @@ msgstr "Never"
 msgid "New Curve"
 msgstr "New Curve"
 
-#: src/app/page.tsx:12061
+#: src/app/page.tsx:12062
 msgid "New input device detected."
 msgstr "New input device detected."
 
@@ -6256,7 +6260,7 @@ msgstr "New preset…"
 msgid "New scene"
 msgstr "New scene"
 
-#: src/components/controls/IslandsPanel.tsx:243
+#: src/components/controls/IslandsPanel.tsx:262
 msgid "Next (N)"
 msgstr "Next (N)"
 
@@ -6463,7 +6467,7 @@ msgstr "No recent files"
 msgid "No registered scene import handler for {extension}."
 msgstr "No registered scene import handler for {extension}."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:530
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:532
 msgid "No representative layers sampled"
 msgstr "No representative layers sampled"
 
@@ -6483,7 +6487,7 @@ msgstr "No source file to restore this model from."
 msgid "No sponsors yet — be the first!"
 msgstr "No sponsors yet — be the first!"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:275
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:276
 msgid "No supports"
 msgstr "No supports"
 
@@ -6536,7 +6540,7 @@ msgstr "Normals"
 msgid "Not all slicers are created equal. This one's free!"
 msgstr "Not all slicers are created equal. This one's free!"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:190
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:191
 msgid "Not Checked"
 msgstr "Not Checked"
 
@@ -6548,8 +6552,8 @@ msgstr "Not connected"
 msgid "Not created yet"
 msgstr "Not created yet"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1041
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1404
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1043
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1406
 msgid "Not scanned"
 msgstr "Not scanned"
 
@@ -6871,7 +6875,7 @@ msgstr "Open saved file location"
 msgid "Open scene…"
 msgstr "Open scene…"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:924
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:926
 msgid "Open the full Printability Report"
 msgstr "Open the full Printability Report"
 
@@ -6913,7 +6917,7 @@ msgstr "Orient flat against plate"
 msgid "Orient Model"
 msgstr "Orient Model"
 
-#: src/app/page.tsx:11904
+#: src/app/page.tsx:11905
 msgid "Orienting Model"
 msgstr "Orienting Model"
 
@@ -6954,7 +6958,7 @@ msgid "Outside plate"
 msgstr "Outside plate"
 
 #. View mode colouring surfaces by how steeply they overhang, which is where supports are needed.
-#: src/components/controls/IslandsPanel.tsx:258
+#: src/components/controls/IslandsPanel.tsx:277
 #: src/features/shaders/mesh/types.ts:44
 msgid "Overhangs"
 msgstr "Overhangs"
@@ -7049,7 +7053,7 @@ msgstr "Parent-child merges across detected islands"
 msgid "Part {0}: {1} triangles"
 msgstr "Part {0}: {1} triangles"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:234
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:235
 msgid "Part rocking ({defl}) exceeds the layer-shift limit."
 msgstr "Part rocking ({defl}) exceeds the layer-shift limit."
 
@@ -7099,15 +7103,15 @@ msgstr "Paused"
 msgid "Pausing…"
 msgstr "Pausing…"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1171
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1173
 msgid "Peak peel"
 msgstr "Peak peel"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:230
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:231
 msgid "Peak support load reaches {peak}."
 msgstr "Peak support load reaches {peak}."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:513
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:515
 msgid "Peel Profile"
 msgstr "Peel Profile"
 
@@ -7199,7 +7203,7 @@ msgstr "Placement Anchor"
 msgid "Placement message."
 msgstr "Placement message."
 
-#: src/app/page.tsx:11894
+#: src/app/page.tsx:11895
 msgid "Placing and bracing supports…"
 msgstr "Placing and bracing supports…"
 
@@ -7428,7 +7432,7 @@ msgstr "Preview"
 msgid "Preview Model"
 msgstr "Preview Model"
 
-#: src/components/controls/IslandsPanel.tsx:219
+#: src/components/controls/IslandsPanel.tsx:238
 msgid "Previous (B)"
 msgstr "Previous (B)"
 
@@ -7474,12 +7478,12 @@ msgstr "Print started successfully."
 msgid "Print started. Use <0>Monitor</0> in the top bar to view live progress and webcam."
 msgstr "Print started. Use <0>Monitor</0> in the top bar to view live progress and webcam."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:904
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:906
 msgid "Printability"
 msgstr "Printability"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1313
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1314
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1315
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1316
 msgid "Printability Report"
 msgstr "Printability Report"
 
@@ -7616,8 +7620,8 @@ msgid "Processing {count, plural, one {# model} other {# models}}"
 msgstr "Processing {count, plural, one {# model} other {# models}}"
 
 #: src/app/page.tsx:2100
-#: src/app/page.tsx:11884
-#: src/app/page.tsx:11896
+#: src/app/page.tsx:11885
+#: src/app/page.tsx:11897
 msgid "Processing 1 model"
 msgstr "Processing 1 model"
 
@@ -7772,7 +7776,7 @@ msgstr "Rebuilding the surface"
 msgid "Rebuilding the surface into a solid"
 msgstr "Rebuilding the surface into a solid"
 
-#: src/app/page.tsx:11762
+#: src/app/page.tsx:11763
 msgid "Rebuilding the surface."
 msgstr "Rebuilding the surface."
 
@@ -7788,7 +7792,7 @@ msgstr "Rebuilt the surface into a solid: {to} triangles from {from}, with {perc
 msgid "Rebuilt the surface into a solid: {to} triangles from {from}, with {percent}% more volume."
 msgstr "Rebuilt the surface into a solid: {to} triangles from {from}, with {percent}% more volume."
 
-#: src/components/controls/IslandsPanel.tsx:159
+#: src/components/controls/IslandsPanel.tsx:178
 msgid "Recalculating…"
 msgstr "Recalculating…"
 
@@ -7866,23 +7870,23 @@ msgstr "Refresh History"
 msgid "Refresh print files"
 msgstr "Refresh print files"
 
-#: src/components/controls/IslandsPanel.tsx:257
+#: src/components/controls/IslandsPanel.tsx:276
 msgid "Regions where both voxel and geometric islands overlap"
 msgstr "Regions where both voxel and geometric islands overlap"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1291
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1293
 msgid "Reinforce"
 msgstr "Reinforce"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:67
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:68
 msgid "Reinforce overloaded supports"
 msgstr "Reinforce overloaded supports"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:311
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:312
 msgid "Reinforced {count} weak members"
 msgstr "Reinforced {count} weak members"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:310
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:311
 msgid "Reinforced 1 weak member"
 msgstr "Reinforced 1 weak member"
 
@@ -7918,7 +7922,7 @@ msgstr "Reloading loads an installed plugin's code, or releases a removed one's 
 msgid "Remaining"
 msgstr "Remaining"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1302
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1304
 msgid "Remaining hotspots are at clearance or size limit"
 msgstr "Remaining hotspots are at clearance or size limit"
 
@@ -7927,8 +7931,8 @@ msgstr "Remaining hotspots are at clearance or size limit"
 msgid "Remember window positions"
 msgstr "Remember window positions"
 
-#: src/app/page.tsx:11761
-#: src/app/page.tsx:11763
+#: src/app/page.tsx:11762
+#: src/app/page.tsx:11764
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:49
 #: src/components/ui/EditorContextMenu.tsx:130
 msgid "Remesh"
@@ -7952,7 +7956,7 @@ msgstr "Remesh failed: {message}"
 msgid "Remesh needs the desktop app."
 msgstr "Remesh needs the desktop app."
 
-#: src/app/page.tsx:11764
+#: src/app/page.tsx:11765
 msgid "Remesh progress"
 msgstr "Remesh progress"
 
@@ -8066,7 +8070,7 @@ msgctxt "Undo history entry"
 msgid "Remove stump"
 msgstr "Remove stump"
 
-#: src/components/controls/IslandsPanel.tsx:447
+#: src/components/controls/IslandsPanel.tsx:466
 msgid "Remove supported clusters"
 msgstr "Remove supported clusters"
 
@@ -8327,7 +8331,7 @@ msgstr "Reset colors to default"
 msgid "Reset cut settings to defaults"
 msgstr "Reset cut settings to defaults"
 
-#: src/components/controls/IslandsPanel.tsx:475
+#: src/components/controls/IslandsPanel.tsx:494
 msgid "Reset defaults"
 msgstr "Reset defaults"
 
@@ -8394,7 +8398,7 @@ msgstr "Resin is mixed, sufficient for the print, and at operating temperature."
 msgid "Resizing supports"
 msgstr "Resizing supports"
 
-#: src/components/controls/IslandsPanel.tsx:340
+#: src/components/controls/IslandsPanel.tsx:359
 msgid "Resolution"
 msgstr "Resolution"
 
@@ -8402,7 +8406,7 @@ msgstr "Resolution"
 msgid "Resolved {resolvedSelfIntersections, plural, one {# self-intersection} other {# self-intersections}}."
 msgstr "Resolved {resolvedSelfIntersections, plural, one {# self-intersection} other {# self-intersections}}."
 
-#: src/app/page.tsx:11820
+#: src/app/page.tsx:11821
 msgid "Resolving the surface into a solid."
 msgstr "Resolving the surface into a solid."
 
@@ -8512,11 +8516,11 @@ msgstr "Ring each mesh minima with contacts on its own flank, so a section start
 msgid "Roads? Where we're printing, we don't need roads."
 msgstr "Roads? Where we're printing, we don't need roads."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1238
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1240
 msgid "Rocking"
 msgstr "Rocking"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:295
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:296
 msgid "Rocking · {defl}"
 msgstr "Rocking · {defl}"
 
@@ -8734,11 +8738,11 @@ msgctxt "Undo history entry"
 msgid "Scale {modelName}"
 msgstr "Scale {modelName}"
 
-#: src/components/controls/IslandsPanel.tsx:390
+#: src/components/controls/IslandsPanel.tsx:409
 msgid "Scale markers with area"
 msgstr "Scale markers with area"
 
-#: src/components/controls/IslandsPanel.tsx:335
+#: src/components/controls/IslandsPanel.tsx:354
 msgid "Scan"
 msgstr "Scan"
 
@@ -8759,11 +8763,11 @@ msgstr "Scan for islands if needed, then place automatic supports on this model"
 msgid "Scan for Supports"
 msgstr "Scan for Supports"
 
-#: src/components/controls/IslandsPanel.tsx:177
+#: src/components/controls/IslandsPanel.tsx:196
 msgid "Scan Islands"
 msgstr "Scan Islands"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:206
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:207
 msgid "Scan overhangs or generate supports to check printability."
 msgstr "Scan overhangs or generate supports to check printability."
 
@@ -8771,12 +8775,12 @@ msgstr "Scan overhangs or generate supports to check printability."
 msgid "Scan progress"
 msgstr "Scan progress"
 
-#: src/components/controls/IslandsPanel.tsx:140
+#: src/components/controls/IslandsPanel.tsx:158
 msgid "Scan settings"
 msgstr "Scan settings"
 
-#: src/components/controls/IslandsPanel.tsx:288
-#: src/components/controls/IslandsPanel.tsx:289
+#: src/components/controls/IslandsPanel.tsx:307
+#: src/components/controls/IslandsPanel.tsx:308
 msgid "Scan Settings"
 msgstr "Scan Settings"
 
@@ -8785,7 +8789,7 @@ msgstr "Scan Settings"
 msgid "Scan the model for unsupported islands"
 msgstr "Scan the model for unsupported islands"
 
-#: src/components/controls/IslandsPanel.tsx:278
+#: src/components/controls/IslandsPanel.tsx:297
 msgid "Scan the model to detect unsupported islands"
 msgstr "Scan the model to detect unsupported islands"
 
@@ -8797,7 +8801,7 @@ msgstr "Scanned {modelName}."
 msgid "Scanning for Supports…"
 msgstr "Scanning for Supports…"
 
-#: src/app/page.tsx:11894
+#: src/app/page.tsx:11895
 msgid "Scanning islands & minima…"
 msgstr "Scanning islands & minima…"
 
@@ -8815,7 +8819,7 @@ msgid "Scanning your network for {presetName} printers…"
 msgstr "Scanning your network for {presetName} printers…"
 
 #: src/components/controls/IslandScanCard.tsx:143
-#: src/components/controls/IslandsPanel.tsx:177
+#: src/components/controls/IslandsPanel.tsx:196
 #: src/components/settings/UvToolsSettingsTab.tsx:172
 #: src/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard.tsx:49
 msgid "Scanning…"
@@ -9246,7 +9250,7 @@ msgstr "Shaft"
 msgid "Shaft Ø range"
 msgstr "Shaft Ø range"
 
-#: src/components/controls/IslandsPanel.tsx:258
+#: src/components/controls/IslandsPanel.tsx:277
 msgid "Shallow surfaces detected by the mesh-normal classifier (the surfaces auto-supports grid)"
 msgstr "Shallow surfaces detected by the mesh-normal classifier (the surfaces auto-supports grid)"
 
@@ -9286,7 +9290,7 @@ msgstr "Shell thickness in millimeters"
 msgid "Shells:"
 msgstr "Shells:"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1208
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1210
 msgid "Short regions"
 msgstr "Short regions"
 
@@ -9315,7 +9319,7 @@ msgstr "Show alpha as 0-100%"
 msgid "Show alpha as 0-255"
 msgstr "Show alpha as 0-255"
 
-#: src/components/controls/IslandsPanel.tsx:368
+#: src/components/controls/IslandsPanel.tsx:387
 msgid "Show already-supported islands"
 msgstr "Show already-supported islands"
 
@@ -9355,7 +9359,7 @@ msgstr "Show Nodes In Voxels"
 msgid "Show or hide the model list"
 msgstr "Show or hide the model list"
 
-#: src/components/controls/IslandsPanel.tsx:377
+#: src/components/controls/IslandsPanel.tsx:396
 msgid "Show plate-contact islands"
 msgstr "Show plate-contact islands"
 
@@ -9388,7 +9392,7 @@ msgstr "Show the cut preview"
 msgid "Show Tuner"
 msgstr "Show Tuner"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:914
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:916
 msgid "Show unsupported areas and support stress on the model"
 msgstr "Show unsupported areas and support stress on the model"
 
@@ -9396,12 +9400,12 @@ msgstr "Show unsupported areas and support stress on the model"
 msgid "Shows \"Cannot Place Support\" and \"Stability Warning\" tooltips."
 msgstr "Shows \"Cannot Place Support\" and \"Stability Warning\" tooltips."
 
-#: src/components/controls/IslandsPanel.tsx:330
+#: src/components/controls/IslandsPanel.tsx:349
 msgid "Shows the Voxels, Minima, Coincident, and Overhangs layer toggles."
 msgstr "Shows the Voxels, Minima, Coincident, and Overhangs layer toggles."
 
-#: src/app/page.tsx:11819
-#: src/app/page.tsx:11821
+#: src/app/page.tsx:11820
+#: src/app/page.tsx:11822
 #: src/components/modals/ShrinkWrapConfirmModal.tsx:49
 #: src/components/ui/EditorContextMenu.tsx:131
 msgid "Shrink-Wrap"
@@ -9424,7 +9428,7 @@ msgstr "Shrink-Wrap failed: {message}"
 msgid "Shrink-Wrap needs the desktop app."
 msgstr "Shrink-Wrap needs the desktop app."
 
-#: src/app/page.tsx:11822
+#: src/app/page.tsx:11823
 msgid "Shrink-Wrap progress"
 msgstr "Shrink-Wrap progress"
 
@@ -9545,7 +9549,7 @@ msgstr "Slicer encoder"
 msgid "Slicing"
 msgstr "Slicing"
 
-#: src/app/page.tsx:11882
+#: src/app/page.tsx:11883
 msgid "Slicing and analysis in progress..."
 msgstr "Slicing and analysis in progress..."
 
@@ -9561,7 +9565,7 @@ msgstr "Slicing Finished"
 msgid "Slicing in progress. Topbar actions are temporarily disabled."
 msgstr "Slicing in progress. Topbar actions are temporarily disabled."
 
-#: src/components/controls/IslandsPanel.tsx:255
+#: src/components/controls/IslandsPanel.tsx:274
 msgid "Slicing islands and suspended areas detected from layer contours"
 msgstr "Slicing islands and suspended areas detected from layer contours"
 
@@ -9670,7 +9674,7 @@ msgstr "Some models have unapplied hollowing"
 msgid "Source"
 msgstr "Source"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:264
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:265
 msgid "Span {span}"
 msgstr "Span {span}"
 
@@ -9740,9 +9744,9 @@ msgid "Sponsors"
 msgstr "Sponsors"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:73
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:83
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1095
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1384
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:84
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1097
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1386
 msgid "Stability"
 msgstr "Stability"
 
@@ -9754,7 +9758,7 @@ msgstr "Stability Warning"
 msgid "Stabilization Anchors"
 msgstr "Stabilization Anchors"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:297
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:298
 msgid "Stable"
 msgstr "Stable"
 
@@ -9831,7 +9835,7 @@ msgstr "Starting print"
 msgid "Starting print…"
 msgstr "Starting print…"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1359
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1361
 msgid "Status"
 msgstr "Status"
 
@@ -9851,7 +9855,7 @@ msgstr "Step 1: Run Scanline Scan"
 msgid "Step 2: Enable Debug Visuals (IDs + Voxels)"
 msgstr "Step 2: Enable Debug Visuals (IDs + Voxels)"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:138
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:139
 msgid "Stick"
 msgstr "Stick"
 
@@ -9896,7 +9900,7 @@ msgstr "Strength"
 msgid "Structure"
 msgstr "Structure"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:135
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:136
 msgid "Stump"
 msgstr "Stump"
 
@@ -9925,7 +9929,7 @@ msgstr "Support angle is too flat (must be >10° from horizontal)."
 msgid "Support base must be below the tip (knot cannot be above the tip)."
 msgstr "Support base must be below the tip (knot cannot be above the tip)."
 
-#: src/components/controls/IslandsPanel.tsx:349
+#: src/components/controls/IslandsPanel.tsx:368
 msgid "Support buffer"
 msgstr "Support buffer"
 
@@ -9945,12 +9949,12 @@ msgstr "Support import failed: unsupported support JSON format."
 msgid "Support import failed."
 msgstr "Support import failed."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1063
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1367
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1065
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1369
 msgid "Support load"
 msgstr "Support load"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:208
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:209
 msgid "Support loads look OK; scan overhangs to check coverage."
 msgstr "Support loads look OK; scan overhangs to check coverage."
 
@@ -9980,7 +9984,7 @@ msgid "Supported: {extensions}"
 msgstr "Supported: {extensions}"
 
 #: src/app/page.tsx:2826
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:81
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:82
 #: src/components/ui/EditorContextMenu.tsx:138
 msgid "Supports"
 msgstr "Supports"
@@ -10025,7 +10029,7 @@ msgstr "Suspiciously empty in here."
 msgid "Swap which cut half receives the tenon and which receives the mortise."
 msgstr "Swap which cut half receives the tenon and which receives the mortise."
 
-#: src/app/page.tsx:11905
+#: src/app/page.tsx:11906
 msgid "Sweeping orientations…"
 msgstr "Sweeping orientations…"
 
@@ -10049,7 +10053,7 @@ msgstr "Switch to {recordedLabel}"
 msgid "Switch to <0>{recordedLabel}</0> before importing?"
 msgstr "Switch to <0>{recordedLabel}</0> before importing?"
 
-#: src/app/page.tsx:11962
+#: src/app/page.tsx:11963
 msgid "Switch to a multi-material printer later and the assignments come back."
 msgstr "Switch to a multi-material printer later and the assignments come back."
 
@@ -10225,7 +10229,7 @@ msgstr "The hole carved in the other half."
 msgid "The inputs and factors the last run sized the supports with"
 msgstr "The inputs and factors the last run sized the supports with"
 
-#: src/app/page.tsx:12021
+#: src/app/page.tsx:12022
 msgid "The models on this plate are deleted with it."
 msgstr "The models on this plate are deleted with it."
 
@@ -10320,8 +10324,8 @@ msgstr "the printer this scene was built for"
 msgid "The rebuilt surface will replace this model in your current scene. A model that cannot be resolved is left untouched, and you can undo this afterwards."
 msgstr "The rebuilt surface will replace this model in your current scene. A model that cannot be resolved is left untouched, and you can undo this afterwards."
 
-#: src/app/page.tsx:11773
-#: src/app/page.tsx:11831
+#: src/app/page.tsx:11774
+#: src/app/page.tsx:11832
 #: src/components/modals/TetrahedralRemeshConfirmModal.tsx:67
 msgid "The rebuilt surface will replace this model in your current scene. Large models take longer, and some models cannot be rebuilt at all and are left untouched. You can undo this afterwards."
 msgstr "The rebuilt surface will replace this model in your current scene. Large models take longer, and some models cannot be rebuilt at all and are left untouched. You can undo this afterwards."
@@ -10407,7 +10411,7 @@ msgstr "The webcam image could not be loaded."
 msgid "Theme and custom UI token customization"
 msgstr "Theme and custom UI token customization"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1285
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1287
 msgid "Thicken overloaded trunks, branches, leaves, and braces"
 msgstr "Thicken overloaded trunks, branches, leaves, and braces"
 
@@ -10524,7 +10528,7 @@ msgstr "This scene is aggressively unoccupied."
 msgid "This scene is already saved."
 msgstr "This scene is already saved."
 
-#: src/app/page.tsx:11924
+#: src/app/page.tsx:11925
 #: src/components/modals/ScenePrinterMismatchModal.tsx:93
 msgid "This scene is made for a multi-material printer"
 msgstr "This scene is made for a multi-material printer"
@@ -10605,7 +10609,7 @@ msgstr "Tip"
 msgid "Tip Fit Margin"
 msgstr "Tip Fit Margin"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1175
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1177
 msgid "Tip max"
 msgstr "Tip max"
 
@@ -10714,7 +10718,7 @@ msgstr "Triangles"
 msgid "Triangles:"
 msgstr "Triangles:"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:131
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:132
 msgid "Trunk"
 msgstr "Trunk"
 
@@ -10738,7 +10742,7 @@ msgstr "Try again"
 msgid "Turning faces outward"
 msgstr "Turning faces outward"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:137
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:138
 msgid "Twig"
 msgstr "Twig"
 
@@ -10759,11 +10763,11 @@ msgstr "Unapplied Holes"
 msgid "Unavailable"
 msgstr "Unavailable"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1196
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1198
 msgid "Uncovered area"
 msgstr "Uncovered area"
 
-#: src/app/page.tsx:11977
+#: src/app/page.tsx:11978
 msgid "Undo brings the models back"
 msgstr "Undo brings the models back"
 
@@ -10840,7 +10844,7 @@ msgstr "Unlink X and Y"
 msgid "Unlock build plate"
 msgstr "Unlock build plate"
 
-#: src/app/page.tsx:12044
+#: src/app/page.tsx:12045
 msgid "Unlock it to add or move models."
 msgstr "Unlock it to add or move models."
 
@@ -10878,7 +10882,7 @@ msgstr "Unsaved Scene Found"
 msgid "Unseal and install"
 msgstr "Unseal and install"
 
-#: src/app/page.tsx:11041
+#: src/app/page.tsx:11042
 msgid "Unsupported file format"
 msgstr "Unsupported file format"
 
@@ -11215,8 +11219,8 @@ msgstr "Voxel"
 msgid "Voxel Size"
 msgstr "Voxel Size"
 
-#: src/components/controls/IslandsPanel.tsx:188
-#: src/components/controls/IslandsPanel.tsx:255
+#: src/components/controls/IslandsPanel.tsx:207
+#: src/components/controls/IslandsPanel.tsx:274
 msgid "Voxels"
 msgstr "Voxels"
 
@@ -11404,7 +11408,7 @@ msgstr "Wireframe"
 msgid "With great resin comes great responsibility."
 msgstr "With great resin comes great responsibility."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:301
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:302
 msgid "Within limit"
 msgstr "Within limit"
 
@@ -11416,7 +11420,7 @@ msgstr "Workspace"
 msgid "Workspace behavior and panel layout"
 msgstr "Workspace behavior and panel layout"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1215
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1217
 msgid "Worst region"
 msgstr "Worst region"
 
@@ -11428,7 +11432,7 @@ msgstr "Write these settings to the auto-support settings"
 msgid "Write these settings, and overwrite the selected preset with them"
 msgstr "Write these settings, and overwrite the selected preset with them"
 
-#: src/app/page.tsx:11915
+#: src/app/page.tsx:11916
 msgid "Writing mesh geometry and support data to file…"
 msgstr "Writing mesh geometry and support data to file…"
 

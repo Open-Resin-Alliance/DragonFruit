@@ -3,7 +3,7 @@
 import React from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
-import { Settings, RotateCcw } from 'lucide-react';
+import { Download, Settings, RotateCcw } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton, Spinner } from '@/components/atoms';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { NumberInput } from '@/components/ui/NumberInput';
@@ -14,6 +14,7 @@ import type { UseIslandsReturn } from '@/volumeAnalysis/Islands/useIslands';
 import { ISLAND_LAYER_COLORS, markerIdFor } from '@/volumeAnalysis/Islands/islandPuckMarkers';
 import { Trans } from '@lingui/react/macro';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+import { exportIslandsToJson } from '@/volumeAnalysis/Islands/exportIslands';
 
 const SECTION_CARD: React.CSSProperties = {
   borderColor: 'var(--border-subtle)',
@@ -62,10 +63,12 @@ function ToggleBtn({ label, checked, color, hint, onChange }: {
 interface IslandsPanelProps {
   islands: UseIslandsReturn;
   hasGeometry: boolean;
+  /** Suggested file stem for the island JSON export. */
+  modelName?: string;
   bottomClearancePx?: number;
 }
 
-export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: IslandsPanelProps) {
+export function IslandsPanel({ islands, hasGeometry, modelName, bottomClearancePx = 88 }: IslandsPanelProps) {
   const { _ } = useLingui();
   const fmt = useLocaleFormat();
   const [expanded, setExpanded] = useFloatingPanelCollapse(true);
@@ -122,6 +125,12 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
   const computedBottomClearance = Math.max(140, Math.round(bottomClearancePx));
 
   const hasData = (tableStats?.allTotal ?? 0) > 0 || (tableStats?.overhangTotal ?? 0) > 0;
+  const exportIslands = () => {
+    const exportSet = islands.structuralIslands ?? islands.filteredIslands;
+    void exportIslandsToJson(exportSet, modelName).catch((error) => {
+      console.error('[Islands] island export failed', error);
+    });
+  };
 
   return (
     <>
@@ -134,13 +143,23 @@ export function IslandsPanel({ islands, hasGeometry, bottomClearancePx = 88 }: I
             </>
           )}
           right={(
-            <IconButton
-              onClick={() => setShowSettings(true)}
-              className="!p-0.5"
-              title={_(msg`Scan settings`)}
-            >
-              <Settings className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
-            </IconButton>
+            <div className="flex items-center gap-1">
+              <IconButton
+                onClick={exportIslands}
+                disabled={!hasData}
+                className="!p-0.5 disabled:opacity-40"
+                title={_(msg`Export islands as JSON`)}
+              >
+                <Download className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+              </IconButton>
+              <IconButton
+                onClick={() => setShowSettings(true)}
+                className="!p-0.5"
+                title={_(msg`Scan settings`)}
+              >
+                <Settings className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+              </IconButton>
+            </div>
           )}
         />
 

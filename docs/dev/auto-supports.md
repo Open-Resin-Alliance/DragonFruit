@@ -1049,7 +1049,11 @@ npm run bench:real-models -- --corpus ~/models
 `--corpus` reads every `<name>.stl` in the directory. An optional
 `<name>.islands.json` beside it supplies the **app's** island set (the serialized
 `DetectedIsland` array; `contact` is `{x,y,z}` and `contactVoxels` may be plain
-number arrays). With no JSON the harness falls back to the in-process voxel
+number arrays). The Islands panel's download button writes exactly that file
+(`exportIslandsToJson` in `src/volumeAnalysis/Islands/exportIslands.ts`) from
+the same `structuralIslands ?? filteredIslands` set the auto-support run uses;
+the desktop app opens a native save dialog and the filename is
+`<model>.islands.json`. With no JSON the harness falls back to the in-process voxel
 detector, which finds detached starts but not the Rust overhang/minima family;
 that set can under-represent real overhangs and can leave a model unsupported
 even though it prints with the app. Use the JSON for a measurement that

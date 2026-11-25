@@ -10851,6 +10851,7 @@ export default function Home() {
               <IslandsPanel
                 islands={islandsPoc}
                 hasGeometry={!!scene.geom}
+                modelName={scene.activeModel?.name}
                 bottomClearancePx={modelStatsBottomClearancePx}
               />
             </div>
