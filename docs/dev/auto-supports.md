@@ -571,13 +571,17 @@ whole-frame structural stress on the assembled forest via
     (`buildFailed`, `unstable`, `crosses`) and left alone.
     `debugSkipAutoBracing` disables all of it.
   - **Braces and thickening are batched, not serialized.** Every action is
-    applied from the same solve: members that got a brace, promotion or
-    kickstand are added to a skip set and `reinforceOverloadedFrameMembers`
-    leaves them to the verification solve; every other overloaded shaft takes
-    one thickening step up to the cap. A second round runs only when the
+    applied from the same solve, and a brace does not suppress the diameter
+    step: a braced trunk/branch also takes its one thickening step in the same
+    batch. Only a promoted leaf is skipped (its old cone no longer exists).
+    That combination is what removes the old "brace succeeded, so never
+    thicken" residual: a 301 % trunk at 0.71 mm goes to the 1.4 mm cap in the
+    same round and verifies at 114 %. A second round runs only when the
     verification still reports overload, so converged models stay at two solves
-    and stubborn ones stop at three with the residual in the report. The frame
-    is never pushed through the old brace→re-solve→thicken→re-solve churn.
+    and stubborn ones stop at three with the residual in the report. A member
+    already at its diameter cap with no legal brace stays over and is reported;
+    no fourth solve is spent on it. The frame is never pushed through the old
+    brace→re-solve→thicken→re-solve churn.
   - **A trunk whose brace request did not land gets a plate buttress.**
     `addTargetedStressBraces` returns `bracedEntityIds`; `autoPlace` maps the
     remaining request endpoints back to their owning trunks and calls
@@ -616,7 +620,9 @@ whole-frame structural stress on the assembled forest via
     same print at 301 % buckling.
   - `reinforceOverloadedFrameMembers` scales overloaded `trunk` (`≤ 1.4 mm`),
     `branch` (`≤ 1.4 mm`), `leaf` cone body (`≤ 1.3 mm`), and `brace`
-    (`≤ 1.4 mm`) members by `clamp((util / 90)^(1/3), 1.10, 1.35)` with stepped
+    (`≤ 1.4 mm`) members by `clamp((util / 90)^(1/3), 1.10, MAX_REINFORCE_STEP_SCALE)`
+    (1.6, so a 300 % member reaches the 1.4 mm absolute cap in one step instead
+    of two) with stepped
     `isShaftBlocked` clearance fallbacks, preserves tip `contactDiameterMm`,
     and upgrades host knots before updating `reinforcedCount` and re-solving.
     The caps are deliberate: past 1.4 mm the answer is a shorter span, a

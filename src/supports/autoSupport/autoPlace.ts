@@ -153,10 +153,11 @@ import {
 
 const LOG_PREFIX = '[AutoSupport]';
 
-/** Up to two batched action passes, each followed by a verification solve:
- *  at most three beam solves instead of the old four. The first pass applies
- *  every action it can from one solve; a second pass only runs when the first
- *  verification still reports overload, so converged models stay at two solves. */
+/** Up to three batched action passes, each followed by a verification solve.
+ *  The first pass applies every action it can from one solve; later passes only
+ *  run when the verification still reports overload. Converged models stay at
+ *  two solves, a residual member gets one more thickening/brace round instead
+ *  of being left over the limit. */
 const MAX_STRESS_REINFORCE_PASSES = 2;
 /** Stress-driven braces a single feedback pass may add. The action list is
  *  severity-ordered; a cap keeps a rocking model from being wrapped at once. */
@@ -7510,8 +7511,6 @@ export function computeAutoSupportPlan(
                         )) {
                             if (action.kind === 'brace-rocking') {
                                 if (requests.length >= MAX_STRESS_BRACES_PER_PASS) continue;
-                                structurallyAddressed.add(action.aEntityId);
-                                structurallyAddressed.add(action.bEntityId);
                                 requests.push({
                                     aEntityId: action.aEntityId,
                                     bEntityId: action.bEntityId,
@@ -7544,7 +7543,6 @@ export function computeAutoSupportPlan(
                                         promotionSkips[promoted.reason] = (promotionSkips[promoted.reason] ?? 0) + 1;
                                     }
                                 } else if (requests.length < MAX_STRESS_BRACES_PER_PASS) {
-                                    structurallyAddressed.add(action.entityId);
                                     requests.push({
                                         aEntityId: action.entityId,
                                         // A member's own midpoint is where the
@@ -7564,7 +7562,6 @@ export function computeAutoSupportPlan(
                                 if (requests.length >= MAX_STRESS_BRACES_PER_PASS) continue;
                                 if (autoSettings.modelScaleEnabled === false
                                     || memberAtReinforcementCap(draft, action.entityKind, action.entityId)) {
-                                    structurallyAddressed.add(action.entityId);
                                     requests.push({
                                         aEntityId: action.entityId,
                                         atZMm: action.layerZMm,
@@ -7592,6 +7589,11 @@ export function computeAutoSupportPlan(
                             stressBracesAdded += braced.added;
                             bracedThisPass = braced.added;
                             bracedIds = new Set(braced.bracedEntityIds);
+                            // A brace and a diameter step are complementary:
+                            // do not let a successful brace suppress the
+                            // thickening that the member still needs. The
+                            // 1.4 mm cap bounds the result; only a promoted
+                            // leaf (removed by the promotion) is skipped.
                             changedThisPass = true;
                         } else if (braced.skipped > 0) {
                             console.log(LOG_PREFIX,
@@ -7623,7 +7625,10 @@ export function computeAutoSupportPlan(
                             const buttress = buttressTrunkWithKickstand(draft, modelId, trunkId, target.z, resolvedMesh ?? undefined);
                             if (!buttress.added) continue;
                             draft = buttress.draft;
-                            structurallyAddressed.add(trunkId);
+                            // A kickstand shares some load but is not a brace
+                            // on the member's own span; let the trunk thicken
+                            // in the same batch rather than suppressing the
+                            // only action that reduces its bending stress.
                             kickstandsThisPass++;
                             stressKickstandsAdded++;
                             changedThisPass = true;

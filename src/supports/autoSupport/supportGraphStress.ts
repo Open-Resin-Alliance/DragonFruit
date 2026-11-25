@@ -1946,6 +1946,10 @@ export function solveSupportFrameStress(
  *  Branches/leaves stay under the trunk so a member never reads fatter than
  *  the host carrying it; braces are ties, not columns. */
 const MAX_REINFORCED_TRUNK_DIA_MM = 1.4;
+/** Largest per-step scale. The cube-root law gives ~1.5x at a 300 % member;
+ *  capping the step at 1.35 needed a second pass just to reach the same
+ *  diameter. The 1.4 mm absolute cap still bounds the result. */
+const MAX_REINFORCE_STEP_SCALE = 1.6;
 const MAX_REINFORCED_BRANCH_DIA_MM = 1.4;
 const MAX_REINFORCED_LEAF_BODY_DIA_MM = 1.3;
 const MAX_REINFORCED_BRACE_DIA_MM = 1.4;
@@ -2085,7 +2089,7 @@ export function reinforceOverloadedFrameMembers(
         if (modelId && trunk.modelId !== modelId) continue;
 
         const root = snapshot.roots?.[trunk.rootId];
-        const idealScale = Math.min(1.35, Math.max(1.10, Math.cbrt(utilPct / 90)));
+        const idealScale = Math.min(MAX_REINFORCE_STEP_SCALE, Math.max(1.10, Math.cbrt(utilPct / 90)));
         const typedTrunk = trunk.typeId ? trunk : { ...trunk, typeId: 'trunk' as const };
 
         const computeTargetDias = (scale: number) => trunk.segments.map((seg) =>
@@ -2150,7 +2154,7 @@ export function reinforceOverloadedFrameMembers(
         if (modelId && branch.modelId !== modelId) continue;
 
         const hostKnot = snapshot.knots?.[branch.parentKnotId];
-        const idealScale = Math.min(1.35, Math.max(1.10, Math.cbrt(utilPct / 90)));
+        const idealScale = Math.min(MAX_REINFORCE_STEP_SCALE, Math.max(1.10, Math.cbrt(utilPct / 90)));
         const typedBranch = branch.typeId ? branch : { ...branch, typeId: 'branch' as const };
 
         const computeTargetDias = (scale: number) => branch.segments.map((seg) =>
@@ -2219,7 +2223,7 @@ export function reinforceOverloadedFrameMembers(
 
         const hostKnot = snapshot.knots?.[leaf.parentKnotId];
         const curBodyDia = leaf.contactCone.profile.bodyDiameterMm ?? 0.9;
-        const idealScale = Math.min(1.35, Math.max(1.10, Math.cbrt(utilPct / 90)));
+        const idealScale = Math.min(MAX_REINFORCE_STEP_SCALE, Math.max(1.10, Math.cbrt(utilPct / 90)));
 
         const computeTargetBodyDia = (scale: number) =>
             Math.min(MAX_REINFORCED_LEAF_BODY_DIA_MM, Math.max(curBodyDia, Number((curBodyDia * scale).toFixed(2))));
@@ -2259,7 +2263,7 @@ export function reinforceOverloadedFrameMembers(
         if (!brace) continue;
         if (modelId && brace.modelId !== modelId) continue;
 
-        const idealScale = Math.min(1.35, Math.max(1.10, Math.cbrt(utilPct / 90)));
+        const idealScale = Math.min(MAX_REINFORCE_STEP_SCALE, Math.max(1.10, Math.cbrt(utilPct / 90)));
         const curDia = brace.profile?.diameter ?? 1.0;
         const startPos = snapshot.knots?.[brace.startKnotId]?.pos;
         const endPos = snapshot.knots?.[brace.endKnotId]?.pos;
