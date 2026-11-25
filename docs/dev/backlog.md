@@ -2251,3 +2251,13 @@ Two smaller directions the plugin SDK notes but does not pursue:
 - **Per-material geometry on import.** The scene import payload has one material per
   model, so a multi-material source file flattens. That follows from the scene
   model, not from the plugin tier; it lands with multi-material support.
+
+## Wider trunk spacing is not a reed-bed fix
+
+Measured while tuning organic tree structure: raising `MIN_TRUNK_SPACING_MM`
+from 2.5 to 3.0 mm cut coverage 0.7 pp on `sloped-cantilever` and left the
+standalone-mast count higher on the tree corpus (a separate 3.0 mm
+cluster-spacing experiment raised trunks 47 → 58). Wider spacing makes fewer
+pillars share a crown, which is the opposite of the intended snap-off chunk.
+The 2.5 mm guard is deliberate; the levers that do shrink the reed bed are
+chunk consolidation, the root merge, and the 8-contact chunk cap.

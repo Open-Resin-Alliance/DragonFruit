@@ -305,6 +305,22 @@ and grid modes:
   `MAX_ROUTED_TRUNK_DIAGONAL_SPAN_MM` (10.5 mm),
   `TWO_LEVEL_BRANCH_REACH_MM` (8 mm), `UPPER_CLUSTER_MIN_Z_MM` (18 mm), and
   `UPPER_CLUSTER_SIBLING_RADIUS_MM` (4.5 mm).
+- **Tree chunks stop at eight contacts, and the two-level crown reaches
+  10 mm.** `MAX_CONSOLIDATION_CONTACTS_PER_CHUNK` (8) caps a chunk below the
+  user's `maxAttachmentsPerTrunk` when that is higher: one tree is a
+  hand-sized snap-off group, not a twelve-finger bush. `TWO_LEVEL_BRANCH_REACH_MM`
+  is 10 mm so an upper cluster further from a ground trunk still becomes a
+  shared `Trunk → Branch → Leaf` crown instead of a fresh mast. Terminal hops
+  already route past `MAX_LEAF_SPAN_BEFORE_BRANCH_MM` (4.5 mm) into real branch
+  shafts, which is the short-finger rule this pass relies on.
+- **Wider pillar spacing was measured and rejected.** Raising
+  `MIN_TRUNK_SPACING_MM` 2.5 → 3.0 (globally) and a separate 3.0 mm cluster
+  spacing both reduced tree consolidation: on the synthetic corpus the global
+  change cost 0.7 pp coverage and the cluster-only change raised standalone
+  trunks 47 → 58 (more masts, fewer shared crowns) while losing coverage. The
+  2.5 mm guard stays; the reed bed is attacked by consolidation and the root
+  merge, not by starving the tree layer. See `docs/dev/backlog.md`.
+
 - **Euler-Bernoulli cantilever & Euler buckling envelope**: auto-bracing braces
   Trunks, not Branches or upper dogleg diagonals, so every unbraced angled
   member is gated by actual green-state photopolymer beam mechanics parameterized

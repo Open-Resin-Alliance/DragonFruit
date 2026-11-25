@@ -32,6 +32,9 @@ export const OVERHANG_GRID_MIN_SPAN_MM = 3.0;
 
 /** Minimum XY spacing (mm) between cluster-synthesized trunks in organic mode. */
 export const MIN_TRUNK_SPACING_MM = 2.5;
+/** Tree chunks stop at eight contacts (when the user cap is higher) so one
+ *  chunk is a hand-sized snap-off group rather than a twelve-finger bush. */
+export const MAX_CONSOLIDATION_CONTACTS_PER_CHUNK = 8;
 
 /** Lateral bridge radius (mm) a single support tip reliably covers on a flat (0–15°) overhang. */
 export const FLAT_OVERHANG_BRIDGE_RADIUS_MM = 1.8;

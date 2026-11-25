@@ -20,7 +20,7 @@ const CLUSTER_MIN_RISE_MM = 0.4;
 /** Contact-cone inset (mm) below a trunk's tip where its shaft topJoint actually ends. */
 const CLUSTER_TOP_KNOT_INSET_MM = 2.5;
 /** Max lateral plan reach (mm) for a 2-level angled Branch arm carrying an elevated upper cluster. */
-export const TWO_LEVEL_BRANCH_REACH_MM = 8.0;
+export const TWO_LEVEL_BRANCH_REACH_MM = 10.0;
 
 // ---------------------------------------------------------------------------
 // Green-state photopolymer beam & buckling constants (SI: N, mm, MPa = N/mm²)

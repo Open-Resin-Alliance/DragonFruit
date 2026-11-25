@@ -136,6 +136,7 @@ import {
     MAX_LEAF_FALLBACK_SPAN_MM,
     MERGE_HOST_LOAD_WEIGHT,
     MAX_CAVITY_BRIDGE_MM,
+    MAX_CONSOLIDATION_CONTACTS_PER_CHUNK,
     MIN_TRUNK_SPACING_MM,
 } from './constants';
 
@@ -5858,7 +5859,7 @@ export function computeAutoSupportPlan(
                 conFanRadiusMm,
                 GRID_HOST_FAN_RADIUS_MM,
                 conFanMaxAngleDeg,
-                autoSettings.maxAttachmentsPerTrunk,
+                Math.min(autoSettings.maxAttachmentsPerTrunk, MAX_CONSOLIDATION_CONTACTS_PER_CHUNK),
                 draft,
                 resolvedMesh ?? undefined,
                 consolidatedOrigin,
