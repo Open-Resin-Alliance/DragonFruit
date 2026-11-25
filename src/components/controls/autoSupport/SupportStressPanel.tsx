@@ -13,7 +13,6 @@ import {
   ChevronDown,
   ClipboardCopy,
   FileText,
-  RefreshCw,
   ShieldPlus,
 } from 'lucide-react';
 import type { MessageDescriptor } from '@lingui/core';
@@ -1017,12 +1016,12 @@ function SupportStressPanelImpl({
           )}
           right={(
             <IconButton
-              onClick={runAnalyze}
-              disabled={!canAnalyze}
-              title={_(msg`Re-run printability analysis`)}
+              onClick={() => setShowStressReport(true)}
+              disabled={!hasAnyData}
+              title={_(msg`Open the full Printability Report`)}
               className="!p-1.5 disabled:opacity-40"
             >
-              <RefreshCw className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+              <FileText className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
             </IconButton>
           )}
         />
@@ -1323,25 +1322,6 @@ function SupportStressPanelImpl({
                   </div>
                 )}
               </div>
-            )}
-
-            {/* 5. Printability Report Trigger */}
-            {hasAnyData && (
-              <button
-                type="button"
-                onClick={() => setShowStressReport(true)}
-                title={_(msg`Open the full Printability Report`)}
-                className="w-full rounded-md border px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide flex items-center justify-between"
-                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-              >
-                <span className="flex items-center gap-1.5">
-                  <FileText className="h-3.5 w-3.5" />
-                  <span>{_(msg`Printability Report`)}</span>
-                </span>
-                <span className="text-[10px] normal-case tracking-normal font-medium" style={{ color: statusAccentColor(summary.level) }}>
-                  {formatStatusTitle(_, summary.level)}
-                </span>
-              </button>
             )}
 
             {/* 6. Footer Action Bar */}
