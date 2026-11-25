@@ -547,7 +547,7 @@ msgstr "<0>{overwriteCollisionCount}</0> archivos que va a escribir este proceso
 #. placeholder {2}: recordedBuildVolumeMm.height
 #: src/components/modals/ScenePrinterMismatchModal.tsx:184
 msgid "<0>{recordedLabel}</0> has a build volume of {0} × {1} × {2} mm."
-msgstr "tiene un volumen de impresión de"
+msgstr "<0>{recordedLabel}</0> tiene un volumen de impresión de {0} × {1} × {2} mm."
 
 #: src/components/scene/MeshRepairConfirmModal.tsx:131
 msgid "<0>Disclaimer:</0> Repair is recommended. Loading this mesh as-is may cause slicing errors or print failures, and successful output cannot be guaranteed."
