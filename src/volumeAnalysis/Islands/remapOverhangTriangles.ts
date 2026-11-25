@@ -87,14 +87,14 @@ export function remapOverhangTriangleIds(
       resolved++;
       if (!remapped.includes(mapped)) remapped.push(mapped);
     }
-    if (remapped.length === 0) {
+    if (resolved < centroids.length * 0.5) {
       if (process.env.NODE_ENV !== 'production') {
         console.warn(
-          `[IslandsPerf] overhang remap failed for ${region.triangleIds.length} triangle(s) `
-          + `on geometry ${geometry.uuid}; overlay will be hidden rather than drawn on wrong faces`,
+          `[IslandsPerf] overhang remap matched ${resolved}/${centroids.length} triangle(s) `
+          + `on geometry ${geometry.uuid}; keeping the scan ids so the overlay still renders`,
         );
       }
-      return { ...region, triangleIds: [] };
+      return region;
     }
     if (resolved < centroids.length && process.env.NODE_ENV !== 'production') {
       console.warn(
