@@ -170,6 +170,10 @@ const MAX_STRESS_KICKSTANDS_PER_PASS = 2;
  *  neighbour inside the aesthetic brace length can still take a longer lateral
  *  tie instead of staying over its limit. Clearance/angle gates still apply. */
 const MAX_CAPPED_STRUT_SPAN_MM = 16;
+/** Last-resort cap lift for a capped member with no brace, plate strut or
+ *  model-coupled bridge. Bounded: a trunk may reach 1.6 mm only in this case;
+ *  the normal structure cap stays 1.4 mm. */
+const MAX_CAPPED_EXCEPTION_DIA_MM = 1.6;
 /** Cross repair is optional geometry hygiene: the local host knot first, then
  *  a bounded number of remote hosts. Unresolved crossings stay flagged; making
  *  every one pay for a forest-wide branch build was the resize phase's cost. */
@@ -7719,6 +7723,45 @@ export function computeAutoSupportPlan(
                         }
                     }
 
+                    // A capped member with no brace/strut left gets a bounded
+                    // cap exception (1.6 mm trunk / 1.5 branch), so the last
+                    // residual is a shaft step rather than an unreachable
+                    // action. The normal cap stays 1.4 mm.
+                    const capOverrides = new Map<string, number>();
+                    for (const target of cappedStrutTargets) {
+                        // The cap exception is the last stage for a member that
+                        // was already over at the cap in this solve. A brace or
+                        // strut in the same batch may still be insufficient
+                        // (the wedge brace is), so the bounded step applies
+                        // alongside it rather than being suppressed.
+                        const segmentSource = target.entityKind === 'trunk'
+                            ? draft.trunks[target.entityId]
+                            : target.entityKind === 'branch'
+                                ? draft.branches[target.entityId]
+                                : null;
+                        const maxSegmentDia = segmentSource && segmentSource.segments.length > 0
+                            ? Math.max(...segmentSource.segments.map((seg) => seg.diameter))
+                            : 0;
+                        const overloadedDias = frameStress.memberSegments
+                            .filter((seg) => seg.entityId === target.entityId && seg.utilizationPct > 100)
+                            .map((seg) => seg.diameterMm);
+                        // A contact cone is a separate member at 0.7 x its
+                        // body; a diameter step on the shaft cannot reduce it,
+                        // and a fatter cone body would rise above the tip.
+                        // Skip the exception when every overloaded member on
+                        // the entity is that cone.
+                        if (maxSegmentDia > 0 && overloadedDias.length > 0
+                            && overloadedDias.every((dia) => dia < maxSegmentDia * 0.9)) {
+                            continue;
+                        }
+                        if (target.entityKind === 'trunk') capOverrides.set(target.entityId, MAX_CAPPED_EXCEPTION_DIA_MM);
+                        else if (target.entityKind === 'branch') capOverrides.set(target.entityId, 1.5);
+                    }
+                    if (capOverrides.size > 0) {
+                        console.log(LOG_PREFIX,
+                            `Stress cap exception: ${capOverrides.size} capped shaft(s) take a bounded diameter step`);
+                    }
+
                     // Every action is applied from the same first solve: members
                     // that got a brace/promotion/kickstand are left to the
                     // verification solve, the rest take one thickening step up
@@ -7730,6 +7773,7 @@ export function computeAutoSupportPlan(
                             resolvedMesh ?? undefined,
                             modelId,
                             structurallyAddressed,
+                            capOverrides,
                         );
                         if (reinforced.changed) {
                             draft = reinforced.snapshot;

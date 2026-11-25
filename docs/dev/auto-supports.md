@@ -646,6 +646,21 @@ whole-frame structural stress on the assembled forest via
     member tip. This is the fallback for a capped shaft with no brace host. If
     the geometry offers no downward model surface inside 12 mm, no bridge is
     added and the residual stays visible.
+  - **A capped member with no working alternative takes one bounded step.**
+    The last stage is the cap exception: a member already over its limit at the
+    diameter cap gets `MAX_CAPPED_EXCEPTION_DIA_MM` (1.6 mm trunk, 1.5 mm
+    branch) through `reinforceOverloadedFrameMembers`' `capOverrides`, alongside
+    any brace/strut the batch could still place. It is deliberately not a
+    second normal pass: the default caps stay 1.4 mm, only a member that was
+    already over at the cap qualifies, and the run logs
+    `Stress cap exception: N capped member(s) ...`. The step applies to a
+    **shaft** overload only. A contact cone is a separate frame member at
+    0.7 × its body diameter; thickening the shaft cannot reduce it, and raising
+    the cone body would lift its socket above the contact tip (the
+    `aboveContact` check tolerates 0.01 mm). On `steep-flat-wedge` the last
+    114 % member is exactly that cone (0.98 mm = 0.7 × 1.4), so the stage
+    deliberately declines it; the remaining fix is a tapered-cone stress
+    member, not another diameter step.
   - **The tip contact check is biaxial.** `biaxialContactStressMpa` compares
     `√(σ_n² + 3τ²)` — the vertical peel plus the layer's lateral drag — against
     the support break strength, so a contact sheared by the diaphragm is counted

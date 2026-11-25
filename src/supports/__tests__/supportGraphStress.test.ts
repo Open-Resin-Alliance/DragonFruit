@@ -944,3 +944,44 @@ test('a twig sharing a support tip becomes a model-coupled frame member', () => 
     assert.ok(tipNode && !tipNode.fixed, 'support tip stays free and is shared');
     assert.ok(graph.nodes.some((n) => n.kind === 'model' && n.fixed), 'model end is a fixed node');
 });
+
+test('a bounded cap override lets an at-cap trunk take one more step', () => {
+    const draft: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            rEx: { id: 'rEx', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            tEx: {
+                id: 'tEx', modelId: 'm', rootId: 'rEx',
+                segments: [
+                    { id: 'sEx', diameter: 1.4, bottomJoint: { id: 'je0', pos: { x: 0, y: 0, z: 1 }, diameter: 1.4 }, topJoint: { id: 'je1', pos: { x: 0, y: 0, z: 10 }, diameter: 1.4 } },
+                    { id: 'sEx2', diameter: 1.4, bottomJoint: { id: 'je1', pos: { x: 0, y: 0, z: 10 }, diameter: 1.4 }, topJoint: { id: 'je2', pos: { x: 0, y: 0, z: 19 }, diameter: 1.4 } },
+                ],
+                contactCone: { id: 'cEx', pos: { x: 0, y: 0, z: 21.5 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.28, bodyDiameterMm: 1.4, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+    };
+    const graph = buildSupportGraph(draft, 'm');
+    const report = solveSupportFrameStress(graph, undefined, {
+        explicitNodalLoads: new Map([[graph.nodes.length - 1, [0.3, 0, 0.6, 0, 0, 0]]]),
+    });
+    assert.ok(report.maxMemberUtilizationPct > 100);
+    const reinforced = reinforceOverloadedFrameMembers(
+        draft,
+        report,
+        undefined,
+        'm',
+        undefined,
+        new Map([['tEx', 1.6]]),
+    );
+    assert.equal(reinforced.changed, true);
+    assert.equal(reinforced.snapshot.trunks.tEx.segments[0].diameter, 1.6,
+        'the lower segment takes the bounded 1.6 mm exception');
+    assert.equal(reinforced.snapshot.trunks.tEx.segments[1].diameter, 1.6,
+        'the contact segment also takes the bounded step');
+    assert.equal(reinforced.snapshot.trunks.tEx.contactCone?.profile.bodyDiameterMm, 1.4,
+        'the cone body stays at the normal cap so it cannot rise above the tip');
+});

@@ -2061,6 +2061,9 @@ export function reinforceOverloadedFrameMembers(
      *  in the same batch; they are left for the verification solve instead of
      *  being thickened as well. */
     skipEntityIds?: ReadonlySet<string>,
+    /** Bounded per-entity cap lift for a capped member with no brace/strut
+     *  available. Absent = the normal 1.4/1.3/1.4 caps. */
+    capOverrides?: ReadonlyMap<string, number>,
 ): ReinforceFrameMembersResult {
     const peakUtilByTrunkId = new Map<string, number>();
     const peakUtilByBranchId = new Map<string, number>();
@@ -2131,8 +2134,9 @@ export function reinforceOverloadedFrameMembers(
         const idealScale = Math.min(MAX_REINFORCE_STEP_SCALE, Math.max(1.10, Math.cbrt(utilPct / 90)));
         const typedTrunk = trunk.typeId ? trunk : { ...trunk, typeId: 'trunk' as const };
 
+        const trunkCap = capOverrides?.get(trunkId) ?? MAX_REINFORCED_TRUNK_DIA_MM;
         const computeTargetDias = (scale: number) => trunk.segments.map((seg) =>
-            Math.min(MAX_REINFORCED_TRUNK_DIA_MM, Math.max(seg.diameter, Number((seg.diameter * scale).toFixed(2)))));
+            Math.min(trunkCap, Math.max(seg.diameter, Number((seg.diameter * scale).toFixed(2)))));
 
         const acceptedScale = tryClearedScale(idealScale, (scale) => {
             const targetDias = computeTargetDias(scale);
@@ -2174,7 +2178,13 @@ export function reinforceOverloadedFrameMembers(
                 ...trunk.contactCone,
                 profile: {
                     ...trunk.contactCone.profile,
-                    bodyDiameterMm: Math.max(trunk.contactCone.profile.bodyDiameterMm, topSegDia),
+                    // A cap exception may fatten the top shaft, but the cone
+                    // body staying at the normal cap keeps it from poking
+                    // above the contact tip (the above-contact check).
+                    bodyDiameterMm: Math.min(
+                        Math.max(trunk.contactCone.profile.bodyDiameterMm, topSegDia),
+                        MAX_REINFORCED_TRUNK_DIA_MM,
+                    ),
                 },
             }
             : trunk.contactCone;
@@ -2196,8 +2206,9 @@ export function reinforceOverloadedFrameMembers(
         const idealScale = Math.min(MAX_REINFORCE_STEP_SCALE, Math.max(1.10, Math.cbrt(utilPct / 90)));
         const typedBranch = branch.typeId ? branch : { ...branch, typeId: 'branch' as const };
 
+        const branchCap = capOverrides?.get(branchId) ?? MAX_REINFORCED_BRANCH_DIA_MM;
         const computeTargetDias = (scale: number) => branch.segments.map((seg) =>
-            Math.min(MAX_REINFORCED_BRANCH_DIA_MM, Math.max(seg.diameter, Number((seg.diameter * scale).toFixed(2)))));
+            Math.min(branchCap, Math.max(seg.diameter, Number((seg.diameter * scale).toFixed(2)))));
 
         const acceptedScale = tryClearedScale(idealScale, (scale) => {
             const targetDias = computeTargetDias(scale);
@@ -2239,7 +2250,10 @@ export function reinforceOverloadedFrameMembers(
                 ...branch.contactCone,
                 profile: {
                     ...branch.contactCone.profile,
-                    bodyDiameterMm: Math.max(branch.contactCone.profile.bodyDiameterMm, firstSegDia),
+                    bodyDiameterMm: Math.min(
+                        Math.max(branch.contactCone.profile.bodyDiameterMm, firstSegDia),
+                        MAX_REINFORCED_BRANCH_DIA_MM,
+                    ),
                 },
             }
             : branch.contactCone;
@@ -2265,7 +2279,7 @@ export function reinforceOverloadedFrameMembers(
         const idealScale = Math.min(MAX_REINFORCE_STEP_SCALE, Math.max(1.10, Math.cbrt(utilPct / 90)));
 
         const computeTargetBodyDia = (scale: number) =>
-            Math.min(MAX_REINFORCED_LEAF_BODY_DIA_MM, Math.max(curBodyDia, Number((curBodyDia * scale).toFixed(2))));
+            Math.min(capOverrides?.get(leafId) ?? MAX_REINFORCED_LEAF_BODY_DIA_MM, Math.max(curBodyDia, Number((curBodyDia * scale).toFixed(2))));
 
         const acceptedScale = tryClearedScale(idealScale, (scale) => {
             const newBodyDia = computeTargetBodyDia(scale);
@@ -2308,7 +2322,7 @@ export function reinforceOverloadedFrameMembers(
         const endPos = snapshot.knots?.[brace.endKnotId]?.pos;
 
         const computeTargetDia = (scale: number) =>
-            Math.min(MAX_REINFORCED_BRACE_DIA_MM, Math.max(curDia, Number((curDia * scale).toFixed(2))));
+            Math.min(capOverrides?.get(braceId) ?? MAX_REINFORCED_BRACE_DIA_MM, Math.max(curDia, Number((curDia * scale).toFixed(2))));
 
         const acceptedScale = tryClearedScale(idealScale, (scale) => {
             const newDia = computeTargetDia(scale);
