@@ -12,6 +12,8 @@ import {
   CheckCircle2,
   ChevronDown,
   ClipboardCopy,
+  Eye,
+  EyeOff,
   FileText,
   ShieldPlus,
 } from 'lucide-react';
@@ -21,6 +23,7 @@ import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+import { isSupportEditInteractionActive } from '@/supports/interaction/gizmoInteractionLock';
 import {
   buildSupportGraph,
   classifyToppleRisk,
@@ -72,7 +75,7 @@ import type { SupportTypeId } from '@/supports/supportTypeRegistry';
 import { AUTO_SUPPORT_SECTION_CARD } from './autoSupportPanelTabs';
 
 const REINFORCE_HISTORY_LABEL = msg`Reinforce overloaded supports`;
-const AUTO_REFRESH_DEBOUNCE_MS = 160;
+const AUTO_REFRESH_DEBOUNCE_MS = 300;
 
 interface StructuralRefs {
   roots: SupportState['roots'];
@@ -130,20 +133,6 @@ function activeSupportStrengthMpa(): number {
 function activeMemberStrengthMpa(): number {
   return Math.max(0.01, getActiveMaterialProfile()?.tensileStrengthMpa ?? DEFAULT_RESIN_TENSILE_STRENGTH_MPA);
 }
-
-const OVERLAY_ON_LABEL = msg({ message: 'Overlay ON', comment: 'Toggle button for 3D support beam stress color overlay. Keep short.' });
-const OVERLAY_OFF_LABEL = msg({ message: 'Overlay OFF', comment: 'Toggle button for 3D support beam stress color overlay. Keep short.' });
-
-/** Matches AutoSupportPresetRow's standard DragonFruit toggle treatment. */
-const TOGGLE_ON_STYLE: React.CSSProperties = {
-  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
-  color: 'var(--text-strong)',
-};
-
-const TOGGLE_OFF_STYLE: React.CSSProperties = {
-  background: 'var(--surface-1)',
-};
 
 const KIND_LABELS: Partial<Record<SupportTypeId, MessageDescriptor>> = {
   trunk: msg`Trunk`,
@@ -616,7 +605,6 @@ function PeelProfileGraph({
 
 export interface SupportStressPanelProps {
   activeModelId?: string;
-  hasGeometry: boolean;
   /** True after an island/overhang scan has completed for the current model pose. */
   hasScanned?: boolean;
   /** Stable signature for the model pose so floating/topple checks track transforms. */
@@ -630,7 +618,6 @@ export interface SupportStressPanelProps {
 
 function SupportStressPanelImpl({
   activeModelId,
-  hasGeometry,
   hasScanned,
   poseKey,
   islands,
@@ -798,31 +785,6 @@ function SupportStressPanelImpl({
     }
   }, [activeModelId, report]);
 
-  const runAnalyze = React.useCallback(() => {
-    if (!activeModelId) return;
-    setReinforceFeedback(null);
-    const snap = getSnapshot();
-    const mesh = getModelMesh(activeModelId);
-    const profile = mesh ? getCachedRepresentativeLayers(mesh, getActiveMaterialProfile()?.layerHeightMm) : undefined;
-    const graph = buildSupportGraph(snap, activeModelId);
-    lastSolvedRefsRef.current = captureStructuralRefs(snap);
-    if (graph.rootCount === 0 || graph.tipCount === 0) {
-      lastOwnReportRef.current = null;
-      clearModelFrameStress(activeModelId);
-      refreshDemandAndTopple(activeModelId, snap, mesh, profile, null);
-      return;
-    }
-    const auto = getSettings().autoSupport;
-    const nextReport = solveSupportFrameStress(graph, profile, {
-      areaPerSupportMm2: auto.areaPerSupportMm2,
-      supportStrengthMpa: activeSupportStrengthMpa(),
-      memberStrengthMpa: activeMemberStrengthMpa(),
-    });
-    lastOwnReportRef.current = nextReport;
-    setModelFrameStress(activeModelId, nextReport);
-    refreshDemandAndTopple(activeModelId, snap, mesh, profile, nextReport);
-  }, [activeModelId, refreshDemandAndTopple]);
-
   const handleReinforce = React.useCallback(() => {
     if (!activeModelId || !report || report.overloadedMembers === 0) return;
     const before = captureSupportEditSnapshot();
@@ -872,6 +834,13 @@ function SupportStressPanelImpl({
       clearTimer();
       autoRefreshTimerRef.current = window.setTimeout(() => {
         autoRefreshTimerRef.current = null;
+        // Resizing/dragging a support writes structural state continuously; do
+        // not block the gizmo with a 200ms+ beam solve and demand evaluation
+        // mid-drag. Re-arm until the edit and its post-drag guard clear.
+        if (isSupportEditInteractionActive()) {
+          scheduleAnalysis();
+          return;
+        }
         const latestSnap = getSnapshot();
         const latestRefs = captureStructuralRefs(latestSnap);
         if (lastSolvedRefsRef.current && sameStructuralRefs(latestRefs, lastSolvedRefsRef.current)) {
@@ -929,7 +898,7 @@ function SupportStressPanelImpl({
       unsubscribe();
       clearTimer();
     };
-  }, [activeModelId, hasScanned, islandsKey, refreshDemandAndTopple]);
+  }, [activeModelId, hasScanned, islandsKey, overlayEnabled, refreshDemandAndTopple]);
 
   const layers = report && report.layerProfile.length > 0
     ? report.layerProfile
@@ -987,7 +956,6 @@ function SupportStressPanelImpl({
   const coverageMeasured = Boolean(printability && hasScanned !== false);
   const showCoverageRow = Boolean(coverageMeasured || hasScanned === false);
   const showStabilityRow = Boolean(topple || isFloatingUnsupported);
-  const canAnalyze = Boolean(hasGeometry && activeModelId);
   const canReinforce = Boolean(report && report.overloadedMembers > 0);
   const overloadedTotal = summary.overloadedCount;
   const showHotspots = Boolean(
@@ -1015,14 +983,27 @@ function SupportStressPanelImpl({
             </>
           )}
           right={(
-            <IconButton
-              onClick={() => setShowStressReport(true)}
-              disabled={!hasAnyData}
-              title={_(msg`Open the full Printability Report`)}
-              className="!p-1.5 disabled:opacity-40"
-            >
-              <FileText className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
-            </IconButton>
+            <div className="flex items-center gap-0.5">
+              <IconButton
+                onClick={() => setStressOverlayEnabled(!overlayEnabled)}
+                aria-pressed={overlayEnabled}
+                disabled={!hasAnyData}
+                title={_(msg`Show unsupported areas and support stress on the model`)}
+                className="!p-1.5 disabled:opacity-40"
+              >
+                {overlayEnabled
+                  ? <Eye className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
+                  : <EyeOff className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />}
+              </IconButton>
+              <IconButton
+                onClick={() => setShowStressReport(true)}
+                disabled={!hasAnyData}
+                title={_(msg`Open the full Printability Report`)}
+                className="!p-1.5 disabled:opacity-40"
+              >
+                <FileText className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+              </IconButton>
+            </div>
           )}
         />
 
@@ -1322,72 +1303,20 @@ function SupportStressPanelImpl({
               </div>
             )}
 
-            {/* 6. Footer Action Bar */}
-            {!report ? (
-              printability ? (
-                <div className="flex gap-1.5">
-                  <Button
-                    onClick={() => setStressOverlayEnabled(!overlayEnabled)}
-                    aria-pressed={overlayEnabled}
-                    title={_(msg`Show unsupported areas and support stress on the model`)}
-                    variant="secondary"
-                    size="auto"
-                    className="min-w-0 flex-1 !h-8 px-2 text-[11px]"
-                    style={overlayEnabled ? TOGGLE_ON_STYLE : TOGGLE_OFF_STYLE}
-                  >
-                    <span className="truncate">{_(overlayEnabled ? OVERLAY_ON_LABEL : OVERLAY_OFF_LABEL)}</span>
-                  </Button>
-                  <Button
-                    onClick={runAnalyze}
-                    disabled={!canAnalyze}
-                    title={_(msg`Solve 3D support beam frame & rigid-body peel loads on existing supports`)}
-                    variant="tinted-accent"
-                    size="auto"
-                    className="min-w-0 flex-1 !h-8 px-2 text-[11px] gap-1 disabled:opacity-50"
-                  >
-                    <Activity className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate">{_(msg`Analyze`)}</span>
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  onClick={runAnalyze}
-                  disabled={!canAnalyze}
-                  title={_(msg`Solve 3D support beam frame & rigid-body peel loads on existing supports`)}
-                  variant="tinted-accent"
-                  size="auto"
-                  className="w-full !h-8 text-[11px] gap-1.5 disabled:opacity-50"
-                >
-                  <Activity className="h-3.5 w-3.5" />
-                  <span>{_(msg`Analyze Supports`)}</span>
-                </Button>
-              )
-            ) : (
+            {(canReinforce || reinforceFeedback) && (
               <>
-                <div className="flex gap-1.5">
-                  <Button
-                    onClick={() => setStressOverlayEnabled(!overlayEnabled)}
-                    aria-pressed={overlayEnabled}
-                    title={_(msg`Show unsupported areas and support stress on the model`)}
-                    variant="secondary"
-                    size="auto"
-                    className="min-w-0 flex-1 !h-8 px-2 text-[11px]"
-                    style={overlayEnabled ? TOGGLE_ON_STYLE : TOGGLE_OFF_STYLE}
-                  >
-                    <span className="truncate">{_(overlayEnabled ? OVERLAY_ON_LABEL : OVERLAY_OFF_LABEL)}</span>
-                  </Button>
+                {canReinforce && (
                   <Button
                     onClick={handleReinforce}
-                    disabled={!canReinforce}
                     title={_(msg`Thicken overloaded trunks, branches, leaves, and braces`)}
-                    variant={canReinforce ? 'tinted-warning' : 'secondary'}
+                    variant="tinted-warning"
                     size="auto"
-                    className="min-w-0 flex-1 !h-8 px-2 text-[11px] gap-1 disabled:opacity-45"
+                    className="w-full !h-8 text-[11px] gap-1.5"
                   >
                     <ShieldPlus className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate">{_(msg`Reinforce`)}</span>
+                    <span>{_(msg`Reinforce`)}</span>
                   </Button>
-                </div>
+                )}
 
                 {reinforceFeedback && (
                   <div

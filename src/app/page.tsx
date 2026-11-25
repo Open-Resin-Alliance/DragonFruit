@@ -10835,7 +10835,6 @@ export default function Home() {
                 >
                   <SupportStressPanel
                     activeModelId={scene.activeModelId ?? undefined}
-                    hasGeometry={!!scene.geom}
                     hasScanned={islandsPoc.hasScanned}
                     poseKey={islandsPoc.poseKey}
                     islands={islandsPoc.structuralIslands ?? islandsPoc.filteredIslands}
