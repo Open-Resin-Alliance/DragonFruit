@@ -1294,6 +1294,64 @@ export function logAutoPlaceTimings(timings: AutoPlaceTimings | null | undefined
  * This is the same sequence used by manual placement clicks.
  * Returns the decision kind so the orchestrator can tally.
  */
+/**
+ * Contact points for a start that cannot be reached at its raw contact.
+ *
+ * The recipe is a base support, but the exact voxel contact can sit behind a
+ * pocket wall or under a lip. Wiggle across the island's own base footprint
+ * (the scan's contact voxels) before giving up: a manual support does exactly
+ * this when it clicks a clear spot at the edge of the marked island.
+ */
+function startContactCandidates(
+    island: DetectedIsland,
+    mesh: THREE.Mesh | undefined,
+    modelId: string,
+    areaPerSupportMm2: number,
+): CandidatePoint[] {
+    const points: Array<{ x: number; y: number }> = [{ x: island.contact.x, y: island.contact.y }];
+    const voxels = island.contactVoxels;
+    if (voxels && voxels.count > 0) {
+        const step = Math.max(1, Math.floor(voxels.count / 10));
+        for (let i = 0; i < voxels.count; i += step) {
+            points.push({ x: footprintX(voxels, i), y: footprintY(voxels, i) });
+        }
+    } else {
+        for (const radius of [0.35, 0.7, 1.05]) {
+            for (let k = 0; k < 8; k++) {
+                const angle = (k * Math.PI) / 4;
+                points.push({
+                    x: island.contact.x + Math.cos(angle) * radius,
+                    y: island.contact.y + Math.sin(angle) * radius,
+                });
+            }
+        }
+    }
+    const seen = new Set<string>();
+    const candidates: CandidatePoint[] = [];
+    for (const point of points) {
+        const key = `${point.x.toFixed(3)}:${point.y.toFixed(3)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const normal = island.surfaceNormal ?? (mesh
+            ? closestSurfaceNormal(mesh, new THREE.Vector3(point.x, point.y, island.baseZ))
+                ?? resolveSurfaceNormal({ x: point.x, y: point.y, z: island.baseZ }, mesh).normal
+            : { x: 0, y: 0, z: -1 });
+        candidates.push({
+            id: `start-${island.id}-${candidates.length}`,
+            tipPos: { x: point.x, y: point.y, z: island.baseZ },
+            tipNormal: normal,
+            modelId,
+            source: island.source,
+            islandAreaMm2: areaPerSupportMm2,
+            zHeight: island.baseZ,
+            priority: 0,
+            gridPoint: false,
+            interior: false,
+        });
+    }
+    return candidates;
+}
+
 function placeOneCandidate(
     candidate: CandidatePoint,
     draft: SupportState,
@@ -6126,29 +6184,15 @@ export function computeAutoSupportPlan(
 
                 let candidates: CandidatePoint[];
                 if (isStart) {
-                    // A start is the first cross-section. A footprint point a
-                    // few tenths higher lands on the island's upper/side face
-                    // and does not hold the first layers; the fan then repeats
-                    // every pass because the start still reads 0/N. The recipe
-                    // contact is the base point itself.
-                    candidates = [{
-                        id: `start-${island.id}-base`,
-                        tipPos: { x: island.contact.x, y: island.contact.y, z: island.contact.z },
-                        tipNormal: island.surfaceNormal
-                            ?? (resolvedMesh
-                                ? closestSurfaceNormal(
-                                    resolvedMesh,
-                                    new THREE.Vector3(island.contact.x, island.contact.y, island.contact.z),
-                                ) ?? resolveSurfaceNormal(island.contact, resolvedMesh).normal
-                                : resolveSurfaceNormal(island.contact, resolvedMesh ?? undefined).normal),
+                    // The recipe contact is the base, but the exact voxel can
+                    // sit behind a pocket wall. Try clear points across the
+                    // island's own base footprint before declaring a pancake.
+                    candidates = startContactCandidates(
+                        island,
+                        resolvedMesh,
                         modelId,
-                        source: island.source,
-                        islandAreaMm2: autoSettings.areaPerSupportMm2,
-                        zHeight: island.contact.z,
-                        priority: 0,
-                        gridPoint: false,
-                        interior: false,
-                    }];
+                        autoSettings.areaPerSupportMm2,
+                    );
                 } else {
                     candidates = buildGapFillCandidates([island], autoSettings, eligible, 0.05, resolvedMesh, {
                         coverageTarget,
@@ -6201,6 +6245,14 @@ export function computeAutoSupportPlan(
                 for (const candidate of candidates) {
                     if (placeOne(candidate) === 'reject') continue;
                     placedThisPass++;
+                    if (isStart) {
+                        const after = assessStartSupport(
+                            island,
+                            collectSupportTips(draft, modelId),
+                            resolvedMesh,
+                        );
+                        if (!after.pancakeRisk) break;
+                    }
                 }
             }
             closureContactsAdded += placedThisPass;
