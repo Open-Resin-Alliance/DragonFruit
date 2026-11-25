@@ -129,9 +129,9 @@ function sizedConeClipsModel(
 ): boolean {
     if (!mesh) return false;
     // The router's SDF gate already cleared the base body. Only a cone whose
-    // sizing override made it wider than that needs the exact recheck; applying
-    // it to every cone rejects valid short near-surface starts.
-    if (cone.profile.bodyDiameterMm <= baseBodyDiameterMm + 0.02) return false;
+    // sizing override made it materially wider needs the exact recheck; applying
+    // it to every near-surface start rejects valid supports (v39).
+    if (cone.profile.bodyDiameterMm <= baseBodyDiameterMm + 0.2) return false;
     const start = renderedConeStart(cone);
     const socket = getFinalSocketPosition(cone);
     const dx = socket.x - start.x;
