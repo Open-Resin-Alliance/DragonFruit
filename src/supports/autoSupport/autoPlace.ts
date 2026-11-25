@@ -6135,7 +6135,12 @@ export function computeAutoSupportPlan(
                         id: `start-${island.id}-base`,
                         tipPos: { x: island.contact.x, y: island.contact.y, z: island.contact.z },
                         tipNormal: island.surfaceNormal
-                            ?? resolveSurfaceNormal(island.contact, resolvedMesh ?? undefined).normal,
+                            ?? (resolvedMesh
+                                ? closestSurfaceNormal(
+                                    resolvedMesh,
+                                    new THREE.Vector3(island.contact.x, island.contact.y, island.contact.z),
+                                ) ?? resolveSurfaceNormal(island.contact, resolvedMesh).normal
+                                : resolveSurfaceNormal(island.contact, resolvedMesh ?? undefined).normal),
                         modelId,
                         source: island.source,
                         islandAreaMm2: autoSettings.areaPerSupportMm2,
@@ -6173,6 +6178,15 @@ export function computeAutoSupportPlan(
                     }];
                 }
                 if (candidates.length === 0) continue;
+                if (isStart) {
+                    // Keep the start at its base point. placeOneCandidate's
+                    // vertical resolver can walk to a far top face when the
+                    // contact is in a pocket; the nearest BVH face is the
+                    // readable surface the user picks by hand.
+                    for (const candidate of candidates) {
+                        preResolvedCandidates.add(candidate);
+                    }
+                }
                 // A voxel/minima start carries no surface normal. The gap
                 // candidate falls back to straight down, which sends the
                 // trunk into the model on a side/steep face even though a
@@ -7479,6 +7493,13 @@ export function computeAutoSupportPlan(
                 .filter((island) => island.startIsland === true && !island.interior && !island.grounded)
                 .map((island) => {
                     const status = assessStartSupport(island, startSupportTips, resolvedMesh);
+                    if (status.pancakeRisk) {
+                        console.warn(
+                            `[AutoSupport] Under-supported start ${island.id} at `
+                            + `(${island.contact.x.toFixed(2)}, ${island.contact.y.toFixed(2)}, Z${island.baseZ.toFixed(2)}) `
+                            + `-- ${status.contacts}/${status.minContacts} contacts, coverage ${(status.coverage * 100).toFixed(1)}%`,
+                        );
+                    }
                     return {
                         id: island.id,
                         areaMm2: status.areaMm2,
