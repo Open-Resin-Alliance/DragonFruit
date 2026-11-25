@@ -1,4 +1,6 @@
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
+import { footprintBounds } from '../../volumeAnalysis/Islands/voxelFootprint';
+import { computeRegionCoverage } from './coverage';
 
 /**
  * First-cross-section ("island start") support recipe.
@@ -86,4 +88,60 @@ export function startFootprintAreaMm2(island: DetectedIsland): number {
     const voxels = island.contactVoxels;
     if (voxels && voxels.count > 0) return voxels.count * 0.25 * 0.25;
     return 0.01;
+}
+
+
+
+/** Contacts that can actually touch this footprint (bbox padded by the disc). */
+export function countIslandContacts(
+    island: DetectedIsland,
+    tips: ReadonlyArray<{ x: number; y: number; z: number }>,
+    radiusMm: number,
+): number {
+    const bounds = island.contactVoxels ? footprintBounds(island.contactVoxels) : null;
+    let contacts = 0;
+    for (const tip of tips) {
+        if (bounds) {
+            if (tip.x >= bounds.minX - radiusMm && tip.x <= bounds.maxX + radiusMm
+                && tip.y >= bounds.minY - radiusMm && tip.y <= bounds.maxY + radiusMm) {
+                contacts += 1;
+            }
+        } else if (Math.hypot(tip.x - island.contact.x, tip.y - island.contact.y) <= radiusMm * 1.5) {
+            contacts += 1;
+        }
+    }
+    return contacts;
+}
+
+export interface StartSupportStatus {
+    areaMm2: number;
+    contacts: number;
+    coverage: number;
+    uncoveredAreaMm2: number;
+    minContacts: number;
+    pancakeRisk: boolean;
+}
+
+/** Recipe compliance for one start at the current draft. */
+export function assessStartSupport(
+    island: DetectedIsland,
+    tips: ReadonlyArray<{ x: number; y: number; z: number }>,
+    mesh?: unknown,
+): StartSupportStatus {
+    const areaMm2 = startFootprintAreaMm2(island);
+    const recipe = startRecipeForArea(areaMm2);
+    const sameLayer = sameLayerStartTips(tips, island.baseZ);
+    const contacts = countIslandContacts(island, sameLayer, recipe.coverageRadiusMm);
+    const voxels = island.contactVoxels;
+    const coverage = voxels && voxels.count > 0
+        ? computeRegionCoverage(island, sameLayer, recipe.coverageRadiusMm, mesh as never)
+        : contacts > 0 ? 1 : 0;
+    return {
+        areaMm2,
+        contacts,
+        coverage,
+        uncoveredAreaMm2: areaMm2 * Math.max(0, 1 - coverage),
+        minContacts: recipe.minContacts,
+        pancakeRisk: contacts < recipe.minContacts || coverage < recipe.coverageTarget,
+    };
 }

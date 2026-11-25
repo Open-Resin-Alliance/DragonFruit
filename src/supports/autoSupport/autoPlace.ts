@@ -56,9 +56,19 @@ import {
     collectSupportTips,
     computeRegionCoverage,
     coverageRadiusForRegion,
+    TIP_COVERAGE_RADIUS_MM,
 } from './coverage';
 import { sizeParameters, presetForArea, modelSizingFactors, RESIN_DENSITY_G_PER_MM3 } from './parameterSizing';
 import { computeLoadBudget, type PlacedContact } from './loadBudget';
+import {
+    START_SUPPORT_CONSTANTS,
+    assessStartSupport,
+    countIslandContacts,
+    markStartIslands,
+    sameLayerStartTips,
+    startFootprintAreaMm2,
+    startRecipeForArea,
+} from './startIslands';
 import type { ModelSizingContext } from './parameterSizing';
 import { getSettings } from '../Settings/state';
 import { decodeSupportSettingsHex, encodeSupportSettingsHex } from '../Settings/supportSettingsCodec';
@@ -4914,6 +4924,10 @@ export function computeAutoSupportPlan(
             `any flat at least ${STEEP_FLAT_ANCHOR_MIN_AREA_MM2.toFixed(0)}mm² keeps its anchoring contacts)`);
     }
 
+    // One start definition for placement, reporting and tests: the scan's own
+    // detached-island flag is the first cross-section with nothing below it.
+    islands = markStartIslands(islands);
+
     console.log(LOG_PREFIX, `Input: ${islands.length} islands from scan`);
     resetRouterStats();
     reportPhase('Preparing model', 1, 1);
@@ -5980,6 +5994,92 @@ export function computeAutoSupportPlan(
     }
     if (gapFilledTrunks > 0) {
         console.log(LOG_PREFIX, `Coverage convergence: ${gapFilledTrunks} gap-fill trunks placed`);
+    }
+
+    // ── Island coverage closure (starts first, then every island) ─────
+    // The generic passes are overhang/area-driven; a start can slip through a
+    // 4 mm² candidate floor, and an above-layer contact can suppress one via
+    // the 3 mm 3D dedupe. This final placement step closes both gaps and is
+    // the densification pass: starts need their recipe count plus 99%
+    // same-layer coverage, and any island the generic passes missed gets a
+    // holding contact and its normal coverage target. Same-layer tips only,
+    // so a contact several mm up/down can never suppress the contact a start
+    // actually needs.
+    const closureIslands = islands.filter((island) => !island.grounded && !island.interior);
+    let closureContactsAdded = 0;
+    if (closureIslands.length > 0) {
+        for (let pass = 0; pass < START_SUPPORT_CONSTANTS.maxPasses; pass++) {
+            const tips = collectSupportTips(draft, modelId);
+            let placedThisPass = 0;
+            for (const island of closureIslands) {
+                const isStart = island.startIsland === true;
+                const area = startFootprintAreaMm2(island);
+                const recipe = startRecipeForArea(area);
+                const radius = isStart
+                    ? recipe.coverageRadiusMm
+                    : island.source === 'overhang'
+                        ? coverageRadiusForRegion(island)
+                        : TIP_COVERAGE_RADIUS_MM;
+                const eligible = isStart
+                    ? sameLayerStartTips(tips, island.baseZ)
+                    : tips.filter((tip) => tip.z <= island.baseZ + START_SUPPORT_CONSTANTS.sameLayerBandMm);
+
+                let countFloor: number;
+                let coverageTarget: number;
+                if (isStart) {
+                    const status = assessStartSupport(island, tips, resolvedMesh);
+                    if (!status.pancakeRisk) continue;
+                    countFloor = Math.max(0, recipe.minContacts - status.contacts);
+                    coverageTarget = recipe.coverageTarget;
+                } else {
+                    coverageTarget = (autoSettings.coverageTargetPercent ?? 95) / 100;
+                    const contacts = countIslandContacts(island, eligible, radius);
+                    const coverage = island.contactVoxels && island.contactVoxels.count > 0
+                        ? computeRegionCoverage(island, eligible, radius, resolvedMesh)
+                        : contacts > 0 ? 1 : 0;
+                    if (contacts > 0 && coverage >= coverageTarget) continue;
+                    countFloor = contacts === 0 ? 1 : 0;
+                }
+
+                let candidates = buildGapFillCandidates([island], autoSettings, eligible, 0.05, resolvedMesh, {
+                    coverageTarget,
+                    radiusMm: radius,
+                    minClusterMm2: isStart ? 0.05 : undefined,
+                    minCandidatesPerRegion: countFloor,
+                    includeNonOverhang: true,
+                    source: island.source,
+                    idPrefix: isStart ? 'start' : 'island',
+                }).map((c): CandidatePoint => ({ ...c, modelId, interior: false }));
+
+                // Point-only islands (no contact footprint) still get the
+                // contact their recipe asks for.
+                if (candidates.length === 0 && countFloor > 0) {
+                    candidates = [{
+                        id: `${isStart ? 'start' : 'island'}-${island.id}-point`,
+                        tipPos: { x: island.contact.x, y: island.contact.y, z: island.contact.z },
+                        tipNormal: island.surfaceNormal ?? { x: 0, y: 0, z: -1 },
+                        modelId,
+                        source: island.source,
+                        islandAreaMm2: autoSettings.areaPerSupportMm2,
+                        zHeight: island.contact.z,
+                        priority: 0,
+                        gridPoint: true,
+                        interior: false,
+                    }];
+                }
+                if (candidates.length === 0) continue;
+                applyContactTipCaps(candidates, resolvedMesh, autoSettings.tipContactMarginScale, autoSettings);
+                for (const candidate of candidates) {
+                    if (placeOne(candidate) === 'reject') continue;
+                    placedThisPass++;
+                }
+            }
+            closureContactsAdded += placedThisPass;
+            if (placedThisPass === 0) break;
+        }
+    }
+    if (closureContactsAdded > 0) {
+        console.log(LOG_PREFIX, `Island coverage closure: ${closureContactsAdded} contact(s) placed`);
     }
 
     // ── Force budget: add contacts where a placed support carries more peel

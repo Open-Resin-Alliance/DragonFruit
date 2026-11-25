@@ -473,17 +473,38 @@ function isPlanPointCovered(
     return false;
 }
 
+export interface GapFillOptions {
+    /** Fractional coverage target; defaults to the setting (95%). */
+    coverageTarget?: number;
+    /** Explicit coverage disc, overriding `coverageRadiusForRegion`. */
+    radiusMm?: number;
+    /** Uncovered-cluster floor; defaults to `MIN_GAP_CLUSTER_MM2`. */
+    minClusterMm2?: number;
+    /** Contact-count floor for recipe starts, enforced even when covered. */
+    minCandidatesPerRegion?: number;
+    /** Allow non-overhang sources (island starts). */
+    includeNonOverhang?: boolean;
+    /** Candidate source stamped on emitted points. */
+    source?: CandidatePoint['source'];
+    /** Id prefix; default `gap` (span/perim variants derive from it). */
+    idPrefix?: string;
+}
+
 export function buildGapFillCandidates(
     overhangIslands: DetectedIsland[],
     settings: AutoSupportSettings,
     tips: Array<{ x: number; y: number; z: number }>,
     layerHeightMm: number = 0.05,
     mesh?: THREE.Mesh,
+    options: GapFillOptions = {},
 ): CandidatePoint[] {
     const out: CandidatePoint[] = [];
-    const coverageTarget = (settings.coverageTargetPercent ?? 95) / 100;
+    const coverageTarget = options.coverageTarget ?? (settings.coverageTargetPercent ?? 95) / 100;
+    const minCandidatesPerRegion = options.minCandidatesPerRegion ?? 0;
+    const idPrefix = options.idPrefix ?? 'gap';
+    const candidateSource = options.source ?? 'overhang';
     for (const region of overhangIslands) {
-        if (region.source !== 'overhang') continue;
+        if (region.source !== 'overhang' && !options.includeNonOverhang) continue;
         // Internal ceilings use the sparser interior grid; re-densifying them
         // through coverage convergence defeats that.
         if (region.interior) continue;
@@ -491,20 +512,29 @@ export function buildGapFillCandidates(
         const regionTips = mesh
             ? tips
             : tips.filter((t) => !tipBelongsToLowerFlatRegion(t, region, overhangIslands));
-        const radius = coverageRadiusForRegion(region);
+        const radius = options.radiusMm ?? coverageRadiusForRegion(region);
         const coverage = computeRegionCoverage(region, regionTips, radius, mesh);
         const emitted: Array<{ x: number; y: number; z: number }> = [];
+        const outStart = out.length;
 
         if (coverage < coverageTarget) {
-            const clusters = findUncoveredClusters(region, regionTips, radius, MIN_GAP_CLUSTER_MM2, true, layerHeightMm, mesh);
+            const clusters = findUncoveredClusters(
+                region,
+                regionTips,
+                radius,
+                options.minClusterMm2 ?? MIN_GAP_CLUSTER_MM2,
+                true,
+                layerHeightMm,
+                mesh,
+            );
             for (const c of clusters) {
                 emitted.push(c);
                 out.push({
-                    id: `gap-${region.id}-${c.x.toFixed(2)}-${c.y.toFixed(2)}`,
+                    id: `${idPrefix}-${region.id}-${c.x.toFixed(2)}-${c.y.toFixed(2)}`,
                     tipPos: { x: c.x, y: c.y, z: c.z },
                     tipNormal: region.surfaceNormal ?? { x: 0, y: 0, z: -1 },
                     modelId: '',
-                    source: 'overhang',
+                    source: candidateSource,
                     islandAreaMm2: settings.areaPerSupportMm2,
                     zHeight: c.z,
                     priority: 0,
@@ -525,11 +555,11 @@ export function buildGapFillCandidates(
             if (!near) {
                 emitted.push(cell);
                 out.push({
-                    id: `span-${region.id}-${cell.x.toFixed(2)}-${cell.y.toFixed(2)}`,
+                    id: `${idPrefix}-span-${region.id}-${cell.x.toFixed(2)}-${cell.y.toFixed(2)}`,
                     tipPos: cell,
                     tipNormal: region.surfaceNormal ?? { x: 0, y: 0, z: -1 },
                     modelId: '',
-                    source: 'overhang',
+                    source: candidateSource,
                     islandAreaMm2: settings.areaPerSupportMm2,
                     zHeight: cell.z,
                     priority: 0,
@@ -545,30 +575,50 @@ export function buildGapFillCandidates(
         // triangle-accurate loops at disc spacing and add a contact at every
         // uncovered point, corners included because the arc walk visits them.
         const loops = region.perimeterLoops;
-        if (!loops || loops.length === 0) continue;
         const spacingMm = Math.max(1.2, radius * 1.1);
         const shallow = (region.overhangAngleDeg ?? 0) <= 15;
+        const addPoint = (point: { x: number; y: number; z: number }, suffix: string): void => {
+            emitted.push(point);
+            out.push({
+                id: `${idPrefix}-${suffix}-${region.id}-${point.x.toFixed(2)}-${point.y.toFixed(2)}`,
+                tipPos: { x: point.x, y: point.y, z: point.z },
+                tipNormal: region.surfaceNormal ?? { x: 0, y: 0, z: -1 },
+                modelId: '',
+                source: candidateSource,
+                islandAreaMm2: settings.areaPerSupportMm2,
+                zHeight: point.z,
+                priority: 0,
+                gridPoint: true,
+                interior: region.interior,
+            });
+        };
         let added = 0;
-        for (const loop of loops) {
-            if (added >= MAX_PERIMETER_CANDIDATES_PER_REGION) break;
-            for (const point of sampleLoopByArc(loop, spacingMm)) {
+        if (loops && loops.length > 0) {
+            for (const loop of loops) {
                 if (added >= MAX_PERIMETER_CANDIDATES_PER_REGION) break;
-                if (isPlanPointCovered(point, regionTips, radius, shallow)) continue;
-                if (emitted.some((other) => Math.hypot(other.x - point.x, other.y - point.y) < spacingMm * 0.5)) continue;
-                emitted.push(point);
-                out.push({
-                    id: `perim-${region.id}-${added}`,
-                    tipPos: { x: point.x, y: point.y, z: point.z },
-                    tipNormal: region.surfaceNormal ?? { x: 0, y: 0, z: -1 },
-                    modelId: '',
-                    source: 'overhang',
-                    islandAreaMm2: settings.areaPerSupportMm2,
-                    zHeight: point.z,
-                    priority: 0,
-                    gridPoint: true,
-                    interior: region.interior,
-                });
-                added++;
+                for (const point of sampleLoopByArc(loop, spacingMm)) {
+                    if (added >= MAX_PERIMETER_CANDIDATES_PER_REGION) break;
+                    const recipeCountMet = out.length - outStart >= minCandidatesPerRegion;
+                    if (recipeCountMet && isPlanPointCovered(point, regionTips, radius, shallow)) continue;
+                    if (emitted.some((other) => Math.hypot(other.x - point.x, other.y - point.y) < spacingMm * 0.5)) continue;
+                    addPoint(point, 'perim');
+                    added++;
+                }
+            }
+        }
+
+        // Recipe floor: a start needs N contacts even when the coverage disc
+        // already reaches 99% (one wide disc is still a single point of peel
+        // failure). Add spread-out footprint cells until the count is met.
+        if (out.length - outStart < minCandidatesPerRegion) {
+            const voxels = region.contactVoxels;
+            const stride = Math.max(1, Math.floor(voxels.count / 48));
+            for (let i = 0; i < voxels.count && out.length - outStart < minCandidatesPerRegion; i += stride) {
+                const x = footprintX(voxels, i);
+                const y = footprintY(voxels, i);
+                const z = footprintZ(voxels, i) ?? region.baseZ;
+                if (emitted.some((other) => Math.hypot(other.x - x, other.y - y) < Math.max(0.9, spacingMm * 0.5))) continue;
+                addPoint({ x, y, z }, 'recipe');
             }
         }
     }
