@@ -758,6 +758,169 @@ function countAttachmentsOnHost(
     return count;
 }
 
+/** Candidate ids are `islandId` plus a per-contact suffix (`o217-a`,
+ *  `force-o87--3.52-1.79`, `fill-o15-0.91--0.34`). The load budget keys rows by
+ *  the island id, so the support-to-island join has to read it back. */
+function islandIdFromSupportDisplayId(displayId: string): string | null {
+    const match = /^(?:force-|fill-|island-|grid-)?([ovm]\d+)/.exec(displayId);
+    return match ? match[1] : null;
+}
+
+/** The same contact set the Forest Report hands to `computeLoadBudget`; the
+ *  load-aware cull and the report must see one list. */
+function collectPlacedContactsForBudget(
+    draft: SupportState,
+    ledger: ForestLedgerEntry[],
+    modelId: string,
+): PlacedContact[] {
+    const presetByEntityId = new Map<string, SizingPreset>();
+    for (const entry of ledger) presetByEntityId.set(entry.entityId, entry.preset);
+    const contacts: PlacedContact[] = [];
+    for (const t of Object.values(draft.trunks ?? {})) {
+        if (t.modelId !== modelId || !t.contactCone?.pos) continue;
+        contacts.push({
+            tip: t.contactCone.pos,
+            preset: presetByEntityId.get(t.id) ?? 'structure',
+            shaftDiameterMm: t.segments[t.segments.length - 1]?.diameter ?? t.contactCone.profile.bodyDiameterMm,
+        });
+    }
+    for (const s of Object.values(draft.stumps ?? {})) {
+        if (s.modelId !== modelId || !s.contactCone?.pos) continue;
+        contacts.push({
+            tip: s.contactCone.pos,
+            preset: presetByEntityId.get(s.id) ?? 'structure',
+            shaftDiameterMm: s.segments[s.segments.length - 1]?.diameter ?? s.contactCone.profile.bodyDiameterMm,
+        });
+    }
+    for (const b of Object.values(draft.branches ?? {})) {
+        if (b.modelId !== modelId || !b.contactCone?.pos) continue;
+        contacts.push({
+            tip: b.contactCone.pos,
+            preset: presetByEntityId.get(b.id) ?? 'structure',
+            shaftDiameterMm: b.segments[b.segments.length - 1]?.diameter ?? b.contactCone.profile.bodyDiameterMm,
+        });
+    }
+    for (const l of Object.values(draft.leaves ?? {})) {
+        if (l.modelId !== modelId || !l.contactCone?.pos) continue;
+        contacts.push({
+            tip: l.contactCone.pos,
+            preset: presetByEntityId.get(l.id) ?? 'structure',
+            shaftDiameterMm: l.contactCone.profile.bodyDiameterMm,
+        });
+    }
+    for (const st of Object.values(draft.sticks ?? {})) {
+        if (st.modelId !== modelId) continue;
+        const cone = st.contactConeA.pos.z >= st.contactConeB.pos.z ? st.contactConeA : st.contactConeB;
+        if (!cone?.pos) continue;
+        contacts.push({
+            tip: cone.pos,
+            preset: presetByEntityId.get(st.id) ?? 'structure',
+            shaftDiameterMm: st.segments[st.segments.length - 1]?.diameter ?? cone.profile.bodyDiameterMm,
+        });
+    }
+    for (const tw of Object.values(draft.twigs ?? {})) {
+        if (tw.modelId !== modelId) continue;
+        const disk = tw.contactDiskA.pos.z >= tw.contactDiskB.pos.z ? tw.contactDiskA : tw.contactDiskB;
+        if (!disk?.pos) continue;
+        contacts.push({
+            tip: disk.pos,
+            preset: presetByEntityId.get(tw.id) ?? 'structure',
+            shaftDiameterMm: tw.segments[tw.segments.length - 1]?.diameter ?? 1,
+        });
+    }
+    return contacts;
+}
+
+/**
+ * Remove bare, standalone overhang pillars whose island does not need the
+ * contact. The load budget is the authority: a pillar goes only while its
+ * island still has no real deficit after subtracting the pillar (the deficit
+ * stays inside half a contact's capacity). Starts are never culled — they are
+ * pancake prevention, not load support — and hosted trunks are skipped because
+ * removing one would orphan its members.
+ *
+ * Only sub-millimetre overhang slivers are culled. A 2 mm² patch is a real
+ * unsupported surface and keeps its pillar even when its per-island load is
+ * under the contact capacity; the eye-socket case is 0.5 mm².
+ */
+const LOAD_CULL_MAX_ISLAND_AREA_MM2 = 1.0;
+
+export function cullLoadSurplusStandaloneOverhangs(
+    draft: SupportState,
+    ledger: ForestLedgerEntry[],
+    islands: DetectedIsland[],
+    modelId: string,
+    areaPerSupportMm2: number,
+    poseDragMomentMm3?: number,
+    poseTotalDragMomentMm3?: number,
+    toppleCoverageNeeded?: boolean,
+): { draft: SupportState; ledger: ForestLedgerEntry[]; removed: string[] } {
+    const contacts = collectPlacedContactsForBudget(draft, ledger, modelId);
+    if (contacts.length === 0) return { draft, ledger, removed: [] };
+    const budget = computeLoadBudget({
+        islands,
+        contacts,
+        areaPerSupportMm2,
+        poseDragMomentMm3,
+        poseTotalDragMomentMm3,
+        toppleCoverageNeeded: toppleCoverageNeeded ?? false,
+    });
+    const rowById = new Map(budget.rows.map((row) => [row.islandId, row]));
+    const islandById = new Map(islands.map((island) => [island.id, island]));
+    const capacityFloorMm2 = Math.max(0.01, areaPerSupportMm2);
+    const nonDeficitMm2 = capacityFloorMm2 * 0.5;
+    const removedCapacityById = new Map<string, number>();
+    const removed: string[] = [];
+    let nextDraft = draft;
+    const kept: ForestLedgerEntry[] = [];
+
+    for (const entry of ledger) {
+        if (entry.kind !== 'trunk') {
+            kept.push(entry);
+            continue;
+        }
+        const entity = nextDraft.trunks[entry.entityId];
+        if (!entity || entity.modelId !== modelId || entity.origin !== 'standalone') {
+            kept.push(entry);
+            continue;
+        }
+        if (!entity.contactCone?.pos || countAttachmentsOnHost('trunk', entity.id, nextDraft) > 0) {
+            kept.push(entry);
+            continue;
+        }
+        const islandId = islandIdFromSupportDisplayId(entry.displayId);
+        if (!islandId) {
+            kept.push(entry);
+            continue;
+        }
+        const island = islandById.get(islandId);
+        const row = rowById.get(islandId);
+        if (!island || island.source !== 'overhang' || island.startIsland || !row
+            || (island.areaMm2 ?? 0) > LOAD_CULL_MAX_ISLAND_AREA_MM2) {
+            kept.push(entry);
+            continue;
+        }
+        const alreadyRemoved = removedCapacityById.get(islandId) ?? 0;
+        // Removing the pillar reduces that island's capacity. Cull only while
+        // what remains is still not a real deficit (inside half a contact).
+        if (row.deficitMm2 + alreadyRemoved + capacityFloorMm2 >= nonDeficitMm2) {
+            kept.push(entry);
+            continue;
+        }
+        const rootId = entity.rootId;
+        const rootShared = rootId !== undefined && (
+            Object.values(nextDraft.trunks).some((other) => other.id !== entity.id && other.rootId === rootId)
+        );
+        nextDraft = draftRemoveEntity(nextDraft, 'trunk', entity.id);
+        if (rootId && !rootShared) nextDraft = draftRemovePrimitive(nextDraft, 'roots', rootId);
+        removedCapacityById.set(islandId, alreadyRemoved + capacityFloorMm2);
+        removed.push(entry.displayId);
+    }
+
+    if (removed.length === 0) return { draft, ledger, removed };
+    return { draft: nextDraft, ledger: kept, removed };
+}
+
 /** Longest hosted member span (mm) on a host — knot→tip over its leaves
  *  and branches. Dumas-style load-concentration signal: merging onto a
  *  host that already carries long members concentrates peel load on one
@@ -5376,7 +5539,7 @@ export function computeAutoSupportPlan(
     // when it converts a standalone grid pillar into a fan leaf.
     const hostOriginById = new Map<string, 'gridInfill' | 'coverageFill'>();
     // Per-placed-entity ledger for the Forest Report (display id, sizing inputs).
-    const forestLedger: ForestLedgerEntry[] = [];
+    let forestLedger: ForestLedgerEntry[] = [];
 
     // Analytics accumulators
     const presets = { detail: 0, structure: 0, anchor: 0 };
@@ -6521,6 +6684,39 @@ export function computeAutoSupportPlan(
     timingStart('analytics');
 
     // ── Coverage analytics ────────────────────────────────────────
+    // Load-aware cull: a bare standalone overhang pillar is only a load path.
+    // If its island is still not in deficit without it, the contact is
+    // cosmetic — the eye-socket pillar that reads as a random support. Starts
+    // and hosted trunks are excluded inside. Run before the coverage read so
+    // the report cannot claim the culled island is still covered.
+    try {
+        const cull = cullLoadSurplusStandaloneOverhangs(
+            draft,
+            forestLedger,
+            islands,
+            modelId,
+            autoSettings.areaPerSupportMm2,
+            poseStability?.dragMomentMm3,
+            poseStability?.totalDragMomentMm3,
+            toppleCoverageNeeded,
+        );
+        if (cull.removed.length > 0) {
+            draft = cull.draft;
+            forestLedger = cull.ledger;
+            diagnostics.hostsByKind.standalone = Math.max(
+                0,
+                diagnostics.hostsByKind.standalone - cull.removed.length,
+            );
+            diagnostics.loadCull = { removed: cull.removed.length, ids: cull.removed };
+            console.log(LOG_PREFIX,
+                `Load-aware cull: removed ${cull.removed.length} bare standalone overhang pillar(s) ` +
+                `on surplus islands — ${cull.removed.join(', ')}`);
+        }
+    } catch (e) {
+        console.warn(LOG_PREFIX,
+            `Load-aware cull failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     const snapshot = draft;
     const supportedIds = new Set<string>();
     const SUPPORT_COVERAGE_RADIUS_MM = 4.0;
@@ -7464,6 +7660,7 @@ export function computeAutoSupportPlan(
                 mergeRefusals: { ...diagnostics.mergeRefusals },
                 gridFallbacks: diagnostics.gridFallbacks,
                 ...(diagnostics.trunkErrorRetries ? { trunkErrorRetries: diagnostics.trunkErrorRetries } : {}),
+                ...(diagnostics.loadCull ? { loadCull: diagnostics.loadCull } : {}),
                 consolidationRefusals: { ...conRefusals },
                 cavityFallbacks: [...diagnostics.cavityFallbacks],
                 ...(rootMergeStats ? { rootMerges: rootMergeStats } : {}),
@@ -7479,63 +7676,7 @@ export function computeAutoSupportPlan(
             };
             // Report only: what a deficit budget would add and cull, in mm² of
             // unsupported surface. Nothing here changes the forest.
-            const presetByEntityId = new Map<string, SizingPreset>();
-            for (const entry of forestLedger) {
-                presetByEntityId.set(entry.entityId, entry.preset);
-            }
-            const postCullContacts: PlacedContact[] = [];
-            for (const t of Object.values(draft.trunks ?? {})) {
-                if (t.modelId !== modelId || !t.contactCone?.pos) continue;
-                postCullContacts.push({
-                    tip: t.contactCone.pos,
-                    preset: presetByEntityId.get(t.id) ?? 'structure',
-                    shaftDiameterMm: t.segments[t.segments.length - 1]?.diameter ?? t.contactCone.profile.bodyDiameterMm,
-                });
-            }
-            for (const s of Object.values(draft.stumps ?? {})) {
-                if (s.modelId !== modelId || !s.contactCone?.pos) continue;
-                postCullContacts.push({
-                    tip: s.contactCone.pos,
-                    preset: presetByEntityId.get(s.id) ?? 'structure',
-                    shaftDiameterMm: s.segments[s.segments.length - 1]?.diameter ?? s.contactCone.profile.bodyDiameterMm,
-                });
-            }
-            for (const b of Object.values(draft.branches ?? {})) {
-                if (b.modelId !== modelId || !b.contactCone?.pos) continue;
-                postCullContacts.push({
-                    tip: b.contactCone.pos,
-                    preset: presetByEntityId.get(b.id) ?? 'structure',
-                    shaftDiameterMm: b.segments[b.segments.length - 1]?.diameter ?? b.contactCone.profile.bodyDiameterMm,
-                });
-            }
-            for (const l of Object.values(draft.leaves ?? {})) {
-                if (l.modelId !== modelId || !l.contactCone?.pos) continue;
-                postCullContacts.push({
-                    tip: l.contactCone.pos,
-                    preset: presetByEntityId.get(l.id) ?? 'structure',
-                    shaftDiameterMm: l.contactCone.profile.bodyDiameterMm,
-                });
-            }
-            for (const st of Object.values(draft.sticks ?? {})) {
-                if (st.modelId !== modelId) continue;
-                const cone = st.contactConeA.pos.z >= st.contactConeB.pos.z ? st.contactConeA : st.contactConeB;
-                if (!cone?.pos) continue;
-                postCullContacts.push({
-                    tip: cone.pos,
-                    preset: presetByEntityId.get(st.id) ?? 'structure',
-                    shaftDiameterMm: st.segments[st.segments.length - 1]?.diameter ?? cone.profile.bodyDiameterMm,
-                });
-            }
-            for (const tw of Object.values(draft.twigs ?? {})) {
-                if (tw.modelId !== modelId) continue;
-                const disk = tw.contactDiskA.pos.z >= tw.contactDiskB.pos.z ? tw.contactDiskA : tw.contactDiskB;
-                if (!disk?.pos) continue;
-                postCullContacts.push({
-                    tip: disk.pos,
-                    preset: presetByEntityId.get(tw.id) ?? 'structure',
-                    shaftDiameterMm: tw.segments[tw.segments.length - 1]?.diameter,
-                });
-            }
+            const postCullContacts = collectPlacedContactsForBudget(draft, forestLedger, modelId);
             forestReport.loadBudget = computeLoadBudget({
                 islands,
                 contacts: postCullContacts,
@@ -7547,7 +7688,7 @@ export function computeAutoSupportPlan(
             const budget = forestReport.loadBudget;
             if (budget.wouldAdd > 0 || budget.wouldCull > 0) {
                 console.log(LOG_PREFIX,
-                    `Load budget (report only): would add ${budget.wouldAdd} and could cull ${budget.wouldCull} ` +
+                    `Load budget (after standalone cull): would add ${budget.wouldAdd} and could cull ${budget.wouldCull} ` +
                     `— demand ${budget.totalDemandMm2.toFixed(0)}mm² vs capacity ${budget.totalCapacityMm2.toFixed(0)}mm², ` +
                     `deficit on ${budget.islandsInDeficit} islands, surplus on ${budget.islandsInSurplus}`);
             }

@@ -419,6 +419,9 @@ export interface PlacementDiagnostics {
     gridFallbacks: number;
     /** Trunk-build failures retried as wide fans after gap-fill. */
     trunkErrorRetries?: { attempted: number; rescued: number };
+    /** Bare standalone overhang pillars removed because their island is not in
+     *  load deficit without them. */
+    loadCull?: { removed: number; ids: string[] };
     /** Candidates whose trunk could not reach the plate and were bridged
      *  model-to-model instead -- by whichever type registered a bridge
      *  builder. Tip = where the bridge
