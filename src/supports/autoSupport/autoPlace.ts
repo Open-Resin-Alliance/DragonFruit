@@ -6140,7 +6140,8 @@ export function computeAutoSupportPlan(
                     candidates = [{
                         id: `${isStart ? 'start' : 'island'}-${island.id}-point`,
                         tipPos: { x: island.contact.x, y: island.contact.y, z: island.contact.z },
-                        tipNormal: island.surfaceNormal ?? { x: 0, y: 0, z: -1 },
+                        tipNormal: island.surfaceNormal
+                            ?? resolveSurfaceNormal(island.contact, resolvedMesh ?? undefined).normal,
                         modelId,
                         source: island.source,
                         islandAreaMm2: autoSettings.areaPerSupportMm2,
@@ -6151,6 +6152,16 @@ export function computeAutoSupportPlan(
                     }];
                 }
                 if (candidates.length === 0) continue;
+                // A voxel/minima start carries no surface normal. The gap
+                // candidate falls back to straight down, which sends the
+                // trunk into the model on a side/steep face even though a
+                // manual contact reaches it. Resolve the face under each
+                // candidate before placement, the same way a click does.
+                if (!island.surfaceNormal && resolvedMesh) {
+                    for (const candidate of candidates) {
+                        candidate.tipNormal = resolveSurfaceNormal(candidate.tipPos, resolvedMesh).normal;
+                    }
+                }
                 applyContactTipCaps(candidates, resolvedMesh, autoSettings.tipContactMarginScale, autoSettings);
                 for (const candidate of candidates) {
                     if (placeOne(candidate) === 'reject') continue;
