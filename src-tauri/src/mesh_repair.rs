@@ -1750,11 +1750,6 @@ pub async fn load_mesh_bytes(request: tauri::ipc::Request<'_>) -> Result<Respons
         .get("x-mesh-classify")
         .and_then(|value| value.to_str().ok())
         .is_none_or(|value| value.trim() != "0");
-    let refine = request
-        .headers()
-        .get("x-mesh-refine")
-        .and_then(|value| value.to_str().ok())
-        .is_none_or(|value| value.trim() != "0");
     let bytes = match request.body() {
         tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
         tauri::ipc::InvokeBody::Json(_) => {
