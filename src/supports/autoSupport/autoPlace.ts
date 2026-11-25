@@ -129,7 +129,8 @@ import type { BranchBuildInput, BranchBuildResult } from '../SupportTypes/Branch
 import { buildLeafData } from '../SupportTypes/Leaf/leafBuilder';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { calculateSmoothedNormal } from '../PlacementLogic/PlacementUtils';
-import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
+import { isCollisionFrustumBlocked, isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
+import { calculateDiskThickness } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { addTargetedStressBraces, buildAutoBracedSnapshot, BRACE_CANOPY_KEEP_OUT_MM, type StressBraceRequest } from '../autoBracing/autoBrace';
 import { buildKickstandData } from '../SupportTypes/Kickstand/kickstandBuilder';
 import { pushSupportHistory } from '../history/supportHistory';
@@ -672,6 +673,50 @@ const _leafRaycaster = new THREE.Raycaster();
  *  Raycasts from the knot toward a point just before the tip (offset inward
  *  along the surface normal), excluding the tip contact itself.  Returns true
  *  if the ray hits a model triangle before reaching the offset point. */
+/** The cone start the renderer uses, offset from the surface by the disk. */
+function contactConeStart(cone: ContactCone): Vec3 {
+    const normal = cone.surfaceNormal ?? cone.normal;
+    const thickness = cone.diskLengthOverride ?? (
+        cone.profile.type === 'disk'
+            ? calculateDiskThickness(normal, cone.normal, cone.profile)
+            : 0
+    );
+    return {
+        x: cone.pos.x + normal.x * thickness,
+        y: cone.pos.y + normal.y * thickness,
+        z: cone.pos.z + normal.z * thickness,
+    };
+}
+
+/**
+ * Exact triangle-buffer check for the cone body, skipping the tip/disk region.
+ * The SDF gate at placement can miss a thin gap; this is the fallback used after
+ * resizing and by the dev audit.
+ */
+function contactConeBodyBlocked(cone: ContactCone, mesh: THREE.Mesh): boolean {
+    const start = contactConeStart(cone);
+    const socket = getFinalSocketPosition(cone);
+    const dx = socket.x - start.x;
+    const dy = socket.y - start.y;
+    const dz = socket.z - start.z;
+    const length = Math.hypot(dx, dy, dz);
+    if (length < 1e-6) return false;
+    const contactR = cone.profile.contactDiameterMm / 2;
+    const bodyR = cone.profile.bodyDiameterMm / 2;
+    const tipIgnore = Math.min(0.95, Math.max(1.2, contactR + 0.3) / length);
+    if (tipIgnore >= 1) return false;
+    const t = tipIgnore;
+    const startRadius = (contactR + (bodyR - contactR) * t) + 0.05;
+    return isCollisionFrustumBlocked(
+        { x: start.x + dx * t, y: start.y + dy * t, z: start.z + dz * t },
+        socket,
+        startRadius,
+        bodyR + 0.05,
+        mesh,
+    );
+}
+
+
 function contactConeCollides(
     knotPos: { x: number; y: number; z: number },
     cone: { pos: { x: number; y: number; z: number }; surfaceNormal?: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number } },
@@ -1893,6 +1938,13 @@ function placeOneCandidate(
                 bodyDiameterMm: cone.profile.bodyDiameterMm,
             })) {
                 logPlacement(`Rejected ${candidate.id}: contact cone rises above its tip after socket placement`);
+                return { kind: 'reject', rejectedReason: 'trunk_build_error', preset, draft: d };
+            }
+            if (cone && mesh && contactConeBodyBlocked(cone, mesh)) {
+                logPlacement(
+                    `Rejected ${candidate.id}: contact cone clips the model `
+                    + `(body ${cone.profile.bodyDiameterMm.toFixed(2)}mm)`,
+                );
                 return { kind: 'reject', rejectedReason: 'trunk_build_error', preset, draft: d };
             }
         }
