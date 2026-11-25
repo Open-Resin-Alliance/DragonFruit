@@ -1650,3 +1650,84 @@ endsolid tet
         }
     }
 }
+
+#[cfg(test)]
+mod scan_profile {
+    use super::*;
+    use std::time::Instant;
+
+    /// Headless profile of the combined scan phases on a real STL.
+    ///
+    /// Run with:
+    ///   DF_PROFILE_STL=E:/tmp/df-as/snowman_01.stl \
+    ///     cargo test --release scan_profile -- --ignored --nocapture
+    #[test]
+    #[ignore = "manual performance profile; needs DF_PROFILE_STL"]
+    fn profile_combined_phases() {
+        let path = std::env::var("DF_PROFILE_STL").expect("set DF_PROFILE_STL to an STL");
+        let layer_height_mm = 0.05_f64;
+        let px_mm = 0.1_f64;
+        let identity = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ];
+        let load_start = Instant::now();
+        let mesh = load_and_transform_mesh(&path, identity, [0.0, 0.0, 0.0]).unwrap();
+        eprintln!("load {:.3}s triangles={}", load_start.elapsed().as_secs_f64(), mesh.triangle_count());
+
+        let soup = mesh.to_triangle_soup();
+        let triangles = dragonfruit_slicing_engine::geometry::parse_triangles(&soup);
+        let bbox = mesh.bbox();
+
+        let profile_voxel = |px: f64, layer: f64, label: &str| {
+            let gw = ((bbox.max.x as f64 - bbox.min.x as f64) / px).ceil().max(1.0) as i32;
+            let gh = ((bbox.max.y as f64 - bbox.min.y as f64) / px).ceil().max(1.0) as i32;
+            let n = ((bbox.max.z as f64 - bbox.min.z as f64) / layer).ceil().max(0.0) as usize;
+            let start = Instant::now();
+            let (masks, _, _, _, _, _) = rasterize_for_island_scan(
+                &triangles,
+                bbox.min.x as f64, bbox.max.x as f64,
+                bbox.min.y as f64, bbox.max.y as f64,
+                bbox.min.z as f64, bbox.max.z as f64,
+                px, layer,
+            );
+            let raster = start.elapsed().as_secs_f64();
+            let scan_start = Instant::now();
+            let job = IslandScanJob {
+                px_mm: px,
+                support_buffer_mm: 0.6,
+                connectivity: Connectivity::Eight,
+                min_island_area_mm2: 0.0001,
+                layer_height_mm: layer,
+                grid: GridRef { origin_x: bbox.min.x as f64, origin_z: -bbox.max.y as f64, width: gw, height: gh, px_mm: px },
+                num_layers: n as u32,
+                min_overlap_px: 1,
+                overlap_neighborhood_px: 1,
+                candidate_only: true,
+            };
+            let result = run_island_scan(&job, &masks, None);
+            let scan = scan_start.elapsed().as_secs_f64();
+            eprintln!(
+                "{label} grid={}x{}x{} cells={} raster={:.3}s scan={:.3}s islands={}",
+                gw, gh, n,
+                gw as u64 * gh as u64 * n as u64,
+                raster, scan, result.islands.len(),
+            );
+        };
+        profile_voxel(px_mm, layer_height_mm, "voxel-fine");
+
+        let minima_start = Instant::now();
+        let minima = scan_minima_internal(&mesh, Some(2));
+        eprintln!("minima {:.3}s count={}", minima_start.elapsed().as_secs_f64(), minima.len());
+
+        let overhang_start = Instant::now();
+        let regions = overhang::classify_overhangs(&mesh, 45.0, 0.25);
+        eprintln!("overhang {:.3}s regions={}", overhang_start.elapsed().as_secs_f64(), regions.len());
+
+        let stability_start = Instant::now();
+        let _ = overhang::compute_stability_report(&mesh, 45.0, false);
+        eprintln!("stability {:.3}s", stability_start.elapsed().as_secs_f64());
+    }
+}
