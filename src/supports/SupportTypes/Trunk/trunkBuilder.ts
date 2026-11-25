@@ -103,10 +103,14 @@ function buildTipProfile(
     settings: ReturnType<typeof getSettings>,
     overrides: TrunkBuildInput['overrides'],
 ): SupportTipProfile {
+    const bodyDiameterMm = overrides?.tipBodyDiameterMm ?? settings.tip.bodyDiameterMm;
+    const contactDiameterMm = overrides?.tipContactDiameterMm ?? settings.tip.contactDiameterMm;
     return {
         type: 'disk',
-        contactDiameterMm: overrides?.tipContactDiameterMm ?? settings.tip.contactDiameterMm,
-        bodyDiameterMm: overrides?.tipBodyDiameterMm ?? settings.tip.bodyDiameterMm,
+        contactDiameterMm,
+        bodyDiameterMm,
+        neckDiameterMm: Math.min(bodyDiameterMm, Math.max(contactDiameterMm, 0.7)),
+        neckFraction: 0.9,
         lengthMm: overrides?.tipLengthMm ?? settings.tip.lengthMm,
         penetrationMm: settings.tip.penetrationMm,
         diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,

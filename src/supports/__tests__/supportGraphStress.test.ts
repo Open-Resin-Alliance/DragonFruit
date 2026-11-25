@@ -980,6 +980,35 @@ test('the tapered cone report finds a stronger section than the effective stiffn
         'the governing tapered section is narrower than the 0.7 x body stiffness diameter');
     assert.ok(taperedCone.utilizationPct > effectiveCone.utilizationPct,
         'the real taper exposes more stress than the effective constant section');
+
+    const neckedDraft: SupportState = {
+        ...draft,
+        trunks: {
+            tEx: {
+                ...draft.trunks.tEx,
+                contactCone: {
+                    ...draft.trunks.tEx.contactCone!,
+                    profile: {
+                        ...draft.trunks.tEx.contactCone!.profile,
+                        neckDiameterMm: 0.7,
+                        neckFraction: 0.9,
+                    },
+                },
+            } as never,
+        },
+    };
+    const neckedGraph = buildSupportGraph(neckedDraft, 'm');
+    const necked = solveSupportFrameStress(neckedGraph, undefined, {
+        explicitNodalLoads: new Map<number, readonly [number, number, number, number, number, number]>([[neckedGraph.nodes.length - 1, [0.3, 0, 0.6, 0, 0, 0]]]),
+        taperedConeStress: true,
+    });
+    const neckedCone = necked.memberSegments.find((seg) => seg.role === 'cone');
+    assert.ok(neckedCone, 'the necked report carries the cone');
+    const neckMember = neckedGraph.members.find((member) => member.role === 'cone');
+    assert.equal(neckMember?.taperNeckDiameterMm, 0.7);
+    assert.equal(neckMember?.taperNeckFraction, 0.9);
+    assert.ok(neckedCone.utilizationPct < taperedCone.utilizationPct,
+        'the local neck lowers the tapered cone stress');
 });
 
 test('a bounded cap override lets an at-cap trunk take one more step', () => {

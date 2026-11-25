@@ -84,8 +84,12 @@ interface ConeBucket {
     key: string;
     cones: InstancedContactCone[];
     profileType: 'disk' | 'sphere' | 'legacy';
-    /** How much wider the body is than the contact end. */
+    /** How much wider the body is than the neck. */
     shapeRatio: number;
+    /** How much wider the neck is than the contact (1 = no neck). */
+    neckRatio: number;
+    /** Fraction of the length taken by the body->neck run (1 = no neck). */
+    neckFraction: number;
 }
 
 /**
@@ -104,9 +108,22 @@ interface ConeBucket {
  * call on every frame. Keyed on the ratio, the same scene is 41.
  */
 export function coneShapeRatio(cone: InstancedContactCone): number {
-    const contactRadius = Math.max(0.001, cone.profile.contactDiameterMm / 2);
+    const neckRadius = Math.max(0.001, (cone.profile.neckDiameterMm ?? cone.profile.contactDiameterMm) / 2);
     const bodyRadius = Math.max(0.001, cone.profile.bodyDiameterMm / 2);
-    return bodyRadius / contactRadius;
+    return bodyRadius / neckRadius;
+}
+
+/** Body-to-neck run vs. the full cone length; 1 = a plain cone. */
+function coneNeckFraction(cone: InstancedContactCone): number {
+    const f = cone.profile.neckFraction;
+    return f !== undefined && f > 0 && f < 1 && cone.profile.neckDiameterMm !== undefined ? f : 1;
+}
+
+/** Neck-to-contact radius ratio; 1 = no separate neck taper. */
+function coneNeckRatio(cone: InstancedContactCone): number {
+    const neckRadius = Math.max(0.001, (cone.profile.neckDiameterMm ?? cone.profile.contactDiameterMm) / 2);
+    const contactRadius = Math.max(0.001, cone.profile.contactDiameterMm / 2);
+    return neckRadius / contactRadius;
 }
 
 /**
@@ -135,7 +152,10 @@ export const CONE_RATIO_BUCKETS_PER_UNIT = 1 / CONE_RATIO_BUCKET_STEP;
  * nothing else. Two cones that differ only in size share a mesh.
  */
 export function coneBucketKey(cone: InstancedContactCone): string {
-    return `${getProfileType(cone.profile)}:${quantizeToScale(coneShapeRatio(cone), CONE_RATIO_BUCKETS_PER_UNIT)}`;
+    const body = quantizeToScale(coneShapeRatio(cone), CONE_RATIO_BUCKETS_PER_UNIT);
+    const neck = quantizeToScale(coneNeckRatio(cone), CONE_RATIO_BUCKETS_PER_UNIT);
+    const fraction = quantizeToScale(coneNeckFraction(cone), CONE_RATIO_BUCKETS_PER_UNIT);
+    return `${getProfileType(cone.profile)}:${body}:${neck}:${fraction}`;
 }
 
 /**
@@ -150,12 +170,21 @@ export function conePrimitiveScales(
     cone: InstancedContactCone,
     diskThickness: number,
     penetration: number,
-): { disk: [number, number, number]; body: [number, number, number]; tip: [number, number, number] } {
+): {
+    disk: [number, number, number];
+    body: [number, number, number];
+    tip: [number, number, number];
+    neckTip: [number, number, number];
+} {
     const contactRadius = Math.max(0.001, cone.profile.contactDiameterMm / 2);
+    const neckRadius = Math.max(0.001, (cone.profile.neckDiameterMm ?? cone.profile.contactDiameterMm) / 2);
+    const neckFraction = coneNeckFraction(cone);
+    const length = Math.max(0.001, cone.profile.lengthMm);
     return {
         disk: [contactRadius, Math.max(0.001, diskThickness + penetration), contactRadius],
-        body: [contactRadius, Math.max(0.001, cone.profile.lengthMm), contactRadius],
+        body: [neckFraction < 1 ? neckRadius : contactRadius, length * neckFraction, neckFraction < 1 ? neckRadius : contactRadius],
         tip: [contactRadius, contactRadius, contactRadius],
+        neckTip: [contactRadius, length * (1 - neckFraction), contactRadius],
     };
 }
 
@@ -258,9 +287,11 @@ function ConeBucketMesh({
 }) {
     const diskRef = useRef<THREE.InstancedMesh>(null);
     const bodyRef = useRef<THREE.InstancedMesh>(null);
+    const neckTipRef = useRef<THREE.InstancedMesh>(null);
     const tipSphereRef = useRef<THREE.InstancedMesh>(null);
     const overlayDiskRef = useRef<THREE.InstancedMesh>(null);
     const overlayBodyRef = useRef<THREE.InstancedMesh>(null);
+    const overlayNeckTipRef = useRef<THREE.InstancedMesh>(null);
     const overlayTipSphereRef = useRef<THREE.InstancedMesh>(null);
     const lastHoveredRef = useRef<InstancedContactCone | null>(null);
 
@@ -297,7 +328,7 @@ function ConeBucketMesh({
     }, [grabRadiusAt, bucket.cones, pointerSceneryModelIds]);
 
     const writeConeMatrices = React.useCallback((index: number, cone: InstancedContactCone, hidden: boolean) => {
-        const meshes = [diskRef.current, bodyRef.current, tipSphereRef.current, overlayDiskRef.current, overlayBodyRef.current, overlayTipSphereRef.current];
+        const meshes = [diskRef.current, bodyRef.current, neckTipRef.current, tipSphereRef.current, overlayDiskRef.current, overlayBodyRef.current, overlayNeckTipRef.current, overlayTipSphereRef.current];
         if (hidden) {
             for (const mesh of meshes) if (mesh) mesh.setMatrixAt(index, HIDDEN_INSTANCE_MATRIX);
             return;
@@ -325,12 +356,32 @@ function ConeBucketMesh({
             mesh.setMatrixAt(index, scratchObject.matrix);
         };
 
-        // Body: the cone's own centre along its normal.
-        const bodyCenter = getConeCenterPosition({ x: startX, y: startY, z: startZ }, cone.normal, cone.profile);
-        conePosition.set(bodyCenter.x, bodyCenter.y, bodyCenter.z);
+        // Body: a plain cone runs the full length; a necked cone runs the
+        // body->neck fraction, then a short neck->contact taper. The contact
+        // end is `start`.
+        const length = Math.max(0.001, cone.profile.lengthMm);
+        const bodyDistance = bucket.neckFraction < 1
+            ? length * (1 - bucket.neckFraction / 2)
+            : length / 2;
+        conePosition.set(
+            startX + cone.normal.x * bodyDistance,
+            startY + cone.normal.y * bodyDistance,
+            startZ + cone.normal.z * bodyDistance,
+        );
         getConeQuaternionInto(cone.normal, coneQuaternion);
         write(bodyRef.current, conePosition, coneQuaternion, scales.body);
         write(overlayBodyRef.current, conePosition, coneQuaternion, scales.body);
+
+        if (bucket.neckFraction < 1) {
+            const tipDistance = length * (1 - bucket.neckFraction) / 2;
+            conePosition.set(
+                startX + cone.normal.x * tipDistance,
+                startY + cone.normal.y * tipDistance,
+                startZ + cone.normal.z * tipDistance,
+            );
+            write(neckTipRef.current, conePosition, coneQuaternion, scales.neckTip);
+            write(overlayNeckTipRef.current, conePosition, coneQuaternion, scales.neckTip);
+        }
 
         // Tip sphere: the contact point itself, unrotated.
         conePosition.set(startX, startY, startZ);
@@ -350,7 +401,7 @@ function ConeBucketMesh({
         getDiskRotationInto(effectiveSurfaceNormal, coneQuaternion);
         write(diskRef.current, conePosition, coneQuaternion, scales.disk);
         write(overlayDiskRef.current, conePosition, coneQuaternion, scales.disk);
-    }, [bucket.profileType, resolveDiskThickness, resolvePenetration]);
+    }, [bucket.profileType, bucket.neckFraction, resolveDiskThickness, resolvePenetration]);
 
     useLayoutEffect(() => {
         for (let i = 0; i < bucket.cones.length; i += 1) {
@@ -507,6 +558,29 @@ function ConeBucketMesh({
                 </instancedMesh>
             )}
 
+            {!discsOnly && bucket.neckFraction < 1 && (
+                <instancedMesh
+                    key={`cone-neck-tip:${bucket.cones.length}`}
+                    ref={neckTipRef}
+                    args={[undefined, undefined, bucket.cones.length]}
+                    frustumCulled={false}
+                    renderOrder={100000}
+                    {...sharedHandlers}
+                    raycast={raycast ?? INSTANCED_MESH_RAYCAST}
+                >
+                    <cylinderGeometry args={[1, bucket.neckRatio, 1, 10]} />
+                    <meshStandardMaterial
+                        color={instanceColor ? '#ffffff' : color}
+                        emissive={emissive}
+                        emissiveIntensity={emissiveIntensity}
+                        transparent={transparent}
+                        opacity={opacity}
+                        depthWrite={!transparent}
+                        clippingPlanes={clippingPlanes ?? undefined}
+                    />
+                </instancedMesh>
+            )}
+
             {/* The tip sphere is a sphere profile's contact primitive, so it stays
                 visible there; a disk profile draws the disk instead, so this copy
                 is not mounted in the discs-only view. */}
@@ -545,6 +619,18 @@ function ConeBucketMesh({
                             material={outOfBoundsMaterial}
                         >
                             <cylinderGeometry args={[1, bucket.shapeRatio, 1, 10]} />
+                        </instancedMesh>
+                    )}
+                    {!discsOnly && bucket.neckFraction < 1 && (
+                        <instancedMesh
+                            ref={overlayNeckTipRef}
+                            args={[undefined, undefined, bucket.cones.length]}
+                            frustumCulled={false}
+                            raycast={() => null}
+                            renderOrder={100000}
+                            material={outOfBoundsMaterial}
+                        >
+                            <cylinderGeometry args={[1, bucket.neckRatio, 1, 10]} />
                         </instancedMesh>
                     )}
                     {(!discsOnly || bucket.profileType !== 'disk') && (
@@ -653,6 +739,8 @@ export function InstancedContactConeGroup({
                 cones: [cone],
                 profileType,
                 shapeRatio: coneShapeRatio(cone),
+                neckRatio: coneNeckRatio(cone),
+                neckFraction: coneNeckFraction(cone),
             });
         }
 

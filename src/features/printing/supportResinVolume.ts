@@ -91,6 +91,8 @@ export function computeSupportAndRaftResinMl({
       contactDiameterMm: number;
       bodyDiameterMm: number;
       lengthMm: number;
+      neckDiameterMm?: number;
+      neckFraction?: number;
       type?: 'disk' | 'sphere';
     };
     normal: { x: number; y: number; z: number };
@@ -100,7 +102,14 @@ export function computeSupportAndRaftResinMl({
     const contactRadius = Math.max(0.001, cone.profile.contactDiameterMm / 2);
     const bodyRadius = Math.max(0.001, cone.profile.bodyDiameterMm / 2);
     const coneLen = Math.max(0, cone.profile.lengthMm);
-    const coneMm3 = frustumVolumeMm3(contactRadius, bodyRadius, coneLen);
+    const neckRadius = Math.max(0.001, (cone.profile.neckDiameterMm ?? cone.profile.contactDiameterMm) / 2);
+    const neckFraction = cone.profile.neckFraction !== undefined && cone.profile.neckFraction > 0 && cone.profile.neckFraction < 1
+      ? cone.profile.neckFraction
+      : 1;
+    const coneMm3 = neckFraction < 1
+      ? frustumVolumeMm3(contactRadius, neckRadius, coneLen * (1 - neckFraction))
+        + frustumVolumeMm3(neckRadius, bodyRadius, coneLen * neckFraction)
+      : frustumVolumeMm3(contactRadius, bodyRadius, coneLen);
 
     // A cone whose profile carries a disk prints that disk as its socket offset,
     // so the offset volume belongs to this primitive and not to a second entity.

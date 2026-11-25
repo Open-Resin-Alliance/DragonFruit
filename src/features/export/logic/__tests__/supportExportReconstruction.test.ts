@@ -290,6 +290,39 @@ test('export cone mesh uses the visible contact-side sphere instead of a socket 
   assert.equal(sphereMeshes[0]?.position.z, 9.5);
 });
 
+test('a necked cone exports a body frustum, a short tip frustum, and the contact sphere', () => {
+  const coneGroup = SupportGeometryGenerator.generateConeMesh({
+    pos: { x: 0, y: 0, z: 10 },
+    normal: { x: 0, y: 0, z: -1 },
+    surfaceNormal: { x: 0, y: 0, z: -1 },
+    diskLengthOverride: 0.5,
+    profile: {
+      type: 'disk',
+      contactDiameterMm: 0.28,
+      bodyDiameterMm: 1.4,
+      neckDiameterMm: 0.7,
+      neckFraction: 0.9,
+      lengthMm: 2.5,
+      penetrationMm: 0.05,
+      diskThicknessMm: 0.1,
+      maxStandoffMm: 0.2,
+      standoffAngleThreshold: Math.PI / 4,
+    },
+  });
+
+  const cylinders = coneGroup.children.filter((child) => (child as THREE.Mesh).geometry?.type === 'CylinderGeometry') as THREE.Mesh[];
+  assert.equal(cylinders.length, 2);
+  const approx = (a: number | undefined, b: number) => a !== undefined && Math.abs(a - b) < 1e-9;
+  const tip = cylinders.find((mesh) => approx((mesh.geometry as THREE.CylinderGeometry).parameters.height, 0.25));
+  const body = cylinders.find((mesh) => approx((mesh.geometry as THREE.CylinderGeometry).parameters.height, 2.25));
+  assert.ok(tip && body, 'body 90% and tip 10% are separate frustums');
+  assert.ok(approx((tip.geometry as THREE.CylinderGeometry).parameters.radiusTop, 0.14));
+  assert.ok(approx((tip.geometry as THREE.CylinderGeometry).parameters.radiusBottom, 0.35));
+  assert.ok(approx((body.geometry as THREE.CylinderGeometry).parameters.radiusTop, 0.35));
+  assert.ok(approx((body.geometry as THREE.CylinderGeometry).parameters.radiusBottom, 0.7));
+  assert.equal(coneGroup.children.filter((child) => (child as THREE.Mesh).geometry?.type === 'SphereGeometry').length, 1);
+});
+
 test('twig disk tips export with finite geometry (no NaN radius)', () => {
   // Regression: a twig's ContactDiskProfile has no contactDiameterMm (it lives
   // on the disk object), so reading the diameter from the profile produced a

@@ -40,6 +40,7 @@ function resolveCollisionAwareDiskThickness(
     }
 
     const bodyRadius = cone.profile.bodyDiameterMm / 2;
+    const coneTipRadius = (cone.profile.neckDiameterMm ?? cone.profile.contactDiameterMm) / 2;
     const rawMaxStandoff = cone.profile.maxStandoffMm ?? LEGACY_MAX_STANDOFF_MM;
     const maxStandoff = rawMaxStandoff === LEGACY_MAX_STANDOFF_MM
         ? LEGACY_CLAMPED_MAX_STANDOFF_MM
@@ -56,7 +57,7 @@ function resolveCollisionAwareDiskThickness(
         + `|${cone.pos.x},${cone.pos.y},${cone.pos.z}`
         + `|${surfaceNormal.x},${surfaceNormal.y},${surfaceNormal.z}`
         + `|${socketTarget.x},${socketTarget.y},${socketTarget.z}`
-        + `|${cone.profile.contactDiameterMm},${cone.profile.bodyDiameterMm}`
+        + `|${cone.profile.contactDiameterMm},${cone.profile.neckDiameterMm ?? cone.profile.contactDiameterMm},${cone.profile.bodyDiameterMm}`
         + `|${maxStandoff},${angleThickness}`;
     let cache = diskThicknessCache.get(collisionMesh);
     if (!cache) {
@@ -76,7 +77,7 @@ function resolveCollisionAwareDiskThickness(
         maxStandoff,
         0.2,
         {
-            startRadius: (cone.profile.contactDiameterMm / 2) + CONTACT_CONE_COLLISION_SAFETY_MM,
+            startRadius: coneTipRadius + CONTACT_CONE_COLLISION_SAFETY_MM,
             endRadius: bodyRadius + CONTACT_CONE_COLLISION_SAFETY_MM,
         },
     );

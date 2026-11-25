@@ -662,14 +662,26 @@ whole-frame structural stress on the assembled forest via
   - **The cone stress follows the real taper.** The frame's stiffness keeps the
     effective `0.7 × body` cone member (that is what the plan is calibrated
     on), but the final report re-solves with `taperedConeStress: true` and
-    evaluates nine stations along the linear body-to-contact taper with the
-    station area/inertia and the internal moment interpolated from the two end
-    moments. On `steep-flat-wedge` the effective 114 % becomes **222 % at the
-    governing 0.397 mm section**, inside the cone rather than at an end. This
-    is report-only on purpose: no brace, kickstand or diameter step changes the
+    evaluates nine stations along the body-to-neck and neck-to-contact pieces
+    with the station area/inertia and the internal moment interpolated from the
+    two end moments. With the old linear cone the effective 114 % became
+    **222 % at the governing 0.397 mm section**, inside the cone rather than at
+    an end; the local neck below brings the member under 100 %. This is
+    report-only on purpose: no brace, kickstand or diameter step changes the
     printed cone, so letting the tapered number drive the action loop would add
-    structure that cannot close the load path. The remaining limit is the cone
-    **geometry** (contact/taper), not the shaft.
+    structure that cannot close the load path.
+  - **The printed trunk cone has a local neck, not a stick.** The trunk
+    builder sets `neckDiameterMm = min(body, max(contact, 0.7))` and
+    `neckFraction = 0.9`. (Branch cones stay plain: their placement has to clear
+    near-surface blockers, and a wider neck changed the chosen cone angle.)
+    Geometry, export, instanced and volume paths build
+    two frustums: body to neck over 90 % of the length, then neck to the 0.28 mm
+    contact over the last 10 %. The contact disk is unchanged. Collision uses
+    one conservative body-to-neck envelope over the full length, which contains
+    both runs. The neck took `steep-flat-wedge` from the 222 % tapered-cone
+    section to **81 % with zero overloaded members**, while the plan stayed
+    identical; `aboveContact` stays 0. The 0.28 mm contact's own biaxial stress
+    is a separate limit, not changed by the cone shape.
   - **The tip contact check is biaxial.** `biaxialContactStressMpa` compares
     `√(σ_n² + 3τ²)` — the vertical peel plus the layer's lateral drag — against
     the support break strength, so a contact sheared by the diaphragm is counted

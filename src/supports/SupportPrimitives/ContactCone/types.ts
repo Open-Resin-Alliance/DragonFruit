@@ -43,6 +43,10 @@ export type SupportTipProfile = {
     bodyDiameterMm: number;     // Larger end (socket side)
     lengthMm: number;           // Total head length (excluding primitive offset)
     penetrationMm: number;      // Embed depth (legacy use, mostly for sphere now)
+    /** Reinforced neck: body->neck over `neckFraction` of the length, then a
+     *  short neck->contact taper. Absent keeps the plain body->contact cone. */
+    neckDiameterMm?: number;
+    neckFraction?: number;
 } & (ContactDiskProfile | ContactSphereProfile | { type?: undefined }); // Allow undefined for legacy compatibility
 
 /**
