@@ -1037,6 +1037,45 @@ Anchoring contacts stay LOW (`steepFlatAnchorBandTop`) on a squat part: the lowe
 - **The collision predicate answers for a lattice point, not for the point you asked about.** `SDFCache.segmentBlocked` and `distanceAt` quantize the query to a 0.5 mm cell (`quantizeToCell` rounds) and return the signed distance at that cell's lattice point, so the value can be wrong for your point by up to the distance between the two. Anything using it as a *bound* must subtract that distance first, which `segmentBlocked` now does: it settles `clear` above `base - gap`, `blocked` below `base + gap`, and asks a point-exact bounded query between them. Skipping that is what let the march jump over geometry inside `clearance` — a column 0.5976 mm from the model at clearance 0.7 mm came back clear, so a routed support could clip the model. Do not verify a predicate with `distanceAt` either: it is quantized the same way, and reported 0.798 for a point that was 0.598 mm from the surface. The residual approximation is the `minStep` floor, so `blocked` from `ColumnClearanceMap` can still exceed the march's by one probe in ~2800 — see `docs/dev/backlog.md`.
 - **Trunk routing is one diagonal and one drop, and the cone follows the shaft.** Placement goes through `calculateSmartPlacementV3` (`PlacementLogicV3/SmartPlacementV3.ts`), whose entire search is `EscapeJointSearch`: walk outward from the socket along a 45° ray in each candidate direction until the column below clears and the roots volume fits, then stop, so the trunk is a single diagonal, a single joint, and a vertical load-bearing span. The lean is 45° from vertical and does not escalate: a flatter leg cleared a wide obstacle below the tip by laying a flat member across the gap, which is a strut rather than a support, so a contact the shape cannot serve takes a pillar instead. The joint count stays at one. Multi-joint chains, lattice searches and contour-following routes are gone and should not come back: a vertical pillar is the strongest support, so the router's only job is to find the earliest point where vertical becomes possible and get there in one move. `resolveConeSocketAndAxis` resolves the socket and the cone axis as one decision, so the builder renders the direction the router picked instead of deriving its own, and the socket is placed on that axis. See [Support Pathfinding V3](support-pathfinding-v3.md).
 
+## Real-model harness
+
+The synthetic corpus is for placement regressions. Real parts are measured with
+the same runner, from a directory of models:
+
+```bash
+npm run bench:real-models -- --corpus ~/models
+```
+
+`--corpus` reads every `<name>.stl` in the directory. An optional
+`<name>.islands.json` beside it supplies the **app's** island set (the serialized
+`DetectedIsland` array; `contact` is `{x,y,z}` and `contactVoxels` may be plain
+number arrays). With no JSON the harness falls back to the in-process voxel
+detector, which finds detached starts but not the Rust overhang/minima family;
+that set can under-represent real overhangs and can leave a model unsupported
+even though it prints with the app. Use the JSON for a measurement that
+corresponds to what the app places.
+
+The real-model script adds the frame solve to the ordinary table:
+
+- `member %`, overloaded member and cone counts, `tip %`, tip overloads,
+  rocking and deflection, and the worst hotspot with its Z section.
+- `--fail-on-overload` exits non-zero when any committed run has an overloaded
+  member (cones included), for a batch gate.
+- `--stress` is implied by the npm script; the plain
+  `bench:auto-supports` table remains placement-only.
+
+Detection runs the app's scanline worker in-process. The stand-in now dispatches
+one message at a time on a task: synchronous replies nested one stack frame per
+layer and overflowed at 960 layers on a 49 mm part, and a microtask alone let
+the process exit between layers. The queue also keeps first-message ordering
+(the worker script must run before its first init message).
+
+Measured on a real 3DBenchy STL with its own overhang islands supplied as JSON:
+150 candidates, 222 entities, 92.4 % area coverage, 25 cross orphans, and a
+frame solve at **327 % max member** (24 overloaded, 2 cones) — the kind of
+result the synthetic corpus cannot produce because its overhangs are authored
+to pass.
+
 ## Timing a run
 
 Every run logs where its time went, one line plus a detail line:

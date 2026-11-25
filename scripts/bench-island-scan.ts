@@ -51,21 +51,55 @@ interface WorkerShim {
  * whose message is being handled: the worker file calls `self.postMessage`, and
  * that is pointed at the calling shim for the duration of its own handler.
  */
+interface PendingDispatch {
+    listeners: Set<(event: { data: unknown }) => void>;
+    message: unknown;
+}
+
+const pendingDispatches: PendingDispatch[] = [];
+let dispatching = false;
+let currentReply: ((data: unknown) => void) | null = null;
+
+/**
+ * Run one worker message at a time.
+ *
+ * The worker posts its reply synchronously inside `onmessage`, so the reply
+ * target is the shim whose message is being dispatched. Replies are then
+ * delivered on a task, which unwinds the previous dispatch: the detector's
+ * `runNext` would otherwise nest one stack frame per layer and a 960-layer
+ * part overflows the Node stack. Tasks also keep the process alive between
+ * layers.
+ */
+function pumpDispatches(globals: { onmessage?: (event: { data: unknown }) => void }): void {
+    if (dispatching) return;
+    const next = pendingDispatches.shift();
+    if (!next) return;
+    dispatching = true;
+    currentReply = (data: unknown) => {
+        setTimeout(() => {
+            for (const listener of next.listeners) listener({ data });
+        }, 0);
+    };
+    try {
+        globals.onmessage?.({ data: next.message });
+    } catch (error) {
+        currentReply = null;
+        dispatching = false;
+        throw error;
+    } finally {
+        if (dispatching) {
+            currentReply = null;
+            dispatching = false;
+        }
+    }
+}
+
 function createWorkerShim(): WorkerShim {
     const listeners = new Set<(event: { data: unknown }) => void>();
     return {
         postMessage: (message: unknown) => {
-            const globals = globalThis as unknown as {
-                onmessage?: (event: { data: unknown }) => void;
-                postMessage?: (data: unknown) => void;
-            };
-            if (!globals.onmessage) {
-                throw new Error('the scanline worker module is not loaded; await installInProcessWorkers() first');
-            }
-            globals.postMessage = (data: unknown) => {
-                for (const listener of listeners) listener({ data });
-            };
-            globals.onmessage({ data: message });
+            pendingDispatches.push({ listeners, message });
+            pumpDispatches(globalThis as unknown as { onmessage?: (event: { data: unknown }) => void });
         },
         addEventListener: (type, listener) => {
             if (type === 'message') listeners.add(listener);
@@ -92,6 +126,11 @@ export async function installInProcessWorkers(): Promise<void> {
         // exists, which a hoisted static import would not allow. It assigns
         // `self.onmessage`, so evaluating it early is the whole failure mode.
         await import('../src/volumeAnalysis/IslandScan/scanlineScan.worker');
+        // The worker file calls `self.postMessage` synchronously from its
+        // onmessage. Route that reply to the shim currently being dispatched.
+        (globalThis as unknown as { postMessage: (data: unknown) => void }).postMessage = (data: unknown) => {
+            currentReply?.(data);
+        };
         globals.Worker = function InProcessWorker() {
             return createWorkerShim();
         };

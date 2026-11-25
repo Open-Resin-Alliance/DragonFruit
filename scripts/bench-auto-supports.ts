@@ -51,6 +51,7 @@ import {
     type AutoPlaceWorkerPayload,
 } from '../src/supports/autoSupport/autoPlace.worker.shared';
 import { getRouterStats, resetRouterStats } from '../src/supports/PlacementLogicV3/SmartPlacementV3';
+import { setAutoSupportVerboseLogging } from '../src/supports/autoSupport/autoPlace';
 import { disposeEventLoopChannel } from '../src/utils/yieldToEventLoop';
 import { supportProxyGeometryOf, type ProxyGeometryContext } from '../src/supports/proxyGeometry/seam';
 import { getFinalSocketPosition } from '../src/supports/SupportPrimitives/ContactCone';
@@ -60,6 +61,7 @@ import { SUPPORT_STATE_TYPES, contactEndpointsFor } from '../src/supports/suppor
 import type { AutoSupportSettings } from '../src/supports/autoSupport/settings';
 import type { AutoSupportPlan } from '../src/supports/autoSupport/types';
 import type { SupportState, Vec3 } from '../src/supports/types';
+import type { SupportFrameStressReport } from '../src/supports/autoSupport/supportGraphStress';
 import type { DetectedIsland } from '../src/volumeAnalysis/Islands/types';
 import type { InstancedShaft } from '../src/supports/SupportPrimitives/Shaft/InstancedShaftGroup';
 import type { InstancedRoot } from '../src/supports/SupportPrimitives/Roots/InstancedRootsGroup';
@@ -117,6 +119,27 @@ interface ModelMetrics {
     routerProbes: number;
     totalMs: number;
     phases: Record<string, number>;
+    /** Frame solve on the committed supports, or null when the run placed none. */
+    stress: StressMetrics | null;
+}
+
+export interface StressMetrics {
+    maxMemberUtilPct: number;
+    overloadedMembers: number;
+    overloadedConeMembers: number;
+    maxTipUtilPct: number;
+    overloadedTips: number;
+    maxTipRockingMm: number;
+    maxTipDeflectionMm: number;
+    reinforcedCount: number;
+    hotspots: Array<{
+        kind: 'tip' | 'member';
+        role?: 'shaft' | 'cone';
+        entityKind: string;
+        utilizationPct: number;
+        layerZMm: number;
+        pos: Vec3;
+    }>;
 }
 
 type Interval = { low: number; high: number };
@@ -134,6 +157,8 @@ function parseArgs(argv: string[]): {
     verbose: boolean;
     detect: boolean;
     detectOptions: DetectOptions;
+    stress: boolean;
+    failOnOverload: boolean;
 } {
     const options = {
         only: null as string[] | null,
@@ -148,6 +173,8 @@ function parseArgs(argv: string[]): {
         verbose: false,
         detect: false,
         detectOptions: { ...DEFAULT_DETECT_OPTIONS },
+        stress: false,
+        failOnOverload: false,
     };
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
@@ -167,6 +194,8 @@ function parseArgs(argv: string[]): {
         else if (arg === '--grid') options.grid = true;
         else if (arg === '--verbose') options.verbose = true;
         else if (arg === '--detect') options.detect = true;
+        else if (arg === '--stress') options.stress = true;
+        else if (arg === '--fail-on-overload') { options.stress = true; options.failOnOverload = true; }
         else if (arg === '--px-mm') options.detectOptions.pxMm = Number(value());
         else if (arg === '--layer-height') options.detectOptions.layerHeightMm = Number(value());
         else if (arg === '--help' || arg === '-h') {
@@ -185,17 +214,46 @@ function corpusFromDirectory(dir: string): CorpusEntry[] {
         .filter((file) => file.toLowerCase().endsWith('.stl'))
         .map((file) => basename(file, file.slice(file.lastIndexOf('.'))))
         .sort()
-        .map((name) => ({
-            name,
-            exercises: `model from ${dir}`,
-            geometry: () => {
-                const buffer = readFileSync(join(dir, `${name}.stl`));
-                return new STLLoader().parse(
-                    buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
-                );
-            },
-            islands: null,
-        }));
+        .map((name) => {
+            const islandsPath = join(dir, `${name}.islands.json`);
+            return {
+                name,
+                exercises: `model from ${dir}`,
+                geometry: () => {
+                    const buffer = readFileSync(join(dir, `${name}.stl`));
+                    return new STLLoader().parse(
+                        buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
+                    );
+                },
+                // The app's scan output, when present. Without it the harness
+                // falls back to the voxel detector, which under-represents
+                // overhangs (the Rust overhang/minima scanners are Tauri-only).
+                islands: existsSync(islandsPath)
+                    ? () => (JSON.parse(readFileSync(islandsPath, 'utf8')) as Array<DetectedIsland & {
+                        contact: Vec3;
+                        contactVoxels?: { xy: number[] | Float32Array; z?: number[] | Float32Array | null; count: number };
+                    }>).map((island) => ({
+                        ...island,
+                        contact: new THREE.Vector3(island.contact.x, island.contact.y, island.contact.z),
+                        ...(island.contactVoxels
+                            ? {
+                                contactVoxels: {
+                                    xy: island.contactVoxels.xy instanceof Float32Array
+                                        ? island.contactVoxels.xy
+                                        : Float32Array.from(island.contactVoxels.xy),
+                                    z: island.contactVoxels.z
+                                        ? (island.contactVoxels.z instanceof Float32Array
+                                            ? island.contactVoxels.z
+                                            : Float32Array.from(island.contactVoxels.z))
+                                        : null,
+                                    count: island.contactVoxels.count,
+                                },
+                            }
+                            : {}),
+                    }) as DetectedIsland)
+                    : null,
+            };
+        });
 }
 
 interface InstancedPrimitives {
@@ -542,6 +600,30 @@ function metricsFrom(
         phases: Object.fromEntries(
             (plan.analytics.timings?.phases ?? []).map((phase) => [phase.label, Math.round(phase.durationMs)]),
         ),
+        stress: stressFrom(report?.frameStress),
+    };
+}
+
+/** Reduce the frame solve to what a real-model run needs to judge a part. */
+function stressFrom(frame: SupportFrameStressReport | undefined): StressMetrics | null {
+    if (!frame) return null;
+    return {
+        maxMemberUtilPct: frame.maxMemberUtilizationPct,
+        overloadedMembers: frame.overloadedMembers,
+        overloadedConeMembers: frame.memberSegments.filter((seg) => seg.role === 'cone' && seg.utilizationPct > 100).length,
+        maxTipUtilPct: frame.maxTipUtilizationPct,
+        overloadedTips: frame.overloadedTips,
+        maxTipRockingMm: frame.maxTipRockingMm,
+        maxTipDeflectionMm: frame.maxTipDeflectionMm,
+        reinforcedCount: frame.reinforcedCount ?? 0,
+        hotspots: frame.hotspots.map((hotspot) => ({
+            kind: hotspot.kind,
+            ...(hotspot.role ? { role: hotspot.role } : {}),
+            entityKind: hotspot.entityKind,
+            utilizationPct: hotspot.utilizationPct,
+            layerZMm: hotspot.layerZMm,
+            pos: hotspot.pos,
+        })),
     };
 }
 
@@ -633,6 +715,35 @@ function formatTable(rows: ModelMetrics[]): string {
     return [line(header), widths.map((width) => '-'.repeat(width)).join('  '), ...body.map(line), line(totals)].join('\n');
 }
 
+function formatStressTable(rows: ModelMetrics[]): string {
+    const header = ['model', 'member %', 'over', 'cones', 'tip %', 'tipOver', 'rock mm', 'defl mm', 'top hotspot'];
+    const topHotspot = (row: ModelMetrics): string => {
+        const hotspot = row.stress?.hotspots[0];
+        if (!hotspot) return '—';
+        return `${hotspot.entityKind}${hotspot.role ? `/${hotspot.role}` : ''} ${hotspot.utilizationPct.toFixed(0)}% @Z${hotspot.layerZMm.toFixed(1)}`;
+    };
+    const body = rows.map((row) => {
+        const stress = row.stress;
+        return [
+            row.name,
+            stress ? stress.maxMemberUtilPct.toFixed(0) : '—',
+            stress ? String(stress.overloadedMembers) : '—',
+            stress ? String(stress.overloadedConeMembers) : '—',
+            stress ? stress.maxTipUtilPct.toFixed(0) : '—',
+            stress ? String(stress.overloadedTips) : '—',
+            stress ? stress.maxTipRockingMm.toFixed(3) : '—',
+            stress ? stress.maxTipDeflectionMm.toFixed(3) : '—',
+            topHotspot(row),
+        ];
+    });
+    const widths = header.map((_, column) => Math.max(
+        header[column].length,
+        ...body.map((row) => row[column].length),
+    ));
+    const line = (cells: string[]): string => cells.map((cell, column) => cell.padEnd(widths[column])).join('  ');
+    return [line(header), widths.map((width) => '-'.repeat(width)).join('  '), ...body.map(line)].join('\n');
+}
+
 async function main(): Promise<void> {
     const options = parseArgs(process.argv.slice(2));
     const entries = options.corpusDir ? corpusFromDirectory(options.corpusDir) : SYNTHETIC_CORPUS;
@@ -648,6 +759,7 @@ async function main(): Promise<void> {
         settings: options.settings,
     };
     const metrics: ModelMetrics[] = [];
+    if (options.verbose) setAutoSupportVerboseLogging(true);
     const restoreLogs = options.verbose ? null : silencePipelineLogs();
     for (const entry of selected) {
         process.stderr.write(`  running ${entry.name}\n`);
@@ -698,6 +810,17 @@ async function main(): Promise<void> {
         for (const row of metrics.filter((candidate) => candidate.orphans > 0)) {
             console.log(`\nORPHANS: ${row.name}: ${row.orphans} (${JSON.stringify(row.orphansByReason)})`);
         }
+        if (options.stress) {
+            console.log('\n== Frame stress ==');
+            console.log(formatStressTable(metrics));
+            for (const row of metrics.filter((candidate) => (candidate.stress?.overloadedMembers ?? 0) > 0)) {
+                const over = row.stress!;
+                console.log(`\nOVERLOADED: ${row.name}: ${over.overloadedMembers} member(s), ${over.overloadedConeMembers} cone(s), max ${over.maxMemberUtilPct.toFixed(0)}%`);
+            }
+            for (const row of metrics.filter((candidate) => candidate.entities === 0)) {
+                console.log(`\nNO SUPPORTS: ${row.name}: placement produced no entities`);
+            }
+        }
         if (baseline.length > 0) {
             console.log('\n== against baseline ==');
             const changed = differences.filter((entry) => entry.hard.length > 0 || entry.soft.length > 0);
@@ -730,9 +853,17 @@ async function main(): Promise<void> {
         }
         if (differences.some((entry) => entry.hard.length > 0 || entry.soft.length > 0)) process.exitCode = 1;
     }
+
+    if (options.failOnOverload) {
+        const overloaded = metrics.filter((row) => (row.stress?.overloadedMembers ?? 0) > 0);
+        if (overloaded.length > 0) {
+            console.error(`overloaded members: ${overloaded.map((row) => row.name).join(', ')}`);
+            process.exitCode = 1;
+        }
+    }
 }
 
 main().catch((error) => {
-    console.error(error instanceof Error ? error.message : error);
+    console.error(error instanceof Error ? (error.stack ?? error.message) : error);
     process.exitCode = 1;
 });
