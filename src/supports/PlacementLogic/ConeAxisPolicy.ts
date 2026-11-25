@@ -211,6 +211,18 @@ export function isSideWallContact(
  * normal: a deviation walk moves the socket anywhere inside its budget, and
  * where it lands is what renders.
  */
+/** Largest cone body whose socket rim still sits below the contact tip. */
+export function maxConeBodyDiameterForContact(args: {
+    coneAxis: Vec3;
+    socketPos: Vec3;
+    tipPos: Vec3;
+}): number {
+    const axis = normalizeOrFallback(args.coneAxis, { x: 0, y: 0, z: -1 });
+    const leanSin = Math.hypot(axis.x, axis.y);
+    if (leanSin <= 1e-9) return Number.POSITIVE_INFINITY;
+    return Math.max(0, (2 * (args.tipPos.z - args.socketPos.z)) / leanSin);
+}
+
 export function coneKeepsContactHighest(args: {
     coneAxis: Vec3;
     socketPos: Vec3;

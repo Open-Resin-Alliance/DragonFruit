@@ -81,7 +81,9 @@ import { memberDepartureAngleFromVerticalDeg } from '../PlacementLogic/smartPlac
  * it up, and it reads as a near-horizontal whisker off the model.
  */
 import {
+    coneKeepsContactHighest,
     isSideWallContact,
+    maxConeBodyDiameterForContact,
     MAX_SIDE_WALL_CONTACT_LEAN_DEG,
 } from '../PlacementLogic/ConeAxisPolicy';
 import { DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG } from '../Settings/defaults';
@@ -89,7 +91,7 @@ import { cloneSupportState, getSnapshot, setSnapshot } from '../state';
 import { createOwnedDraft, draftAddEntity, draftAddPrimitive, draftCommitSupport, draftRemoveEntity, draftRemovePrimitive, draftVersion, bumpDraftVersion, sealOwnedDraft } from './supportDraft';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import { buildTrunkData, buildTrunkDataFromPlacement } from '../SupportTypes/Trunk/trunkBuilder';
-import { getSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
+import { getFinalSocketPosition, getSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
 import {
     synthesizeTreeClusters,
     findOffsetSilhouetteRoute,
@@ -1872,11 +1874,24 @@ function placeOneCandidate(
     // `adaptive` those same contacts now measure ~69° (the policy tilts the axis
     // toward the plate) and stay.
     {
-        const n = trunkResult.trunk.contactCone?.normal ?? trunkResult.trunk.contactCone?.surfaceNormal;
+        const cone = trunkResult.trunk.contactCone;
+        const n = cone?.normal ?? cone?.surfaceNormal;
         if (n) {
             const settings = getSettings();
             if (isSideWallContact(n, settings.tip.coneAngleMode ?? 'normal', settings.tip.adaptiveConeAngleOffsetDeg)) {
                 logPlacement(`Rejected ${candidate.id}: side-wall trunk too shallow (cone within ${90 - MAX_SIDE_WALL_CONTACT_LEAN_DEG}° of flat)`);
+                return { kind: 'reject', rejectedReason: 'trunk_build_error', preset, draft: d };
+            }
+            // The axis policy's side-wall bound is not the whole geometry: a
+            // socket moved by the disk/standoff pass can still lift the cone's
+            // body rim over the contact. Validate the cone that will render.
+            if (cone && !coneKeepsContactHighest({
+                coneAxis: cone.normal,
+                socketPos: getFinalSocketPosition(cone),
+                tipPos: cone.pos,
+                bodyDiameterMm: cone.profile.bodyDiameterMm,
+            })) {
+                logPlacement(`Rejected ${candidate.id}: contact cone rises above its tip after socket placement`);
                 return { kind: 'reject', rejectedReason: 'trunk_build_error', preset, draft: d };
             }
         }
@@ -2922,9 +2937,20 @@ export function syncContactConeDiameters(
         const nextContact = cap !== undefined
             ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, Math.min(cap, uncapped))
             : uncapped;
-        if (Math.abs(body - hostDia) > 1e-6 || Math.abs(contact - nextContact) > 1e-6) {
+        // The body diameter is also a geometric constraint: on a leaning cone
+        // the socket rim rises by (body / 2) * lean. Following a thick host
+        // blindly lifted Claptrap's contact 0.269 mm over its own tip. Cap the
+        // body to the largest rim that still sits below the contact.
+        const socket = getFinalSocketPosition({ ...cone, profile: { ...cone.profile, bodyDiameterMm: hostDia } });
+        const maxBody = maxConeBodyDiameterForContact({
+            coneAxis: cone.normal,
+            socketPos: socket,
+            tipPos: cone.pos,
+        }) - 0.005;
+        const nextBody = Math.max(contact, Math.min(hostDia, maxBody));
+        if (Math.abs(body - nextBody) > 1e-6 || Math.abs(contact - nextContact) > 1e-6) {
             changed = true;
-            return { ...cone, profile: { ...cone.profile, bodyDiameterMm: hostDia, contactDiameterMm: nextContact } };
+            return { ...cone, profile: { ...cone.profile, bodyDiameterMm: nextBody, contactDiameterMm: nextContact } };
         }
         return cone;
     };

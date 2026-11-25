@@ -670,6 +670,14 @@ whole-frame structural stress on the assembled forest via
     printed cone, so letting the tapered number drive the action loop would add
     structure that cannot close the load path. The remaining limit is the cone
     **geometry** (contact/taper), not the shaft.
+  - **Contact body growth is capped by the socket rim.** Post-placement
+    `syncContactConeDiameters` used to follow the host shaft blindly. On a
+    leaning contact the socket rim rises by `(body / 2) * leanSin`; following a
+    1.34 mm host on an 81° contact lifted Claptrap's cone 0.269 mm over its own
+    tip. The body is now capped by
+    `maxConeBodyDiameterForContact` (minus 0.005 mm) as well as the host
+    diameter. Claptrap's above-contact defect went to zero with the same 1143
+    entities and 98.6 % coverage, for 0.9 mm³ less member volume.
   - **The tip contact check is biaxial.** `biaxialContactStressMpa` compares
     `√(σ_n² + 3τ²)` — the vertical peel plus the layer's lateral drag — against
     the support break strength, so a contact sheared by the diaphragm is counted

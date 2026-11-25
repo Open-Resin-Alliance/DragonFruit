@@ -100,6 +100,7 @@ interface ModelMetrics {
     /** Contacts whose own cone or socket joint rises over the tip it touches. */
     aboveContact: number;
     worstAboveContactMm: number;
+    aboveContactDetails: AboveContactDetail[];
     coveragePct: number;
     islandsCovered: number;
     islandsUncovered: number;
@@ -374,9 +375,10 @@ function measurePrimitives(primitives: InstancedPrimitives): {
  * Read through the registry's declared contact fields, so a type that adds a
  * contact is checked without an edit here.
  */
-function measureAboveContact(state: SupportState): { count: number; worstMm: number } {
+function measureAboveContact(state: SupportState): { count: number; worstMm: number; details: AboveContactDetail[] } {
     let count = 0;
     let worstMm = 0;
+    const details: AboveContactDetail[] = [];
     for (const descriptor of SUPPORT_STATE_TYPES) {
         const upperFields = contactEndpointsFor(descriptor.id)
             .filter((endpoint) => endpoint.end === 'upper')
@@ -391,11 +393,38 @@ function measureAboveContact(state: SupportState): { count: number; worstMm: num
                 if (above > ABOVE_CONTACT_TOLERANCE_MM) {
                     count++;
                     worstMm = Math.max(worstMm, above);
+                    details.push({
+                        type: descriptor.id,
+                        entityId: (entity as { id?: string }).id ?? '?',
+                        field,
+                        pos: contact.pos,
+                        socket: contact.socket,
+                        contactDiameterMm: contact.contactDiameterMm,
+                        bodyDiameterMm: contact.bodyDiameterMm,
+                        leanSin: contact.leanSin,
+                        aboveMm: above,
+                        ...(contact.normal ? { normal: contact.normal } : {}),
+                        ...(contact.surfaceNormal ? { surfaceNormal: contact.surfaceNormal } : {}),
+                    });
                 }
             }
         }
     }
-    return { count, worstMm };
+    return { count, worstMm, details };
+}
+
+export interface AboveContactDetail {
+    type: string;
+    entityId: string;
+    field: string;
+    pos: Vec3;
+    socket: Vec3;
+    contactDiameterMm: number;
+    bodyDiameterMm: number;
+    leanSin: number;
+    aboveMm: number;
+    normal?: Vec3;
+    surfaceNormal?: Vec3;
 }
 
 interface DeclaredContact {
@@ -405,6 +434,9 @@ interface DeclaredContact {
     bodyDiameterMm: number;
     /** Sine of the axis's lean from vertical, for the socket-end rise. */
     leanSin: number;
+    contactDiameterMm: number;
+    normal?: Vec3;
+    surfaceNormal?: Vec3;
 }
 
 /** A value the registry declared as a contact: a tip, an axis and a tip profile. */
@@ -449,6 +481,9 @@ function contactOf(value: unknown): DeclaredContact | null {
         },
         bodyDiameterMm,
         leanSin: Math.hypot(value.normal.x, value.normal.y) / axisLength,
+        contactDiameterMm,
+        normal: value.normal,
+        surfaceNormal,
     };
 }
 
@@ -572,6 +607,7 @@ function metricsFrom(
         memberVolumeMm3: analysis.volumeMm3,
         aboveContact: aboveContact.count,
         worstAboveContactMm: aboveContact.worstMm,
+        aboveContactDetails: aboveContact.details,
         coveragePct: plan.analytics.areaCoverage * 100,
         islandsCovered: plan.analytics.islandsCovered,
         islandsUncovered: plan.analytics.islandsUncovered,
@@ -806,6 +842,11 @@ async function main(): Promise<void> {
         if (undetermined.length > 0) console.log(`\nNOT DETERMINISTIC: ${undetermined.map((row) => row.name).join(', ')}`);
         for (const row of metrics.filter((candidate) => candidate.aboveContact > 0)) {
             console.log(`\nCONTACT ABOVE TIP: ${row.name}: ${row.aboveContact} contact(s), worst ${row.worstAboveContactMm.toFixed(3)}mm`);
+            for (const detail of row.aboveContactDetails) {
+                console.log(`  ${detail.type} ${detail.entityId} ${detail.field}: ${detail.aboveMm.toFixed(3)}mm above · body ${detail.bodyDiameterMm.toFixed(2)} · contact ${detail.contactDiameterMm.toFixed(2)} · leanSin ${detail.leanSin.toFixed(3)}`);
+                console.log(`    pos ${JSON.stringify(detail.pos)} socket ${JSON.stringify(detail.socket)}`);
+                if (detail.surfaceNormal) console.log(`    surfaceNormal ${JSON.stringify(detail.surfaceNormal)} normal ${JSON.stringify(detail.normal)}`);
+            }
         }
         for (const row of metrics.filter((candidate) => candidate.orphans > 0)) {
             console.log(`\nORPHANS: ${row.name}: ${row.orphans} (${JSON.stringify(row.orphansByReason)})`);

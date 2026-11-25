@@ -7,10 +7,21 @@ import {
     coneAxisLeanFromVerticalDeg,
     coneKeepsContactHighest,
     isSideWallContact,
+    maxConeBodyDiameterForContact,
     MAX_SIDE_WALL_CONTACT_LEAN_DEG,
     resolveConeAxisPolicy,
 } from '../PlacementLogic/ConeAxisPolicy';
 import type { Vec3 } from '../types';
+
+test('maxConeBodyDiameterForContact is the body whose rim just reaches the tip', () => {
+    const tip = { x: 0, y: 0, z: 10 };
+    const socket = { x: 0, y: 1, z: 9 };
+    const axis = { x: 0, y: 1, z: 0 };
+    // leanSin = 1, z gap = 1 -> body 2.0.
+    assert.equal(maxConeBodyDiameterForContact({ coneAxis: axis, socketPos: socket, tipPos: tip }), 2);
+    assert.equal(coneKeepsContactHighest({ coneAxis: axis, socketPos: socket, tipPos: tip, bodyDiameterMm: 2 }), true);
+    assert.equal(coneKeepsContactHighest({ coneAxis: axis, socketPos: socket, tipPos: tip, bodyDiameterMm: 2.01 }), false);
+});
 
 function angleBetween(a: Vec3, b: Vec3): number {
     const va = new THREE.Vector3(a.x, a.y, a.z).normalize();
