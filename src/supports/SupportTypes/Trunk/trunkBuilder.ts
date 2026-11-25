@@ -15,6 +15,7 @@ import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/cont
 // React hooks, which a server route cannot import.
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk/ContactDiskInteraction';
 import { getJointDiameter } from '../../constants';
+import { isCollisionFrustumBlocked } from '../../PlacementLogic/CollisionAvoidance';
 import { getSettings } from '../../Settings/state';
 import { applySizingOverridesToSettings } from '../../autoSupport/parameterSizing';
 import type { SupportData } from '../../rendering/SupportBuilder';
@@ -97,6 +98,50 @@ function normalizeTrunkJointChain(args: {
         constructionJoints: normalizedConstruction,
         routeJoints: normalizedRoute,
     };
+}
+
+/** The rendered cone start: the contact point plus the disk standoff. */
+function renderedConeStart(cone: ContactCone): Vec3 {
+    const normal = cone.surfaceNormal ?? cone.normal;
+    const thickness = cone.diskLengthOverride ?? (
+        cone.profile.type === 'disk'
+            ? calculateDiskThickness(normal, cone.normal, cone.profile)
+            : 0
+    );
+    return {
+        x: cone.pos.x + normal.x * thickness,
+        y: cone.pos.y + normal.y * thickness,
+        z: cone.pos.z + normal.z * thickness,
+    };
+}
+
+/**
+ * Exact cone-body check after the builder applies sizing overrides.
+ *
+ * The routing gate sees the unsized tip profile; this is the cone that actually
+ * renders. Skip the tip/disk region, where the cone is meant to meet the model,
+ * and reject only a body that intersects the mesh.
+ */
+function sizedConeClipsModel(cone: ContactCone, mesh: THREE.Mesh | undefined): boolean {
+    if (!mesh) return false;
+    const start = renderedConeStart(cone);
+    const socket = getFinalSocketPosition(cone);
+    const dx = socket.x - start.x;
+    const dy = socket.y - start.y;
+    const dz = socket.z - start.z;
+    const length = Math.hypot(dx, dy, dz);
+    if (length < 1e-6) return false;
+    const contactR = cone.profile.contactDiameterMm / 2;
+    const bodyR = cone.profile.bodyDiameterMm / 2;
+    const skip = Math.min(0.95, Math.max(1.2, contactR + 0.3) / length);
+    if (skip >= 1) return false;
+    return isCollisionFrustumBlocked(
+        { x: start.x + dx * skip, y: start.y + dy * skip, z: start.z + dz * skip },
+        socket,
+        contactR + (bodyR - contactR) * skip + 0.05,
+        bodyR + 0.05,
+        mesh,
+    );
 }
 
 function buildTipProfile(
@@ -454,6 +499,9 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         socketJointId: socketJointId,
     };
 
+    const finalError: LimitationCode | undefined = error
+        ?? (sizedConeClipsModel(contactCone, input.mesh) ? 'COLLISION_WITH_MODEL' : undefined);
+
     // Build Trunk
     const trunk: Trunk = {
         id: trunkId,
@@ -472,10 +520,10 @@ export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: T
         roots: root,
         segments: createdSegments,
         contactCone: contactCone,
-        error: error,
+        error: finalError,
         warning: warning,
         angle: angle // Required for gradient color
     };
 
-    return { root, trunk, supportData, route, error, warning, stagnated: placement.stagnated, exhaustedBudget: placement.exhaustedBudget };
+    return { root, trunk, supportData, route, error: finalError, warning, stagnated: placement.stagnated, exhaustedBudget: placement.exhaustedBudget };
 }
