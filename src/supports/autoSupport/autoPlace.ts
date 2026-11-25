@@ -4423,6 +4423,17 @@ export function forestReportToText(report: ForestReport, autoSettings?: Partial<
         }
         lines.push('');
     }
+    if (report.starts && report.starts.count > 0) {
+        lines.push('STARTS');
+        lines.push(`  Starts: ${report.starts.count} (${report.starts.underSupported} under-supported)`);
+        for (const row of report.starts.rows) {
+            lines.push(
+                `    ${row.id} ${row.areaMm2.toFixed(2)}mm² · ${row.contacts}/${row.minContacts} contacts · ` +
+                `cov ${row.coveragePct.toFixed(1)}% · Z${row.zMm.toFixed(1)}` +
+                `${row.pancakeRisk ? ' — PANCAKE RISK' : ''}`);
+        }
+        lines.push('');
+    }
     if (report.orphans && report.orphans.length > 0) {
         lines.push('ORPHANS CULLED');
         // Group by reason with justification
@@ -4763,6 +4774,8 @@ export function computeAutoSupportPlan(
         analytics: {
             islandsCovered: 0,
             islandsUncovered: islands.length,
+            startIslands: 0,
+            startsUnderSupported: 0,
             presets: { detail: 0, structure: 0, anchor: 0 },
             rejectionReasons: {},
             areaCoverage: 0,
@@ -6360,6 +6373,8 @@ export function computeAutoSupportPlan(
     analytics = {
         islandsCovered: supportedIds.size,
         islandsUncovered: islands.length - supportedIds.size,
+        startIslands: 0,
+        startsUnderSupported: 0,
         presets,
         rejectionReasons,
         areaCoverage: totalArea > 0 ? coveredArea / totalArea : 0,
@@ -7278,6 +7293,31 @@ export function computeAutoSupportPlan(
                     }
                 }
             }
+            const startSupportTips = collectSupportTips(draft, modelId);
+            const startRows = islands
+                .filter((island) => island.startIsland === true && !island.interior)
+                .map((island) => {
+                    const status = assessStartSupport(island, startSupportTips, resolvedMesh);
+                    return {
+                        id: island.id,
+                        areaMm2: status.areaMm2,
+                        contacts: status.contacts,
+                        minContacts: status.minContacts,
+                        coveragePct: status.coverage * 100,
+                        uncoveredAreaMm2: status.uncoveredAreaMm2,
+                        zMm: island.baseZ,
+                        pancakeRisk: status.pancakeRisk,
+                    };
+                });
+            forestReport.starts = {
+                count: startRows.length,
+                underSupported: startRows.filter((row) => row.pancakeRisk).length,
+                rows: startRows,
+            };
+            analytics.startIslands = forestReport.starts.count;
+            analytics.startsUnderSupported = forestReport.starts.underSupported;
+            console.log(LOG_PREFIX,
+                `Starts: ${forestReport.starts.count} (${forestReport.starts.underSupported} under-supported)`);
             analytics.forestReport = forestReport;
             console.log(LOG_PREFIX,
                 `Forest report: ${forestReport.hostCount} hosts, ${forestReport.leafCount} leaves, ` +

@@ -79,7 +79,7 @@ test('same-layer start tips ignore contacts at another cross-section', () => {
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { accelerateGeometry, initializeBVH } from '../../utils/bvh';
 import { footprintFromPoints } from '../../volumeAnalysis/Islands/voxelFootprint';
-import { computeAutoSupportPlan } from '../autoSupport/autoPlace';
+import { computeAutoSupportPlan, forestReportToText } from '../autoSupport/autoPlace';
 import { setModelMesh } from '../autoSupport/meshStore';
 import { createDefaultSettings } from '../Settings/types';
 import { getSettings, setSettings } from '../Settings/state';
@@ -236,6 +236,49 @@ test('an above-layer contact does not suppress the start contact the layer needs
         const tiny = assessStartSupport(tinyStart, tips, mesh);
         assert.ok(tiny.contacts >= 1, 'a same-layer start contact survives the above-layer decoy');
         assert.equal(tiny.pancakeRisk, false);
+    } finally {
+        setModelMesh('m', null);
+        resetStore();
+        resetKickstandsInState();
+        setSettings(prev);
+    }
+});
+
+
+test('the forest report carries a start row per start and a summary line', () => {
+    initializeBVH();
+    const prev = getSettings();
+    try {
+        const settings = createDefaultSettings();
+        settings.grid.enabled = false;
+        setSettings(settings);
+        resetStore();
+        const { mesh, islands } = detachedStartsScene();
+        setModelMesh('m', mesh);
+        const plan = computeAutoSupportPlan(
+            islands,
+            'm',
+            { debugSkipAutoBracing: true, stabilizationEnabled: false },
+            undefined,
+            mesh,
+        );
+        assert.ok(plan, 'plan computed');
+        const report = plan.result.analytics?.forestReport;
+        assert.ok(report?.starts, 'start report present');
+        assert.equal(report.starts.count, 3);
+        assert.equal(report.starts.underSupported, 0);
+        assert.equal(plan.result.analytics?.startIslands, 3);
+        assert.equal(plan.result.analytics?.startsUnderSupported, 0);
+        assert.deepEqual(report.starts.rows.map((row) => row.id).sort(),
+            ['start-large', 'start-small', 'start-tiny']);
+        for (const row of report.starts.rows) {
+            assert.ok(row.coveragePct >= 99, `${row.id} coverage row >= 99%`);
+            assert.ok(row.contacts >= row.minContacts, `${row.id} contacts row >= recipe`);
+            assert.equal(row.pancakeRisk, false);
+        }
+        const text = forestReportToText(report);
+        assert.match(text, /Starts: 3 \(0 under-supported\)/);
+        assert.match(text, /start-large/);
     } finally {
         setModelMesh('m', null);
         resetStore();

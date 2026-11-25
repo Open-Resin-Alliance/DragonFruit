@@ -142,6 +142,8 @@ export interface ForestReport {
     frameStress?: SupportFrameStressReport;
     /** Solved-demand topple margin about the pose's worst bearing edge. */
     toppleRisk?: ToppleRiskReport;
+    /** Island starts (first cross-sections) and whether their recipe holds. */
+    starts?: StartReport;
     /** Placement diagnostics: why trunks are where they are, fan/merge refusal counts */
     diagnostics?: {
         candidatesBySource: { voxel: number; minima: number; intersection: number; overhang: number; stabilization: number; reinforcement: number };
@@ -183,6 +185,25 @@ export interface ForestReport {
             refusals: Partial<Record<string, number>>;
         };
     };
+}
+
+/** One island start: its recipe, current same-layer coverage, and pancake risk. */
+export interface StartReportRow {
+    id: string;
+    areaMm2: number;
+    contacts: number;
+    minContacts: number;
+    coveragePct: number;
+    uncoveredAreaMm2: number;
+    zMm: number;
+    /** Fewer contacts than the recipe, or coverage below the start target. */
+    pancakeRisk: boolean;
+}
+
+export interface StartReport {
+    count: number;
+    underSupported: number;
+    rows: StartReportRow[];
 }
 
 /** One orphaned leaf/branch — host knot missing, drifted, or path now crosses a thickened shaft. */
@@ -299,6 +320,10 @@ export interface AutoPlaceAnalytics {
     islandsCovered: number;
     /** Number of islands that still have no nearby support. */
     islandsUncovered: number;
+    /** Island starts (first cross-sections) found in this run. */
+    startIslands: number;
+    /** Starts below their recipe count or 99% coverage. */
+    startsUnderSupported: number;
     /** Breakdown of candidates by assigned preset. */
     presets: { detail: number; structure: number; anchor: number };
     /** Breakdown of rejections by reason. */
