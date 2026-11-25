@@ -1695,6 +1695,9 @@ export interface StressBraceResult {
     skipped: number;
     changed: boolean;
     reasons: Partial<Record<'noEndpoints' | 'noHost' | 'noLegalLink' | 'duplicate' | 'blocked', number>>;
+    /** Request endpoints whose brace was actually added. A missing id is one
+     *  the caller may replace with a kickstand buttress in the same batch. */
+    bracedEntityIds: string[];
 }
 
 /**
@@ -1775,6 +1778,7 @@ export function addTargetedStressBraces(
     };
     let added = 0;
     let skipped = 0;
+    const bracedEntityIds: string[] = [];
 
     for (const request of requests) {
         const aId = resolveSupportId(request.aEntityId);
@@ -1894,6 +1898,7 @@ export function addTargetedStressBraces(
                             generatedBy: 'autoBracing',
                         };
                         existingPairIds.add(key);
+                        bracedEntityIds.push(...[a.supportId, b.supportId].filter((id): id is string => Boolean(id)));
                         added++;
                         placed = true;
                         break;
@@ -1913,5 +1918,5 @@ export function addTargetedStressBraces(
         }
     }
 
-    return { snapshot: next, added, skipped, changed: added > 0, reasons };
+    return { snapshot: next, added, skipped, changed: added > 0, reasons, bracedEntityIds };
 }

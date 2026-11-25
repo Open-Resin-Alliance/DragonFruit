@@ -2014,6 +2014,10 @@ export function reinforceOverloadedFrameMembers(
     report: SupportFrameStressReport,
     mesh?: THREE.Mesh,
     modelId?: string,
+    /** Members already given a structural action (brace, promotion, kickstand)
+     *  in the same batch; they are left for the verification solve instead of
+     *  being thickened as well. */
+    skipEntityIds?: ReadonlySet<string>,
 ): ReinforceFrameMembersResult {
     const peakUtilByTrunkId = new Map<string, number>();
     const peakUtilByBranchId = new Map<string, number>();
@@ -2075,6 +2079,7 @@ export function reinforceOverloadedFrameMembers(
     };
 
     for (const [trunkId, utilPct] of peakUtilByTrunkId.entries()) {
+        if (skipEntityIds?.has(trunkId)) continue;
         const trunk = snapshot.trunks?.[trunkId];
         if (!trunk || trunk.segments.length === 0) continue;
         if (modelId && trunk.modelId !== modelId) continue;
@@ -2139,6 +2144,7 @@ export function reinforceOverloadedFrameMembers(
     }
 
     for (const [branchId, utilPct] of peakUtilByBranchId.entries()) {
+        if (skipEntityIds?.has(branchId)) continue;
         const branch = snapshot.branches?.[branchId];
         if (!branch || branch.segments.length === 0) continue;
         if (modelId && branch.modelId !== modelId) continue;
@@ -2206,6 +2212,7 @@ export function reinforceOverloadedFrameMembers(
     }
 
     for (const [leafId, utilPct] of peakUtilByLeafId.entries()) {
+        if (skipEntityIds?.has(leafId)) continue;
         const leaf = snapshot.leaves?.[leafId];
         if (!leaf?.contactCone?.profile) continue;
         if (modelId && leaf.modelId !== modelId) continue;
@@ -2247,6 +2254,7 @@ export function reinforceOverloadedFrameMembers(
     }
 
     for (const [braceId, utilPct] of peakUtilByBraceId.entries()) {
+        if (skipEntityIds?.has(braceId)) continue;
         const brace = snapshot.braces?.[braceId];
         if (!brace) continue;
         if (modelId && brace.modelId !== modelId) continue;

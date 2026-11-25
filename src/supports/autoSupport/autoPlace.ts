@@ -153,10 +153,11 @@ import {
 
 const LOG_PREFIX = '[AutoSupport]';
 
-/** Thicken→re-solve rounds after bracing. Three is enough to absorb the
- *  neighbour coupling (one shaft crossing its limit when the next thickens);
- *  more would churn on members that are at the clearance cap. */
-const MAX_STRESS_REINFORCE_PASSES = 3;
+/** Up to two batched action passes, each followed by a verification solve:
+ *  at most three beam solves instead of the old four. The first pass applies
+ *  every action it can from one solve; a second pass only runs when the first
+ *  verification still reports overload, so converged models stay at two solves. */
+const MAX_STRESS_REINFORCE_PASSES = 2;
 /** Stress-driven braces a single feedback pass may add. The action list is
  *  severity-ordered; a cap keeps a rocking model from being wrapped at once. */
 const MAX_STRESS_BRACES_PER_PASS = 4;
@@ -7493,6 +7494,11 @@ export function computeAutoSupportPlan(
                     let changedThisPass = false;
                     let reinforcedThisPass = 0;
                     let bracedThisPass = 0;
+                    let bracedIds: ReadonlySet<string> = new Set();
+                    // Reset per pass: a member braced in pass 1 may still be
+                    // over after the verification solve and can be thickened in
+                    // pass 2.
+                    const structurallyAddressed = new Set<string>();
 
                     const requests: StressBraceRequest[] = [];
                     let promotedThisPass = 0;
@@ -7504,6 +7510,8 @@ export function computeAutoSupportPlan(
                         )) {
                             if (action.kind === 'brace-rocking') {
                                 if (requests.length >= MAX_STRESS_BRACES_PER_PASS) continue;
+                                structurallyAddressed.add(action.aEntityId);
+                                structurallyAddressed.add(action.bEntityId);
                                 requests.push({
                                     aEntityId: action.aEntityId,
                                     bEntityId: action.bEntityId,
@@ -7528,6 +7536,7 @@ export function computeAutoSupportPlan(
                                     );
                                     if (promoted.promoted) {
                                         draft = promoted.draft;
+                                        structurallyAddressed.add(action.entityId);
                                         promotedThisPass++;
                                         stressLeafPromotions++;
                                         changedThisPass = true;
@@ -7535,6 +7544,7 @@ export function computeAutoSupportPlan(
                                         promotionSkips[promoted.reason] = (promotionSkips[promoted.reason] ?? 0) + 1;
                                     }
                                 } else if (requests.length < MAX_STRESS_BRACES_PER_PASS) {
+                                    structurallyAddressed.add(action.entityId);
                                     requests.push({
                                         aEntityId: action.entityId,
                                         // A member's own midpoint is where the
@@ -7554,6 +7564,7 @@ export function computeAutoSupportPlan(
                                 if (requests.length >= MAX_STRESS_BRACES_PER_PASS) continue;
                                 if (autoSettings.modelScaleEnabled === false
                                     || memberAtReinforcementCap(draft, action.entityKind, action.entityId)) {
+                                    structurallyAddressed.add(action.entityId);
                                     requests.push({
                                         aEntityId: action.entityId,
                                         atZMm: action.layerZMm,
@@ -7580,6 +7591,7 @@ export function computeAutoSupportPlan(
                             draft = braced.snapshot;
                             stressBracesAdded += braced.added;
                             bracedThisPass = braced.added;
+                            bracedIds = new Set(braced.bracedEntityIds);
                             changedThisPass = true;
                         } else if (braced.skipped > 0) {
                             console.log(LOG_PREFIX,
@@ -7587,43 +7599,52 @@ export function computeAutoSupportPlan(
                         }
                     }
 
-                    // A shaft with no neighbour in brace reach gets a plate
-                    // buttress: a kickstand at 30-45°, not a fatter pole and
-                    // not an unbraced flagpole. Only when the brace pass landed
-                    // nothing (no host existed) and the request names a trunk.
+                    // A shaft whose brace request did not land gets a plate
+                    // buttress: a kickstand at 30-45°, not a fatter pole and not
+                    // an unbraced flagpole. This is per trunk, so a batch where
+                    // one pair was braced still buttresses the pair that had no
+                    // host.
                     let kickstandsThisPass = 0;
-                    if (bracedThisPass === 0 && requests.length > 0) {
-                        const targetZ = new Map<string, number>();
+                    if (requests.length > 0) {
+                        const targetTrunks = new Map<string, { z: number; entityIds: string[] }>();
                         for (const request of requests) {
                             for (const entityId of [request.aEntityId, request.bEntityId]) {
                                 if (!entityId) continue;
                                 const trunkId = owningTrunkId(draft, entityId);
-                                if (trunkId && !targetZ.has(trunkId)) targetZ.set(trunkId, request.atZMm);
+                                if (!trunkId) continue;
+                                const entry = targetTrunks.get(trunkId) ?? { z: request.atZMm, entityIds: [] };
+                                entry.entityIds.push(entityId);
+                                targetTrunks.set(trunkId, entry);
                             }
                         }
-                        for (const [trunkId, z] of targetZ) {
+                        for (const [trunkId, target] of targetTrunks) {
                             if (kickstandsThisPass >= MAX_STRESS_KICKSTANDS_PER_PASS) break;
-                            const buttress = buttressTrunkWithKickstand(draft, modelId, trunkId, z, resolvedMesh ?? undefined);
+                            if (target.entityIds.some((id) => bracedIds.has(id))) continue;
+                            const buttress = buttressTrunkWithKickstand(draft, modelId, trunkId, target.z, resolvedMesh ?? undefined);
                             if (!buttress.added) continue;
                             draft = buttress.draft;
+                            structurallyAddressed.add(trunkId);
                             kickstandsThisPass++;
                             stressKickstandsAdded++;
                             changedThisPass = true;
                         }
                         if (kickstandsThisPass > 0) {
                             console.log(LOG_PREFIX,
-                                `Stress buttress: ${kickstandsThisPass} kickstand(s) added for trunks with no brace host`);
+                                `Stress buttress: ${kickstandsThisPass} kickstand(s) added for trunks whose brace did not land`);
                         }
                     }
 
-                    // Structure first: only a pass that landed no brace and no
-                    // promotion may thicken, and only up to the cap.
-                    if (!changedThisPass && memberOverloaded && autoSettings.modelScaleEnabled !== false) {
+                    // Every action is applied from the same first solve: members
+                    // that got a brace/promotion/kickstand are left to the
+                    // verification solve, the rest take one thickening step up
+                    // to the structure cap.
+                    if (memberOverloaded && autoSettings.modelScaleEnabled !== false) {
                         const reinforced = reinforceOverloadedFrameMembers(
                             draft,
                             frameStress,
                             resolvedMesh ?? undefined,
                             modelId,
+                            structurallyAddressed,
                         );
                         if (reinforced.changed) {
                             draft = reinforced.snapshot;

@@ -884,3 +884,30 @@ test('a trunk already at the reinforcement cap is skipped, not clubbed further',
     assert.equal(reinforced.snapshot.trunks.tCap.segments[0].diameter, 1.4);
     assert.equal(reinforced.skippedCount, 1, 'the at-cap skip is counted for the brace fallback');
 });
+
+test('a member already structurally addressed is not thickened in the same batch', () => {
+    const draft: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            rSkip: { id: 'rSkip', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            tSkip: {
+                id: 'tSkip', modelId: 'm', rootId: 'rSkip',
+                segments: [{ id: 'sSkip', diameter: 0.65, bottomJoint: { id: 'js0', pos: { x: 0, y: 0, z: 1 }, diameter: 0.65 }, topJoint: { id: 'js1', pos: { x: 0, y: 0, z: 19 }, diameter: 0.65 } }],
+                contactCone: { id: 'cSkip', pos: { x: 0, y: 0, z: 21.5 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.28, bodyDiameterMm: 0.65, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+    };
+    const graph = buildSupportGraph(draft, 'm');
+    const report = solveSupportFrameStress(graph, undefined, {
+        explicitNodalLoads: new Map([[graph.nodes.length - 1, [0.12, 0, 0.25, 0, 0, 0]]]),
+    });
+    assert.ok(report.maxMemberUtilizationPct > 100);
+    const skipped = reinforceOverloadedFrameMembers(draft, report, undefined, 'm', new Set(['tSkip']));
+    assert.equal(skipped.changed, false, 'a braced/promoted member is left to the verification solve');
+    assert.equal(skipped.reinforcedTrunks, 0);
+    assert.equal(skipped.snapshot.trunks.tSkip.segments[0].diameter, 0.65);
+});

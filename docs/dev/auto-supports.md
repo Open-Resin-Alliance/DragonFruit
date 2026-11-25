@@ -551,30 +551,42 @@ whole-frame structural stress on the assembled forest via
     plain-text printability report prints them
     as `RECOMMENDED ACTIONS`. Tips are deliberately not planned here — their
     capacity pass is `computeForceBudget`, whose add point is the cell's
-    furthest point, not the tip's own position. **Execution is wired and
-    structure-first:** the feedback loop runs up to
-    `MAX_STRESS_REINFORCE_PASSES` rounds; each round turns `brace-rocking`,
-    `brace-member`, and any `thicken-member` already at its diameter cap into
-    `addTargetedStressBraces` requests (a horizontal lateral tie at the layer
-    first, the auto-brace 45° link as fallback; knots on both host segments,
-    mesh clearance, one brace per support pair) capped at
-    `MAX_STRESS_BRACES_PER_PASS` (4), and re-solves. Only a round that landed
-    **no** brace and no leaf promotion thickens, and only up to the cap below —
-    so a shaft is never made fatter while a shorter span is still available. A rocking pair may be
-    farther apart than the ladder's aesthetic `maxBraceLengthMm`, so that action
-    carries the pair's own span (capped at 60 mm). A member brace attaches at
-    the member's own midpoint, not the report's critical layer: the critical
-    layer can sit far from the shaft that was measured, and a brace there would
-    split the wrong span. `thicken-member` stays with
-    `reinforceOverloadedFrameMembers` for a shaft below its cap; once scaling is
-    disabled or the shaft sits at the cap, the loop requests the brace instead.
-    `debugSkipAutoBracing` disables all of it. When an overloaded member is a leaf, the
-    loop cannot brace it (there is no shaft to knot onto): it calls
-    `promoteOverloadedLeaf` to replace the leaf with a branch on the same host
-    knot (same tip, new shaft), capped at two promotions per pass, and re-solves
-    so the next round can thicken or brace that branch. A refused promotion is
-    counted by reason (`buildFailed`, `unstable`, `crosses`) and left alone.
-    `thicken-member` stays with `reinforceOverloadedFrameMembers`.
+    furthest point, not the tip's own position. **Execution is wired as a
+    batched loop:** `MAX_STRESS_REINFORCE_PASSES` is 2, and each round works
+    from one solve, so a run costs at most three beam solves (initial +
+    verification) instead of the old four. In a round the loop turns
+    `brace-rocking`, `brace-member`, and any `thicken-member` already at its
+    diameter cap into `addTargetedStressBraces` requests (a horizontal lateral
+    tie at the layer first, the auto-brace 45° link as fallback; knots on both
+    host segments, mesh clearance, one brace per support pair) capped at
+    `MAX_STRESS_BRACES_PER_PASS` (4). A rocking pair may be farther apart than
+    the ladder's aesthetic `maxBraceLengthMm`, so that action carries the pair's
+    own span (capped at 60 mm). A member brace attaches at the member's own
+    midpoint, not the report's critical layer: the critical layer can sit far
+    from the shaft that was measured, and a brace there would split the wrong
+    span. When an overloaded member is a leaf, the loop cannot brace it (there
+    is no shaft to knot onto): it calls `promoteOverloadedLeaf` to replace the
+    leaf with a branch on the same host knot (same tip, new shaft), capped at
+    two promotions per round. A refused promotion is counted by reason
+    (`buildFailed`, `unstable`, `crosses`) and left alone.
+    `debugSkipAutoBracing` disables all of it.
+  - **Braces and thickening are batched, not serialized.** Every action is
+    applied from the same solve: members that got a brace, promotion or
+    kickstand are added to a skip set and `reinforceOverloadedFrameMembers`
+    leaves them to the verification solve; every other overloaded shaft takes
+    one thickening step up to the cap. A second round runs only when the
+    verification still reports overload, so converged models stay at two solves
+    and stubborn ones stop at three with the residual in the report. The frame
+    is never pushed through the old brace→re-solve→thicken→re-solve churn.
+  - **A trunk whose brace request did not land gets a plate buttress.**
+    `addTargetedStressBraces` returns `bracedEntityIds`; `autoPlace` maps the
+    remaining request endpoints back to their owning trunks and calls
+    `buttressTrunkWithKickstand` for a trunk whose own request is still
+    unserved, even when other pairs in the same batch were braced. This is
+    per-trunk, so one successful pair no longer suppresses the kickstand a
+    different unbraced spire needs. The buttress is one per trunk and capped at
+    `MAX_STRESS_KICKSTANDS_PER_PASS` (2) per round; a trunk that already has a
+    kickstand is skipped.
   - **The tip contact check is biaxial.** `biaxialContactStressMpa` compares
     `√(σ_n² + 3τ²)` — the vertical peel plus the layer's lateral drag — against
     the support break strength, so a contact sheared by the diaphragm is counted
