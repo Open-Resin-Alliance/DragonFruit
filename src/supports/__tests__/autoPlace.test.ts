@@ -1314,7 +1314,7 @@ for (const gridEnabled of [false, true]) {
 // Model-scale sizing: the run-level factors reach the built geometry.
 // ---------------------------------------------------------------------------
 
-test('the same island sizes a thicker trunk on a big model than on a small one', () => {
+test('a big model never gets a thinner trunk than a small one, and the structure cap holds', () => {
     resetStore();
     resetKickstandsInState();
     clearHistory();
@@ -1342,10 +1342,14 @@ test('the same island sizes a thicker trunk on a big model than on a small one',
 
     const small = shaftForBox(30, 30, 30);
     const large = shaftForBox(220, 220, 60);
+    // Both runs carry the whole model on one contact, so the stress loop takes
+    // each to the structure cap (1.4 mm); growth past the band is now bracing
+    // and kickstands, not a fatter pole. The large model may never be thinner.
     assert.ok(
-        large > small,
-        `the large model's trunk is thicker (${large.toFixed(2)} mm vs ${small.toFixed(2)} mm)`,
+        large >= small,
+        `the large model's trunk is never thinner (${large.toFixed(2)} mm vs ${small.toFixed(2)} mm)`,
     );
+    assert.ok(large <= 1.4 + 1e-6, `the structure shaft cap holds (${large.toFixed(2)} mm)`);
 
     setModelMesh('model-a', null);
 });

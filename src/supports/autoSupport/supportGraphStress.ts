@@ -8,8 +8,12 @@ import { GREEN_RESIN_MODULUS_MPA, NOMINAL_PEEL_PRESSURE_MPA } from './treeSynthe
 import { DEFAULT_SUPPORT_BREAK_STRENGTH_MPA } from './greenMaterialCalibration';
 /** Poisson's ratio for green-state cured UV photopolymer resin. */
 const GREEN_RESIN_POISSON = 0.35;
-/** Above this free-node threshold, report rigid-body tip overload only to keep solve time tiny. */
-const MAX_FRAME_SOLVE_FREE_NODES = 1200;
+/** Above this free-node threshold, report rigid-body tip overload only to keep
+ *  solve time bounded. A dense miniature forest is ~1700 members; at 1200 the
+ *  solve silently degraded to rigid-body exactly where member bending decides
+ *  whether to brace or thicken. 4500 keeps the full frame solve on those runs;
+ *  beyond it the rigid-body fallback (and its `solverMode` report) still hold. */
+const MAX_FRAME_SOLVE_FREE_NODES = 4500;
 /** Extra stages the per-component pass may add beyond the global critical layers. */
 const MAX_COMPONENT_STAGE_LAYERS = 8;
 /** Lateral peel drag fraction during release from flexible FEP film. */
@@ -1533,7 +1537,10 @@ export function solveSupportFrameStress(
         let rzOld = 0;
         for (let i = 0; i < dofCount; i++) rzOld += r[i] * zVec[i];
 
-        const maxIter = Math.min(350, Math.max(80, freeNodeCount * 4));
+        // 350 iterations is plenty at the old 1200-node ceiling; a 4500-node
+        // frame needs a deeper Krylov space to reach the same residual.
+        const iterCap = freeNodeCount > 1200 ? 500 : 350;
+        const maxIter = Math.min(iterCap, Math.max(80, freeNodeCount * 4));
         const tolSq = 1e-10 * rhsNormSq;
 
         for (let iter = 0; iter < maxIter; iter++) {
@@ -1932,12 +1939,28 @@ export function solveSupportFrameStress(
     };
 }
 
-/** Max strengthened diameter (mm) applied by automatic weak-spot reinforcement. */
-const MAX_REINFORCED_TRUNK_DIA_MM = 2.2;
-const MAX_REINFORCED_BRANCH_DIA_MM = 1.65;
-const MAX_REINFORCED_LEAF_BODY_DIA_MM = 1.55;
-const MAX_REINFORCED_BRACE_DIA_MM = 1.6;
+/** Max strengthened diameter (mm) applied by automatic weak-spot reinforcement.
+ *  A trunk stops at the structure band + headroom (1.4 mm): past that the
+ *  answer is a shorter span (brace), a kickstand or a split, not a fatter
+ *  pole — which is also what makes the print removable in one piece per tree.
+ *  Branches/leaves stay under the trunk so a member never reads fatter than
+ *  the host carrying it; braces are ties, not columns. */
+const MAX_REINFORCED_TRUNK_DIA_MM = 1.4;
+const MAX_REINFORCED_BRANCH_DIA_MM = 1.4;
+const MAX_REINFORCED_LEAF_BODY_DIA_MM = 1.3;
+const MAX_REINFORCED_BRACE_DIA_MM = 1.4;
 const REINFORCE_JOINT_OFFSET_MM = 0.125;
+
+/** The reinforcement ceiling for a shaft kind; 0 when the kind has no shaft. */
+export function reinforcementDiameterCapMm(kind: SupportTypeId): number {
+    switch (kind) {
+        case 'trunk': return MAX_REINFORCED_TRUNK_DIA_MM;
+        case 'branch': return MAX_REINFORCED_BRANCH_DIA_MM;
+        case 'leaf': return MAX_REINFORCED_LEAF_BODY_DIA_MM;
+        case 'brace': return MAX_REINFORCED_BRACE_DIA_MM;
+        default: return 0;
+    }
+}
 
 function insetSegmentEnd(start: Vec3, end: Vec3, maxInsetMm = 1.5): Vec3 {
     const dx = end.x - start.x;

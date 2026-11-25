@@ -280,6 +280,12 @@ adapting Cao et al. (2025) to run interactively inside the auto-support worker:
   fail `isShaftBlocked` while its placed pre-resize shaft cleared the mesh is
   reverted to its placed diameter rather than thickening into a `hostBlocked`
   cull.
+- **A bare pillar is not re-profiled.** `computeAndApplySupportDiameterProfile`
+  only has attachment demand to write a stepwise profile from; a trunk with no
+  hosted branch or leaf is skipped entirely. Re-deriving it from its own contact
+  demand rewrote the placed diameter (normalizing a deliberately tapered pillar
+  back to its base) and re-encoded its settings for no load story. A bare
+  pillar's slenderness belongs to the stress loop and the placement sizing.
 
 ## Cluster-first tree synthesis and occluded rescue
 
@@ -449,20 +455,23 @@ whole-frame structural stress on the assembled forest via
     plain-text printability report prints them
     as `RECOMMENDED ACTIONS`. Tips are deliberately not planned here — their
     capacity pass is `computeForceBudget`, whose add point is the cell's
-    furthest point, not the tip's own position. **Execution is wired:** after
-    bracing, the stress feedback loop runs up to `MAX_STRESS_REINFORCE_PASSES`
-    rounds; each round thickens what it can, then turns `brace-rocking` and
-    `brace-member` actions into `addTargetedStressBraces` requests (a horizontal
-    lateral tie at the layer first, the auto-brace 45° link as fallback; knots on
-    both host segments, mesh clearance, one brace per support pair) capped at
-    `MAX_STRESS_BRACES_PER_PASS` (4), and re-solves. A rocking pair may be
+    furthest point, not the tip's own position. **Execution is wired and
+    structure-first:** the feedback loop runs up to
+    `MAX_STRESS_REINFORCE_PASSES` rounds; each round turns `brace-rocking`,
+    `brace-member`, and any `thicken-member` already at its diameter cap into
+    `addTargetedStressBraces` requests (a horizontal lateral tie at the layer
+    first, the auto-brace 45° link as fallback; knots on both host segments,
+    mesh clearance, one brace per support pair) capped at
+    `MAX_STRESS_BRACES_PER_PASS` (4), and re-solves. Only a round that landed
+    **no** brace and no leaf promotion thickens, and only up to the cap below —
+    so a shaft is never made fatter while a shorter span is still available. A rocking pair may be
     farther apart than the ladder's aesthetic `maxBraceLengthMm`, so that action
     carries the pair's own span (capped at 60 mm). A member brace attaches at
     the member's own midpoint, not the report's critical layer: the critical
     layer can sit far from the shaft that was measured, and a brace there would
     split the wrong span. `thicken-member` stays with
-    `reinforceOverloadedFrameMembers`; when scaling is disabled or a pass
-    reinforced nothing, the loop falls back to a brace for that shaft.
+    `reinforceOverloadedFrameMembers` for a shaft below its cap; once scaling is
+    disabled or the shaft sits at the cap, the loop requests the brace instead.
     `debugSkipAutoBracing` disables all of it. When an overloaded member is a leaf, the
     loop cannot brace it (there is no shaft to knot onto): it calls
     `promoteOverloadedLeaf` to replace the leaf with a branch on the same host
@@ -478,10 +487,13 @@ whole-frame structural stress on the assembled forest via
     tensile/shear asymmetry is not measured yet, so this is deliberately
     isotropic and conservative. `peakStressMpa` on a tip hotspot is this
     equivalent stress; `maxTipUtilizationPct` and the peel curve use it too.
-  - When grounded free nodes are at most `1200` (`solverMode: 'frame3d'`),
+  - When grounded free nodes are at most `4500` (`solverMode: 'frame3d'`;
+    raised from 1200 because a dense miniature silently fell back to
+    rigid-body exactly where member bending decides brace-vs-thicken),
     `solveSupportFrameStress` assembles a 6-DOF per-node 3D Euler-Bernoulli beam
     stiffness matrix and solves `K u = f` with Block-Jacobi Preconditioned
-    Conjugate Gradient to compute tip deflection, combined axial + bending stress
+    Conjugate Gradient (iteration cap 350 at ≤1200 free nodes, 500 above) to
+    compute tip deflection, combined axial + bending stress
     vs the **bulk** member strength (`options.memberStrengthMpa`, the resin
     datasheet tensile; it defaults to `supportStrengthMpa` for a caller with one
     strength), and Euler column buckling utilization (`hotspots`). The **tip**
@@ -494,13 +506,18 @@ whole-frame structural stress on the assembled forest via
     into its root disk and cured into the part at its contact. The former 1.1 L
     was pinned-pinned plus an imperfection and put a 1.1 mm × 20 mm trunk on the
     same print at 301 % buckling.
-  - `reinforceOverloadedFrameMembers` scales overloaded `trunk` (`≤ 2.2 mm`),
-    `branch` (`≤ 1.65 mm`), `leaf` cone body (`≤ 1.55 mm`), and `brace`
-    (`≤ 1.6 mm`) members by `clamp((util / 90)^(1/3), 1.10, 1.35)` with stepped
+  - `reinforceOverloadedFrameMembers` scales overloaded `trunk` (`≤ 1.4 mm`),
+    `branch` (`≤ 1.4 mm`), `leaf` cone body (`≤ 1.3 mm`), and `brace`
+    (`≤ 1.4 mm`) members by `clamp((util / 90)^(1/3), 1.10, 1.35)` with stepped
     `isShaftBlocked` clearance fallbacks, preserves tip `contactDiameterMm`,
     and upgrades host knots before updating `reinforcedCount` and re-solving.
+    The caps are deliberate: past 1.4 mm the answer is a shorter span, a
+    kickstand or a split, not a fatter pole (and a member never reads fatter
+    than the trunk carrying it). `reinforcementDiameterCapMm` exposes the same
+    number so the loop and the report cannot drift.
   - **The run closes the loop before it hands over a report.** After bracing,
-    `computeAutoSupportPlan` solves the frame, thickens what is over limit, and
+    `computeAutoSupportPlan` solves the frame, braces/kickstands what is over
+    limit first, thickens only what no structural action could fix, and
     re-solves — up to `MAX_STRESS_REINFORCE_PASSES` (3) rounds, stopping when no
     member is overloaded or nothing changes. A single pass left members over
     limit whenever thickening one shaft pushed its neighbour over; the report
@@ -602,6 +619,15 @@ nothing here reads a force. The three caps are **settings, not constants** (the
 `SIZE_REFERENCE_MM`/`SIZE_EXPONENT` pair and their load/height siblings stay
 internal), and `autoSupport.modelScaleEnabled = false` pins all three factors to
 ×1 — the band exactly — for a caller that wants the local sizing alone.
+
+The height/load curve is **capped at the band's own shaft ceiling**
+(`curveShaftCapMm`): detail and structure stop at band + `STRUCTURE_SHAFT_HEADROOM_MM`
+(0.4 mm → 1.2 / 1.4 mm), while the anchor band keeps the absolute 2.0 mm
+ceiling because its job is anchoring, not load-carrying. A tall support on a
+large heavy part therefore cannot become a pole; the stress loop shortens its
+span (brace) or buttresses it (kickstand) instead. The explicit `sizeScale`
+multiplier remains the one term allowed past the curve — it is an instruction,
+not a curve.
 
 `ModelSizingContext` is optional on `sizeParameters`: a caller with no mesh gets
 the band exactly, which is why the unit tests and the manual-placement paths are

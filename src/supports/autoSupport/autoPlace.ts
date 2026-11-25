@@ -97,6 +97,7 @@ import {
 import {
     buildSupportGraph,
     reinforceOverloadedFrameMembers,
+    reinforcementDiameterCapMm,
     solveSupportFrameStress,
 } from './supportGraphStress';
 import { computeForceBudgetFromGraph, collectForceBudgetSurfaces } from './forceBudget';
@@ -178,6 +179,24 @@ function memberMaxAngleFromVerticalDeg(gridEnabled: boolean = Boolean(getSetting
     if (!gridEnabled) return OFF_GRID_MAX_MEMBER_ANGLE_FROM_VERTICAL_DEG;
     const minRiseDeg = getSettings().grid?.minBranchAngleDeg ?? DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG;
     return Math.max(0, Math.min(90, 90 - minRiseDeg));
+}
+
+/** True once a shaft kind is at the diameter the reinforcement pass may reach.
+ *  Past it the answer is a shorter span (brace) or a plate buttress (kickstand),
+ *  not a fatter pole. */
+function memberAtReinforcementCap(draft: SupportState, kind: SupportTypeId, entityId: string): boolean {
+    const cap = reinforcementDiameterCapMm(kind);
+    if (!(cap > 0)) return false;
+    const collection = draft[getSupportTypeDescriptor(kind).location.key] as unknown as
+        | Record<string, { segments?: Array<{ diameter?: number }>; contactCone?: { profile?: { bodyDiameterMm?: number } } }>
+        | undefined;
+    const entity = collection?.[entityId];
+    if (!entity) return false;
+    if (entity.segments && entity.segments.length > 0) {
+        return entity.segments.some((seg) => (seg.diameter ?? 0) >= cap - 1e-3);
+    }
+    const body = entity.contactCone?.profile?.bodyDiameterMm;
+    return typeof body === 'number' && body >= cap - 1e-3;
 }
 
 /**
@@ -7100,12 +7119,11 @@ export function computeAutoSupportPlan(
                     supportStrengthMpa,
                     memberStrengthMpa,
                 });
-                // Close the loop with the stress solver: thicken, brace, re-solve,
-                // and repeat until the frame is inside limits or nothing moves.
-                // Thickening alone could not fix an overloaded leaf at its cone
-                // cap or a rocking pair; `planStressActions` names those, and
-                // `addTargetedStressBraces` executes them with the auto-brace
-                // conventions.
+                // Close the loop with the stress solver: brace / kickstand
+                // first, re-solve, and only thicken when no structural action
+                // could be applied this pass. The structure band is capped at
+                // 1.4 mm, so a fatter pole is not an answer the loop can reach;
+                // the shorter span or the plate buttress is.
                 let reinforcedTotal = 0;
                 let stressBracesAdded = 0;
                 let stressLeafPromotions = 0;
@@ -7117,20 +7135,7 @@ export function computeAutoSupportPlan(
 
                     let changedThisPass = false;
                     let reinforcedThisPass = 0;
-                    if (memberOverloaded && autoSettings.modelScaleEnabled !== false) {
-                        const reinforced = reinforceOverloadedFrameMembers(
-                            draft,
-                            frameStress,
-                            resolvedMesh ?? undefined,
-                            modelId,
-                        );
-                        if (reinforced.changed) {
-                            draft = reinforced.snapshot;
-                            reinforcedThisPass = reinforced.totalReinforced;
-                            reinforcedTotal += reinforced.totalReinforced;
-                            changedThisPass = true;
-                        }
-                    }
+                    let bracedThisPass = 0;
 
                     const requests: StressBraceRequest[] = [];
                     let promotedThisPass = 0;
@@ -7184,11 +7189,14 @@ export function computeAutoSupportPlan(
                                     });
                                 }
                             } else if (action.kind === 'thicken-member') {
-                                // A shaft that could not thicken — scaling off,
-                                // at its diameter/clearance cap, or the pass
-                                // made no change — needs a shorter span instead.
+                                // A shaft at its reinforcement cap (or with
+                                // scaling off) cannot grow; it needs a shorter
+                                // span instead. A shaft below the cap is left to
+                                // the thickening step below — one modest step is
+                                // still cheaper than a brace.
                                 if (requests.length >= MAX_STRESS_BRACES_PER_PASS) continue;
-                                if (reinforcedThisPass === 0 || autoSettings.modelScaleEnabled === false) {
+                                if (autoSettings.modelScaleEnabled === false
+                                    || memberAtReinforcementCap(draft, action.entityKind, action.entityId)) {
                                     requests.push({
                                         aEntityId: action.entityId,
                                         atZMm: action.layerZMm,
@@ -7204,7 +7212,6 @@ export function computeAutoSupportPlan(
                     if (Object.keys(promotionSkips).length > 0) {
                         console.log(LOG_PREFIX, `Stress leaf promotions skipped: ${JSON.stringify(promotionSkips)}`);
                     }
-                    let bracedThisPass = 0;
                     if (requests.length > 0) {
                         const braced = addTargetedStressBraces(
                             draft,
@@ -7220,6 +7227,23 @@ export function computeAutoSupportPlan(
                         } else if (braced.skipped > 0) {
                             console.log(LOG_PREFIX,
                                 `Stress braces skipped: ${JSON.stringify(braced.reasons)}`);
+                        }
+                    }
+
+                    // Structure first: only a pass that landed no brace and no
+                    // promotion may thicken, and only up to the cap.
+                    if (!changedThisPass && memberOverloaded && autoSettings.modelScaleEnabled !== false) {
+                        const reinforced = reinforceOverloadedFrameMembers(
+                            draft,
+                            frameStress,
+                            resolvedMesh ?? undefined,
+                            modelId,
+                        );
+                        if (reinforced.changed) {
+                            draft = reinforced.snapshot;
+                            reinforcedThisPass = reinforced.totalReinforced;
+                            reinforcedTotal += reinforced.totalReinforced;
+                            changedThisPass = true;
                         }
                     }
 

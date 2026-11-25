@@ -18,6 +18,7 @@ import {
     distributeRigidBodyDragLoads,
     biaxialContactStressMpa,
     reinforceOverloadedFrameMembers,
+    reinforcementDiameterCapMm,
     solveSupportFrameStress,
     type SupportFrameStressReport,
 } from '../autoSupport/supportGraphStress';
@@ -846,4 +847,40 @@ test('rocking is the rigid-body fit, not a local leaf sag', () => {
     ];
     assert.ok(Math.abs(rigidBodyRockingMm(withCenterSag) - expected) < 1e-9,
         'a local contact sag at the rotation center does not become part rocking');
+});
+
+
+test('reinforcement caps keep every member under the trunk and stop at 1.4 mm', () => {
+    assert.equal(reinforcementDiameterCapMm('trunk'), 1.4);
+    assert.equal(reinforcementDiameterCapMm('branch'), 1.4);
+    assert.equal(reinforcementDiameterCapMm('leaf'), 1.3);
+    assert.equal(reinforcementDiameterCapMm('brace'), 1.4);
+    assert.equal(reinforcementDiameterCapMm('stick'), 0, 'no shaft to reinforce');
+});
+
+test('a trunk already at the reinforcement cap is skipped, not clubbed further', () => {
+    const draft: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            rCap: { id: 'rCap', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            tCap: {
+                id: 'tCap', modelId: 'm', rootId: 'rCap',
+                segments: [{ id: 'sCap', diameter: 1.4, bottomJoint: { id: 'jc0', pos: { x: 0, y: 0, z: 1 }, diameter: 1.4 }, topJoint: { id: 'jc1', pos: { x: 0, y: 0, z: 19 }, diameter: 1.4 } }],
+                contactCone: { id: 'cCap', pos: { x: 0, y: 0, z: 21.5 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.28, bodyDiameterMm: 1.4, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+    };
+    const graph = buildSupportGraph(draft, 'm');
+    const report = solveSupportFrameStress(graph, undefined, {
+        explicitNodalLoads: new Map([[graph.nodes.length - 1, [0.3, 0, 0.6, 0, 0, 0]]]),
+    });
+    assert.ok(report.maxMemberUtilizationPct > 100, 'the capped trunk is still overloaded');
+    const reinforced = reinforceOverloadedFrameMembers(draft, report, undefined, 'm');
+    assert.equal(reinforced.changed, false, 'no diameter increase past the cap');
+    assert.equal(reinforced.snapshot.trunks.tCap.segments[0].diameter, 1.4);
+    assert.equal(reinforced.skippedCount, 1, 'the at-cap skip is counted for the brace fallback');
 });

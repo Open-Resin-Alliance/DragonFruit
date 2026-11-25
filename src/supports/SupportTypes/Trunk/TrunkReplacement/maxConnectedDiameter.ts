@@ -602,6 +602,17 @@ export function computeForestDiameterProfile(snapshot: SupportState, modelId?: s
         const trunk = snapshot.trunks[trunkId];
         if (modelId !== undefined && trunk?.modelId !== modelId) continue;
 
+        // A bare pillar carries no attachment load, so there is no stepwise
+        // profile to write: re-deriving it from its own contact demand only
+        // rewrites the placed diameter (normalizing a deliberately tapered
+        // pillar back to its base) and re-encodes its settings. Leave it as
+        // placed; the stress loop owns a bare pillar's slenderness.
+        const carriesMembers = trunk.segments.some((seg) =>
+            (knotsByParentShaftId.get(seg.id) ?? []).some((k) =>
+                (context.branchesByParentKnotId.get(k.id)?.length ?? 0)
+                + (context.leavesByParentKnotId.get(k.id)?.length ?? 0) > 0));
+        if (!carriesMembers) continue;
+
         const applied = computeAndApplySupportDiameterProfile(working, trunkId, undefined, context);
         if (!applied) continue;
 

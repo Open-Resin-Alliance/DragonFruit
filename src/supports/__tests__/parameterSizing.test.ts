@@ -12,6 +12,7 @@ import {
     setResolvedSizingBands,
     HEIGHT_REFERENCE_MM,
     TIP_CONTACT_MIN_SHAFT_RATIO,
+    STRUCTURE_SHAFT_HEADROOM_MM,
     estimateHostCount,
 } from '../autoSupport/parameterSizing';
 import { computeAutoSupportPlan } from '../autoSupport/autoPlace';
@@ -226,11 +227,11 @@ test('a bigger print gets thicker trunks than a small one', () => {
     const large = sizeParameters(candidate, 1, ctx(400))!;
     assert.deepEqual(mini, sizeParameters(candidate), 'a mini is the band, exactly');
     assert.ok(mid.shaftDiameterMm! > mini.shaftDiameterMm!, 'mid-size model is thicker');
-    assert.ok(large.shaftDiameterMm! > mid.shaftDiameterMm!, 'larger model is thicker again');
-    assert.ok(
-        large.shaftDiameterMm! <= mini.shaftDiameterMm! * AUTO_SUPPORT_CONSTRAINTS.modelSizeFactorCap.defaultValue * AUTO_SUPPORT_CONSTRAINTS.modelLoadFactorCap.defaultValue + 1e-9,
-        'the factors bound the growth',
-    );
+    // The curve stops at the structure band + headroom; a larger model past
+    // that point is not a fatter pole, it is more bracing (stress loop).
+    assert.equal(large.shaftDiameterMm, mid.shaftDiameterMm, 'structure curve saturates at the headroom cap');
+    assert.ok(large.shaftDiameterMm! <= activeSizingBand().shaftDiameterMm + STRUCTURE_SHAFT_HEADROOM_MM + 1e-9,
+        'the structure shaft cap holds');
     assert.ok(large.rootsDiameterMm! > mini.rootsDiameterMm!, 'the pad scales with the trunk');
     assert.ok(large.tipContactDiameterMm! > mini.tipContactDiameterMm!, 'the tip floor rides the shaft');
 });
@@ -313,9 +314,13 @@ test('modelSizeFactorCap bounds the size factor', () => {
     const candidate = makeCandidate({ islandAreaMm2: 0.001, zHeight: 10 });
     const band = activeSizingBand().shaftDiameterMm;
 
+    assert.equal(modelSizingFactors(ctx).sizeFactor, AUTO_SUPPORT_CONSTRAINTS.modelSizeFactorCap.defaultValue,
+        'default cap 1.45 is the size factor');
     const defaulted = sizeParameters(candidate, 1, ctx)!;
-    assert.equal(defaulted.shaftDiameterMm, band * AUTO_SUPPORT_CONSTRAINTS.modelSizeFactorCap.defaultValue,
-        'default cap 1.45 is the sized size factor');
+    // The factor is 1.45 but the structure shaft curve stops at band+0.4;
+    // the cap is still visible on the factor and on a larger band.
+    assert.equal(defaulted.shaftDiameterMm, band + STRUCTURE_SHAFT_HEADROOM_MM,
+        'structure curve caps at 1.4 mm');
 
     const capped = withAutoSupport({ modelSizeFactorCap: 1.0 }, () => sizeParameters(candidate, 1, ctx)!);
     assert.equal(capped.shaftDiameterMm, band, 'cap 1.0 removes the size factor entirely');
@@ -405,16 +410,46 @@ test('a run naming a custom Support Studio preset sizes with its numbers, not th
     updateAutoSupportSettings({ sizingPreset: 'structure' });
 });
 
-test('the three model factors together are capped at the documented 1.85', () => {
+test('the run factors stay individually capped and the shaft curve stops at the headroom', () => {
     const band = activeSizingBand().shaftDiameterMm;
     const candidate = makeCandidate({ islandAreaMm2: 8, zHeight: 100 });
     // Large part (size cap 1.45), heavy share (load cap 1.3) and a tall
     // support (height cap 1.35): 2.54 if multiplied freely.
     const ctx: ModelSizingContext = { modelVolumeMm3: 400000, totalCandidates: 20, modelSizeMm: 400 };
+    // Each run-level factor keeps its own cap; the shaft curve then stops at
+    // band + headroom, so the product can never club a structure pole.
+    const factors = modelSizingFactors(ctx);
+    assert.ok(factors.sizeFactor <= AUTO_SUPPORT_CONSTRAINTS.modelSizeFactorCap.defaultValue + 1e-9, 'size factor capped');
+    assert.ok(factors.loadFactor <= AUTO_SUPPORT_CONSTRAINTS.modelLoadFactorCap.defaultValue + 1e-9, 'load factor capped');
     const sized = sizeParameters(candidate, 1, ctx)!;
-    assert.ok(sized.shaftDiameterMm! <= band * 1.85 + 1e-9,
-        `combined factor caps at 1.85 (got ${sized.shaftDiameterMm})`);
-    assert.ok(sized.shaftDiameterMm! > band * 1.5, 'and the scaled end still grows');
+    assert.ok(sized.shaftDiameterMm! <= band + STRUCTURE_SHAFT_HEADROOM_MM + 1e-9,
+        `structure shaft cap (got ${sized.shaftDiameterMm})`);
+    assert.ok(sized.shaftDiameterMm! > band * 1.3, 'and the scaled end still grows');
+});
+
+test('the structure headroom caps tall/large trunks, and sizeScale is the explicit escape', () => {
+    const ctx: ModelSizingContext = { modelVolumeMm3: 400000, totalCandidates: 20, modelSizeMm: 400 };
+    const candidate = makeCandidate({ islandAreaMm2: 8, zHeight: 100 });
+    const band = activeSizingBand().shaftDiameterMm;
+
+    const sized = sizeParameters(candidate, 1, ctx)!;
+    assert.equal(sized.shaftDiameterMm, band + STRUCTURE_SHAFT_HEADROOM_MM,
+        'the height/load curve cannot club a structure trunk past 1.4');
+
+    const explicit = sizeParameters(candidate, 1.2, ctx)!;
+    assert.ok(explicit.shaftDiameterMm! > sized.shaftDiameterMm!, 'sizeScale is an instruction, not a curve');
+    assert.ok(explicit.shaftDiameterMm! <= 2.0, 'but still bounded by the absolute shaft ceiling');
+});
+
+test('the anchor band keeps the full shaft ceiling (its job is anchoring)', () => {
+    const ctx: ModelSizingContext = { modelVolumeMm3: 400000, totalCandidates: 20, modelSizeMm: 400 };
+    const candidate = makeCandidate({ islandAreaMm2: 8, zHeight: 100 });
+    withTier('anchor', () => {
+        const sized = sizeParameters(candidate, 1, ctx)!;
+        assert.ok(sized.shaftDiameterMm! > SIZING_BANDS.structure.shaftDiameterMm + STRUCTURE_SHAFT_HEADROOM_MM,
+            'anchor can grow past the structure headroom');
+        assert.ok(sized.shaftDiameterMm! <= 2.0, 'but not past the absolute ceiling');
+    });
 });
 
 test('sizeParameters honors sizeScale in slot 2 and customAutoSettings in slot 4 without mutating global store', () => {

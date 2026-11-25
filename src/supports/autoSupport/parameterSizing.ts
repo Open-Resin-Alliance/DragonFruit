@@ -140,6 +140,20 @@ const CELL_REFERENCE_AREA_MM2 = 8;
 
 /** Maximum shaft diameter (mm) for very large single supports. */
 const MAX_SHAFT_DIAMETER_MM = 2.0;
+/**
+ * Headroom a band's shaft may gain from the height/load curves before bracing
+ * takes over. The structure band is 1.0 mm, so its poles stay at or below
+ * 1.4 mm; the anchor band (1.4 mm) keeps the full 2.0 mm ceiling because its
+ * job is anchoring, not load-carrying. The explicit `sizeScale` multiplier is
+ * still allowed past this — it is an instruction, not a curve.
+ */
+export const STRUCTURE_SHAFT_HEADROOM_MM = 0.4;
+
+function curveShaftCapMm(bandDiameterMm: number): number {
+    return bandDiameterMm >= 1.4
+        ? MAX_SHAFT_DIAMETER_MM
+        : Math.min(MAX_SHAFT_DIAMETER_MM, bandDiameterMm + STRUCTURE_SHAFT_HEADROOM_MM);
+}
 
 /**
  * Combined ceiling on the three run-level model factors (mm-equivalent).
@@ -377,12 +391,20 @@ export function sizeParameters(
         : 1;
     const trunkScale = modelSizingFactors(ctx, autoSettings).trunkScale;
     const modelScale = Math.min(MAX_MODEL_SCALE_FACTOR, heightFactor * trunkScale);
+    // Height, load and area tail all want more girth; cap the curve at the
+    // band + headroom so a tall light support cannot become a pole. The stress
+    // loop braces/downgrades instead; `sizeScale` below is the explicit escape.
+    const curveCap = curveShaftCapMm(band.shaftDiameterMm);
     const shaftDiameterMm = round(
         clamp(
-            shaftDiameterForArea(band.shaftDiameterMm, areaInput) * modelScale,
+            clamp(
+                shaftDiameterForArea(band.shaftDiameterMm, areaInput) * modelScale,
+                0.001,
+                curveCap,
+            ) * sizeScale,
             0.001,
             MAX_SHAFT_DIAMETER_MM,
-        ) * sizeScale,
+        ),
     3);
     // Underside normal z = cos(angle from straight-down). Flat ceilings
     // (|nz| ≈ 1) peel hardest → full band contact; steep slopes are closer
