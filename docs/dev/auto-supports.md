@@ -778,19 +778,25 @@ Anchoring contacts stay LOW (`steepFlatAnchorBandTop`) on a squat part: the lowe
 - **Cavity fallback: bridge down, then just off vertical.** A tip with no plate route (`buildTrunkData` → `COLLISION_WITH_MODEL` — e.g. the ceiling of a hollow model's cavity) is first offered to a nearby host, then bridged model-to-model by `buildCavityBridge`: a downward raycast finds the surface below and the drop chooses a stick (`> stickVsTwigCutoffMm`) or a twig. The cast walks a small disc of verticals around the tip (radii 0, 0.75, 1.5, 2.25 mm, nearest radius first) rather than one straight-down ray — a punched drain hole or a gap directly under the tip used to swallow the single ray and leave the contact with no support at all, which is what "no supports inside the cavity once holes are punched" was. `MAX_SHAFT_ANGLE_DEG` (20°, in `stickVerticality.ts` — the stick's registered bridge builder applies it) caps the cant and the post-build shaft check rejects any bridge that pierces the model, so the wider search cannot produce a crooked stick. Twigs get the same shape of gate from their own registered builder (`Twig/twigVerticality.ts`, `MAX_TWIG_SHAFT_ANGLE_DEG` 45°), which no longer lives in this path.
 - **A shaft may not thread a hole into the cavity.** The mesh collision tests
   cannot see this: a drain hole or bore is open space, so a pillar routed
-  through it is geometrically clear. After the forest is built,
-  `validateAndCullOrphans` tests every host path and hosted member against the
-  `CavityTester` from `interiorSupportGeometry.ts`: the path is sampled every
-  0.75 mm, and if any sample is strictly inside the cavity void while a
-  terminal is outside the cavity side of the wall, it is a shoot-through and is
+  through it is geometrically clear. A built trunk is checked in
+  `placeOneCandidate` before it is committed (`rawCavityPaths`, because the
+  trunk is not in the draft yet and `hostSegmentSpan` cannot resolve its root
+  there) and a crossing is treated like `COLLISION_WITH_MODEL`: the same
+  fallback ladder runs — cavity fan onto a nearby host first, then
+  `buildCavityBridge` — and each re-planned member is itself checked against
+  the cavity before it is kept. Only when neither can serve the tip without a
+  new crossing is the candidate rejected (logged as
+  `CAVITY_SHOOT_THROUGH`) and counted as `trunk_build_error`.
+  `validateAndCullOrphans` still tests every host path and hosted member after
+  the forest is built, as the safety net for members created by passes that do
+  not go through `placeOneCandidate` (consolidation, merge, gap-fill retries):
+  the path is sampled every 0.75 mm, and if any sample is strictly inside the
+  cavity void while a terminal is outside the cavity side of the wall, it is
   culled as `cavityCrossing` (a culled host cascades to its members as
   `missingHost`, as with `hostBlocked`). A member wholly inside the void is the
   intended cavity support — its terminals sit on the cavity wall, which
   `isOnInteriorSide` accepts — and a member wholly outside is an ordinary
-  support. The guard is a post-pass safety net, not a re-route: a culled
-  contact loses its support rather than being re-planned, and the run says so
-  in the orphan tally. This is why an interior contact must never reach the
-  plate-trunk path in the first place.
+  support.
 - **An internal contact may only bridge inside the cavity.** Before candidates are generated, the run classifies every island against the cavity mesh the Auto-Support panel hands the worker (`getCavityGeometry` → `cavityMesh` in the payload): the cavity mesh is part of the hollowed model mesh, so an interior contact lies **on** it (within 0.15 mm) while an exterior contact is at least one shell thickness away (minimum 0.2 mm). Distance is normal-agnostic: a winding-convention mismatch cannot invert the answer. Such a candidate carries `interior: true`, skips the plate trunk and the cavity fan entirely, and is placed only by `buildCavityBridge` — or rejected. Interior grid regions also use `INTERIOR_CAVITY_SPACING_SCALE` (3) times the normal spacing — one ninth the contacts — and coverage convergence skips them: a short model-to-model bridge carries less peel than a full-height pillar, and the dense cavity forest was hard to see and remove. Before this, a hollow part with a bore or a floor opening gave the router a legal plate route, and supports ran from the plate through the cavity and out through the shell: the "internal supports shoot through the model" report. The fanning pass skips `interior` islands for the same reason.
 - **Flat-island coverage is stubs, not bridges.** Flat voxel islands (everything the grid phase does not own: `source !== 'overhang'`) get stub branches from the trunks standing under them. The pass walks the island's 2.5 mm cell grid; each cell goes to the **nearest trunk within `leafFanRadiusMm` laterally**, and the cell is skipped when no trunk is that close — those spots belong to the pillar paths. Two earlier shapes are closed: walking *trunks* and stamping the island's whole bbox from each of them (10–24 mm near-horizontal branches from one host, straight across whatever stood between — through a hole into a cavity), and knot ids that omitted the trunk, so each writer overwrote the previous knot and every earlier branch re-parented onto whichever trunk wrote last (the "dozens of members on one host" that no capacity check could explain). Each tip takes its Z from the cell's own footprint voxel rather than the island's single contact Z, so a stepped island no longer hangs tips in air, and a stub that would pierce the mesh (`branchCollidesWithSDF`) is skipped like every other member-creating path.
 - **Gridless runs still merge**: candidates within `GRIDLESS_MERGE_RADIUS_MM` (4 mm) of an existing trunk join it. Among in-radius hosts, `findMergeHost` ranks by distance plus `MERGE_HOST_LOAD_WEIGHT` (0.5) × longest already-hosted member span — nearer wins, but merges avoid piling long members onto one plate anchor (Dumas gain shape). No hosted members → pure nearest-first.

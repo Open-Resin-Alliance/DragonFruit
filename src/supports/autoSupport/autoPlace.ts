@@ -1256,6 +1256,7 @@ function placeOneCandidate(
     ignoreGrid = false,
     preResolvedCandidates?: WeakSet<CandidatePoint>,
     deferUnstableRoutedTrunk = false,
+    cavity?: CavityTester,
 ): { kind: PlacementOutcomeKind; draft: SupportState; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number; fanRefusal?: FanLeafRefusal; mergeRefusal?: 'noHost' | 'rejected'; cavityFanRefusal?: string; gridFallback?: boolean } {
     const supportSettings = getSettings();
     const auto: Partial<AutoSupportSettings> = autoSettings ?? supportSettings.autoSupport ?? {};
@@ -1688,16 +1689,24 @@ function placeOneCandidate(
             contactCone: applyExplicitTipCapToCone(trunkResult.trunk.contactCone, candidate.tipDiameterMm),
         };
     }
+    // A pillar through a drain hole is geometrically clear, so the mesh tests
+    // cannot refuse it. Treat it like a blocked plate route: re-plan onto a
+    // cavity fan/bridge, and reject only if neither can serve the tip without
+    // crossing the cavity itself.
+    const trunkCrossesCavity = !trunkResult.error && cavity
+        ? crossesCavityBoundary(rawCavityPaths(trunkResult.trunk), cavity, candidate.modelId)
+        : false;
     // A near-plate type builds different geometry. Its own validation, not an
     // unused out-of-bounds trunk, decides whether that contact can be served.
     const claimedType = trunkResult.error === 'OUT_OF_BOUNDS'
         ? selectTypeForPlacement('tipHeight', tipPos.z)
         : null;
     const deferToTypeOverride = claimedType ? Boolean(buildContactOverride(claimedType)) : false;
-    if (trunkResult.error && !deferToTypeOverride) {
-        // Cavity fallback: if the trunk can't reach the build plate, try
-        // bridging to a lower surface with a Stick (model-to-model).
-        if (trunkResult.error === 'COLLISION_WITH_MODEL' && mesh) {
+    if ((trunkResult.error || trunkCrossesCavity) && !deferToTypeOverride) {
+        // Cavity fallback: if the trunk can't reach the build plate (or would
+        // thread a cavity opening), try bridging to a lower surface with a
+        // Stick (model-to-model) or carry the tip on a nearby host.
+        if ((trunkResult.error === 'COLLISION_WITH_MODEL' || trunkCrossesCavity) && mesh) {
             // Before bridging model-to-model, try to carry the tip as a fan
             // leaf on a nearby host. A jaw tip whose straight pillar pierces
             // the chest often has a trunk within 5 mm that can host it — that
@@ -1731,22 +1740,30 @@ function placeOneCandidate(
                     candidate.tipDiameterMm,
                 );
                 if (fan.ok) {
-                    const fanKind = typeWord(fan.kind);
-                    logPlacement(`${fanKind} (cavity-fan) ${candidate.id} → ${typeWord(fan.hostTypeId).toLowerCase()} ${fan.hostId} dist=${fan.distMm.toFixed(1)}mm angle=${fan.angleDeg.toFixed(0)}°`);
-                    return { kind: fan.kind, preset, draft: fan.draft, entityId: fan.entityId };
+                    const fanEntity = supportEntityById(fan.draft, fan.kind, fan.entityId);
+                    const fanCrossesCavity = cavity && fanEntity
+                        ? crossesCavityBoundary(memberCavityPaths(fan.draft, fan.kind, fanEntity), cavity, candidate.modelId)
+                        : false;
+                    if (!fanCrossesCavity) {
+                        const fanKind = typeWord(fan.kind);
+                        logPlacement(`${fanKind} (cavity-fan) ${candidate.id} → ${typeWord(fan.hostTypeId).toLowerCase()} ${fan.hostId} dist=${fan.distMm.toFixed(1)}mm angle=${fan.angleDeg.toFixed(0)}°`);
+                        return { kind: fan.kind, preset, draft: fan.draft, entityId: fan.entityId };
+                    }
+                    cavityFanRefusal = 'cavityCross';
+                } else {
+                    // Carry the numbers: `noHost` cannot say whether there was
+                    // no host at all or only a far one, and that decides whether
+                    // the reach is the lever or the angle gate is.
+                    const nearest = fan.nearestHostMm;
+                    const steep = fan.nearestSteepMm;
+                    cavityFanRefusal = nearest === undefined
+                        ? fan.reason
+                        : `${fan.reason} (nearest ${nearest.toFixed(1)}mm plan${
+                            steep === undefined
+                                ? ', no legal host'
+                                : `, nearest legal ${steep.toFixed(1)}mm @ ${(fan.steepAngleDeg ?? 0).toFixed(0)}°`
+                        })`;
                 }
-                // Carry the numbers: `noHost` cannot say whether there was no
-                // host at all or only a far one, and that decides whether the
-                // reach is the lever or the angle gate is.
-                const nearest = fan.nearestHostMm;
-                const steep = fan.nearestSteepMm;
-                cavityFanRefusal = nearest === undefined
-                    ? fan.reason
-                    : `${fan.reason} (nearest ${nearest.toFixed(1)}mm plan${
-                        steep === undefined
-                            ? ', no legal host'
-                            : `, nearest legal ${steep.toFixed(1)}mm @ ${(fan.steepAngleDeg ?? 0).toFixed(0)}°`
-                    })`;
             } catch {}
             const band = activeSizingBand(auto);
             const cappedBridgeTip = candidate.tipDiameterMm !== undefined
@@ -1756,7 +1773,10 @@ function placeOneCandidate(
                 shaftDiameterMm: overrides.shaftDiameterMm ?? band.shaftDiameterMm,
                 tipContactDiameterMm: cappedBridgeTip,
             });
-            if (cavityResult) {
+            if (cavityResult && cavity
+                && crossesCavityBoundary(memberCavityPaths(draft, cavityResult.kind, cavityResult.entity), cavity, candidate.modelId)) {
+                logPlacement(`Cavity ${cavityResult.kind} rejected (crosses the cavity boundary) ${candidate.id}`);
+            } else if (cavityResult) {
                 // Keep short cavity twigs but cap long bridges at 12mm; a
                 // rejected tip is reconsidered by fan/merge in a later pass.
                 const entity = cavityResult.entity;
@@ -1781,8 +1801,9 @@ function placeOneCandidate(
             }
         }
         const bbox = mesh ? new THREE.Box3().setFromObject(mesh) : null;
+        const failureReason = trunkResult.error ?? 'CAVITY_SHOOT_THROUGH';
         logPlacement(
-            `Rejected ${candidate.id}: trunk build error \"${trunkResult.error}\" ` +
+            `Rejected ${candidate.id}: trunk build error \"${failureReason}\" ` +
             `tip=(${tipPos.x.toFixed(1)},${tipPos.y.toFixed(1)},${tipPos.z.toFixed(1)}) ` +
             `mesh=${mesh ? 'yes' : 'no'} ` +
             `bbox=${bbox ? `(${bbox.min.x.toFixed(0)},${bbox.min.y.toFixed(0)},${bbox.min.z.toFixed(0)})-(${bbox.max.x.toFixed(0)},${bbox.max.y.toFixed(0)},${bbox.max.z.toFixed(0)})` : 'none'}`);
@@ -1937,6 +1958,7 @@ function placeOneCandidate(
                 // `ignoreGrid`, which leaves `gridEnabled` false inside.
                 const fallback = placeOneCandidate(
                     candidate, draft, autoSettings, gridHostIds, mesh, sizingCtx, true, preResolvedCandidates,
+                    false, cavity,
                 );
                 logPlacement(fallback.kind === 'reject'
                     ? `Grid fallback failed ${candidate.id}: ${fallback.rejectedReason}`
@@ -3070,6 +3092,27 @@ function crossesCavityBoundary(
     return pathEntersCavityVoid(paths, cavity, modelId);
 }
 
+/** A not-yet-inserted host's path from its own joints. `hostSegmentSpan`
+ *  resolves a missing joint from the root in the draft, which does not hold
+ *  this trunk yet; the plate end is assumed vertical to the tip instead. */
+function rawCavityPaths(entity: {
+    segments: ReadonlyArray<{ bottomJoint?: { pos: Vec3 } | null; topJoint?: { pos: Vec3 } | null }>;
+    contactCone?: { pos: Vec3 };
+}): Array<{ start: Vec3; end: Vec3 }> {
+    const tip = entity.contactCone?.pos;
+    const paths: Array<{ start: Vec3; end: Vec3 }> = [];
+    let previous: Vec3 | undefined;
+    for (const seg of entity.segments) {
+        const start = seg.bottomJoint?.pos ?? previous ?? (tip ? { x: tip.x, y: tip.y, z: 0 } : undefined);
+        const end = seg.topJoint?.pos ?? tip;
+        if (start && end && Math.hypot(end.x - start.x, end.y - start.y, end.z - start.z) > 1e-4) {
+            paths.push({ start, end });
+        }
+        previous = end;
+    }
+    return paths;
+}
+
 /** The shaft path of a host entity, as the spans the drift check measures. */
 function hostCavityPaths(
     draft: SupportState,
@@ -3081,6 +3124,38 @@ function hostCavityPaths(
         if (span) paths.push(span);
     }
     return paths;
+}
+
+/** The path a hosted member actually bridges: its segments when it has
+ *  them, otherwise knot -> contact(s) (leaf, stick, twig). */
+function memberCavityPaths(
+    draft: SupportState,
+    kind: SupportTypeId,
+    entity: unknown,
+): Array<{ start: Vec3; end: Vec3 }> {
+    const record = entity as Record<string, unknown>;
+    if (Array.isArray(record.segments) && record.segments.length > 0) {
+        return hostCavityPaths(draft, record as never);
+    }
+    const points: Vec3[] = [];
+    const parentKnotId = record.parentKnotId;
+    const knot = typeof parentKnotId === 'string' ? draft.knots[parentKnotId] : undefined;
+    if (knot?.pos) points.push(knot.pos);
+    for (const { field } of contactEndpointsFor(kind)) {
+        const pos = (record[field] as { pos?: Vec3 } | undefined)?.pos;
+        if (pos) points.push(pos);
+    }
+    const paths: Array<{ start: Vec3; end: Vec3 }> = [];
+    for (let i = 1; i < points.length; i++) paths.push({ start: points[i - 1], end: points[i] });
+    return paths;
+}
+
+/** Look up a built member in the draft by the collection its type owns. */
+function supportEntityById(draft: SupportState, kind: SupportTypeId, id: string): unknown {
+    const collection = draft[getSupportTypeDescriptor(kind).location.key] as unknown as
+        | Record<string, unknown>
+        | undefined;
+    return collection?.[id];
 }
 
 /** Validate hosted members' attachment after forest resize; cull orphans and return them for reporting. */
@@ -5029,7 +5104,7 @@ export function computeAutoSupportPlan(
 
     const placeOne = (candidate: CandidatePoint, deferTrunkError = false): string => {
         try {
-            const result = placeOneCandidate(candidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx, false, preResolvedCandidates, deferTrunkError);
+            const result = placeOneCandidate(candidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx, false, preResolvedCandidates, deferTrunkError, cavityTester);
             if (deferTrunkError && result.kind === 'reject' && result.rejectedReason === 'trunk_build_error') {
                 return 'defer_rescue';
             }
@@ -6592,7 +6667,7 @@ export function computeAutoSupportPlan(
                             };
                             preResolvedCandidates.add(recandidate);
                             try {
-                                const result = placeOneCandidate(recandidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx, false, preResolvedCandidates);
+                                const result = placeOneCandidate(recandidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx, false, preResolvedCandidates, false, cavityTester);
                                 draft = result.draft;
                                 if (result.kind === 'reject') rejectedCount++;
                                 else placed[result.kind]++;
