@@ -355,7 +355,10 @@ export function computeAndApplySupportDiameterProfile(
     const recordUpdate = (after: Knot) => {
         const before = snapshot.knots[after.id];
         if (!before) return;
-        if (!beforeByKnotId.has(after.id)) beforeByKnotId.set(after.id, structuredClone(before));
+        // Snapshot knots are immutable: every change is a new object, and the
+        // revert payload only reads `before`. Cloning each one showed up in the
+        // resize profile for no correctness gain.
+        if (!beforeByKnotId.has(after.id)) beforeByKnotId.set(after.id, before);
         nextKnotById.set(after.id, after);
     };
 
@@ -601,6 +604,17 @@ export function computeForestDiameterProfile(snapshot: SupportState, modelId?: s
 
         const applied = computeAndApplySupportDiameterProfile(working, trunkId, undefined, context);
         if (!applied) continue;
+
+        // A lone trunk whose profile is already the contact demand needs no
+        // snapshot replacement; that keeps the forest-resize clearance/orphan
+        // passes off forests where nothing actually thickened.
+        const trunkChanged = applied.knotUpdates.length > 0
+            || applied.trunk.settingsCodeHex !== trunk.settingsCodeHex
+            || applied.trunk.segments.length !== trunk.segments.length
+            || applied.trunk.segments.some((seg, i) => Math.abs(seg.diameter - (trunk.segments[i]?.diameter ?? 0)) > 1e-6
+                || Math.abs((seg.topJoint?.diameter ?? 0) - (trunk.segments[i]?.topJoint?.diameter ?? 0)) > 1e-6
+                || Math.abs((seg.bottomJoint?.diameter ?? 0) - (trunk.segments[i]?.bottomJoint?.diameter ?? 0)) > 1e-6);
+        if (!trunkChanged) continue;
 
         if (!nextTrunks || !nextKnots) {
             nextTrunks = { ...snapshot.trunks };

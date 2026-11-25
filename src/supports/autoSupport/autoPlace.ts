@@ -1306,8 +1306,20 @@ function placeOneCandidate(
     // this function asks for it up to three times (island fan, overhang fan,
     // cavity fan) against an unchanged draft. Build it once, lazily — each
     // attempt returns as soon as it succeeds, so nothing mutates in between.
+    // Keep only hosts whose plan distance can reach any of those tiers; the
+    // widest is the cavity rescue.
     let fanPool: FanShaftPoint[] | null = null;
-    const fanShaftPoints = (): FanShaftPoint[] => (fanPool ??= collectFanShaftPoints(draft));
+    const fanPoolRadiusMm = Math.max(
+        LEAF_FAN_RADIUS_MM,
+        auto.leafFanRadiusMm ?? 0,
+        GRID_HOST_FAN_RADIUS_MM,
+        CAVITY_FAN_RADIUS_MM,
+    );
+    const fanShaftPoints = (): FanShaftPoint[] => (fanPool ??= collectFanShaftPoints(
+        draft,
+        { x: tipPos.x, y: tipPos.y },
+        fanPoolRadiusMm,
+    ));
 
     // ── Gridless merge check ──────────────────────────────────────
     // Density-grid points force standalone trunks (a flat region needs
@@ -2361,7 +2373,11 @@ const MAX_FANNING_PASSES = 5;
  *
  * The pool spans EVERY model, so host choosers must filter on `modelId`.
  */
-export function collectFanShaftPoints(draft: SupportState): FanShaftPoint[] {
+export function collectFanShaftPoints(
+    draft: SupportState,
+    near?: { x: number; y: number },
+    radiusMm?: number,
+): FanShaftPoint[] {
     const shaftPoints: FanShaftPoint[] = [];
     for (const { hostTypeId, hostId, entity } of collectHostEntities(draft)) {
         if (entity.origin === NEAR_PLATE_ORIGIN) continue;
@@ -2373,6 +2389,21 @@ export function collectFanShaftPoints(draft: SupportState): FanShaftPoint[] {
             const span = hostSegmentSpan(draft, entity, seg);
             if (!span) continue;
             const { start, end } = span;
+            if (near && radiusMm !== undefined) {
+                // Only segments whose plan distance to the tip can put a
+                // sample inside the fan radius. Without this every candidate
+                // walked every host segment's 10 samples; the fan was the
+                // dominant placement cost on a few-hundred-support forest.
+                const sx = end.x - start.x;
+                const sy = end.y - start.y;
+                const lenSq = sx * sx + sy * sy;
+                const t = lenSq > 1e-9
+                    ? Math.min(1, Math.max(0, ((near.x - start.x) * sx + (near.y - start.y) * sy) / lenSq))
+                    : 0;
+                const dx = start.x + sx * t - near.x;
+                const dy = start.y + sy * t - near.y;
+                if (dx * dx + dy * dy > radiusMm * radiusMm) continue;
+            }
             const diameter = seg.diameter ?? 1.0;
             for (let i = 0; i <= SHAFT_SAMPLES_PER_SEGMENT; i++) {
                 const t = i / SHAFT_SAMPLES_PER_SEGMENT;
@@ -6184,7 +6215,11 @@ export function computeAutoSupportPlan(
                         const prevMaxDia = Math.max(0, ...prevTrunk.segments.map((s) => s.diameter ?? 0));
                         const nextMaxDia = Math.max(0, ...trunk.segments.map((s) => s.diameter ?? 0));
                         if (nextMaxDia <= prevMaxDia + 1e-4) continue;
-                        if (isHostShaftBlocked(trunk, resolvedMesh) && !isHostShaftBlocked(prevTrunk, resolvedMesh)) {
+                        // The pre-resize trunk was placed and already vetted;
+                        // re-testing it doubled every mesh query in this guard.
+                        // A thickened trunk that is blocked is reverted whether
+                        // or not the old one was; the old failure is unchanged.
+                        if (isHostShaftBlocked(trunk, resolvedMesh)) {
                             if (!safeTrunks) safeTrunks = { ...resized.trunks };
                             safeTrunks[tid] = prevTrunk;
                             revertedCount++;
