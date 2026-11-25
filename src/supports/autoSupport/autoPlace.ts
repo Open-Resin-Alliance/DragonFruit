@@ -4885,6 +4885,11 @@ export function computeAutoSupportPlan(
         return null;
     }
 
+    // Islands below the configured footprint floor are noise: a few voxels
+    // paid for by a full support tree. The density pass already filtered them;
+    // the final closure and the start report must use the same floor.
+    const minClosureAreaMm2 = autoSettings.minIslandAreaMm2 ?? 0.02;
+
     // The modal's bar used to start at the placement pass, so the worker
     // startup, the BVH build, the pose measurement and candidate generation
     // looked like a freeze. Every pass reports its own short progress now.
@@ -6158,7 +6163,9 @@ export function computeAutoSupportPlan(
     // collision path); the unit paths that run meshless keep their legacy
     // rejection behavior and the closure does not retry them.
     const closureIslands = resolvedMesh
-        ? islands.filter((island) => !island.grounded && !island.interior)
+        ? islands.filter((island) => !island.grounded
+            && !island.interior
+            && startFootprintAreaMm2(island) >= minClosureAreaMm2)
         : [];
     let closureContactsAdded = 0;
     if (closureIslands.length > 0) {
@@ -7564,8 +7571,14 @@ export function computeAutoSupportPlan(
                 }
             }
             const startSupportTips = collectSupportTips(draft, modelId);
-            const startRows = islands
-                .filter((island) => island.startIsland === true && !island.interior && !island.grounded)
+            const allStartIslands = islands.filter(
+                (island) => island.startIsland === true && !island.interior && !island.grounded,
+            );
+            const reportableStartIslands = allStartIslands.filter(
+                (island) => startFootprintAreaMm2(island) >= minClosureAreaMm2,
+            );
+            const ignoredTinyStarts = allStartIslands.length - reportableStartIslands.length;
+            const startRows = reportableStartIslands
                 .map((island) => {
                     const status = assessStartSupport(island, startSupportTips, resolvedMesh);
                     if (status.pancakeRisk) {
@@ -7594,7 +7607,10 @@ export function computeAutoSupportPlan(
             analytics.startIslands = forestReport.starts.count;
             analytics.startsUnderSupported = forestReport.starts.underSupported;
             console.log(LOG_PREFIX,
-                `Starts: ${forestReport.starts.count} (${forestReport.starts.underSupported} under-supported)`);
+                `Starts: ${forestReport.starts.count} (${forestReport.starts.underSupported} under-supported)` +
+                (ignoredTinyStarts > 0
+                    ? ` · ${ignoredTinyStarts} below min island area ${minClosureAreaMm2}mm² ignored`
+                    : ''));
             analytics.forestReport = forestReport;
             console.log(LOG_PREFIX,
                 `Forest report: ${forestReport.hostCount} hosts, ${forestReport.leafCount} leaves, ` +
