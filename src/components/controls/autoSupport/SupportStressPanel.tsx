@@ -1036,7 +1036,7 @@ function SupportStressPanelImpl({
               >
                 <StatusGlyph
                   level={summary.level}
-                  className={`h-4 w-4 shrink-0${issueSubtitle ? ' mt-0.5' : ''}`}
+                  className={`h-4 w-4 shrink-0${issueSubtitle ? ' mt-0.5' : ' -translate-y-px'}`}
                 />
                 <div className="min-w-0 flex-1 space-y-0.5">
                   <div className="text-xs font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
