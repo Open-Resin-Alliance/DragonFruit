@@ -105,11 +105,7 @@ export function decodeF32(bytes: ArrayBuffer | Uint8Array | number[], label: str
 }
 
 /** Commands that return a raw little-endian f32 position payload. */
-export type MeshPositionReadCommand =
-  | 'mesh_repair_read_positions'
-  | 'mesh_organic_cut_read_geodesic'
-  | 'mesh_organic_cut_read_membrane'
-  | 'mesh_organic_cut_read_tenon';
+export type MeshPositionReadCommand = 'mesh_repair_read_positions';
 
 /** Invoke a position-reading command and decode its f32 payload. */
 export async function readPositionsFromCommand(

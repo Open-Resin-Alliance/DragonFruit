@@ -131,9 +131,9 @@ only meaningful while nothing else stages. The VOXL import builds four models
 concurrently, and a model whose stored classification does not address its payload runs
 `classifyFromGeometry` inside its own build; two of those interleaved and each read back
 the other's soup, which rendered as one model's geometry standing in another's place.
-Classify, analyze, both path repairs, the path load, hollowing and hole punching now put
-their mesh into the native mesh store and name it by id, so concurrent passes each read their
-own (`dev/native-mesh-store.md`). The families still on the buffer (organic cut, islands,
+Classify, analyze, both path repairs, the path load, hollowing, hole punching and the organic
+cut now put their mesh into the native mesh store and name it by id, so concurrent passes each
+read their own (`dev/native-mesh-store.md`). The families still on the buffer (islands,
 slicing) keep the hazard until they move.
 
 ## What DFMX deliberately drops

@@ -200,7 +200,7 @@ export interface OrganicCutReport {
   /**
    * How many separate parts the cut produced. 2 for a plane/single-loop cut; more
    * when a multi-loop cut frees several pieces (e.g. both of Squirtle's arms); 0 on
-   * a no-op. The frontend reads exactly this many parts back.
+   * a no-op. The cut command returns one part id per part.
    */
   partCount?: number;
   /**
