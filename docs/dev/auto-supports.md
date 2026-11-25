@@ -985,6 +985,20 @@ Every run logs where its time went, one line plus a detail line:
   the cost is the walking; a low one means the field itself is being computed
   over and over, and the near-field gates (`isContactConeBlocked`, which cannot
   use the quantized cache) are the place to look.
+- **The two long phases hide sub-steps.** `resize` covers the diameter
+  profile, post-resize validation, orphan re-place, cross repair and cone sync;
+  `bracing` covers both `buildAutoBracedSnapshot` and the whole stress
+  feedback loop. The detail line now carries the split: `resize:profile`,
+  `resize:validate`, `resize:requeue`, `resize:cross-repair`,
+  `resize:cone-sync`, `bracing:auto`, `bracing:stress`. Read those before
+  optimizing a phase by name.
+- **Cross repair is local-first and bounded.** It tries another legal Z on the
+  member's existing host first; only then a nearby host (8 mm) and at most
+  `MAX_CROSS_REHOST_REMOTE_ATTEMPTS` (8) forest-wide attempts. Every remote
+  attempt can build a branch cone, and the old unbounded forest pool made this
+  the dominant resize cost. Unresolved `cross` orphans stay flagged in the
+  report rather than paying for a sweep; the flags are the knob if a model
+  needs more repair.
 - The same data is on `result.analytics.timings` (`AutoPlaceTimings`), which is
   what the worker path logs: the worker's own `console` output never reaches the
   log bridge, so the client prints the timing it got back.

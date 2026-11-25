@@ -163,6 +163,11 @@ const MAX_STRESS_BRACES_PER_PASS = 4;
  *  brace reach. A kickstand is the answer for a lone tall spire: it cannot be
  *  braced to a neighbour that does not exist, and it must not be clubbed. */
 const MAX_STRESS_KICKSTANDS_PER_PASS = 2;
+/** Cross repair is optional geometry hygiene: the local host knot first, then
+ *  a bounded number of remote hosts. Unresolved crossings stay flagged; making
+ *  every one pay for a forest-wide branch build was the resize phase's cost. */
+const MAX_CROSS_REHOST_REMOTE_ATTEMPTS = 8;
+const CROSS_REHOST_RADIUS_MM = 8;
 /** Overloaded leaves a single feedback pass may promote to branches. */
 const MAX_STRESS_LEAF_PROMOTIONS_PER_PASS = 2;
 /** Most trunk-build failures retried as wide fans after gap-fill. The retry is
@@ -4050,6 +4055,18 @@ export function mergeNearbyTrunkRoots(
     }
     const pairs: Pair[] = [];
     const current = trunks();
+    // Survivor tie-breaks read each trunk's live attachment count. Counting
+    // scans every hosted member, and the pair loop used to do it twice per
+    // pair (O(pairs x members)). Cache by host id and invalidate only the
+    // survivor after a merge, which is the only tree whose fan changed.
+    const attachmentCounts = new Map<string, number>();
+    const attachmentCountFor = (trunkId: string): number => {
+        const cached = attachmentCounts.get(trunkId);
+        if (cached !== undefined) return cached;
+        const count = countAttachmentsOnHost('trunk', trunkId, draft);
+        attachmentCounts.set(trunkId, count);
+        return count;
+    };
     const spansByTrunkId = new Map<string, Array<{ start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }>>();
     for (const t of current) spansByTrunkId.set(t.id, trunkSpans(t));
 
@@ -4090,8 +4107,8 @@ export function mergeNearbyTrunkRoots(
             }
             // Taller tip survives; more attachments then root/tip position
             // break ties, so the choice never depends on generated ids.
-            const aCount = countAttachmentsOnHost('trunk', a.id, draft);
-            const bCount = countAttachmentsOnHost('trunk', b.id, draft);
+            const aCount = attachmentCountFor(a.id);
+            const bCount = attachmentCountFor(b.id);
             const aWins = ta.z !== tb.z
                 ? ta.z > tb.z
                 : aCount !== bCount
@@ -6820,7 +6837,9 @@ export function computeAutoSupportPlan(
             }
             bumpDraftVersion(draft);
             const preResizeTrunks = draft.trunks;
+            perfMark('resize:profile');
             const resized = computeForestDiameterProfile(draft, modelId);
+            perfMeasure('resize:profile', 'resize:profile');
             if (resized !== draft) {
                 if (resolvedMesh) {
                     // Guard against self-inflicted `hostBlocked` culls: if thickening
@@ -6860,7 +6879,9 @@ export function computeAutoSupportPlan(
             let orphanInfos: OrphanInfo[] = [];
             try {
                 const preCullDraft = draft;
+                perfMark('resize:validate');
                 const culled = validateAndCullOrphans(draft, resolvedMesh ?? undefined, modelId, cavityTester);
+                perfMeasure('resize:validate', 'resize:validate');
                 if (culled.orphans.length > 0) {
                     draft = culled.draft;
                     orphanInfos = culled.orphans;
@@ -6901,6 +6922,7 @@ export function computeAutoSupportPlan(
                         return items;
                     };
 
+                    perfMark('resize:requeue');
                     const requeueItems = extractRequeueContacts(culled.orphans, preCullDraft);
                     if (requeueItems.length > 0) {
                         let replaced = 0;
@@ -6939,6 +6961,7 @@ export function computeAutoSupportPlan(
                                 rejectedCount++;
                             }
                         }
+                        perfMeasure('resize:requeue', 'resize:requeue');
                         console.log(LOG_PREFIX, `Orphan re-place: ${replaced}/${requeueItems.length} culled contacts re-placed.`);
                         const preRecheckDraft = draft;
                         const recheck = validateAndCullOrphans(draft, resolvedMesh ?? undefined, modelId, cavityTester);
@@ -7015,6 +7038,7 @@ export function computeAutoSupportPlan(
                     // another shaft after thickening onto a clear non-crossing host
                     // (often the exact shaft they crossed) instead of leaving
                     // intersecting geometry in the forest.
+                    perfMark('resize:cross-repair');
                     const crossOrphans = orphanInfos.filter((o) => o.reason === 'cross');
                     if (crossOrphans.length > 0) {
                         let crossResolved = 0;
@@ -7023,7 +7047,11 @@ export function computeAutoSupportPlan(
                             autoSettings.leafFanMaxAngleDeg ?? LEAF_FAN_MAX_ANGLE_DEG,
                             memberMaxAngleFromVerticalDeg(Boolean(gridEnabled)),
                         );
-                        const crossPool = collectFanShaftPoints(draft);
+                        // One pass over the knots for the "does this branch
+                        // still host a knot?" check, instead of scanning every
+                        // knot per orphan.
+                        const knotShaftIds = new Set(Object.values(draft.knots).map((k) => k.parentShaftId));
+                        let remoteCrossAttempts = 0;
                         for (const o of crossOrphans) {
                             let member: ShaftHostedMemberEntity | undefined;
                             let memberTypeId: ShaftHostedMemberTypeId | undefined;
@@ -7043,7 +7071,7 @@ export function computeAutoSupportPlan(
                                     o.id,
                                     ...((member as { segments?: Segment[] }).segments ?? []).map((s) => s.id),
                                 ]);
-                                if (Object.values(draft.knots).some((k) => hostedSegIds.has(k.parentShaftId))) {
+                                if ([...hostedSegIds].some((id) => knotShaftIds.has(id))) {
                                     continue;
                                 }
                             }
@@ -7054,31 +7082,27 @@ export function computeAutoSupportPlan(
                             }
 
                             const excludeOldHost = o.hostId ? new Set<string>([o.hostId]) : undefined;
-                            let rehost = fanLeafToHost(
-                                cone.pos,
-                                modelId,
-                                crossPool,
-                                gridHostIds,
-                                `auto-cross-rehost-${o.id}`,
-                                CAVITY_FAN_RADIUS_MM,
-                                CAVITY_FAN_RADIUS_MM,
-                                crossMaxAngleDeg,
-                                autoSettings.maxAttachmentsPerTrunk,
+                            // Only hosts whose plan position can be inside the
+                            // 12mm rehost reach are candidates. The old full
+                            // forest pool made fanLeafToHost walk every sample
+                            // (and build a branch cone for every legal one) once
+                            // per orphan — the dominant resize-phase cost.
+                            const crossPool = collectFanShaftPoints(
                                 draftWithoutOld,
-                                resolvedMesh ?? undefined,
-                                member.origin ?? 'overhang',
-                                'nearest',
-                                undefined,
-                                excludeOldHost,
-                                autoSettings,
-                                cone.profile?.maxContactDiameterMm,
+                                { x: cone.pos.x, y: cone.pos.y },
+                                CAVITY_FAN_RADIUS_MM + 1,
                             );
-                            if (!rehost.ok && o.hostId) {
-                                // Fall back to a different non-crossing Z knot on the same host.
+                            const sameHostPool = o.hostId
+                                ? crossPool.filter((sample) => sample.hostId === o.hostId)
+                                : [];
+                            let rehost: ReturnType<typeof fanLeafToHost> = { ok: false } as never;
+                            if (sameHostPool.length > 0) {
+                                // Cheapest repair first: another legal Z on the
+                                // host it already belongs to.
                                 rehost = fanLeafToHost(
                                     cone.pos,
                                     modelId,
-                                    crossPool,
+                                    sameHostPool,
                                     gridHostIds,
                                     `auto-cross-rehost-${o.id}`,
                                     CAVITY_FAN_RADIUS_MM,
@@ -7091,6 +7115,32 @@ export function computeAutoSupportPlan(
                                     'steepest',
                                     undefined,
                                     undefined,
+                                    autoSettings,
+                                    cone.profile?.maxContactDiameterMm,
+                                );
+                            }
+                            if (!rehost.ok && remoteCrossAttempts < MAX_CROSS_REHOST_REMOTE_ATTEMPTS) {
+                                remoteCrossAttempts++;
+                                // A nearby host other than the one it drifted
+                                // off. Bounded: every remote attempt can build a
+                                // branch cone, and unresolved crossings stay
+                                // flagged rather than paying for a forest sweep.
+                                rehost = fanLeafToHost(
+                                    cone.pos,
+                                    modelId,
+                                    crossPool,
+                                    gridHostIds,
+                                    `auto-cross-rehost-${o.id}`,
+                                    CROSS_REHOST_RADIUS_MM,
+                                    CROSS_REHOST_RADIUS_MM,
+                                    crossMaxAngleDeg,
+                                    autoSettings.maxAttachmentsPerTrunk,
+                                    draftWithoutOld,
+                                    resolvedMesh ?? undefined,
+                                    member.origin ?? 'overhang',
+                                    'nearest',
+                                    undefined,
+                                    excludeOldHost,
                                     autoSettings,
                                     cone.profile?.maxContactDiameterMm,
                                 );
@@ -7112,6 +7162,7 @@ export function computeAutoSupportPlan(
                                 }
                             }
                         }
+                        perfMeasure('resize:cross-repair', 'resize:cross-repair');
                         if (crossResolved > 0) {
                             console.log(LOG_PREFIX, `Cross re-host: resolved ${crossResolved}/${crossOrphans.length} shaft-crossing members.`);
                             const postCrossCheck = validateAndCullOrphans(draft, resolvedMesh ?? undefined, modelId, cavityTester);
@@ -7151,7 +7202,9 @@ export function computeAutoSupportPlan(
             // Clicking the support rebuilt the cone from the shaft and
             // "snapped it correct"; do that globally instead of waiting
             // for a click.
+            perfMark('resize:cone-sync');
             const coneSynced = syncContactConeDiameters(draft, modelId, autoSettings);
+            perfMeasure('resize:cone-sync', 'resize:cone-sync');
             bumpDraftVersion(coneSynced);
             if (coneSynced !== draft) {
                 draft = coneSynced;
@@ -7353,7 +7406,9 @@ export function computeAutoSupportPlan(
     if (changed && !autoSettings.debugSkipAutoBracing) {
         console.log(LOG_PREFIX, 'Running auto-brace...');
         try {
+            perfMark('bracing:auto');
             const braceResult = buildAutoBracedSnapshot(draft, getSettings().autoBracing, { modelId });
+            perfMeasure('bracing:auto', 'bracing:auto');
             draft = braceResult.snapshot;
             console.log(LOG_PREFIX,
                 `Auto-brace: ${braceResult.status} ` +
@@ -7369,6 +7424,7 @@ export function computeAutoSupportPlan(
 
     if (changed && analytics.forestReport) {
         try {
+            perfMark('bracing:stress');
             let supportGraph = buildSupportGraph(draft, modelId);
             if (supportGraph.rootCount > 0 && supportGraph.tipCount > 0) {
                 let frameStress = solveSupportFrameStress(supportGraph, tractionProfile, {
@@ -7593,6 +7649,7 @@ export function computeAutoSupportPlan(
                     + `max defl ${frameStress.maxTipDeflectionMm.toFixed(3)}mm · rocking ${frameStress.maxTipRockingMm.toFixed(3)}mm`
                     + ((frameStress.reinforcedCount ?? 0) > 0 ? ` · reinforced ${frameStress.reinforcedCount}` : ''));
             }
+            perfMeasure('bracing:stress', 'bracing:stress');
         } catch (e) {
             console.warn(LOG_PREFIX,
                 `Frame stress analysis failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
