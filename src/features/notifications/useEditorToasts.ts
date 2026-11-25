@@ -199,9 +199,14 @@ export function useEditorToasts({
       return;
     }
 
+    // The minimum stops a quick save from flashing past unread. But once this
+    // save's green "Saved to" toast is up, the blue one has nothing left to say
+    // and covers it (same slot, higher z-index), so it leaves straight away.
     const shownAt = saveToastShownAtRef.current ?? Date.now();
     const elapsed = Date.now() - shownAt;
-    const remaining = Math.max(0, MIN_SAVE_TOAST_VISIBLE_MS - elapsed);
+    const savedToastFollowsThisSave =
+      isExportSuccessToastVisible && exportSuccessToast !== null && exportSuccessToast.id >= shownAt;
+    const remaining = savedToastFollowsThisSave ? 0 : Math.max(0, MIN_SAVE_TOAST_VISIBLE_MS - elapsed);
 
     if (saveToastHideTimeoutRef.current !== null) {
       window.clearTimeout(saveToastHideTimeoutRef.current);
@@ -218,7 +223,7 @@ export function useEditorToasts({
         setIsSaveToastVisible(false);
       }, TOAST_ANIMATION_MS);
     }, remaining);
-  }, [hasActiveSaveWork, isSaveToastAnimatedVisible, isSaveToastVisible]);
+  }, [exportSuccessToast, hasActiveSaveWork, isExportSuccessToastVisible, isSaveToastAnimatedVisible, isSaveToastVisible]);
 
   React.useEffect(() => {
     return () => {

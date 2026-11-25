@@ -201,6 +201,49 @@ test('hollowing edits land in undo history', async (t) => {
         delete tauriWindow.__TAURI_INTERNALS__;
       }
     });
+
+    await t.test('a cavity rebuilt after undo and redo stays inside its model', async () => {
+      // Both sit off the origin, the way a model on the plate does: the hollowed
+      // model spans z 10..30 and its cavity z 15..25.
+      const hollowed = new Float32Array([0, 0, 10, 10, 0, 10, 0, 10, 30, 10, 10, 30, 10, 0, 10, 0, 10, 30]);
+      const cavity = new Float32Array([2, 2, 15, 8, 2, 15, 2, 8, 25, 8, 8, 25, 8, 2, 15, 2, 8, 25]);
+      const tauriWindow = window as unknown as { __TAURI_INTERNALS__?: unknown };
+      tauriWindow.__TAURI_INTERNALS__ ??= {};
+      mockIPC((cmd) => {
+        if (cmd === 'mesh_hollow_apply_from_captured_source') {
+          return JSON.stringify({ removedVoxels: 100, outputTriangleCount: 2 });
+        }
+        if (cmd === 'mesh_repair_read_positions') return new Uint8Array(hollowed.slice().buffer);
+        if (cmd === 'mesh_hollow_staged_read_cavity_positions') return new Uint8Array(cavity.slice().buffer);
+        return null;
+      });
+      const cavityZ = () => {
+        const entry = current().hollowing.cavityGeometryByModelIdRef.current.get(modelId);
+        assert.ok(entry, 'the model has a cavity');
+        entry.geometry.computeBoundingBox();
+        const box = entry.geometry.boundingBox;
+        assert.ok(box);
+        return [box.min.z, box.max.z];
+      };
+      try {
+        clearHistory();
+        const geometryBefore = current().scene.models[0].geometry.geometry;
+        current().hollowing.handleApplyHollowing();
+        await waitFor(() => current().scene.models[0].geometry.geometry !== geometryBefore, 'the hollowed geometry');
+        await settle(20);
+        assert.deepEqual(cavityZ(), [15, 25], 'the applied cavity is where the hollowing put it');
+
+        undo();
+        await settle(20);
+        redo();
+        await waitFor(() => current().hollowing.cavityGeometryByModelIdRef.current.has(modelId), 'the cavity to be rebuilt');
+        await settle(20);
+        assert.deepEqual(cavityZ(), [15, 25], 'the rebuilt cavity is where it was, not half the model lower');
+      } finally {
+        clearMocks();
+        delete tauriWindow.__TAURI_INTERNALS__;
+      }
+    });
   } finally {
     await tree.unmount();
   }

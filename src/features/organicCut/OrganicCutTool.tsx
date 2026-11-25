@@ -1,5 +1,8 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { ModelTransform } from '@/hooks/useModelTransform';
@@ -174,16 +177,23 @@ const OCCLUDED_OPACITY_FACTOR = 0.22;
  */
 const SURFACE_DEPTH_BIAS = 2e-4;
 
-/** Patch a material's vertex shader to apply {@link SURFACE_DEPTH_BIAS}. */
-function biasTowardCamera(material: THREE.Material): void {
+/** Patch a line material's vertex shader to apply {@link SURFACE_DEPTH_BIAS}. */
+function biasTowardCamera(material: LineMaterial): void {
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader.replace(
-      '#include <project_vertex>',
-      `#include <project_vertex>
+      'gl_Position = clip;',
+      `gl_Position = clip;
       gl_Position.z -= ${SURFACE_DEPTH_BIAS} * gl_Position.w;`,
     );
   };
 }
+
+/**
+ * Seam line width, in CSS pixels. WebGL draws a plain `THREE.Line` one pixel wide
+ * whatever its material asks for, which vanished against the highlighted model,
+ * so the seam is a screen-space `Line2` instead.
+ */
+const SEAM_LINE_WIDTH_PX = 2.5;
 
 /**
  * How far ABOVE its own render order the seam's solid pass is drawn, so it lands
@@ -209,12 +219,13 @@ function occludedLinePair(
   opacity: number,
   renderOrder: number,
 ): THREE.Group {
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  const ghost = new THREE.Line(
+  const geom = new LineGeometry();
+  geom.setPositions(positions);
+  const ghost = new Line2(
     geom,
-    new THREE.LineBasicMaterial({
+    new LineMaterial({
       color,
+      linewidth: SEAM_LINE_WIDTH_PX,
       depthTest: false,
       depthWrite: false,
       transparent: true,
@@ -222,9 +233,9 @@ function occludedLinePair(
     }),
   );
   ghost.renderOrder = renderOrder;
-  const solid = new THREE.Line(
+  const solid = new Line2(
     geom,
-    new THREE.LineBasicMaterial({ color, transparent: true, opacity }),
+    new LineMaterial({ color, linewidth: SEAM_LINE_WIDTH_PX, transparent: true, opacity }),
   );
   biasTowardCamera(solid.material);
   solid.renderOrder = renderOrder + SEAM_SOLID_ABOVE_TENON;
@@ -349,7 +360,7 @@ export function OrganicCutTool({
     return new THREE.Vector3(-center.x, -center.y, -center.z);
   }, [activeModel]);
 
-  // Build the connecting polyline as a concrete THREE.Line so we can render it via
+  // Build the connecting polyline as a concrete Line2 pair so we can render it via
   // <primitive>, avoiding the JSX <line> ambiguity with SVG line elements.
   //
   // PREFER the surface-following geodesic polyline from Rust when available; only
@@ -687,7 +698,7 @@ export function OrganicCutTool({
     if (!loopLine) return;
     // Both passes of the pair (ghost + solid) recolour together.
     for (const pass of loopLine.children) {
-      const mat = (pass as THREE.Line).material as THREE.LineBasicMaterial;
+      const mat = (pass as Line2).material;
       mat.color.set(lineHovered ? colors.seamHover : colors.seam);
     }
   }, [loopLine, lineHovered, colors]);

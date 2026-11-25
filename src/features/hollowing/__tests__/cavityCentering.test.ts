@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
-import { centerCavityPositions } from '../cavityCentering';
+import { centerCavityPositions, uncenterCavityPositions } from '../cavityCentering';
 
 // Regression guard for the VOXL cavity-alignment bug: the persisted cavity must
 // be recentered by the SAME `−model.geometry.center` that ExportManager bakes
@@ -69,4 +69,14 @@ test('recentering by the model center aligns the cavity frame with the model STL
   // Model+cavity are concentric here, so both land at the origin.
   assert.ok(exportedModelCenter.length() < 1e-6, 'centered model sits at origin');
   assert.ok(exportedCavityCenter.length() < 1e-6, 'recentered cavity sits at origin');
+});
+
+test('uncenterCavityPositions puts a persisted cavity back in its model frame', () => {
+  const raw = new Float32Array([2, 2, 15, 8, 8, 25]);
+  const center = { x: 5, y: 5, z: 20 };
+  const persisted = centerCavityPositions(raw, center);
+
+  assert.deepEqual(Array.from(uncenterCavityPositions(persisted, center)), Array.from(raw), 'raw model: back where it was');
+  assert.deepEqual(Array.from(uncenterCavityPositions(persisted, { x: 0, y: 0, z: 0 })), Array.from(persisted), 'model loaded centered: unchanged');
+  assert.notStrictEqual(uncenterCavityPositions(persisted, center), persisted, 'never the persisted array itself');
 });
