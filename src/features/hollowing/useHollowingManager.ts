@@ -631,7 +631,7 @@ export function useHollowingManager({
         openFaceSelected: nextShellOpenFaceSelected,
       },
     }, { historyDescription: HOLLOWING_SETTINGS_LABEL, merge: true });
-  }, [blockedHollowVoxelIndices, hollowingState.mode, hollowingState.openFace, hollowingState.voxelSizeMm, isShellOpenFaceSelected, deps.current.persistActiveModelModifiers, rememberBakedHollowing, scene.activeModel]);
+  }, [blockedHollowVoxelIndices, hollowingEditMode, hollowingState.mode, hollowingState.openFace, hollowingState.shellThicknessMm, hollowingState.voxelSizeMm, isShellOpenFaceSelected, deps.current.persistActiveModelModifiers, rememberBakedHollowing, scene.activeModel]);
 
   const isHollowingApplied = React.useMemo(() => {
     const modifier = scene.activeModel?.meshModifiers?.hollowing;

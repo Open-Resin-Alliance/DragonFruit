@@ -1,15 +1,15 @@
 /**
  * Frontend dispatcher for the DragonFruit mesh-repair engine.
  *
- * Under Tauri:
- *   - `repairFromPath(filePath)` — Rust reads the file directly (STL/OBJ/3MF/
- *     staged positions), runs analyze + repair, and leaves the repaired
- *     positions in the shared staging buffer. We then fetch those bytes back
- *     as a new Float32Array.
- *   - `repairFromGeometry(geometry)` — Uploads the existing
- *     `THREE.BufferGeometry` position buffer via the existing staging IPC
- *     (`stage_mesh_binary_set`) and runs `mesh_repair_staged`.
- *   - `classifyFromGeometry(geometry)` — Uploads geometry and runs
+ * Under Tauri every pass works on the native mesh store (`nativeMeshStore.ts`): a
+ * geometry goes in under an id, the command is told that id, and its result comes back
+ * under an id of its own that is read once and dropped. Passes in flight at the same
+ * time each work on their own mesh, so nothing here queues them.
+ *   - `repairFromPath(filePath)` — Rust reads the file directly (STL/OBJ/3MF),
+ *     runs analyze + repair, and returns the repaired positions.
+ *   - `repairFromGeometry(geometry)` — Stores the geometry and runs
+ *     `mesh_repair_staged` on it.
+ *   - `classifyFromGeometry(geometry)` — Stores the geometry and runs
  *     `mesh_classify_staged`, a lightweight model/support section classifier
  *     that does not execute the heavy repair pipeline.
  *
@@ -17,29 +17,12 @@
  * the WASM Manifold repair path.
  */
 import * as THREE from 'three';
+import { loadTauriCore } from './tauriMeshBridge';
 import {
-  expandGeometryToTriangleSoup,
-  loadTauriCore,
-  readPositionsFromCommand,
-} from './tauriMeshBridge';
-
-/**
- * Runs one staged mesh pass at a time.
- *
- * `stage_mesh_binary_set` — and every command that reads the staged buffer back —
- * is process-wide state, so a stage/consume window is only meaningful while nothing
- * else stages. The VOXL import builds four models concurrently, and a model whose
- * stored classification does not address its payload runs the classify pass from
- * inside its build: two of those interleaved, each read back the *other's* soup, and
- * the viewport showed one model's geometry in another model's place. Serialising the
- * window is the whole fix; each pass is still native work off the main thread.
- */
-let stagedPass: Promise<unknown> = Promise.resolve();
-function withStagedMesh<T>(pass: () => Promise<T>): Promise<T> {
-  const run = stagedPass.then(pass, pass);
-  stagedPass = run.catch(() => undefined);
-  return run;
-}
+  openNativeMeshClient,
+  takeResultPositions,
+  withNativeMesh,
+} from './nativeMeshStore';
 
 export interface MeshAnalysisJson {
   triangle_count: number;
@@ -316,16 +299,17 @@ export async function repairFromPath(
   }
 
   try {
-    return await withStagedMesh(async () => {
-      const reportJson = await core.invoke<string>('mesh_repair_from_path', {
-        filePath,
-        optionsJson,
-        progressToken: token,
-      });
-      const report = normalizeMeshHealthReport(JSON.parse(reportJson));
-      const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-      return { report, positions };
+    const clientId = await openNativeMeshClient(core);
+    const reportJson = await core.invoke<string>('mesh_repair_from_path', {
+      filePath,
+      optionsJson,
+      progressToken: token,
+      clientId,
     });
+    const raw: unknown = JSON.parse(reportJson);
+    const report = normalizeMeshHealthReport(raw);
+    const positions = await takeResultPositions(core, raw, 'mesh_repair_from_path');
+    return { report, positions };
   } finally {
     unlisten?.();
   }
@@ -366,16 +350,17 @@ export async function repairPartsFromPath(
   }
 
   try {
-    return await withStagedMesh(async () => {
-      const reportJson = await core.invoke<string>('mesh_repair_parts_from_path', {
-        filePath,
-        optionsJson,
-        progressToken: token,
-      });
-      const report = normalizeMeshHealthReport(JSON.parse(reportJson));
-      const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-      return { report, positions };
+    const clientId = await openNativeMeshClient(core);
+    const reportJson = await core.invoke<string>('mesh_repair_parts_from_path', {
+      filePath,
+      optionsJson,
+      progressToken: token,
+      clientId,
     });
+    const raw: unknown = JSON.parse(reportJson);
+    const report = normalizeMeshHealthReport(raw);
+    const positions = await takeResultPositions(core, raw, 'mesh_repair_parts_from_path');
+    return { report, positions };
   } finally {
     unlisten?.();
   }
@@ -390,15 +375,13 @@ export async function repairPartsFromPath(
 export async function loadMeshFromPath(filePath: string): Promise<Float32Array | null> {
   const core = await loadTauriCore();
   if (!core) return null;
-  return withStagedMesh(async () => {
-    await core.invoke<void>('mesh_load_from_path', { filePath });
-    return readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-  });
+  const clientId = await openNativeMeshClient(core);
+  const meshId = await core.invoke<string | null>('mesh_load_from_path', { filePath, clientId });
+  return takeResultPositions(core, { meshId }, 'mesh_load_from_path');
 }
 
 /**
- * Uploads a geometry to the Rust staging buffer and runs analysis only —
- * no repair is performed and the staged buffer retains the original positions.
+ * Runs analysis only on a geometry: no repair is performed.
  * Returns null if not running under Tauri.
  */
 export async function analyzeFromGeometry(
@@ -410,14 +393,8 @@ export async function analyzeFromGeometry(
   const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
   if (!posAttr) throw new Error('analyzeFromGeometry: geometry has no position attribute');
 
-  const soup = expandGeometryToTriangleSoup(geometry);
-  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-
-  return withStagedMesh(async () => {
-    await core.invoke('stage_mesh_binary_set', bytes, {
-      headers: { 'Content-Type': 'application/octet-stream' },
-    });
-    const analysisJson = await core.invoke<string>('mesh_analyze_staged');
+  return withNativeMesh(core, geometry, async (meshId) => {
+    const analysisJson = await core.invoke<string>('mesh_analyze_staged', { meshId });
     return normalizeMeshAnalysis(JSON.parse(analysisJson));
   });
 }
@@ -494,15 +471,6 @@ export async function repairFromGeometry(
   const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
   if (!posAttr) throw new Error('repairFromGeometry: geometry has no position attribute');
 
-  // Normalize to a contiguous Float32Array (handle indexed geometry by
-  // expanding to triangle soup).
-  const soup = expandGeometryToTriangleSoup(geometry);
-  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-
-  await core.invoke('stage_mesh_binary_set', bytes, {
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
-
   const optionsPayload = {
     ...options,
     assume_support_geometry: options.assumeSupportGeometry,
@@ -520,13 +488,17 @@ export async function repairFromGeometry(
   }
 
   try {
-    const reportJson = await core.invoke<string>('mesh_repair_staged', {
-      optionsJson,
-      progressToken: token,
+    return await withNativeMesh(core, geometry, async (meshId) => {
+      const reportJson = await core.invoke<string>('mesh_repair_staged', {
+        optionsJson,
+        progressToken: token,
+        meshId,
+      });
+      const raw: unknown = JSON.parse(reportJson);
+      const report = normalizeMeshHealthReport(raw);
+      const positions = await takeResultPositions(core, raw, 'mesh_repair_staged');
+      return { report, positions };
     });
-    const report = normalizeMeshHealthReport(JSON.parse(reportJson));
-    const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
-    return { report, positions };
   } finally {
     unlisten?.();
   }
@@ -534,7 +506,7 @@ export async function repairFromGeometry(
 
 /**
  * Runs a lightweight model/support section classifier over an existing
- * THREE.BufferGeometry by staging positions and invoking `mesh_classify_staged`.
+ * THREE.BufferGeometry by storing it and invoking `mesh_classify_staged` on it.
  * This does not run the expensive repair pipeline.
  */
 export async function classifyFromGeometry(
@@ -547,23 +519,19 @@ export async function classifyFromGeometry(
   const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
   if (!posAttr) throw new Error('classifyFromGeometry: geometry has no position attribute');
 
-  const soup = expandGeometryToTriangleSoup(geometry);
-  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-
   const optionsPayload = {
     ...options,
     assume_support_geometry: options.assumeSupportGeometry,
   };
   const optionsJson = JSON.stringify(optionsPayload);
-  return withStagedMesh(async () => {
-    await core.invoke('stage_mesh_binary_set', bytes, {
-      headers: { 'Content-Type': 'application/octet-stream' },
-    });
+  return withNativeMesh(core, geometry, async (meshId) => {
     const reportJson = await core.invoke<string>('mesh_classify_staged', {
       optionsJson,
+      meshId,
     });
-    const report = normalizeMeshHealthReport(JSON.parse(reportJson));
-    const positions = await readPositionsFromCommand(core.invoke, 'mesh_repair_read_positions');
+    const raw: unknown = JSON.parse(reportJson);
+    const report = normalizeMeshHealthReport(raw);
+    const positions = await takeResultPositions(core, raw, 'mesh_classify_staged');
     return { report, positions };
   });
 }

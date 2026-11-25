@@ -40,6 +40,12 @@ _Avoid_: knot (a knot is a primitive that attaches supports to a shaft; an ancho
 The code predates parts of this vocabulary and has not caught up. When grepping, expect: shaft → `'segment'`; Roots → `'root'`, singular; contact disk → `contactDisk`. Selection and hover categories are unions in `src/supports/types.ts`. Most entity interfaces live there, but `Kickstand` lives in `src/supports/SupportTypes/Kickstand/types.ts`.
 _Avoid_: renaming these in passing — they are persisted in scenes and matched by string.
 
+### Native meshes
+
+**mesh store** vs **staging register**:
+Both hold a mesh on the Rust side for a native operation to read. The **staging register** is one slot for the whole process (`stage_mesh_binary_set`): the next command reads whatever the last caller put there. The **mesh store** holds any number of meshes under ids the caller passes back, and each operation returns its result's id (`src-tauri/src/mesh_store.rs`, `docs/dev/native-mesh-store.md`). New code uses the store; the register goes as each family of operations moves off it.
+_Avoid_: staging buffer for the store, handle (the store's word is id)
+
 ### Slicing and 3DAA
 
 **3DAA**:

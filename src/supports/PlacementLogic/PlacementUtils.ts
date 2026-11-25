@@ -97,7 +97,9 @@ export function findClosestMeshToPoint(point: { x: number; y: number; z: number 
         if (!(candidate instanceof THREE.Mesh) || !candidate.geometry) continue;
 
         let distance = Number.POSITIVE_INFINITY;
-        const boundsTree = (candidate.geometry as any).boundsTree;
+        const boundsTree = (candidate.geometry as THREE.BufferGeometry & {
+            boundsTree?: { closestPointToPoint?: (point: THREE.Vector3, target: object) => { distance: number } | null };
+        }).boundsTree;
         if (boundsTree?.closestPointToPoint) {
             localPoint.copy(worldPoint).applyMatrix4(candidate.matrixWorld.clone().invert());
             const result = boundsTree.closestPointToPoint(localPoint, resultTarget);

@@ -67,7 +67,8 @@ libloading = "0.8"
 # The webview watchdog's reload prompt: a sheet it can close itself, which
 # rfd's blocking modal cannot do.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+# NSBundle/NSProcessInfo: the macOS and WebKit versions in the log header.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSBundle", "NSProcessInfo"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "std",
   "block2",

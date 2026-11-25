@@ -18,7 +18,7 @@ if (-not $PSBoundParameters.ContainsKey('OutputDirectory')) {
     $OutputDirectory = Join-Path $PSScriptRoot '../src-tauri/windows-resources'
 }
 # Current stable Microsoft x64 runtime; update deliberately, not during builds.
-$pinnedMinimum = [version]'14.51.36247.0'
+$pinnedMinimum = [version]'14.52.37029.0'
 if (-not $PSBoundParameters.ContainsKey('MinimumVersion')) { $MinimumVersion = $pinnedMinimum }
 if ($null -eq $MinimumVersion -or $MinimumVersion -lt $pinnedMinimum) {
     throw "MinimumVersion cannot be lower than the pinned runtime $pinnedMinimum."

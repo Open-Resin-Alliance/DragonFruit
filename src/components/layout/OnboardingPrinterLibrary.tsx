@@ -77,11 +77,9 @@ export function OnboardingPrinterLibrary({ onAdded, onBack }: OnboardingPrinterL
   }, [presets]);
 
   // Default to the first manufacturer once the list is known.
-  React.useEffect(() => {
-    if (selectedManufacturer === null && manufacturers.length > 0) {
-      setSelectedManufacturer(manufacturers[0]);
-    }
-  }, [manufacturers, selectedManufacturer]);
+  if (selectedManufacturer === null && manufacturers.length > 0) {
+    setSelectedManufacturer(manufacturers[0]);
+  }
 
   const filteredPresets = React.useMemo(() => {
     const term = search.trim().toLowerCase();

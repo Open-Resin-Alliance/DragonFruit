@@ -36,8 +36,10 @@ export type PrintingPreviewPaneProps = {
   printingPreviewVisualTransform: string | null | undefined;
 
   models: React.ComponentProps<typeof PrintingLayerGpuPreview>['models'];
-  supportDragGroupRef: React.RefObject<THREE.Group | null>;
-  supportRenderRefreshNonce: number;
+  /** The supports and rafts of the plate being previewed, moved with `models`. */
+  supportGroupRef: React.RefObject<THREE.Group | null>;
+  /** Changes whenever the preview should gather the supports under `supportGroupRef` again. */
+  supportVersion: string;
   printingPreviewScrubUpscaleTransform: string | null | undefined;
 
   printingPreviewPngUrlForDisplay: string | null;
@@ -80,8 +82,8 @@ export function PrintingPreviewPane({
   activePrinterProfile,
   printingPreviewVisualTransform,
   models,
-  supportDragGroupRef,
-  supportRenderRefreshNonce,
+  supportGroupRef,
+  supportVersion,
   printingPreviewScrubUpscaleTransform,
   printingPreviewPngUrlForDisplay,
   isPrintingPngLoaded,
@@ -186,8 +188,8 @@ export function PrintingPreviewPane({
                       buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
                       viewportWidthMm={printingPreviewTargetResolution?.viewportWidth}
                       viewportHeightMm={printingPreviewTargetResolution?.viewportHeight}
-                      supportGroupRef={supportDragGroupRef as React.RefObject<THREE.Group>}
-                      supportVersion={supportRenderRefreshNonce}
+                      supportGroupRef={supportGroupRef}
+                      supportVersion={supportVersion}
                       mirrorX={activePrinterProfile?.display?.mirrorX === true}
                       mirrorY={activePrinterProfile?.display?.mirrorY === true}
                       multiMaterialMode={activePrinterProfile?.materialMode === 'multiTank'}

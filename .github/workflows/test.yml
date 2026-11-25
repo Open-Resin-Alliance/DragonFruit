@@ -135,6 +135,9 @@ jobs:
       - name: Check no new UI literals bypass Lingui
         run: npm run check:i18n-literals
 
+      - name: Check the React Compiler skips nothing new
+        run: npm run check:compiler-skips
+
   support-metrics:
     name: Auto-support metrics
     runs-on: ubuntu-latest

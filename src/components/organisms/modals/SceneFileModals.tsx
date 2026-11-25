@@ -601,9 +601,11 @@ export function SceneFileModals({
         )}
       />
 
+      {/* Opened from inside the Save & Close / Save & New Scene dialogs, which
+          portal to <body> at z-[220] and would hide it at the same level. */}
       {showSceneSaveChoiceModal && (
         <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          className="fixed inset-0 z-[230] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
               resolveSceneSaveChoice('cancel');

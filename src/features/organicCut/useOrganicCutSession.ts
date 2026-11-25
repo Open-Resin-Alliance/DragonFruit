@@ -716,6 +716,20 @@ export function useOrganicCutSession({
   const isDraggingRef = React.useRef(isDraggingPoint);
   const dragBaselineRef = React.useRef<{ loops: SessionLoop[]; active: number } | null>(null);
 
+  // The preview is too heavy to rebuild on every pointer move, so the last one
+  // stays up for the drag. A WAYPOINT drag moves the seam, and the cut face
+  // goes out from under the tenon: it would be left standing in mid-air, so it
+  // goes. Dragging the TENON does not move the face — the anchor and the lean
+  // are carried on the built soup, client-side — so it stays on screen for the
+  // whole gesture and Rust is asked once, when the handle is let go. It used to
+  // be dropped for both, which is why the tenon vanished the moment you took
+  // hold of it. Adjusted during render so the stale tenon never paints.
+  const [seenDraggingPoint, setSeenDraggingPoint] = React.useState(isDraggingPoint);
+  if (seenDraggingPoint !== isDraggingPoint) {
+    setSeenDraggingPoint(isDraggingPoint);
+    if (isDraggingPoint && !isDraggingTenon) setTenonPreview(null);
+  }
+
   React.useEffect(() => {
     const wasDragging = isDraggingRef.current;
     isDraggingRef.current = isDraggingPoint;
@@ -723,15 +737,6 @@ export function useOrganicCutSession({
     if (!wasDragging && isDraggingPoint) {
       flushEditRun();
       dragBaselineRef.current = { loops: loopsRef.current, active: activeLoopIndexRef.current };
-      // The preview is too heavy to rebuild on every pointer move, so the last one
-      // stays up for the drag. A WAYPOINT drag moves the seam, and the cut face
-      // goes out from under the tenon: it would be left standing in mid-air, so it
-      // goes. Dragging the TENON does not move the face — the anchor and the lean
-      // are carried on the built soup, client-side — so it stays on screen for the
-      // whole gesture and Rust is asked once, when the handle is let go. It used to
-      // be dropped for both, which is why the tenon vanished the moment you took
-      // hold of it.
-      if (!isDraggingTenon) setTenonPreview(null);
       return;
     }
     if (!wasDragging || isDraggingPoint) return;
@@ -1047,6 +1052,7 @@ export function useOrganicCutSession({
   const cutMode = panelState.cutMode;
   React.useEffect(() => {
     if (!toolActive || loop.length < 2 || !activeGeometry || !activeGeometryKey) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the seam preview is owned by this effect's cancellable solve; clearing it belongs with the request it would otherwise start.
       setGeodesicPolyline(null);
       setPlaneCurves(null);
       return;
@@ -1164,6 +1170,7 @@ export function useOrganicCutSession({
       // Don't clear just because a drag started — keep the last preview up for the
       // duration of the drag (the lean is client-side, so no rebuild is needed until
       // the tenon/waypoint drag ends); only clear when there is truly nothing to show.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the cut preview is owned by this effect's cancellable Rust request; clearing it belongs with the request it would otherwise start.
       if (!isDraggingPoint && !isDraggingTenon) clearCutPreview();
       return;
     }

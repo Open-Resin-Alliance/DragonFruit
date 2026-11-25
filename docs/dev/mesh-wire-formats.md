@@ -125,15 +125,16 @@ the next save. Both loaders take `refine: false` (`x-mesh-refine: 0` on
 `load_mesh_bytes`, the `refine` argument on `load_mesh_range`), and the VOXL loaders
 pass it whenever the caller holds a classification for that payload.
 
-**The staged passes are serialised on the JS side.** `stage_mesh_binary_set` and the
+**The repair passes run on the native mesh store.** `stage_mesh_binary_set` and the
 `*_read_positions` commands share one process-wide buffer, so a stage/read window is
 only meaningful while nothing else stages. The VOXL import builds four models
 concurrently, and a model whose stored classification does not address its payload runs
 `classifyFromGeometry` inside its own build; two of those interleaved and each read back
 the other's soup, which rendered as one model's geometry standing in another's place.
-`withStagedMesh` (`src/utils/meshRepair.ts`) is the single queue every staged pass goes
-through — classify, analyze, both path repairs and the path load. It does not serialise
-the AO bake, which sends its soup in the request body precisely to avoid this buffer.
+Classify, analyze, both path repairs and the path load now put their mesh into the native
+mesh store and name it by id, so concurrent passes each read their own
+(`dev/native-mesh-store.md`). The families still on the buffer (hollowing, hole punch,
+organic cut, islands, slicing) keep the hazard until they move.
 
 ## What DFMX deliberately drops
 
@@ -167,5 +168,6 @@ ADR-0027 keeps the DFST decision as the record of why the preview path exists.
 ## Related pages
 
 - `dev/tauri-ipc-bridge.md` — the IPC seam and the staging rules
+- `dev/native-mesh-store.md` — meshes held under ids instead of the staging buffer
 - `dev/formats.md` — the formats the app reads and writes
 - `dev/voxl-format-spec.md` — the on-disk binary container and its `zlib` code

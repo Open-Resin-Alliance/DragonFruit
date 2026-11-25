@@ -132,7 +132,9 @@ test('classifyFromGeometry with assumeSupportGeometry: true preserves likely_sup
   const restoreWindow = installFakeWindow({
     __TAURI_INTERNALS__: {
       invoke: async (cmd: string, args?: { optionsJson?: string }) => {
-        if (cmd === 'stage_mesh_binary_set') return;
+        if (cmd === 'mesh_store_open_client') return 0;
+        if (cmd === 'mesh_store_put') return 'm1';
+        if (cmd === 'mesh_store_drop') return 1;
         if (cmd === 'mesh_classify_staged') {
           capturedOptionsJson = args?.optionsJson;
           const parsed = JSON.parse(args?.optionsJson ?? '{}');
@@ -145,9 +147,10 @@ test('classifyFromGeometry with assumeSupportGeometry: true preserves likely_sup
             residual_issues: [],
             fully_repaired: true,
             total_ms: 1,
+            meshId: 'm2',
           });
         }
-        if (cmd === 'mesh_repair_read_positions') {
+        if (cmd === 'mesh_store_read') {
           return new Float32Array([0, 0, 0, 10, 0, 0, 0, 10, 0]).buffer;
         }
         throw new Error(`Unexpected command: ${cmd}`);

@@ -24,6 +24,7 @@ const source = (models: LoadedModel[]): SceneSaveSource => deepFreeze({
   plateName: 'Plate 1',
   printer: undefined,
   plateOrdering: undefined,
+  plateOriginMode: 'front_left',
 });
 
 test('a save writes hidden models as well as visible ones (#925)', () => {
@@ -41,6 +42,10 @@ test('the plates, the active plate and its name reach the save unchanged', () =>
   assert.deepEqual(context.plates, [{ id: 'plate-1', name: 'Plate 1' }]);
   assert.equal(context.activePlateId, 'plate-1');
   assert.equal(context.plateName, 'Plate 1');
+});
+
+test('the origin the beds are laid out with reaches the save', () => {
+  assert.equal(buildSceneSaveContext(source([model('a', true)])).plateOriginMode, 'front_left');
 });
 
 test('a thumbnail is attached only when there is one', () => {

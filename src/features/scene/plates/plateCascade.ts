@@ -27,6 +27,8 @@
  * always was.
  */
 
+import type { PlateOriginMode } from './plateLayout';
+
 /** Distance between two plates' build volumes, on top of the plate footprint. */
 export const PLATE_CASCADE_GAP_MM = 24;
 
@@ -146,4 +148,23 @@ export function readPlateOrdering(value: unknown): PlateOrdering | null {
       typeof candidate.columns === 'number' ? candidate.columns : DEFAULT_FIXED_PLATE_COLUMNS,
     ),
   };
+}
+
+/**
+ * Where a saved scene records the origin its beds were laid out with.
+ *
+ * The origin mode decides where a plate's own frame starts (its centre or its front-left
+ * corner), and the models' positions are measured in that frame. A viewer preference used
+ * to decide it, so a scene written under one and opened under the other put every model
+ * half a bed off. It is the same kind of fact about the file as the ordering.
+ */
+export const VOXL_PLATE_ORIGIN_EXTENSION = 'plateOriginMode';
+
+/**
+ * Read that extension back. Anything unrecognised reads as null, which is what a file
+ * written before the origin was recorded looks like; what it was laid out with is not
+ * known, so the reader keeps its own.
+ */
+export function readPlateOriginMode(value: unknown): PlateOriginMode | null {
+  return value === 'center' || value === 'front_left' ? value : null;
 }

@@ -252,8 +252,8 @@ import {
   type ArrangeModel as HighPrecisionArrangeModel,
 } from '@/features/scene/arrange/highPrecisionArrange';
 import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
-import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
-import { modelsOnPlate, plateCanBeRemoved } from '@/features/scene/plates/plateLayout';
+import { appendedPlateSlots, modelsOnPlate, plateBuildArea, plateCanBeRemoved, plateCenterFor, plateLocalRect } from '@/features/scene/plates/plateLayout';
+import { scrubPreviewScope } from '@/features/printing/scrubPreviewScope';
 
 // Domain Features
 import { useSceneCollectionManager, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
@@ -856,7 +856,7 @@ export default function Home() {
    */
   const activePlateModelIds = React.useMemo(
     () => new Set(
-      modelsOnPlate(scene.models, scene.activePlateId, scene.plateFrames).map((model) => model.id),
+      modelsOnPlate({ models: scene.models, plateId: scene.activePlateId, frames: scene.plateFrames }).map((model) => model.id),
     ),
     [scene.activePlateId, scene.models, scene.plateFrames],
   );
@@ -1254,6 +1254,8 @@ export default function Home() {
   }, [scene.mode, transformMgr.transformMode]);
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
   const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
+  /** The supports and rafts of the plate the scrub preview is of, moved with its models (#867). */
+  const printingScrubSupportGroupRef = React.useRef<THREE.Group | null>(null);
   const supportDragResetRafRef = React.useRef<number | null>(null);
   const supportDragResetSecondRafRef = React.useRef<number | null>(null);
   const [holdSupportDragDeltaUntilSupportSync, setHoldSupportDragDeltaUntilSupportSync] = React.useState(false);
@@ -1431,6 +1433,7 @@ export default function Home() {
     plateName: scene.plateName,
     printer: scene.voxlPrinterBundle ?? undefined,
     plateOrdering: scene.plateOrdering,
+    plateOriginMode: scene.view3dSettings.originMode,
     enabled: sceneAutosaveEnabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
     cooldownMs: sceneAutosaveSettings.cooldownMs,
@@ -2603,7 +2606,7 @@ export default function Home() {
       hoveredCategoryForVisual: supportRendererDebug?.hoveredCategoryForVisual ?? null,
       hoveredIdForVisual: supportRendererDebug?.hoveredIdForVisual ?? null,
     };
-  }, [bracePlacementSnapshot, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId, transformDebugTick]);
+  }, [bracePlacementSnapshot, scene.activeModelId, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId, transformDebugTick]);
 
   // Reads the live stores directly: Home's subscribed snapshot is an empty
   // stub in support mode (trackSupportCollectionsInHome), so counting from it
@@ -3225,28 +3228,28 @@ export default function Home() {
   }, [completedSaveDestinationPath, completedSaveDirectory, completedSliceIntent, printingSlicingBenchmark?.totalElapsedMs]);
 
   /**
-   * What the fast scrub preview draws: the models of the bed being worked on, moved to the
-   * origin the way the slice itself is taken.
-   *
-   * The preview is a top-down look at one bed's build volume, drawn around the origin. Handed
-   * the scene as it stands, it shows the bed that sits at the origin — plate 1 — whatever bed
-   * the preview is really of, which is why scrubbing showed the wrong model on plate 2.
+   * What the fast scrub preview draws: the bed being worked on, which is the one the
+   * workspace shows the slice of, moved to the origin the way the slice itself is taken —
+   * its models, and through `printingScrubSupportGroupRef` its supports and rafts.
    */
-  const printingScrubPreviewModels = React.useMemo(() => {
-    const activeFrame = scene.plateFrames.find((frame) => frame.id === scene.activePlateId);
-    const onPlate = modelsOnPlate(scene.models, scene.activePlateId, scene.plateFrames);
-    if (!activeFrame || (activeFrame.dxMm === 0 && activeFrame.dyMm === 0)) return onPlate;
-
-    return onPlate.map((model) => ({
-      ...model,
-      transform: {
-        ...model.transform,
-        position: model.transform.position.clone().add(
-          new THREE.Vector3(-activeFrame.dxMm, -activeFrame.dyMm, 0),
-        ),
-      },
-    }));
-  }, [scene.activePlateId, scene.models, scene.plateFrames]);
+  const printingScrubScope = React.useMemo(
+    () => scrubPreviewScope({ models: scene.models, frames: scene.plateFrames, plateId: scene.activePlateId }),
+    [scene.activePlateId, scene.models, scene.plateFrames],
+  );
+  /**
+   * The scrub preview gathers the plate's support meshes once and cuts those. It gathers
+   * them again on a support edit, on another plate, and when a drag of the slider starts
+   * or ends, which by then sees whatever the canvas has drawn since.
+   */
+  const printingScrubSupportVersion = `${supportRenderRefreshNonce}|${scene.activePlateId}|${isPrintingLayerScrubbing ? 'scrub' : 'still'}`;
+  /** The canvas draws the plate's supports for the scrub preview only in the printing workspace. */
+  const printingPlateSupports = React.useMemo(() => (scene.mode === 'printing'
+    ? {
+        groupRef: printingScrubSupportGroupRef,
+        excludeModelIds: printingScrubScope.supportExcludeModelIds,
+        offsetMm: printingScrubScope.offsetMm,
+      }
+    : null), [printingScrubScope, scene.mode]);
 
   /**
    * The scene shot a plate's file carries, framed on that plate.
@@ -3305,14 +3308,15 @@ export default function Home() {
   const resinBuildVolumeBounds = React.useMemo(() => {
     if (!scene.view3dSettings.enabled) return null;
 
-    const width = scene.view3dSettings.widthMm;
-    const depth = scene.view3dSettings.depthMm;
-    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -width * 0.5;
-    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
+    const { minX, minY, maxX, maxY } = plateLocalRect({
+      widthMm: scene.view3dSettings.widthMm,
+      depthMm: scene.view3dSettings.depthMm,
+      originMode: scene.view3dSettings.originMode,
+    });
 
     return new THREE.Box3(
       new THREE.Vector3(minX, minY, 0),
-      new THREE.Vector3(minX + width, minY + depth, scene.view3dSettings.maxZMm),
+      new THREE.Vector3(maxX, maxY, scene.view3dSettings.maxZMm),
     );
   }, [
     scene.view3dSettings.depthMm,
@@ -3540,9 +3544,11 @@ export default function Home() {
       cancelled = true;
     };
   }, [
+    activePlateModelIds,
     getOrComputeBaseResinMl,
     resinEstimateComputationSignature,
     resinEstimateRefreshTick,
+    sceneResinModels,
     shouldEstimateResinInBackground,
     supportAndRaftResinMl,
     visibleResinModels,
@@ -4595,6 +4601,7 @@ export default function Home() {
           plateName: scene.plateName,
           printer: scene.voxlPrinterBundle ?? undefined,
           plateOrdering: scene.plateOrdering,
+          plateOriginMode: scene.view3dSettings.originMode,
         },
         exportThumbnailPng,
       ),
@@ -4656,6 +4663,7 @@ export default function Home() {
     scene.plateOrdering,
     scene.plates,
     scene.selectedModelIds,
+    scene.view3dSettings.originMode,
     scene.voxlPrinterBundle,
     setExportSuccessToast,
     setIsExportSuccessToastVisible,
@@ -6464,6 +6472,7 @@ export default function Home() {
   }, [
     arrangeSpacingMm,
     closeEditorContextMenu,
+    editorContextMenuSupportTarget,
     editorContextMenuTargetIds,
     liveSelectedBodies,
     multiTankMaterialChoices,
@@ -7498,14 +7507,15 @@ export default function Home() {
   const buildVolumeBounds = React.useMemo(() => {
     if (!scene.view3dSettings.enabled) return null;
 
-    const width = scene.view3dSettings.widthMm;
-    const depth = scene.view3dSettings.depthMm;
-    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -width * 0.5;
-    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
+    const { minX, minY, maxX, maxY } = plateLocalRect({
+      widthMm: scene.view3dSettings.widthMm,
+      depthMm: scene.view3dSettings.depthMm,
+      originMode: scene.view3dSettings.originMode,
+    });
 
     return new THREE.Box3(
       new THREE.Vector3(minX, minY, 0),
-      new THREE.Vector3(minX + width, minY + depth, scene.view3dSettings.maxZMm),
+      new THREE.Vector3(maxX, maxY, scene.view3dSettings.maxZMm),
     );
   }, [
     scene.view3dSettings.depthMm,
@@ -8258,7 +8268,7 @@ export default function Home() {
 
     // Select all visible models for export workspace tinting
     scene.setSelectedModelIds(visibleIds);
-  }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId, getVisibleModelIdsWithUnappliedHoles, applyAllHolePunchProgress, resolveUnappliedModifier]);
+  }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId, scene.setSelectedModelIds, getVisibleModelIdsWithUnappliedHoles, applyAllHolePunchProgress, resolveUnappliedModifier]);
 
 
   // Advance the "Apply to All" queue once the current model's bake settles.
@@ -9222,6 +9232,7 @@ export default function Home() {
   }, [
     applySelectionPositionUpdates,
     commitPendingSelectionPositionHistory,
+    getPendingSelectionStartEntries,
     getSelectionTargetIds,
     getSelectionTransformEntries,
     islands,
@@ -9296,14 +9307,25 @@ export default function Home() {
       selectedModelIds: scene.selectedModelIds,
       activeModelId: scene.activeModelId,
     });
-    const targetCenter = scene.view3dSettings.originMode === 'front_left'
-      ? new THREE.Vector2(scene.view3dSettings.widthMm * 0.5, scene.view3dSettings.depthMm * 0.5)
-      : new THREE.Vector2(0, 0);
+    // The middle of the plate being worked on: on plate 3, centring the selection
+    // used to send it to the middle of plate 1.
+    const { x, y } = plateCenterFor({
+      frames: scene.plateFrames,
+      plateId: scene.activePlateId,
+      footprint: {
+        widthMm: scene.view3dSettings.widthMm,
+        depthMm: scene.view3dSettings.depthMm,
+        originMode: scene.view3dSettings.originMode,
+      },
+    });
+    const targetCenter = new THREE.Vector2(x, y);
     applySelectionPositionUpdates(buildCenterSelectionUpdates(scene.models, targetIds, targetCenter));
   }, [
     applySelectionPositionUpdates,
     scene.activeModelId,
+    scene.activePlateId,
     scene.models,
+    scene.plateFrames,
     scene.selectedModelIds,
     scene.view3dSettings.depthMm,
     scene.view3dSettings.originMode,
@@ -9473,7 +9495,7 @@ export default function Home() {
 
     isScaleGestureRef.current = operation === 'scale';
     return true;
-  }, [captureTransformSupportSnapshot, disableSnapForManualZMove, getSelectionTargetIds, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, scene.models, scene.selectedModelIds, scene.setModelsAutoLift]);
+  }, [captureTransformSupportSnapshot, disableSnapForManualZMove, getSelectionTargetIds, isModelPlateLocked, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, scene.models, scene.selectedModelIds, scene.setModelsAutoLift]);
 
   const ensurePendingTransformHistoryForActiveModel = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
     if (!scene.activeModelId || !scene.activeModel) return;
@@ -9764,15 +9786,10 @@ export default function Home() {
       // Spacing may be negative (nesting); clamp so a step never collapses.
       const spacing = Math.max(-Math.min(width, depth) + 0.1, duplicateSpacingMm);
 
-      const rawDupMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-      const rawDupMaxX = rawDupMinX + scene.view3dSettings.widthMm;
-      const rawDupMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-      const rawDupMaxY = rawDupMinY + scene.view3dSettings.depthMm;
-      const dupSm = scene.view3dSettings.safetyMarginMm;
-      const minX = rawDupMinX + Math.max(0, dupSm?.left ?? 0);
-      const maxX = rawDupMaxX - Math.max(0, dupSm?.right ?? 0);
-      const minY = rawDupMinY + Math.max(0, dupSm?.front ?? 0);
-      const maxY = rawDupMaxY - Math.max(0, dupSm?.back ?? 0);
+      const { minX, maxX, minY, maxY } = plateBuildArea({
+        footprint: scene.view3dSettings,
+        safetyMarginMm: scene.view3dSettings.safetyMarginMm,
+      });
 
       const plateWidth = Math.max(1, maxX - minX);
       const plateDepth = Math.max(1, maxY - minY);
@@ -9874,17 +9891,17 @@ export default function Home() {
       const remaining = Math.max(0, totalCount - chosenCenters.length);
       const perBed = Math.max(1, maxCols * maxRows);
       const ghostBeds = remaining > 0 ? Math.ceil(remaining / perBed) : 0;
-      const footprint = { widthMm: scene.view3dSettings.widthMm, depthMm: scene.view3dSettings.depthMm };
       const ghostOffsets: Array<{ dxMm: number; dyMm: number }> = [];
       let placedOnGhostBeds = 0;
+      const ghostSlots = appendedPlateSlots({
+        plates: scene.plates,
+        count: ghostBeds,
+        footprint: scene.view3dSettings,
+        ordering: scene.plateOrdering,
+      });
 
-      for (let bed = 0; bed < ghostBeds; bed += 1) {
-        const offset = plateCascadeOffsetMm(
-          scene.plates.length + bed,
-          footprint,
-          scene.plates.length + ghostBeds,
-          scene.plateOrdering,
-        );
+      for (const { dxMm, dyMm } of ghostSlots) {
+        const offset = { dxMm, dyMm };
         ghostOffsets.push(offset);
 
         // Nearest the middle of that bed first, which is where the eye looks for them.
@@ -9972,6 +9989,7 @@ export default function Home() {
     scene.models,
     scene.mode,
     scene.plateOffsetFor,
+    scene.plateOrdering,
     scene.plates,
     scene.view3dSettings.depthMm,
     scene.view3dSettings.originMode,
@@ -11058,16 +11076,16 @@ export default function Home() {
             plateOrdering={scene.plateOrdering}
             plateLocked={scene.plateLocked}
             onTogglePlateLock={() => scene.setPlateLocked(!scene.plateLocked)}
-            plateClearTitle={plateCanBeRemoved(scene.plates, scene.activePlateId)
+            plateClearTitle={plateCanBeRemoved({ plates: scene.plates, plateId: scene.activePlateId })
               ? _(msg({ message: 'Delete this plate', comment: 'Tooltip on the bin beside the build plate when the plate can go: it removes the bed and the models standing on it. Undo brings them back.' }))
               : _(msg({ message: 'Clear build plate', comment: 'Tooltip on the bin beside the build plate, which removes every model on it. Undo brings them back.' }))}
             onClearPlate={() => {
               const plateId = scene.activePlateId;
-              const intent = plateCanBeRemoved(scene.plates, plateId) ? 'delete' : 'clear';
+              const intent = plateCanBeRemoved({ plates: scene.plates, plateId }) ? 'delete' : 'clear';
               // An empty bed has nothing to lose: a delete takes it straight away, and
               // a clear has nothing to do. The confirmation is for the models either
               // one takes with it.
-              if (modelsOnPlate(scene.models, plateId, scene.plateFrames).length === 0) {
+              if (modelsOnPlate({ models: scene.models, plateId, frames: scene.plateFrames }).length === 0) {
                 if (intent === 'delete') scene.removePlate(plateId);
                 return;
               }
@@ -11170,6 +11188,7 @@ export default function Home() {
             selectedTintStrength={effectiveSelectedTintStrengthForScene}
             supportsRef={supportsRef}
             supportDragGroupRef={supportDragGroupRef}
+            printingPlateSupports={printingPlateSupports}
             holdSupportDragDelta={holdSupportDragDeltaUntilSupportSync}
             supportDragTransactionId={supportDragTransactionId}
             customPrepareLassoSelection={{
@@ -11354,9 +11373,9 @@ export default function Home() {
             printingPreviewTargetResolution={printingPreviewTargetResolution}
             activePrinterProfile={activePrinterProfile}
             printingPreviewVisualTransform={printingPreviewVisualTransform}
-            models={printingScrubPreviewModels}
-            supportDragGroupRef={supportDragGroupRef}
-            supportRenderRefreshNonce={supportRenderRefreshNonce}
+            models={printingScrubScope.models}
+            supportGroupRef={printingScrubSupportGroupRef}
+            supportVersion={printingScrubSupportVersion}
             printingPreviewScrubUpscaleTransform={printingPreviewScrubUpscaleTransform}
             printingPreviewPngUrlForDisplay={printingPreviewPngUrlForDisplay}
             isPrintingPngLoaded={isPrintingPngLoaded}
@@ -11972,7 +11991,7 @@ export default function Home() {
                 // The plate, not the scene: with more than one bed, the bin empties
                 // the one you are working on and leaves the others alone.
                 void scene.deleteModels(
-                  modelsOnPlate(scene.models, scene.activePlateId, scene.plateFrames).map((model) => model.id),
+                  modelsOnPlate({ models: scene.models, plateId: scene.activePlateId, frames: scene.plateFrames }).map((model) => model.id),
                 );
               }}
             >

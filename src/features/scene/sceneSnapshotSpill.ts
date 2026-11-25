@@ -3,6 +3,7 @@ import { accelerateGeometry } from '@/utils/bvh';
 import { releaseGeometryStorage } from '@/utils/releaseGeometry';
 import type { LoadedModel, SceneSnapshotPair } from '@/features/scene/useSceneCollectionManager';
 import type { SupportState } from '@/supports/types';
+import { loadTauriCore, type TauriInvoke } from '@/utils/tauriMeshBridge';
 
 const SPILL_DIRECTORY = 'dragonfruit-undo';
 const SPILL_VERSION = 1;
@@ -54,7 +55,6 @@ type SupportSection = {
 };
 
 export type SpilledSceneSnapshot = {
-  fileHandle: FileSystemFileHandle;
   dataOffset: number;
   /** Bytes this scratch file holds, for the history's disk budget. */
   byteLength: number;
@@ -146,14 +146,134 @@ function serializeSupportState(state: SupportState | undefined): Uint8Array | nu
   }
 }
 
-async function spillDirectory(): Promise<FileSystemDirectoryHandle | null> {
-  if (typeof navigator === 'undefined' || !navigator.storage?.getDirectory) return null;
-  try {
+/**
+ * Where spilled snapshots live: one file per history key.
+ *
+ * In the desktop app the files are written by Rust (`undo_spill.rs`). The origin
+ * private file system was the only store until it turned out that WebKit has no
+ * `FileSystemFileHandle.createWritable()` before Safari 26, so in the WKWebView of
+ * macOS 12 to 15 every spill threw and each history entry kept a whole scene in
+ * memory. The origin private file system is still what a browser uses, when it
+ * has that method.
+ */
+export interface SpillStore {
+  /** Writes `chunks`, in order, as the key's file, replacing any earlier one. */
+  write(key: string, chunks: readonly Uint8Array[]): Promise<void>;
+  read(key: string, offset: number, length: number): Promise<ArrayBuffer>;
+  /** Deletes the key's file; one that is already gone is not an error. */
+  remove(key: string): Promise<void>;
+  /** Deletes every file whose key is not in `activeKeys`. */
+  prune(activeKeys: ReadonlySet<string>): Promise<void>;
+}
+
+const fileName = (key: string) => `scene-${key}.bin`;
+
+/** Bytes per IPC call. Each chunk is copied on its way to Rust, so it stays modest. */
+const NATIVE_CHUNK_BYTES = 8 * 1024 * 1024;
+
+export function nativeSpillStore(invoke: TauriInvoke): SpillStore {
+  const remove = async (key: string) => {
+    await invoke<void>('undo_spill_remove', { key });
+  };
+  return {
+    async write(key, chunks) {
+      let offset = 0;
+      try {
+        for (const chunk of chunks) {
+          for (let start = 0; start < chunk.byteLength; start += NATIVE_CHUNK_BYTES) {
+            const part = chunk.subarray(start, Math.min(start + NATIVE_CHUNK_BYTES, chunk.byteLength));
+            offset = await invoke<number>('undo_spill_append', part, {
+              headers: {
+                'Content-Type': 'application/octet-stream',
+                'x-undo-spill-key': key,
+                'x-undo-spill-offset': String(offset),
+              },
+            });
+          }
+        }
+      } catch (error) {
+        await remove(key).catch(() => undefined);
+        throw error;
+      }
+    },
+    async read(key, offset, length) {
+      const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>('undo_spill_read', { key, offset, length });
+      if (bytes instanceof ArrayBuffer) return bytes;
+      const view = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
+      return view.slice().buffer;
+    },
+    remove,
+    async prune(activeKeys) {
+      await invoke<number>('undo_spill_prune', { activeKeys: [...activeKeys] });
+    },
+  };
+}
+
+function opfsWritable(): boolean {
+  return typeof FileSystemFileHandle !== 'undefined'
+    && typeof (FileSystemFileHandle.prototype as { createWritable?: unknown }).createWritable === 'function';
+}
+
+function opfsSpillStore(): SpillStore {
+  const directory = async (): Promise<FileSystemDirectoryHandle> => {
     const root = await navigator.storage.getDirectory();
-    return await root.getDirectoryHandle(SPILL_DIRECTORY, { create: true });
-  } catch {
-    return null;
+    return root.getDirectoryHandle(SPILL_DIRECTORY, { create: true });
+  };
+  const remove = async (key: string) => {
+    try {
+      await (await directory()).removeEntry(fileName(key));
+    } catch {
+      // Already gone.
+    }
+  };
+  return {
+    async write(key, chunks) {
+      const fileHandle = await (await directory()).getFileHandle(fileName(key), { create: true });
+      try {
+        const writable = await fileHandle.createWritable();
+        for (const chunk of chunks) await writable.write(chunk as unknown as ArrayBufferView<ArrayBuffer>);
+        await writable.close();
+      } catch (error) {
+        await remove(key);
+        throw error;
+      }
+    },
+    async read(key, offset, length) {
+      const file = await (await (await directory()).getFileHandle(fileName(key))).getFile();
+      return file.slice(offset, offset + length).arrayBuffer();
+    },
+    remove,
+    async prune(activeKeys) {
+      const dir = await directory();
+      const entries = (dir as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }).entries();
+      for await (const [name, handle] of entries) {
+        if (handle.kind !== 'file' || !name.endsWith('.bin')) continue;
+        const key = name.slice('scene-'.length, -'.bin'.length);
+        if (!name.startsWith('scene-') || !activeKeys.has(key)) {
+          await dir.removeEntry(name).catch(() => undefined);
+        }
+      }
+    },
+  };
+}
+
+let spillStorePromise: Promise<SpillStore | null> | null = null;
+
+/** The store this runtime spills to, or null where there is none. Cached. */
+function spillStore(): Promise<SpillStore | null> {
+  if (!spillStorePromise) {
+    spillStorePromise = loadTauriCore().then((core) => {
+      if (core) return nativeSpillStore(core.invoke);
+      if (typeof navigator !== 'undefined' && typeof navigator.storage?.getDirectory === 'function' && opfsWritable()) return opfsSpillStore();
+      return null;
+    }).catch(() => null);
   }
+  return spillStorePromise;
+}
+
+/** Points the spill at `store` (null: back to the runtime's own). Tests only. */
+export function setSpillStoreForTests(store: SpillStore | null): void {
+  spillStorePromise = store ? Promise.resolve(store) : null;
 }
 
 export function hasSpilledSceneSnapshot(key: string): boolean {
@@ -162,24 +282,17 @@ export function hasSpilledSceneSnapshot(key: string): boolean {
 
 /** Removes scratch files that no current history entry references (startup/HMR cleanup). */
 export async function pruneSpilledSceneSnapshots(activeKeys: ReadonlySet<string>): Promise<void> {
-  const directory = await spillDirectory();
-  if (!directory) return;
+  const store = await spillStore();
+  if (!store) return;
   try {
-    const entries = (directory as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }).entries();
-    for await (const [name, handle] of entries) {
-      if (handle.kind !== 'file' || !name.endsWith('.bin')) continue;
-      const key = name.slice('scene-'.length, -'.bin'.length);
-      if (!name.startsWith('scene-') || !activeKeys.has(key)) {
-        await directory.removeEntry(name).catch(() => undefined);
-      }
-    }
+    await store.prune(activeKeys);
   } catch (error) {
     console.warn('[UndoSpill] Failed pruning scratch snapshots.', error);
   }
 }
 
 /**
- * Writes a snapshot's geometry arrays to the OPFS scratch store, then clears the
+ * Writes a snapshot's geometry arrays to the scratch store, then clears the
  * in-memory attribute storage. The model objects and support state stay in RAM:
  * they are small beside the buffers, and keeping them avoids re-creating the
  * transform/geometry wrappers on undo.
@@ -212,10 +325,9 @@ export async function spillSceneSnapshotPair(
   if (candidates.length === 0 && !supportPending) return false;
 
   inFlightSpills.add(key);
-  let fileHandle: FileSystemFileHandle | null = null;
   try {
-    const directory = await spillDirectory();
-    if (!directory) return false;
+    const store = await spillStore();
+    if (!store) return false;
 
     const specs: GeometrySpec[] = [];
     const payloads: Array<{ array: ArrayBufferView; spec: AttributeSpec }> = [];
@@ -264,9 +376,7 @@ export async function spillSceneSnapshotPair(
       specs.push(geometrySpec);
       id += 1;
       if (id % 4 === 0) {
-        const { promise, resolve } = Promise.withResolvers<void>();
-        setTimeout(resolve, 0);
-        await promise;
+        await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
       }
     }
 
@@ -292,16 +402,13 @@ export async function spillSceneSnapshotPair(
     const prefix = new Uint8Array(4);
     new DataView(prefix.buffer).setUint32(0, headerBytes.byteLength, true);
 
-    fileHandle = await directory.getFileHandle(`scene-${key}.bin`, { create: true });
-    const writable = await fileHandle.createWritable();
-    await writable.write(prefix);
-    await writable.write(headerBytes);
+    const chunks: Uint8Array[] = [prefix, headerBytes];
     for (const { array, spec } of payloads) {
-      await writable.write(new Uint8Array(array.buffer, array.byteOffset, spec.byteLength) as unknown as ArrayBufferView<ArrayBuffer>);
+      chunks.push(new Uint8Array(array.buffer, array.byteOffset, spec.byteLength));
     }
-    if (beforeSupport) await writable.write(beforeSupport as unknown as ArrayBufferView<ArrayBuffer>);
-    if (afterSupport) await writable.write(afterSupport as unknown as ArrayBufferView<ArrayBuffer>);
-    await writable.close();
+    if (beforeSupport) chunks.push(beforeSupport);
+    if (afterSupport) chunks.push(afterSupport);
+    await store.write(key, chunks);
 
     // Only drop the states that reached the file.
     if (beforeSupport) pair.before.supportState = undefined;
@@ -332,7 +439,6 @@ export async function spillSceneSnapshotPair(
     }
 
     spilledSceneSnapshots.set(key, {
-      fileHandle,
       dataOffset: 4 + headerBytes.byteLength,
       byteLength: offset,
       geometries: specs,
@@ -344,15 +450,8 @@ export async function spillSceneSnapshotPair(
     );
     return true;
   } catch (error) {
+    // The store removes a half-written file itself.
     console.warn('[UndoSpill] Failed spilling scene snapshot; keeping it in memory.', error);
-    if (fileHandle) {
-      try {
-        const directory = await spillDirectory();
-        await directory?.removeEntry(`scene-${key}.bin`);
-      } catch {
-        // A stale scratch file is pruned on the next successful spill.
-      }
-    }
     return false;
   } finally {
     inFlightSpills.delete(key);
@@ -365,7 +464,11 @@ export async function rehydrateSceneSnapshotPair(key: string, pair: SceneSnapsho
   if (!spilled) return false;
 
   try {
-    const file = await spilled.fileHandle.getFile();
+    const store = await spillStore();
+    if (!store) return false;
+    const readSection = (offset: number, byteLength: number) => (
+      store.read(key, spilled.dataOffset + offset, byteLength)
+    );
     const byUuid = new Map<string, THREE.BufferGeometry>();
     for (const geometry of pairGeometries(pair)) byUuid.set(geometry.uuid, geometry);
 
@@ -376,9 +479,7 @@ export async function rehydrateSceneSnapshotPair(key: string, pair: SceneSnapsho
 
       for (const attributeSpec of spec.attributes) {
         const Ctor = constructorFor(attributeSpec.type);
-        const buffer = await file
-          .slice(spilled.dataOffset + attributeSpec.offset, spilled.dataOffset + attributeSpec.offset + attributeSpec.byteLength)
-          .arrayBuffer();
+        const buffer = await readSection(attributeSpec.offset, attributeSpec.byteLength);
         geometry.setAttribute(
           attributeSpec.name,
           new THREE.BufferAttribute(new Ctor(buffer) as never, attributeSpec.itemSize, attributeSpec.normalized),
@@ -386,9 +487,7 @@ export async function rehydrateSceneSnapshotPair(key: string, pair: SceneSnapsho
       }
       if (spec.index) {
         const Ctor = constructorFor(spec.index.type);
-        const buffer = await file
-          .slice(spilled.dataOffset + spec.index.offset, spilled.dataOffset + spec.index.offset + spec.index.byteLength)
-          .arrayBuffer();
+        const buffer = await readSection(spec.index.offset, spec.index.byteLength);
         geometry.setIndex(new THREE.BufferAttribute(new Ctor(buffer) as never, spec.index.itemSize, spec.index.normalized));
       }
       if (spec.hadBoundsTree) accelerateGeometry(geometry);
@@ -398,9 +497,7 @@ export async function rehydrateSceneSnapshotPair(key: string, pair: SceneSnapsho
       const decoder = new TextDecoder();
       const readSupport = async (section: SupportSection | null): Promise<SupportState | undefined> => {
         if (!section) return undefined;
-        const buffer = await file
-          .slice(spilled.dataOffset + section.offset, spilled.dataOffset + section.offset + section.byteLength)
-          .arrayBuffer();
+        const buffer = await readSection(section.offset, section.byteLength);
         return JSON.parse(decoder.decode(buffer)) as SupportState;
       };
       pair.before.supportState = await readSupport(spilled.support.before);
@@ -410,14 +507,7 @@ export async function rehydrateSceneSnapshotPair(key: string, pair: SceneSnapsho
     // The arrays are in RAM again and no history pair points at this file:
     // leaving it would strand a full copy of the scene on disk until the next
     // startup prunes it.
-    void (async () => {
-      try {
-        const directory = await spillDirectory();
-        await directory?.removeEntry(`scene-${key}.bin`);
-      } catch {
-        // Already gone.
-      }
-    })();
+    void store.remove(key).catch(() => undefined);
     spilledSceneSnapshots.delete(key);
     return true;
   } catch (error) {
@@ -430,12 +520,5 @@ export function disposeSpilledSceneSnapshot(key: string): void {
   const spilled = spilledSceneSnapshots.get(key);
   spilledSceneSnapshots.delete(key);
   if (!spilled) return;
-  void (async () => {
-    try {
-      const directory = await spillDirectory();
-      await directory?.removeEntry(`scene-${key}.bin`);
-    } catch {
-      // Already gone.
-    }
-  })();
+  void spillStore().then((store) => store?.remove(key)).catch(() => undefined);
 }

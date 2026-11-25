@@ -185,14 +185,14 @@ and prints `[command] Xms` to stderr.
 
 | Command | Description | Wraps |
 |---------|-------------|-------|
-| `scene create --o <scene.voxl>` | Create empty scene | `voxl/codec-v2::serializeVoxlDocumentV2` |
+| `scene create -o <scene.voxl>` | Create empty scene | `voxl/codec-v2::serializeVoxlDocumentV2` |
 | `scene add-model <voxl> --mesh <stl> [--name N] [--position x,y,z]` | Add model | VOXL model entry |
 | `scene remove-model <voxl> --id <id>` | Remove model (cascades supports) | VOXL mutation |
 | `scene list-models <voxl> [--json]` | List models with transforms | VOXL read |
 | `scene transform-model <voxl> --id <id> [--position x,y,z] [--rotate x,y,z] [--scale x,y,z]` | Set transform | VOXL mutation |
 | `scene duplicate <voxl> --id <id> [--count N] [--offset x,y,z]` | Duplicate model | VOXL mutation |
 | `scene arrange <voxl> --mesh-dir <dir> [--spacing 2] [--build-width-mm 218] [--build-depth-mm 122] [--anchor center]` | Auto-arrange on plate | `highPrecisionArrange` (SAT nesting) |
-| `scene slice <voxl> --o <out> --mesh-dir <dir> [--plate <id or n>] [--printer <profile.json>] [--material <material.json>] [--aa-preset P] [--aa-settings <aa.json>] [--lut-curves <curves.json>]` | Merge + slice via Rust, with the job the app would build | Loads STLs → applies transforms → `assembleSliceJob` → `dragonfruit-cli slice run` |
+| `scene slice <voxl> -o <out> --mesh-dir <dir> [--plate <id or n>] [--printer <profile.json>] [--material <material.json>] [--aa-preset P] [--aa-settings <aa.json>] [--lut-curves <curves.json>]` | Merge + slice via Rust, with the job the app would build | Loads STLs → applies transforms → `assembleSliceJob` → `dragonfruit-cli slice run` |
 | `scene load <voxl> [--json]` | Dump full scene | `voxl/codec::parseVoxlAuto` |
 
 **`scene slice` builds the same job as the app.** With `--printer` (an official
@@ -213,9 +213,10 @@ on that plate are sliced, shifted back by the plate's offset so they land where
 they stand on it, and each model left out is named on stderr
 (`not sliced: 'Cube B' stands on plate 2`). Which plate a model stands on comes
 from `plateLayout.ts`, the same rule the app uses (see
-[ADR-0045](../adr/0045-headless-scene-operations.md)). The VOXL does not record
-the viewer's origin mode, so plates are laid out with the default centred
-origin. Every command that saves keeps the scene's plates, active plate and
+[ADR-0045](../adr/0045-headless-scene-operations.md)). Plates are laid out with
+the origin the scene was saved under (the `plateOriginMode` extension), and
+`scene arrange` writes its positions in that same frame; a scene that does not
+record one was laid out from the plate's centre, the app's default. Every command that saves keeps the scene's plates, active plate and
 embedded printer.
 
 Anti-aliasing is resolved by the same code as the slicing panel. Without flags
@@ -314,7 +315,7 @@ VOXL scene in `.lumen`, and thumbnails.
 
 ```bash
 # 1. Create scene
-npx tsx scripts/dragonfruit-ts-cli.ts scene create --o scene.voxl
+npx tsx scripts/dragonfruit-ts-cli.ts scene create -o scene.voxl
 
 # 2. Add model
 npx tsx scripts/dragonfruit-ts-cli.ts scene add-model scene.voxl \
@@ -332,7 +333,7 @@ npx tsx scripts/dragonfruit-ts-cli.ts scene arrange scene.voxl \
 
 # 5. Slice (TS merges scene → Rust slices)
 npx tsx scripts/dragonfruit-ts-cli.ts scene slice scene.voxl \
-  --o sliced.nanodlp --mesh-dir . --json
+  -o sliced.nanodlp --mesh-dir . --json
 
 # 6. Extract layer preview
 dragonfruit-cli slice preview-layer sliced.nanodlp --layer 500 -o preview.png

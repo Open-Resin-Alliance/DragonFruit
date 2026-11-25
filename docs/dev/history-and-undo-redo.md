@@ -238,8 +238,13 @@ and the pair never triggers a spill.
 ### Disk-backed geometry spill
 
 A scene snapshot keeps its model objects, transforms and support state in RAM,
-but the geometry arrays can be moved to the **OPFS scratch store**
-(`dragonfruit-undo/`, written by `src/features/scene/sceneSnapshotSpill.ts`).
+but the geometry arrays can be moved to a **scratch store**
+(`src/features/scene/sceneSnapshotSpill.ts`): one file per history key in
+`dragonfruit-undo/`. The desktop app writes it from Rust (`src-tauri/src/undo_spill.rs`,
+under the system temp dir); a browser uses the origin private file system.
+The desktop app does not use the origin private file system because WebKit has no
+`FileSystemFileHandle.createWritable()` before Safari 26: in the WKWebView of
+macOS 12 to 15 every spill threw and each entry kept a whole scene in RAM.
 Only `BufferGeometry` attributes and indices, plus the pair's **support state**
 (JSON), move; model IDs, transforms, plates and printer stay in the pair, so the
 existing `applySceneSnapshot` restore path does not change.
@@ -283,7 +288,7 @@ reaches the store.
   ceiling evicts the oldest spilled entries, and `pruneSpilledSceneSnapshots`
   removes orphans on startup.
 
-Spill is best-effort: when OPFS is unavailable, quota is exhausted, or a geometry
+Spill is best-effort: when there is no store (a browser without `createWritable`), the disk is full, or a geometry
 uses an unsupported layout (interleaved/morph attributes), the snapshot stays in
 memory and the old bounded-history behaviour applies.
 

@@ -25,21 +25,26 @@ import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { basename, resolve, dirname } from 'path';
 import { execFileSync } from 'child_process';
+import { createHash } from 'crypto';
 import { createRequire } from 'module';
 import { v4 as uuidv4 } from 'uuid';
 import { parseVoxlAuto } from '../src/features/scene/voxl/codec';
-import { serializeVoxlDocumentV2 } from '../src/features/scene/voxl/codec-v2';
+import { decodeVoxlBodyChunk, serializeVoxlDocumentV2 } from '../src/features/scene/voxl/codec-v2';
 import { reportAddressesTriangleSoup } from '../src/features/scene/voxl/classification';
 import {
   DYNAMIC_PLATE_ORDERING,
   VOXL_PLATE_ORDERING_EXTENSION,
+  VOXL_PLATE_ORIGIN_EXTENSION,
   readPlateOrdering,
+  readPlateOriginMode,
 } from '../src/features/scene/plates/plateCascade';
 import { computePlateFrames, plateSliceScope, resolveModelPlateId, type PlateSliceScope } from '../src/features/scene/plates/plateLayout';
 import type {
   BuildVoxlDocumentInput,
+  PrecompressedChunk,
   VoxlDocumentV1,
   VoxlModelEntry,
+  VoxlModelRuntimeLike,
 } from '../src/features/scene/voxl/types';
 import type {
   DragonfruitImportFormat,
@@ -50,8 +55,11 @@ import type {
   Brace,
   Knot,
   Vec3,
-  SupportEntity,
+  Kickstand,
+  BezierSegment,
+  Segment,
 } from '../src/supports/types';
+import type { KickstandBuildResult } from '../src/supports/SupportTypes/Kickstand/types';
 import type { AaPreset } from '../src/features/slicing/autoAaPhysics';
 import type { SceneSliceModelInput } from './cli/sceneSliceMesh';
 import { removeModelFromDocument } from './cli/sceneRemoveModel';
@@ -81,36 +89,81 @@ let LOADED_MESH_BYTES = new Map<string, Uint8Array>();
 // decimated"; the slice path prefers these over the decimated MESH bytes so it
 // slices the same geometry the GUI would.
 let LOADED_ORIG_BYTES = new Map<string, Uint8Array>();
+// The same originals as stored (compressed), keyed by model id, so a save writes
+// them back as they were instead of inflating and recompressing them.
+let LOADED_ORIG_CHUNKS = new Map<string, PrecompressedChunk>();
+// Raw BODY chunks (split 3MF bodies), keyed by model id.
+let LOADED_BODY_CHUNKS = new Map<string, Uint8Array>();
 async function loadVoxl(path: string): Promise<VoxlDocumentV1> {
   const raw = readFileSync(path);
   const result = await parseVoxlAuto(raw);
   LOADED_MESH_BYTES = result.meshBytes;
   LOADED_ORIG_BYTES = result.originalMeshBytes ?? new Map();
+  LOADED_ORIG_CHUNKS = result.originalMeshChunks ?? new Map();
+  LOADED_BODY_CHUNKS = result.bodyChunks ?? new Map();
   return result.document;
 }
 
 /**
- * Adapt the in-memory V1-shaped document to the V2 writer's input.
- *
- * The writer keys pre-decoded mesh bytes by model *index*; `loadVoxl` holds
- * them by model *id*. A model with no loaded bytes keeps its `mesh` ref
- * unchanged (the writer emits no MESH chunk for its index).
+ * Give `copyId` the geometry `sourceId` was loaded with: its mesh, its original
+ * and its split bodies. A copy has a new id, and the save looks geometry up by
+ * id, so without this it is written with no mesh at all. Sharing the bytes also
+ * lets the writer store the copy's mesh in the source's chunk.
  */
-function toBuildInput(doc: VoxlDocumentV1): { input: BuildVoxlDocumentInput; meshBytes: Map<number, Uint8Array> } {
+function shareLoadedGeometry(sourceId: string, copyId: string): void {
+  const mesh = LOADED_MESH_BYTES.get(sourceId);
+  if (mesh) LOADED_MESH_BYTES.set(copyId, mesh);
+  const original = LOADED_ORIG_BYTES.get(sourceId);
+  if (original) LOADED_ORIG_BYTES.set(copyId, original);
+  const originalChunk = LOADED_ORIG_CHUNKS.get(sourceId);
+  if (originalChunk) LOADED_ORIG_CHUNKS.set(copyId, originalChunk);
+  const bodies = LOADED_BODY_CHUNKS.get(sourceId);
+  if (bodies) LOADED_BODY_CHUNKS.set(copyId, bodies);
+}
+
+type VoxlSaveSource = {
+  input: BuildVoxlDocumentInput;
+  meshBytes: Map<number, Uint8Array>;
+  sha256: Map<number, string>;
+  originals: Map<number, PrecompressedChunk>;
+};
+
+/**
+ * Adapt the in-memory V1-shaped document to the V2 writer's input, handing back
+ * everything `loadVoxl` read (ADR-0045 rule 6: a CLI save keeps every field).
+ *
+ * The writer keys pre-decoded mesh bytes, their hashes and the originals by model
+ * *index*; `loadVoxl` holds them by model *id*. A model with no loaded bytes keeps
+ * its `mesh` ref unchanged (the writer emits no MESH chunk for its index). The
+ * hashes are what let the writer store a mesh several models share only once.
+ */
+function toBuildInput(doc: VoxlDocumentV1): VoxlSaveSource {
   const meshBytes = new Map<number, Uint8Array>();
-  doc.models.forEach((model, index) => {
+  const sha256 = new Map<number, string>();
+  const originals = new Map<number, PrecompressedChunk>();
+  const models: VoxlModelRuntimeLike[] = doc.models.map((model, index) => {
     const bytes = LOADED_MESH_BYTES.get(model.id);
-    if (bytes) meshBytes.set(index, bytes);
+    if (bytes) {
+      meshBytes.set(index, bytes);
+      sha256.set(index, createHash('sha256').update(bytes).digest('hex'));
+    }
+    const original = LOADED_ORIG_CHUNKS.get(model.id);
+    if (original) originals.set(index, original);
+    const bodyChunk = LOADED_BODY_CHUNKS.get(model.id);
+    if (!bodyChunk) return model;
+    const { center, bodies } = decodeVoxlBodyChunk(bodyChunk);
+    return { ...model, bodies, bodyCenter: center };
   });
 
   const input: BuildVoxlDocumentInput = {
-    models: doc.models,
+    models,
     activeModelId: doc.scene.activeModelId,
     selectedModelIds: doc.scene.selectedModelIds,
     plates: doc.scene.plates,
     activePlateId: doc.scene.activePlateId,
     supports: doc.supports,
     extensions: doc.extensions,
+    ...(doc.materials ? { materials: doc.materials } : {}),
     meta: {
       generator: doc.meta.generator,
       generatorVersion: doc.meta.generatorVersion,
@@ -118,12 +171,15 @@ function toBuildInput(doc: VoxlDocumentV1): { input: BuildVoxlDocumentInput; mes
     },
   };
 
-  return { input, meshBytes };
+  return { input, meshBytes, sha256, originals };
 }
 
 async function saveVoxl(path: string, doc: VoxlDocumentV1): Promise<void> {
-  const { input, meshBytes } = toBuildInput(doc);
-  const bytes = await serializeVoxlDocumentV2(input, meshBytes);
+  const { input, meshBytes, sha256, originals } = toBuildInput(doc);
+  const bytes = await serializeVoxlDocumentV2(input, meshBytes, sha256, {
+    precompressedOriginal: originals,
+    embedOriginalMesh: true,
+  });
   writeFileSync(path, bytes);
 }
 
@@ -168,6 +224,26 @@ function parseVec3(s: string): Vec3 {
   return { x: parts[0], y: parts[1], z: parts[2] };
 }
 
+/**
+ * Short flags and old spellings, by the name the commands read. `--o` was the
+ * only spelling of the output flag until `-o` and `--output` worked, so scripts
+ * that still pass it keep working.
+ */
+const FLAG_ALIASES: Record<string, string> = { o: 'output' };
+
+/** `--name`, or a single letter such as `-o`. A value like `-10,20,0` is not a flag. */
+function isFlag(arg: string): boolean {
+  return arg.startsWith('--') || /^-[A-Za-z]$/.test(arg);
+}
+
+/**
+ * A kickstand's id. Scenes store the whole build result; a bare kickstand is
+ * matched too, as the CLI always has.
+ */
+function kickstandId(k: KickstandBuildResult | Kickstand): string | undefined {
+  return 'kickstand' in k ? k.kickstand?.id : k.id;
+}
+
 function parseArgs(argv: string[]): { command: string; subcommand: string; positional: string[]; flags: Record<string, string | boolean> } {
   const command = argv[0] ?? '';
   const subcommand = argv[1] ?? '';
@@ -177,10 +253,11 @@ function parseArgs(argv: string[]): { command: string; subcommand: string; posit
   let i = 2;
   while (i < argv.length) {
     const arg = argv[i];
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2);
+    if (isFlag(arg)) {
+      const name = arg.replace(/^--?/, '');
+      const key = FLAG_ALIASES[name] ?? name;
       const next = argv[i + 1];
-      if (next && !next.startsWith('--')) {
+      if (next && !isFlag(next)) {
         flags[key] = next;
         i += 2;
       } else {
@@ -230,7 +307,7 @@ function jsonOutput(flags: Record<string, string | boolean>): boolean {
 // ---------------------------------------------------------------------------
 
 async function sceneCreate(args: ReturnType<typeof parseArgs>): Promise<void> {
-  const output = requireFlag(args.flags, 'o');
+  const output = requireFlag(args.flags, 'output');
   const doc = createEmptyDoc();
   await saveVoxl(output, doc);
   if (jsonOutput(args.flags)) {
@@ -373,6 +450,7 @@ async function sceneDuplicate(args: ReturnType<typeof parseArgs>): Promise<void>
     copy.transform.position.x += offset.x * i;
     copy.transform.position.y += offset.y * i;
     copy.transform.position.z += offset.z * i;
+    shareLoadedGeometry(source.id, copy.id);
     doc.models.push(copy);
     newIds.push(copy.id);
   }
@@ -580,7 +658,7 @@ async function supportRemove(args: ReturnType<typeof parseArgs>): Promise<void> 
     s.branches = s.branches.filter((b) => !knotIds.includes(b.parentKnotId));
     s.leaves = s.leaves.filter((l) => !knotIds.includes(l.parentKnotId));
     s.braces = s.braces.filter((b) => !knotIds.includes(b.startKnotId) && !knotIds.includes(b.endKnotId));
-    if (s.kickstands) s.kickstands = s.kickstands.filter((k: any) => !knotIds.includes(k.hostKnot?.id));
+    if (s.kickstands) s.kickstands = s.kickstands.filter((k) => !knotIds.includes(k.hostKnot?.id));
     // Recurse: branches are shafts too
     if (branchIds.length > 0) cascadeRemoveByShaftIds(branchIds);
   };
@@ -607,8 +685,7 @@ async function supportRemove(args: ReturnType<typeof parseArgs>): Promise<void> 
     s.leaves = s.leaves.filter((l) => l.id !== id);
     s.braces = s.braces.filter((b) => b.id !== id);
     s.knots = s.knots.filter((k) => k.id !== id);
-    if (s.kickstands) s.kickstands = s.kickstands.filter((k: any) =>
-      (k.kickstand?.id ?? k.id) !== id);
+    if (s.kickstands) s.kickstands = s.kickstands.filter((k) => kickstandId(k) !== id);
   }
 
   await saveVoxl(voxlPath, doc);
@@ -727,7 +804,7 @@ async function supportUpdate(args: ReturnType<typeof parseArgs>): Promise<void> 
     }
   }
   if (!found) for (const k of s.kickstands ?? []) {
-    if ((k as any).kickstand?.id === id || (k as any).id === id) {
+    if (kickstandId(k) === id) {
       found = true; break;
     }
   }
@@ -749,12 +826,11 @@ async function supportUpdate(args: ReturnType<typeof parseArgs>): Promise<void> 
 type VoxlGroup = { id: string; name: string; modelIds: string[] };
 
 function getGroups(doc: VoxlDocumentV1): VoxlGroup[] {
-  return ((doc.extensions as any)?.groups as VoxlGroup[]) ?? [];
+  return (doc.extensions?.groups as VoxlGroup[] | undefined) ?? [];
 }
 
 function setGroups(doc: VoxlDocumentV1, groups: VoxlGroup[]): void {
-  if (!doc.extensions) doc.extensions = {};
-  (doc.extensions as any).groups = groups;
+  doc.extensions = { ...doc.extensions, groups };
 }
 
 async function sceneGroup(args: ReturnType<typeof parseArgs>): Promise<void> {
@@ -857,18 +933,19 @@ async function supportStraightenSegment(args: ReturnType<typeof parseArgs>): Pro
   const s = doc.supports;
   let found = false;
 
-  const straighten = (segments: any[]) => {
-    for (let i = 0; i < segments.length; i++) {
-      if (segments[i].id === segId) {
+  const straighten = (segments: Segment[]) => {
+    for (const segment of segments) {
+      if (segment.id === segId) {
         // Remove bezier fields, set to straight
-        delete segments[i].type;
-        delete segments[i].controlPoint1;
-        delete segments[i].controlPoint2;
-        delete segments[i].startTangent;
-        delete segments[i].endTangent;
-        delete segments[i].tension;
-        delete segments[i].bias;
-        delete segments[i].resolution;
+        const seg: Partial<BezierSegment> = segment as BezierSegment;
+        delete seg.type;
+        delete seg.controlPoint1;
+        delete seg.controlPoint2;
+        delete seg.startTangent;
+        delete seg.endTangent;
+        delete seg.tension;
+        delete seg.bias;
+        delete seg.resolution;
         found = true;
         return;
       }
@@ -877,8 +954,8 @@ async function supportStraightenSegment(args: ReturnType<typeof parseArgs>): Pro
 
   for (const trunk of s.trunks) straighten(trunk.segments);
   if (!found) for (const branch of s.branches) straighten(branch.segments);
-  if (!found) for (const twig of s.twigs ?? []) straighten((twig as any).segments ?? []);
-  if (!found) for (const stick of s.sticks ?? []) straighten((stick as any).segments ?? []);
+  if (!found) for (const twig of s.twigs ?? []) straighten(twig.segments ?? []);
+  if (!found) for (const stick of s.sticks ?? []) straighten(stick.segments ?? []);
 
   if (!found) throw new Error(`Segment '${segId}' not found`);
 
@@ -1074,10 +1151,10 @@ async function scenePlace(args: ReturnType<typeof parseArgs>): Promise<void> {
 
 async function sceneExportStl(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
-  if (!voxlPath) throw new Error('Usage: scene export-stl <scene.voxl> --o <output.stl> --mesh-dir <dir>');
+  if (!voxlPath) throw new Error('Usage: scene export-stl <scene.voxl> -o <output.stl> --mesh-dir <dir>');
 
   const doc = await loadVoxl(voxlPath);
-  const output = requireFlag(args.flags, 'o');
+  const output = requireFlag(args.flags, 'output');
   const meshDir = optionalFlag(args.flags, 'mesh-dir') ?? dirname(resolve(voxlPath));
   const visibleModels = doc.models.filter((m) => m.visible);
   if (visibleModels.length === 0) throw new Error('No visible models');
@@ -1130,7 +1207,6 @@ import { quaternionFromGlobalEuler } from '../src/utils/rotation';
 import {
   computeHighPrecisionArrangeUpdates,
   type ArrangeModel,
-  type ArrangeTransform,
   type HullCacheEntry,
   type HighPrecisionArrangeInput,
 } from '../src/features/scene/arrange/highPrecisionArrange';
@@ -1212,7 +1288,8 @@ async function sceneArrange(args: ReturnType<typeof parseArgs>): Promise<void> {
     sceneModels: arrangeModels,
     widthMm: plateW,
     depthMm: plateD,
-    originMode: 'center',
+    // Positions are written in the frame the scene's are measured in.
+    originMode: readPlateOriginMode(doc.extensions?.[VOXL_PLATE_ORIGIN_EXTENSION]) ?? 'center',
     arrangeSpacingMm: spacing,
     arrangeAllowRotateOnZ: false,
     arrangeAnchorMode: anchorMode,
@@ -1410,8 +1487,9 @@ function loadSceneSliceMesh(): typeof import('./cli/sceneSliceMesh') {
 /**
  * The plate `scene slice` covers: `--plate` (an id, or a number from 1), else the
  * plate the scene was being worked on, else the first. Plates are laid out the way
- * the app lays them out, from the printer's footprint and the scene's ordering;
- * the origin is taken as the plate's centre, the app's default.
+ * the app lays them out, from the printer's footprint and the scene's ordering
+ * and origin; a scene that does not record its origin was laid out from the
+ * plate's centre, the app's default.
  */
 function resolveSlicePlate(
   doc: VoxlDocumentV1,
@@ -1421,7 +1499,10 @@ function resolveSlicePlate(
   const plates = doc.scene.plates?.length ? doc.scene.plates : [{ id: 'plate-1' }];
   const frames = computePlateFrames({
     plates,
-    footprint: { ...footprint, originMode: 'center' },
+    footprint: {
+      ...footprint,
+      originMode: readPlateOriginMode(doc.extensions?.[VOXL_PLATE_ORIGIN_EXTENSION]) ?? 'center',
+    },
     ordering: readPlateOrdering(doc.extensions?.[VOXL_PLATE_ORDERING_EXTENSION]) ?? DYNAMIC_PLATE_ORDERING,
   });
   const frame = plateFlag !== undefined
@@ -1432,10 +1513,10 @@ function resolveSlicePlate(
   }
   const indexOf = new Map(frames.map((f) => [f.id, f.index]));
   return {
-    scope: plateSliceScope(frame, doc.models.filter((m) => m.visible), frames),
+    scope: plateSliceScope({ frame, models: doc.models.filter((m) => m.visible), frames }),
     number: frame.index + 1,
     plateCount: frames.length,
-    plateNumberOf: (model) => (indexOf.get(resolveModelPlateId(model, frames)) ?? 0) + 1,
+    plateNumberOf: (model) => (indexOf.get(resolveModelPlateId({ model, frames })) ?? 0) + 1,
   };
 }
 
@@ -1443,7 +1524,7 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
   const voxlPath = args.positional[0];
   if (!voxlPath) {
     throw new Error(
-      'Usage: scene slice <scene.voxl> --o <output> [--mesh-dir <dir>]\n'
+      'Usage: scene slice <scene.voxl> -o <output> [--mesh-dir <dir>]\n'
       + '  [--plate <id|n>]                                 the plate to slice, by id or number from 1 (default: the active plate)\n'
       + '  [--printer <profile.json>] [--printer-id <id>]  preset, profile or app-exported bundle; builds the job the app would\n'
       + '  [--material <profile.json>]                      default: the bundle\'s first material, else the app\'s default\n'
@@ -1457,7 +1538,7 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
     );
   }
 
-  const output = requireFlag(args.flags, 'o');
+  const output = requireFlag(args.flags, 'output');
   const meshDir = optionalFlag(args.flags, 'mesh-dir') ?? dirname(resolve(voxlPath));
   const raftMode = optionalFlag(args.flags, 'raft') as 'off' | 'solid' | 'line' | undefined;
   if (raftMode !== undefined && raftMode !== 'off' && raftMode !== 'solid' && raftMode !== 'line') {
@@ -1634,6 +1715,7 @@ async function sceneSlice(args: ReturnType<typeof parseArgs>): Promise<void> {
       raftMode,
       raftSettings,
       plateOffsetMm: plate.scope.offsetMm,
+      supportTipShrinkPercent: sliceJob.resolveSceneTipShrinkPercent(job),
     });
     meshPositions = mesh.trianglesXYZ;
     modelTriangleCount = mesh.modelTriangleCount;
@@ -1869,8 +1951,8 @@ async function main(): Promise<void> {
       throw new Error(`Unknown command: ${args.command}\n\n${USAGE}`);
     }
     await pending;
-  } catch (err: any) {
-    console.error(`Error: ${err.message}`);
+  } catch (err) {
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 }

@@ -138,6 +138,18 @@ list. Never take a directory off the list to turn a build green, and when a
 listed directory is renamed, follow the rename in the list — the check fails on
 missing entries precisely so coverage cannot be lost silently.
 
+## React Compiler skips
+
+The React Compiler memoises components and hooks automatically, but it skips a
+whole function when it meets a construct it can't handle (`try…finally`, a
+dynamic `import()`, a ref read during render, a disabled react-hooks rule, …).
+A skipped function's hand-written dependency lists are then taken literally,
+so a missing dependency is a stale closure (#941). `npm run check:compiler-skips`
+fails on any skipped function not listed in `scripts/compiler-skips.json`, and
+on any listed one that now compiles. `--report` prints every skip with its
+reason. When you fix one, run the script with `--write` to drop it from the
+list; never use `--write` to add one without saying why in the PR.
+
 ## Consult the developer docs first
 
 Before reverse-engineering how a system works from the source, check the
