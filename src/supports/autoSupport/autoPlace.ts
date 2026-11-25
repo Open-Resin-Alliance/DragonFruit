@@ -15,7 +15,7 @@ import {
 } from '../supportTypeRegistry';
 import type { SupportCollectionKey, ShaftHostedMemberType, ShaftHostedMemberTypeId } from '../supportTypeRegistry';
 import type { SupportTypeId } from '../supportTypeRegistry';
-import { footprintX, footprintY, footprintZ } from '@/volumeAnalysis/Islands/voxelFootprint';
+import { footprintBounds, footprintX, footprintY, footprintZ } from '@/volumeAnalysis/Islands/voxelFootprint';
 import { memberShaftDiameterMm } from '../constants';
 import * as THREE from 'three';
 import { quantizeToScale } from '@/utils/math';
@@ -1314,6 +1314,25 @@ function startContactCandidates(
         const step = Math.max(1, Math.floor(voxels.count / 10));
         for (let i = 0; i < voxels.count; i += step) {
             points.push({ x: footprintX(voxels, i), y: footprintY(voxels, i) });
+        }
+        // A real island can wrap a hole. The scan footprint has no voxels in
+        // the hole, but a manual hover there places a support cleanly and the
+        // start recipe counts by bounds. Probe the footprint bbox, holes
+        // included.
+        const bounds = footprintBounds(voxels);
+        if (bounds) {
+            const width = bounds.maxX - bounds.minX;
+            const height = bounds.maxY - bounds.minY;
+            const cell = Math.max(0.35, Math.min(width, height) / 4);
+            for (let x = bounds.minX; x <= bounds.maxX + 1e-6; x += cell) {
+                for (let y = bounds.minY; y <= bounds.maxY + 1e-6; y += cell) {
+                    points.push({ x, y });
+                }
+            }
+            points.push({
+                x: (bounds.minX + bounds.maxX) / 2,
+                y: (bounds.minY + bounds.maxY) / 2,
+            });
         }
     } else {
         for (const radius of [0.35, 0.7, 1.05]) {
@@ -6173,7 +6192,11 @@ export function computeAutoSupportPlan(
                     countFloor = Math.max(0, recipe.minContacts - status.contacts);
                     coverageTarget = recipe.coverageTarget;
                 } else {
-                    coverageTarget = (autoSettings.coverageTargetPercent ?? 95) / 100;
+                    // The main density pass honours the user's coverage target;
+                    // this is the final closure and a visibly uncovered island
+                    // reads as a bug no matter what the percentage says. Cover
+                    // the remaining footprint completely.
+                    coverageTarget = 1.0;
                     const contacts = countIslandContacts(island, eligible, radius);
                     const coverage = island.contactVoxels && island.contactVoxels.count > 0
                         ? computeRegionCoverage(island, eligible, radius, resolvedMesh)
