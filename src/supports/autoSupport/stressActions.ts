@@ -55,6 +55,10 @@ export type StressAction =
     };
 
 export interface StressActionOptions {
+    /** Include contact-cone members. The auto loop needs the calibrated cone
+     *  action path; the UI's corrective plan does not offer actions that cannot
+     *  change the printed cone. Default false. */
+    includeConeMembers?: boolean;
     /** Rocking limit the stability check uses (mm). */
     rockingLimitMm?: number;
     /** Members over this utilization need an action. 100 = only overloaded. */
@@ -122,6 +126,7 @@ export function planStressActions(
     const memberTargetPct = Math.max(1, options.memberTargetPct ?? DEFAULT_MEMBER_TARGET_PCT);
     const trunkBracePct = Math.max(memberTargetPct, options.trunkBracePct ?? DEFAULT_TRUNK_BRACE_PCT);
     const rockingRequiresOverload = options.rockingRequiresOverload ?? true;
+    const includeConeMembers = options.includeConeMembers === true;
     const maxActions = Math.max(1, options.maxActions ?? 12);
     const actions: StressAction[] = [];
     const hasOverload = report.overloadedTips > 0
@@ -144,6 +149,7 @@ export function planStressActions(
 
     for (const hotspot of report.hotspots) {
         if (hotspot.utilizationPct <= memberTargetPct) continue;
+        if (!includeConeMembers && hotspot.kind === 'member' && hotspot.role === 'cone') continue;
         const action = actionForMember(hotspot, trunkBracePct);
         if (action) actions.push(action);
     }

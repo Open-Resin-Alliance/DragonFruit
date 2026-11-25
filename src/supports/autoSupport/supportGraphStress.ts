@@ -45,6 +45,12 @@ export interface SupportGraphMember {
     lengthMm: number;
     diameterMm: number;
     angleFromVerticalDeg: number;
+    /** A contact cone is one stiffness member (effective diameter) whose
+     *  stress is recovered along its real taper. It cannot be thickened like a
+     *  shaft. */
+    role?: 'shaft' | 'cone';
+    taperBodyDiameterMm?: number;
+    taperTipDiameterMm?: number;
 }
 
 export interface SupportGraph {
@@ -59,6 +65,8 @@ export interface FrameStressHotspot {
     entityId: string;
     entityKind: SupportTypeId;
     kind: 'tip' | 'member';
+    /** The member is a contact-cone subdivision, not a shaft segment. */
+    role?: 'shaft' | 'cone';
     utilizationPct: number;
     /** Tip hotspots: biaxial contact equivalent stress (√(σ_n² + 3τ²)); member
      *  hotspots: combined axial + bending stress. */
@@ -87,6 +95,7 @@ export interface StressSegment {
     b: Vec3;
     diameterMm: number;
     utilizationPct: number;
+    role?: 'shaft' | 'cone';
 }
 
 export interface StressTipPoint {
@@ -145,6 +154,9 @@ export interface SupportFrameStressReport {
 function compareVec3(a: Vec3, b: Vec3): number {
     return a.z - b.z || a.x - b.x || a.y - b.y;
 }
+
+/** Stations used to recover the stress along a tapered contact cone. */
+const CONE_TAPER_STRESS_STATIONS = 8;
 
 function clampDiameterMm(d: number | undefined, fallback = 1.0): number {
     return typeof d === 'number' && Number.isFinite(d) && d > 0 ? Math.max(0.1, d) : fallback;
@@ -242,6 +254,8 @@ export function buildSupportGraph(snapshot: SupportState, modelId?: string): Sup
         nodeA: number,
         nodeB: number,
         diameterMm: number,
+        role?: 'shaft' | 'cone',
+        taper?: { bodyMm: number; tipMm: number },
     ) => {
         if (nodeA === nodeB) return;
         const a = nodes[nodeA].pos;
@@ -262,6 +276,8 @@ export function buildSupportGraph(snapshot: SupportState, modelId?: string): Sup
             lengthMm,
             diameterMm: clampDiameterMm(diameterMm),
             angleFromVerticalDeg,
+            ...(role ? { role } : {}),
+            ...(taper ? { taperBodyDiameterMm: taper.bodyMm, taperTipDiameterMm: taper.tipMm } : {}),
         });
     };
 
@@ -364,13 +380,17 @@ export function buildSupportGraph(snapshot: SupportState, modelId?: string): Sup
         const { lastNodeIdx, lastDiameterMm } = addShaftSegments(trunk, 'trunk', root, undefined, true);
         if (trunk.contactCone?.pos && lastNodeIdx !== null) {
             const tipDia = clampDiameterMm(trunk.contactCone.profile?.contactDiameterMm, 0.28);
-            const coneDia = Math.max(tipDia, clampDiameterMm(trunk.contactCone.profile?.bodyDiameterMm, lastDiameterMm) * 0.7);
+            const bodyDia = clampDiameterMm(trunk.contactCone.profile?.bodyDiameterMm, lastDiameterMm);
+            const coneDia = Math.max(tipDia, bodyDia * 0.7);
             const tipIdx = internNode(trunk.contactCone.pos, 'tip', false, {
                 entityId: trunk.id,
                 entityKind: 'trunk',
                 tipContactDiameterMm: tipDia,
             });
-            addBeamMember(trunk.id, 'trunk', lastNodeIdx, tipIdx, coneDia);
+            addBeamMember(trunk.id, 'trunk', lastNodeIdx, tipIdx, coneDia, 'cone', {
+                bodyMm: bodyDia,
+                tipMm: tipDia,
+            });
         }
     }
 
@@ -1396,12 +1416,17 @@ export function solveSupportFrameStress(
          *  called broken while its datasheet tensile is 24 MPa. Defaults to
          *  `supportStrengthMpa` for callers that have only one strength. */
         memberStrengthMpa?: number;
+        /** Report contact-cone stress along the real taper. The action loop
+         *  keeps the effective cone member; no support action can change the
+         *  printed cone section, so the tapered value is diagnostic. */
+        taperedConeStress?: boolean;
     },
 ): SupportFrameStressReport {
     const maxCriticalLayers = Math.max(1, options?.maxCriticalLayers ?? 3);
     const areaPerSupportMm2 = Math.max(1.0, options?.areaPerSupportMm2 ?? 10.0);
     const supportStrengthMpa = Math.max(0.01, options?.supportStrengthMpa ?? DEFAULT_SUPPORT_BREAK_STRENGTH_MPA);
     const memberStrengthMpa = Math.max(0.01, options?.memberStrengthMpa ?? supportStrengthMpa);
+    const taperedConeStress = options?.taperedConeStress === true;
 
     // Reachability BFS from all fixed root nodes so the frame stiffness matrix is strictly SPD.
     const nodeAdj: number[][] = Array.from({ length: graph.nodes.length }, () => []);
@@ -1631,6 +1656,7 @@ export function solveSupportFrameStress(
     const overloadedMemberIds = new Set<string>();
     const candidateHotspots: FrameStressHotspot[] = [];
     const memberMaxUtil = new Float64Array(graph.members.length);
+    const coneCriticalDia = new Map<number, number>();
     const tipPeakUtil = new Map<number, { utilPct: number; loadN: number }>();
     const criticalStatsByRepIndex = new Map<number, { maxTipUtilPct: number; maxMemberUtilPct: number }>();
     const syntheticLayerPoints: LayerPeelPoint[] = [];
@@ -1807,16 +1833,51 @@ export function solveSupportFrameStress(
                 const mB = Math.hypot(fElemLoc[10], fElemLoc[11]);
                 const maxMomentNmm = Math.max(mA, mB);
 
-                const axialStressMpa = axialMagN / el.areaMm2;
-                const bendingStressMpa = (maxMomentNmm * el.radiusMm) / el.inertiaMm4;
-                const peakStressMpa = axialStressMpa + bendingStressMpa;
-                const stressUtilPct = (100 * peakStressMpa) / memberStrengthMpa;
+                const m = graph.members[el.memberIdx];
+                let peakStressMpa: number;
+                let stressUtilPct: number;
+                if (taperedConeStress && m.role === 'cone' && m.taperBodyDiameterMm !== undefined && m.taperTipDiameterMm !== undefined) {
+                    // The stiffness member uses an effective diameter; the
+                    // real cone tapers from body to contact. Recover the taper
+                    // stress from the element end forces: the internal bending
+                    // moment is linear along a beam with no distributed load,
+                    // and the section modulus follows the taper. The maximum
+                    // can sit well inside the cone, not at either end.
+                    const bodyD = m.taperBodyDiameterMm;
+                    const tipD = m.taperTipDiameterMm;
+                    let maxStress = 0;
+                    let govDia = bodyD;
+                    for (let st = 0; st <= CONE_TAPER_STRESS_STATIONS; st++) {
+                        const t = st / CONE_TAPER_STRESS_STATIONS;
+                        const d = bodyD + (tipD - bodyD) * t;
+                        const area = Math.PI * d * d / 4;
+                        const inertia = Math.PI * d * d * d * d / 64;
+                        // Internal moment at the station from the two end
+                        // moments; the B end enters with the opposite sign.
+                        const my = fElemLoc[4] * (1 - t) - fElemLoc[10] * t;
+                        const mz = fElemLoc[5] * (1 - t) - fElemLoc[11] * t;
+                        const moment = Math.hypot(my, mz);
+                        const stress = axialMagN / Math.max(1e-9, area)
+                            + (moment * (d / 2)) / Math.max(1e-9, inertia);
+                        if (stress > maxStress) {
+                            maxStress = stress;
+                            govDia = d;
+                        }
+                    }
+                    peakStressMpa = maxStress;
+                    stressUtilPct = (100 * peakStressMpa) / memberStrengthMpa;
+                    coneCriticalDia.set(el.memberIdx, govDia);
+                } else {
+                    const axialStressMpa = axialMagN / el.areaMm2;
+                    const bendingStressMpa = (maxMomentNmm * el.radiusMm) / el.inertiaMm4;
+                    peakStressMpa = axialStressMpa + bendingStressMpa;
+                    stressUtilPct = (100 * peakStressMpa) / memberStrengthMpa;
+                }
                 const buckleUtilPct = (100 * axialCompN) / Math.max(1e-6, el.bucklingCritN);
                 const utilPct = Math.max(stressUtilPct, buckleUtilPct);
 
                 if (utilPct > layerMaxMemberUtilPct) layerMaxMemberUtilPct = utilPct;
                 if (utilPct > memberMaxUtil[el.memberIdx]) memberMaxUtil[el.memberIdx] = utilPct;
-                const m = graph.members[el.memberIdx];
                 if (utilPct > maxMemberUtilizationPct) maxMemberUtilizationPct = utilPct;
                 if (utilPct > 100) overloadedMemberIds.add(m.entityId);
 
@@ -1826,6 +1887,7 @@ export function solveSupportFrameStress(
                     entityId: m.entityId,
                     entityKind: m.entityKind,
                     kind: 'member',
+                    ...(m.role ? { role: m.role } : {}),
                     utilizationPct: utilPct,
                     peakStressMpa,
                     deflectionMm: fB >= 0 ? Math.hypot(u[fB * 6], u[fB * 6 + 1], u[fB * 6 + 2]) : 0,
@@ -1917,8 +1979,9 @@ export function solveSupportFrameStress(
             entityKind: m.entityKind,
             a: graph.nodes[m.nodeA].pos,
             b: graph.nodes[m.nodeB].pos,
-            diameterMm: m.diameterMm,
+            diameterMm: coneCriticalDia.get(mi) ?? m.diameterMm,
             utilizationPct: memberMaxUtil[mi],
+            ...(m.role ? { role: m.role } : {}),
         }))
         .sort((x, y) => compareVec3(x.a, y.a) || compareVec3(x.b, y.b));
 

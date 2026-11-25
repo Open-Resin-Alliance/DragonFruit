@@ -107,8 +107,16 @@ test('buildSupportGraph splits trunk shafts at branch and brace knots cleanly', 
     assert.equal(graph.rootCount, 2, 'both trunk plate roots grounded');
     assert.equal(graph.tipCount, 3, 'two trunk tips plus one leaf tip');
     assert.equal(graph.braceCount, 1, 'one brace strut recorded');
-    // Each split trunk contributes 2 shaft sub-members + 1 cone member = 3; plus 1 brace + 1 leaf = 8.
+    // Each split trunk contributes 2 shaft sub-members + 1 effective cone
+    // member = 3; two trunks + 1 brace + 1 leaf = 8.
     assert.equal(graph.members.length, 8, 'splits both host trunk segments at their brace/leaf knots');
+    const cones = graph.members.filter((member) => member.role === 'cone');
+    assert.equal(cones.length, 2, 'each trunk cone keeps one stiffness member');
+    for (const cone of cones) {
+        assert.equal(cone.taperBodyDiameterMm, 1.0);
+        assert.equal(cone.taperTipDiameterMm, 0.28);
+        assert.equal(cone.diameterMm, 0.7, 'stiffness keeps the effective 0.7 x body diameter');
+    }
 });
 
 test('a knot within 0.5 mm of a shaft end welds into it instead of splitting a stub', () => {
@@ -943,6 +951,35 @@ test('a twig sharing a support tip becomes a model-coupled frame member', () => 
     const tipNode = graph.nodes.find((n) => n.kind === 'tip');
     assert.ok(tipNode && !tipNode.fixed, 'support tip stays free and is shared');
     assert.ok(graph.nodes.some((n) => n.kind === 'model' && n.fixed), 'model end is a fixed node');
+});
+
+test('the tapered cone report finds a stronger section than the effective stiffness diameter', () => {
+    const draft: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            rEx: { id: 'rEx', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            tEx: {
+                id: 'tEx', modelId: 'm', rootId: 'rEx',
+                segments: [{ id: 'sEx', diameter: 1.4, bottomJoint: { id: 'je0', pos: { x: 0, y: 0, z: 1 }, diameter: 1.4 }, topJoint: { id: 'je1', pos: { x: 0, y: 0, z: 19 }, diameter: 1.4 } }],
+                contactCone: { id: 'cEx', pos: { x: 0, y: 0, z: 21.5 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.28, bodyDiameterMm: 1.4, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            } as never,
+        },
+    };
+    const graph = buildSupportGraph(draft, 'm');
+    const loads = { explicitNodalLoads: new Map<number, readonly [number, number, number, number, number, number]>([[graph.nodes.length - 1, [0.3, 0, 0.6, 0, 0, 0]]]) };
+    const effective = solveSupportFrameStress(graph, undefined, loads);
+    const tapered = solveSupportFrameStress(graph, undefined, { ...loads, taperedConeStress: true });
+    const effectiveCone = effective.memberSegments.find((seg) => seg.role === 'cone');
+    const taperedCone = tapered.memberSegments.find((seg) => seg.role === 'cone');
+    assert.ok(effectiveCone && taperedCone, 'both reports carry the cone member');
+    assert.ok(taperedCone.diameterMm < effectiveCone.diameterMm,
+        'the governing tapered section is narrower than the 0.7 x body stiffness diameter');
+    assert.ok(taperedCone.utilizationPct > effectiveCone.utilizationPct,
+        'the real taper exposes more stress than the effective constant section');
 });
 
 test('a bounded cap override lets an at-cap trunk take one more step', () => {

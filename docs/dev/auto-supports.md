@@ -653,14 +653,23 @@ whole-frame structural stress on the assembled forest via
     any brace/strut the batch could still place. It is deliberately not a
     second normal pass: the default caps stay 1.4 mm, only a member that was
     already over at the cap qualifies, and the run logs
-    `Stress cap exception: N capped member(s) ...`. The step applies to a
-    **shaft** overload only. A contact cone is a separate frame member at
-    0.7 × its body diameter; thickening the shaft cannot reduce it, and raising
-    the cone body would lift its socket above the contact tip (the
-    `aboveContact` check tolerates 0.01 mm). On `steep-flat-wedge` the last
-    114 % member is exactly that cone (0.98 mm = 0.7 × 1.4), so the stage
-    deliberately declines it; the remaining fix is a tapered-cone stress
-    member, not another diameter step.
+    `Stress cap exception: N capped shaft(s) ...`. The step applies to a
+    **shaft** overload only. A contact cone is not a shaft segment; thickening
+    the shaft cannot reduce it, and raising the cone body would lift its socket
+    above the contact tip (the `aboveContact` check tolerates 0.01 mm), so the
+    stage declines a cone overload.
+
+  - **The cone stress follows the real taper.** The frame's stiffness keeps the
+    effective `0.7 × body` cone member (that is what the plan is calibrated
+    on), but the final report re-solves with `taperedConeStress: true` and
+    evaluates nine stations along the linear body-to-contact taper with the
+    station area/inertia and the internal moment interpolated from the two end
+    moments. On `steep-flat-wedge` the effective 114 % becomes **222 % at the
+    governing 0.397 mm section**, inside the cone rather than at an end. This
+    is report-only on purpose: no brace, kickstand or diameter step changes the
+    printed cone, so letting the tapered number drive the action loop would add
+    structure that cannot close the load path. The remaining limit is the cone
+    **geometry** (contact/taper), not the shaft.
   - **The tip contact check is biaxial.** `biaxialContactStressMpa` compares
     `√(σ_n² + 3τ²)` — the vertical peel plus the layer's lateral drag — against
     the support break strength, so a contact sheared by the diaphragm is counted

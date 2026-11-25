@@ -7523,7 +7523,7 @@ export function computeAutoSupportPlan(
                     if (autoSettings.debugSkipAutoBracing !== true) {
                         for (const action of planStressActions(
                             frameStress,
-                            { rockingLimitMm: ROCKING_THRESHOLD_MM },
+                            { rockingLimitMm: ROCKING_THRESHOLD_MM, includeConeMembers: true },
                         )) {
                             if (action.kind === 'brace-rocking') {
                                 if (requests.length >= MAX_STRESS_BRACES_PER_PASS) continue;
@@ -7734,24 +7734,13 @@ export function computeAutoSupportPlan(
                         // strut in the same batch may still be insufficient
                         // (the wedge brace is), so the bounded step applies
                         // alongside it rather than being suppressed.
-                        const segmentSource = target.entityKind === 'trunk'
-                            ? draft.trunks[target.entityId]
-                            : target.entityKind === 'branch'
-                                ? draft.branches[target.entityId]
-                                : null;
-                        const maxSegmentDia = segmentSource && segmentSource.segments.length > 0
-                            ? Math.max(...segmentSource.segments.map((seg) => seg.diameter))
-                            : 0;
-                        const overloadedDias = frameStress.memberSegments
+                        const overloadedRoles = frameStress.memberSegments
                             .filter((seg) => seg.entityId === target.entityId && seg.utilizationPct > 100)
-                            .map((seg) => seg.diameterMm);
-                        // A contact cone is a separate member at 0.7 x its
-                        // body; a diameter step on the shaft cannot reduce it,
-                        // and a fatter cone body would rise above the tip.
-                        // Skip the exception when every overloaded member on
-                        // the entity is that cone.
-                        if (maxSegmentDia > 0 && overloadedDias.length > 0
-                            && overloadedDias.every((dia) => dia < maxSegmentDia * 0.9)) {
+                            .map((seg) => seg.role ?? 'shaft');
+                        // A contact cone is not a shaft segment: its section is
+                        // fixed by the tip profile, and a diameter step on the
+                        // shaft cannot reduce it.
+                        if (overloadedRoles.length > 0 && overloadedRoles.every((role) => role === 'cone')) {
                             continue;
                         }
                         if (target.entityKind === 'trunk') capOverrides.set(target.entityId, MAX_CAPPED_EXCEPTION_DIA_MM);
@@ -7798,6 +7787,25 @@ export function computeAutoSupportPlan(
                 }
                 if (reinforcedTotal > 0) {
                     frameStress = { ...frameStress, reinforcedCount: reinforcedTotal };
+                }
+                // Report the contact cones along their real taper. The action
+                // loop above deliberately keeps the effective cone member:
+                // no brace, kickstand or diameter step can change the printed
+                // cone section, so a stronger stress number must not make the
+                // plan add structure it cannot use. This final solve changes
+                // the report only.
+                if (supportGraph.rootCount > 0 && supportGraph.tipCount > 0) {
+                    const reinforcedCount = frameStress.reinforcedCount;
+                    supportGraph = buildSupportGraph(draft, modelId);
+                    frameStress = solveSupportFrameStress(supportGraph, tractionProfile, {
+                        areaPerSupportMm2: autoSettings.areaPerSupportMm2,
+                        supportStrengthMpa,
+                        memberStrengthMpa,
+                        taperedConeStress: true,
+                    });
+                    if (reinforcedCount !== undefined) {
+                        frameStress = { ...frameStress, reinforcedCount };
+                    }
                 }
                 if (stressBracesAdded > 0 || stressLeafPromotions > 0 || stressKickstandsAdded > 0 || stressTwigStruts > 0) {
                     console.log(LOG_PREFIX,
