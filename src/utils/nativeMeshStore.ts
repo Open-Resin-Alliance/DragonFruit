@@ -20,12 +20,14 @@ import {
 } from './tauriMeshBridge';
 
 /** Why an id did not resolve, as the store's error strings name it. */
-export type NativeMeshStoreErrorCode = 'expired' | 'unknown';
+export type NativeMeshStoreErrorCode = 'expired' | 'unknown' | 'wrong_kind';
 
 /**
  * A store id that did not resolve. `expired` means the store released the entry to stay
- * inside its budget; `unknown` means it was never stored or was already dropped. Neither is
- * retried here: a silent re-upload would hide the caller that held an id too long.
+ * inside its budget; `unknown` means it was never stored or was already dropped;
+ * `wrong_kind` means it holds another kind of entry than the command needs (a session where
+ * a mesh was expected, say). None is retried here: a silent re-upload would hide the caller
+ * that held an id too long.
  */
 export class NativeMeshStoreError extends Error {
   readonly code: NativeMeshStoreErrorCode;
@@ -37,7 +39,7 @@ export class NativeMeshStoreError extends Error {
   }
 }
 
-const STORE_ERROR_PATTERN = /^mesh-store\/(expired|unknown):/;
+const STORE_ERROR_PATTERN = /^mesh-store\/(expired|unknown|wrong_kind):/;
 
 /** The store error a rejected command carries, or null when it is some other failure. */
 export function asNativeMeshStoreError(error: unknown): NativeMeshStoreError | null {
@@ -48,7 +50,7 @@ export function asNativeMeshStoreError(error: unknown): NativeMeshStoreError | n
 }
 
 /** Rethrows a store error as a {@link NativeMeshStoreError}, logged; anything else unchanged. */
-function rethrow(error: unknown): never {
+function rethrowNativeMeshStoreError(error: unknown): never {
   const storeError = asNativeMeshStoreError(error);
   if (storeError) {
     void logToNativeFile('warn', `[nativeMeshStore] ${storeError.message}`);
@@ -111,7 +113,35 @@ export async function readNativeMesh(
     });
     return decodeF32(bytes, 'mesh_store_read');
   } catch (error) {
-    return rethrow(error);
+    return rethrowNativeMeshStoreError(error);
+  }
+}
+
+/**
+ * Reads a stored buffer (or a soup) as raw bytes, copied into a buffer of its own so a typed
+ * view of any element size lines up. With `release`, the entry is dropped as it is read.
+ */
+export async function readNativeBuffer(
+  core: TauriCoreModule,
+  bufferId: string,
+  { release = false }: { release?: boolean } = {},
+): Promise<ArrayBuffer> {
+  try {
+    const bytes = await core.invoke<ArrayBuffer | Uint8Array | number[]>('mesh_store_read', {
+      meshId: bufferId,
+      release,
+    });
+    const u8 = bytes instanceof ArrayBuffer || Array.isArray(bytes)
+      ? new Uint8Array(bytes)
+      : bytes instanceof Uint8Array
+        ? bytes
+        : null;
+    if (!u8) throw new Error('mesh_store_read returned unexpected type');
+    const copy = new Uint8Array(u8.byteLength);
+    copy.set(u8);
+    return copy.buffer;
+  } catch (error) {
+    return rethrowNativeMeshStoreError(error);
   }
 }
 
@@ -157,7 +187,7 @@ export async function withNativeMesh<T>(
   try {
     return await pass(meshId);
   } catch (error) {
-    return rethrow(error);
+    return rethrowNativeMeshStoreError(error);
   } finally {
     await dropNativeMeshes(core, [meshId]).catch(() => undefined);
   }

@@ -108,12 +108,6 @@ export function decodeF32(bytes: ArrayBuffer | Uint8Array | number[], label: str
 export type MeshPositionReadCommand =
   | 'mesh_repair_read_positions'
   | 'mesh_punch_read_positions'
-  | 'mesh_hollow_preview_read_positions'
-  | 'mesh_hollow_preview_read_infill_positions'
-  | 'mesh_hollow_preview_read_removed_voxel_centers'
-  | 'mesh_hollow_preview_read_blocked_voxel_centers'
-  | 'mesh_hollow_preview_read_cavity_positions'
-  | 'mesh_hollow_staged_read_cavity_positions'
   | 'mesh_organic_cut_read_geodesic'
   | 'mesh_organic_cut_read_membrane'
   | 'mesh_organic_cut_read_tenon';

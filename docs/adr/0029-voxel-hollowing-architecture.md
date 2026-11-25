@@ -26,6 +26,11 @@ voxelizes the model, classifies shell vs. interior voxels, computes cavity
 surfaces, and returns results as binary Float32Array/Uint32Array buffers read
 back via dedicated `_read_positions` / `_read_cavity_positions` commands.
 
+The transport has since moved to the native mesh store
+([ADR-0048](0048-native-mesh-store.md)): the preview runs on a session opened by
+id, and each output comes back as an id of its own. The engine side of this
+decision is unchanged; `docs/dev/native-mesh-store.md` has the commands.
+
 Three modes: `cavity` (hollow the interior), `infill` (lattice or pillar fill),
 and `shell_open_face` (remove one face of the bounding box for mold-style
 prints). A `rotationQuat` parameter orients the voxel grid to the model's scene

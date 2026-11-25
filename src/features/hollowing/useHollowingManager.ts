@@ -25,11 +25,11 @@ import {
   computeVoxelResolution,
 } from '@/utils/geometryScaling';
 import {
-  hollowApplyFromCapturedSource,
+  applyHollowSession,
   hollowFromGeometry,
-  hollowPreviewFromCapturedSource,
+  openHollowSession,
+  previewHollowSession,
   selectRemovedVoxelsInPolygon,
-  stageHollowPreviewSource,
   type HollowOptions,
   type HollowReport,
 } from '@/utils/meshHollowing';
@@ -286,13 +286,13 @@ export function useHollowingManager({
           rotationQuat: [applyQuat.x, applyQuat.y, applyQuat.z, applyQuat.w],
         };
         const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
-        const staged = await stageHollowPreviewSource(
+        const sessionId = await openHollowSession(
           sourceGeometry,
           `${activeModel.id}::${sourceGeometryKey}`,
         );
 
-        const result = staged
-          ? await hollowApplyFromCapturedSource(options)
+        const result = sessionId
+          ? await applyHollowSession(sessionId, options)
           : await hollowFromGeometry(sourceGeometry, options);
         if (!result) {
           deps.current.showOperationError(hollowingDesktopOnlyMessage(_));
@@ -1096,15 +1096,15 @@ export function useHollowingManager({
 
     hollowPreviewWarmupKeyRef.current = previewKey;
     try {
-      const staged = await stageHollowPreviewSource(
+      const sessionId = await openHollowSession(
         sourceGeometry,
         `${activeModel.id}::${sourceGeometryKey}`,
       );
-      if (!staged) {
+      if (!sessionId) {
         return;
       }
 
-      const result = await hollowPreviewFromCapturedSource(options);
+      const result = await previewHollowSession(sessionId, options);
       if (!result) {
         return;
       }
@@ -1196,18 +1196,18 @@ export function useHollowingManager({
         return;
       }
 
-      const staged = await stageHollowPreviewSource(
+      const sessionId = await openHollowSession(
         sourceGeometry,
         `${activeModel.id}::${sourceGeometryKey}`,
       );
-      if (!staged) {
+      if (!sessionId) {
         if (notifyUnavailable) {
           deps.current.showOperationError(hollowingPreviewDesktopOnlyMessage(_));
         }
         return;
       }
 
-      const result = await hollowPreviewFromCapturedSource(options);
+      const result = await previewHollowSession(sessionId, options);
       if (!result) {
         if (notifyUnavailable) {
           deps.current.showOperationError(hollowingPreviewDesktopOnlyMessage(_));
@@ -1522,9 +1522,13 @@ export function useHollowingManager({
     // container pixels -> point-in-polygon); see meshHollowing.ts / hollowing.rs.
     const cameraProjection = helpers.getCameraProjection?.();
     if (cameraProjection) {
-      const { options } = buildHollowPreviewRequest(activeModel);
+      const { sourceGeometry, sourceGeometryKey, options } = buildHollowPreviewRequest(activeModel);
       try {
-        const removedIndices = await selectRemovedVoxelsInPolygon({
+        const sessionId = await openHollowSession(
+          sourceGeometry,
+          `${activeModel.id}::${sourceGeometryKey}`,
+        );
+        const removedIndices = sessionId ? await selectRemovedVoxelsInPolygon(sessionId, {
           polygon: polygon.map((point) => [point.x, point.y] as [number, number]),
           viewProj: cameraProjection.viewProj,
           rectWidth: cameraProjection.rectWidth,
@@ -1551,7 +1555,7 @@ export function useHollowingManager({
             activeModel.transform.position.z,
           ],
           options,
-        });
+        }) : null;
         if (removedIndices) {
           for (let i = 0; i < removedIndices.length; i += 1) {
             selected.push(String(removedIndices[i]));

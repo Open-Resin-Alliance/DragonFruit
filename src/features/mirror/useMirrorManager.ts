@@ -28,6 +28,26 @@ type MirrorSession = {
   initialSupportState: SupportState;
 };
 
+/**
+ * The display mesh reflected with the model, AO included: a reflection keeps every edge and
+ * every occluder, and waiting for a fresh refine and bake drew the model white for a moment
+ * after every flip. Undefined when there is none, or when reflecting fails and the display
+ * mesh is derived afresh.
+ *
+ * Outside the hook because the React Compiler skips a hook with a conditional inside a
+ * try/catch.
+ */
+function reflectDisplayGeometry(session: MirrorSession): THREE.BufferGeometry | undefined {
+  const sourceDisplay = session.initialGeometry.displayGeometry;
+  if (!sourceDisplay) return undefined;
+  try {
+    return bakeWithFlips(sourceDisplay, session.flips) ?? undefined;
+  } catch (error) {
+    console.warn('[Mirror] reflecting the display mesh failed, deriving it afresh:', error);
+    return undefined;
+  }
+}
+
 export type UseMirrorManagerOptions = {
   scene: ReturnType<typeof useSceneCollectionManager>;
   transformMgr: ReturnType<typeof useTransformManager>;
@@ -94,16 +114,7 @@ export function useMirrorManager({
     finalizedTransform: ModelTransform,
     axisLabel: string,
   ) => {
-    // The display mesh is reflected with the model, AO included: a reflection keeps
-    // every edge and every occluder, and waiting for a fresh refine and bake drew the
-    // model white for a moment after every flip.
-    const sourceDisplay = session.initialGeometry.displayGeometry;
-    let displayGeometry: THREE.BufferGeometry | undefined;
-    try {
-      displayGeometry = sourceDisplay ? bakeWithFlips(sourceDisplay, session.flips) ?? undefined : undefined;
-    } catch (error) {
-      console.warn('[Mirror] reflecting the display mesh failed, deriving it afresh:', error);
-    }
+    const displayGeometry = reflectDisplayGeometry(session);
     scene.replaceModelGeometry(session.modelId, baked, mirrorModelLabel(axisLabel), {
       // Z deletes the supports up front, behind its own confirmation.
       includeSupportState: !session.flips.z,

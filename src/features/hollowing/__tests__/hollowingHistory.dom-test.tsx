@@ -171,11 +171,12 @@ test('hollowing edits land in undo history', async (t) => {
       const tauriWindow = window as unknown as { __TAURI_INTERNALS__?: unknown };
       tauriWindow.__TAURI_INTERNALS__ ??= {};
       mockIPC((cmd) => {
-        if (cmd === 'mesh_hollow_apply_from_captured_source') {
-          return JSON.stringify({ removedVoxels: 100, outputTriangleCount: 2 });
+        if (cmd === 'mesh_store_put') return 'hollow-source';
+        if (cmd === 'mesh_hollow_session_open') return 'hollow-session';
+        if (cmd === 'mesh_hollow_session_apply') {
+          return JSON.stringify({ removedVoxels: 100, outputTriangleCount: 2, meshId: 'hollowed' });
         }
-        if (cmd === 'mesh_repair_read_positions') return new Uint8Array(hollowed.buffer);
-        if (cmd === 'mesh_hollow_staged_read_cavity_positions') throw new Error('no cavity');
+        if (cmd === 'mesh_store_read') return new Uint8Array(hollowed.buffer);
         return null;
       });
       try {

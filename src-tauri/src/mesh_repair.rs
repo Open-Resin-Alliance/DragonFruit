@@ -32,7 +32,7 @@ use dragonfruit_mesh_repair::{
     analyze, classify_support_split, hollow_voxel, io, punch_cylinders, repair_auto_with_progress,
     repair_separate_parts,
     shrink_wrap_with_progress, solid_remesh_with_progress, tet_surface_with_progress, HolePunchOptions,
-    HollowOptions, HollowSession, IndexedMesh, MeshHealthReport, RepairOptions, ShrinkWrapOptions, SolidRemeshOptions,
+    HollowOptions, IndexedMesh, MeshHealthReport, RepairOptions, ShrinkWrapOptions, SolidRemeshOptions,
     TetWrapOptions,
     Vec3,
 };
@@ -43,26 +43,13 @@ use serde::Deserialize;
 use tauri::ipc::Response;
 use tauri::Emitter;
 
+use crate::hollow_source::HollowSource;
 use crate::mesh_store;
 use crate::{
     staged_mesh, staged_mesh_file_appender, staged_mesh_file_path, staged_mesh_stats,
     StageMeshStats,
 };
 
-static HOLLOW_PREVIEW_SOURCE_MESH: OnceLock<Mutex<Option<Arc<IndexedMesh>>>> = OnceLock::new();
-static HOLLOW_PREVIEW_SESSION: OnceLock<Mutex<Option<Arc<HollowSession>>>> = OnceLock::new();
-static HOLLOW_PREVIEW_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-static HOLLOW_PREVIEW_INFILL_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-static HOLLOW_PREVIEW_REMOVED_VOXEL_CENTER_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> =
-    OnceLock::new();
-static HOLLOW_PREVIEW_REMOVED_VOXEL_INDEX_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-static HOLLOW_PREVIEW_BLOCKED_VOXEL_CENTER_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> =
-    OnceLock::new();
-static HOLLOW_PREVIEW_BLOCKED_VOXEL_INDEX_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-/// Cavity interior mesh from the staged hollow path.
-static HOLLOW_STAGED_CAVITY_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-/// Cavity interior mesh from the preview hollow path.
-static HOLLOW_PREVIEW_CAVITY_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static PUNCH_SOURCE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static PUNCH_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Captured source mesh for repeated non-mutating organic-cut runs.
@@ -81,46 +68,6 @@ static ORGANIC_CUT_GEODESIC_SOLVER: OnceLock<Mutex<Option<Arc<GeodesicSolver>>>>
 static ORGANIC_CUT_MEMBRANE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Most recent registration-tenon preview (LE f32 triangle soup, tenon + mortise).
 static ORGANIC_CUT_TENON_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-
-fn hollow_preview_source_mesh() -> &'static Mutex<Option<Arc<IndexedMesh>>> {
-    HOLLOW_PREVIEW_SOURCE_MESH.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_session() -> &'static Mutex<Option<Arc<HollowSession>>> {
-    HOLLOW_PREVIEW_SESSION.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_RESULT_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_infill_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_INFILL_RESULT_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_removed_voxel_center_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_REMOVED_VOXEL_CENTER_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_removed_voxel_index_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_REMOVED_VOXEL_INDEX_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_blocked_voxel_center_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_BLOCKED_VOXEL_CENTER_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_blocked_voxel_index_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_BLOCKED_VOXEL_INDEX_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_staged_cavity_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_STAGED_CAVITY_RESULT_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_cavity_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_CAVITY_RESULT_BYTES.get_or_init(|| Mutex::new(None))
-}
 
 fn punch_source_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     PUNCH_SOURCE_BYTES.get_or_init(|| Mutex::new(None))
@@ -152,45 +99,6 @@ fn organic_cut_membrane_bytes() -> &'static Mutex<Option<Vec<u8>>> {
 
 fn organic_cut_tenon_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     ORGANIC_CUT_TENON_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-/// Clears every hollow-preview buffer derived from the captured source mesh
-/// (session cache, all result/removed/blocked/cavity byte buffers). Called
-/// whenever a new source mesh is captured so stale data from a previous
-/// model/session can never be served alongside a fresh one.
-fn reset_hollow_preview_derived_state() -> Result<(), String> {
-    *hollow_preview_session()
-        .lock()
-        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? = None;
-    *hollow_preview_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = None;
-    *hollow_preview_infill_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? = None;
-    *hollow_preview_removed_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))? =
-        None;
-    *hollow_preview_removed_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))? =
-        None;
-    *hollow_preview_blocked_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))? =
-        None;
-    *hollow_preview_blocked_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))? =
-        None;
-    *hollow_preview_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = None;
-    *hollow_staged_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))? = None;
-    Ok(())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -727,30 +635,28 @@ pub async fn mesh_analyze_staged(mesh_id: Option<String>) -> Result<String, Stri
     serde_json::to_string(&analysis).map_err(|e| format!("serialize analysis: {e}"))
 }
 
-/// Applies voxel hollowing to the current staged mesh.
-/// Replaces staged positions with the hollowed result and returns a JSON report.
+/// Hollows a stored mesh once, with no session: the output path, where nothing is previewed.
+///
+/// Returns the report JSON with the result's id as `meshId` and, when the mode leaves an
+/// interior surface, that surface's id as `cavityId`. Both belong to the input's owner.
 #[tauri::command]
-pub async fn mesh_hollow_staged(options_json: String) -> Result<String, String> {
+pub async fn mesh_hollow_staged(options_json: String, mesh_id: String) -> Result<String, String> {
     let options = parse_hollow_options(&options_json)?;
-    let bytes = read_staging_bytes()?;
-    let (mesh, cavity_bytes, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+    let store = mesh_store::global();
+    let input = store.get_soup(&mesh_id)?;
+    let owner = store.owner_of(&mesh_id)?;
+    let (outputs, report) = tauri::async_runtime::spawn_blocking(move || {
+        let bytes = input.soup_bytes().expect("get_soup returned a soup");
+        let mesh = io::staged::load_positions_le(bytes).map_err(|e| e.to_string())?;
         let outcome = hollow_voxel(mesh, &options);
-        let cavity_bytes = outcome.cavity_mesh.as_ref().map(|cm| {
-            let soup = cm.to_triangle_soup();
-            bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
-        });
-        Ok::<_, String>((outcome.mesh, cavity_bytes, outcome.report))
+        Ok::<_, String>((
+            HollowOutputs::mesh_and_cavity(&outcome.mesh, outcome.cavity_mesh.as_ref()),
+            outcome.report,
+        ))
     })
     .await
     .map_err(|e| format!("hollow task panicked: {e}"))??;
-
-    *hollow_staged_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))? = cavity_bytes;
-
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize hollow report: {e}"))
+    report_json_with_ids(&report, outputs.store(&owner))
 }
 
 /// Resamples the current staged mesh with the shrinkwrap resampler.
@@ -856,326 +762,143 @@ pub async fn mesh_solid_remesh_staged(
     serde_json::to_string(&report).map_err(|e| format!("serialize shrink-wrap report: {e}"))
 }
 
-/// Captures the current staged mesh bytes as the source for repeated
-/// non-mutating hollow previews.
+/// Opens a hollowing session on a stored mesh and returns the session's id.
+///
+/// The session parses the mesh once and keeps the voxel grid it builds, so repeated previews
+/// while the user changes the shell or infill only rebuild the grid when the resolution or the
+/// rotation changes. It keeps its own copy of the source: the mesh it was opened from can be
+/// dropped right away. The session belongs to the mesh's owner; drop it with `mesh_store_drop`.
 #[tauri::command]
-pub async fn mesh_hollow_preview_capture_staged_source() -> Result<(), String> {
-    let bytes = read_staging_bytes()?;
-    let source_mesh = tauri::async_runtime::spawn_blocking(move || {
-        io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())
+pub async fn mesh_hollow_session_open(mesh_id: String) -> Result<String, String> {
+    let store = mesh_store::global();
+    let input = store.get_soup(&mesh_id)?;
+    let owner = store.owner_of(&mesh_id)?;
+    let source = tauri::async_runtime::spawn_blocking(move || {
+        let bytes = input.soup_bytes().expect("get_soup returned a soup");
+        io::staged::load_positions_le(bytes)
+            .map(HollowSource::new)
+            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("hollow preview capture task panicked: {e}"))??;
-
-    *hollow_preview_source_mesh()
-        .lock()
-        .map_err(|e| format!("hollow preview source lock poisoned: {e}"))? =
-        Some(Arc::new(source_mesh));
-    reset_hollow_preview_derived_state()?;
-    Ok(())
+    .map_err(|e| format!("hollow session open task panicked: {e}"))??;
+    Ok(store.put(
+        owner,
+        mesh_store::Entry::Session(mesh_store::Session::Hollow(Arc::new(source))),
+    ))
 }
 
-/// Runs voxel hollowing against the captured preview source mesh without
-/// mutating the regular staged mesh buffer.
+/// Runs a hollow preview on a session.
+///
+/// Returns the report JSON with an id per output, all owned by the session's owner and each the
+/// caller's to read or drop: `meshId` (the hollowed shell), `cavityId` and `infillId` when the
+/// mode produces them, and four buffers, `removedVoxelCentersId` and `blockedVoxelCentersId`
+/// (`f32`, three per voxel) and `removedVoxelIndicesId` and `blockedVoxelIndicesId` (`u32`).
 #[tauri::command]
-pub async fn mesh_hollow_preview_from_captured_source(
+pub async fn mesh_hollow_session_preview(
+    session_id: String,
     options_json: String,
 ) -> Result<String, String> {
     let options = parse_hollow_options(&options_json)?;
-    let source_mesh = hollow_preview_source_mesh()
-        .lock()
-        .map_err(|e| format!("hollow preview source lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No captured hollow preview source — call mesh_hollow_preview_capture_staged_source first"
-                .to_string()
-        })?;
-
-    let cached_session = hollow_preview_session()
-        .lock()
-        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))?
-        .clone();
-
-    let session = if let Some(session) = cached_session {
-        if session.voxel_resolution() == options.voxel_resolution
-            && session.rotation_quat() == options.rotation_quat
-        {
-            session
-        } else {
-            let source_mesh_for_build = source_mesh.clone();
-            let resolution = options.voxel_resolution;
-            let rotation = options.rotation_quat;
-            let session = tauri::async_runtime::spawn_blocking(move || {
-                Ok::<_, String>(Arc::new(HollowSession::with_rotation(
-                    (*source_mesh_for_build).clone(),
-                    resolution,
-                    rotation,
-                )))
-            })
-            .await
-            .map_err(|e| format!("hollow preview session build panicked: {e}"))??;
-            *hollow_preview_session()
-                .lock()
-                .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? =
-                Some(session.clone());
-            session
-        }
-    } else {
-        let source_mesh_for_build = source_mesh.clone();
-        let resolution = options.voxel_resolution;
-        let rotation = options.rotation_quat;
-        let session = tauri::async_runtime::spawn_blocking(move || {
-            Ok::<_, String>(Arc::new(HollowSession::with_rotation(
-                (*source_mesh_for_build).clone(),
-                resolution,
-                rotation,
-            )))
-        })
-        .await
-        .map_err(|e| format!("hollow preview session build panicked: {e}"))??;
-        *hollow_preview_session()
-            .lock()
-            .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? =
-            Some(session.clone());
-        session
-    };
-
-    let (
-        positions_bytes,
-        cavity_bytes,
-        infill_positions_bytes,
-        removed_voxel_center_bytes,
-        removed_voxel_index_bytes,
-        blocked_voxel_center_bytes,
-        blocked_voxel_index_bytes,
-        report,
-    ) = tauri::async_runtime::spawn_blocking(move || {
+    let store = mesh_store::global();
+    let source = store.hollow_source(&session_id)?;
+    let owner = store.owner_of(&session_id)?;
+    let (outputs, report) = tauri::async_runtime::spawn_blocking(move || {
+        let session = source.session_for(options.voxel_resolution, options.rotation_quat);
         let outcome = session.run(&options);
-        let soup = outcome.mesh.to_triangle_soup();
-        let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
-        let cavity_bytes = outcome.cavity_mesh.as_ref().map(|cm| {
-            let soup = cm.to_triangle_soup();
-            bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
+        let mut outputs =
+            HollowOutputs::mesh_and_cavity(&outcome.mesh, outcome.cavity_mesh.as_ref());
+        outputs.infill = outcome.preview_infill_mesh.as_ref().map(soup_bytes);
+        outputs.voxels = Some(HollowVoxelBuffers {
+            removed_centers: bytemuck::cast_slice::<f32, u8>(&outcome.removed_voxel_centers)
+                .to_vec(),
+            removed_indices: bytemuck::cast_slice::<u32, u8>(&outcome.removed_voxel_indices)
+                .to_vec(),
+            blocked_centers: bytemuck::cast_slice::<f32, u8>(&outcome.blocked_voxel_centers)
+                .to_vec(),
+            blocked_indices: bytemuck::cast_slice::<u32, u8>(&outcome.blocked_voxel_indices)
+                .to_vec(),
         });
-        let infill_bytes = outcome.preview_infill_mesh.map(|mesh| {
-            let soup = mesh.to_triangle_soup();
-            bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
-        });
-        let removed_voxel_center_bytes =
-            bytemuck::cast_slice::<f32, u8>(&outcome.removed_voxel_centers).to_vec();
-        let removed_voxel_index_bytes =
-            bytemuck::cast_slice::<u32, u8>(&outcome.removed_voxel_indices).to_vec();
-        let blocked_voxel_center_bytes =
-            bytemuck::cast_slice::<f32, u8>(&outcome.blocked_voxel_centers).to_vec();
-        let blocked_voxel_index_bytes =
-            bytemuck::cast_slice::<u32, u8>(&outcome.blocked_voxel_indices).to_vec();
+        Ok::<_, String>((outputs, outcome.report))
+    })
+    .await
+    .map_err(|e| format!("hollow preview task panicked: {e}"))??;
+    report_json_with_ids(&report, outputs.store(&owner))
+}
+
+/// Runs the hollow a session previews for real, at full detail. Returns the report JSON with
+/// `meshId` and, when there is one, `cavityId`, as `mesh_hollow_staged` does.
+#[tauri::command]
+pub async fn mesh_hollow_session_apply(
+    session_id: String,
+    options_json: String,
+) -> Result<String, String> {
+    let options = parse_hollow_options(&options_json)?;
+    let store = mesh_store::global();
+    let source = store.hollow_source(&session_id)?;
+    let owner = store.owner_of(&session_id)?;
+    let (outputs, report) = tauri::async_runtime::spawn_blocking(move || {
+        let session = source.session_for(options.voxel_resolution, options.rotation_quat);
+        let outcome = session.run(&options);
         Ok::<_, String>((
-            bytes,
-            cavity_bytes,
-            infill_bytes,
-            removed_voxel_center_bytes,
-            removed_voxel_index_bytes,
-            blocked_voxel_center_bytes,
-            blocked_voxel_index_bytes,
+            HollowOutputs::mesh_and_cavity(&outcome.mesh, outcome.cavity_mesh.as_ref()),
             outcome.report,
         ))
     })
     .await
-    .map_err(|e| format!("hollow preview task panicked: {e}"))??;
-
-    *hollow_preview_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = Some(positions_bytes);
-    *hollow_preview_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = cavity_bytes;
-    *hollow_preview_infill_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? =
-        infill_positions_bytes;
-    *hollow_preview_removed_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))? =
-        Some(removed_voxel_center_bytes);
-    *hollow_preview_removed_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))? =
-        Some(removed_voxel_index_bytes);
-    *hollow_preview_blocked_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))? =
-        Some(blocked_voxel_center_bytes);
-    *hollow_preview_blocked_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))? =
-        Some(blocked_voxel_index_bytes);
-
-    serde_json::to_string(&report).map_err(|e| format!("serialize hollow preview report: {e}"))
-}
-
-#[tauri::command]
-pub async fn mesh_hollow_apply_from_captured_source(
-    options_json: String,
-) -> Result<String, String> {
-    let options = parse_hollow_options(&options_json)?;
-    let source_mesh = hollow_preview_source_mesh()
-        .lock()
-        .map_err(|e| format!("hollow preview source lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No captured hollow preview source — call mesh_hollow_preview_capture_staged_source first"
-                .to_string()
-        })?;
-
-    let cached_session = hollow_preview_session()
-        .lock()
-        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))?
-        .clone();
-
-    let session = if let Some(session) = cached_session {
-        if session.voxel_resolution() == options.voxel_resolution
-            && session.rotation_quat() == options.rotation_quat
-        {
-            session
-        } else {
-            let source_mesh_for_build = source_mesh.clone();
-            let resolution = options.voxel_resolution;
-            let rotation = options.rotation_quat;
-            let session = tauri::async_runtime::spawn_blocking(move || {
-                Ok::<_, String>(Arc::new(HollowSession::with_rotation(
-                    (*source_mesh_for_build).clone(),
-                    resolution,
-                    rotation,
-                )))
-            })
-            .await
-            .map_err(|e| format!("hollow apply session build panicked: {e}"))??;
-            *hollow_preview_session()
-                .lock()
-                .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? =
-                Some(session.clone());
-            session
-        }
-    } else {
-        let source_mesh_for_build = source_mesh.clone();
-        let resolution = options.voxel_resolution;
-        let rotation = options.rotation_quat;
-        let session = tauri::async_runtime::spawn_blocking(move || {
-            Ok::<_, String>(Arc::new(HollowSession::with_rotation(
-                (*source_mesh_for_build).clone(),
-                resolution,
-                rotation,
-            )))
-        })
-        .await
-        .map_err(|e| format!("hollow apply session build panicked: {e}"))??;
-        *hollow_preview_session()
-            .lock()
-            .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? =
-            Some(session.clone());
-        session
-    };
-
-    let (mesh, cavity_bytes, report) = tauri::async_runtime::spawn_blocking(move || {
-        let outcome = session.run(&options);
-        let cavity_bytes = outcome.cavity_mesh.as_ref().map(|cm| {
-            let soup = cm.to_triangle_soup();
-            bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
-        });
-        Ok::<_, String>((outcome.mesh, cavity_bytes, outcome.report))
-    })
-    .await
     .map_err(|e| format!("hollow apply task panicked: {e}"))??;
-
-    *hollow_staged_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))? = cavity_bytes;
-
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize hollow apply report: {e}"))
+    report_json_with_ids(&report, outputs.store(&owner))
 }
 
-/// Returns the most recent non-mutating hollow preview positions as raw
-/// little-endian bytes.
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_positions() -> Result<Response, String> {
-    let bytes = hollow_preview_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
+/// The byte outputs of one hollow run, before they go into the store.
+struct HollowOutputs {
+    mesh: Vec<u8>,
+    cavity: Option<Vec<u8>>,
+    infill: Option<Vec<u8>>,
+    voxels: Option<HollowVoxelBuffers>,
 }
 
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_infill_positions() -> Result<Response, String> {
-    let bytes = hollow_preview_infill_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview infill result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
+/// The voxel sets a preview draws and the lasso picks from.
+struct HollowVoxelBuffers {
+    removed_centers: Vec<u8>,
+    removed_indices: Vec<u8>,
+    blocked_centers: Vec<u8>,
+    blocked_indices: Vec<u8>,
 }
 
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_removed_voxel_centers() -> Result<Response, String> {
-    let bytes = hollow_preview_removed_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview removed voxel center result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
+impl HollowOutputs {
+    fn mesh_and_cavity(mesh: &IndexedMesh, cavity: Option<&IndexedMesh>) -> Self {
+        Self {
+            mesh: soup_bytes(mesh),
+            cavity: cavity.map(soup_bytes),
+            infill: None,
+            voxels: None,
+        }
+    }
+
+    /// Puts each output into the store for `owner`, and returns the id of each under the name
+    /// the report gives it.
+    fn store(self, owner: &mesh_store::Owner) -> Vec<(&'static str, String)> {
+        use mesh_store::Entry::{Buffer, Soup};
+        let store = mesh_store::global();
+        let put = |entry| store.put(owner.clone(), entry);
+        let mut ids = vec![("meshId", put(Soup(self.mesh)))];
+        if let Some(cavity) = self.cavity {
+            ids.push(("cavityId", put(Soup(cavity))));
+        }
+        if let Some(infill) = self.infill {
+            ids.push(("infillId", put(Soup(infill))));
+        }
+        if let Some(voxels) = self.voxels {
+            ids.push(("removedVoxelCentersId", put(Buffer(voxels.removed_centers))));
+            ids.push(("removedVoxelIndicesId", put(Buffer(voxels.removed_indices))));
+            ids.push(("blockedVoxelCentersId", put(Buffer(voxels.blocked_centers))));
+            ids.push(("blockedVoxelIndicesId", put(Buffer(voxels.blocked_indices))));
+        }
+        ids
+    }
 }
 
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_removed_voxel_indices() -> Result<Response, String> {
-    let bytes = hollow_preview_removed_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview removed voxel index result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
-}
-
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_blocked_voxel_centers() -> Result<Response, String> {
-    let bytes = hollow_preview_blocked_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview blocked voxel center result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
-}
-
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_blocked_voxel_indices() -> Result<Response, String> {
-    let bytes = hollow_preview_blocked_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview blocked voxel index result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
-}
-
-/// Request payload for `mesh_hollow_preview_select_removed_voxels_in_polygon`.
+/// Request payload for `mesh_hollow_session_select_removed_voxels`.
 /// All fields are in the same spaces the frontend lasso resolver used before
 /// the projection moved to Rust: `polygon` in container pixels, `view_proj` a
 /// column-major `projectionMatrix * matrixWorldInverse`, and the model
@@ -1196,27 +919,24 @@ struct SelectRemovedVoxelsRequest {
 }
 
 /// Selects the full through-depth set of removed (cavity) voxels whose
-/// projected screen point falls inside the lasso polygon, operating on the
-/// cached hollow-preview session so the result is immune to the boundary
+/// projected screen point falls inside the lasso polygon, on the session's voxel
+/// grid for the request's options, so the result is immune to the boundary
 /// filter and viewport cap that narrow the rendered/exported voxel subset.
 /// Returns the grid indices as raw little-endian `u32` bytes.
 #[tauri::command]
-pub async fn mesh_hollow_preview_select_removed_voxels_in_polygon(
+pub async fn mesh_hollow_session_select_removed_voxels(
+    session_id: String,
     request_json: String,
 ) -> Result<Response, String> {
     let request: SelectRemovedVoxelsRequest = serde_json::from_str(&request_json)
         .map_err(|e| format!("invalid select-removed-voxels request JSON: {e}"))?;
-
-    let session = hollow_preview_session()
-        .lock()
-        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview session — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
+    let source = mesh_store::global().hollow_source(&session_id)?;
 
     let indices = tauri::async_runtime::spawn_blocking(move || {
+        let session = source.session_for(
+            request.options.voxel_resolution,
+            request.options.rotation_quat,
+        );
         let selected = session.select_removed_voxels_in_polygon(
             &request.options,
             &request.polygon,
@@ -1230,7 +950,11 @@ pub async fn mesh_hollow_preview_select_removed_voxels_in_polygon(
             ),
             Vec3::new(request.scale[0], request.scale[1], request.scale[2]),
             request.rotation_quat,
-            Vec3::new(request.position[0], request.position[1], request.position[2]),
+            Vec3::new(
+                request.position[0],
+                request.position[1],
+                request.position[2],
+            ),
         );
         Ok::<Vec<u32>, String>(selected)
     })
@@ -1238,33 +962,6 @@ pub async fn mesh_hollow_preview_select_removed_voxels_in_polygon(
     .map_err(|e| format!("hollow select task panicked: {e}"))??;
 
     let bytes = bytemuck::cast_slice::<u32, u8>(&indices).to_vec();
-    Ok(Response::new(bytes))
-}
-
-/// Reads the cavity interior mesh positions from the last preview hollow operation.
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_cavity_positions() -> Result<Response, String> {
-    let bytes = hollow_preview_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview cavity result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
-}
-
-/// Reads the cavity interior mesh positions from the last staged hollow operation.
-#[tauri::command]
-pub async fn mesh_hollow_staged_read_cavity_positions() -> Result<Response, String> {
-    let bytes = hollow_staged_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow staged cavity result — call mesh_hollow_staged first".to_string()
-        })?;
     Ok(Response::new(bytes))
 }
 
@@ -2052,7 +1749,7 @@ pub async fn load_mesh_bytes(request: tauri::ipc::Request<'_>) -> Result<Respons
         .headers()
         .get("x-mesh-classify")
         .and_then(|value| value.to_str().ok())
-        .map_or(true, |value| value.trim() != "0");
+        .is_none_or(|value| value.trim() != "0");
     let bytes = match request.body() {
         tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
         tauri::ipc::InvokeBody::Json(_) => {
@@ -2268,7 +1965,10 @@ mod registry {
 
     const MESH_REGISTRY_CAP: usize = 8;
 
-    static REGISTRY: OnceLock<Mutex<VecDeque<(u32, Arc<IndexedMesh>)>>> = OnceLock::new();
+    /// Meshes waiting for their bake, oldest first, each under its token.
+    type Registry = Mutex<VecDeque<(u32, Arc<IndexedMesh>)>>;
+
+    static REGISTRY: OnceLock<Registry> = OnceLock::new();
     static NEXT_TOKEN: OnceLock<Mutex<u32>> = OnceLock::new();
 
     /// Keep `mesh` for its bake and return the token that names it.
@@ -2833,7 +2533,7 @@ impl StagedInput {
     fn bytes(&self) -> &[u8] {
         match self {
             StagedInput::Register(bytes) => bytes,
-            StagedInput::Stored(entry) => entry.soup_bytes(),
+            StagedInput::Stored(entry) => entry.soup_bytes().expect("get_soup returned a soup"),
         }
     }
 }
@@ -2841,7 +2541,7 @@ impl StagedInput {
 /// The stored mesh `mesh_id` names, or the staging register when there is none.
 fn staged_input(mesh_id: Option<&str>) -> Result<StagedInput, String> {
     match mesh_id {
-        Some(id) => Ok(StagedInput::Stored(mesh_store::global().get(id)?)),
+        Some(id) => Ok(StagedInput::Stored(mesh_store::global().get_soup(id)?)),
         None => read_staging_bytes().map(StagedInput::Register),
     }
 }
@@ -2880,9 +2580,22 @@ fn deliver_result(mesh: &IndexedMesh, target: &ResultTarget) -> Result<Option<St
 
 /// A report as JSON, with the result's id under `meshId` when the result went to the store.
 fn report_json<T: serde::Serialize>(report: &T, mesh_id: Option<String>) -> Result<String, String> {
+    report_json_with_ids(
+        report,
+        mesh_id.map(|id| ("meshId", id)).into_iter().collect(),
+    )
+}
+
+/// A report as JSON with each stored output's id added under its name.
+fn report_json_with_ids<T: serde::Serialize>(
+    report: &T,
+    ids: Vec<(&'static str, String)>,
+) -> Result<String, String> {
     let mut value = serde_json::to_value(report).map_err(|e| format!("serialize report: {e}"))?;
-    if let (Some(id), Some(object)) = (mesh_id, value.as_object_mut()) {
-        object.insert("meshId".into(), serde_json::Value::String(id));
+    if let Some(object) = value.as_object_mut() {
+        for (name, id) in ids {
+            object.insert(name.into(), serde_json::Value::String(id));
+        }
     }
     serde_json::to_string(&value).map_err(|e| format!("serialize report: {e}"))
 }
@@ -3519,6 +3232,146 @@ mod store_isolation_tests {
             tauri::async_runtime::block_on(mesh_analyze_staged(None)).expect("analysis ran");
         *staged_mesh().lock().unwrap() = None;
         assert_eq!(triangle_count(&seen_by_a), 12, "A analysed B's cube");
+    }
+
+    /// Hollow sessions on two meshes, previewed at the same time and many times over: each
+    /// preview reports its own session's mesh, and every output comes back as an id owned by
+    /// the session's owner.
+    #[test]
+    fn hollow_sessions_on_two_meshes_never_see_each_other() {
+        let client = "hollow-session-test".to_string();
+        let store = mesh_store::global();
+        let owner = Owner::Frontend(client.clone());
+        let open = |bytes: Vec<u8>| {
+            let mesh_id = store.put(owner.clone(), Entry::Soup(bytes));
+            let session_id =
+                tauri::async_runtime::block_on(mesh_hollow_session_open(mesh_id.clone()))
+                    .expect("session opened");
+            // The session keeps its own copy: the mesh it was opened from can go at once.
+            store.drop_ids(&[mesh_id]);
+            session_id
+        };
+        let sessions = [(open(tetrahedron()), 4u64), (open(cube()), 12u64)];
+
+        let runs: Vec<_> = (0..8)
+            .map(|i| {
+                let (session_id, expected) = sessions[i % 2].clone();
+                let owner = owner.clone();
+                std::thread::spawn(move || {
+                    let store = mesh_store::global();
+                    // Alternating resolutions makes runs on one session rebuild its grid
+                    // while others read it.
+                    let options = format!(r#"{{"voxelResolution":{}}}"#, 12 + 4 * (i % 3));
+                    let report_json = tauri::async_runtime::block_on(mesh_hollow_session_preview(
+                        session_id.clone(),
+                        options,
+                    ))
+                    .expect("preview ran");
+                    let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+                    assert_eq!(
+                        report["sourceTriangleCount"].as_u64(),
+                        Some(expected),
+                        "run {i} hollowed another session's mesh"
+                    );
+                    let mut ids = Vec::new();
+                    for name in [
+                        "meshId",
+                        "removedVoxelCentersId",
+                        "removedVoxelIndicesId",
+                        "blockedVoxelCentersId",
+                        "blockedVoxelIndicesId",
+                    ] {
+                        let id = report[name]
+                            .as_str()
+                            .unwrap_or_else(|| panic!("run {i}: no {name} in {report_json}"));
+                        assert_eq!(store.owner_of(id).unwrap(), owner);
+                        ids.push(id.to_string());
+                    }
+                    let centers = store.read_bytes(&ids[1]).unwrap();
+                    let indices = store.read_bytes(&ids[2]).unwrap();
+                    assert_eq!(
+                        centers.len() / 12,
+                        indices.len() / 4,
+                        "run {i}: one centre per removed voxel index"
+                    );
+                    for name in ["cavityId", "infillId"] {
+                        if let Some(id) = report[name].as_str() {
+                            ids.push(id.to_string());
+                        }
+                    }
+                    store.drop_ids(&ids);
+                })
+            })
+            .collect();
+        for run in runs {
+            run.join().expect("a run panicked");
+        }
+
+        let applied = tauri::async_runtime::block_on(mesh_hollow_session_apply(
+            sessions[1].0.clone(),
+            r#"{"voxelResolution":12}"#.to_string(),
+        ))
+        .expect("apply ran");
+        let applied: serde_json::Value = serde_json::from_str(&applied).unwrap();
+        assert_eq!(applied["sourceTriangleCount"].as_u64(), Some(12));
+        let result_id = applied["meshId"]
+            .as_str()
+            .expect("apply returns its result's id");
+        assert!(store.get_soup(result_id).is_ok());
+        assert!(
+            applied.get("removedVoxelCentersId").is_none(),
+            "apply returns no preview buffers"
+        );
+
+        let mut leftovers = vec![result_id.to_string()];
+        leftovers.extend(applied["cavityId"].as_str().map(str::to_string));
+        leftovers.extend(sessions.iter().map(|(id, _)| id.clone()));
+        store.drop_ids(&leftovers);
+    }
+
+    #[test]
+    fn a_hollow_session_command_on_the_wrong_id_says_why() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("hollow-session-errors".to_string());
+        let mesh_id = store.put(owner, Entry::Soup(tetrahedron()));
+
+        let err = tauri::async_runtime::block_on(mesh_hollow_session_preview(
+            mesh_id.clone(),
+            String::new(),
+        ))
+        .unwrap_err();
+        assert!(err.starts_with("mesh-store/wrong_kind:"), "{err}");
+
+        let session_id = tauri::async_runtime::block_on(mesh_hollow_session_open(mesh_id.clone()))
+            .expect("session opened");
+        let err = tauri::async_runtime::block_on(mesh_hollow_session_open(session_id.clone()))
+            .unwrap_err();
+        assert!(err.starts_with("mesh-store/wrong_kind:"), "{err}");
+
+        store.drop_ids(&[mesh_id, session_id.clone()]);
+        let err =
+            tauri::async_runtime::block_on(mesh_hollow_session_apply(session_id, String::new()))
+                .unwrap_err();
+        assert!(err.starts_with("mesh-store/unknown:"), "{err}");
+    }
+
+    #[test]
+    fn a_one_shot_hollow_returns_its_result_by_id() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("hollow-one-shot".to_string());
+        let mesh_id = store.put(owner.clone(), Entry::Soup(cube()));
+        let report_json = tauri::async_runtime::block_on(mesh_hollow_staged(
+            r#"{"voxelResolution":12}"#.to_string(),
+            mesh_id.clone(),
+        ))
+        .expect("hollow ran");
+        let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+        assert_eq!(report["sourceTriangleCount"].as_u64(), Some(12));
+        let result_id = report["meshId"].as_str().expect("a result id");
+        assert_eq!(store.owner_of(result_id).unwrap(), owner);
+        let mut ids = vec![mesh_id, result_id.to_string()];
+        ids.extend(report["cavityId"].as_str().map(str::to_string));
+        store.drop_ids(&ids);
     }
 
     /// The same two callers, at the same time and many times over, through ids: each analysis

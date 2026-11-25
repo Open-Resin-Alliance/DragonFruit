@@ -16,34 +16,85 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
 
-/// What an entry holds. A closed set: a reader asks for the variant it needs.
+use crate::hollow_source::HollowSource;
+
+/// What an entry holds. A closed set: a reader asks for the kind it needs, and an id that
+/// holds another kind fails with `wrong_kind`.
 ///
-/// Only the triangle soup exists so far. Indexed meshes, files, auxiliary buffers and sessions
-/// are added with the operation family that first stores one.
-#[derive(Clone, Debug, PartialEq)]
+/// Indexed meshes and files are added with the operation family that first stores one.
+#[derive(Clone, Debug)]
 pub enum Entry {
     /// A triangle soup: little-endian `f32`, nine per triangle, the staging buffer's layout.
     Soup(Vec<u8>),
+    /// An operation's output that is not a mesh, as raw little-endian bytes: voxel centres
+    /// (`f32`, three per voxel) or voxel indices (`u32`). The command that returns its id says
+    /// which.
+    Buffer(Vec<u8>),
+    /// What a long-lived operation keeps between calls, so each call does not rebuild it.
+    Session(Session),
+}
+
+/// A session entry's state, one variant per operation family that keeps one.
+#[derive(Clone, Debug)]
+pub enum Session {
+    /// A hollowing source: the parsed mesh and the voxel grid last built from it.
+    Hollow(Arc<HollowSource>),
+}
+
+/// An entry's kind, for `wrong_kind` errors and for readers that accept more than one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryKind {
+    Soup,
+    Buffer,
+    HollowSession,
+}
+
+impl EntryKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EntryKind::Soup => "triangle soup",
+            EntryKind::Buffer => "buffer",
+            EntryKind::HollowSession => "hollow session",
+        }
+    }
 }
 
 impl Entry {
+    pub fn kind(&self) -> EntryKind {
+        match self {
+            Entry::Soup(_) => EntryKind::Soup,
+            Entry::Buffer(_) => EntryKind::Buffer,
+            Entry::Session(Session::Hollow(_)) => EntryKind::HollowSession,
+        }
+    }
+
     fn byte_len(&self) -> usize {
         match self {
-            Entry::Soup(bytes) => bytes.len(),
+            Entry::Soup(bytes) | Entry::Buffer(bytes) => bytes.len(),
+            Entry::Session(Session::Hollow(source)) => source.byte_len(),
         }
     }
 
-    /// The soup's bytes.
-    pub fn soup_bytes(&self) -> &[u8] {
+    /// The soup's bytes, or `None` for another kind.
+    pub fn soup_bytes(&self) -> Option<&[u8]> {
         match self {
-            Entry::Soup(bytes) => bytes,
+            Entry::Soup(bytes) => Some(bytes),
+            _ => None,
         }
     }
 
-    /// The soup's bytes, by value.
-    pub fn into_soup_bytes(self) -> Vec<u8> {
+    /// The bytes of an entry that is plain bytes (a soup or a buffer), or `None` for a session.
+    pub fn bytes(&self) -> Option<&[u8]> {
         match self {
-            Entry::Soup(bytes) => bytes,
+            Entry::Soup(bytes) | Entry::Buffer(bytes) => Some(bytes),
+            Entry::Session(_) => None,
+        }
+    }
+
+    fn into_bytes(self) -> Option<Vec<u8>> {
+        match self {
+            Entry::Soup(bytes) | Entry::Buffer(bytes) => Some(bytes),
+            Entry::Session(_) => None,
         }
     }
 }
@@ -63,6 +114,12 @@ pub enum StoreError {
     Expired(String),
     /// The id was never handed out, or its owner dropped it.
     Unknown(String),
+    /// The id holds another kind of entry than the reader asked for.
+    WrongKind {
+        id: String,
+        expected: &'static str,
+        found: EntryKind,
+    },
 }
 
 impl StoreError {
@@ -70,6 +127,7 @@ impl StoreError {
         match self {
             StoreError::Expired(_) => "expired",
             StoreError::Unknown(_) => "unknown",
+            StoreError::WrongKind { .. } => "wrong_kind",
         }
     }
 }
@@ -84,6 +142,15 @@ impl fmt::Display for StoreError {
             StoreError::Unknown(id) => write!(
                 f,
                 "mesh-store/unknown: no mesh '{id}' (never stored, or already dropped)"
+            ),
+            StoreError::WrongKind {
+                id,
+                expected,
+                found,
+            } => write!(
+                f,
+                "mesh-store/wrong_kind: '{id}' holds a {}, not a {expected}",
+                found.as_str()
             ),
         }
     }
@@ -225,6 +292,58 @@ impl MeshStore {
         Ok(Arc::try_unwrap(shared).unwrap_or_else(|still_shared| (*still_shared).clone()))
     }
 
+    /// The triangle soup under `id`, shared; `wrong_kind` when the id holds something else.
+    /// A caller that got `Ok` can rely on `soup_bytes()` being `Some`.
+    pub fn get_soup(&self, id: &str) -> Result<Arc<Entry>, StoreError> {
+        let entry = self.get(id)?;
+        match entry.kind() {
+            EntryKind::Soup => Ok(entry),
+            found => Err(wrong_kind(id, EntryKind::Soup.as_str(), found)),
+        }
+    }
+
+    /// A copy of the bytes under `id`, which must be a soup or a buffer.
+    pub fn read_bytes(&self, id: &str) -> Result<Vec<u8>, StoreError> {
+        let entry = self.get(id)?;
+        entry
+            .bytes()
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| wrong_kind(id, BYTES_KINDS, entry.kind()))
+    }
+
+    /// Removes `id`, which must be a soup or a buffer, and returns its bytes as `take` does. An
+    /// id of another kind is left where it is.
+    pub fn take_bytes(&self, id: &str) -> Result<Vec<u8>, StoreError> {
+        {
+            let mut inner = self.lock();
+            match inner.slots.get(id) {
+                Some(slot) if slot.entry.bytes().is_none() => {
+                    return Err(wrong_kind(id, BYTES_KINDS, slot.entry.kind()));
+                }
+                Some(_) => {}
+                None => return Err(inner.miss(id)),
+            }
+        }
+        let entry = self.take(id)?;
+        let kind = entry.kind();
+        entry
+            .into_bytes()
+            .ok_or_else(|| wrong_kind(id, BYTES_KINDS, kind))
+    }
+
+    /// The hollowing session under `id`.
+    pub fn hollow_source(&self, id: &str) -> Result<Arc<HollowSource>, StoreError> {
+        let entry = self.get(id)?;
+        match &*entry {
+            Entry::Session(Session::Hollow(source)) => Ok(source.clone()),
+            other => Err(wrong_kind(
+                id,
+                EntryKind::HollowSession.as_str(),
+                other.kind(),
+            )),
+        }
+    }
+
     /// Drops these ids and returns how many were present. An id already gone is not an error:
     /// a drop in a `finally` must not fail because an eviction got there first.
     pub fn drop_ids<S: AsRef<str>>(&self, ids: &[S]) -> usize {
@@ -309,6 +428,17 @@ impl Inner {
     }
 }
 
+/// What `read_bytes` and `take_bytes` accept, as a `wrong_kind` error names it.
+const BYTES_KINDS: &str = "triangle soup or buffer";
+
+fn wrong_kind(id: &str, expected: &'static str, found: EntryKind) -> StoreError {
+    StoreError::WrongKind {
+        id: id.to_string(),
+        expected,
+        found,
+    }
+}
+
 /// The process's store.
 pub fn global() -> &'static MeshStore {
     static STORE: OnceLock<MeshStore> = OnceLock::new();
@@ -333,8 +463,8 @@ mod tests {
         let a = store.put(client("c"), soup(36, 1));
         let b = store.put(client("c"), soup(72, 2));
         assert_ne!(a, b);
-        assert_eq!(store.get(&a).unwrap().soup_bytes(), &[1u8; 36][..]);
-        assert_eq!(store.get(&b).unwrap().soup_bytes(), &[2u8; 72][..]);
+        assert_eq!(store.get(&a).unwrap().soup_bytes(), Some(&[1u8; 36][..]));
+        assert_eq!(store.get(&b).unwrap().soup_bytes(), Some(&[2u8; 72][..]));
         assert_eq!(store.stats().entries, 2);
         assert_eq!(store.stats().bytes, 108);
     }
@@ -374,7 +504,10 @@ mod tests {
     fn a_mesh_larger_than_the_budget_is_still_stored() {
         let store = MeshStore::new(10);
         let big = store.put(client("c"), soup(36, 1));
-        assert_eq!(store.get(&big).unwrap().soup_bytes().len(), 36);
+        assert_eq!(
+            store.get(&big).unwrap().soup_bytes().map(<[u8]>::len),
+            Some(36)
+        );
     }
 
     #[test]
@@ -384,15 +517,15 @@ mod tests {
         let held = store.get(&a).unwrap();
         store.put(client("c"), soup(40, 8));
         assert_eq!(store.get(&a).unwrap_err().code(), "expired");
-        assert_eq!(held.soup_bytes(), &[7u8; 40][..]);
+        assert_eq!(held.soup_bytes(), Some(&[7u8; 40][..]));
     }
 
     #[test]
     fn take_moves_the_bytes_out_when_nothing_else_holds_them() {
         let store = MeshStore::new(1 << 20);
         let a = store.put(client("c"), soup(36, 4));
-        let ptr = store.get(&a).unwrap().soup_bytes().as_ptr();
-        let taken = store.take(&a).unwrap().into_soup_bytes();
+        let ptr = store.get(&a).unwrap().soup_bytes().unwrap().as_ptr();
+        let taken = store.take_bytes(&a).unwrap();
         assert_eq!(
             taken.as_ptr(),
             ptr,
@@ -407,9 +540,9 @@ mod tests {
         let store = MeshStore::new(1 << 20);
         let a = store.put(client("c"), soup(36, 5));
         let held = store.get(&a).unwrap();
-        let taken = store.take(&a).unwrap().into_soup_bytes();
+        let taken = store.take_bytes(&a).unwrap();
         assert_eq!(taken, vec![5u8; 36]);
-        assert_eq!(held.soup_bytes(), &[5u8; 36][..]);
+        assert_eq!(held.soup_bytes(), Some(&[5u8; 36][..]));
     }
 
     #[test]
@@ -421,5 +554,52 @@ mod tests {
         assert_eq!(store.get(&stale).unwrap_err().code(), "unknown");
         assert!(store.get(&current).is_ok());
         assert_eq!(store.owner_of(&current).unwrap(), client("now"));
+    }
+    fn hollow_session() -> Entry {
+        use dragonfruit_mesh_repair::{IndexedMesh, Vec3};
+        let mesh = IndexedMesh {
+            positions: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ],
+            triangles: vec![[0, 1, 2]],
+        };
+        Entry::Session(Session::Hollow(Arc::new(HollowSource::new(mesh))))
+    }
+
+    #[test]
+    fn a_buffer_reads_back_as_bytes_but_is_not_a_soup() {
+        let store = MeshStore::new(1 << 20);
+        let id = store.put(client("c"), Entry::Buffer(vec![9u8; 12]));
+        assert_eq!(store.read_bytes(&id).unwrap(), vec![9u8; 12]);
+        let err = store.get_soup(&id).unwrap_err();
+        assert_eq!(err.code(), "wrong_kind");
+        assert!(
+            err.to_string().starts_with("mesh-store/wrong_kind: '")
+                && err.to_string().contains("holds a buffer"),
+            "{err}"
+        );
+        assert_eq!(store.take_bytes(&id).unwrap(), vec![9u8; 12]);
+        assert_eq!(store.stats().bytes, 0);
+    }
+
+    #[test]
+    fn a_session_is_not_bytes_and_a_failed_take_leaves_it_in_place() {
+        let store = MeshStore::new(1 << 20);
+        let id = store.put(client("c"), hollow_session());
+        assert_eq!(store.stats().bytes, 3 * 12 + 12);
+        assert_eq!(store.read_bytes(&id).unwrap_err().code(), "wrong_kind");
+        assert_eq!(store.take_bytes(&id).unwrap_err().code(), "wrong_kind");
+        assert!(store.hollow_source(&id).is_ok());
+    }
+
+    #[test]
+    fn a_soup_is_not_a_session() {
+        let store = MeshStore::new(1 << 20);
+        let id = store.put(client("c"), soup(36, 1));
+        let err = store.hollow_source(&id).unwrap_err();
+        assert_eq!(err.code(), "wrong_kind");
+        assert!(err.to_string().contains("not a hollow session"), "{err}");
     }
 }

@@ -61,16 +61,19 @@ test('streamed slice input excludes raw hollowing output and preserves the model
       case 'stage_mesh_binary_set':
         staged = new Uint8Array(args as Uint8Array);
         return {};
+      case 'mesh_store_open_client':
+        return 0;
+      case 'mesh_store_put':
+        return 'hollow-input';
       case 'mesh_hollow_staged':
         hollowCalls += 1;
-        // Native hollowing replaces the shared stage with raw f32 output.
-        staged = new Uint8Array(hollowed.buffer.slice(0));
-        return JSON.stringify({ removedVoxels: 1 });
-      case 'mesh_repair_read_positions':
-        // Reading positions copies, rather than consumes, that shared buffer.
-        return staged.slice();
-      case 'mesh_hollow_staged_read_cavity_positions':
-        return new Uint8Array(0);
+        // Native hollowing leaves its raw f32 output in the mesh store, by id.
+        return JSON.stringify({ removedVoxels: 1, meshId: 'hollow-result' });
+      case 'mesh_store_read':
+        assert.equal((args as { meshId: string }).meshId, 'hollow-result');
+        return new Uint8Array(hollowed.buffer.slice(0));
+      case 'mesh_store_drop':
+        return 1;
       case 'stage_mesh_binary_chunk': {
         const chunk = args as Uint8Array;
         const next = new Uint8Array(staged.length + chunk.length);

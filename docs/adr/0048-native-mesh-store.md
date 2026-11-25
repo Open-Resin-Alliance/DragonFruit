@@ -40,9 +40,10 @@ the sideloaded plugin runtime (slots by id).
 2. **Results are entries.** A command run on the store returns its result's id (as
    `meshId` in its JSON), and that id can be the next command's input. An operation never
    changes its input entry.
-3. **Entries are a closed enum.** A reader asks for the variant it needs. Only the triangle
-   soup exists now; indexed meshes, files, auxiliary buffers and sessions are added by the
-   family that first stores one, and asking for the wrong one becomes a coded error then.
+3. **Entries are a closed enum.** A reader asks for the variant it needs, and asking for
+   the wrong one is a coded error (`wrong_kind`). The triangle soup came first, and
+   hollowing added auxiliary buffers and sessions; indexed meshes and files are added by
+   the family that first stores one.
 4. **Lifetime is explicit, with a budget as the net.** Callers drop ids (a list at a time);
    a byte budget releases least-recently-used entries when a caller forgets. An operation
    holds its own reference while it runs, so a release only drops the store's. A released
@@ -75,7 +76,7 @@ the sideloaded plugin runtime (slots by id).
 - Callers must drop what they put. `withNativeMesh` (`nativeMeshStore.ts`) scopes an
   input to one pass, and results are released as they are read.
 - The staging slot, its file form and the 18 session slots stay until their families
-  move; they are deleted as each one does.
+  move; they are deleted as each one does. Hollowing's ten went first.
 
 ## Alternatives considered
 

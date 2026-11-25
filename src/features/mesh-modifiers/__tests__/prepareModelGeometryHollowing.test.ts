@@ -14,22 +14,24 @@ type InvokeCall = { cmd: string; args: unknown };
 // (node_modules/@tauri-apps/api/core.js:202), and meshHollowing.ts's
 // isTauriRuntime()/loadTauriCore() check lazily at call time, so re-installing
 // the window per test is sufficient even though loadTauriCore module-caches its
-// promise. Command names mirror the real hollowFromGeometry sequence
-// (meshHollowing.ts:199-212).
+// promise. Command names mirror the real hollowFromGeometry sequence on the
+// native mesh store (put, hollow by id, read the result, drop).
 function installFakeTauri(): InvokeCall[] {
   const calls: InvokeCall[] = [];
   const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
   const invoke = async (cmd: string, args?: unknown) => {
     calls.push({ cmd, args });
     switch (cmd) {
-      case 'stage_mesh_binary_set':
-        return undefined;
+      case 'mesh_store_open_client':
+        return 0;
+      case 'mesh_store_put':
+        return 'hollow-input';
       case 'mesh_hollow_staged':
-        return JSON.stringify({ removedVoxels: 10 });
-      case 'mesh_repair_read_positions':
+        return JSON.stringify({ removedVoxels: 10, meshId: 'hollow-result' });
+      case 'mesh_store_read':
         return new Uint8Array(positions.buffer.slice(0));
-      case 'mesh_hollow_staged_read_cavity_positions':
-        return new Uint8Array(0);
+      case 'mesh_store_drop':
+        return 1;
       default:
         throw new Error(`unexpected command: ${cmd}`);
     }
