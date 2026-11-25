@@ -228,17 +228,18 @@ export const TwigRenderer = React.memo(function TwigRenderer({
     },
     onSettled: () => clearTwigDragPreview(),
   });
+  const { start: startTipDrag, stop: stopTipDrag } = tipDrag;
 
   const startDiskDrag = React.useCallback((diskKey: 'contactDiskA' | 'contactDiskB', initialEvent?: any) => {
     if (!isSelected) return;
 
     activeDiskRef.current = diskKey;
-    tipDrag.start({
+    startTipDrag({
       event: initialEvent, camera, domElement: gl.domElement, scene,
       modelId: twig.modelId,
       placementSurface: (diskKey === 'contactDiskA' ? twig.contactDiskA : twig.contactDiskB).placementSurface,
     });
-  }, [camera, gl.domElement, isSelected, recomputeTwigForMovedDisk, scene, twig.id, twig.modelId]);
+  }, [camera, gl.domElement, isSelected, recomputeTwigForMovedDisk, scene, startTipDrag, twig.contactDiskA, twig.contactDiskB, twig.id, twig.modelId]);
 
   const handleContactDiskHudPointerDownA = React.useCallback((e: any) => {
     if (!isSelected) return;
@@ -253,8 +254,8 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   }, [isSelected, startDiskDrag]);
 
   const handleContactDiskHudPointerUp = React.useCallback(() => {
-    tipDrag.stop();
-  }, [tipDrag]);
+    stopTipDrag();
+  }, [stopTipDrag]);
 
   const effectiveTwig = tipDrag.preview ?? twig;
 

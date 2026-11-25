@@ -133,9 +133,6 @@
     "src/components/scene/camera/CameraControlsRecovery.tsx": [
       "CameraControlsRecovery"
     ],
-    "src/components/scene/camera/CameraFocusHotkeyController.tsx": [
-      "CameraFocusHotkeyController"
-    ],
     "src/components/scene/camera/CameraHomeResetController.tsx": [
       "CameraHomeResetController"
     ],
@@ -144,9 +141,6 @@
     ],
     "src/components/scene/camera/SpaceMouseController.tsx": [
       "SpaceMouseController"
-    ],
-    "src/components/scene/camera/useStlLoadCameraIntro.ts": [
-      "useStlLoadCameraIntro"
     ],
     "src/components/selection/SelectionSpotlight.tsx": [
       "SelectionSpotlight"
@@ -249,9 +243,6 @@
     "src/features/supports/useSupportInteractionManager.ts": [
       "useSupportInteractionManager"
     ],
-    "src/features/transform/useTransformManager.ts": [
-      "useTransformManager"
-    ],
     "src/features/updater/GlobalUpdateIndicator.tsx": [
       "GlobalUpdateIndicator"
     ],
@@ -313,9 +304,6 @@
     "src/supports/SupportPrimitives/Joint/useJointInteraction.ts": [
       "useJointInteraction"
     ],
-    "src/supports/SupportPrimitives/Knot/KnotGizmo.tsx": [
-      "KnotGizmo"
-    ],
     "src/supports/SupportProxyMeshLayer.tsx": [
       "SupportProxyMeshLayer"
     ],
@@ -324,12 +312,6 @@
     ],
     "src/supports/SupportTypes/Kickstand/KickstandPlacementController.tsx": [
       "KickstandPlacementController"
-    ],
-    "src/supports/SupportTypes/Stick/StickRenderer.tsx": [
-      "StickRenderer"
-    ],
-    "src/supports/SupportTypes/Twig/TwigRenderer.tsx": [
-      "TwigRenderer"
     ],
     "src/supports/SupportTypes/useContactDiskDragSession.ts": [
       "useContactDiskDragSession"
