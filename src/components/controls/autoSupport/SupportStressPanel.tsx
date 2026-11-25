@@ -250,7 +250,7 @@ function formatPrimaryIssueSubtitle(
     }
     case 'rocking': {
       const defl = fmt.quantity(topple?.complianceMm ?? 0, 2, 'mm');
-      return _(msg`Deflection (${defl}) exceeds rocking limit.`);
+      return _(msg`Part rocking (${defl}) exceeds the layer-shift limit.`);
     }
     case 'deficientRegions': {
       const regions = printability?.deficientRegions ?? 0;

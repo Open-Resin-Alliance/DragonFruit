@@ -208,7 +208,7 @@ function primaryIssueSentence(summary: SupportStressSummary, input: SupportStres
             return `Peak support utilization is ${summary.peakUtilizationPct.toFixed(0)}% (>= 75% warning band).`;
         case 'rocking':
             return topple
-                ? `Contact rocking (${topple.complianceMm.toFixed(3)}mm differential) exceeds the ${ROCKING_THRESHOLD_MM.toFixed(2)}mm layer-shift limit.`
+                ? `Part rocking (${topple.complianceMm.toFixed(3)}mm differential) exceeds the ${ROCKING_THRESHOLD_MM.toFixed(2)}mm layer-shift limit.`
                 : 'Support frame deflection exceeds the rocking limit.';
         case 'deficientRegions':
             return printability
@@ -272,7 +272,7 @@ export function supportStressReportToText(input: SupportStressReportInput): stri
         lines.push(
             `  Support load: tip max ${frame.maxTipUtilizationPct.toFixed(0)}% (${frame.overloadedTips} over) · `
             + `frame max ${frame.maxMemberUtilizationPct.toFixed(0)}% (${frame.overloadedMembers} over) · `
-            + `max defl ${frame.maxTipDeflectionMm.toFixed(3)}mm`,
+            + `max leaf defl ${frame.maxTipDeflectionMm.toFixed(3)}mm`,
         );
     }
     if (topple) {
@@ -355,7 +355,7 @@ export function supportStressReportToText(input: SupportStressReportInput): stri
         lines.push(
             `  Utilization: tip max ${frame.maxTipUtilizationPct.toFixed(0)}% (${frame.overloadedTips} over) · `
             + `member max ${frame.maxMemberUtilizationPct.toFixed(0)}% (${frame.overloadedMembers} over) · `
-            + `max defl ${frame.maxTipDeflectionMm.toFixed(3)}mm`,
+            + `max leaf defl ${frame.maxTipDeflectionMm.toFixed(3)}mm`,
         );
         if (frame.hotspots.length > 0) {
             lines.push(`  Hotspots (${frame.hotspots.length}):`);

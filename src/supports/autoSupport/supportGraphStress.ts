@@ -107,13 +107,14 @@ export interface SupportFrameStressReport {
     maxMemberUtilizationPct: number;
     overloadedMembers: number;
     maxTipDeflectionMm: number;
-    /** Differential (max−min) contact displacement along the layer's drag
-     *  direction, across all evaluated layers (mm). This is the rocking / layer
-     *  shift of the part; `maxTipDeflectionMm` is a single tip's elastic sag. */
+    /** Fitted rigid-body rotation range along the layer's drag direction,
+     *  across all evaluated layers (mm). This is the part's rocking / layer
+     *  shift; `maxTipDeflectionMm` is a single tip's elastic sag. */
     maxTipRockingMm: number;
     solverMode: 'frame3d' | 'rigidBodyOnly';
-    /** At the worst-rocking layer, the two free tips whose contact displacement
-     *  differs most along the drag axis. The pair a cross-brace should tie. */
+    /** At the worst-rocking layer, the two tips at the extremes of the fitted
+     *  rigid-body rotation (the rotation lever arms). The pair a cross-brace
+     *  should tie. */
     rockingPair?: {
         aEntityId: string;
         bEntityId: string;
@@ -1297,6 +1298,43 @@ function selectCriticalLayers(
  * Uses Block-Jacobi Preconditioned Conjugate Gradient on the assembled 6-DOF
  * per-node stiffness matrix (fast, zero allocations in the inner loop).
  */
+/**
+ * The part's rocking along the layer drag axis: the range of the best-fitting
+ * planar rigid-body rotation `p = a + θ·(-nx·y + ny·x)` across the tips.
+ * A leaf bending under its own peel share moves its contact locally, but the
+ * cured part is one rigid layer; only the rigid rotation is the layer shift.
+ * The raw max−min of tip displacements reported ~3 mm on prints that work.
+ */
+export function rigidBodyRockingMm(
+    points: ReadonlyArray<{ pos: { x: number; y: number }; dx: number; dy: number }>,
+): number {
+    if (points.length < 2) return 0;
+    const nx = Math.SQRT1_2;
+    const ny = Math.SQRT1_2;
+    let count = 0;
+    let sumS = 0;
+    let sumP = 0;
+    let sumSS = 0;
+    let sumSP = 0;
+    let minS = Infinity;
+    let maxS = -Infinity;
+    for (const point of points) {
+        const s = -nx * point.pos.y + ny * point.pos.x;
+        const p = point.dx * nx + point.dy * ny;
+        count++;
+        sumS += s;
+        sumP += p;
+        sumSS += s * s;
+        sumSP += s * p;
+        if (s < minS) minS = s;
+        if (s > maxS) maxS = s;
+    }
+    const denom = sumSS - (sumS * sumS) / count;
+    if (denom <= 1e-12) return 0;
+    const theta = (sumSP - (sumS * sumP) / count) / denom;
+    return Math.abs(theta) * (maxS - minS);
+}
+
 export function solveSupportFrameStress(
     graph: SupportGraph,
     profile: RepresentativeLayerProfile | undefined,
@@ -1536,10 +1574,10 @@ export function solveSupportFrameStress(
     let maxTipUtilizationPct = 0;
     let maxMemberUtilizationPct = 0;
     let maxTipDeflectionMm = 0;
-    // Rocking: the range of contact displacement along the layer's coherent
-    // drag direction. `maxTipDeflectionMm` is an elastic sag (one thin leaf
-    // bending under its own peel share); the part's layer shift is how far the
-    // contact set moves relative to itself, which is a differential.
+    // Rocking: the range of the fitted rigid-body rotation along the layer's
+    // coherent drag direction. `maxTipDeflectionMm` is an elastic sag (one thin
+    // leaf bending under its own peel share); the part's layer shift is only
+    // the rotation the whole contact set shares, not that local sag.
     let maxTipRockingMm = 0;
     let worstRockingPair: SupportFrameStressReport['rockingPair'] | undefined;
     let worstTipDisplacements: SupportFrameStressReport['tipDisplacements'] | undefined;
@@ -1634,10 +1672,6 @@ export function solveSupportFrameStress(
         if (solverMode === 'frame3d') {
             solveCG();
 
-            let tipProjectionMin = Infinity;
-            let tipProjectionMax = -Infinity;
-            let minTipIndex = -1;
-            let maxTipIndex = -1;
             const layerTipDisplacements: NonNullable<SupportFrameStressReport['tipDisplacements']> = [];
             for (const ni of tipNodes) {
                 const fIdx = freeMap[ni];
@@ -1648,16 +1682,6 @@ export function solveSupportFrameStress(
                 const dz = u[base + 2];
                 const defl = Math.hypot(dx, dy, dz);
                 if (defl > maxTipDeflectionMm) maxTipDeflectionMm = defl;
-                // Same coherent drag direction the layer's lateral load uses.
-                const projection = dx * Math.SQRT1_2 + dy * Math.SQRT1_2;
-                if (projection < tipProjectionMin) {
-                    tipProjectionMin = projection;
-                    minTipIndex = ni;
-                }
-                if (projection > tipProjectionMax) {
-                    tipProjectionMax = projection;
-                    maxTipIndex = ni;
-                }
                 const node = graph.nodes[ni];
                 layerTipDisplacements.push({
                     entityId: node.entityId,
@@ -1667,23 +1691,41 @@ export function solveSupportFrameStress(
                     dz,
                 });
             }
-            if (tipProjectionMax > tipProjectionMin) {
-                const rocking = tipProjectionMax - tipProjectionMin;
-                if (rocking > maxTipRockingMm) {
-                    maxTipRockingMm = rocking;
-                    if (minTipIndex >= 0 && maxTipIndex >= 0) {
-                        const a = graph.nodes[minTipIndex];
-                        const b = graph.nodes[maxTipIndex];
-                        worstRockingPair = {
-                            aEntityId: a.entityId ?? a.id,
-                            bEntityId: b.entityId ?? b.id,
-                            aPos: a.pos,
-                            bPos: b.pos,
-                            layerZMm: layer.zMm,
-                            differentialMm: rocking,
-                        };
-                        worstTipDisplacements = layerTipDisplacements;
+
+            // The part is one cured rigid layer; a support leaf bending under
+            // its own load is compliance, not the part rocking. Fit a planar
+            // rigid-body rotation to the drag-direction projection and take the
+            // fitted range; the raw max−min included each leaf's 1–3 mm sag.
+            const rocking = rigidBodyRockingMm(layerTipDisplacements);
+            if (rocking > maxTipRockingMm) {
+                const nx = Math.SQRT1_2;
+                const ny = Math.SQRT1_2;
+                let minS = Infinity;
+                let maxS = -Infinity;
+                let minD: (typeof layerTipDisplacements)[number] | undefined;
+                let maxD: (typeof layerTipDisplacements)[number] | undefined;
+                for (const d of layerTipDisplacements) {
+                    const s = -nx * d.pos.y + ny * d.pos.x;
+                    if (s < minS) {
+                        minS = s;
+                        minD = d;
                     }
+                    if (s > maxS) {
+                        maxS = s;
+                        maxD = d;
+                    }
+                }
+                if (minD && maxD) {
+                    maxTipRockingMm = rocking;
+                    worstRockingPair = {
+                        aEntityId: minD.entityId ?? 'tip',
+                        bEntityId: maxD.entityId ?? 'tip',
+                        aPos: minD.pos,
+                        bPos: maxD.pos,
+                        layerZMm: layer.zMm,
+                        differentialMm: rocking,
+                    };
+                    worstTipDisplacements = layerTipDisplacements;
                 }
             }
 

@@ -417,16 +417,20 @@ whole-frame structural stress on the assembled forest via
     component of the representative layer's Stefan mask
     (`maskComponentLabels`): a tip in a disconnected island cannot transfer
     shear through material that is not there, so each component carries its own
-    vertical share; an unassigned tip stands alone. The rocking metric still
-    projects displacement along the coherent drag axis.
+    vertical share; an unassigned tip stands alone. The rocking metric projects
+    displacement along the coherent drag axis, then fits the part's rigid-body
+    rotation.
   - **The report now carries the data a corrective action needs, and a planner
     turns it into one.** At the worst-rocking layer, `rockingPair` names the two
-    free tips whose contact displacement differs most along the drag axis, and
-    `tipDisplacements` holds every free tip's `(dx, dy, dz)`.
+    tips at the extremes of the part's fitted rigid-body rotation (the rotation
+    lever arms), and `tipDisplacements` holds every free tip's raw
+    `(dx, dy, dz)`. The fit is `p = a + θ·(-nx·y + ny·x)` along the drag axis:
+    a leaf bending under its own peel share moves its contact locally, but the
+    cured part is one rigid layer, so only the fitted rotation is the layer
+    shift. The raw max−min of tip displacements reported ~3 mm on prints that
+    work; the fitted part rocking on the hand-supported Puck is 0.043 mm.
     `planStressActions` orders the fixes: `brace-rocking` for that pair when the
-    differential exceeds `ROCKING_THRESHOLD_MM` **and** a tip or member is also
-    over (rocking alone is reported, but a known-good 35 mm print measured
-    ~3 mm of elastic sway at 32 % contact load; bracing that is over-support),
+    fitted differential exceeds `ROCKING_THRESHOLD_MM`,
     `brace-member` for an
     overloaded leaf/branch (a cone at its thickness cap needs a shorter span,
     not a thicker tip) and for a trunk over `DEFAULT_TRUNK_BRACE_PCT` (200 %,
@@ -1094,15 +1098,15 @@ those into `pastEdge` / `rocking` (`> ROCKING_THRESHOLD_MM` 0.15 mm contact
 differential) / `adhesionBound`, and `toppleRiskNeedsCoverage` turns the report
 into the placement and coverage boolean.
 
-`complianceMm` reads `SupportFrameStressReport.maxTipRockingMm`, not
-`maxTipDeflectionMm`: rocking is a **differential**, the range of contact
-displacement along the layer's coherent drag direction (`max − min` over the tip
-DOFs). A single tip's deflection magnitude is an elastic sag — one thin leaf
-bending under its own share — and using it marked whole poses as rocking on a
-floppy leaf while the part's contacts moved together. The two are reported
-separately (frame log, panel, text report: "Rocking offset"), and a symmetric
-frame under a symmetric peel reads ~0 differential even though each tip
-deflects.
+`complianceMm` reads `SupportFrameStressReport.maxTipRockingMm`, now the range
+of the **fitted rigid-body rotation** along the layer's coherent drag direction
+(`rigidBodyRockingMm`). A single tip's deflection magnitude is an elastic sag —
+one thin leaf bending under its own share — reported separately as
+`maxTipDeflectionMm`. The raw max−min of contact displacements still included
+that sag (and marked a 3 mm "rocking" on the hand- and auto-supported Puck
+prints that work); the fit removes it, and the same hand file reads 0.043 mm.
+A symmetric frame under a symmetric peel reads ~0 fitted rotation even though
+each tip deflects.
 
 The edge now travels with the pose: the Rust `StabilityReport` exposes
 `worst_edge_point_mm` / `worst_edge_normal` (pinned by the analytic fixture

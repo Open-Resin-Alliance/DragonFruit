@@ -13,15 +13,15 @@
  * is directly comparable to the 10–50 kPa peel band and to a measured pull-off,
  * so the number means something before `σ` exists.
  *
- * `complianceMm` is the frame solve's max tip deflection under the same peel:
- * a pose that rocks more than `ROCKING_THRESHOLD_MM` fails dimensionally even
- * when the contact never lifts.
+ * `complianceMm` is the frame solve's fitted rigid-body rocking under the same
+ * peel: a pose that rocks more than `ROCKING_THRESHOLD_MM` fails dimensionally
+ * even when the contact never lifts.
  */
 
 import { computeLayerPeelForceAndCop, computePeelLayerSamples } from './supportGraphStress';
 import type { RepresentativeLayerProfile, RepresentativeLayer } from './tractionOptimization';
 
-/** A tip displacement above this reads as rocking / layer-line shift. */
+/** A fitted part rotation differential above this reads as rocking / layer-line shift. */
 export const ROCKING_THRESHOLD_MM = 0.15;
 /** Conservative plate adhesion ceiling (MPa = 300 kPa; NOMINAL_PEEL_PRESSURE_MPA / CONSERVATIVE_P_SIGMA). */
 export const TOPPLE_ADHESION_THRESHOLD_MPA = 0.3;
@@ -42,7 +42,7 @@ export interface ToppleRiskInput {
     bearingAreaMm2: number;
     /** How far the bearing patch's own centroid sits inside the edge (mm). */
     contactDepthMm: number;
-    /** Frame rocking: the differential (max−min) contact displacement along the
+    /** Frame rocking: the fitted rigid-body rotation range along the
      *  drag direction under the same peel (mm), from `SupportFrameStressReport.maxTipRockingMm`. */
     frameRockingMm?: number;
 }

@@ -5,11 +5,10 @@
  * an over-capacity tip). This module says what to do about it, using only data
  * the solver measured, so a closed auto-support loop has a deterministic order:
  *
- * 1. `brace-rocking` — tie the two tips whose contact displacement differs most
- *    along the drag axis at the worst layer. This is the only action that
- *    targets the rocking metric; it is emitted only when a tip or member is
- *    also over (the known-good 3 mm sway measured at 32 % contact load is
- *    elastic, not a support failure), unless `rockingRequiresOverload: false`.
+ * 1. `brace-rocking` — tie the two extreme tips of the part's fitted rigid-body
+ *    rotation along the drag axis at the worst layer. This is the only action
+ *    that targets the rocking metric; the raw contact max−min was leaf sag, not
+ *    part motion.
  * 2. `brace-member` — an overloaded leaf or branch is a slender cone/shaft at
  *    its thickness cap; a mid-span brace shortens its effective span. Promotion
  *    to a branch with a real shaft is the next step if no host is in reach.
@@ -64,12 +63,6 @@ export interface StressActionOptions {
      *  thickened again: past this point the diameter is usually at a cap or
      *  clearance limit, and a thicker shaft cannot fit. */
     trunkBracePct?: number;
-    /** Brace a rocking pair even when no tip or member is over. Default `true`
-     *  (suppressed): rocking is a differential/layer-shift metric, and a
-     *  known-good 35 mm print measured ~3 mm of elastic sway with every contact
-     *  at 32 % — bracing it is how the loop over-supports a working model.
-     *  The report still states the rocking offset. */
-    rockingRequiresOverload?: boolean;
     /** Cap on returned actions, highest severity first. */
     maxActions?: number;
 }
@@ -123,15 +116,10 @@ export function planStressActions(
     const rockingLimitMm = Math.max(1e-6, options.rockingLimitMm ?? DEFAULT_ROCKING_LIMIT_MM);
     const memberTargetPct = Math.max(1, options.memberTargetPct ?? DEFAULT_MEMBER_TARGET_PCT);
     const trunkBracePct = Math.max(memberTargetPct, options.trunkBracePct ?? DEFAULT_TRUNK_BRACE_PCT);
-    const rockingRequiresOverload = options.rockingRequiresOverload ?? true;
     const maxActions = Math.max(1, options.maxActions ?? 12);
     const actions: StressAction[] = [];
-    const hasOverload = report.overloadedTips > 0
-        || report.overloadedMembers > 0
-        || report.hotspots.some((h) => (h.kind === 'tip' ? h.utilizationPct > 100 : h.utilizationPct > memberTargetPct));
 
-    if (report.rockingPair && report.maxTipRockingMm > rockingLimitMm
-        && (!rockingRequiresOverload || hasOverload)) {
+    if (report.rockingPair && report.maxTipRockingMm > rockingLimitMm) {
         actions.push({
             kind: 'brace-rocking',
             severity: report.maxTipRockingMm / rockingLimitMm,

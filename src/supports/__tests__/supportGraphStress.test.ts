@@ -12,6 +12,7 @@ import { resetKickstandsInState, resetStore } from '../state';
 import { computeAutoSupportPlan, forestReportToText } from '../autoSupport/autoPlace';
 import {
     buildSupportGraph,
+    rigidBodyRockingMm,
     computePeelLayerSamples,
     distributeRigidBodyPeelLoads,
     distributeRigidBodyDragLoads,
@@ -821,4 +822,28 @@ test('the material tensile strength scales tip utilization without moving geomet
     assert.ok(at12.maxMemberUtilizationPct > 0, `member loaded (${at12.maxMemberUtilizationPct})`);
     assert.ok(Math.abs(at12.maxMemberUtilizationPct / split.maxMemberUtilizationPct - 2) < 1e-6,
         `doubling member strength halves member utilization (${at12.maxMemberUtilizationPct} vs ${split.maxMemberUtilizationPct})`);
+});
+
+test('rocking is the rigid-body fit, not a local leaf sag', () => {
+    const sOf = (x: number, y: number) => (x - y) * Math.SQRT1_2;
+    const theta = 0.01;
+    const rigid: Array<{ pos: { x: number; y: number }; dx: number; dy: number }> = [
+        { pos: { x: 0, y: 0 }, dx: -theta * 0, dy: theta * 0 },
+        { pos: { x: 10, y: 0 }, dx: -theta * 0, dy: theta * 10 },
+        { pos: { x: 0, y: 10 }, dx: -theta * 10, dy: theta * 0 },
+        { pos: { x: 10, y: 10 }, dx: -theta * 10, dy: theta * 10 },
+    ];
+    const sValues = rigid.map((p) => sOf(p.pos.x, p.pos.y));
+    const expected = theta * (Math.max(...sValues) - Math.min(...sValues));
+    assert.ok(Math.abs(rigidBodyRockingMm(rigid) - expected) < 1e-9, 'pure rotation is recovered');
+
+    const translated = rigid.map((p) => ({ ...p, dx: 1, dy: 1 }));
+    assert.ok(rigidBodyRockingMm(translated) < 1e-9, 'rigid translation has no rocking');
+
+    const withCenterSag = [
+        ...rigid,
+        { pos: { x: 5, y: 5 }, dx: 3, dy: 0 },
+    ];
+    assert.ok(Math.abs(rigidBodyRockingMm(withCenterSag) - expected) < 1e-9,
+        'a local contact sag at the rotation center does not become part rocking');
 });

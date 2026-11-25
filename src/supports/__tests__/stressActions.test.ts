@@ -148,18 +148,3 @@ test('thicken actions carry the member midpoint for a brace fallback', () => {
         assert.deepEqual(action.pos, { x: 2, y: 1, z: 11 });
     }
 });
-
-test('rocking alone does not spend a brace, but an explicit request still plans it', () => {
-    const report = makeReport({
-        maxTipRockingMm: 3.143,
-        rockingPair: { ...ROCKING_PAIR, differentialMm: 3.143 },
-        maxTipUtilizationPct: 32,
-        hotspots: [
-            { entityId: 'tip-1', entityKind: 'leaf', kind: 'tip', utilizationPct: 32, layerZMm: 20.2, pos: { x: 3.5, y: 1.5, z: 16 } },
-        ],
-    });
-
-    assert.equal(planStressActions(report).length, 0, 'no contact/member overload → no brace');
-    const forced = planStressActions(report, { rockingRequiresOverload: false });
-    assert.equal(forced[0]?.kind, 'brace-rocking');
-});
