@@ -114,7 +114,7 @@ function detachedIsland(
 function detachedStartsScene(): { mesh: THREE.Mesh; islands: DetectedIsland[] } {
     const boxes = [
         new THREE.BoxGeometry(1, 0.5, 1).translate(-15, 0, 5.5),
-        new THREE.BoxGeometry(1.5, 1.5, 1).translate(0, 0, 10.5),
+        new THREE.BoxGeometry(1.9, 1.9, 1).translate(0, 0, 10.5),
         new THREE.BoxGeometry(4, 4, 1).translate(15, 0, 15.5),
     ];
     const geometry = mergeGeometries(boxes) ?? boxes[0];
@@ -125,7 +125,7 @@ function detachedStartsScene(): { mesh: THREE.Mesh; islands: DetectedIsland[] } 
         mesh,
         islands: [
             detachedIsland('start-tiny', -15, 0, 1, 0.5, 5),
-            detachedIsland('start-small', 0, 0, 1.5, 1.5, 10),
+            detachedIsland('start-small', 0, 0, 1.9, 1.9, 10),
             detachedIsland('start-large', 15, 0, 4, 4, 15),
         ],
     };
@@ -279,6 +279,58 @@ test('the forest report carries a start row per start and a summary line', () =>
         const text = forestReportToText(report);
         assert.match(text, /Starts: 3 \(0 under-supported\)/);
         assert.match(text, /start-large/);
+    } finally {
+        setModelMesh('m', null);
+        resetStore();
+        resetKickstandsInState();
+        setSettings(prev);
+    }
+});
+
+test('the generic passes alone leave a pancake; the closure removes it', () => {
+    initializeBVH();
+    const prev = getSettings();
+    try {
+        const settings = createDefaultSettings();
+        settings.grid.enabled = false;
+        setSettings(settings);
+        const { mesh, islands } = detachedStartsScene();
+        setModelMesh('m', mesh);
+
+        // "Before": the same islands with the start marker disabled, so only
+        // the generic overhang/area passes run (the pre-fix behavior).
+        const legacyIslands = islands.map((island) => ({ ...island, startIsland: false }));
+        resetStore();
+        const legacyPlan = computeAutoSupportPlan(
+            legacyIslands,
+            'm',
+            { debugSkipAutoBracing: true, stabilizationEnabled: false },
+            undefined,
+            mesh,
+        );
+        assert.ok(legacyPlan, 'legacy plan computed');
+        const legacyTips = collectSupportTips(legacyPlan.support, 'm');
+        const before = islands
+            .map((start) => assessStartSupport(start, legacyTips, mesh))
+            .filter((status) => status.pancakeRisk).length;
+
+        // "After": the normal run, start markers on.
+        resetStore();
+        const fixedPlan = computeAutoSupportPlan(
+            islands,
+            'm',
+            { debugSkipAutoBracing: true, stabilizationEnabled: false },
+            undefined,
+            mesh,
+        );
+        assert.ok(fixedPlan, 'fixed plan computed');
+        const fixedTips = collectSupportTips(fixedPlan.support, 'm');
+        const after = islands
+            .map((start) => assessStartSupport(start, fixedTips, mesh))
+            .filter((status) => status.pancakeRisk).length;
+
+        assert.ok(before > 0, `the generic passes leave at least one pancake (got ${before})`);
+        assert.equal(after, 0, 'the start closure leaves none');
     } finally {
         setModelMesh('m', null);
         resetStore();
