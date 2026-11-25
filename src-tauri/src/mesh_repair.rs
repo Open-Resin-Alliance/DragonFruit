@@ -1753,12 +1753,12 @@ pub async fn load_mesh_bytes(request: tauri::ipc::Request<'_>) -> Result<Respons
         .headers()
         .get("x-mesh-classify")
         .and_then(|value| value.to_str().ok())
-        .map_or(true, |value| value.trim() != "0");
+        .is_none_or(|value| value.trim() != "0");
     let refine = request
         .headers()
         .get("x-mesh-refine")
         .and_then(|value| value.to_str().ok())
-        .map_or(true, |value| value.trim() != "0");
+        .is_none_or(|value| value.trim() != "0");
     let bytes = match request.body() {
         tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
         tauri::ipc::InvokeBody::Json(_) => {
@@ -1985,7 +1985,10 @@ mod registry {
 
     const MESH_REGISTRY_CAP: usize = 8;
 
-    static REGISTRY: OnceLock<Mutex<VecDeque<(u32, Arc<IndexedMesh>)>>> = OnceLock::new();
+    /// Meshes waiting for their bake, oldest first, each under its token.
+    type Registry = Mutex<VecDeque<(u32, Arc<IndexedMesh>)>>;
+
+    static REGISTRY: OnceLock<Registry> = OnceLock::new();
     static NEXT_TOKEN: OnceLock<Mutex<u32>> = OnceLock::new();
 
     /// Keep `mesh` for its bake and return the token that names it.
