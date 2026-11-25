@@ -64,20 +64,20 @@
       "routerPlacements": 658,
       "routerCones": 17094,
       "routerProbes": 2752,
-      "totalMs": 5476.142500000001,
+      "totalMs": 8541.6204,
       "phases": {
-        "candidates": 63,
-        "dedup": 13,
-        "support-filter": 45,
-        "placement": 877,
-        "consolidation": 44,
-        "gap-fill": 91,
-        "analytics": 6,
+        "candidates": 101,
+        "dedup": 22,
+        "support-filter": 65,
+        "placement": 1409,
+        "consolidation": 70,
+        "gap-fill": 143,
+        "analytics": 5,
         "fanning": 0,
-        "surface-coverage": 0,
-        "resize": 3180,
-        "report": 22,
-        "bracing": 1090
+        "surface-coverage": 1,
+        "resize": 5137,
+        "report": 25,
+        "bracing": 1496
       }
     },
     {
@@ -135,20 +135,20 @@
       "routerPlacements": 39,
       "routerCones": 1144,
       "routerProbes": 435,
-      "totalMs": 153.10900000000038,
+      "totalMs": 285.6816999999992,
       "phases": {
-        "candidates": 8,
+        "candidates": 13,
         "dedup": 1,
-        "support-filter": 3,
-        "placement": 44,
-        "consolidation": 2,
-        "gap-fill": 5,
-        "analytics": 1,
+        "support-filter": 5,
+        "placement": 94,
+        "consolidation": 3,
+        "gap-fill": 7,
+        "analytics": 0,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 73,
-        "report": 1,
-        "bracing": 13
+        "resize": 118,
+        "report": 2,
+        "bracing": 39
       }
     },
     {
@@ -200,20 +200,20 @@
       "routerPlacements": 19,
       "routerCones": 504,
       "routerProbes": 56,
-      "totalMs": 79.43580000000111,
+      "totalMs": 127.63590000000113,
       "phases": {
-        "candidates": 7,
-        "dedup": 0,
-        "support-filter": 3,
-        "placement": 23,
-        "consolidation": 3,
-        "gap-fill": 1,
+        "candidates": 11,
+        "dedup": 1,
+        "support-filter": 2,
+        "placement": 36,
+        "consolidation": 4,
+        "gap-fill": 2,
         "analytics": 0,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 12,
-        "report": 1,
-        "bracing": 20
+        "resize": 21,
+        "report": 2,
+        "bracing": 38
       }
     },
     {
@@ -221,7 +221,7 @@
       "exercises": "a 25 degree underside: cells sample the real face normal, so the cone axis policy and the contact gates run on sloped geometry",
       "islands": 1,
       "islandSource": "authored",
-      "candidates": 402,
+      "candidates": 403,
       "entities": 382,
       "placedByType": {
         "trunk": 46,
@@ -265,27 +265,27 @@
         "cavityFallbacks": 87
       },
       "rejections": {
-        "trunk_build_error": 91,
+        "trunk_build_error": 92,
         "grid_reject_other": 45
       },
       "deterministic": true,
-      "routerPlacements": 567,
-      "routerCones": 22218,
+      "routerPlacements": 568,
+      "routerCones": 22268,
       "routerProbes": 73127,
-      "totalMs": 5598.2664,
+      "totalMs": 9110.212500000001,
       "phases": {
-        "candidates": 19,
-        "dedup": 3,
-        "support-filter": 24,
-        "placement": 1501,
-        "consolidation": 201,
-        "gap-fill": 58,
-        "analytics": 5,
+        "candidates": 30,
+        "dedup": 4,
+        "support-filter": 52,
+        "placement": 2597,
+        "consolidation": 316,
+        "gap-fill": 93,
+        "analytics": 10,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 2475,
-        "report": 8,
-        "bracing": 926
+        "resize": 4021,
+        "report": 15,
+        "bracing": 1347
       }
     },
     {
@@ -293,7 +293,7 @@
       "exercises": "a 60 degree face classified as a steep flat: sparse toppling contact instead of formation density, plus stabilization anchors on the low edge",
       "islands": 1,
       "islandSource": "authored",
-      "candidates": 31,
+      "candidates": 32,
       "entities": 18,
       "placedByType": {
         "trunk": 6,
@@ -336,26 +336,26 @@
       "rejections": {
         "trunk_build_error": 11,
         "grid_reject_collision": 5,
-        "grid_reject_other": 4
+        "grid_reject_other": 5
       },
       "deterministic": true,
-      "routerPlacements": 64,
-      "routerCones": 1784,
+      "routerPlacements": 67,
+      "routerCones": 1812,
       "routerProbes": 10463,
-      "totalMs": 104.47860000000037,
+      "totalMs": 202.88960000000225,
       "phases": {
-        "candidates": 12,
+        "candidates": 21,
         "dedup": 1,
         "support-filter": 1,
-        "placement": 55,
-        "consolidation": 0,
-        "gap-fill": 12,
-        "analytics": 2,
-        "fanning": 0,
+        "placement": 95,
+        "consolidation": 1,
+        "gap-fill": 26,
+        "analytics": 3,
+        "fanning": 1,
         "surface-coverage": 0,
-        "resize": 0,
-        "report": 2,
-        "bracing": 18
+        "resize": 1,
+        "report": 3,
+        "bracing": 48
       }
     },
     {
@@ -407,15 +407,15 @@
       "routerPlacements": 245,
       "routerCones": 9669,
       "routerProbes": 763286,
-      "totalMs": 857.8548999999985,
+      "totalMs": 1374.6240999999973,
       "phases": {
-        "candidates": 12,
-        "dedup": 3,
-        "support-filter": 22,
-        "placement": 799,
+        "candidates": 17,
+        "dedup": 1,
+        "support-filter": 16,
+        "placement": 1293,
         "consolidation": 0,
-        "gap-fill": 18,
-        "analytics": 3,
+        "gap-fill": 34,
+        "analytics": 9,
         "fanning": 0,
         "surface-coverage": 0,
         "resize": 0,
@@ -468,7 +468,7 @@
       "routerPlacements": 0,
       "routerCones": 0,
       "routerProbes": 0,
-      "totalMs": 0.6126000000003842,
+      "totalMs": 0.8774999999986903,
       "phases": {}
     }
   ]

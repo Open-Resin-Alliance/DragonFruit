@@ -60,20 +60,20 @@
       "routerPlacements": 60,
       "routerCones": 195,
       "routerProbes": 203,
-      "totalMs": 3542.6805,
+      "totalMs": 5952.358700000001,
       "phases": {
-        "candidates": 68,
-        "dedup": 13,
-        "support-filter": 49,
-        "placement": 812,
-        "consolidation": 43,
-        "gap-fill": 55,
-        "analytics": 8,
+        "candidates": 104,
+        "dedup": 17,
+        "support-filter": 72,
+        "placement": 1382,
+        "consolidation": 72,
+        "gap-fill": 89,
+        "analytics": 6,
         "fanning": 0,
         "surface-coverage": 1,
-        "resize": 1914,
-        "report": 17,
-        "bracing": 359
+        "resize": 3232,
+        "report": 21,
+        "bracing": 622
       }
     },
     {
@@ -131,20 +131,20 @@
       "routerPlacements": 10,
       "routerCones": 285,
       "routerProbes": 109,
-      "totalMs": 117.03009999999995,
+      "totalMs": 193.52000000000044,
       "phases": {
-        "candidates": 8,
+        "candidates": 10,
         "dedup": 1,
-        "support-filter": 3,
-        "placement": 48,
-        "consolidation": 5,
-        "gap-fill": 4,
+        "support-filter": 5,
+        "placement": 80,
+        "consolidation": 9,
+        "gap-fill": 6,
         "analytics": 0,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 17,
-        "report": 1,
-        "bracing": 27
+        "resize": 33,
+        "report": 2,
+        "bracing": 40
       }
     },
     {
@@ -197,12 +197,12 @@
       "routerPlacements": 2,
       "routerCones": 2,
       "routerProbes": 0,
-      "totalMs": 46.8092000000006,
+      "totalMs": 55.43789999999899,
       "phases": {
-        "candidates": 7,
-        "dedup": 0,
-        "support-filter": 1,
-        "placement": 21,
+        "candidates": 10,
+        "dedup": 1,
+        "support-filter": 2,
+        "placement": 25,
         "consolidation": 0,
         "gap-fill": 1,
         "analytics": 0,
@@ -210,7 +210,7 @@
         "surface-coverage": 0,
         "resize": 1,
         "report": 1,
-        "bracing": 13
+        "bracing": 15
       }
     },
     {
@@ -218,7 +218,7 @@
       "exercises": "a 25 degree underside: cells sample the real face normal, so the cone axis policy and the contact gates run on sloped geometry",
       "islands": 1,
       "islandSource": "authored",
-      "candidates": 401,
+      "candidates": 402,
       "entities": 473,
       "placedByType": {
         "trunk": 47,
@@ -263,26 +263,26 @@
         "cavityFallbacks": 76
       },
       "rejections": {
-        "trunk_build_error": 83
+        "trunk_build_error": 84
       },
       "deterministic": true,
-      "routerPlacements": 254,
-      "routerCones": 11469,
+      "routerPlacements": 255,
+      "routerCones": 11519,
       "routerProbes": 18125,
-      "totalMs": 4791.74,
+      "totalMs": 7763.203599999999,
       "phases": {
-        "candidates": 19,
-        "dedup": 6,
-        "support-filter": 41,
-        "placement": 2066,
-        "consolidation": 311,
-        "gap-fill": 136,
-        "analytics": 5,
+        "candidates": 30,
+        "dedup": 9,
+        "support-filter": 47,
+        "placement": 3395,
+        "consolidation": 496,
+        "gap-fill": 266,
+        "analytics": 9,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 913,
-        "report": 7,
-        "bracing": 827
+        "resize": 1496,
+        "report": 12,
+        "bracing": 1246
       }
     },
     {
@@ -290,7 +290,7 @@
       "exercises": "a 60 degree face classified as a steep flat: sparse toppling contact instead of formation density, plus stabilization anchors on the low edge",
       "islands": 1,
       "islandSource": "authored",
-      "candidates": 31,
+      "candidates": 32,
       "entities": 20,
       "placedByType": {
         "trunk": 6,
@@ -333,24 +333,24 @@
       "rejections": {
         "trunk_build_error": 11,
         "grid_reject_collision": 5,
-        "grid_reject_other": 4
+        "grid_reject_other": 5
       },
       "deterministic": true,
-      "routerPlacements": 35,
-      "routerCones": 1261,
+      "routerPlacements": 36,
+      "routerCones": 1262,
       "routerProbes": 8637,
-      "totalMs": 113.8719000000001,
+      "totalMs": 138.3767000000007,
       "phases": {
-        "candidates": 8,
+        "candidates": 12,
         "dedup": 1,
         "support-filter": 1,
-        "placement": 41,
+        "placement": 48,
         "consolidation": 1,
-        "gap-fill": 13,
-        "analytics": 3,
+        "gap-fill": 26,
+        "analytics": 2,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 1,
+        "resize": 0,
         "report": 3,
         "bracing": 41
       }
@@ -404,15 +404,15 @@
       "routerPlacements": 135,
       "routerCones": 6750,
       "routerProbes": 760990,
-      "totalMs": 1052.1571000000004,
+      "totalMs": 1298.7200999999986,
       "phases": {
-        "candidates": 13,
-        "dedup": 1,
-        "support-filter": 16,
-        "placement": 992,
+        "candidates": 18,
+        "dedup": 4,
+        "support-filter": 20,
+        "placement": 1213,
         "consolidation": 0,
-        "gap-fill": 25,
-        "analytics": 4,
+        "gap-fill": 33,
+        "analytics": 8,
         "fanning": 0,
         "surface-coverage": 0,
         "resize": 0,
@@ -465,7 +465,7 @@
       "routerPlacements": 0,
       "routerCones": 0,
       "routerProbes": 0,
-      "totalMs": 0.5368999999991502,
+      "totalMs": 0.873700000000099,
       "phases": {}
     }
   ]
