@@ -105,6 +105,10 @@ export interface DetectedIsland {
   /** Contact lies on a cavity (internal) surface. Filled by the auto-support
    *  run from the cavity mesh; absent on scan output. */
   interior?: boolean;
+  /** Lowest connected cross-section of a detached island, i.e. a start with
+   *  nothing below it. Stamped by the auto-support run from `isDetached`; the
+   *  start recipe and the forest report read this one field. */
+  startIsland?: boolean;
 
   // --- voxel-detector extras (undefined for minima) ---
   /** Contact footprint area at the island's base layer (mm^2). */
