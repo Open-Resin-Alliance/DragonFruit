@@ -29,8 +29,14 @@ export const START_SUPPORT_CONSTANTS = {
     largeMinContacts: 3,
     /** Starts are peel-initiation surfaces; the overhang 95% target is not enough. */
     coverageTarget: 0.99,
-    /** Contacts on the same cross-section only. One layer (0.05 mm) plus snap/drift. */
-    sameLayerBandMm: 0.25,
+    /**
+     * Contacts on the same cross-section only. 0.75 mm covers one layer plus
+     * the surface-snap error seen on real LYS/refined meshes: the scan contact
+     * sits at the voxel birth layer, the support cone lands on the rendered
+     * face ~0.4 mm above it. 0.25 rejected that valid contact, so the closure
+     * added it again every pass and never counted it.
+     */
+    sameLayerBandMm: 0.75,
     /** Coverage discs: small footprint, dense patch; large footprint, wider base. */
     tinyRadiusMm: 1.2,
     smallRadiusMm: 1.8,
