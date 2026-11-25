@@ -6,6 +6,7 @@ import type { SupportState } from '../types';
 import { SUPPORT_STATE_TYPES, contactEndpointsFor } from '../supportTypeRegistry';
 import { cellKey, footprintX, footprintY, footprintZ } from '@/volumeAnalysis/Islands/voxelFootprint';
 import { bridgeRadiusForAngleDeg, influenceRadiusMm } from './constants';
+import { HIGH_LEVERAGE_SPAN_MM, HoldingTipIndex, longestFreeSpanCell } from './supportSpan';
 
 /** A tip covers surface within this radius (mm) — mirrors ALREADY_SUPPORTED_RADIUS_MM. */
 export const TIP_COVERAGE_RADIUS_MM = 3.0;
@@ -288,6 +289,7 @@ export function findUncoveredClusters(
     allowZeroTips: boolean = false,
     layerHeightMm: number = 0.05,
     mesh?: THREE.Mesh,
+    minClusterSpanMm: number = HIGH_LEVERAGE_SPAN_MM,
 ): Array<{ x: number; y: number; z: number }> {
     const voxels = region.contactVoxels;
     if (!voxels || voxels.count === 0) return [];
@@ -351,7 +353,19 @@ export function findUncoveredClusters(
         }
 
         const areaMm2 = cluster.length * 0.25 * 0.25;
-        if (areaMm2 < minClusterMm2) continue;
+        if (areaMm2 < minClusterMm2) {
+            // A long thin bare sliver has little area but a real unsupported
+            // span; the old area-only floor skipped it while the printability
+            // span check warned about it.
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const v of cluster) {
+                if (v.x < minX) minX = v.x;
+                if (v.y < minY) minY = v.y;
+                if (v.x > maxX) maxX = v.x;
+                if (v.y > maxY) maxY = v.y;
+            }
+            if (Math.max(maxX - minX, maxY - minY) < minClusterSpanMm) continue;
+        }
 
         // Centroid + surface Z from the nearest voxel to the centroid.
         let sumX = 0;
@@ -478,24 +492,51 @@ export function buildGapFillCandidates(
             ? tips
             : tips.filter((t) => !tipBelongsToLowerFlatRegion(t, region, overhangIslands));
         const radius = coverageRadiusForRegion(region);
-        if (computeRegionCoverage(region, regionTips, radius, mesh) >= coverageTarget) continue;
-
+        const coverage = computeRegionCoverage(region, regionTips, radius, mesh);
         const emitted: Array<{ x: number; y: number; z: number }> = [];
-        const clusters = findUncoveredClusters(region, regionTips, radius, MIN_GAP_CLUSTER_MM2, true, layerHeightMm, mesh);
-        for (const c of clusters) {
-            emitted.push(c);
-            out.push({
-                id: `gap-${region.id}-${c.x.toFixed(2)}-${c.y.toFixed(2)}`,
-                tipPos: { x: c.x, y: c.y, z: c.z },
-                tipNormal: region.surfaceNormal ?? { x: 0, y: 0, z: -1 },
-                modelId: '',
-                source: 'overhang',
-                islandAreaMm2: settings.areaPerSupportMm2,
-                zHeight: c.z,
-                priority: 0,
-                gridPoint: true,
-                interior: region.interior,
-            });
+
+        if (coverage < coverageTarget) {
+            const clusters = findUncoveredClusters(region, regionTips, radius, MIN_GAP_CLUSTER_MM2, true, layerHeightMm, mesh);
+            for (const c of clusters) {
+                emitted.push(c);
+                out.push({
+                    id: `gap-${region.id}-${c.x.toFixed(2)}-${c.y.toFixed(2)}`,
+                    tipPos: { x: c.x, y: c.y, z: c.z },
+                    tipNormal: region.surfaceNormal ?? { x: 0, y: 0, z: -1 },
+                    modelId: '',
+                    source: 'overhang',
+                    islandAreaMm2: settings.areaPerSupportMm2,
+                    zHeight: c.z,
+                    priority: 0,
+                    gridPoint: true,
+                    interior: region.interior,
+                });
+            }
+        }
+
+        // Coverage is a disc radius; it does not say how far a footprint cell
+        // is from the nearest holding tip. A covered region with a long free
+        // span is still a cantilever, so add one contact at its worst cell even
+        // when the coverage target is met.
+        const spanCell = longestFreeSpanCell(region, new HoldingTipIndex(regionTips), region.baseZ);
+        if (spanCell && spanCell.spanMm >= HIGH_LEVERAGE_SPAN_MM) {
+            const cell = spanCell.cell;
+            const near = emitted.some((other) => Math.hypot(other.x - cell.x, other.y - cell.y) < 0.75);
+            if (!near) {
+                emitted.push(cell);
+                out.push({
+                    id: `span-${region.id}-${cell.x.toFixed(2)}-${cell.y.toFixed(2)}`,
+                    tipPos: cell,
+                    tipNormal: region.surfaceNormal ?? { x: 0, y: 0, z: -1 },
+                    modelId: '',
+                    source: 'overhang',
+                    islandAreaMm2: settings.areaPerSupportMm2,
+                    zHeight: cell.z,
+                    priority: 0,
+                    gridPoint: true,
+                    interior: region.interior,
+                });
+            }
         }
 
         // Perimeter-first fill. A cluster centroid covers the middle of a bare

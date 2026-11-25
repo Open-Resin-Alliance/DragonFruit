@@ -205,9 +205,18 @@ combined with footprint area via `coverageRadiusForRegion`) rather than a single
 - Large flat regions still pack denser via `coverageRadiusForArea` (floored at
   half radius).
 
-A region needs no gap filling once `REGION_COVERAGE_TARGET` (95%) is met;
-uncovered clusters below `MIN_GAP_CLUSTER_MM2` (1.5 mm²) are skipped, and there
-are at most `MAX_GAP_FILL_PASSES` (3) passes per run. In `deduplicateCandidates`,
+A region needs no uncovered-cluster fill once `REGION_COVERAGE_TARGET` (95%) is
+met; uncovered clusters below `MIN_GAP_CLUSTER_MM2` (1.5 mm²) are skipped
+**unless** their extent reaches `HIGH_LEVERAGE_SPAN_MM` (4 mm), so a long thin
+bare sliver (a 5 mm × 0.25 mm line is 0.3 mm²) still gets a contact. Coverage is
+a disc test and cannot see distance: `buildGapFillCandidates` also indexes the
+region's holding tips (`HoldingTipIndex`, `supportSpan.ts`), measures every
+footprint cell's plan distance to the nearest tip at or below it, and adds one
+contact at the longest free span when that span is ≥
+`HIGH_LEVERAGE_SPAN_MM` — even on a region whose coverage target is met. A
+region carries at most one such span contact per pass, deduped against the
+cluster contacts, and there are at most `MAX_GAP_FILL_PASSES` (3) passes per
+run. In `deduplicateCandidates`,
 flat overhang pairs (`|nz| > 0.90`) use the flat 3D ball so a lower heel never
 erases higher-Z toe tips on gently tilted soles; sloped overhang pairs still use
 the grown 2D disc (subject to `SUPPORT_RESTSTACK_DELTA_MM`, 5 mm), and discrete

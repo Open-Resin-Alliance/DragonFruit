@@ -13,6 +13,7 @@ import {
     REGION_COVERAGE_TARGET,
 } from '../autoSupport/coverage';
 import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
+import { HIGH_LEVERAGE_SPAN_MM } from '../autoSupport/supportSpan';
 import { DEFAULT_TIP_PROFILE } from '../SupportPrimitives/ContactCone/types';
 import type { ContactCone, ContactDiskProfile } from '../SupportPrimitives/ContactCone/types';
 import type { ContactDisk, SupportState, Vec3 } from '../types';
@@ -104,6 +105,46 @@ test('fully covered region gets no gap-fill candidates', () => {
     const settings = createDefaultAutoSupportSettings();
     const candidates = buildGapFillCandidates([region], settings, tips);
     assert.equal(candidates.length, 0, 'coverage target met → no fill');
+});
+
+test('a thin uncovered sliver below the area floor still counts as a gap when it spans', () => {
+    // 5mm × 0.25mm bare line = 1.31mm², under MIN_GAP_CLUSTER_MM2 (1.5) but a
+    // 5mm unsupported span. The old area-only floor dropped it.
+    const voxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -2.5; x <= 2.5 + 1e-9; x += 0.25) voxels.push({ x, y: 0, z: 10 });
+    const region: DetectedIsland = {
+        ...rectRegion('sliver', -2.5, 2.5, 0, 0),
+        areaMm2: 1.3125,
+        contactVoxels: footprintFromPoints(voxels),
+    };
+    const tips = [{ x: 0, y: -10, z: 10 }];
+    const clusters = findUncoveredClusters(region, tips);
+    assert.equal(clusters.length, 1, 'thin long bare sliver is a gap cluster');
+    assert.ok(5 >= HIGH_LEVERAGE_SPAN_MM);
+
+    const candidates = buildGapFillCandidates([region], createDefaultAutoSupportSettings(), tips);
+    assert.ok(candidates.some((c) => c.id.startsWith('gap-sliver')), 'sliver gets a gap candidate');
+});
+
+test('a covered region with a long free span still gets one span contact', () => {
+    // 8×2mm sloped strip, tips 15mm below: grown 4.5mm discs cover every cell
+    // (coverage target met) but the centre is 4.12mm from the nearest holding
+    // tip, so the cantilever needs a contact of its own.
+    const region: DetectedIsland = {
+        ...rectRegion('bridge', -4, 4, -1, 1, 10),
+        areaMm2: 16,
+        overhangAngleDeg: 35,
+    };
+    const tips = [
+        { x: -4, y: 0, z: -5 },
+        { x: 4, y: 0, z: -5 },
+    ];
+    assert.ok(computeRegionCoverage(region, tips) >= REGION_COVERAGE_TARGET, 'coverage target met');
+
+    const candidates = buildGapFillCandidates([region], createDefaultAutoSupportSettings(), tips);
+    const span = candidates.filter((c) => c.id.startsWith('span-bridge'));
+    assert.equal(span.length, 1, 'exactly one span contact at the longest free span');
+    assert.ok(Math.abs(span[0].tipPos.x) < 0.3, 'span contact sits at the strip centre');
 });
 
 test('coverage target constant is below 1 so edge voxels do not force infinite fill', () => {

@@ -34,7 +34,7 @@
 
 import type * as THREE from 'three';
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
-import { footprintX, footprintY, footprintZ } from '@/volumeAnalysis/Islands/voxelFootprint';
+import { freeSpanForRegion, HoldingTipIndex, MAX_FREE_SPAN_MM, HIGH_LEVERAGE_SPAN_MM } from './supportSpan';
 import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
 import type { ContactDisk, Segment, SupportState, Vec3 } from '../types';
 import {
@@ -52,9 +52,7 @@ const FOOTPRINT_CELL_AREA_MM2 = 0.25 * 0.25;
 /** Contact Z at or below this is a plate contact, which needs no support. */
 const PLATE_EPSILON_MM = 0.5;
 /** Longest span we distinguish; beyond this the exact number stops mattering. */
-export const MAX_FREE_SPAN_MM = 10;
-/** Plan bucket size for the nearest-holding-tip probe: one bucket per span cap. */
-const SPAN_BUCKET_MM = MAX_FREE_SPAN_MM;
+export { MAX_FREE_SPAN_MM, HIGH_LEVERAGE_SPAN_MM } from './supportSpan';
 /** Uncovered fraction of the scan's footprint area that reads as critical. */
 const CRITICAL_UNCOVERED_FRACTION = 0.25;
 /** An uncovered footprint at least this large is a hole, not a cosmetic rim. */
@@ -62,8 +60,6 @@ const CRITICAL_UNCOVERED_AREA_MM2 = 8;
 /** Below this uncovered area a rim is cosmetic when its free span is short;
  *  0.25 mm² on a 331 mm² footprint must not make the whole model unsupported. */
 export const MIN_MATERIAL_UNCOVERED_MM2 = 0.5;
-/** Span at which a footprint yields to bending rather than to coverage alone. */
-export const HIGH_LEVERAGE_SPAN_MM = 4;
 /** Smallest peel texel: one texel per 0.5 mm of plan surface. */
 const OVERLAY_MIN_CELL_MM = 0.5;
 /** Hard cap on an overlay side, so a large model cannot allocate a giant texture. */
@@ -222,67 +218,6 @@ function collectHoldingTips(snapshot: SupportState, modelId?: string): { tips: H
         add(a && b ? (b.pos.z > a.pos.z ? b : a) : (a ?? b), lastSegmentDiameter(twig.segments));
     }
     return { tips, contacts };
-}
-
-function bucketKey(cx: number, cy: number): number {
-    return (cx + 4096) * 8192 + (cy + 4096);
-}
-
-/**
- * Plan-distance index over holding tips. One bucket is `MAX_FREE_SPAN_MM` on a
- * side, so a cell's 3×3 neighbourhood always contains every tip within the cap
- * and the probe is nine lookups regardless of forest density.
- */
-class HoldingTipIndex {
-    private readonly buckets = new Map<number, Vec3[]>();
-
-    constructor(tips: readonly Vec3[]) {
-        for (const tip of tips) {
-            const key = bucketKey(Math.floor(tip.x / SPAN_BUCKET_MM), Math.floor(tip.y / SPAN_BUCKET_MM));
-            const bucket = this.buckets.get(key);
-            if (bucket) bucket.push(tip);
-            else this.buckets.set(key, [tip]);
-        }
-    }
-
-    /** Plan distance to the nearest tip at or below `zMm`, capped at `MAX_FREE_SPAN_MM`. */
-    nearestBelow(x: number, y: number, zMm: number): number {
-        const cx = Math.floor(x / SPAN_BUCKET_MM);
-        const cy = Math.floor(y / SPAN_BUCKET_MM);
-        let best = MAX_FREE_SPAN_MM * MAX_FREE_SPAN_MM;
-        for (let dx = -1; dx <= 1; dx++) {
-            for (let dy = -1; dy <= 1; dy++) {
-                const bucket = this.buckets.get(bucketKey(cx + dx, cy + dy));
-                if (!bucket) continue;
-                for (const tip of bucket) {
-                    if (tip.z > zMm + PLATE_EPSILON_MM) continue;
-                    const ddx = x - tip.x;
-                    const ddy = y - tip.y;
-                    const d2 = ddx * ddx + ddy * ddy;
-                    if (d2 < best) best = d2;
-                }
-            }
-        }
-        return Math.min(MAX_FREE_SPAN_MM, Math.sqrt(best));
-    }
-}
-
-/** Worst plan distance from any footprint cell to a holding tip below it. */
-function freeSpanForRegion(region: DetectedIsland, index: HoldingTipIndex, fallbackZ: number): number {
-    const voxels = region.contactVoxels;
-    if (!voxels || voxels.count === 0) return MAX_FREE_SPAN_MM;
-    let worst = 0;
-    for (let i = 0; i < voxels.count; i++) {
-        const x = footprintX(voxels, i);
-        const y = footprintY(voxels, i);
-        const z = footprintZ(voxels, i) ?? fallbackZ;
-        const span = index.nearestBelow(x, y, z);
-        if (span > worst) {
-            worst = span;
-            if (worst >= MAX_FREE_SPAN_MM) break;
-        }
-    }
-    return worst;
 }
 
 /**
