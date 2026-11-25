@@ -2261,3 +2261,18 @@ cluster-spacing experiment raised trunks 47 → 58). Wider spacing makes fewer
 pillars share a crown, which is the opposite of the intended snap-off chunk.
 The 2.5 mm guard is deliberate; the levers that do shrink the reed bed are
 chunk consolidation, the root merge, and the 8-contact chunk cap.
+
+## Silhouette-front routing needs a view authority
+
+The requested "prefer side/back grounded hosts over a front-curtain pillar" has
+no input to act on today: the placement pipeline is geometric and has no
+camera/view direction, so any "front" heuristic would guess. The closest
+geometric proxies (model bbox centre, tip surface normal) do not distinguish
+front from back and would re-rank every merge/fan globally, which is how a
+cosmetic change becomes a coverage regression. The intended interface is an
+optional view-direction field on the auto-support request, threaded into
+`findMergeHost`/`fanLeafToHost` as a soft `dot(hostDir, viewDir) < 0` bias
+(a tie-break under the existing distance/load score), plus a bench-visible
+metric for how many new front-side pillars were avoided. Until that signal
+exists, routing uses `findOffsetSilhouetteRoute`'s contour escape and the
+existing steepest/nearest host order only.
