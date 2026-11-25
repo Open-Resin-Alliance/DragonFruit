@@ -6965,6 +6965,7 @@ export function SceneCanvas({
                       clipLower={clipLower}
                       clipUpper={clipUpper}
                       geometry={model.geometry.geometry}
+                      displayGeometry={model.geometry.displayGeometry}
                       meshColor={modelMeshColor} // Use model color, dimmed on a bed you are not working on
                       nonManifold={modelIsNonManifold} // Red checkerboard overlay when the model fails the manifold status check
                       meshRef={meshGroupRefCallback}

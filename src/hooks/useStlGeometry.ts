@@ -12,10 +12,8 @@ import { loadMeshRangeFromNativePath } from '@/utils/tauriMeshBridge';
 import type { VoxlMeshRange } from '@/features/scene/voxl/types';
 import { accelerateGeometry } from '@/utils/bvh';
 import { logToNativeFile } from '@/utils/nativeLog';
-import { runWithConcurrency } from '@/utils/runWithConcurrency';
+import { decodeDfmx, type DecodedMesh } from '@/utils/dfmx';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
-import { refineCoarseFaces, shouldRefineCoarseFaces } from '@/utils/tauriMeshBridge';
-import { inflateZlib } from '@/utils/inflateZlib';
 import {
   analyzeFromGeometry,
   applyRepairedPositions,
@@ -49,7 +47,21 @@ export type MeshDefects = {
 };
 
 export type GeometryWithBounds = {
+  /**
+   * The model's mesh as the file or the last operation left it. Saving, export,
+   * slicing, scans and every mesh operation read this one.
+   */
   geometry: THREE.BufferGeometry;
+  /**
+   * What the viewport draws, when it is not `geometry` itself: the same surface
+   * with its long faces split so the per-vertex AO has vertices to land on.
+   *
+   * Derived, never written anywhere, and never indexed by anything that outlives
+   * a frame — triangle ids address `geometry`. Absent means the mesh needed no
+   * refinement (or there is no AO to refine for), and `geometry` is drawn as is.
+   * See {@link displayGeometryOf}.
+   */
+  displayGeometry?: THREE.BufferGeometry;
   bbox: THREE.Box3;
   center: THREE.Vector3;
   size: THREE.Vector3;
@@ -154,8 +166,8 @@ export interface ProcessGeometryOptions {
    * The file this geometry came from, when it came from one.
    *
    * With a path the repair reads the file through the native loader, which is the same
-   * path the import took: it classifies the mesh at load, refines what needs it, and
-   * keeps the file's own indexing. Without one the geometry is expanded to a triangle
+   * path the import took: it classifies the mesh at load and keeps the file's own
+   * indexing. Without one the geometry is expanded to a triangle
    * soup and staged, which costs an upload and re-derives every vertex.
    */
   sourcePath?: string;
@@ -195,16 +207,6 @@ export interface ProcessGeometryOptions {
    * from it before then misses the attribute. @internal
    */
   _deferOcclusionBake?: (bake: Promise<boolean>) => void;
-  /**
-   * Whether the native loader may refine coarse faces. Default true.
-   *
-   * A payload that is already a scene's own mesh — a VOXL `MESH` chunk — passes
-   * false: refinement is not idempotent, so refining a stored mesh changes the
-   * triangle count and order that any model/support boundary indexes, and a
-   * save/load cycle grows it every time (81,282 triangles came back as 126,386 on
-   * the reported scene). @internal
-   */
-  _refine?: boolean;
   /** Skip `computeVertexNormals()` - the geometry already has a `normal` attribute */
   _skipComputeNormals?: boolean;
   _isTauriRuntime?: () => boolean;
@@ -339,6 +341,11 @@ function buildSectionGeometries(
   modelGeo.setAttribute('position', new THREE.BufferAttribute(modelPositions, 3));
 
   return { supportSectionGeometry: supportGeo, modelSectionGeometry: modelGeo };
+}
+
+/** The geometry the viewport draws for a model: its display mesh, or the mesh itself. */
+export function displayGeometryOf(entry: Pick<GeometryWithBounds, 'geometry' | 'displayGeometry'>): THREE.BufferGeometry {
+  return entry.displayGeometry ?? entry.geometry;
 }
 
 /**
@@ -969,155 +976,6 @@ async function loadStlViaTauri(filePath: string, classify: boolean): Promise<Nat
   }
 }
 
-// ---------------------------------------------------------------------------
-// DFMX — the multi-body native payload. The layout is specified in
-// docs/dev/mesh-wire-formats.md; keep these offsets in step with it.
-// ---------------------------------------------------------------------------
-const MESH_RESPONSE_HEADER_BYTES = 32;
-const MESH_RESPONSE_BODY_ENTRY_BYTES = 8;
-const SOUP_BYTES_PER_TRIANGLE = 9 * Float32Array.BYTES_PER_ELEMENT * 2;
-/**
- * Version 2: each body is a zlib stream holding that body's soup (positions, then
- * one normal per corner). A scene's payloads are 910 MB across thirteen models, and
- * the channel only does ~75 MB/s effective during an import because the transfer
- * and the main thread that receives each model take turns — the volume is what the
- * load pays. The native encoder packs each body at zlib level 1 (2.7x on real
- * geometry) and the bodies are unpacked here with the platform's
- * `DecompressionStream`, off the main thread.
- */
-const MESH_RESPONSE_VERSION = 2;
-/** Bodies unpacked at once: 52-129 MB each once inflated, so not all at once. */
-const BODY_INFLATE_CONCURRENCY = 4;
-
-/** One decoded native payload: its bodies plus the header facts the STL preview
- *  path needs. */
-export type DecodedMesh = {
-  bodies: THREE.BufferGeometry[];
-  /** The payload's preview bit: the body (or bodies) are a decimation. */
-  isPreview: boolean;
-  /** Triangles in the file the payload was made from. */
-  originalTriangleCount: number;
-  /** Triangles actually in this payload. */
-  previewTriangleCount: number;
-  /** Model-section triangles for a preview, when the loader classified them. */
-  modelTriangleCount?: number;
-  /** The classification report the loader produced for a single-body load, when
-   *  it did. Passing this to `processGeometry` skips the native classify pass. */
-  report?: MeshHealthReport;
-  /** The mesh the loader kept for this payload's AO bake, when it kept one (a
-   *  single-body load). The bake asks for it by token instead of being sent the
-   *  soup back: 36 bytes a triangle, 430 MB across a scene. 0 or absent means the
-   *  caller sends the soup, which is what every other geometry does. */
-  meshToken?: number;
-};
-
-/**
- * Unpack one packed body into its geometry.
- *
- * The stream is the platform's own decompressor — genuinely off the main thread,
- * unlike `fflate`'s pool, which waits on its workers through `SharedArrayBuffer` in
- * a `crossOriginIsolated` webview and blocks the thread it should free. Its output
- * is a fresh `ArrayBuffer`, so the geometry can view it directly rather than copying
- * the soup again. `inflateZlib` falls back to a synchronous inflate on webviews
- * older than Safari 16.4.
- */
-async function decodeBody(packed: Uint8Array, triangleCount: number): Promise<THREE.BufferGeometry> {
-  const soup = await inflateZlib(packed);
-  const expected = triangleCount * SOUP_BYTES_PER_TRIANGLE;
-  if (soup.byteLength !== expected) {
-    throw new Error(
-      `Native mesh loader returned a body that unpacks to ${soup.byteLength} bytes, ` +
-      `not the ${expected} its table entry claims.`,
-    );
-  }
-  const corners = triangleCount * 9;
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute(
-    'position',
-    new THREE.BufferAttribute(new Float32Array(soup.buffer, soup.byteOffset, corners), 3),
-  );
-  geometry.setAttribute(
-    'normal',
-    new THREE.BufferAttribute(
-      new Float32Array(soup.buffer, soup.byteOffset + corners * Float32Array.BYTES_PER_ELEMENT, corners),
-      3,
-    ),
-  );
-  return geometry;
-}
-
-/**
- * Decode a DFMX payload into one geometry per body.
- *
- * Each body arrives packed (version 2) and is unpacked four at a time; the packed
- * bytes are views into the payload buffer, which belongs to this call — Tauri's IPC
- * is a `fetch` against a custom-protocol URL (`tauri`'s `ipc-protocol.js`), so
- * `response.arrayBuffer()` hands back a buffer nothing reuses or shortens.
- */
-export async function decodeDfmx(payload: Uint8Array | ArrayBuffer): Promise<DecodedMesh> {
-  const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
-  if (bytes.byteLength < MESH_RESPONSE_HEADER_BYTES) {
-    throw new Error('Native mesh loader returned a truncated DFMX header.');
-  }
-  const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const magic = String.fromCharCode(
-    header.getUint8(0), header.getUint8(1), header.getUint8(2), header.getUint8(3),
-  );
-  if (magic !== 'DFMX') {
-    throw new Error(`Native mesh loader returned an unsupported payload (${magic}).`);
-  }
-  if (header.getUint32(4, true) !== MESH_RESPONSE_VERSION) {
-    throw new Error('Native mesh loader returned an unsupported DFMX version.');
-  }
-
-  const bodyCount = header.getUint32(12, true);
-  // The table first: each entry carries the body's triangle count and the length of
-  // its packed stream, so the bodies no longer follow from the header alone.
-  let offset = MESH_RESPONSE_HEADER_BYTES + bodyCount * MESH_RESPONSE_BODY_ENTRY_BYTES;
-  const table: Array<{ index: number; triangleCount: number; packed: Uint8Array }> = [];
-  for (let index = 0; index < bodyCount; index += 1) {
-    const entry = MESH_RESPONSE_HEADER_BYTES + index * MESH_RESPONSE_BODY_ENTRY_BYTES;
-    const triangleCount = header.getUint32(entry, true);
-    const packedBytes = header.getUint32(entry + 4, true);
-    if (offset + packedBytes > bytes.byteLength) {
-      throw new Error('Native mesh loader returned a truncated DFMX body.');
-    }
-    table.push({ index, triangleCount, packed: bytes.subarray(offset, offset + packedBytes) });
-    offset += packedBytes;
-  }
-
-  const bodies = new Array<THREE.BufferGeometry>(bodyCount);
-  await runWithConcurrency(table, BODY_INFLATE_CONCURRENCY, async (body) => {
-    bodies[body.index] = await decodeBody(body.packed, body.triangleCount);
-  });
-  const previewTriangleCount = table.reduce((sum, body) => sum + body.triangleCount, 0);
-
-  const meshToken = header.getUint32(28, true);
-  const modelTriangleCount = header.getUint32(20, true);
-  const metadataLength = header.getUint32(24, true);
-  let report: MeshHealthReport | undefined;
-  if (metadataLength > 0 && metadataLength <= bytes.byteLength) {
-    const json = new TextDecoder().decode(bytes.subarray(bytes.byteLength - metadataLength));
-    try {
-      report = JSON.parse(json) as MeshHealthReport;
-    } catch (error) {
-      // A report we cannot read is not worth failing the mesh over: dropping it
-      // sends the caller back to the staging classify pass, which is correct.
-      console.warn('[loadMeshFile] could not parse the native classification report.', error);
-    }
-  }
-
-  return {
-    bodies,
-    isPreview: (header.getUint32(8, true) & 1) !== 0,
-    originalTriangleCount: header.getUint32(16, true),
-    previewTriangleCount,
-    modelTriangleCount: modelTriangleCount > 0 ? modelTriangleCount : undefined,
-    ...(meshToken > 0 ? { meshToken } : {}),
-    report,
-  };
-}
-
 /**
  * Load every body of a mesh file natively. Tauri with an on-disk path only;
  * returns null everywhere else (and on any failure) so the caller falls back to
@@ -1190,10 +1048,10 @@ export function skipsNativePassForModelOnly(
  * file was written with, and the format requires a reader that honours it *not*
  * to re-run the classifier — but only while it still addresses this payload:
  * `reportAddressesTriangleSoup` compares the boundary's `post.triangle_count`,
- * the mesh the pass ended with, against the triangles just loaded. Refinement is
- * deterministic but versioned, and a section boundary is a triangle index, so a
- * file written under a different refinement rule describes a mesh this build does
- * not produce.
+ * the mesh the pass ended with, against the triangles just loaded. A section
+ * boundary is a triangle index, so a file whose stored mesh is not the one this
+ * build loads — one written while the loaders still refined, read back now that
+ * they do not — describes a mesh this build does not produce.
  *
  * A split boundary in a stored report is honoured as written. The writer's rule
  * (same document) is that a report is stamped only when that same predicate holds
@@ -1203,7 +1061,7 @@ export function skipsNativePassForModelOnly(
  *
  * Dropping the report is safe: prep falls back to the classify pass, which is a
  * round trip and the cost this reuse exists to avoid, paid only by a file whose
- * refinement no longer matches the app's.
+ * stored mesh no longer matches what the app loads.
  */
 export function classificationForPayload(
   loaderReport: MeshHealthReport | undefined,
@@ -1226,19 +1084,18 @@ export function classificationForPayload(
 async function loadNativeMeshBytes(
   buffer: Uint8Array,
   classify: boolean,
-  refine: boolean,
 ): Promise<DecodedMesh | null> {
   if (!isTauriRuntime()) return null;
   try {
     // The phase nobody else can see, and the one a scene of print-sized models
     // waits on. "Round trip", not "transfer": the window contains the native
-    // command too (parse, refine and encode, whose duration the Rust log line has
+    // command too (parse, classify and encode, whose duration the Rust log line has
     // on its own). The wire is not the problem — measured with a plain
     // `read_print_file_bytes` from the page, it delivers 110-135 MB/s with about
     // 3 ms of latency — so the interesting half of this number is the native side.
     // Logged to the file as well: it is what the import is argued with.
     const requested = performance.now();
-    const payload = await loadMeshBytes(buffer, classify, refine);
+    const payload = await loadMeshBytes(buffer, classify);
     const received = performance.now();
     const decoded = await decodeDfmx(payload);
     const timing =
@@ -1276,7 +1133,6 @@ export async function loadMeshGeometryFromRange(
     compressedSize: range.compressedSize,
     compression: range.compression,
     classify: wantsLoaderClassification(options),
-    refine: options._refine !== false,
   });
   const decoded = await decodeDfmx(payload);
   const merged = mergeBodyGeometries(decoded.bodies);
@@ -1369,23 +1225,15 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
  *
  * This is where a VOXL scene's embedded mesh arrives: the MESH chunk is the
  * original STL bytes, and `loadMeshGeometry` routes them here rather than to the
- * native file loaders. Those refine coarse faces and return face normals as they
- * read; a buffer parsed by three does neither, so the same command the plugin
- * import asks is asked here, and only when the mesh is small enough for the round
- * trip to be free (see `REFINE_MAX_TRIANGLES`). The command returns the normals
- * with the payload, which is why the caller then has to skip
- * `computeVertexNormals`.
+ * native file loaders. The mesh is kept as written; its display mesh, if it needs
+ * one, is derived later like every other model's (`displayMesh.ts`).
  */
 export async function loadStlGeometryFromBuffer(buffer: Uint8Array, options: ProcessGeometryOptions = {}): Promise<GeometryWithBounds> {
-  // Native first when there is one: a single round trip parses, refines and
-  // classifies the bytes, where the renderer path parses in JS and then stages the
+  // Native first when there is one: a single round trip parses and classifies the
+  // bytes, where the renderer path parses in JS and then stages the
   // mesh back for the classifier. A VOXL model or a file out of a zip arrives as
   // bytes, so it never has a path for `load_mesh_file` to use.
-  const decoded = await loadNativeMeshBytes(
-    buffer,
-    wantsLoaderClassification(options),
-    options._refine !== false,
-  );
+  const decoded = await loadNativeMeshBytes(buffer, wantsLoaderClassification(options));
   if (decoded) {
     return processGeometry(mergeBodyGeometries(decoded.bodies), {
       ...options,
@@ -1400,21 +1248,7 @@ export async function loadStlGeometryFromBuffer(buffer: Uint8Array, options: Pro
 
   const loader = new STLLoader();
   const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
-  const source = loader.parse(arrayBuffer);
-
-  let geometry = source;
-  let refined = false;
-  if (shouldRefineCoarseFaces(source)) {
-    try {
-      const result = await refineCoarseFaces(source);
-      if (result) {
-        geometry = result;
-        refined = true;
-      }
-    } catch (error) {
-      console.warn('[loadStlGeometry] buffer geometry left unrefined', error);
-    }
-  }
+  const geometry = loader.parse(arrayBuffer);
 
   // No native decode here, so nothing produced a report to check the stored one
   // against — check it against what three parsed: the same rule the native paths
@@ -1424,7 +1258,6 @@ export async function loadStlGeometryFromBuffer(buffer: Uint8Array, options: Pro
   const triangles = Math.floor((geometry.getIndex()?.count ?? position?.count ?? 0) / 3);
   return processGeometry(geometry, {
     ...options,
-    ...(refined ? { _skipComputeNormals: true } : {}),
     bakedClassification: classificationForPayload(undefined, options.bakedClassification, triangles),
   });
 }

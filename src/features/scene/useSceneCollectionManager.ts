@@ -3,7 +3,17 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import * as THREE from 'three';
-import { loadTauriCore, refineCoarseFaces, shouldRefineCoarseFaces } from '@/utils/tauriMeshBridge';
+import { loadTauriCore } from '@/utils/tauriMeshBridge';
+import {
+  acknowledgeEditInPlace,
+  hasDisplayGeometryInFlight,
+  isDisplayGeometryPending,
+  requestDisplayGeometry,
+  settleDisplayGeometry,
+  settledDisplayGeometry,
+  subscribeDisplayGeometry,
+  wasEditedInPlace,
+} from './displayMesh';
 import { solidRemeshFromGeometry, tetSurfaceFromGeometry, type SolidRemeshProgressSink, type SolidRemeshOptions, type TetSurfaceProgressSink, type TetWrapOptions } from '@/utils/meshShrinkwrap';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import { loadMeshGeometry, loadMeshGeometryFromRange, load3mfGeometryMergedWithSplitData, processGeometry, skipsNativePassForModelOnly, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
@@ -42,7 +52,7 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 import { forgetCenteredPositions } from '@/utils/modelBounds';
 import { releasePrepareMergedSupportsFor } from '@/supports/prepare/mergedSupportCache';
 import { releaseGeometryStorage as releaseGeometryStorageBase } from '@/utils/releaseGeometry';
-import { disposeSpilledSceneSnapshot, hasSpilledSceneSnapshot, pruneSpilledSceneSnapshots, rehydrateSceneSnapshotPair, spillSceneSnapshotPair, spilledSceneSnapshotBytes } from './sceneSnapshotSpill';
+import { disposeSpilledSceneSnapshot, hasSpilledSceneSnapshot, modelGeometries, pruneSpilledSceneSnapshots, rehydrateSceneSnapshotPair, spillSceneSnapshotPair, spilledSceneSnapshotBytes } from './sceneSnapshotSpill';
 import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/supports/types';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/builtinComplexPluginFileTypeHandlers';
@@ -57,7 +67,7 @@ import {
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { runWithConcurrency } from '@/utils/runWithConcurrency';
 import { logToNativeFile } from '@/utils/nativeLog';
-import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeAndAttachOcclusionForGeometry, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, isOcclusionUnavailable, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
+import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeAndAttachOcclusionForGeometry, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, canBakeOcclusionAsync, isOcclusionUnavailable, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
 import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
 import { shelfPack, type ShelfItem } from '@/features/scene/arrange/shelfPack';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -159,7 +169,7 @@ import {
   unlinkModelsLabel,
 } from '@/features/scene/sceneHistoryLabels';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
-import { MODEL_EDGE_OVERLAY_ENABLED, buildModelEdgeGeometry } from '@/hooks/useStlGeometry';
+import { MODEL_EDGE_OVERLAY_ENABLED, buildModelEdgeGeometry, displayGeometryOf } from '@/hooks/useStlGeometry';
 import { MESH_SHADER_TYPES, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
 import {
   getSavedWorkspaceCameraSettings,
@@ -273,8 +283,8 @@ const AO_BAKE_CONCURRENCY = 2;
  *
  * Was two, on the reasoning that each build is a native round trip whose serial
  * phases want overlapping. Measured on the 13-model scene, two left both workers
- * stalled: the native load is only 0.17-0.25 s (`[load_mesh_bytes] parsed, refined
- * and encoded in …`) while the round trip a build waits on is 1.4-2.3 s, because
+ * stalled: the native load is only 0.17-0.25 s (`[load_mesh_bytes] parsed and
+ * encoded in …`, measured when it also refined) while the round trip a build waits on is 1.4-2.3 s, because
  * the wire (65-81 MB a model at ~125 MB/s) and the *single main thread* that
  * decodes, accelerates and computes planes for each model are shared resources. A
  * build's own work is ~1.2 s of that, so the rest is one worker waiting for the
@@ -667,15 +677,6 @@ function installLiveModelsProvider(provider: (() => LoadedModel[]) | null): void
 
 function installExtraRetainedGeometries(provider: (() => Iterable<THREE.BufferGeometry>) | null): void {
   extraRetainedGeometriesProvider = provider;
-}
-
-function modelGeometries(model: Pick<LoadedModel, 'geometry'>): THREE.BufferGeometry[] {
-  const geometries: THREE.BufferGeometry[] = [model.geometry.geometry];
-  if (model.geometry.edgeGeometry) geometries.push(model.geometry.edgeGeometry);
-  const defects = model.geometry.meshDefects;
-  if (defects?.supportSectionGeometry) geometries.push(defects.supportSectionGeometry);
-  if (defects?.modelSectionGeometry) geometries.push(defects.modelSectionGeometry);
-  return geometries;
 }
 
 /**
@@ -2996,6 +2997,7 @@ export function useSceneCollectionManager(options?: {
         // overlay for each copy, which is O(triangles) and blocked the main
         // thread for most of a second on an 8-model duplicate.
         ...(source.edgeGeometry ? { edgeGeometry: source.edgeGeometry } : {}),
+        ...(source.displayGeometry ? { displayGeometry: source.displayGeometry } : {}),
       };
     }
 
@@ -3014,9 +3016,13 @@ export function useSceneCollectionManager(options?: {
     if (options?.accelerate ?? true) {
       accelerateGeometry(clonedGeometry);
     }
+    // The display mesh only draws (no BVH), and a clone may be edited on its own, so
+    // it gets its own copy — its AO included — rather than a stale share.
+    const clonedDisplay = source.displayGeometry?.clone();
 
     return {
       geometry: clonedGeometry,
+      ...(clonedDisplay ? { displayGeometry: clonedDisplay } : {}),
       bbox: source.bbox.clone(),
       center: source.center.clone(),
       size: source.size.clone(),
@@ -3096,6 +3102,7 @@ export function useSceneCollectionManager(options?: {
     || pendingFlatteningPlanesRef.current > 0
     || pendingAoBakeRef.current > 0
     || pendingAoQueueRef.current.length > 0
+    || hasDisplayGeometryInFlight()
   ), []);
 
   const processDeferredDisposalQueue = useCallback(() => {
@@ -4231,6 +4238,11 @@ export function useSceneCollectionManager(options?: {
        * that previewed its change on the model (Mirror) passes the state from before it.
        */
       historyBefore?: { transform?: ModelTransform; supportState?: SupportState };
+      /**
+       * The new mesh's display mesh, when the operation has it already (Mirror). It
+       * lands with the mesh, so no frame draws the model without its AO.
+       */
+      displayGeometry?: THREE.BufferGeometry;
     },
   ) => {
     const currentModels = modelsRef.current;
@@ -4261,6 +4273,10 @@ export function useSceneCollectionManager(options?: {
       flatteningPlanes: target.geometry.flatteningPlanes,
       ...(nextEdgeGeometry ? { edgeGeometry: nextEdgeGeometry } : {}),
     };
+    if (options?.displayGeometry) {
+      settleDisplayGeometry(nextBufferGeometry, options.displayGeometry);
+      nextGeometry.displayGeometry = options.displayGeometry;
+    }
 
     if (!options?.deferPostProcessing) {
       deferAccelerateGeometry([nextGeometry]);
@@ -4610,6 +4626,65 @@ export function useSceneCollectionManager(options?: {
   }, [higherContrastModelEdges, setModels]);
 
   /**
+   * Display meshes.
+   *
+   * Every model mesh — loaded, replaced by an operation, split by a cut, restored by
+   * undo — gets its display mesh here, the one place that asks for it, and has it
+   * attached when it lands. Keyed on the model mesh, so a mesh history already holds
+   * is not refined twice. See `displayMesh.ts`.
+   *
+   * Only while there is occlusion to draw on it: the display mesh exists for the AO
+   * and nothing else, so a machine without a discrete GPU, or with the AO turned
+   * down to nothing, draws every model's own mesh and holds no second one.
+   */
+  const [displayMeshVersion, setDisplayMeshVersion] = useState(0);
+  const [aoHardwareAvailable, setAoHardwareAvailable] = useState<boolean | null>(null);
+  useEffect(() => subscribeDisplayGeometry(() => setDisplayMeshVersion((version) => version + 1)), []);
+  useEffect(() => {
+    let cancelled = false;
+    void canBakeOcclusionAsync().then((available) => {
+      if (!cancelled) setAoHardwareAvailable(available);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (aoHardwareAvailable !== true || bakedAoIntensity <= 0) return;
+    const attach = new Map<THREE.BufferGeometry, THREE.BufferGeometry | undefined>();
+    const acknowledged: THREE.BufferGeometry[] = [];
+    for (const model of modelsRef.current) {
+      const real = model.geometry.geometry;
+      if (!real.getAttribute('position')) continue;
+      if (wasEditedInPlace(real)) {
+        // Its display mesh shows the shape from before the edit.
+        acknowledged.push(real);
+        if (model.geometry.displayGeometry) attach.set(real, undefined);
+        void requestDisplayGeometry(real);
+        continue;
+      }
+      const known = settledDisplayGeometry(real);
+      if (known === undefined) {
+        // An entry that arrived with one (a clone, a rehydrated snapshot) keeps it.
+        if (!model.geometry.displayGeometry) void requestDisplayGeometry(real);
+        continue;
+      }
+      const display = known ?? undefined;
+      if (model.geometry.displayGeometry !== display) attach.set(real, display);
+    }
+    for (const real of acknowledged) acknowledgeEditInPlace(real);
+    if (attach.size === 0) return;
+    setModels((prev) => prev.map((m) => {
+      const real = m.geometry.geometry;
+      if (!attach.has(real)) return m;
+      const display = attach.get(real);
+      if (m.geometry.displayGeometry === display) return m;
+      const geometry = { ...m.geometry };
+      if (display) geometry.displayGeometry = display;
+      else delete geometry.displayGeometry;
+      return { ...m, geometry };
+    }));
+  }, [models, displayMeshVersion, aoHardwareAvailable, bakedAoIntensity, setModels]);
+
+  /**
    * Baked ambient occlusion.
    *
    * One native bake per model, on an idle callback, off the main thread:
@@ -4632,7 +4707,12 @@ export function useSceneCollectionManager(options?: {
 
     const queue = modelsRef.current
       .filter((model) => {
-        const geometry = model.geometry.geometry;
+        // The bake lands on what the viewport draws: the display mesh when the model
+        // has one. Its values are per vertex of that mesh and nothing else reads them.
+        // Not before the display mesh has landed: baking the model mesh in the
+        // meantime is a bake thrown away.
+        if (isDisplayGeometryPending(model.geometry)) return false;
+        const geometry = displayGeometryOf(model.geometry);
         if (!geometry.getAttribute('position')) return false;
         // A geometry the hardware check skipped has no attribute by design; it
         // must not be re-queued on every model change.
@@ -4678,7 +4758,7 @@ export function useSceneCollectionManager(options?: {
       // work done in the first 200 ms.
       pendingAoBakeRef.current += 1;
       const model = modelsRef.current.find((m) => m.id === id);
-      const geometry = model?.geometry.geometry;
+      const geometry = model ? displayGeometryOf(model.geometry) : undefined;
       if (geometry) pendingAoGeometriesRef.current.add(geometry);
       try {
         if (geometry) {
@@ -4724,7 +4804,7 @@ export function useSceneCollectionManager(options?: {
       scheduleIdle(() => void bakeOne());
     }
     return () => { cancelled = true; };
-  }, [models, bakedAoIntensity]);
+  }, [models, bakedAoIntensity, displayMeshVersion]);
 
   const finalizeModelGeometryPostProcessing = useCallback((id: string) => {
     const target = modelsRef.current.find((m) => m.id === id);
@@ -6496,13 +6576,9 @@ export function useSceneCollectionManager(options?: {
         { sourcePositionsBase64: string; sourcePositionCount: number }
       >();
       for (const normalized of normalizedPayloads) {
-        // The plugin built this geometry in the renderer, so it has not been
-        // through the native loaders that refine coarse faces. Refine it here, and
-        // keep the normals the command returns: it ships one per face, so there is
-        // nothing left for `computeVertexNormals` to derive.
         let geometry = normalized.geometry;
-        // Bake the cavity in first, so refine, classification and the BVH all
-        // describe the hollow solid rather than the shell that encloses it.
+        // Bake the cavity in first, so classification and the BVH describe the
+        // hollow solid rather than the shell that encloses it.
         if (bakeImportedHollowing) {
           const cavity = readPayloadCavity(normalized);
           if (cavity) {
@@ -6522,24 +6598,8 @@ export function useSceneCollectionManager(options?: {
             );
           }
         }
-        let skipComputeNormals = false;
-        // The mesh loaders already gate refinement on size. Plugin geometry
-        // takes this path directly, so apply the same ceiling here instead of
-        // sending a multi-million-triangle soup over IPC for a dense mesh.
-        if (shouldRefineCoarseFaces(geometry)) {
-          try {
-            const refined = await refineCoarseFaces(geometry);
-            if (refined) {
-              geometry = refined;
-              skipComputeNormals = true;
-            }
-          } catch (error) {
-            console.warn('[refine] plugin geometry left unrefined', error);
-          }
-        }
         const processed = await processGeometry(geometry, {
           center: false,
-          ...(skipComputeNormals ? { _skipComputeNormals: true } : {}),
           nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
           skipClassification: skipsNativePassForModelOnly(
             normalized.skipClassification === true,
@@ -7064,7 +7124,7 @@ export function useSceneCollectionManager(options?: {
       // Build every unique mesh, a couple at a time, before the placement loop.
       // Placement stays in order below because it depends on what is already on the
       // plate; building does not. Each build is a native round trip with serial
-      // phases (parse, refine, classify) around a parallel one, so two in flight let
+      // phases (parse, classify) around a parallel one, so two in flight let
       // one model's serial phase run during another's. The hash is computed here once
       // per model and reused by the loop, so neither the content hash nor the
       // integrity check is paid twice.
@@ -7081,9 +7141,6 @@ export function useSceneCollectionManager(options?: {
         nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
         assumeSupportGeometry: model.isSupportGeometry,
         skipClassification: model.isSupportGeometry,
-        // The payload is the scene's own mesh: refining it again changes the count and
-        // order every boundary indexes, and grows it on each round trip.
-        _refine: false,
       });
       const hashByModelId = new Map<string, string>();
       const uniqueBuilds = new Map<
@@ -7124,8 +7181,8 @@ export function useSceneCollectionManager(options?: {
         const buildCount = uniqueBuilds.size;
         // Every mesh's occlusion bake is left in flight rather than awaited per
         // model: it is the GPU's work (0.4-1.2 s a model on the scene this was
-        // measured against) while the remaining meshes are still being parsed,
-        // refined and classified, and running them one model at a time left the
+        // measured against) while the remaining meshes are still being parsed
+        // and classified, and running them one model at a time left the
         // GPU idle for most of the load. They are all awaited below, before any
         // model is placed, so each one's first frame still carries its occlusion
         // — the pop-in that baking after the fact produced.

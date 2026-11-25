@@ -18,6 +18,7 @@ use std::collections::BinaryHeap;
 
 use dragonfruit_mesh_core::halfedge::Topology;
 use dragonfruit_mesh_core::mesh::{IndexedMesh, Vec3};
+use dragonfruit_mesh_core::refine::refine_coarse_faces;
 
 /// Vertex adjacency derived from the mesh topology: for each vertex, its graph
 /// neighbours and the Euclidean length of the connecting edge.
@@ -173,11 +174,7 @@ pub fn surface_loop_from_mesh_smoothed(
     close: bool,
     smoothing: f32,
 ) -> Option<Vec<Vec3>> {
-    let topo = Topology::build(mesh);
-    let graph = VertexGraph::build(mesh, &topo);
-    let (path, is_anchor) = surface_loop_with_anchors(mesh, &graph, waypoints, close)?;
-    let straight = straighten_path(mesh, &topo, &path, &is_anchor, close);
-    Some(smooth_through_anchors(mesh, &topo, &straight, &is_anchor, close, smoothing))
+    GeodesicSolver::build(mesh.clone()).surface_loop_smoothed(waypoints, close, smoothing)
 }
 
 /// A reusable geodesic solver that owns a mesh plus its precomputed [`Topology`]
@@ -193,7 +190,16 @@ pub struct GeodesicSolver {
 
 impl GeodesicSolver {
     /// Builds the solver from a mesh (computes topology + vertex graph once).
+    ///
+    /// The seam walks a copy with the long faces split
+    /// ([`refine_coarse_faces`]), not the mesh as given. The path starts on mesh
+    /// edges and is straightened through the vertices it has, so a face spanning
+    /// the model leaves it nothing to bend with: on a 12-triangle cube a loop
+    /// around the sides was its four waypoints, cutting each corner 2.5mm inside
+    /// the solid. The split copy has the same surface, so every point the seam
+    /// lands on is on the model's own mesh.
     pub fn build(mesh: IndexedMesh) -> Self {
+        let mesh = refine_coarse_faces(mesh);
         let topo = Topology::build(&mesh);
         let graph = VertexGraph::build(&mesh, &topo);
         Self { mesh, topo, graph }
@@ -1013,5 +1019,85 @@ mod tests {
                 "segment {k} too sharp ({t:.3} rad) — line is not smooth"
             );
         }
+    }
+
+    /// A 12-triangle cube of side `s`, wound outward.
+    fn coarse_cube(s: f32) -> IndexedMesh {
+        let p = |x: f32, y: f32, z: f32| Vec3::new(x * s, y * s, z * s);
+        IndexedMesh {
+            positions: vec![
+                p(0., 0., 0.),
+                p(1., 0., 0.),
+                p(1., 1., 0.),
+                p(0., 1., 0.),
+                p(0., 0., 1.),
+                p(1., 0., 1.),
+                p(1., 1., 1.),
+                p(0., 1., 1.),
+            ],
+            triangles: vec![
+                [0, 2, 1],
+                [0, 3, 2],
+                [4, 5, 6],
+                [4, 6, 7],
+                [0, 1, 5],
+                [0, 5, 4],
+                [1, 2, 6],
+                [1, 6, 5],
+                [2, 3, 7],
+                [2, 7, 6],
+                [3, 0, 4],
+                [3, 4, 7],
+            ],
+        }
+    }
+
+    /// Distance from `p` to the surface of the cube `[0, s]³`.
+    fn off_cube_surface(p: Vec3, s: f32) -> f32 {
+        let inside =
+            (0.0..=s).contains(&p.x) && (0.0..=s).contains(&p.y) && (0.0..=s).contains(&p.z);
+        if inside {
+            [p.x, s - p.x, p.y, s - p.y, p.z, s - p.z]
+                .into_iter()
+                .fold(f32::MAX, f32::min)
+        } else {
+            let clamped = Vec3::new(p.x.clamp(0.0, s), p.y.clamp(0.0, s), p.z.clamp(0.0, s));
+            p.sub(clamped).length()
+        }
+    }
+
+    #[test]
+    fn a_seam_around_a_coarse_mesh_wraps_its_corners() {
+        // One waypoint on each side face. With nothing but the cube's own corners to
+        // bend through, the loop was the four waypoints: chords cutting each corner
+        // 2.5mm inside the solid, 28.3mm around instead of 40.
+        let s = 10.0;
+        let solver = GeodesicSolver::build(coarse_cube(s));
+        let waypoints = [
+            Vec3::new(5.0, 0.0, 5.0),
+            Vec3::new(10.0, 5.0, 5.0),
+            Vec3::new(5.0, 10.0, 5.0),
+            Vec3::new(0.0, 5.0, 5.0),
+        ];
+        let seam = solver.surface_loop(&waypoints, true).expect("a loop");
+
+        let n = seam.len();
+        let worst_chord = (0..n)
+            .map(|i| {
+                let (a, b) = (seam[i], seam[(i + 1) % n]);
+                off_cube_surface(a.add(b).scale(0.5), s)
+            })
+            .fold(0.0, f32::max);
+        let around: f32 = (0..n)
+            .map(|i| seam[(i + 1) % n].sub(seam[i]).length())
+            .sum();
+        assert!(
+            worst_chord < 0.5,
+            "a segment cuts {worst_chord:.2}mm into the solid"
+        );
+        assert!(
+            around > 38.0,
+            "the seam is {around:.1}mm around, the band is 40"
+        );
     }
 }

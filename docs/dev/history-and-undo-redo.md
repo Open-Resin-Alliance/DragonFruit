@@ -220,6 +220,9 @@ Three payload patterns exist:
   undone and a remove re-added with cascades intact.
 - **Typed arrays** — mesh smoothing pushes `{ geometryKey, uniqueIds, before, after }`
   and the handler writes the recorded deltas back into the topology.
+  A stroke over faces longer than the brush is the exception: it splits them first
+  (`refineUnderStroke`), which changes the triangles, so it lands as a snapshot step
+  through `replaceModelGeometry` instead, under the same "Brush stroke" label.
 - **Snapshot references** — whole-scene actions push a `{ key }` pointing into
   `sceneSnapshotRegistry` (in `useSceneCollectionManager.ts`), which stores the
   heavy `{ before, after }` pairs with a 200-entry + ~300 MB-eviction budget.

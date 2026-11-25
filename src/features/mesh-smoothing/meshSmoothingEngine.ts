@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { type SmoothingScratch } from './smoothingAlgorithms';
 import { getMeshTopology, queryUniqueVerticesInSphere } from './topologyCache';
 import { clampMeshSmoothingBrushSizeMm, getMeshSmoothingSettings, type MeshSmoothingSettings } from './settings';
+import { refineUnderStroke, STROKE_EDGE_PER_RADIUS } from './refineUnderStroke';
 
 export type MeshSmoothingStrokeFinalizedPayload = {
   geometryKey: number;
@@ -74,20 +75,21 @@ type StrokeUndoState = {
   ids: number[];
   before: number[];
   samples: number[];
+  /** Millimetres per model unit: the model's scale on the plate. */
+  mmPerUnit: number;
 };
+
+/**
+ * The brush radius in the model's own units. The brush is sized in printed millimetres
+ * and the stroke runs on the mesh as modelled, so a model scaled up 50× gets a radius
+ * fifty times smaller in its own units.
+ */
+function brushRadiusInModelUnits(settings: MeshSmoothingSettings, mmPerUnit: number): number {
+  return clampMeshSmoothingBrushSizeMm(settings.brushSizeMm) / (mmPerUnit > 0 ? mmPerUnit : 1);
+}
 
 const activeStrokeGeometry = new WeakMap<THREE.BufferGeometry, StrokeUndoState>();
-const scratchNewlyHighlightedByGeometry = new WeakMap<THREE.BufferGeometry, Uint32Array>();
 const scratchSmoothingByGeometry = new WeakMap<THREE.BufferGeometry, SmoothingScratch>();
-
-type HighlightQueueState = {
-  buf: Uint32Array;
-  count: number;
-  read: number;
-  timeoutId: number | null;
-};
-
-const highlightQueueByGeometry = new WeakMap<THREE.BufferGeometry, HighlightQueueState>();
 
 const highlightStateByGeometry = new WeakMap<THREE.BufferGeometry, SmoothingHighlightState>();
 
@@ -125,7 +127,8 @@ export function recordMeshSmoothingEngineStrokeSample(geometry: THREE.BufferGeom
     const dy = centerLocal.y - ly;
     const dz = centerLocal.z - lz;
     const d2 = dx * dx + dy * dy + dz * dz;
-    if (d2 < 0.01 * 0.01) return;
+    const minStep = 0.01 / stroke.mmPerUnit;
+    if (d2 < minStep * minStep) return;
   }
 
   s.push(centerLocal.x, centerLocal.y, centerLocal.z);
@@ -521,89 +524,6 @@ function beginHighlightStroke(geometry: THREE.BufferGeometry): void {
   }
 }
 
-function getOrCreateHighlightQueueState(geometry: THREE.BufferGeometry): HighlightQueueState {
-  const existing = highlightQueueByGeometry.get(geometry);
-  if (existing) return existing;
-
-  const next: HighlightQueueState = {
-    buf: new Uint32Array(1024),
-    count: 0,
-    read: 0,
-    timeoutId: null,
-  };
-  highlightQueueByGeometry.set(geometry, next);
-  return next;
-}
-
-function clearHighlightQueue(geometry: THREE.BufferGeometry): void {
-  const state = highlightQueueByGeometry.get(geometry);
-  if (!state) return;
-  if (state.timeoutId != null) {
-    clearTimeout(state.timeoutId);
-    state.timeoutId = null;
-  }
-  state.count = 0;
-  state.read = 0;
-}
-
-function enqueueHighlightUniqueIds(geometry: THREE.BufferGeometry, uniqueIds: Uint32Array): void {
-  if (uniqueIds.length === 0) return;
-
-  // If there is no active stroke, don't do background highlight work.
-  if (!activeStrokeGeometry.has(geometry)) return;
-
-  const state = getOrCreateHighlightQueueState(geometry);
-
-  const needed = state.count + uniqueIds.length;
-  if (needed > state.buf.length) {
-    const nextLen = Math.max(needed, state.buf.length * 2);
-    const next = new Uint32Array(nextLen);
-    next.set(state.buf.subarray(0, state.count));
-    state.buf = next;
-  }
-
-  state.buf.set(uniqueIds, state.count);
-  state.count += uniqueIds.length;
-
-  if (state.timeoutId != null) return;
-
-  const flushChunk = () => {
-    state.timeoutId = null;
-
-    // Stop if stroke ended.
-    if (!activeStrokeGeometry.has(geometry)) {
-      state.count = 0;
-      state.read = 0;
-      return;
-    }
-
-    const topo = getMeshTopology(geometry);
-    if (!topo) {
-      state.count = 0;
-      state.read = 0;
-      return;
-    }
-
-    const chunkSize = 128;
-    const end = Math.min(state.count, state.read + chunkSize);
-    if (end > state.read) {
-      applyHighlightToUniqueVertices(geometry, topo, state.buf.subarray(state.read, end));
-      state.read = end;
-    }
-
-    if (state.read < state.count) {
-      state.timeoutId = setTimeout(flushChunk, 0) as unknown as number;
-      return;
-    }
-
-    // Finished.
-    state.count = 0;
-    state.read = 0;
-  };
-
-  state.timeoutId = setTimeout(flushChunk, 0) as unknown as number;
-}
-
 function applyHighlightToUniqueVertices(geometry: THREE.BufferGeometry, topo: NonNullable<ReturnType<typeof getMeshTopology>>, uniqueIds: Uint32Array): void {
   const hs = getOrCreateHighlightState(geometry);
   if (!hs) return;
@@ -812,16 +732,20 @@ function getSmoothingScratch(geometry: THREE.BufferGeometry, uniqueCount: number
   return next;
 }
 
-export function beginMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): void {
+/**
+ * `mmPerUnit` is the model's scale on the plate — how many printed millimetres one unit
+ * of its mesh is — so the brush, sized in millimetres, covers what it shows.
+ */
+export function beginMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry, mmPerUnit = 1): void {
   activeStrokeGeometry.set(geometry, {
     affectedUnique: new Set(),
     beforeIndexByUid: new Map(),
     ids: [],
     before: [],
     samples: [],
+    mmPerUnit: Number.isFinite(mmPerUnit) && mmPerUnit > 0 ? mmPerUnit : 1,
   });
 
-  clearHighlightQueue(geometry);
   beginHighlightStroke(geometry);
 
   if (readyByGeometry.has(geometry)) {
@@ -849,9 +773,124 @@ export function beginMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): 
   }, 0);
 }
 
-export function endMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): void {
-  clearHighlightQueue(geometry);
+/**
+ * Puts a model's mesh in the scene in place of another: `next` for the model whose mesh
+ * is `previous`, as one undo step. Returns whether it did; a stroke it refuses is
+ * smoothed in place instead, on the mesh as it is.
+ */
+export type MeshSmoothingGeometryReplacer = (previous: THREE.BufferGeometry, next: THREE.BufferGeometry) => boolean;
 
+let geometryReplacer: MeshSmoothingGeometryReplacer | null = null;
+
+/**
+ * Lets a stroke that needs more vertices than the mesh has replace the mesh (see
+ * `refineUnderStroke`). Without one, every stroke smooths in place, as a session with
+ * no scene does.
+ */
+export function setMeshSmoothingGeometryReplacer(replacer: MeshSmoothingGeometryReplacer): () => void {
+  geometryReplacer = replacer;
+  return () => {
+    if (geometryReplacer === replacer) geometryReplacer = null;
+  };
+}
+
+/**
+ * Hand `next` to the scene in place of `previous`, if a scene is listening and takes it.
+ * A replacer that throws counts as one that declined.
+ */
+export function replaceMeshSmoothingGeometry(previous: THREE.BufferGeometry, next: THREE.BufferGeometry): boolean {
+  if (!geometryReplacer) return false;
+  try {
+    return geometryReplacer(previous, next);
+  } catch (err) {
+    console.error('[MeshSmoothingEngine] replacing the stroke\'s mesh failed', err);
+    return false;
+  }
+}
+
+/** Copy the topology's moved vertices back into every corner of the soup they weld. */
+function writeBackUniquePositions(topo: NonNullable<ReturnType<typeof getMeshTopology>>, applied: Uint32Array): void {
+  const arr = topo.positionAttribute.array as Float32Array;
+  for (let i = 0; i < applied.length; i++) {
+    const uid = applied[i];
+    const u3 = uid * 3;
+    const group = topo.groups[uid];
+    for (let gi = 0; gi < group.length; gi++) {
+      const v3 = group[gi] * 3;
+      arr[v3 + 0] = topo.uniquePositions[u3 + 0];
+      arr[v3 + 1] = topo.uniquePositions[u3 + 1];
+      arr[v3 + 2] = topo.uniquePositions[u3 + 2];
+    }
+  }
+  topo.positionAttribute.needsUpdate = true;
+}
+
+/**
+ * Smooth a finished stroke on `geometry`, synchronously: every vertex within the brush
+ * of one of its samples, by the same rule a stroke smoothed in place follows. Returns
+ * how many vertices moved. `mmPerUnit` is the model's scale on the plate.
+ */
+export function smoothStrokeOnGeometry(
+  geometry: THREE.BufferGeometry,
+  samples: ArrayLike<number>,
+  settings: MeshSmoothingSettings,
+  maxVertices: number,
+  mmPerUnit = 1,
+): number {
+  const topo = getMeshTopology(geometry);
+  if (!topo) return 0;
+  const radius = brushRadiusInModelUnits(settings, mmPerUnit);
+  const affected = new Set<number>();
+  const center = new THREE.Vector3();
+  for (let i = 0; i + 2 < samples.length; i += 3) {
+    center.set(samples[i], samples[i + 1], samples[i + 2]);
+    const near = queryUniqueVerticesInSphere(topo, center, radius);
+    for (let j = 0; j < near.length; j++) affected.add(near[j]);
+  }
+  if (affected.size === 0) return 0;
+
+  const applied = applyUniformSmoothingToTopology(topo, Uint32Array.from(affected), settings, maxVertices);
+  writeBackUniquePositions(topo, applied);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return applied.length;
+}
+
+/**
+ * Smooth the stroke on a copy of the mesh with its faces split under the brush, and put
+ * the copy in the model's place — when the faces there are longer than the brush, which
+ * would leave it nothing to move. Returns whether the stroke was handled that way.
+ */
+function smoothStrokeOnRefinedCopy(
+  geometry: THREE.BufferGeometry,
+  samples: ArrayLike<number>,
+  settings: MeshSmoothingSettings,
+  maxVertices: number,
+  mmPerUnit: number,
+): boolean {
+  if (!geometryReplacer) return false;
+  const radius = brushRadiusInModelUnits(settings, mmPerUnit);
+  const next = refineUnderStroke(geometry, samples, radius, radius * STROKE_EDGE_PER_RADIUS);
+  if (!next) return false;
+
+  smoothStrokeOnGeometry(next, samples, settings, maxVertices, mmPerUnit);
+  const replaced = replaceMeshSmoothingGeometry(geometry, next);
+  if (!replaced) next.dispose();
+  return replaced;
+}
+
+/** Drop a stroke that left the mesh alone (its model now has another one). */
+function releaseStroke(geometry: THREE.BufferGeometry): void {
+  activeStrokeGeometry.delete(geometry);
+  workerPendingFinalize = false;
+  if (workerActiveGeometry === geometry) {
+    workerActiveGeometry = null;
+    workerActiveGeometryKey = 0;
+  }
+}
+
+export function endMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): void {
   const pending = pendingInitByGeometry.get(geometry);
   if (pending) {
     pending.canceled = true;
@@ -873,9 +912,14 @@ export function endMeshSmoothingEngineStroke(geometry: THREE.BufferGeometry): vo
   const settings = getMeshSmoothingSettings();
   const maxVertices = 8000;
 
+  if (stroke && stroke.affectedUnique.size === 0 && smoothStrokeOnRefinedCopy(geometry, stroke.samples, settings, maxVertices, stroke.mmPerUnit)) {
+    releaseStroke(geometry);
+    return;
+  }
+
   // If we didn't collect affected verts during the stroke, compute them now from stroke samples.
   if (topo && stroke && stroke.affectedUnique.size === 0 && stroke.samples.length > 0) {
-    const radius = clampMeshSmoothingBrushSizeMm(settings.brushSizeMm);
+    const radius = brushRadiusInModelUnits(settings, stroke.mmPerUnit);
     const samples = stroke.samples;
     for (let i = 0; i + 2 < samples.length; i += 3) {
       const center = new THREE.Vector3(samples[i] ?? 0, samples[i + 1] ?? 0, samples[i + 2] ?? 0);

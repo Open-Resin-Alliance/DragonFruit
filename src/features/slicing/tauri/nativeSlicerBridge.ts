@@ -579,7 +579,7 @@ function toPayloadBytes(payload: ArrayBuffer | ArrayBufferView | number[]): Uint
  * normals as 9 `f32` per triangle for each body. The layout is specified in
  * `docs/dev/mesh-wire-formats.md`.
  *
- * The native loader refines coarse faces and returns each triangle's own face
+ * The native loader reads the mesh as written and returns each triangle's own face
  * normal, so the geometry matches what every other import path sees. Desktop
  * only — throws outside the Tauri runtime.
  */
@@ -607,7 +607,6 @@ export async function loadMeshFileFromNativePath(filePath: string, classify?: bo
 export async function loadMeshBytes(
   bytes: Uint8Array,
   classify: boolean,
-  refine = true,
 ): Promise<Uint8Array> {
   const core = await loadTauriCore();
   if (!core) {
@@ -618,7 +617,6 @@ export async function loadMeshBytes(
     headers: {
       'Content-Type': 'application/octet-stream',
       'x-mesh-classify': classify ? '1' : '0',
-      'x-mesh-refine': refine ? '1' : '0',
     },
   });
   return toPayloadBytes(payload);

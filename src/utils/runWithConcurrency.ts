@@ -4,7 +4,7 @@
  *
  * Results are discarded: the task records whatever it produced. That is the shape
  * this is for — overlapping the native round trips an import makes, where the
- * phases inside one item are partly serial (parse, refine, classify) and partly
+ * phases inside one item are partly serial (parse, classify) and partly
  * not (a GPU bake), so two in flight let one item's serial phase run during
  * another's.
  *
