@@ -870,16 +870,22 @@ This is the member-side counterpart of the forest resize, which runs the other w
 
 ## Rules worth knowing before you change placement
 
-- **A mesh patch is grounded only when its top is at the plate, not when its contact is.**
-  An overhang region's `contact` is its lowest footprint pixel, so the plate-contact
-  filter reading that alone wrote off a domed underside that touches the plate at one
-  point and climbs 15 mm: `annotateFilterFlags` marked the whole patch `grounded`, the
-  default toggles dropped it from `filteredIslands` (exactly what the Auto-Support
-  panel hands the run), and a part resting on the plate placed almost nothing while the
-  same part lifted 5 mm got a full forest. Grounding now asks the patch's own top
-  (`maxZ`) as well; islands that declare no top (voxel sections, minima) keep the
-  contact rule, where the contact *is* the base. Contacts closer to the plate than a
-  stump's root height still cannot be served and are refused as `STUMP_BELOW_ROOT`
+- **A mesh patch is grounded when its top is at the plate, or when it is a shallow
+  plate-contact patch.** An overhang region's `contact` is its lowest footprint pixel,
+  so the plate-contact filter reading that alone wrote off a domed underside that
+  touches the plate at one point and climbs 15 mm: `annotateFilterFlags` marked the
+  whole patch `grounded`, the default toggles dropped it from `filteredIslands`
+  (exactly what the Auto-Support panel hands the run), and a part resting on the plate
+  placed almost nothing while the same part lifted 5 mm got a full forest. Grounding
+  now asks the patch's own top (`maxZ`) as well; islands that declare no top (voxel
+  sections, minima) keep the contact rule, where the contact *is* the base. A shallow
+  plate-contact patch is the exception: an overhang whose top is within
+  `PLATE_CONTACT_PATCH_MAX_RISE_MM` (2 mm) of its plate contact is a base with a bevel
+  or draft, not a dome — the snowman's 1557 mm² base at 1.5° and 0.908 mm rise is
+  grounded. Excluding it raised that model's coverage from 9.7 % to 91.9 %; the
+  remaining stress there is a separate load-path problem, not a plate-contact one.
+  Contacts closer to the plate than a stump's root height still cannot be served and
+  are refused as `STUMP_BELOW_ROOT`
   (`stumpBuilder.ts`), which is the geometry talking, not a policy.
 - **A stump's body must clear the model, and no gate in the grid checks it.**
   A type with its own contact override returns from `decideGridPlacement` before the

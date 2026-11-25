@@ -31,6 +31,14 @@ export interface IslandFilterToggles {
   showPlateContact: boolean;
 }
 
+/**
+ * A mesh overhang patch whose top is this close above its plate contact is a
+ * plate-contact patch: the part rests on it, even if the underside has a small
+ * bevel or draft. A domed underside that only touches at one point climbs far
+ * more and stays unsupported.
+ */
+export const PLATE_CONTACT_PATCH_MAX_RISE_MM = 2;
+
 export const DEFAULT_FILTER_TOGGLES: IslandFilterToggles = {
   showAlreadySupported: false,
   showPlateContact: false,
@@ -72,7 +80,10 @@ export function annotateFilterFlags(
     // is at the plate too; islands without one (voxel sections, minima) keep the
     // contact rule, where the contact *is* the base.
     const topZ = Number.isFinite(island.maxZ) ? (island.maxZ as number) : island.contact.z;
-    island.grounded = island.contact.z <= plateCeil && topZ <= plateCeil + zTolerance;
+    const plateContactPatch = island.source === 'overhang'
+      && topZ - island.contact.z <= PLATE_CONTACT_PATCH_MAX_RISE_MM;
+    island.grounded = island.contact.z <= plateCeil
+      && (topZ <= plateCeil + zTolerance || plateContactPatch);
 
     const candidates = grid.query(island.contact.x, island.contact.y, maxRadius);
     let isSupported = false;

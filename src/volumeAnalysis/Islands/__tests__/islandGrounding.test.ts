@@ -43,14 +43,20 @@ test('a patch that only touches the plate is still unsupported, not grounded', (
   // Reading the contact alone hid the whole patch and the part got no supports.
   const dome = patch('o0', 0, 20);
   const flatBottom = patch('o1', 0, 0);
+  // The snowman base: contact at the plate, a 0.9 mm bevel/draft top. It rests
+  // on the plate just like the flat bottom and must not receive supports.
+  const shallowBase = patch('o2', 0.0003, 0.9078);
+  const climbingBase = patch('o3', 0, 3);
 
-  const annotated = annotate([dome, flatBottom]);
+  const annotated = annotate([dome, flatBottom, shallowBase, climbingBase]);
 
   assert.equal(annotated[0].grounded, false, 'a patch that rises off the plate needs support');
   assert.equal(annotated[1].grounded, true, 'a flat bottom resting on the plate is grounded');
+  assert.equal(annotated[2].grounded, true, 'a shallow plate-contact patch is grounded');
+  assert.equal(annotated[3].grounded, false, 'a patch climbing past the shallow rise still needs support');
 
   const visible = applyFilter(annotated, DEFAULT_FILTER_TOGGLES);
-  assert.deepEqual(visible.map((island) => island.id), ['o0']);
+  assert.deepEqual(visible.map((island) => island.id), ['o0', 'o3']);
 });
 
 test('a patch lifted clear of the plate is not grounded', () => {
