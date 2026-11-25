@@ -629,6 +629,8 @@ export function useImportExportManager({
     }
   }, [buildSyntheticFileChangeEvent, importSceneFilesWithPluginWarning, pickFilesWithNativeDialog, pickFilesWithWebInput, scene, expandPickedFilesWithZip]);
 
+  // Destructured so the dependency list can name the function instead of the whole (per-render) scene.
+  const loadSceneMeshFiles = scene.loadFiles;
   const handleOpenSceneDialog = React.useCallback(async () => {
     const nativeFiles = await pickSceneFilesWithNativeDialog();
     if (nativeFiles) {
@@ -654,7 +656,7 @@ export function useImportExportManager({
       }
 
       if (expandedFromZips.meshFiles.length > 0) {
-        void scene.loadFiles(expandedFromZips.meshFiles);
+        void loadSceneMeshFiles(expandedFromZips.meshFiles);
       }
       return;
     }
@@ -666,9 +668,9 @@ export function useImportExportManager({
       await importSceneFilesWithPluginWarning(expanded.sceneFiles, { resultingScenePath: null });
     }
     if (expanded.meshFiles.length > 0) {
-      void scene.loadFiles(expanded.meshFiles);
+      void loadSceneMeshFiles(expanded.meshFiles);
     }
-  }, [importSceneFilesWithPluginWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput, expandPickedFilesWithZip]);
+  }, [importSceneFilesWithPluginWarning, pickSceneFilesWithNativeDialog, pickFilesWithWebInput, expandPickedFilesWithZip, loadSceneMeshFiles]);
 
   const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
     if (!entries || entries.length === 0) return false;

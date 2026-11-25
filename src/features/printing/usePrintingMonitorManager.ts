@@ -2476,7 +2476,6 @@ export function usePrintingMonitorManager(deps: PrintingMonitorManagerDeps) {
     if (isPrintingMonitorWebcamResetBusy) return;
 
     const host = monitoringDeviceHost;
-    const port = monitoringDevicePort;
     if (!printingMonitorModalOpen || !monitoringDeviceId || !host) {
       setPrintingMonitorWebcamInfo({
         available: false,
