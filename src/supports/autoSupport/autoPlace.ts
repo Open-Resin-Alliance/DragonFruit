@@ -6132,7 +6132,16 @@ export function computeAutoSupportPlan(
                     includeNonOverhang: true,
                     source: island.source,
                     idPrefix: isStart ? 'start' : 'island',
-                }).map((c): CandidatePoint => ({ ...c, modelId, interior: false }));
+                }).map((c): CandidatePoint => ({
+                    ...c,
+                    modelId,
+                    interior: false,
+                    // A start in a pocket may have no vertical plate path but a
+                    // clear fan/merge from the supports around it — which is how
+                    // a user reaches the same island by hand. Grid points force
+                    // standalone trunks and skip that path.
+                    ...(isStart ? { gridPoint: false } : {}),
+                }));
 
                 // Point-only islands (no contact footprint) still get the
                 // contact their recipe asks for.
@@ -6147,7 +6156,7 @@ export function computeAutoSupportPlan(
                         islandAreaMm2: autoSettings.areaPerSupportMm2,
                         zHeight: island.contact.z,
                         priority: 0,
-                        gridPoint: true,
+                        gridPoint: !isStart,
                         interior: false,
                     }];
                 }
