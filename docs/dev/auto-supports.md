@@ -880,6 +880,36 @@ This is the member-side counterpart of the forest resize, which runs the other w
 
 **Where the thickness actually comes from (finding, not tuned here).** The floor is relative, so it cannot make a forest chunky by itself — it only tracks a host that is already thick. The host's own diameter is the model-scale term: at ×1.6 the harness hosts sit at 1.62 mm against a 1.0 mm band, and with the model terms at ×1 they sit at 1.01 mm (measured: sizeScale 1 → 1.01, 1.25 → 1.27, 1.6 → 1.62, 2.0 → 2.03). A `base Ø1.00 · h1.25 → Ø1.93mm` note is therefore ~×1.55 of model factor, not height alone (the note prints only `h`; see the two findings in the forest-report section). `MAX_SHAFT_DIAMETER_MM` is not the binder anywhere near the reported sizes: at ×2.0 every harness host reads 2.03 mm and none at ×1.6 does — and that ×2.0 is the user's own `sizeScale`, which is allowed past the cap by design. Retuning those factors is a separate decision.
 
+## Desktop scan profile
+
+The desktop scan is fast enough that resolution tricks are not the lever. On
+`snowman_01` (506,188 triangles, 0.1 mm / 0.05 mm), the release Rust core
+measured:
+
+| phase | time |
+|---|---:|
+| load + parse | 0.078 s |
+| voxel raster | 0.031 s |
+| voxel scan | 0.038 s |
+| minima scan | 0.179 s |
+| overhang classification | 0.064 s |
+| stability report | 0.042 s |
+
+The app runs those families concurrently, so the wall clock is the largest
+phase (minima) plus load and serialization, not their sum. Re-run with:
+
+```bash
+DF_PROFILE_STL=/path/to/model.stl cargo test --release scan_profile -- --ignored --nocapture
+```
+
+The 8.8 s figure reported earlier came from the **TS fallback detector** on the
+same mesh, not the desktop Rust path. A coarse voxel pass was tried and reverted:
+it saved ~0.03 s of raster/scan while coarsening the voxel islands. If a desktop
+scan feels slow, profile the Tauri IPC payload and the frontend annotation /
+renderer cascade before changing the scan grid; the log shows renderer commits,
+WebGL context loss, and `bracing:stress` / `resize:cross-repair` spikes, not the
+island arithmetic.
+
 ## Rules worth knowing before you change placement
 
 - **A mesh patch is grounded when its top is at the plate, or when it is a shallow
