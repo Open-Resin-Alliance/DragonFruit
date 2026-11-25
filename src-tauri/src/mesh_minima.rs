@@ -741,6 +741,13 @@ pub struct CombinedIslandScanResult {
 /// `triangleId` in the overhang output indexes the rendered geometry. The three
 /// scans run concurrently on one welded mesh, which is what keeps the combined
 /// command cheaper than three separate passes.
+/// The voxel family runs at half resolution in each axis: 4x fewer cells in
+/// XY and 2x fewer layers. The overhang/minima families stay at the caller's
+/// fine resolution, so contact geometry and shallow overhangs are not
+/// coarsened. This is the coarse half of the scan; the fine half already runs
+/// on the mesh.
+const VOXEL_COARSE_FACTOR: f64 = 2.0;
+
 fn scan_islands_from_mesh(
     app: crate::DragonFruitAppHandle,
     mesh: IndexedMesh,
@@ -768,20 +775,22 @@ fn scan_islands_from_mesh(
 
     let ox = bbox.min.x as f64;
     let oz = -bbox.max.y as f64;
-    let gw = ((bbox.max.x as f64 - bbox.min.x as f64) / px_mm).ceil().max(1.0) as i32;
-    let gh = ((bbox.max.y as f64 - bbox.min.y as f64) / px_mm).ceil().max(1.0) as i32;
+    let voxel_px_mm = px_mm * VOXEL_COARSE_FACTOR;
+    let voxel_layer_height_mm = layer_height_mm * VOXEL_COARSE_FACTOR;
+    let gw = ((bbox.max.x as f64 - bbox.min.x as f64) / voxel_px_mm).ceil().max(1.0) as i32;
+    let gh = ((bbox.max.y as f64 - bbox.min.y as f64) / voxel_px_mm).ceil().max(1.0) as i32;
     let model_height = bbox.max.z as f64 - bbox.min.z as f64;
-    let num_layers = (model_height / layer_height_mm).ceil().max(0.0) as usize;
+    let num_layers = (model_height / voxel_layer_height_mm).ceil().max(0.0) as usize;
 
     let connectivity_enum = if connectivity == 4 { Connectivity::Four } else { Connectivity::Eight };
 
     let job = IslandScanJob {
-        px_mm,
+        px_mm: voxel_px_mm,
         support_buffer_mm,
         connectivity: connectivity_enum,
         min_island_area_mm2: 0.0001,
-        layer_height_mm,
-        grid: GridRef { origin_x: ox, origin_z: oz, width: gw, height: gh, px_mm },
+        layer_height_mm: voxel_layer_height_mm,
+        grid: GridRef { origin_x: ox, origin_z: oz, width: gw, height: gh, px_mm: voxel_px_mm },
         num_layers: num_layers as u32,
         min_overlap_px: 1,
         overlap_neighborhood_px: 1,
@@ -813,7 +822,7 @@ fn scan_islands_from_mesh(
                 bbox.min.x as f64, bbox.max.x as f64,
                 bbox.min.y as f64, bbox.max.y as f64,
                 bbox.min.z as f64, bbox.max.z as f64,
-                px_mm, layer_height_mm,
+                voxel_px_mm, voxel_layer_height_mm,
             );
             let rasterize_sec = rasterize_start.elapsed().as_secs_f64();
             log::info!("[islands-combined] Rasterized {} layers in {:.1}s", num_layers, rasterize_sec);
@@ -868,14 +877,14 @@ fn scan_islands_from_mesh(
                         (
                             cx as f32,
                             cy as f32,
-                            bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm,
+                            bbox.min.z as f64 + island.first_layer as f64 * voxel_layer_height_mm,
                         )
                     } else if let Some(c) = island.centroid {
                         let (cx, cy) = scan_result.grid.pixel_center_to_world_xy(c.x, c.y);
                         (
                             cx as f32,
                             cy as f32,
-                            bbox.min.z as f64 + island.first_layer as f64 * layer_height_mm,
+                            bbox.min.z as f64 + island.first_layer as f64 * voxel_layer_height_mm,
                         )
                     } else {
                         (0.0_f32, 0.0_f32, 0.0_f64)
@@ -886,13 +895,21 @@ fn scan_islands_from_mesh(
                         epsilon, &z_buckets, z_min, z_range, num_buckets, &mesh,
                     );
 
-                    build_voxel_island_from_scan(
+                    let mut built = build_voxel_island_from_scan(
                         idx,
                         island,
                         contact,
                         raw_base_z,
                         footprint.clone(),
-                    )
+                    );
+                    // The UI and the fine families address layers at the
+                    // caller's layer height; report the coarse span in those
+                    // units.
+                    built.layer_span = [
+                        (built.layer_span[0] as f64 * VOXEL_COARSE_FACTOR) as u32,
+                        (built.layer_span[1] as f64 * VOXEL_COARSE_FACTOR) as u32,
+                    ];
+                    built
                 })
                 .collect();
             log::info!(
