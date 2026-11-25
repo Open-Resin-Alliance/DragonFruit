@@ -351,7 +351,7 @@ async function runLoop() {
 
       const res = job.type === 'finalize' ? doFinalize(job) : doSmoothing(job);
       if (res) {
-        (self as any).postMessage(res, [res.applied.buffer, res.newPositions.buffer]);
+        self.postMessage(res, { transfer: [res.applied.buffer, res.newPositions.buffer] });
       }
 
       // Yield so the worker can receive a newer pending job quickly.

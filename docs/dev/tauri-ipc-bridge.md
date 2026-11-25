@@ -261,40 +261,43 @@ span is long does not separate a coarse base from a genuine crevice, since both 
 on short edges, and smoothing does not help either: on a fan the mesh-graph
 neighbours are ten millimetres away in space.
 
-Import through `io::load_mesh_from_path`, never the format loaders (`io::stl::load`,
-`io::obj::load`, `io::three_mf::load`) directly. The refinement lives in the
-dispatcher, and the shell's STL path called `io::stl::load` for a while, so the
-model in the viewport was never refined while every probe that called the
-dispatcher said it was.
+**The fix is a second mesh, not a change to the model's.** `refine_coarse_faces`
+(`dragonfruit-mesh-repair::io`) splits faces longer than 2% of the model's
+diagonal, a quarter of the occlusion reach. It used to run inside the loaders, on
+the model itself, so that the triangle ids the overhang scan, support placement,
+masks and caches index would never move under them. That made the model the file
+was not: every load grew it, an export wrote the grown mesh (a re-exported Benchy
+went from 11 to 19 MB), a VOXL stored it and the next load grew it again, and
+every path that built a mesh outside the loaders — a VOXL chunk parsed in the
+renderer, a plugin import, an operation's result — escaped it.
 
-A plugin cannot call native code, so geometry an importer builds in the renderer
-(LYS, via `plugins/lys-import/`) never reaches that dispatcher either. The host
-calls `refine_mesh_soup` after a plugin import instead: soup in the request body,
-`[u32 triangle count][positions][normals]` out. It welds the mesh on the way in,
-which is what gives the refinement shared edges to split, and it returns the face
-normals for the same reason the loaders do, so the importer does not have to
-derive them in TypeScript.
+Now the loaders read every file as written, and the renderer refines a copy it
+only draws: the model's *display mesh* (`GeometryWithBounds.displayGeometry`).
+The scene asks for it in one place, a reconciler in `useSceneCollectionManager`
+that calls `requestDisplayGeometry` (`src/features/scene/displayMesh.ts`) for any
+model mesh without one — loaded, replaced by an operation, split by a cut,
+restored by undo — memoized per mesh, and attaches it when it lands. The AO bakes
+the display mesh; saving, exporting, slicing, scans and operations read the
+model's. A headless session never asks, so the CLIs and the scripting API see the
+same meshes the app saves.
 
-The fix is at the source. `io::load_mesh_from_path` refines faces longer than 2% of
-the model's diagonal, which is a quarter of the occlusion reach, before anything
-derives data from the mesh, because triangle ids are what the overhang scan,
-support placement, masks and caches index. Measured on that base: the longest edge
-went from 16.8mm to 1.1mm, its vertices from 1608 to 10261, the model from 150k to
-171k triangles (+14%), the bake from 63ms to 74ms, and the refinement itself costs
-10ms. Meshes that are already fine are returned untouched, so the common case pays
-one pass over the triangles and nothing else.
+The request is `refine_mesh_soup`: soup in the request body, a `DFMX` payload out
+(docs/dev/mesh-wire-formats.md). No bodies means the mesh had nothing to split;
+otherwise one body, the refined mesh with its face normals, and the header's token
+naming it in the bake registry, so the AO asks for it by token instead of being
+sent the soup back. The command welds the mesh on the way in, which is what gives
+the refinement shared edges to split. It is asked only below
+`DISPLAY_REFINE_MAX_TRIANGLES` (400k) and only when an edge is longer than the
+limit: the command costs the mesh in traffic, and a mesh with faces too long for
+the field is a mesh with few of them, so the meshes that need it are the ones
+small enough to send. Above that limit a large mesh with a few huge faces draws
+its own mesh, which is a real gap and the rarer one.
 
-**Two paths escaped it, and one of them escaped the budget too.** A VOXL scene
-carries its models' original STL bytes in its MESH chunks, and the loader handed
-them to three's `STLLoader` in the renderer (`loadStlGeometryFromBuffer`), which
-is neither the native file dispatcher nor the plugin command, so a scene's models
-were never refined at all. The same call now asks `refine_mesh_soup`, which also
-gives them the face normals the native loaders produce, and it
-asks only below `REFINE_MAX_TRIANGLES` (400k): the command costs twice the mesh in
-traffic, and a mesh with faces too long for the field is a mesh with few of them,
-so the meshes that need it are the ones small enough to send. Above that limit a
-large mesh with a few huge faces still goes unrefined, which is a real gap and the
-rarer one.
+Measured on that base, when the refinement still ran on the model: the longest
+edge went from 16.8mm to 1.1mm, its vertices from 1608 to 10261, the mesh from
+150k to 171k triangles (+14%), the bake from 63ms to 74ms, and the refinement
+itself costs 10ms. Meshes that are already fine have nothing to split, so the
+common case pays one pass over the triangles and nothing else.
 
 The budget was the second half. It was `1.3x` the *current* triangle count, spent
 longest-edge-first, which is proportional to the mesh that most needs it: measured
@@ -376,7 +379,8 @@ magnitude is off by two orders of magnitude at the ends of its range.
 A raw body is the soup — the mesh in the request, as above — and is what a geometry the
 loader never had sends: a plugin's geometry, a repaired one, a file out of a zip. A
 **JSON** body is `{ meshToken, expectedCorners, rays? }`: the token the loader put in the
-`DFMX` header for that model, naming the refined mesh it kept in `mesh_repair`'s registry.
+`DFMX` header for that model (or `refine_mesh_soup` put in a display mesh's), naming the
+mesh it kept in `mesh_repair`'s registry.
 That path skips the upload (36 bytes a triangle, 430 MB across a scene) *and* the weld
 the native side would do, because the registered mesh is already welded and indexed; the
 response is identical in shape (one `f32` per corner, in the mesh's triangle order, which
@@ -395,7 +399,7 @@ a body table, then one zlib-packed body per model (positions and normals).
 `load_mesh_file` takes `filePath` and an optional `classify` (default true). It
 dispatches through `io::load_mesh_bodies_from_path` — `stl`/`obj` give one body;
 `3mf` gives one per `<build><item>` expanded through its components, with
-transforms baked — refines coarse faces per body, and adds one STL-only step in
+transforms baked — reads each body as written, and adds one STL-only step in
 front: a mesh too large to render (its triangle count read from the binary-STL
 header) is decimated into a preview, and an oversized ASCII STL is refused.
 
@@ -426,7 +430,8 @@ one at the price of the whole classify pass (430 ms of a 550 ms load on a
 725k-triangle model; 11.9 s over the 13-model scene in `backlog.md`).
 `classificationForPayload` then checks the stored report against the payload that
 came back — its `pre.triangle_count` must match — and drops it when it does not, so
-a file written under another refinement rule still gets classified.
+a file whose stored mesh the loader no longer reproduces (one written while the
+loaders still refined) still gets classified.
 
 ### Deferred post-processing
 

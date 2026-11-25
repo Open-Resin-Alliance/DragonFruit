@@ -3,6 +3,7 @@ import { FootprintProfile, RaftSettings } from '../RaftTypes';
 import { insetConvexPolygon } from './insetConvexPolygon';
 import { generatePerimeterWall } from './generatePerimeterWall';
 import { signedArea2d } from './signedArea2d';
+import { offsetRingResolvingFolds } from './offsetRingResolvingFolds';
 
 const LOOP_EPS = 1e-4;
 
@@ -86,6 +87,83 @@ function sanitizeLoop(loop: THREE.Vector2[]): THREE.Vector2[] {
   return compacted;
 }
 
+/** The wall's other three rings, each paired vertex for vertex with the outer one. */
+type WallLoops = {
+  inner: THREE.Vector2[];
+  topOuter: THREE.Vector2[];
+  topInner: THREE.Vector2[];
+};
+
+/**
+ * The rings as offset by `insetConvexPolygon`. Exact for the convex hull an
+ * uncut raft has; null where an offset folds or loses a vertex, which a
+ * clearance notch causes.
+ */
+function convexWallLoops(outer: THREE.Vector2[], wallThickness: number, topInset: number): WallLoops | null {
+  if (!isConvexLoop(outer)) return null;
+  const inner = sanitizeLoop(insetConvexPolygon(outer, wallThickness));
+  if (inner.length < 3) return null;
+
+  // Inset the top loops to create the slope
+  // If topInset is 0, topOuter === outer (vertical wall)
+  // We use -topInset to OUTSET (expand) the top, creating an outward flare
+  const topOuter = sanitizeLoop(topInset > 0.001 ? insetConvexPolygon(outer, -topInset) : outer);
+  const topInner = sanitizeLoop(topInset > 0.001 ? insetConvexPolygon(inner, -topInset) : inner);
+
+  if (
+    inner.length !== outer.length
+    || topOuter.length !== outer.length
+    || topInner.length !== outer.length
+  ) {
+    return null;
+  }
+  return { inner, topOuter, topInner };
+}
+
+/** Every corner turns the same way: the only rings `insetConvexPolygon` offsets correctly. */
+function isConvexLoop(loop: readonly THREE.Vector2[]): boolean {
+  const n = loop.length;
+  let left = false;
+  let right = false;
+  for (let i = 0; i < n; i += 1) {
+    const turn = cross(loop[(i - 1 + n) % n], loop[i], loop[(i + 1) % n]);
+    if (turn > 0) left = true;
+    else if (turn < 0) right = true;
+    if (left && right) return false;
+  }
+  return true;
+}
+
+/** A ring the wall can be built on once repeated points are set aside. */
+function isUsableWallLoop(loop: readonly THREE.Vector2[]): boolean {
+  const distinct: THREE.Vector2[] = [];
+  for (const point of loop) {
+    const prev = distinct[distinct.length - 1];
+    if (!prev || prev.distanceToSquared(point) > LOOP_EPS * LOOP_EPS) distinct.push(point);
+  }
+  if (distinct.length >= 2 && distinct[0].distanceToSquared(distinct[distinct.length - 1]) <= LOOP_EPS * LOOP_EPS) {
+    distinct.pop();
+  }
+  return distinct.length >= 3 && isSimpleLoop(distinct) && signedArea2d(distinct) > LOOP_EPS;
+}
+
+/**
+ * The rings for an outer ring a clearance cut has made concave. Edges of the cut
+ * shorter than the offset collapse to a point on the offset rings (see
+ * `offsetRingResolvingFolds`), so the wall keeps its lip and its channels along
+ * the rest of the perimeter instead of falling back to a plain wall everywhere.
+ */
+function foldResolvedWallLoops(outer: THREE.Vector2[], wallThickness: number, topInset: number): WallLoops | null {
+  const flared = topInset > 0.001;
+  const inner = offsetRingResolvingFolds(outer, wallThickness);
+  const topOuter = flared ? offsetRingResolvingFolds(outer, -topInset) : outer.map((p) => p.clone());
+  // The top of the inner face is the inner ring moved out by the same flare.
+  const topInner = flared ? offsetRingResolvingFolds(outer, wallThickness - topInset) : inner;
+  if (!inner || !topOuter || !topInner) return null;
+  if (!isUsableWallLoop(inner) || !isUsableWallLoop(topOuter) || !isUsableWallLoop(topInner)) return null;
+  return { inner, topOuter, topInner };
+}
+
 /**
  * Generate a crenelated wall by manually building geometry with rectangular gaps.
  * Places 3 evenly-spaced rectangular gaps on each straight edge segment.
@@ -114,34 +192,16 @@ export function generateCrenelatedWallManual(
     return new THREE.Mesh(new THREE.BufferGeometry());
   }
 
-  const inner = sanitizeLoop(insetConvexPolygon(outer, wallThickness));
-  if (inner.length < 3) {
+  const loops = convexWallLoops(outer, wallThickness, topInset)
+    ?? foldResolvedWallLoops(outer, wallThickness, topInset);
+  if (!loops) {
     return generatePerimeterWall(outer, {
       wallThickness,
       wallHeight,
       thickness: settings.thickness,
     });
   }
-
-  // Inset the top loops to create the slope
-  // If topInset is 0, topOuter === outer (vertical wall)
-  // We use -topInset to OUTSET (expand) the top, creating an outward flare
-  const topOuter = sanitizeLoop(topInset > 0.001 ? insetConvexPolygon(outer, -topInset) : outer);
-  const topInner = sanitizeLoop(topInset > 0.001 ? insetConvexPolygon(inner, -topInset) : inner);
-
-  if (
-    inner.length !== outer.length
-    || topOuter.length !== outer.length
-    || topInner.length !== outer.length
-    || topOuter.length < 3
-    || topInner.length < 3
-  ) {
-    return generatePerimeterWall(outer, {
-      wallThickness,
-      wallHeight,
-      thickness: settings.thickness,
-    });
-  }
+  const { inner, topOuter, topInner } = loops;
 
   const n = outer.length;
   const zBase = settings.thickness;

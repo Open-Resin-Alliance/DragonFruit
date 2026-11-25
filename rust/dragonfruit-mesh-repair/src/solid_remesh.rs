@@ -253,18 +253,6 @@ pub fn solid_remesh_with_progress(
         crate::shells::remove_noise_shells(&mut prepared);
     }
 
-    // 6. Put the detail back at the density the loader would.
-    //
-    // The resolve triangulates a flat region as one polygon, so the whole underside of a plate comes
-    // back as a single fan of needles bridging its pockets, and `as_original` cannot help: on a round
-    // trip there is no operand for the provenance to point at, and the construction is what
-    // re-triangulated. Measured on `Gusano_de_Dune_70%.stl`, over its underside: the input's own
-    // triangulation is even, the resolve's is not, and the app takes the repaired positions straight
-    // from the repair rather than re-reading them through the loader, so nothing downstream was going
-    // to fix it. This applies the loader's own rule, at its own threshold and budget, so a rebuild
-    // hands back a surface at the density a read would have given it.
-    let prepared = crate::io::refine_coarse_faces(prepared);
-
     let shells_after = shells_of(&prepared);
     let output_triangles = prepared.triangles.len();
     SolidRemeshOutcome {

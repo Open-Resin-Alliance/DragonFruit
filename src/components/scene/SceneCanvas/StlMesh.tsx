@@ -20,6 +20,7 @@ import {
   ensureMeshSmoothingEngineReady,
 } from '@/features/mesh-smoothing/meshSmoothingEngine';
 import {
+  getSupportBlockerBrushSizeMm,
   paintSupportBlockers,
   beginSupportBlockerStroke,
   setSupportBlockerHover,
@@ -38,6 +39,18 @@ import { prewarmSupportPlacementAsync } from '@/supports/PlacementLogicV3/suppor
 /** three-mesh-bvh reads `firstHitOnly` off the raycaster; three's own type lacks it. */
 type BvhRaycaster = THREE.Raycaster & { firstHitOnly?: boolean };
 const _clipFallbackRaycaster: BvhRaycaster = new THREE.Raycaster();
+const _plateScale = new THREE.Vector3();
+
+/**
+ * Printed millimetres per unit of `object`'s mesh. The brushes are sized in millimetres
+ * and paint the mesh in its own units, so a model scaled on the plate needs its radius
+ * divided by this. A non-uniform scale gets the mean.
+ */
+function mmPerMeshUnit(object: THREE.Object3D): number {
+  _plateScale.setFromMatrixScale(object.matrixWorld);
+  const scale = Math.cbrt(Math.abs(_plateScale.x * _plateScale.y * _plateScale.z));
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
 const _interiorCavityRaycaster: BvhRaycaster = new THREE.Raycaster();
 const _interiorCavityRaycastMesh = new THREE.Mesh();
 
@@ -397,6 +410,7 @@ function hasVisibleHolePunchIntersection(
 
 function StlMeshComponent({
   geometry,
+  displayGeometry,
   clipLower,
   clipUpper,
   meshColor,
@@ -461,7 +475,10 @@ function StlMeshComponent({
   cavityGeometry,
   children,
 }: {
+  /** The model's own mesh: picking, painting, smoothing and the triangle-id overlays use it. */
   geometry: THREE.BufferGeometry;
+  /** What to draw instead, when the model has a display mesh (see `GeometryWithBounds`). */
+  displayGeometry?: THREE.BufferGeometry;
   clipLower?: number | null;
   clipUpper?: number | null;
   meshColor?: string;
@@ -644,7 +661,21 @@ function StlMeshComponent({
       intersects: THREE.Intersection[],
     ) {
       if (isSupportDimmedRef.current && supportDimRaycastBlockedRef.current) return;
-      THREE.Mesh.prototype.raycast.call(this, raycaster, intersects);
+      // Hit the model's own mesh, not the display mesh it draws, so every
+      // `faceIndex` a consumer reads addresses `geometry` — the mesh the scans,
+      // the blockers and the BVH are built on.
+      const own = this.userData.raycastGeometry as THREE.BufferGeometry | undefined;
+      const drawn = this.geometry;
+      if (!own || own === drawn) {
+        THREE.Mesh.prototype.raycast.call(this, raycaster, intersects);
+        return;
+      }
+      this.geometry = own;
+      try {
+        THREE.Mesh.prototype.raycast.call(this, raycaster, intersects);
+      } finally {
+        this.geometry = drawn;
+      }
     } as THREE.Mesh['raycast'],
   );
 
@@ -678,6 +709,16 @@ function StlMeshComponent({
     );
   }, [geometry]);
 
+  // The viewport draws the display mesh: the same surface with its long faces split
+  // for the AO. Picking, painting, smoothing and the overlays keyed by triangle id
+  // stay on `geometry`, the model's own mesh — the raycast swaps it in. Two
+  // views draw `geometry` itself because they are about its triangles: the
+  // wireframe shader, and smoothing, which edits `geometry` in place mid-stroke.
+  const isSmoothingThisModel = mode === 'prepare' && transformMode === 'smoothing' && Boolean(isActiveModel);
+  const renderGeometry = displayGeometry && shaderType !== 'wireframe' && !isSmoothingThisModel
+    ? displayGeometry
+    : geometry;
+
   // Baked per-vertex occlusion (see docs/dev/backlog.md). The bake attaches the
   // attribute in the background, so a model can gain it while mounted, and the
   // geometry object keeps its identity — the store's per-geometry counter is what
@@ -686,18 +727,18 @@ function StlMeshComponent({
   // map and the raft with.
   const bakedAoVersion = React.useSyncExternalStore(
     subscribeToBakedOcclusionVersions,
-    () => bakedOcclusionVersion(geometry),
+    () => bakedOcclusionVersion(renderGeometry),
     getBakedOcclusionServerVersion,
   );
   const bakedAoStrength = React.useMemo(() => {
-    const occlusion = geometry.getAttribute(BAKED_OCCLUSION_ATTRIBUTE);
-    return occlusion && occlusion.count === geometry.getAttribute('position').count
+    const occlusion = renderGeometry.getAttribute(BAKED_OCCLUSION_ATTRIBUTE);
+    return occlusion && occlusion.count === renderGeometry.getAttribute('position').count
       ? bakedOcclusionStrength(bakedAoIntensity)
       : 0;
-    // The bake writes the attribute into `geometry` in place: its version is the only
-    // thing that changes, so it is what tells this memo to read the attribute again.
+    // The bake writes the attribute into `renderGeometry` in place: its version is the
+    // only thing that changes, so it is what tells this memo to read the attribute again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [geometry, bakedAoVersion, bakedAoIntensity]);
+  }, [renderGeometry, bakedAoVersion, bakedAoIntensity]);
 
   const hasVertexColorAttribute = React.useMemo(() => {
     const colorAttr = geometry.getAttribute('color');
@@ -1322,8 +1363,8 @@ if (uDitherAmount > 0.0) {
           else if (actualMeshRef) (actualMeshRef as React.MutableRefObject<THREE.Mesh | null>).current = node;
           if (node) applyRaycastDisabledState();
         }}
-        userData={{ modelId, thumbnailTintTarget: 'modelMesh', cavityGeometry }}
-        geometry={geometry}
+        userData={{ modelId, thumbnailTintTarget: 'modelMesh', cavityGeometry, raycastGeometry: geometry }}
+        geometry={renderGeometry}
         position={meshLocalOffset}
         renderOrder={baseShaderType === 'xray' ? 10010 : isSupportDimmed ? 2 : 0}
         onClick={(e) => {
@@ -1629,7 +1670,7 @@ if (uDitherAmount > 0.0) {
                 localPoint.copy(e.point);
                 e.object.worldToLocal(localPoint);
 
-                paintSupportBlockers(modelId, geometry, localPoint);
+                paintSupportBlockers(modelId, geometry, localPoint, getSupportBlockerBrushSizeMm() / mmPerMeshUnit(e.object));
               }
             }
           }
@@ -1785,7 +1826,7 @@ if (uDitherAmount > 0.0) {
             beginMeshSmoothingStroke(e.point.clone(), normal);
 
             onSmoothingGeometryActivate?.(geometry);
-            beginMeshSmoothingEngineStroke(geometry);
+            beginMeshSmoothingEngineStroke(geometry, mmPerMeshUnit(e.object));
           }
           if ((mode === 'prepare' || mode === 'support') && transformMode === 'supportBlockers' && isActiveModel && e.button === 0) {
             beginSupportBlockerStroke(modelId);
@@ -1794,7 +1835,7 @@ if (uDitherAmount > 0.0) {
             localPoint.copy(e.point);
             e.object.worldToLocal(localPoint);
 
-            paintSupportBlockers(modelId, geometry, localPoint);
+            paintSupportBlockers(modelId, geometry, localPoint, getSupportBlockerBrushSizeMm() / mmPerMeshUnit(e.object));
           }
         }}
       >
@@ -1895,7 +1936,7 @@ if (uDitherAmount > 0.0) {
           assigned resin. Hover gets a fainter grey rim instead of a tint. */}
       {materialOutlineEnabled && isEffectivelySelected && selectedBodyIndices.length === 0 && (
         <MaterialOutlineRim
-          geometry={geometry}
+          geometry={renderGeometry}
           position={meshLocalOffset}
           scale={materialOutlineScale}
           color="#ffffff"
@@ -1907,7 +1948,7 @@ if (uDitherAmount > 0.0) {
       )}
       {materialOutlineEnabled && !isEffectivelySelected && (isHoveredModel || isMarqueeHovered) && (
         <MaterialOutlineRim
-          geometry={geometry}
+          geometry={renderGeometry}
           position={meshLocalOffset}
           scale={materialHoverOutlineScale}
           color="#9aa0aa"
@@ -1959,13 +2000,13 @@ if (uDitherAmount > 0.0) {
       )}
 
       {outOfBoundsMaterial && (
-        <mesh geometry={geometry} position={meshLocalOffset} renderOrder={3} raycast={() => null}>
+        <mesh geometry={renderGeometry} position={meshLocalOffset} renderOrder={3} raycast={() => null}>
           <primitive object={outOfBoundsMaterial} attach="material" />
         </mesh>
       )}
 
       {supportPlacementGuideEnabled && supportPlacementGuideMaterial && (
-        <mesh geometry={geometry} position={meshLocalOffset} renderOrder={4} raycast={() => null}>
+        <mesh geometry={renderGeometry} position={meshLocalOffset} renderOrder={4} raycast={() => null}>
           <primitive object={supportPlacementGuideMaterial} attach="material" />
         </mesh>
       )}
@@ -1975,7 +2016,7 @@ if (uDitherAmount > 0.0) {
         // striped. Falls back to the full geometry when there is no model/support
         // split, in which case the whole mesh is the part.
         <mesh
-          geometry={modelSectionGeometry ?? geometry}
+          geometry={modelSectionGeometry ?? renderGeometry}
           position={meshLocalOffset}
           renderOrder={5}
           raycast={() => null}

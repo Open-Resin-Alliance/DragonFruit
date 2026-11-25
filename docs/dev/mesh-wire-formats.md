@@ -1,7 +1,9 @@
 # Mesh Wire Format (DFMX)
 
 One binary payload carries a mesh from Rust to the renderer: `DFMX`, written by
-`encode_mesh_bodies` and returned by the `load_mesh_file` command. It is
+`encode_mesh_bodies` and returned by the `load_mesh_*` commands and by
+`refine_mesh_soup` (a model's display mesh: no bodies when there is nothing to
+split, otherwise one, with its token set). It is
 little-endian, versioned, and holds one or more *bodies*. Each body ends in the
 same soup: positions (9 `f32` per triangle), then one normal per corner (9 `f32` per
 triangle — each triangle's own geometric normal, see `dragonfruit_mesh_core::normals`).
@@ -63,15 +65,15 @@ construction.
 Because bodies are laid out as separate soups, a body's vertices are not welded
 *across* bodies — matching a 3MF, where each build item is an independent solid.
 
-The reader is `decodeDfmx` (`src/hooks/useStlGeometry.ts`), which returns the bodies
+The reader is `decodeDfmx` (`src/utils/dfmx.ts`), which returns the bodies
 plus the header facts a preview needs (flags, original and model counts). Each packed
 body is a view into the payload buffer — the payload is the body of a `fetch` response
 (Tauri's IPC is a custom-protocol fetch) and belongs to that call — and the unpacked
 soup becomes the geometry's storage, so nothing is copied twice.
 
 **The token in the header's last slot keeps the soup off the wire a second time.** The
-loader has each model's refined mesh in hand when it encodes the payload, so it registers
-it and reports the token here; the AO bake asks for that mesh by token instead of being
+loader has each model's mesh in hand when it encodes the payload, so it registers it and
+reports the token here (and `refine_mesh_soup` does the same for a display mesh); the AO bake asks for that mesh by token instead of being
 sent a soup back — forty bytes against 36 bytes a triangle, which is 430 MB across a
 scene. The field is unchanged by construction: the loader's weld and the bake's re-weld
 of the same soup were measured to produce the same vertex set and a bit-identical field
@@ -85,9 +87,8 @@ caller's.
 What counts as a body is the loader's decision:
 
 - `io::load_mesh_from_path` returns a single mesh and is what analysis and repair
-  use. Import through it, never a format loader, so coarse faces are refined.
-- `io::load_mesh_bodies_from_path` returns every body a file declares, each
-  refined. `stl`, `obj` and the staged formats give one body; `3mf` gives one per
+  use.
+- `io::load_mesh_bodies_from_path` returns every body a file declares. `stl`, `obj` and the staged formats give one body; `3mf` gives one per
   `<build><item>` expanded through its components, with the composed transform
   baked into the vertices (`three_mf::load_bodies`).
 
@@ -114,16 +115,15 @@ bytes in the request body and writes the same payload, so both share one decoder
 passes `(sourcePath, offset, length, compression)` and the file's range is read and
 inflated inside Rust, so a VOXL scene never holds its meshes' bytes in the webview.
 
-**Refinement is opt-out, and a stored scene mesh opts out.** `refine_coarse_faces`
-splits triangles longer than 2% of the bbox diagonal, and it is not idempotent: run it
-over a mesh it already produced and it splits more, because the new edges are still
-long relative to the same diagonal. A VOXL `MESH` chunk is the scene's refined
-geometry, so refining it again changes both the count and the order its
-`classification` boundary indexes — on the reported scene, 81,282 triangles came back
-as 126,386, the boundary was dropped, the classifier re-ran and grew the mesh again on
-the next save. Both loaders take `refine: false` (`x-mesh-refine: 0` on
-`load_mesh_bytes`, the `refine` argument on `load_mesh_range`), and the VOXL loaders
-pass it whenever the caller holds a classification for that payload.
+**Nothing a loader returns is refined.** Every loader returns the mesh as written,
+because that mesh is the model: what is saved, exported, sliced and indexed by
+triangle id. `refine_coarse_faces` is not idempotent — run over a mesh it already
+produced, it splits more — so when the loaders refined, a VOXL `MESH` chunk (the
+scene's refined geometry) came back grown: 81,282 triangles as 126,386 on the
+reported scene, its `classification` boundary dropped, the classifier re-run, and
+the mesh grown again on the next save. The renderer refines a copy it draws instead
+(`refine_mesh_soup`, see docs/dev/tauri-ipc-bridge.md). A VOXL written while the
+loaders still refined stores that refined mesh, and is read as it stores it.
 
 **The repair passes run on the native mesh store.** `stage_mesh_binary_set` and the
 `*_read_positions` commands share one process-wide buffer, so a stage/read window is

@@ -26,6 +26,13 @@ const MUTED_OPACITY = 0.12;
 const TOPPLE_COOL = new THREE.Color('#ffd28a');
 /** ...and the patch carrying the most: saturated orange-red. */
 const TOPPLE_HOT = new THREE.Color('#ff3d00');
+/**
+ * The patches are copied from the model's own triangles, but the viewport may draw
+ * its display mesh, the same surface split differently. Coplanar triangles on two
+ * tessellations do not round to the same depth, so without an offset the patch
+ * loses the depth test on scattered pixels.
+ */
+const OVER_DRAWN_MESH = { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 } as const;
 
 /**
  * Per-vertex topple weight: the average of the load shares carried by the faces
@@ -247,6 +254,7 @@ export function IslandOverhangOverlay({
       opacity: OVERHANG_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: false,
+      ...OVER_DRAWN_MESH,
     });
     applyOverhangShader(material, true);
     return material;
@@ -258,6 +266,7 @@ export function IslandOverhangOverlay({
       opacity: MUTED_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: false,
+      ...OVER_DRAWN_MESH,
     });
     applyOverhangShader(material, true);
     return material;
@@ -270,6 +279,7 @@ export function IslandOverhangOverlay({
       opacity: OVERHANG_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: false,
+      ...OVER_DRAWN_MESH,
     });
     applyOverhangShader(material, false);
     return material;

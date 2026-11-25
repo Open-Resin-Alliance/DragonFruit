@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { resolveObjectURL } from 'node:buffer';
 import test from 'node:test';
+import * as THREE from 'three';
 import { useEffect } from 'react';
 import { useMirrorManager } from '@/features/mirror/useMirrorManager';
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -161,6 +162,27 @@ test('a mirror session is one undo step back to the unmirrored model', async (t)
       assert.equal(model().geometry.geometry, geometryBefore);
       assert.deepEqual(pose(), poseBefore);
       assert.equal(model().name, 'Renamed again');
+    });
+
+    await t.test('the display mesh is reflected with its AO, not derived again', async () => {
+      // No native side here, so no refine: the test hands the model a display mesh
+      // the way a loaded one carries it, then checks it comes back reflected.
+      workerAnswers = true;
+      const display = model().geometry.geometry.toNonIndexed();
+      const corners = display.getAttribute('position').count;
+      display.setAttribute('aBakedAo', new THREE.BufferAttribute(Float32Array.from({ length: corners }, (_, i) => i / corners), 1));
+      model().geometry.displayGeometry = display;
+      const geometryBefore = model().geometry.geometry;
+      current().mirror.handleMirror('z');
+      await waitFor(() => model().geometry.geometry !== geometryBefore, 'the baked geometry');
+      const reflected = model().geometry.displayGeometry;
+      assert.ok(reflected && reflected !== display, 'the mirrored model lands with its own display mesh');
+      assert.ok(reflected.getAttribute('aBakedAo'), 'and with its AO, so no frame draws it unoccluded');
+      const before = display.getAttribute('position').array;
+      const after = reflected.getAttribute('position').array;
+      // Corner 0 keeps its place; corners 1 and 2 swap to keep the triangle facing out.
+      assert.deepEqual([after[0], after[1], after[2]], [before[0], before[1], -before[2]]);
+      assert.equal(reflected.getAttribute('aBakedAo').getX(2), display.getAttribute('aBakedAo').getX(1));
     });
   } finally {
     await tree.unmount();

@@ -15,7 +15,7 @@ import { getSettings } from '../Settings/state';
 import { getSnapshot } from '../state';
 import { commitAutoPlacePlan, logAutoPlaceTimings, runAutoPlace } from './autoPlace';
 import * as THREE from 'three';
-import { getModelMesh } from './meshStore';
+import { getModelMesh, getModelSourceMesh } from './meshStore';
 import { resolvedSizingBandsForRun } from './parameterSizing';
 import type { AutoSupportSettings } from './settings';
 import type { AutoPlaceResult, AutoSupportPlan } from './types';
@@ -156,7 +156,7 @@ const serializeCavityForModel = (
 };
 
 const serializeMeshForModel = (modelId: string): { mesh?: SerializedModelMesh; meshKey?: string } => {
-    const mesh = getModelMesh(modelId);
+    const mesh = getModelSourceMesh(modelId);
     if (!mesh) return {};
 
     const key = modelMeshKey(mesh);

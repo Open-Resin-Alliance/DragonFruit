@@ -102,8 +102,15 @@ function constructorFor(name: TypedArrayName): new (buffer: ArrayBuffer) => Arra
   return map[name];
 }
 
-function modelGeometries(model: Pick<LoadedModel, 'geometry'>): THREE.BufferGeometry[] {
+/**
+ * Every geometry a model holds: its mesh and what is derived from it. History
+ * retention, release, spill and the memory budget all walk this one list, so a
+ * derived geometry added to `GeometryWithBounds` is added here.
+ */
+export function modelGeometries(model: Pick<LoadedModel, 'geometry'>): THREE.BufferGeometry[] {
   const geometries: THREE.BufferGeometry[] = [model.geometry.geometry];
+  const display = model.geometry.displayGeometry;
+  if (display && display !== model.geometry.geometry) geometries.push(display);
   if (model.geometry.edgeGeometry) geometries.push(model.geometry.edgeGeometry);
   const defects = model.geometry.meshDefects;
   if (defects?.supportSectionGeometry) geometries.push(defects.supportSectionGeometry);

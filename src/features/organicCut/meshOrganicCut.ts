@@ -13,10 +13,23 @@ import * as THREE from 'three';
 import {
   type TauriInvoke,
   decodeF32,
+  expandGeometryToTriangleSoup,
   loadTauriCore,
   stageGeometryToStagedMesh,
 } from '@/utils/tauriMeshBridge';
 import type { TenonPreviewFrame, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutReport, OrganicCutResult } from './types';
+import {
+  IDENTITY_CUT_SCALE,
+  type CutScale,
+  frameFromCutSpace,
+  isIdentityCutScale,
+  loopPointToCutSpace,
+  pointsFromCutSpace,
+  planeToCutSpace,
+  sameCutScale,
+  specToCutSpace,
+  vectorToCutSpace,
+} from './cutSpace';
 
 let stagedCutSourceKey: string | null = null;
 // The geometry OBJECT last staged. Tracked alongside the tenon so that if a model's
@@ -24,6 +37,9 @@ let stagedCutSourceKey: string | null = null;
 // original geometry reference), we detect the change and re-stage instead of
 // reusing the stale captured source.
 let stagedCutSourceGeometry: THREE.BufferGeometry | null = null;
+// The model's scale the staged source was built at. Everything sent to Rust after the
+// staging is scaled by it and everything read back is unscaled — see `cutSpace.ts`.
+let stagedCutScale: CutScale = IDENTITY_CUT_SCALE;
 
 type OrganicCutReadCommand =
   | 'mesh_organic_cut_read_geodesic'
@@ -41,7 +57,24 @@ async function readPositionsFromCommand(
 /** Read the cut part at `index` (model-local triangle soup). */
 async function readPartAtIndex(invoke: TauriInvoke, index: number): Promise<Float32Array> {
   const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>('mesh_organic_cut_read_part', { index });
-  return decodeF32(bytes, `mesh_organic_cut_read_part[${index}]`);
+  return pointsFromCutSpace(decodeF32(bytes, `mesh_organic_cut_read_part[${index}]`), stagedCutScale);
+}
+
+/** Stage `geometry` with the model's scale applied, so Rust works in printed millimetres. */
+async function stageScaledGeometry(invoke: TauriInvoke, geometry: THREE.BufferGeometry, scale: CutScale): Promise<void> {
+  if (isIdentityCutScale(scale)) {
+    await stageGeometryToStagedMesh(invoke, geometry);
+    return;
+  }
+  const soup = expandGeometryToTriangleSoup(geometry);
+  for (let i = 0; i < soup.length; i += 3) {
+    soup[i] *= scale[0];
+    soup[i + 1] *= scale[1];
+    soup[i + 2] *= scale[2];
+  }
+  await invoke('stage_mesh_binary_set', new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength), {
+    headers: { 'Content-Type': 'application/octet-stream' },
+  });
 }
 
 /** Read all `count` parts the cut produced (in order, largest first). */
@@ -59,31 +92,43 @@ async function readAllParts(invoke: TauriInvoke, count: number): Promise<Float32
  * path (e.g. the per-frame geodesic during a waypoint drag) can skip the
  * `stageCutSource` await entirely.
  */
-export function isCutSourceStaged(sourceKey: string, geometry?: THREE.BufferGeometry): boolean {
+export function isCutSourceStaged(
+  sourceKey: string,
+  geometry?: THREE.BufferGeometry,
+  scale: CutScale = IDENTITY_CUT_SCALE,
+): boolean {
   if (stagedCutSourceKey !== sourceKey) return false;
   // Same tenon but a different geometry object → the mesh was replaced (cut/undo);
   // treat as not staged so callers re-stage the current geometry.
   if (geometry && stagedCutSourceGeometry !== geometry) return false;
-  return true;
+  // Rescaled on the plate since: the staged mesh is the wrong size.
+  return sameCutScale(stagedCutScale, scale);
 }
 
+/**
+ * `scale` is the model's scale on the plate. The cut's sizes — the tenon, its fit, the
+ * joint clearance, the room a tenon has to grow — are printed millimetres, so the
+ * source is staged at the size it prints, not at the size it was modelled.
+ */
 export async function stageCutSource(
   geometry: THREE.BufferGeometry,
   sourceKey: string,
+  scale: CutScale = IDENTITY_CUT_SCALE,
 ): Promise<boolean> {
   const core = await loadTauriCore();
   if (!core) return false;
 
-  // Re-stage if either the tenon OR the geometry object changed (same id can carry
-  // new geometry after a cut/undo).
-  if (stagedCutSourceKey === sourceKey && stagedCutSourceGeometry === geometry) {
+  // Re-stage if the tenon, the geometry object (same id can carry new geometry after a
+  // cut/undo) or the model's scale changed.
+  if (isCutSourceStaged(sourceKey, geometry, scale)) {
     return true;
   }
 
-  await stageGeometryToStagedMesh(core.invoke, geometry);
+  await stageScaledGeometry(core.invoke, geometry, scale);
   await core.invoke('mesh_organic_cut_capture_staged_source');
   stagedCutSourceKey = sourceKey;
   stagedCutSourceGeometry = geometry;
+  stagedCutScale = scale;
   return true;
 }
 
@@ -98,11 +143,17 @@ export async function cutFromCapturedSource(
   const core = await loadTauriCore();
   if (!core) return null;
 
-  const optionsJson = JSON.stringify(options);
+  const optionsJson = JSON.stringify({ ...options, cut: specToCutSpace(options.cut, stagedCutScale) });
   const reportJson = await core.invoke<string>('mesh_organic_cut_from_captured_source', { optionsJson });
-  const report = JSON.parse(reportJson) as OrganicCutReport;
+  const report = reportFromCutSpace(JSON.parse(reportJson) as OrganicCutReport);
   const parts = await readAllParts(core.invoke, report.partCount ?? 0);
   return { report, parts };
+}
+
+function reportFromCutSpace(report: OrganicCutReport): OrganicCutReport {
+  if (!report.leakPoints?.length) return report;
+  const flat = pointsFromCutSpace(new Float32Array(report.leakPoints.flat()), stagedCutScale);
+  return { ...report, leakPoints: report.leakPoints.map((_, i) => [flat[i * 3], flat[i * 3 + 1], flat[i * 3 + 2]]) };
 }
 
 /**
@@ -119,6 +170,7 @@ export async function cutFromGeometry(
   await stageGeometryToStagedMesh(core.invoke, geometry);
   stagedCutSourceKey = null;
   stagedCutSourceGeometry = null;
+  stagedCutScale = IDENTITY_CUT_SCALE;
 
   const optionsJson = JSON.stringify(options);
   const reportJson = await core.invoke<string>('mesh_organic_cut_staged', { optionsJson });
@@ -143,7 +195,7 @@ export async function computeGeodesicLoop(
   if (loopPoints.length < 2) return null;
 
   const requestJson = JSON.stringify({
-    points: loopPoints.map((p) => ({ position: p.position })),
+    points: loopPoints.map((p) => ({ position: vectorToCutSpace(p.position, stagedCutScale) })),
     close,
     smoothing,
   });
@@ -165,7 +217,7 @@ export async function computeGeodesicLoop(
     // non-zero byteOffset view, which Float32Array can't wrap directly).
     const copy = new Uint8Array(u8.byteLength);
     copy.set(u8);
-    return new Float32Array(copy.buffer);
+    return pointsFromCutSpace(new Float32Array(copy.buffer), stagedCutScale);
   } catch {
     return null;
   }
@@ -244,7 +296,7 @@ export async function computeMembranePreview(
   if (loopPoints.length < 3) return empty;
 
   const requestJson = JSON.stringify({
-    points: loopPoints.map((p) => ({ position: p.position })),
+    points: loopPoints.map((p) => ({ position: loopPointToCutSpace(p, stagedCutScale).position })),
     close: true,
     membraneSmoothing,
     density,
@@ -256,7 +308,7 @@ export async function computeMembranePreview(
     tenonFilletMm,
     tenonToleranceMm,
     tenonSwapSides,
-    tenonAnchor,
+    tenonAnchor: tenonAnchor && vectorToCutSpace(tenonAnchor, stagedCutScale),
     tenonTiltRad,
     tenonRollRad,
   });
@@ -272,10 +324,10 @@ export async function computeMembranePreview(
       tenonFrame?: TenonPreviewFrame | null;
     };
     const membrane = report.triangleCount
-      ? await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_membrane')
+      ? pointsFromCutSpace(await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_membrane'), stagedCutScale)
       : null;
     const tenonPreview = report.jointTriangleCount
-      ? await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_tenon')
+      ? pointsFromCutSpace(await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_tenon'), stagedCutScale)
       : null;
     return {
       membrane,
@@ -284,7 +336,7 @@ export async function computeMembranePreview(
       tenonKind: report.tenonKind ?? 'none',
       tenonFits: report.tenonFits ?? true,
       tenonDetail: report.tenonDetail ?? '',
-      tenonFrame: report.tenonFrame ?? null,
+      tenonFrame: report.tenonFrame ? frameFromCutSpace(report.tenonFrame, stagedCutScale) : null,
     };
   } catch (err) {
     console.error('[organicCut] membrane preview command failed', err);
@@ -324,9 +376,10 @@ export async function computePlaneTenonPreview(
   const core = await loadTauriCore();
   if (!core) return empty;
 
+  const plane = planeToCutSpace({ normal: planeNormal, offset: planeOffset }, stagedCutScale);
   const requestJson = JSON.stringify({
-    planeNormal,
-    planeOffset,
+    planeNormal: plane.normal,
+    planeOffset: plane.offset,
     generateTenon,
     tenonWidthMm,
     tenonDepthMm,
@@ -334,7 +387,7 @@ export async function computePlaneTenonPreview(
     tenonFilletMm,
     tenonToleranceMm,
     tenonSwapSides,
-    tenonAnchor,
+    tenonAnchor: tenonAnchor && vectorToCutSpace(tenonAnchor, stagedCutScale),
   });
   try {
     const reportJson = await core.invoke<string>('mesh_organic_cut_plane_tenon_preview', { requestJson });
@@ -347,7 +400,7 @@ export async function computePlaneTenonPreview(
       tenonFrame?: TenonPreviewFrame | null;
     };
     const tenonPreview = report.jointTriangleCount
-      ? await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_tenon')
+      ? pointsFromCutSpace(await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_tenon'), stagedCutScale)
       : null;
     return {
       membrane: null,
@@ -356,7 +409,7 @@ export async function computePlaneTenonPreview(
       tenonKind: report.tenonKind ?? 'none',
       tenonFits: report.tenonFits ?? true,
       tenonDetail: report.tenonDetail ?? '',
-      tenonFrame: report.tenonFrame ?? null,
+      tenonFrame: report.tenonFrame ? frameFromCutSpace(report.tenonFrame, stagedCutScale) : null,
     };
   } catch (err) {
     console.error('[organicCut] plane tenon preview command failed', err);
