@@ -18,9 +18,10 @@ import {
 } from '@/components/scene/CrossSectionStencilCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import IslandInstancesOverlay from '@/components/scene/IslandInstancesOverlay';
-import type { IslandInstances } from '@/volumeAnalysis/Islands/islandInstances';
+import { EMPTY_ISLAND_INSTANCES, filterIslandInstances, type IslandInstances } from '@/volumeAnalysis/Islands/islandInstances';
 import { IslandOverhangOverlay } from '@/components/scene/IslandOverhangOverlay';
 import { SupportBlockerOverlay } from '@/features/support-blockers/SupportBlockerOverlay';
+import { createCavityTester } from '@/supports/interiorSupportGeometry';
 import { useSupportBlockerSceneBindings } from '@/features/support-blockers/useSupportBlockerSceneBindings';
 import { subscribeSupportBlockers, isSupportBlockerStrokeActive } from '@/supports/autoSupport/supportBlockers';
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
@@ -3329,6 +3330,52 @@ export function SceneCanvas({
     }
     return map;
   }, [models]);
+
+  /**
+   * Interior view shows the cavity mesh, but the island scan is one set of
+   * exterior-frame buffers. Split it against the cavity surface so the overlay
+   * only paints islands and overhangs on the wall that is in view; clamped to
+   * the same tight wall distance the auto-support run uses to classify a
+   * contact as interior.
+   */
+  const interiorIslandOverlay = React.useMemo(() => {
+    if (!interiorView || !activeModelId) return null;
+    const cavity = cavityGeometryByModelId?.get(activeModelId);
+    if (!cavity) return null;
+    const tester = createCavityTester(cavityGeometryByModelId, modelWorldInverseById);
+    const wallMm = 0.15;
+    const isInterior = (x: number, y: number, z: number): boolean =>
+      tester.distanceToSurface({ x, y, z }, activeModelId) <= wallMm;
+    return {
+      overhang: (overhangIslands ?? []).filter(
+        (region) => isInterior(region.contact.x, region.contact.y, region.contact.z),
+      ),
+      markers: (islandMarkers ?? []).filter(
+        (marker) => isInterior(marker.centerX, marker.centerY, marker.baseZ),
+      ),
+      instances: filterIslandInstances(
+        islandInstances ?? EMPTY_ISLAND_INSTANCES,
+        isInterior,
+      ),
+    };
+  }, [
+    interiorView,
+    activeModelId,
+    cavityGeometryByModelId,
+    modelWorldInverseById,
+    overhangIslands,
+    islandMarkers,
+    islandInstances,
+  ]);
+  const visibleOverhangIslands = interiorView
+    ? (interiorIslandOverlay?.overhang ?? [])
+    : (overhangIslands ?? []);
+  const visibleIslandInstances = interiorView
+    ? (interiorIslandOverlay?.instances ?? EMPTY_ISLAND_INSTANCES)
+    : islandInstances;
+  const visibleSelectedMarker = interiorView
+    ? (interiorIslandOverlay?.markers.find((marker) => marker.id === overlaySelectedIslandId) ?? null)
+    : selectedMarker;
 
   // Model matrices for the marquee, rebuilt whenever a model moves.
   const modelMarqueeMatrices = React.useMemo(() => {
@@ -7139,14 +7186,10 @@ export function SceneCanvas({
                         />
                       )}
 
-                      {/* The island/overhang scan runs on the exterior mesh. Interior
-                          view draws the cavity geometry (the inner wall), so painting
-                          those exterior regions over it would mark surfaces that are
-                          not in view. There is no cavity island scan to substitute. */}
-                      {!interiorView && isActive && !stressOverlayActive && (mode === 'support' || mode === 'analysis') && showOverhangs && overhangIslands && overhangIslands.length > 0 && (
+                      {isActive && !stressOverlayActive && (mode === 'support' || mode === 'analysis') && showOverhangs && visibleOverhangIslands.length > 0 && (
                         <IslandOverhangOverlay
                           geometry={model.geometry.geometry}
-                          regions={overhangIslands}
+                          regions={visibleOverhangIslands}
                           toppleCoverage={toppleCoverage !== false}
                           dragTotalMm3={dragTotalMm3}
                         />
@@ -8163,11 +8206,9 @@ export function SceneCanvas({
                   via the GPU picking system. Supplied by the host (page.tsx). */}
               {organicCutKeyGizmo}
 
-              {/* Exterior island markers/footprints: same rule as the overhang
-                  overlay — interior view is the cavity mesh, not the scan surface. */}
-              {!interiorView && selectedMarker && !stressOverlayActive && (
+              {visibleSelectedMarker && !stressOverlayActive && (
                 <IslandOverlay
-                  markers={[selectedMarker]}
+                  markers={[visibleSelectedMarker]}
                   brushRadiusMm={overlayBrushRadius ?? 2}
                   color={overlayColor ?? '#FF0000'}
                   opacity={overlayOpacity ?? 0.5}
@@ -8180,9 +8221,9 @@ export function SceneCanvas({
                   (the frame the detectors emit), so this must stay OUTSIDE the
                   model group — mounting it inside would apply the model
                   transform twice. */}
-              {!interiorView && islandInstances && islandInstances.count > 0 && (mode === 'support' || mode === 'analysis') && !stressOverlayActive && (
+              {visibleIslandInstances && visibleIslandInstances.count > 0 && (mode === 'support' || mode === 'analysis') && !stressOverlayActive && (
                 <IslandInstancesOverlay
-                  instances={islandInstances}
+                  instances={visibleIslandInstances}
                   selectedIslandId={overlaySelectedIslandId}
                   opacity={overlayOpacity ?? 0.9}
                 />

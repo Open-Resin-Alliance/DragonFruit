@@ -102,3 +102,40 @@ export function buildIslandInstances(
     ? { centerRadius, meta, count, layerHeightMm }
     : { centerRadius, meta, count };
 }
+
+/**
+ * Keep only the instances whose world-space centre satisfies `predicate`.
+ * Used by interior view: the scan is one set of buffers, and the cavity
+ * overlay needs the subset that lies on the inner wall without rebuilding the
+ * whole scan.
+ */
+export function filterIslandInstances(
+  instances: IslandInstances,
+  predicate: (x: number, y: number, z: number) => boolean,
+): IslandInstances {
+  if (!instances || instances.count === 0) return EMPTY_ISLAND_INSTANCES;
+  const centers = instances.centerRadius;
+  const meta = instances.meta;
+  let keep = 0;
+  for (let i = 0; i < instances.count; i++) {
+    if (predicate(centers[i * 4], centers[i * 4 + 1], centers[i * 4 + 2])) keep++;
+  }
+  if (keep === 0) return EMPTY_ISLAND_INSTANCES;
+  if (keep === instances.count) return instances;
+  const centerRadius = new Float32Array(keep * 4);
+  const keptMeta = new Float32Array(keep * 2);
+  let out = 0;
+  for (let i = 0; i < instances.count; i++) {
+    if (!predicate(centers[i * 4], centers[i * 4 + 1], centers[i * 4 + 2])) continue;
+    centerRadius[out * 4] = centers[i * 4];
+    centerRadius[out * 4 + 1] = centers[i * 4 + 1];
+    centerRadius[out * 4 + 2] = centers[i * 4 + 2];
+    centerRadius[out * 4 + 3] = centers[i * 4 + 3];
+    keptMeta[out * 2] = meta[i * 2];
+    keptMeta[out * 2 + 1] = meta[i * 2 + 1];
+    out++;
+  }
+  return instances.layerHeightMm !== undefined && Number.isFinite(instances.layerHeightMm) && instances.layerHeightMm > 0
+    ? { centerRadius, meta: keptMeta, count: keep, layerHeightMm: instances.layerHeightMm }
+    : { centerRadius, meta: keptMeta, count: keep };
+}
