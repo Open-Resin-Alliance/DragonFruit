@@ -3,8 +3,8 @@ import test from 'node:test';
 
 import { createEmptySupportCollections } from '../supportTypeRegistry';
 import type { SupportState } from '../types';
-import { addTargetedStressBraces } from '../autoBracing/autoBrace';
-import { promoteOverloadedLeaf } from '../autoSupport/autoPlace';
+import { addTargetedStressBraces, BRACE_CANOPY_KEEP_OUT_MM } from '../autoBracing/autoBrace';
+import { buttressTrunkWithKickstand, promoteOverloadedLeaf } from '../autoSupport/autoPlace';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
 
 function twoTrunks(distanceMm = 5): SupportState {
@@ -215,4 +215,97 @@ test('a leaf pair resolves to the support trees that host it', () => {
     const start = result.snapshot.knots[brace.startKnotId]!;
     const end = result.snapshot.knots[brace.endKnotId]!;
     assert.deepEqual([start.parentShaftId, end.parentShaftId].sort(), ['sA', 'sB']);
+});
+
+
+test('a targeted brace stays below the contact canopy', () => {
+    const result = addTargetedStressBraces(
+        twoTrunks(),
+        [{ aEntityId: 'tA', bEntityId: 'tB', atZMm: 19.8 }],
+        createDefaultAutoBracingSettings(),
+        new Set(['model-a']),
+    );
+    assert.equal(result.added, 1);
+    const brace = Object.values(result.snapshot.braces)[0]!;
+    for (const knotId of [brace.startKnotId, brace.endKnotId]) {
+        const knot = result.snapshot.knots[knotId]!;
+        assert.ok(knot.pos.z <= 20 - BRACE_CANOPY_KEEP_OUT_MM + 1e-6,
+            `brace knot ${knot.pos.z.toFixed(2)} stays ${BRACE_CANOPY_KEEP_OUT_MM}mm below the shaft top`);
+    }
+});
+
+test('braces meeting the same shaft at the same rung share one knot', () => {
+    const base = twoTrunks(4) as unknown as {
+        roots: Record<string, unknown>;
+        trunks: Record<string, unknown>;
+    };
+    const withThird = {
+        ...(base as object),
+        roots: {
+            ...base.roots,
+            rC: { id: 'rC', modelId: 'model-a', transform: { pos: { x: -4, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 },
+        },
+        trunks: {
+            ...base.trunks,
+            tC: {
+                id: 'tC', modelId: 'model-a', rootId: 'rC',
+                segments: [{
+                    id: 'sC', diameter: 1.0,
+                    bottomJoint: { id: 'sC-b', pos: { x: -4, y: 0, z: 1 }, diameter: 1.0 },
+                    topJoint: { id: 'sC-t', pos: { x: -4, y: 0, z: 20 }, diameter: 1.0 },
+                }],
+                contactCone: {
+                    id: 'tC-c', pos: { x: -4, y: 0, z: 22 }, normal: { x: 0, y: 0, z: -1 },
+                    profile: { type: 'disk', contactDiameterMm: 0.3, bodyDiameterMm: 1.0, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 },
+                },
+            },
+        },
+    } as never;
+    const settings = createDefaultAutoBracingSettings();
+
+    const first = addTargetedStressBraces(
+        withThird,
+        [{ aEntityId: 'tA', bEntityId: 'tB', atZMm: 5 }],
+        settings,
+        new Set(['model-a']),
+    );
+    const second = addTargetedStressBraces(
+        first.snapshot,
+        [{ aEntityId: 'tA', bEntityId: 'tC', atZMm: 5 }],
+        settings,
+        new Set(['model-a']),
+    );
+
+    assert.equal(second.added, 1);
+    const knotsOnA = Object.values(second.snapshot.knots).filter((k) => k.parentShaftId === 'sA');
+    assert.equal(knotsOnA.length, 1, 'both braces meet A at one shared knot');
+    const braces = Object.values(second.snapshot.braces);
+    assert.equal(braces.length, 2);
+    const sharedId = knotsOnA[0].id;
+    assert.equal(
+        braces.filter((b) => b.startKnotId === sharedId || b.endKnotId === sharedId).length,
+        2,
+        'both braces reference the shared knot',
+    );
+});
+
+
+test('a trunk with no brace host gets a plate kickstand at a buttress angle', () => {
+    const snapshot = twoTrunks();
+    const result = buttressTrunkWithKickstand(snapshot, 'model-a', 'tA', 8);
+    assert.equal(result.added, true, 'a buttress is added');
+    const kickstand = Object.values(result.draft.kickstands)[0]!;
+    assert.equal(kickstand.hostSegmentId, 'sA');
+    const knot = result.draft.knots[kickstand.hostKnotId]!;
+    assert.equal(knot.parentShaftId, 'sA');
+    assert.ok(knot.pos.z <= 20 - 2.5 + 1e-6, 'the host knot stays below the canopy');
+    const root = result.draft.roots[kickstand.rootId]!;
+    const run = Math.hypot(root.transform.pos.x - knot.pos.x, root.transform.pos.y - knot.pos.y);
+    const rise = knot.pos.z - root.transform.pos.z;
+    const angleFromVertical = (Math.atan2(run, rise) * 180) / Math.PI;
+    assert.ok(angleFromVertical >= 25 && angleFromVertical <= 50,
+        `buttress leans 30-45° from vertical (got ${angleFromVertical.toFixed(1)}°)`);
+
+    const again = buttressTrunkWithKickstand(result.draft, 'model-a', 'tA', 8);
+    assert.equal(again.added, false, 'one buttress per trunk');
 });

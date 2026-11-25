@@ -116,7 +116,8 @@ import { buildLeafData } from '../SupportTypes/Leaf/leafBuilder';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { calculateSmoothedNormal } from '../PlacementLogic/PlacementUtils';
 import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
-import { addTargetedStressBraces, buildAutoBracedSnapshot, type StressBraceRequest } from '../autoBracing/autoBrace';
+import { addTargetedStressBraces, buildAutoBracedSnapshot, BRACE_CANOPY_KEEP_OUT_MM, type StressBraceRequest } from '../autoBracing/autoBrace';
+import { buildKickstandData } from '../SupportTypes/Kickstand/kickstandBuilder';
 import { pushSupportHistory } from '../history/supportHistory';
 import { SUPPORT_AUTO_PLACE } from '../history/actionTypes';
 import { getModelMesh } from './meshStore';
@@ -147,6 +148,10 @@ const MAX_STRESS_REINFORCE_PASSES = 3;
 /** Stress-driven braces a single feedback pass may add. The action list is
  *  severity-ordered; a cap keeps a rocking model from being wrapped at once. */
 const MAX_STRESS_BRACES_PER_PASS = 4;
+/** Plate buttresses a single feedback pass may add for shafts with no host in
+ *  brace reach. A kickstand is the answer for a lone tall spire: it cannot be
+ *  braced to a neighbour that does not exist, and it must not be clubbed. */
+const MAX_STRESS_KICKSTANDS_PER_PASS = 2;
 /** Overloaded leaves a single feedback pass may promote to branches. */
 const MAX_STRESS_LEAF_PROMOTIONS_PER_PASS = 2;
 /** Most trunk-build failures retried as wide fans after gap-fill. The retry is
@@ -4584,6 +4589,106 @@ export function isExemptFromSteepWallCull(
         || Boolean(island.interior);
 }
 
+/** The trunk a stress action belongs to: the entity itself when it is a trunk,
+ *  otherwise the trunk owning the segment its knot hangs from. */
+function owningTrunkId(draft: SupportState, entityId: string): string | undefined {
+    if (draft.trunks[entityId]) return entityId;
+    const knotId = draft.branches[entityId]?.parentKnotId ?? draft.leaves[entityId]?.parentKnotId;
+    const knot = knotId ? draft.knots[knotId] : undefined;
+    if (!knot) return undefined;
+    return Object.values(draft.trunks).find((trunk) =>
+        trunk.segments.some((seg) => seg.id === knot.parentShaftId))?.id;
+}
+
+/**
+ * Buttress a trunk to the build plate with a Kickstand at 30-45° from
+ * vertical when no neighbouring shaft is in brace reach. This is the structural
+ * answer for a lonely tall spire: the closed loop prefers it to a fatter pole,
+ * and the kickstand is an existing support type (same builder as placement).
+ *
+ * Returns the draft unchanged when the trunk already carries a kickstand, has
+ * no segment left below its contact canopy, or no candidate root/column clears
+ * the shape and mesh gates.
+ */
+export function buttressTrunkWithKickstand(
+    draftIn: SupportState,
+    modelId: string,
+    trunkId: string,
+    atZMm: number,
+    mesh?: THREE.Mesh,
+): { draft: SupportState; added: boolean } {
+    const trunk = draftIn.trunks[trunkId];
+    if (!trunk || trunk.modelId !== modelId) return { draft: draftIn, added: false };
+    const segmentIds = new Set(trunk.segments.map((seg) => seg.id));
+    if (Object.values(draftIn.kickstands ?? {}).some((ks) => segmentIds.has(ks.hostSegmentId))) {
+        return { draft: draftIn, added: false };
+    }
+
+    const plateZ = trunk.rootId ? (draftIn.roots[trunk.rootId]?.transform.pos.z ?? 0) : 0;
+    let host: { segment: Segment; start: Vec3; end: Vec3; z: number } | null = null;
+    for (const segment of trunk.segments) {
+        const span = hostSegmentSpan(draftIn, trunk, segment);
+        if (!span) continue;
+        const lo = Math.min(span.start.z, span.end.z) + 0.25;
+        const hi = Math.max(span.start.z, span.end.z) - BRACE_CANOPY_KEEP_OUT_MM;
+        if (hi <= lo) continue;
+        const z = Math.min(hi, Math.max(lo, atZMm));
+        if (!host || z > host.z) host = { segment, start: span.start, end: span.end, z };
+    }
+    if (!host || host.z - plateZ < 3) return { draft: draftIn, added: false };
+
+    const dz = host.end.z - host.start.z;
+    if (Math.abs(dz) < 0.5) return { draft: draftIn, added: false };
+    const t = Math.min(1, Math.max(0, (host.z - host.start.z) / dz));
+    const hostPos = {
+        x: host.start.x + (host.end.x - host.start.x) * t,
+        y: host.start.y + (host.end.y - host.start.y) * t,
+        z: host.start.z + dz * t,
+    };
+
+    // 30-45° from vertical: lateral run ~0.7-1.0 × rise. Try a few distances
+    // and all eight azimuths; the builder's own shape/clearance gate decides.
+    const rise = hostPos.z - plateZ;
+    const baseRun = Math.min(6, Math.max(2.5, rise * 0.7));
+    const rootPositions = Object.values(draftIn.roots);
+    for (const scale of [1, 0.75, 1.3]) {
+        const run = baseRun * scale;
+        for (let k = 0; k < 8; k++) {
+            const angle = (k * Math.PI) / 4;
+            const rootPos = { x: hostPos.x + Math.cos(angle) * run, y: hostPos.y + Math.sin(angle) * run, z: plateZ };
+            if (rootPositions.some((r) =>
+                Math.hypot(r.transform.pos.x - rootPos.x, r.transform.pos.y - rootPos.y) < 1.5)) continue;
+
+            const seed = `stress-ks-${trunkId}-${Math.round(hostPos.z * 10)}-${Math.round(run * 10)}-${k}`;
+            if (draftIn.roots[`${seed}-root`] || draftIn.knots[`${seed}-host-knot`] || draftIn.kickstands[`${seed}-kickstand`]) continue;
+            const build = buildKickstandData({
+                modelId,
+                rootPos,
+                host: {
+                    segmentId: host.segment.id,
+                    supportKind: 'trunk',
+                    t,
+                    pos: hostPos,
+                    diameterMm: host.segment.diameter ?? 1,
+                },
+                collisionMesh: mesh,
+                // The buttress's overall lean is set by `run` (~35°); the
+                // builder's last terminal leg is shallower than that, so the
+                // per-segment gate keeps the manual-placement ceiling (80°).
+                maxShaftAngleDeg: 80,
+                idSeed: seed,
+            });
+            if (build.error) continue;
+            let next = draftIn;
+            next = draftAddPrimitive(next, 'roots', build.root);
+            next = draftAddPrimitive(next, 'knots', build.hostKnot);
+            next = draftAddEntity(next, 'kickstand', build.kickstand);
+            return { draft: next, added: true };
+        }
+    }
+    return { draft: draftIn, added: false };
+}
+
 export function computeAutoSupportPlan(
     islands: DetectedIsland[],
     modelId: string,
@@ -7127,6 +7232,7 @@ export function computeAutoSupportPlan(
                 let reinforcedTotal = 0;
                 let stressBracesAdded = 0;
                 let stressLeafPromotions = 0;
+                let stressKickstandsAdded = 0;
                 const autoBracingSettings = getSettings().autoBracing;
                 for (let pass = 0; pass < MAX_STRESS_REINFORCE_PASSES; pass++) {
                     const memberOverloaded = frameStress.overloadedMembers > 0;
@@ -7230,6 +7336,35 @@ export function computeAutoSupportPlan(
                         }
                     }
 
+                    // A shaft with no neighbour in brace reach gets a plate
+                    // buttress: a kickstand at 30-45°, not a fatter pole and
+                    // not an unbraced flagpole. Only when the brace pass landed
+                    // nothing (no host existed) and the request names a trunk.
+                    let kickstandsThisPass = 0;
+                    if (bracedThisPass === 0 && requests.length > 0) {
+                        const targetZ = new Map<string, number>();
+                        for (const request of requests) {
+                            for (const entityId of [request.aEntityId, request.bEntityId]) {
+                                if (!entityId) continue;
+                                const trunkId = owningTrunkId(draft, entityId);
+                                if (trunkId && !targetZ.has(trunkId)) targetZ.set(trunkId, request.atZMm);
+                            }
+                        }
+                        for (const [trunkId, z] of targetZ) {
+                            if (kickstandsThisPass >= MAX_STRESS_KICKSTANDS_PER_PASS) break;
+                            const buttress = buttressTrunkWithKickstand(draft, modelId, trunkId, z, resolvedMesh ?? undefined);
+                            if (!buttress.added) continue;
+                            draft = buttress.draft;
+                            kickstandsThisPass++;
+                            stressKickstandsAdded++;
+                            changedThisPass = true;
+                        }
+                        if (kickstandsThisPass > 0) {
+                            console.log(LOG_PREFIX,
+                                `Stress buttress: ${kickstandsThisPass} kickstand(s) added for trunks with no brace host`);
+                        }
+                    }
+
                     // Structure first: only a pass that landed no brace and no
                     // promotion may thicken, and only up to the cap.
                     if (!changedThisPass && memberOverloaded && autoSettings.modelScaleEnabled !== false) {
@@ -7256,16 +7391,17 @@ export function computeAutoSupportPlan(
                     });
                     console.log(LOG_PREFIX,
                         `Stress feedback pass ${pass + 1}: reinforced ${reinforcedThisPass} member(s), `
-                        + `braced ${bracedThisPass} pair/member(s) → `
+                        + `braced ${bracedThisPass} pair/member(s), buttressed ${kickstandsThisPass} trunk(s) → `
                         + `${frameStress.overloadedMembers} member(s), ${frameStress.overloadedTips} tip(s) over, `
                         + `rocking ${frameStress.maxTipRockingMm.toFixed(3)}mm`);
                 }
                 if (reinforcedTotal > 0) {
                     frameStress = { ...frameStress, reinforcedCount: reinforcedTotal };
                 }
-                if (stressBracesAdded > 0 || stressLeafPromotions > 0) {
+                if (stressBracesAdded > 0 || stressLeafPromotions > 0 || stressKickstandsAdded > 0) {
                     console.log(LOG_PREFIX,
                         `Stress closed loop: ${stressBracesAdded} brace(s), `
+                        + `${stressKickstandsAdded} kickstand buttress(es), `
                         + `${stressLeafPromotions} leaf promotion(s) applied`);
                 }
                 analytics.forestReport.frameStress = frameStress;

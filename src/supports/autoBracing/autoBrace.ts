@@ -127,6 +127,47 @@ function sortSupports(a: SupportSample, b: SupportSample): number {
     return 0;
 }
 
+/** Brace knots stay this far below a shaft's top (the contact-cone base), so a
+ *  brace never fuses the terminal finger into the support next door and the
+ *  contact cone snaps away cleanly in post-cure removal. */
+export const BRACE_CANOPY_KEEP_OUT_MM = 2.5;
+
+function braceAtZWithinCanopy(sample: SupportSample, z: number): boolean {
+    return z > sample.topReferenceZ - BRACE_CANOPY_KEEP_OUT_MM + 1e-6;
+}
+
+/** Brace attachment heights quantize to this rung, so neighbouring braces that
+ *  meet the same shaft at the same tier share a knot instead of splitting it
+ *  into two near-coincident sub-millimetre segments. */
+export const BRACE_RUNG_MM = 0.5;
+const BRACE_KNOT_SHARE_TOL_Z_MM = 0.05;
+const BRACE_KNOT_SHARE_TOL_PLAN_MM = 0.05;
+
+/** Reuse a knot already on this segment at this rung, or mint one. */
+function makeBraceKnotTaker(
+    knots: Record<string, Knot>,
+    createKnotId: () => string,
+): (segmentId: string, pos: Vec3, t: number | undefined, diameter: number) => Knot {
+    const byRung = new Map<string, Knot>();
+    const keyOf = (segmentId: string, z: number) => `${segmentId}:${Math.round(z / BRACE_RUNG_MM)}`;
+    for (const knot of Object.values(knots)) {
+        byRung.set(keyOf(knot.parentShaftId, knot.pos.z), knot);
+    }
+    return (segmentId, pos, t, diameter) => {
+        const key = keyOf(segmentId, pos.z);
+        const existing = byRung.get(key);
+        if (existing
+            && Math.abs(existing.pos.z - pos.z) <= BRACE_KNOT_SHARE_TOL_Z_MM
+            && Math.hypot(existing.pos.x - pos.x, existing.pos.y - pos.y) <= BRACE_KNOT_SHARE_TOL_PLAN_MM) {
+            return existing;
+        }
+        const knot: Knot = { id: createKnotId(), parentShaftId: segmentId, t, pos, diameter };
+        knots[knot.id] = knot;
+        byRung.set(key, knot);
+        return knot;
+    };
+}
+
 function createUniqueIdFactory(prefix: string, existingIds: Set<string>) {
     let index = 1;
     return () => {
@@ -1086,6 +1127,7 @@ export function buildAutoBracedSnapshot(
 
     const generatedBraces: Record<string, Brace> = {};
     const generatedKnots: Record<string, Knot> = {};
+    const takeBraceKnot = makeBraceKnotTaker(nextSnapshot.knots, createKnotId);
 
     // Trunk-to-trunk brace axes actually placed by the ladder — used by the
     // post-ladder reconciliation to drop redundant kickstands.
@@ -1396,6 +1438,7 @@ export function buildAutoBracedSnapshot(
 
                 highAnchor = resolveAnchorAtZ(highS, atZ + dzGuess);
                 if (!highAnchor) return;
+                if (braceAtZWithinCanopy(lowS, lowAnchor.pos.z) || braceAtZWithinCanopy(highS, highAnchor.pos.z)) return;
 
                 const dx = highAnchor.pos.x - lowAnchor.pos.x;
                 const dy = highAnchor.pos.y - lowAnchor.pos.y;
@@ -1410,10 +1453,10 @@ export function buildAutoBracedSnapshot(
 
                 if (!linePassesMeshClearance(lowAnchor.pos, highAnchor.pos, lowAnchor.modelId, settings.braceDiameterMm, activePlateModelIds)) return;
 
-                const sId = createKnotId(), eId = createKnotId(), bId = createBraceId();
-                generatedKnots[sId] = { id: sId, parentShaftId: lowAnchor.segmentId, t: lowAnchor.t, pos: lowAnchor.pos, diameter: lowAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM };
-                generatedKnots[eId] = { id: eId, parentShaftId: highAnchor.segmentId, t: highAnchor.t, pos: highAnchor.pos, diameter: highAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM };
-                generatedBraces[bId] = { id: bId, modelId: lowAnchor.modelId, startKnotId: sId, endKnotId: eId, profile: braceProfile, debugSection: section, generatedBy: 'autoBracing' };
+                const bId = createBraceId();
+                const lowBraceKnot = takeBraceKnot(lowAnchor.segmentId, lowAnchor.pos, lowAnchor.t, lowAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM);
+                const highBraceKnot = takeBraceKnot(highAnchor.segmentId, highAnchor.pos, highAnchor.t, highAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM);
+                generatedBraces[bId] = { id: bId, modelId: lowAnchor.modelId, startKnotId: lowBraceKnot.id, endKnotId: highBraceKnot.id, profile: braceProfile, debugSection: section, generatedBy: 'autoBracing' };
 
                 // Only trunk↔trunk braces count toward the two-axis stability
                 // contract — braces to kickstands are the kickstand's own bracing.
@@ -1684,6 +1727,7 @@ export function addTargetedStressBraces(
     const knotIds = new Set(Object.keys(next.knots));
     const createBraceId = createUniqueIdFactory('auto-brace', braceIds);
     const createKnotId = createUniqueIdFactory('auto-brace-knot', knotIds);
+    const takeBraceKnot = makeBraceKnotTaker(next.knots, createKnotId);
 
     /** A rocking pair is reported by contact entity: a leaf has no shaft of
      *  its own, so resolve it to the support tree that hosts it (the parent
@@ -1783,9 +1827,10 @@ export function addTargetedStressBraces(
             if (b.modelId !== a.modelId) continue;
             const key = pairKey(a.supportId, b.supportId);
             const zLow = Math.max(a.bottomReferenceZ, b.bottomReferenceZ);
-            const zHigh = Math.min(a.topReferenceZ, b.topReferenceZ);
+            const zHigh = Math.min(a.topReferenceZ, b.topReferenceZ) - BRACE_CANOPY_KEEP_OUT_MM;
             if (zHigh - zLow < 0.5) continue;
-            const clampedTarget = THREE.MathUtils.clamp(request.atZMm, zLow + 0.25, zHigh - 0.25);
+            const rungTarget = Math.round(request.atZMm / BRACE_RUNG_MM) * BRACE_RUNG_MM;
+            const clampedTarget = THREE.MathUtils.clamp(rungTarget, zLow + 0.25, zHigh - 0.25);
             const attempts = [...new Set([
                 Math.round(clampedTarget * 1000) / 1000,
                 Math.round((zLow + 0.25) * 1000) / 1000,
@@ -1819,6 +1864,7 @@ export function addTargetedStressBraces(
                     for (const resolveHigh of linkModes) {
                         const high = resolveHigh();
                         if (!high) continue;
+                        if (braceAtZWithinCanopy(lowS, low.pos.z) || braceAtZWithinCanopy(highS, high.pos.z)) continue;
                         const span = Math.hypot(
                             high.pos.x - low.pos.x,
                             high.pos.y - low.pos.y,
@@ -1835,28 +1881,14 @@ export function addTargetedStressBraces(
                             continue;
                         }
 
-                        const startId = createKnotId();
-                        const endId = createKnotId();
                         const braceId = createBraceId();
-                        next.knots[startId] = {
-                            id: startId,
-                            parentShaftId: low.segmentId,
-                            t: low.t,
-                            pos: low.pos,
-                            diameter: low.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM,
-                        };
-                        next.knots[endId] = {
-                            id: endId,
-                            parentShaftId: high.segmentId,
-                            t: high.t,
-                            pos: high.pos,
-                            diameter: high.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM,
-                        };
+                        const startKnot = takeBraceKnot(low.segmentId, low.pos, low.t, low.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM);
+                        const endKnot = takeBraceKnot(high.segmentId, high.pos, high.t, high.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM);
                         next.braces[braceId] = {
                             id: braceId,
                             modelId: a.modelId,
-                            startKnotId: startId,
-                            endKnotId: endId,
+                            startKnotId: startKnot.id,
+                            endKnotId: endKnot.id,
                             profile: braceProfile,
                             debugSection: 'repeating',
                             generatedBy: 'autoBracing',

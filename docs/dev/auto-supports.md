@@ -320,6 +320,27 @@ and grid modes:
     `placeOneCandidate` defers it to Phase 3 rescue (trying a stable steep
     branch, a compact `2.5 / 4.0 / 5.0 mm` silhouette dogleg, or a short
     `≤ 12 mm` cavity bridge first, keeping the routed trunk only as last resort).
+- **Brace knots keep a canopy clear.** `BRACE_CANOPY_KEEP_OUT_MM` (2.5 mm)
+  below a shaft's top (the contact-cone base) is brace-free: the auto ladder
+  skips a link whose anchor lands inside it, and targeted stress braces clamp
+  their requested Z to `topReferenceZ - 2.5`. A brace that fuses the terminal
+  finger to a neighbour is unrecoverable in post-cure removal; the cone is the
+  part that must snap away cleanly.
+- **Braces meeting at the same tier share a knot.** Attachment heights
+  quantize to `BRACE_RUNG_MM` (0.5 mm) and both brace paths reuse a knot
+  already on that segment/height (within 0.05 mm in Z and plan). Two braces
+  that meet one trunk at the same rung reference one knot instead of splitting
+  the shaft into two near-coincident sub-millimetre segments.
+- **A lonely tall spire is buttressed, not thickened.** When the stress
+  feedback round lands no brace for a trunk (`noHost` — there is nothing in
+  reach to brace against), `buttressTrunkWithKickstand` adds an existing
+  Kickstand support from the plate to a host knot below the canopy, with the
+  root offset ~0.7 × the rise (~35° from vertical) and eight azimuths tried
+  through `buildKickstandData`'s own shape/clearance gate. One buttress per
+  trunk, at most `MAX_STRESS_KICKSTANDS_PER_PASS` (2) per round; the log prints
+  `Stress buttress`. This is why a solitary column is not left freestanding and
+  does not need a diameter step.
+
 - **Three-pass skeleton & 2-level crown build**: `synthesizeTreeClusters` runs a
   batch downward raycast (`computePlateReachability`), then a deterministic
   greedy downward-cone set cover over plate-clear elevated contacts —
