@@ -1194,8 +1194,6 @@ export function SceneCanvas({
   const meshGroupRefCallbacks = React.useRef<Record<string, (node: THREE.Group | null) => void>>({});
   const actualMeshRefCallbacks = React.useRef<Record<string, (node: THREE.Mesh | null) => void>>({});
 
-  const prevBranchHoverDotVisibleRef = React.useRef<boolean | null>(null);
-  const prevLeafHoverDotVisibleRef = React.useRef<boolean | null>(null);
   const supportPlacementGuideActive = useSupportPlacementGuideActive();
   const [supportHelpEnabled, setSupportHelpEnabled] = React.useState(() => getSupportPlacementHelpEnabled());
   React.useEffect(() => subscribeSupportPlacementHelp(() => setSupportHelpEnabled(getSupportPlacementHelpEnabled())), []);
@@ -2553,7 +2551,7 @@ export function SceneCanvas({
           color: outOfBoundsModelIds.has(model.id) ? '#ff5b6f' : '#5aaeff',
         };
       });
-  }, [activeBuildVolumeSettings.showModelBoundingBoxes, activeTransformOverrideModelId, computeModelWorldBounds, modelWorldBounds, models, outOfBoundsModelIds, transform]);
+  }, [activeBuildVolumeSettings.showModelBoundingBoxes, activeTransformOverrideModelId, buildVolumeBounds, computeModelWorldBounds, modelWorldBounds, models, outOfBoundsModelIds, transform]);
 
   const buildVolumeBoxGeometry = React.useMemo(() => {
     if (!activeBuildVolumeSettings?.enabled || !buildVolumeBounds) return null;
@@ -2747,28 +2745,6 @@ export function SceneCanvas({
       return prev === next ? prev : next;
     });
   }, []);
-
-  React.useEffect(() => {
-    const visible = !!branchHoverPosition && !branchTipPosition && !placementPreviews[BRANCH_FAMILY_PLACEMENT_OWNER];
-    if (prevBranchHoverDotVisibleRef.current === null) {
-      prevBranchHoverDotVisibleRef.current = visible;
-      return;
-    }
-    if (prevBranchHoverDotVisibleRef.current !== visible) {
-      prevBranchHoverDotVisibleRef.current = visible;
-    }
-  }, [branchHoverPosition, branchTipPosition, placementPreviews[BRANCH_FAMILY_PLACEMENT_OWNER]]);
-
-  React.useEffect(() => {
-    const visible = !!leafHoverPosition && !leafTipPosition && !placementPreviews[LEAF_PLACEMENT_OWNER];
-    if (prevLeafHoverDotVisibleRef.current === null) {
-      prevLeafHoverDotVisibleRef.current = visible;
-      return;
-    }
-    if (prevLeafHoverDotVisibleRef.current !== visible) {
-      prevLeafHoverDotVisibleRef.current = visible;
-    }
-  }, [leafHoverPosition, leafTipPosition, placementPreviews[LEAF_PLACEMENT_OWNER]]);
 
   // Computed refs for active model
   const activeGroupRef = React.useMemo(

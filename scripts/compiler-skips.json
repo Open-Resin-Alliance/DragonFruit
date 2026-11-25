@@ -195,11 +195,6 @@
       "BuiltinPreviewMesh",
       "StlPreviewMesh"
     ],
-    "src/components/settings/profileFormAtoms.tsx": [
-      "LabeledNumberInput",
-      "PluginLocalMaterialSettingsSections",
-      "ReplacementMaterialEditorShell"
-    ],
     "src/features/export/components/ExportPanel.tsx": [
       "ExportPanel"
     ],
