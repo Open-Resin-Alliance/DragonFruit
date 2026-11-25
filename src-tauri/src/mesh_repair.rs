@@ -50,8 +50,6 @@ use crate::{
     StageMeshStats,
 };
 
-static PUNCH_SOURCE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-static PUNCH_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Captured source mesh for repeated non-mutating organic-cut runs.
 static ORGANIC_CUT_SOURCE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// All parts of the most recent organic cut (LE f32 soup each), in order — read
@@ -68,14 +66,6 @@ static ORGANIC_CUT_GEODESIC_SOLVER: OnceLock<Mutex<Option<Arc<GeodesicSolver>>>>
 static ORGANIC_CUT_MEMBRANE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Most recent registration-tenon preview (LE f32 triangle soup, tenon + mortise).
 static ORGANIC_CUT_TENON_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-
-fn punch_source_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    PUNCH_SOURCE_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn punch_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    PUNCH_RESULT_BYTES.get_or_init(|| Mutex::new(None))
-}
 
 fn organic_cut_source_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     ORGANIC_CUT_SOURCE_BYTES.get_or_init(|| Mutex::new(None))
@@ -965,79 +955,27 @@ pub async fn mesh_hollow_session_select_removed_voxels(
     Ok(Response::new(bytes))
 }
 
-/// Applies manual cylindrical hole punches to the current staged mesh.
+/// Punches cylindrical holes through a stored mesh, and returns the report with the result's id
+/// as `meshId`, owned by whoever owns the input.
+///
+/// The input is left in the store as it was. The hole punch preview keeps one stored source
+/// and punches it again on every change, which is what capturing the staged source used to do.
 #[tauri::command]
-pub async fn mesh_punch_staged(options_json: String) -> Result<String, String> {
+pub async fn mesh_punch_staged(options_json: String, mesh_id: String) -> Result<String, String> {
     let options = parse_hole_punch_options(&options_json)?;
-    let bytes = read_staging_bytes()?;
-    let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+    let store = mesh_store::global();
+    let input = store.get_soup(&mesh_id)?;
+    let owner = store.owner_of(&mesh_id)?;
+    let (result, report) = tauri::async_runtime::spawn_blocking(move || {
+        let bytes = input.soup_bytes().expect("get_soup returned a soup");
+        let mesh = io::staged::load_positions_le(bytes).map_err(|e| e.to_string())?;
         let outcome = punch_cylinders(mesh, &options);
-        Ok::<_, String>((outcome.mesh, outcome.report))
+        Ok::<_, String>((soup_bytes(&outcome.mesh), outcome.report))
     })
     .await
     .map_err(|e| format!("punch task panicked: {e}"))??;
-
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize punch report: {e}"))
-}
-
-/// Captures the current staged mesh bytes as the source for repeated
-/// non-mutating hole-punch runs.
-#[tauri::command]
-pub async fn mesh_punch_capture_staged_source() -> Result<(), String> {
-    let bytes = read_staging_bytes()?;
-    *punch_source_bytes()
-        .lock()
-        .map_err(|e| format!("punch source lock poisoned: {e}"))? = Some(bytes);
-    *punch_result_bytes()
-        .lock()
-        .map_err(|e| format!("punch result lock poisoned: {e}"))? = None;
-    Ok(())
-}
-
-/// Runs hole punching against the captured source mesh without mutating the
-/// regular staged mesh buffer.
-#[tauri::command]
-pub async fn mesh_punch_from_captured_source(options_json: String) -> Result<String, String> {
-    let options = parse_hole_punch_options(&options_json)?;
-    let source_bytes = punch_source_bytes()
-        .lock()
-        .map_err(|e| format!("punch source lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No captured punch source — call mesh_punch_capture_staged_source first".to_string()
-        })?;
-
-    let (positions_bytes, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&source_bytes).map_err(|e| e.to_string())?;
-        let outcome = punch_cylinders(mesh, &options);
-        let soup = outcome.mesh.to_triangle_soup();
-        let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
-        Ok::<_, String>((bytes, outcome.report))
-    })
-    .await
-    .map_err(|e| format!("punch task panicked: {e}"))??;
-
-    *punch_result_bytes()
-        .lock()
-        .map_err(|e| format!("punch result lock poisoned: {e}"))? = Some(positions_bytes);
-
-    serde_json::to_string(&report).map_err(|e| format!("serialize punch report: {e}"))
-}
-
-/// Returns the most recent non-mutating punch result positions as raw
-/// little-endian bytes.
-#[tauri::command]
-pub async fn mesh_punch_read_positions() -> Result<Response, String> {
-    let bytes = punch_result_bytes()
-        .lock()
-        .map_err(|e| format!("punch result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No punch result — call mesh_punch_from_captured_source first".to_string()
-        })?;
-    Ok(Response::new(bytes))
+    let result_id = store.put(owner, mesh_store::Entry::Soup(result));
+    report_json(&report, Some(result_id))
 }
 
 // --- organic cut ---------------------------------------------------------
@@ -3372,6 +3310,78 @@ mod store_isolation_tests {
         let mut ids = vec![mesh_id, result_id.to_string()];
         ids.extend(report["cavityId"].as_str().map(str::to_string));
         store.drop_ids(&ids);
+    }
+
+    const CENTRE_PUNCH: &str = r#"{"punches":[{"centerNorm":[0.5,0.5,0.5],"radiusMm":2}]}"#;
+
+    /// The hole punch preview punches one stored source again on every change, so a punch must
+    /// leave its input as it found it.
+    #[test]
+    fn a_punch_leaves_its_source_in_place_for_the_next_one() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("punch-source".to_string());
+        let source_id = store.put(owner.clone(), Entry::Soup(cube()));
+        let mut ids = vec![source_id.clone()];
+        for _ in 0..2 {
+            let report_json = tauri::async_runtime::block_on(mesh_punch_staged(
+                CENTRE_PUNCH.to_string(),
+                source_id.clone(),
+            ))
+            .expect("punch ran");
+            let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+            assert_eq!(report["sourceTriangleCount"].as_u64(), Some(12));
+            let result_id = report["meshId"].as_str().expect("a result id").to_string();
+            assert_eq!(store.owner_of(&result_id).unwrap(), owner);
+            ids.push(result_id);
+        }
+        assert!(store.get_soup(&source_id).is_ok(), "the source is still there");
+        store.drop_ids(&ids);
+    }
+
+    #[test]
+    fn punches_on_two_stored_meshes_never_see_each_other() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("punch-isolation".to_string());
+        let sources = [
+            (store.put(owner.clone(), Entry::Soup(tetrahedron())), 4),
+            (store.put(owner.clone(), Entry::Soup(cube())), 12),
+        ];
+        let runs: Vec<_> = (0..8)
+            .map(|i| {
+                let (source_id, expected) = sources[i % 2].clone();
+                std::thread::spawn(move || {
+                    let report_json = tauri::async_runtime::block_on(mesh_punch_staged(
+                        CENTRE_PUNCH.to_string(),
+                        source_id,
+                    ))
+                    .expect("punch ran");
+                    let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+                    let result_id = report["meshId"].as_str().unwrap().to_string();
+                    (report["sourceTriangleCount"].as_u64(), expected, result_id)
+                })
+            })
+            .collect();
+        let mut ids: Vec<String> = sources.iter().map(|(id, _)| id.clone()).collect();
+        for run in runs {
+            let (seen, expected, result_id) = run.join().unwrap();
+            assert_eq!(seen, Some(expected), "each punch read its own source");
+            ids.push(result_id);
+        }
+        store.drop_ids(&ids);
+    }
+
+    #[test]
+    fn a_punch_on_something_other_than_a_mesh_says_why() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("punch-wrong-kind".to_string());
+        let buffer_id = store.put(owner, Entry::Buffer(vec![0; 16]));
+        let error = tauri::async_runtime::block_on(mesh_punch_staged(
+            CENTRE_PUNCH.to_string(),
+            buffer_id.clone(),
+        ))
+        .unwrap_err();
+        assert!(error.starts_with("mesh-store/wrong_kind:"), "{error}");
+        store.drop_ids(&[buffer_id]);
     }
 
     /// The same two callers, at the same time and many times over, through ids: each analysis

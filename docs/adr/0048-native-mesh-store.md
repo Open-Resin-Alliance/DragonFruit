@@ -62,7 +62,8 @@ the sideloaded plugin runtime (slots by id).
    are untouched. The first family is classify, analyze and repair (staged, from a path,
    by parts, and the plain load); `withStagedMesh` goes with it. Then, one change each:
    hollow, hole punch, organic cut, islands, the AO registry and slicing. Sessions become
-   entries that pin their source, replacing the `*_capture_staged_source` copies. The
+   entries, replacing the `*_capture_staged_source` copies; a family that keeps nothing
+   between runs but its source holds that source as a stored soup instead. The
    output-file writer becomes its own module with an `open → handle` of its own, and
    slicing cancel moves onto the per-token `CANCELS` pattern.
 
@@ -76,7 +77,8 @@ the sideloaded plugin runtime (slots by id).
 - Callers must drop what they put. `withNativeMesh` (`nativeMeshStore.ts`) scopes an
   input to one pass, and results are released as they are read.
 - The staging slot, its file form and the 18 session slots stay until their families
-  move; they are deleted as each one does. Hollowing's ten went first.
+  move; they are deleted as each one does. Hollowing's ten went first, then hole punching's
+  two.
 
 ## Alternatives considered
 
