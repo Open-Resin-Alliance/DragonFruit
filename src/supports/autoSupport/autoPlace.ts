@@ -7306,7 +7306,7 @@ export function computeAutoSupportPlan(
             }
             const startSupportTips = collectSupportTips(draft, modelId);
             const startRows = islands
-                .filter((island) => island.startIsland === true && !island.interior)
+                .filter((island) => island.startIsland === true && !island.interior && !island.grounded)
                 .map((island) => {
                     const status = assessStartSupport(island, startSupportTips, resolvedMesh);
                     return {

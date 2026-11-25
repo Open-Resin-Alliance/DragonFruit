@@ -255,8 +255,12 @@ test('the forest report carries a start row per start and a summary line', () =>
         resetStore();
         const { mesh, islands } = detachedStartsScene();
         setModelMesh('m', mesh);
+        const plateIsland: DetectedIsland = {
+            ...detachedIsland('plate-grounded', -5, 0, 1, 1, 0),
+            grounded: true,
+        };
         const plan = computeAutoSupportPlan(
-            islands,
+            [...islands, plateIsland],
             'm',
             { debugSkipAutoBracing: true, stabilizationEnabled: false },
             undefined,
@@ -265,7 +269,7 @@ test('the forest report carries a start row per start and a summary line', () =>
         assert.ok(plan, 'plan computed');
         const report = plan.result.analytics?.forestReport;
         assert.ok(report?.starts, 'start report present');
-        assert.equal(report.starts.count, 3);
+        assert.equal(report.starts.count, 3, 'a plate-grounded island is not a start needing support');
         assert.equal(report.starts.underSupported, 0);
         assert.equal(plan.result.analytics?.startIslands, 3);
         assert.equal(plan.result.analytics?.startsUnderSupported, 0);
