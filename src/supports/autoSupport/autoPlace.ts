@@ -60,6 +60,7 @@ import {
 } from './coverage';
 import { sizeParameters, presetForArea, modelSizingFactors, RESIN_DENSITY_G_PER_MM3 } from './parameterSizing';
 import { computeLoadBudget, type PlacedContact } from './loadBudget';
+import { forceDrivenContactCount, selectForceCoveragePoints } from './tractionCovering';
 import {
     START_SUPPORT_CONSTANTS,
     assessStartSupport,
@@ -175,7 +176,6 @@ const MAX_STRESS_LEAF_PROMOTIONS_PER_PASS = 2;
  *  should not spend its budget here. */
 const MAX_TRUNK_ERROR_RETRIES = 48;
 /** Add→re-evaluate rounds for the per-support force budget after gap-fill. */
-const MAX_FORCE_BUDGET_ADD_PASSES = 3;
 /** Contacts a single force-budget round may add, worst-utilization first. */
 const MAX_FORCE_BUDGET_ADDS_PER_PASS = 32;
 /** Minimum plan distance between a budget addition and an existing contact. */
@@ -6138,74 +6138,117 @@ export function computeAutoSupportPlan(
     // vertical pillar to a leaning face is usually blocked by the part.
     // Everything still passes the usual gates (tip caps, clearance, trunk retry).
     if (tractionProfile && forceBudgetSurfaces.length > 0) {
-        for (let pass = 0; pass < MAX_FORCE_BUDGET_ADD_PASSES; pass++) {
-            const budgetGraph = buildSupportGraph(draft, modelId);
-            if (budgetGraph.tipCount === 0) break;
+        const budgetGraph = buildSupportGraph(draft, modelId);
+        if (budgetGraph.tipCount > 0) {
             const budget = computeForceBudgetFromGraph(
                 budgetGraph,
                 tractionProfile,
                 forceBudgetSurfaces,
                 supportStrengthMpa,
             );
-            // Formation overhangs first (stable among themselves), then the
-            // class-2 steep flats: the latter are harder to route and should not
-            // displace a formation contact from the per-pass budget.
             const overBudget = budget.rows
                 .filter((row) => row.addPoint && row.deficitN > 0)
                 .sort((a, b) => Number(a.addPoint!.steepFlat) - Number(b.addPoint!.steepFlat));
-            if (overBudget.length === 0) break;
 
-            const areaByIsland = new Map<string, number>();
-            for (const island of forceBudgetSurfaces) {
-                if (island.areaMm2 !== undefined) areaByIsland.set(island.id, island.areaMm2);
+            // Paper-aligned one-shot densification (Cao et al. 2025): turn the
+            // tip force deficit into a capacity count and a Gaussian traction
+            // field, then pick the new contacts geometrically. No second frame
+            // or force solve is needed to choose the points.
+            const surfaceById = new Map(forceBudgetSurfaces.map((island) => [island.id, island]));
+            interface DeficitGroup {
+                island: DetectedIsland | undefined;
+                rows: typeof overBudget;
+                deficitN: number;
+                capacityN: number;
             }
-            const existingTips = collectSupportTips(draft, modelId);
-            const accepted: Array<{ x: number; y: number }> = [];
-            const candidates: CandidatePoint[] = [];
+            const groups = new Map<string, DeficitGroup>();
             for (const row of overBudget) {
-                if (candidates.length >= MAX_FORCE_BUDGET_ADDS_PER_PASS) break;
                 const point = row.addPoint!;
-                const tooClose = existingTips.some((tip) =>
-                    (tip.x - point.pos.x) ** 2 + (tip.y - point.pos.y) ** 2 < MIN_FORCE_BUDGET_ADD_SPACING_MM ** 2)
-                    || accepted.some((other) =>
-                        (other.x - point.pos.x) ** 2 + (other.y - point.pos.y) ** 2 < MIN_FORCE_BUDGET_ADD_SPACING_MM ** 2);
-                if (tooClose) continue;
-                accepted.push({ x: point.pos.x, y: point.pos.y });
-                const augmented = point.steepFlat;
-                const candidate: CandidatePoint = {
-                    id: `force-${row.entityId ?? 'tip'}-${pass}-${candidates.length}`,
-                    tipPos: { ...point.pos },
-                    tipNormal: { ...point.normal },
-                    modelId,
-                    source: 'overhang',
-                    islandAreaMm2: areaByIsland.get(point.islandId) ?? autoSettings.areaPerSupportMm2,
-                    zHeight: point.pos.z,
-                    priority: augmented ? -1 : 0,
-                    // A formation patch is a density point (standalone pillar).
-                    // A class-2 steep face is a force repair: let the fan/merge
-                    // path attach it to a host instead of forcing a vertical
-                    // pillar a leaning face usually blocks.
-                    gridPoint: !augmented,
-                };
-                if (augmented) {
-                    // The island carries the exact surface normal; a whole-mesh
-                    // raycast at a steep face hits the wrong side.
-                    preResolvedCandidates.add(candidate);
-                    forceBudgetAugmentedAttempts++;
+                let group = groups.get(point.islandId);
+                if (!group) {
+                    group = { island: surfaceById.get(point.islandId), rows: [], deficitN: 0, capacityN: 0 };
+                    groups.set(point.islandId, group);
                 }
-                forceBudgetAttempts++;
-                candidates.push(candidate);
+                group.rows.push(row);
+                group.deficitN += row.deficitN;
+                group.capacityN = Math.max(group.capacityN, row.capacityN);
             }
-            if (candidates.length === 0) break;
-            applyContactTipCaps(candidates, resolvedMesh, autoSettings.tipContactMarginScale, autoSettings);
-            let placedThisPass = 0;
-            for (const candidate of candidates) {
-                if (placeOne(candidate) === 'reject') continue;
-                placedThisPass++;
-                if (!candidate.gridPoint) forceBudgetAugmentedPlaced++;
+
+            const existingTips = collectSupportTips(draft, modelId);
+            const candidates: CandidatePoint[] = [];
+            for (const [islandId, group] of groups) {
+                if (candidates.length >= MAX_FORCE_BUDGET_ADDS_PER_PASS) break;
+                const needed = forceDrivenContactCount(group.deficitN, group.capacityN);
+                if (needed <= 0) continue;
+                const remaining = MAX_FORCE_BUDGET_ADDS_PER_PASS - candidates.length;
+                const seedRows = group.rows;
+                const firstPoint = seedRows[0].addPoint!;
+                const island = group.island;
+                const seeds = seedRows.map((row) => ({
+                    x: row.addPoint!.pos.x,
+                    y: row.addPoint!.pos.y,
+                    demandN: row.demandN,
+                    capacityN: row.capacityN,
+                }));
+                const points = island && island.contactVoxels && island.contactVoxels.count > 0
+                    ? selectForceCoveragePoints(
+                        island,
+                        seeds,
+                        existingTips,
+                        Math.min(needed, remaining),
+                        {
+                            sigmaMm: Math.max(1.2, coverageRadiusForRegion(island)),
+                            minSpacingMm: MIN_FORCE_BUDGET_ADD_SPACING_MM,
+                        },
+                    )
+                    : [];
+                if (points.length === 0) {
+                    // No footprint (a point surface): fall back to the deficit
+                    // cells themselves, still respecting the plant spacing.
+                    for (const row of seedRows) {
+                        if (points.length >= Math.min(needed, remaining)) break;
+                        const p = row.addPoint!.pos;
+                        if (points.some((other) => Math.hypot(other.x - p.x, other.y - p.y) < MIN_FORCE_BUDGET_ADD_SPACING_MM)) continue;
+                        points.push({ x: p.x, y: p.y, z: p.z, score: 0 });
+                    }
+                }
+
+                for (const point of points) {
+                    if (candidates.length >= MAX_FORCE_BUDGET_ADDS_PER_PASS) break;
+                    const augmented = firstPoint.steepFlat;
+                    const candidate: CandidatePoint = {
+                        id: `force-${islandId}-${point.x.toFixed(2)}-${point.y.toFixed(2)}`,
+                        tipPos: { x: point.x, y: point.y, z: point.z },
+                        tipNormal: augmented
+                            ? { ...(island?.surfaceNormal ?? firstPoint.normal) }
+                            : { ...firstPoint.normal },
+                        modelId,
+                        source: 'overhang',
+                        islandAreaMm2: island?.areaMm2 ?? autoSettings.areaPerSupportMm2,
+                        zHeight: point.z,
+                        priority: augmented ? -1 : 0,
+                        // A formation patch is a density point (standalone
+                        // pillar). A class-2 steep face is a force repair: let
+                        // the fan/merge path attach it to a host.
+                        gridPoint: !augmented,
+                    };
+                    if (augmented) {
+                        preResolvedCandidates.add(candidate);
+                        forceBudgetAugmentedAttempts++;
+                    }
+                    forceBudgetAttempts++;
+                    candidates.push(candidate);
+                }
             }
-            forceBudgetAdds += placedThisPass;
-            if (placedThisPass === 0) break;
+
+            if (candidates.length > 0) {
+                applyContactTipCaps(candidates, resolvedMesh, autoSettings.tipContactMarginScale, autoSettings);
+                for (const candidate of candidates) {
+                    if (placeOne(candidate) === 'reject') continue;
+                    forceBudgetAdds++;
+                    if (!candidate.gridPoint) forceBudgetAugmentedPlaced++;
+                }
+            }
         }
     }
     if (forceBudgetAdds > 0 || forceBudgetAttempts > 0) {
