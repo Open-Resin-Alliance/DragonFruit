@@ -395,25 +395,37 @@ export function TransformGizmo({
     if (part?.startsWith('scale-') && onScaleEnd) onScaleEnd();
   };
 
+  // Each handle listens on `window` and stops only once its own state change
+  // commits in the R3F tree, which can land after the canvas has already ended
+  // the gesture. A move delivered in that gap wrote a drag delta that nothing
+  // cleared, so every raft on the plate stayed scaled about the dragged model.
+  // Only the part being dragged reports movement, read from the ref that
+  // `handleDragStart`/`handleDragEnd` set synchronously.
+  const isDraggingPart = (part: string) => activePartRef.current === part;
+
   const handleAxisMove = (axis: GizmoAxis, delta: THREE.Vector3) => {
+    if (!isDraggingPart(`axis-${axis}`)) return;
     if (onMove) {
       onMove(delta, axis);
     }
   };
 
   const handleCenterMove = (delta: THREE.Vector3) => {
+    if (!isDraggingPart('center')) return;
     if (onMove) {
       onMove(delta);
     }
   };
 
   const handleRotate = (axis: GizmoAxis, angle: number): number | void => {
+    if (!isDraggingPart(`ring-${axis}`)) return;
     if (onRotate) {
       return onRotate(axis, angle);
     }
   };
 
   const handleScaleDrag = (axis: GizmoAxis, factor: number, isUniform: boolean) => {
+    if (!isDraggingPart(`scale-${axis}`)) return;
     if (onScale) {
       if (isUniform) {
         onScale('uniform', factor);
