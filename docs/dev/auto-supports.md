@@ -1012,6 +1012,24 @@ summarized by `src/supports/autoSupport/supportStressReport.ts`
 (`summarizeSupportStress`, `supportStressReportToText`,
 `SupportStressReportInput`, `SupportStressSummary`, `SupportStressStatusLevel`,
 `FLOATING_Z_THRESHOLD_MM`).
+### Support-mode analysis runs on the auto-support worker
+
+The frame solve, representative-layer sampling, printability, and topple pass
+are too heavy for the UI thread on a multi-million-triangle model. They now run
+on the same worker as placement: `src/supports/autoSupport/supportAnalysis.ts`
+exports `runSupportAnalysis` (pure apart from the seeded store/mesh/settings),
+`autoPlace.worker.ts` handles an `analyze` request next to `run`, and
+`autoPlaceWorkerClient.ts` exposes `analyzeSupportState` /
+`buildSupportAnalysisPayload`. The worker posts
+`Preparing model → Sampling layers → Building support graph → Solving frame →
+Stability → Printability`; the panel renders those as check circles while the
+report lands in one store write. The analysis is debounced and re-arms while a
+support gizmo is dragging, so resizing never waits on a solve. The payload
+carries the support snapshot, serialized islands, and the mesh (through the
+worker's confirmed-key cache); the main thread pays that serialization once, not
+the solve. Without a `Worker` (tests, plain browser) the client falls back to
+the same in-process body.
+
 `SupportStressPanel` (titled **Printability** in the UI) renders a plain-language
 hero verdict banner (`Checks Passed` / `Needs Attention` / `Action Needed` /
 `Not Checked`), a unified three-row Coverage / Support load / Stability checklist,
@@ -1173,8 +1191,9 @@ which the client fills from the active material). The run derates it **once**,
 at its boundary, with `supportBreakStrengthMpa`; the frame solver receives it as
 `supportStrengthMpa` for tips and the undated datasheet value as
 `memberStrengthMpa` for members, the force budget and Phase 1c get the break
-strength. The panel's re-solve calls `activeSupportStrengthMpa()` and
-`activeMemberStrengthMpa()` for the same pair. Doubling the profile value halves
+strength. The panel carries the profile tensile in
+`buildSupportAnalysisPayload`; `runSupportAnalysis` derives the same pair before
+calling the solver. Doubling the profile value halves
 every tip/member utilization without moving geometry (pinned by a solver
 test). A stored profile still carrying the **old 12 MPa default** is moved to 24
 once during hydration (`migrateTensileSemantics`): under the new semantics 12

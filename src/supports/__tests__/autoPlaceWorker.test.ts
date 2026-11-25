@@ -39,6 +39,7 @@ import {
     modelMeshKey,
     resetAutoPlaceWorkerCache,
     runAutoPlaceRequest,
+    runSupportAnalysisRequest,
     seedAutoPlaceEnvironment,
     serializeIsland,
     serializeModelMesh,
@@ -1389,3 +1390,27 @@ test('a tip that cannot hold its layer peel gets a force-budget contact', () => 
 });
 
 
+
+
+test('the worker analysis returns the frame/printability reports and its check phases', () => {
+    const { mesh, island } = rotatedUnderside();
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const payload = {
+        ...structuredClone(payloadFor(island, mesh)),
+        analysis: { areaPerSupportMm2: 10 },
+    };
+    const phases: string[] = [];
+    const result = withStore(null, () => runSupportAnalysisRequest(payload, (progress) => {
+        phases.push(progress.phase);
+    }));
+
+    assert.ok(result.frame, 'frame report produced off the main thread');
+    assert.ok(result.printability, 'printability report produced');
+    assert.ok(result.frame.solverMode === 'frame3d' || result.frame.solverMode === 'rigidBodyOnly');
+    assert.ok(Number.isFinite(result.printability.uncoveredAreaMm2), 'printability is a real report');
+    for (const phase of ['Preparing model', 'Sampling layers', 'Building support graph', 'Solving frame', 'Stability', 'Printability']) {
+        assert.ok(phases.includes(phase), `progress reported ${phase}`);
+    }
+});

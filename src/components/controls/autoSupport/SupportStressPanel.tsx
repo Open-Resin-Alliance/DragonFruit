@@ -11,10 +11,12 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  Circle,
   ClipboardCopy,
   Eye,
   EyeOff,
   FileText,
+  Loader2,
   ShieldPlus,
 } from 'lucide-react';
 import type { MessageDescriptor } from '@lingui/core';
@@ -25,14 +27,9 @@ import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import { isSupportEditInteractionActive } from '@/supports/interaction/gizmoInteractionLock';
 import {
-  buildSupportGraph,
   classifyToppleRisk,
-  clearModelFrameStress,
   clearModelToppleRisk,
-  evaluatePrintability,
-  evaluateToppleRisk,
   FLOATING_Z_THRESHOLD_MM,
-  getCachedRepresentativeLayers,
   getFrameStressSnapshot,
   getModelMesh,
   HIGH_LEVERAGE_SPAN_MM,
@@ -42,27 +39,20 @@ import {
   setModelPrintability,
   setModelToppleRisk,
   setStressOverlayEnabled,
-  solveSupportFrameStress,
   subscribeFrameStress,
   subscribeModelMesh,
   summarizeSupportStress,
   supportStressReportToText,
-  toppleRiskNeedsCoverage,
   type LayerPeelPoint,
   type PrintabilityReport,
-  type RepresentativeLayerProfile,
   type SupportFrameStressReport,
   type SupportStressStatusLevel,
   type SupportStressSummary,
   type ToppleRiskReport,
 } from '@/supports/autoSupport';
-import { measurePoseStability, posedPositions } from '@/supports/autoSupport/poseStability';
+import { analyzeSupportState } from '@/supports/autoSupport/autoPlaceWorkerClient';
 import { getHomeSupportCollectionsSnapshot } from '@/features/supports/supportSnapshotHelpers';
-import { DEFAULT_RESIN_TENSILE_STRENGTH_MPA, supportBreakStrengthMpa } from '@/supports/autoSupport/greenMaterialCalibration';
-import { getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
-import { geometryCentroidMm } from '@/features/printing/modelResinVolume';
 import { getSettings } from '@/supports/Settings/state';
-import { getActiveMaterialProfile } from '@/features/profiles/profileStore';
 import { getSnapshot, setSnapshot, subscribe as subscribeSupportState } from '@/supports/state';
 import type { SupportState } from '@/supports/types';
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
@@ -76,6 +66,23 @@ import { AUTO_SUPPORT_SECTION_CARD } from './autoSupportPanelTabs';
 
 const REINFORCE_HISTORY_LABEL = msg`Reinforce overloaded supports`;
 const AUTO_REFRESH_DEBOUNCE_MS = 300;
+
+interface SupportAnalysisUiState {
+  running: boolean;
+  phase: string;
+  done: number;
+  total: number;
+  error: string | null;
+}
+
+const ANALYSIS_STEPS: ReadonlyArray<{ phase: string; label: MessageDescriptor }> = [
+  { phase: 'Preparing model', label: msg`Model` },
+  { phase: 'Sampling layers', label: msg`Layers` },
+  { phase: 'Building support graph', label: msg`Supports` },
+  { phase: 'Solving frame', label: msg`Frame` },
+  { phase: 'Stability', label: msg`Stability` },
+  { phase: 'Printability', label: msg`Coverage` },
+];
 
 interface StructuralRefs {
   roots: SupportState['roots'];
@@ -118,20 +125,6 @@ function sameStructuralRefs(a: StructuralRefs, b: StructuralRefs): boolean {
     && a.sticks === b.sticks
     && a.twigs === b.twigs
   );
-}
-
-/** The material profile's datasheet tensile, derated to the thin-section
- *  support break strength the solver and every placement capacity use. */
-function activeSupportStrengthMpa(): number {
-  return supportBreakStrengthMpa(
-    getActiveMaterialProfile()?.tensileStrengthMpa ?? DEFAULT_RESIN_TENSILE_STRENGTH_MPA,
-  );
-}
-
-/** Bulk green strength for member bending: the datasheet tensile, not the
- *  0.5 × 0.5 mm contact coupon the support break strength is measured on. */
-function activeMemberStrengthMpa(): number {
-  return Math.max(0.01, getActiveMaterialProfile()?.tensileStrengthMpa ?? DEFAULT_RESIN_TENSILE_STRENGTH_MPA);
 }
 
 const KIND_LABELS: Partial<Record<SupportTypeId, MessageDescriptor>> = {
@@ -373,51 +366,6 @@ function computeMeshMinZMm(mesh: THREE.Mesh | null | undefined): number | null {
   return Number.isFinite(minZ) ? minZ : null;
 }
 
-function computeLiveToppleRisk(
-  modelId: string,
-  mesh: THREE.Mesh | null | undefined,
-  profile: RepresentativeLayerProfile | undefined,
-  rockingMm: number,
-  hasSupports: boolean,
-): ToppleRiskReport | null {
-  if (!mesh || !mesh.geometry) return null;
-  const indexAttr = mesh.geometry.getIndex();
-  const hasRaft = getRaftSettingsForModel(modelId).bottomMode !== 'off';
-  const poseStability = measurePoseStability(
-    posedPositions(mesh),
-    indexAttr ? (indexAttr.array as ArrayLike<number>) : null,
-    0,
-    0,
-    undefined,
-    hasRaft,
-  );
-  if (!hasSupports && poseStability.plateZMm > FLOATING_Z_THRESHOLD_MM) {
-    return null;
-  }
-  const edgeNormal = poseStability.worstEdgeNormal;
-  if (
-    !poseStability.worstEdgePoint
-    || !edgeNormal
-    || Math.hypot(edgeNormal.x, edgeNormal.y) <= 1e-6
-    || poseStability.bearingAreaMm2 <= 0
-  ) {
-    return null;
-  }
-  const localCentroid = geometryCentroidMm(mesh.geometry);
-  if (!localCentroid) return null;
-  mesh.updateMatrixWorld();
-  const worldCentroid = new THREE.Vector3(localCentroid.x, localCentroid.y, localCentroid.z)
-    .applyMatrix4(mesh.matrixWorld);
-  return evaluateToppleRisk({
-    profile,
-    centroid: { x: worldCentroid.x, y: worldCentroid.y },
-    edge: { point: poseStability.worstEdgePoint, normal: edgeNormal },
-    bearingAreaMm2: poseStability.bearingAreaMm2,
-    contactDepthMm: poseStability.contactDepthMm,
-    frameRockingMm: rockingMm,
-  });
-}
-
 interface StressGraphSvgProps {
   layers: readonly LayerPeelPoint[];
   hoveredIndex: number | null;
@@ -635,6 +583,14 @@ function SupportStressPanelImpl({
   const lastOwnReportRef = React.useRef<SupportFrameStressReport | null>(null);
   const lastSolvedRefsRef = React.useRef<StructuralRefs | null>(null);
   const autoRefreshTimerRef = React.useRef<number | null>(null);
+  const analysisSeqRef = React.useRef(0);
+  const [analysis, setAnalysis] = React.useState<SupportAnalysisUiState>({
+    running: false,
+    phase: '',
+    done: 0,
+    total: 0,
+    error: null,
+  });
 
   const stressSnap = React.useSyncExternalStore(
     subscribeFrameStress,
@@ -704,69 +660,74 @@ function SupportStressPanelImpl({
   }, [islands]);
 
   /**
-   * Re-evaluate solved Stefan topple risk and live printability demand for the
-   * current edit, sharing the cached representative layer profile.
+   * Evaluate the existing forest on the worker. The frame solve, representative
+   * layer sampling, printability and topple pass were the main-thread chug on a
+   * large model; the worker returns the three reports and this only commits them.
    */
-  const refreshDemandAndTopple = React.useCallback((
-    modelId: string,
-    snapshot: SupportState,
-    mesh: THREE.Mesh | null | undefined,
-    profile: RepresentativeLayerProfile | undefined,
-    frameReport: SupportFrameStressReport | null,
-  ): void => {
-    // A frame report is the proof, but a model whose supports are placed and not
-    // yet solved is supported too — the floating check must not call it floating.
-    const hasSupports = Boolean(frameReport && frameReport.tipCount > 0)
-      || [snapshot.trunks, snapshot.branches, snapshot.leaves,
-        snapshot.stumps, snapshot.sticks, snapshot.twigs]
-        .some((collection) => Object.values(collection ?? {})
-          .some((entity) => entity.modelId === modelId));
-    const computedTopple = computeLiveToppleRisk(
-      modelId,
-      mesh,
-      profile,
-      frameReport?.maxTipRockingMm ?? 0,
-      hasSupports,
-    );
-    if (computedTopple) {
-      setModelToppleRisk(modelId, computedTopple);
-    } else {
-      clearModelToppleRisk(modelId);
-    }
-    const existingTopple = computedTopple ?? undefined;
-    const effectiveToppleCoverage = existingTopple
-      ? toppleRiskNeedsCoverage(existingTopple)
-      : toppleCoverageNeeded;
-
-    setModelPrintability(modelId, evaluatePrintability({
-      islands: islandsRef.current ?? [],
-      snapshot,
-      modelId,
-      areaPerSupportMm2: getSettings().autoSupport.areaPerSupportMm2,
-      profile,
-      poseDragMomentMm3,
-      toppleCoverageNeeded: effectiveToppleCoverage,
-      frame: frameReport
+  const runAnalysis = React.useCallback(async (reinforcedCount?: number) => {
+    if (!activeModelId) return;
+    const seq = ++analysisSeqRef.current;
+    const snapshot = getSnapshot();
+    const refs = captureStructuralRefs(snapshot);
+    const pose = poseKey ?? null;
+    setAnalysis({ running: true, phase: 'Preparing model', done: 0, total: 1, error: null });
+    try {
+      const result = await analyzeSupportState(
+        activeModelId,
+        islandsRef.current ?? [],
+        {
+          poseDragMomentMm3,
+          toppleCoverageNeeded,
+          areaPerSupportMm2: getSettings().autoSupport.areaPerSupportMm2,
+        },
+        (progress) => {
+          if (analysisSeqRef.current !== seq) return;
+          setAnalysis({
+            running: true,
+            phase: progress.phase,
+            done: progress.done,
+            total: progress.total,
+            error: null,
+          });
+        },
+      );
+      if (analysisSeqRef.current !== seq) return;
+      const currentRefs = captureStructuralRefs(getSnapshot());
+      if (!sameStructuralRefs(currentRefs, refs) || (poseKey ?? null) !== pose) {
+        // A newer edit or pose change already owns the panel; its result lands.
+        return;
+      }
+      lastSolvedRefsRef.current = currentRefs;
+      const nextReport: SupportFrameStressReport = reinforcedCount !== undefined
         ? {
-          maxTipUtilizationPct: frameReport.maxTipUtilizationPct,
-          maxMemberUtilizationPct: frameReport.maxMemberUtilizationPct,
-        }
-        : undefined,
-    }));
-  }, [poseDragMomentMm3, toppleCoverageNeeded]);
+            ...result.frame,
+            reinforcedCount: (lastOwnReportRef.current?.reinforcedCount ?? 0) + reinforcedCount,
+          }
+        : result.frame;
+      lastOwnReportRef.current = nextReport;
+      setModelFrameStress(activeModelId, nextReport);
+      setModelPrintability(activeModelId, result.printability);
+      if (result.topple) setModelToppleRisk(activeModelId, result.topple);
+      else clearModelToppleRisk(activeModelId);
+      setAnalysis({ running: false, phase: '', done: 0, total: 0, error: null });
+    } catch (error) {
+      if (analysisSeqRef.current !== seq) return;
+      setAnalysis({
+        running: false,
+        phase: '',
+        done: 0,
+        total: 0,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [activeModelId, poseKey, poseDragMomentMm3, toppleCoverageNeeded]);
 
-  // Evaluate Stefan peel demand + topple margin whenever the model, pose, or scan changes.
+  // Evaluate the model, pose, or scan on the worker; support edits go through
+  // the debounced subscription below.
   React.useEffect(() => {
     if (!activeModelId || !modelMesh) return;
-    const profile = getCachedRepresentativeLayers(modelMesh, getActiveMaterialProfile()?.layerHeightMm);
-    refreshDemandAndTopple(
-      activeModelId,
-      getSnapshot(),
-      modelMesh,
-      profile,
-      getFrameStressSnapshot().byModelId[activeModelId] ?? null,
-    );
-  }, [activeModelId, poseKey, modelMesh, hasScanned, islandsKey, refreshDemandAndTopple]);
+    void runAnalysis();
+  }, [activeModelId, poseKey, modelMesh, hasScanned, islandsKey, runAnalysis]);
 
   React.useEffect(() => {
     setHoveredIdx(null);
@@ -790,7 +751,6 @@ function SupportStressPanelImpl({
     const before = captureSupportEditSnapshot();
     const snap = getSnapshot();
     const mesh = getModelMesh(activeModelId);
-    const auto = getSettings().autoSupport;
     const reinforced = reinforceOverloadedFrameMembers(snap, report, mesh ?? undefined, activeModelId);
     if (!reinforced.changed) {
       setReinforceFeedback({ kind: 'limit' });
@@ -801,24 +761,11 @@ function SupportStressPanelImpl({
     setSnapshot(reinforced.snapshot);
     pushSupportEditHistory(REINFORCE_HISTORY_LABEL, before, captureSupportEditSnapshot());
     flushSupportEditHistory();
-
-    const profile = mesh ? getCachedRepresentativeLayers(mesh, getActiveMaterialProfile()?.layerHeightMm) : undefined;
-    const graph = buildSupportGraph(reinforced.snapshot, activeModelId);
-    const nextReport: SupportFrameStressReport = {
-      ...solveSupportFrameStress(graph, profile, {
-        areaPerSupportMm2: auto.areaPerSupportMm2,
-        supportStrengthMpa: activeSupportStrengthMpa(),
-        memberStrengthMpa: activeMemberStrengthMpa(),
-      }),
-      reinforcedCount: (report.reinforcedCount ?? 0) + reinforced.totalReinforced,
-    };
-    lastOwnReportRef.current = nextReport;
     setReinforceFeedback({ kind: 'reinforced', count: reinforced.totalReinforced });
-    setModelFrameStress(activeModelId, nextReport);
-    refreshDemandAndTopple(activeModelId, reinforced.snapshot, mesh, profile, nextReport);
-  }, [activeModelId, refreshDemandAndTopple, report]);
+    void runAnalysis(reinforced.totalReinforced);
+  }, [activeModelId, report, runAnalysis]);
 
-  // Every structural support edit re-analyses on a 160 ms debounce.
+  // Every structural support edit re-analyses on a debounce; never mid-drag.
   React.useEffect(() => {
     if (!activeModelId) return;
     let lastSeenRefs = captureStructuralRefs(getSnapshot());
@@ -835,8 +782,8 @@ function SupportStressPanelImpl({
       autoRefreshTimerRef.current = window.setTimeout(() => {
         autoRefreshTimerRef.current = null;
         // Resizing/dragging a support writes structural state continuously; do
-        // not block the gizmo with a 200ms+ beam solve and demand evaluation
-        // mid-drag. Re-arm until the edit and its post-drag guard clear.
+        // not block the gizmo with an analysis mid-drag. Re-arm until the edit
+        // and its post-drag guard clear.
         if (isSupportEditInteractionActive()) {
           scheduleAnalysis();
           return;
@@ -846,34 +793,9 @@ function SupportStressPanelImpl({
         if (lastSolvedRefsRef.current && sameStructuralRefs(latestRefs, lastSolvedRefsRef.current)) {
           return;
         }
-        const graph = buildSupportGraph(latestSnap, activeModelId);
-        const mesh = getModelMesh(activeModelId);
-        const profile = mesh ? getCachedRepresentativeLayers(mesh, getActiveMaterialProfile()?.layerHeightMm) : undefined;
-        let nextReport: SupportFrameStressReport | null = null;
-        if (graph.rootCount > 0 && graph.tipCount > 0) {
-          const auto = getSettings().autoSupport;
-          nextReport = solveSupportFrameStress(graph, profile, {
-            areaPerSupportMm2: auto.areaPerSupportMm2,
-            supportStrengthMpa: activeSupportStrengthMpa(),
-            memberStrengthMpa: activeMemberStrengthMpa(),
-          });
-          lastOwnReportRef.current = nextReport;
-          setModelFrameStress(activeModelId, nextReport);
-        } else {
-          clearModelFrameStress(activeModelId);
-        }
-        lastSolvedRefsRef.current = latestRefs;
-        refreshDemandAndTopple(activeModelId, latestSnap, mesh, profile, nextReport);
+        void runAnalysis();
       }, AUTO_REFRESH_DEBOUNCE_MS);
     };
-
-    const seedSnap = getSnapshot();
-
-    const hasContacts = [seedSnap.trunks, seedSnap.branches, seedSnap.leaves, seedSnap.stumps, seedSnap.sticks, seedSnap.twigs]
-      .some((collection) => Object.keys(collection).length > 0);
-    if (hasContacts || getFrameStressSnapshot().byModelId[activeModelId] || getFrameStressSnapshot().overlayEnabled) {
-      scheduleAnalysis();
-    }
 
     const unsubscribe = subscribeSupportState(() => {
       const snap = getSnapshot();
@@ -898,7 +820,7 @@ function SupportStressPanelImpl({
       unsubscribe();
       clearTimer();
     };
-  }, [activeModelId, hasScanned, islandsKey, overlayEnabled, refreshDemandAndTopple]);
+  }, [activeModelId, hasScanned, islandsKey, overlayEnabled, runAnalysis]);
 
   const layers = report && report.layerProfile.length > 0
     ? report.layerProfile
@@ -969,6 +891,7 @@ function SupportStressPanelImpl({
       ? 'warning'
       : 'neutral';
   const peakForceForHeader = report?.peakLayerPeelForceN ?? printability?.peakPeelForceN ?? 0;
+  const analysisStepIndex = ANALYSIS_STEPS.findIndex((step) => step.phase === analysis.phase);
 
   return (
     <>
@@ -1028,6 +951,57 @@ function SupportStressPanelImpl({
                       {issueSubtitle}
                     </div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* Worker analysis progress: the main thread only receives reports. */}
+            {(analysis.running || analysis.error) && (
+              <div className="rounded-md border p-2 space-y-1.5" style={AUTO_SUPPORT_SECTION_CARD}>
+                <div className="flex items-center justify-between gap-2 text-[10px]">
+                  <span className="font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    {_(msg`Analyzing`)}
+                  </span>
+                  <span
+                    className="min-w-0 truncate tabular-nums"
+                    style={{ color: analysis.error ? 'var(--danger)' : 'var(--text-muted)' }}
+                    title={analysis.error ?? undefined}
+                  >
+                    {analysis.error
+                      ?? `${_(msg`Frame, coverage and stability checks`)}${analysis.total > 1 ? ` ${analysis.done}/${analysis.total}` : ''}`}
+                  </span>
+                </div>
+                <div className="flex items-start gap-1">
+                  {ANALYSIS_STEPS.map((step, index) => {
+                    const stepState = analysis.error
+                      ? 'pending'
+                      : index < analysisStepIndex
+                        ? 'done'
+                        : index === analysisStepIndex
+                          ? 'active'
+                          : 'pending';
+                    return (
+                      <div
+                        key={step.phase}
+                        className="flex min-w-0 flex-1 flex-col items-center gap-0.5"
+                        title={_(step.label)}
+                      >
+                        {stepState === 'done' ? (
+                          <Check className="h-3.5 w-3.5" style={{ color: 'var(--success)' }} />
+                        ) : stepState === 'active' ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: 'var(--accent)' }} />
+                        ) : (
+                          <Circle className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+                        )}
+                        <span
+                          className="w-full truncate text-center text-[9px]"
+                          style={{ color: stepState === 'pending' ? 'var(--text-muted)' : 'var(--text-strong)' }}
+                        >
+                          {_(step.label)}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1248,7 +1222,7 @@ function SupportStressPanelImpl({
                     {topple && (
                       <div className="border-t pt-1.5 space-y-1" style={{ borderColor: 'var(--border-subtle)' }}>
                         <div className="flex justify-between">
-                          <span>{_(msg`COM depth`)}</span>
+                          <span>{_(msg`Center of Mass depth`)}</span>
                           <span style={{ color: topple.comDepthMm > 0 ? 'var(--success)' : 'var(--danger)' }}>
                             {fmt.quantity(topple.comDepthMm, 1, 'mm')}
                           </span>

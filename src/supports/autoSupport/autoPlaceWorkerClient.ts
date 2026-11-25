@@ -24,8 +24,10 @@ import { getModelMesh } from './meshStore';
 import { resolvedSizingBandsForRun } from './parameterSizing';
 import type { AutoSupportSettings } from './settings';
 import type { AutoPlaceResult, AutoSupportPlan } from './types';
+import type { SupportAnalysisResult } from './supportAnalysis';
 import {
     modelMeshKey,
+    runSupportAnalysisRequest,
     serializeIsland,
     serializeModelMesh,
     type AutoPlaceWorkerPayload,
@@ -36,8 +38,9 @@ import {
 
 let worker: Worker | null = null;
 let requestSeq = 1;
+type WorkerPendingResult = AutoSupportPlan | null | SupportAnalysisResult;
 const pending = new Map<number, {
-    resolve: (plan: AutoSupportPlan | null) => void;
+    resolve: (result: WorkerPendingResult) => void;
     reject: (error: Error) => void;
     /** Cleared by the worker's ack; fires if the worker never gets that far. */
     startupTimer: ReturnType<typeof setTimeout>;
@@ -121,6 +124,8 @@ const ensureWorker = (): Worker | null => {
                 // failed inside the run.
                 if (msg.stack) error.stack = `${msg.error}\n  --- from the worker ---\n${msg.stack}`;
                 entry.reject(error);
+            } else if (msg.type === 'analysis') {
+                entry.resolve(msg.result);
             } else {
                 entry.resolve(msg.plan);
             }
@@ -301,7 +306,7 @@ const requestPlan = (
     onProgress?: (progress: { phase: string; done: number; total: number }) => void,
 ): Promise<AutoSupportPlan | null> => {
     const requestId = requestSeq++;
-    return new Promise((resolve, reject) => {
+    return new Promise<AutoSupportPlan | null>((resolve, reject) => {
         const startupTimer = setTimeout(() => {
             pending.delete(requestId);
             workerUnusable = true;
@@ -313,7 +318,12 @@ const requestPlan = (
             ));
         }, AUTO_PLACE_WORKER_STARTUP_TIMEOUT_MS);
 
-        pending.set(requestId, { resolve, reject, startupTimer, onProgress });
+        pending.set(requestId, {
+            resolve: (result) => resolve(result as AutoSupportPlan | null),
+            reject,
+            startupTimer,
+            onProgress,
+        });
         // Serialising the mesh and structured-cloning the payload happen
         // before the worker can report anything. Put the bar up now.
         onProgress?.({ phase: 'Preparing model', done: 0, total: 1 });
@@ -327,6 +337,90 @@ const requestPlan = (
         }
     });
 };
+
+const requestAnalysis = (
+    target: Worker,
+    payload: AutoPlaceWorkerPayload,
+    onProgress?: (progress: { phase: string; done: number; total: number }) => void,
+): Promise<SupportAnalysisResult> => {
+    const requestId = requestSeq++;
+    return new Promise<SupportAnalysisResult>((resolve, reject) => {
+        const startupTimer = setTimeout(() => {
+            pending.delete(requestId);
+            workerUnusable = true;
+            dropWorker(target);
+            reject(new Error('support-analysis worker did not start'));
+        }, AUTO_PLACE_WORKER_STARTUP_TIMEOUT_MS);
+        pending.set(requestId, {
+            resolve: (result) => resolve(result as SupportAnalysisResult),
+            reject,
+            startupTimer,
+            onProgress,
+        });
+        onProgress?.({ phase: 'Preparing model', done: 0, total: 1 });
+        try {
+            target.postMessage({ type: 'analyze', requestId, payload });
+        } catch (err) {
+            clearTimeout(startupTimer);
+            pending.delete(requestId);
+            clearWorkerSessionCaches();
+            reject(err instanceof Error ? err : new Error(String(err)));
+        }
+    });
+};
+
+/**
+ * Build the analysis request from the live support/mesh/settings state. The
+ * mesh is encoded through the same confirmed-key cache the plan uses, so the
+ * worker rebuilds it once and later analyses carry only the key.
+ */
+export function buildSupportAnalysisPayload(
+    modelId: string,
+    islands: readonly DetectedIsland[],
+    analysis: { poseDragMomentMm3?: number; toppleCoverageNeeded?: boolean; areaPerSupportMm2?: number },
+): AutoPlaceWorkerPayload {
+    const appSettings = getSettings();
+    const baseState = getSnapshot();
+    const raftState = getRaftStateSnapshot();
+    const primaryMesh = getModelMesh(modelId);
+    const encoded = encodeMeshForWorker(modelId, primaryMesh);
+    const material = getActiveMaterialProfile();
+    return {
+        modelId,
+        islands: islands.map(serializeIsland),
+        appSettings,
+        baseState,
+        raftState,
+        layerHeightMm: material?.layerHeightMm,
+        tensileStrengthMpa: material?.tensileStrengthMpa,
+        ...(encoded.mesh ? { mesh: encoded.mesh } : {}),
+        ...(encoded.meshKey ? { meshKey: encoded.meshKey } : {}),
+        analysis,
+    };
+}
+
+/**
+ * Evaluate the existing forest on the worker. Same store writes as the old
+ * main-thread panel pass, but the frame/printability/topple work stays off the
+ * UI thread. Falls back in-process when no worker exists (tests, plain browser).
+ */
+export async function analyzeSupportState(
+    modelId: string,
+    islands: readonly DetectedIsland[],
+    analysis: { poseDragMomentMm3?: number; toppleCoverageNeeded?: boolean; areaPerSupportMm2?: number },
+    onProgress?: (progress: { phase: string; done: number; total: number }) => void,
+): Promise<SupportAnalysisResult> {
+    const payload = buildSupportAnalysisPayload(modelId, islands, analysis);
+    const target = ensureWorker();
+    if (!target) return runSupportAnalysisRequest(payload, onProgress);
+    try {
+        return await requestAnalysis(target, payload, onProgress);
+    } catch (error) {
+        console.error('[AutoSupport] analysis worker failed, falling back to the in-process pass.', error);
+        clearWorkerSessionCaches();
+        return runSupportAnalysisRequest(payload, onProgress);
+    }
+}
 
 /**
  * Run auto-placement on the worker and commit the plan. Same result and same

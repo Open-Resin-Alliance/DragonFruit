@@ -28,6 +28,7 @@ import {
     registerMeshForAutoBrace,
     unregisterMeshForAutoBrace,
 } from '../autoBracing/meshGeometryStore';
+import { runSupportAnalysis, type SupportAnalysisResult } from './supportAnalysis';
 import { computeAutoSupportPlan } from './autoPlace';
 import { setResolvedSizingBands } from './parameterSizing';
 import type { SizingBand } from './settings';
@@ -102,18 +103,23 @@ export type AutoPlaceWorkerPayload = {
     cavityMeshKey?: string | null;
     /** Active sibling model meshes on the plate for cross-model brace clearance. */
     siblingMeshes?: AutoPlaceWorkerSiblingMesh[];
+    /** Support-analysis inputs that the auto-place run itself does not use. */
+    analysis?: {
+        poseDragMomentMm3?: number;
+        toppleCoverageNeeded?: boolean;
+        areaPerSupportMm2?: number;
+    };
 };
 
-export type AutoPlaceWorkerRequest = {
-    type: 'run';
-    requestId: number;
-    payload: AutoPlaceWorkerPayload;
-};
+export type AutoPlaceWorkerRequest =
+    | { type: 'run'; requestId: number; payload: AutoPlaceWorkerPayload }
+    | { type: 'analyze'; requestId: number; payload: AutoPlaceWorkerPayload };
 
 export type AutoPlaceWorkerResponse =
     | { type: 'started'; requestId: number }
     | { type: 'progress'; requestId: number; phase: string; done: number; total: number }
     | { type: 'result'; requestId: number; plan: AutoSupportPlan | null }
+    | { type: 'analysis'; requestId: number; result: SupportAnalysisResult }
     | { type: 'error'; requestId: number; error: string; stack?: string };
 
 export function serializeIsland(island: DetectedIsland): SerializedIsland {
@@ -362,4 +368,16 @@ export function runAutoPlaceRequest(
         payload.layerHeightMm,
         payload.tensileStrengthMpa,
     );
+}
+
+
+/** Seed this thread, then run the frame/printability/topple pass. */
+export function runSupportAnalysisRequest(
+    payload: AutoPlaceWorkerPayload,
+    onProgress?: (progress: { phase: string; done: number; total: number }) => void,
+): SupportAnalysisResult {
+    onProgress?.({ phase: 'Preparing model', done: 0, total: 1 });
+    const { mesh } = seedAutoPlaceEnvironment(payload);
+    onProgress?.({ phase: 'Preparing model', done: 1, total: 1 });
+    return runSupportAnalysis(payload, mesh, onProgress);
 }
