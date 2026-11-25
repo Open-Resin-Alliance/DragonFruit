@@ -222,6 +222,59 @@ erases higher-Z toe tips on gently tilted soles; sloped overhang pairs still use
 the grown 2D disc (subject to `SUPPORT_RESTSTACK_DELTA_MM`, 5 mm), and discrete
 islands (voxel/minima/intersection) always keep the flat 3D ball.
 
+## Island starts and coverage closure (`startIslands.ts`)
+
+**What a start is.** The lowest connected cross-section of a detached island:
+material whose layer first appears with nothing below it. The voxel scan already
+records this as `DetectedIsland.isDetached` (its own "0-bridge to layer L-1, or
+L=0" answer) and exports the BIRTH footprint in `contactVoxels`/`contact`, so
+the start is read from scan data rather than detected again. The run stamps
+`startIsland` onto every island (`markStartIslands`) so placement, the forest
+report and the tests share one definition. A minima or overhang region is not a
+start unless it carries an explicit `startIsland` stamp.
+
+**Why the generic rules are wrong for a start.** Candidate generation is
+overhang/area-driven: a start can miss the perimeter/infill floor (about 4 mm²)
+or the 1.5 mm² gap-cluster floor. `filterAlreadySupported` drops a candidate
+within 3 mm in 3D of *any* existing contact, so a contact a layer above or below
+can suppress the one the start needs. And the overhang coverage target is 95%:
+the 5% a flat overhang is allowed to leave is exactly the peel-initiation patch
+a start tears from. Too few contacts then prints a pancake — the first layers
+peel before the island's cross-section can carry the part.
+
+**The recipe** (`START_SUPPORT_CONSTANTS`):
+
+| footprint | minimum contacts | coverage disc | coverage target |
+| --- | ---: | ---: | ---: |
+| ≤ 0.5 mm² (speck / narrow rib) | 1 | 1.2 mm | 99% |
+| ≤ 3 mm² | 2 | 1.8 mm | 99% |
+| > 3 mm² | 3 | 2.5 mm | 99% |
+
+The larger footprint's three contacts are a base plane, not a count: a single
+trunk under a 20 mm² start is the pancake case the recipe exists to stop.
+
+**Pass order and behavior.** `computeAutoSupportPlan` runs the closure after the
+overhang gap-fill loop and before the force budget and the stress/brace loop.
+It reuses `buildGapFillCandidates` (now with `GapFillOptions`: target, radius,
+cluster floor, contact-count floor, non-overhang sources, id prefix) and
+`placeOneCandidate`; there is no second placement engine. Start contacts are
+deduped only against tips in the same cross-section — a 0.25 mm band around
+`baseZ` — so a contact several millimetres above/below can never suppress it.
+The same pass is the **densification/coverage closure for every non-grounded
+island**: a voxel/minima island the generic passes missed gets at least one
+holding contact and its normal coverage target, and an overhang region that
+still sits under target after gap-fill gets the rest. It runs at most
+`START_SUPPORT_CONSTANTS.maxPasses` (3) passes and stops when a pass places
+nothing.
+
+**Report fields.** `ForestReport.starts` holds `count`, `underSupported` and one
+`StartReportRow` per start: `id`, `areaMm2`, `contacts`, `minContacts`,
+`coveragePct`, `uncoveredAreaMm2`, `zMm`, `pancakeRisk` (contacts below the
+recipe OR coverage below 99%). `forestReportToText` prints a `STARTS` section
+and the summary line `Starts: N (M under-supported)`; the run logs the same
+line. `AutoPlaceAnalytics.startIslands`/`startsUnderSupported` expose the
+counters to the bench and the panel.
+
 ## Representative-layer Voronoi traction optimization (`tractionOptimization.ts`)
 
 Between candidate filtering (`filterAlreadySupported`) and normal/tip resolution,
