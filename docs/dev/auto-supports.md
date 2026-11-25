@@ -880,25 +880,6 @@ This is the member-side counterpart of the forest resize, which runs the other w
 
 **Where the thickness actually comes from (finding, not tuned here).** The floor is relative, so it cannot make a forest chunky by itself — it only tracks a host that is already thick. The host's own diameter is the model-scale term: at ×1.6 the harness hosts sit at 1.62 mm against a 1.0 mm band, and with the model terms at ×1 they sit at 1.01 mm (measured: sizeScale 1 → 1.01, 1.25 → 1.27, 1.6 → 1.62, 2.0 → 2.03). A `base Ø1.00 · h1.25 → Ø1.93mm` note is therefore ~×1.55 of model factor, not height alone (the note prints only `h`; see the two findings in the forest-report section). `MAX_SHAFT_DIAMETER_MM` is not the binder anywhere near the reported sizes: at ×2.0 every harness host reads 2.03 mm and none at ×1.6 does — and that ×2.0 is the user's own `sizeScale`, which is allowed past the cap by design. Retuning those factors is a separate decision.
 
-## Scan resolution is tiered
-
-The desktop scan is not one resolution. The voxel family (`scan_islands_staged`)
-runs at **half resolution in each axis** (`VOXEL_COARSE_FACTOR = 2`, so 0.2 mm /
-0.1 mm for the default 0.1 mm / 0.05 mm request), while the overhang and minima
-families stay at the caller's fine resolution. That is the coarse-to-fine split:
-the voxel pass answers "where are the detached layer starts" over an 8x smaller
-grid, and the triangle-based overhang/minima pass carries the fine contact and
-shallow-overhang detail. Contact points are still surface-snapped against the
-full mesh, and the reported layer span is scaled back to the requested layer
-height.
-
-The tradeoff is explicit: a detached voxel island smaller than the coarse
-footprint can be missed unless the overhang/minima families see it. The factor
-is a constant in `src-tauri/src/mesh_minima.rs`, not a user setting yet; lowering
-it restores fine voxels at 8x the cells. On the snowman STL the full TS scan was
-390 M cells / 8.8 s; the coarse grid is 8x fewer cells before the fine
-overhang/minima work.
-
 ## Rules worth knowing before you change placement
 
 - **A mesh patch is grounded when its top is at the plate, or when it is a shallow
