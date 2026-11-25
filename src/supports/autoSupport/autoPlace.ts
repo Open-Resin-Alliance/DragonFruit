@@ -6124,24 +6124,36 @@ export function computeAutoSupportPlan(
                     countFloor = contacts === 0 ? 1 : 0;
                 }
 
-                let candidates = buildGapFillCandidates([island], autoSettings, eligible, 0.05, resolvedMesh, {
-                    coverageTarget,
-                    radiusMm: radius,
-                    minClusterMm2: isStart ? 0.05 : undefined,
-                    minCandidatesPerRegion: countFloor,
-                    includeNonOverhang: true,
-                    source: island.source,
-                    idPrefix: isStart ? 'start' : 'island',
-                }).map((c): CandidatePoint => ({
-                    ...c,
-                    modelId,
-                    interior: false,
-                    // A start in a pocket may have no vertical plate path but a
-                    // clear fan/merge from the supports around it — which is how
-                    // a user reaches the same island by hand. Grid points force
-                    // standalone trunks and skip that path.
-                    ...(isStart ? { gridPoint: false } : {}),
-                }));
+                let candidates: CandidatePoint[];
+                if (isStart) {
+                    // A start is the first cross-section. A footprint point a
+                    // few tenths higher lands on the island's upper/side face
+                    // and does not hold the first layers; the fan then repeats
+                    // every pass because the start still reads 0/N. The recipe
+                    // contact is the base point itself.
+                    candidates = [{
+                        id: `start-${island.id}-base`,
+                        tipPos: { x: island.contact.x, y: island.contact.y, z: island.contact.z },
+                        tipNormal: island.surfaceNormal
+                            ?? resolveSurfaceNormal(island.contact, resolvedMesh ?? undefined).normal,
+                        modelId,
+                        source: island.source,
+                        islandAreaMm2: autoSettings.areaPerSupportMm2,
+                        zHeight: island.contact.z,
+                        priority: 0,
+                        gridPoint: false,
+                        interior: false,
+                    }];
+                } else {
+                    candidates = buildGapFillCandidates([island], autoSettings, eligible, 0.05, resolvedMesh, {
+                        coverageTarget,
+                        radiusMm: radius,
+                        minCandidatesPerRegion: countFloor,
+                        includeNonOverhang: true,
+                        source: island.source,
+                        idPrefix: 'island',
+                    }).map((c): CandidatePoint => ({ ...c, modelId, interior: false }));
+                }
 
                 // Point-only islands (no contact footprint) still get the
                 // contact their recipe asks for.
