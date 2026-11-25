@@ -33,7 +33,7 @@ import {
 } from '@/features/hole-punching/holePunchPersistence';
 import { buildGeometryVersionKey, disposeHollowPreviewCacheEntry } from '@/features/hollowing/hollowingPreviewCache';
 import type { HollowPreviewCacheEntry, HollowingSourceEntry } from '@/features/hollowing/hollowingPreviewTypes';
-import { punchFromCapturedSource, stagePunchSource, type PunchOptions } from '@/utils/meshPunching';
+import { openPunchSource, punchStoredSource, type PunchOptions } from '@/utils/meshPunching';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import {
   ADD_HOLE_LABEL,
@@ -1205,8 +1205,8 @@ export function useHolePunchManager({
           ? `${activeModel.id}::hole-source:${activeModel.meshModifiers?.holePunchSourcePositionCount ?? 0}:${activeModel.meshModifiers?.holePunchSourcePositionsBase64?.length ?? 0}`
           : `${activeModel.id}::geom:${buildGeometryVersionKey(activeModel.geometry.geometry)}`;
 
-        const staged = await stagePunchSource(sourceGeometry, punchSourceKey);
-        if (!staged) {
+        const sourceId = await openPunchSource(sourceGeometry, punchSourceKey);
+        if (!sourceId) {
           if (ownsSourceGeometry) {
             sourceGeometry.dispose();
           }
@@ -1214,7 +1214,7 @@ export function useHolePunchManager({
           return;
         }
 
-        const result = await punchFromCapturedSource(punchOptions);
+        const result = await punchStoredSource(sourceId, punchOptions);
         if (!result) {
           if (ownsSourceGeometry) {
             sourceGeometry.dispose();

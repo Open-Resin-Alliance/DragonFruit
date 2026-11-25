@@ -433,11 +433,6 @@ import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/compo
 import { uploadPrintJobWithProgress, type PluginUploadProgressEvent } from '@/features/plugins/pluginUploadBridge';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { fetchRtspRelayStatus } from '@/utils/rtspRelayBridge';
-import {
-  punchFromCapturedSource,
-  stagePunchSource,
-  type PunchOptions,
-} from '@/utils/meshPunching';
 import type {
   ModelMeshModifiers,
   ModelMeshModifiersHistoryOptions,

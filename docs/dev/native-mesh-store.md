@@ -12,7 +12,7 @@ that use it can run at the same time on different meshes, which the staging regi
 `stage_mesh_binary_set` writes one process-wide slot, and the next command that reads staging
 reads whatever is there. Two passes in flight on two meshes read each other's mesh and nothing
 errors, so the frontend had to queue every pass. The register stays for the families not yet
-migrated (hole punch, organic cut, islands, shrink-wrap, slicing); new code should not add
+migrated (organic cut, islands, shrink-wrap, slicing); new code should not add
 callers to it.
 
 ## Public surface
@@ -73,6 +73,14 @@ The preview's buffers are `removedVoxelCentersId` and `blockedVoxelCentersId` (`
 per voxel) and `removedVoxelIndicesId` and `blockedVoxelIndicesId` (`u32`). `cavityId` and
 `infillId` appear only when the mode produces them.
 
+**Hole punching** runs on the store only, and its command requires the id too. It keeps
+nothing between runs, so it has no session: the preview keeps its source as a stored soup
+and punches it again by id on every change.
+
+| Command | Input | Result |
+| --- | --- | --- |
+| `mesh_punch_staged(optionsJson, meshId)` | `meshId`, left in the store as it was | `meshId`, owned by the input's owner |
+
 **TypeScript** (`src/utils/nativeMeshStore.ts`) is the only frontend module that calls the
 primitives:
 
@@ -94,6 +102,14 @@ primitives:
   does not use. When the store has lost the session, it is forgotten, so the next
   `openHollowSession` opens a new one; the error still reaches the caller.
 
+`src/utils/meshPunching.ts` does the same for hole punching, with a stored source in place of
+a session:
+
+- `openPunchSource(geometry, sourceKey)` returns the stored source for that key, or puts the
+  geometry and drops the previous source.
+- `punchStoredSource(sourceId, options)` punches it and collects the result;
+  `punchFromGeometry` punches a geometry once, inside `withNativeMesh`.
+
 ## Sessions
 
 A session is an entry that keeps an operation's expensive state between calls. Hollowing
@@ -102,8 +118,9 @@ builds, and the grid is rebuilt only when the resolution or the rotation changes
 shell, the infill or the blockers reuses it.
 
 - **A session keeps its own copy of the source.** Once it is open, the mesh it was opened from
-  can be dropped; `openHollowSession` drops it straight away. Pinning a stored source, so that
-  two families can share one, comes when hole punching moves.
+  can be dropped; `openHollowSession` drops it straight away. Nothing pins a stored entry: a
+  family that only re-reads its source, as hole punching does, holds it as a plain soup, which
+  no command changes.
 - **A session is dropped like any id.** `openHollowSession` drops the previous session when
   the source changes. Commands already running on the old one hold their own reference and
   finish; a command sent with its id afterwards fails with `unknown`.
