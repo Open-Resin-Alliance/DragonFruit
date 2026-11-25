@@ -3759,8 +3759,11 @@ export function forestSizingNote(entry: ForestLedgerEntry, actualShaftMm: number
  * already touch, not a re-layout.
  */
 export const ROOT_MERGE_RADIUS_MM = 3;
-/** Mid-air shaft clearance threshold (mm) below which two trunks are also merge candidates. */
+/** Mid-air shaft centerline threshold (mm) below which two trunks are merge candidates.
+ *  Floored: a surface-close pair may sit wider than this when the shafts are fat. */
 export const MID_SHAFT_MERGE_DISTANCE_MM = 1.6;
+/** Surface clearance (mm) counted on top of both shaft radii for the mid-shaft test. */
+const MID_SHAFT_MERGE_CLEARANCE_MM = 0.5;
 
 export interface RootMergeOptions {
     mesh?: THREE.Mesh;
@@ -3805,13 +3808,14 @@ export function mergeNearbyTrunkRoots(
 ): RootMergeResult {
     const maxRootDistanceMm = options.maxRootDistanceMm ?? ROOT_MERGE_RADIUS_MM;
     const maxShaftDistanceMm = options.maxShaftDistanceMm ?? MID_SHAFT_MERGE_DISTANCE_MM;
-    const maxShaftDistSq = maxShaftDistanceMm * maxShaftDistanceMm;
     const refusals: RootMergeResult['refusals'] = {};
     const mergedTrunkIds: string[] = [];
     let draft = draftIn;
     const consumed = new Set<string>();
 
     const tipOf = (entity: { contactCone?: { pos: { x: number; y: number; z: number } } }) => entity.contactCone?.pos;
+    const maxShaftDiameterOf = (trunk: { segments: Segment[] }): number =>
+        (trunk.segments ?? []).reduce((max, segment) => Math.max(max, segment.diameter ?? 0), 0);
 
     const trunks = () => Object.values(draft.trunks).filter((trunk) => trunk.modelId === modelId);
 
@@ -3864,7 +3868,17 @@ export function mergeNearbyTrunkRoots(
                         if (d2 < bestShaftSq) bestShaftSq = d2;
                     }
                 }
-                if (bestShaftSq > maxShaftDistSq) continue;
+                // The centerline floor assumed thin placement shafts; two
+                // post-placement shafts of ~1.7 mm overlap at 1.6 mm and
+                // 'almost touch' well past it. Add both radii plus a small
+                // surface clearance so a fat near-touching pair is a candidate.
+                const radiusA = maxShaftDiameterOf(a) / 2;
+                const radiusB = maxShaftDiameterOf(b) / 2;
+                const shaftLimitMm = Math.max(
+                    maxShaftDistanceMm,
+                    radiusA + radiusB + MID_SHAFT_MERGE_CLEARANCE_MM,
+                );
+                if (bestShaftSq > shaftLimitMm * shaftLimitMm) continue;
                 minDist = Math.sqrt(bestShaftSq);
             }
             // Taller tip survives; more attachments then root/tip position
@@ -3956,6 +3970,12 @@ export function mergeNearbyTrunkRoots(
         for (const contact of contacts) {
             // Try primary survivor first (local deduplication), then allow nearby
             // clear trunks in the forest to absorb overflow when survivor is full/steep.
+            // A merge replaces a whole pillar, so the survivor may use the
+            // full fan radius even when it is a grid host. The 2.5 mm lattice
+            // reach exists to keep ordinary placement fans tight; applied to a
+            // consolidation it refuses the exact pairs that stand closest
+            // together, because the victim's members were fanned up to
+            // `fanRadiusMm` from its own shaft.
             let result = fanLeafToHost(
                 contact.tip,
                 modelId,
@@ -3963,7 +3983,7 @@ export function mergeNearbyTrunkRoots(
                 options.gridHostIds,
                 'rm',
                 options.fanRadiusMm,
-                options.gridHostFanRadiusMm,
+                options.fanRadiusMm,
                 options.maxAngleDeg,
                 options.maxAttachments,
                 attempt,
@@ -3983,7 +4003,7 @@ export function mergeNearbyTrunkRoots(
                     options.gridHostIds,
                     'rm',
                     options.fanRadiusMm,
-                    options.gridHostFanRadiusMm,
+                    options.fanRadiusMm,
                     options.maxAngleDeg,
                     options.maxAttachments,
                     attempt,

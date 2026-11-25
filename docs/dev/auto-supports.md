@@ -725,14 +725,20 @@ Anchoring contacts stay LOW (`steepFlatAnchorBandTop`) on a squat part: the lowe
 - **Co-located and mid-shaft close trunks merge across nearby hosts.** After
   gap-fill and before the diameter resize, `mergeNearbyTrunkRoots` dissolves a
   trunk whose plate root stands within `ROOT_MERGE_RADIUS_MM` (3 mm) of a
-  taller one **or** whose leaning shaft passes within
-  `MID_SHAFT_MERGE_DISTANCE_MM` (1.6 mm) in 3D: its own tip and every hosted
+  taller one **or** whose leaning shaft passes surface-close in 3D — the
+  `MID_SHAFT_MERGE_DISTANCE_MM` (1.6 mm) centerline floor, widened to both
+  shaft radii plus `MID_SHAFT_MERGE_CLEARANCE_MM` (0.5 mm) so two fat
+  near-touching shafts (1.8 mm Ø at 2.2 mm centers) are candidates instead of
+  only intersecting ones: its own tip and every hosted
   member's tip are re-fanned onto the primary survivor first (preferring steepest
   legal knots via `fanLeafToHost`, with overflow contacts absorbed by other
   nearby non-consumed trunks if the primary survivor hits capacity or angle/reach
   limits), excluding victim shafts and soon-to-be-removed hosted members from
   crossing checks before removing the victim's members, knots, trunk, and
-  unreferenced root. The merge commits only if *every* contact can be re-served
+  unreferenced root. The survivor uses the full `fanRadiusMm` even when it is a
+  grid host: the 2.5 mm lattice reach (`GRID_HOST_FAN_RADIUS_MM`) exists to keep
+  ordinary placement fans tight, but a merge is replacing the victim pillar, and
+  the victim's own members were fanned out to `fanRadiusMm` from its shaft. The merge commits only if *every* contact can be re-served
   without colliding (`contactConeCollides` / `branchCollidesWithSDF` against
   the mesh); a refusal keeps the victim trunk intact and tallies the reason
   (`blocked`, `angle`, `capacity`, `noHost`, `noTips`) in

@@ -178,3 +178,46 @@ test('mesh collision between survivor shaft and victim tips rolls back merge cle
     assert.equal(Object.keys(result.draft.trunks).length, 2, 'victim trunk B remains intact');
     assert.ok(result.refusals.blocked, `blocked refusal tallied (${JSON.stringify(result.refusals)})`);
 });
+test('a grid survivor accepts the full fan radius when absorbing a merge', () => {
+    // B stands 0.9 mm from A but its tips fan 3.4 mm out, past the 2.5 mm
+    // lattice reach. Ordinary placement must keep grid fans tight; a merge is
+    // replacing the pillar, so the survivor uses the normal fan radius.
+    const s = snapshot(0.9, 2.5);
+    const result = mergeNearbyTrunkRoots(s, 'm', { ...OPTIONS, gridHostIds: new Set(['A']) });
+    assert.equal(result.merged, 1, 'grid host absorbs a member fanned beyond the lattice reach');
+    assert.deepEqual(Object.keys(result.draft.trunks), ['A']);
+});
+
+test('fat shafts that almost touch are candidates beyond the centerline floor', () => {
+    const s: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            'r-A': { id: 'r-A', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2.5, diskHeight: 0.5, coneHeight: 0.5 } as never,
+            'r-B': { id: 'r-B', modelId: 'm', transform: { pos: { x: 6, y: 0, z: 0 } }, diameter: 2.5, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            A: {
+                ...trunk('A', 0, 12),
+                segments: [{
+                    id: 'seg-A', diameter: 1.8,
+                    bottomJoint: { id: 'j0-A', pos: { x: 0, y: 0, z: 1 }, diameter: 1.8 },
+                    topJoint: { id: 'j1-A', pos: { x: 0, y: 0, z: 11.5 }, diameter: 1.8 },
+                }],
+            },
+            B: {
+                id: 'B', modelId: 'm', origin: 'standalone', rootId: 'r-B',
+                segments: [{
+                    id: 'seg-B', diameter: 1.8,
+                    bottomJoint: { id: 'j0-B', pos: { x: 6, y: 0, z: 1 }, diameter: 1.8 },
+                    topJoint: { id: 'j1-B', pos: { x: 2.2, y: 0, z: 9.5 }, diameter: 1.8 },
+                }],
+                contactCone: cone('c-B', 2.2, 0, 10),
+            },
+        } as never,
+    };
+    const result = mergeNearbyTrunkRoots(s, 'm', OPTIONS);
+    assert.equal(result.merged, 1, '2.2 mm centerlines with 1.8 mm shafts are surface-close');
+    assert.deepEqual(Object.keys(result.draft.trunks), ['A']);
+});
