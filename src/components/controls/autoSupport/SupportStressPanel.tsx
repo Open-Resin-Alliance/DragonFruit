@@ -706,6 +706,17 @@ function SupportStressPanelImpl({
     !report && !hasModelContacts && modelMinZMm !== null && modelMinZMm > FLOATING_Z_THRESHOLD_MM,
   );
 
+  const islandsRef = React.useRef(islands);
+  React.useEffect(() => {
+    islandsRef.current = islands;
+  }, [islands]);
+  const islandsKey = React.useMemo(() => {
+    const list = islands ?? [];
+    return `${list.length}|${list
+      .map((island) => `${island.id}:${(island.areaMm2 ?? 0).toFixed(3)}:${(island.overhangAngleDeg ?? 0).toFixed(2)}`)
+      .join(',')}`;
+  }, [islands]);
+
   /**
    * Re-evaluate solved Stefan topple risk and live printability demand for the
    * current edit, sharing the cached representative layer profile.
@@ -742,7 +753,7 @@ function SupportStressPanelImpl({
       : toppleCoverageNeeded;
 
     setModelPrintability(modelId, evaluatePrintability({
-      islands: islands ?? [],
+      islands: islandsRef.current ?? [],
       snapshot,
       modelId,
       areaPerSupportMm2: getSettings().autoSupport.areaPerSupportMm2,
@@ -756,7 +767,7 @@ function SupportStressPanelImpl({
         }
         : undefined,
     }));
-  }, [islands, poseDragMomentMm3, toppleCoverageNeeded]);
+  }, [poseDragMomentMm3, toppleCoverageNeeded]);
 
   // Evaluate Stefan peel demand + topple margin whenever the model, pose, or scan changes.
   React.useEffect(() => {
@@ -769,7 +780,7 @@ function SupportStressPanelImpl({
       profile,
       getFrameStressSnapshot().byModelId[activeModelId] ?? null,
     );
-  }, [activeModelId, poseKey, modelMesh, hasScanned, refreshDemandAndTopple]);
+  }, [activeModelId, poseKey, modelMesh, hasScanned, islandsKey, refreshDemandAndTopple]);
 
   React.useEffect(() => {
     setHoveredIdx(null);
@@ -889,16 +900,6 @@ function SupportStressPanelImpl({
     };
 
     const seedSnap = getSnapshot();
-    if (islands && islands.length > 0) {
-      const seedMesh = getModelMesh(activeModelId);
-      refreshDemandAndTopple(
-        activeModelId,
-        seedSnap,
-        seedMesh,
-        seedMesh ? getCachedRepresentativeLayers(seedMesh, getActiveMaterialProfile()?.layerHeightMm) : undefined,
-        getFrameStressSnapshot().byModelId[activeModelId] ?? null,
-      );
-    }
 
     const hasContacts = [seedSnap.trunks, seedSnap.branches, seedSnap.leaves, seedSnap.stumps, seedSnap.sticks, seedSnap.twigs]
       .some((collection) => Object.keys(collection).length > 0);
@@ -917,7 +918,7 @@ function SupportStressPanelImpl({
         || curStress.overlayEnabled
         || [snap.trunks, snap.branches, snap.leaves, snap.stumps, snap.sticks, snap.twigs]
           .some((collection) => Object.keys(collection).length > 0)
-        || Boolean(islands && islands.length > 0);
+        || Boolean(islandsRef.current && islandsRef.current.length > 0);
       if (!shouldRefresh) return;
       if (lastSolvedRefsRef.current && sameStructuralRefs(nextRefs, lastSolvedRefsRef.current)) {
         return;
@@ -929,7 +930,7 @@ function SupportStressPanelImpl({
       unsubscribe();
       clearTimer();
     };
-  }, [activeModelId, islands, refreshDemandAndTopple]);
+  }, [activeModelId, hasScanned, islandsKey, refreshDemandAndTopple]);
 
   const layers = report && report.layerProfile.length > 0
     ? report.layerProfile
