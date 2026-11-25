@@ -501,7 +501,7 @@ export function buildGapFillCandidates(
     const out: CandidatePoint[] = [];
     const coverageTarget = options.coverageTarget ?? (settings.coverageTargetPercent ?? 95) / 100;
     const minCandidatesPerRegion = options.minCandidatesPerRegion ?? 0;
-    const idPrefix = options.idPrefix ?? 'gap';
+    const idPrefix = options.idPrefix;
     const candidateSource = options.source ?? 'overhang';
     for (const region of overhangIslands) {
         if (region.source !== 'overhang' && !options.includeNonOverhang) continue;
@@ -530,7 +530,9 @@ export function buildGapFillCandidates(
             for (const c of clusters) {
                 emitted.push(c);
                 out.push({
-                    id: `${idPrefix}-${region.id}-${c.x.toFixed(2)}-${c.y.toFixed(2)}`,
+                    id: idPrefix
+                        ? `${idPrefix}-${region.id}-${c.x.toFixed(2)}-${c.y.toFixed(2)}`
+                        : `gap-${region.id}-${c.x.toFixed(2)}-${c.y.toFixed(2)}`,
                     tipPos: { x: c.x, y: c.y, z: c.z },
                     tipNormal: region.surfaceNormal ?? { x: 0, y: 0, z: -1 },
                     modelId: '',
@@ -555,7 +557,9 @@ export function buildGapFillCandidates(
             if (!near) {
                 emitted.push(cell);
                 out.push({
-                    id: `${idPrefix}-span-${region.id}-${cell.x.toFixed(2)}-${cell.y.toFixed(2)}`,
+                    id: idPrefix
+                        ? `${idPrefix}-span-${region.id}-${cell.x.toFixed(2)}-${cell.y.toFixed(2)}`
+                        : `span-${region.id}-${cell.x.toFixed(2)}-${cell.y.toFixed(2)}`,
                     tipPos: cell,
                     tipNormal: region.surfaceNormal ?? { x: 0, y: 0, z: -1 },
                     modelId: '',
@@ -580,7 +584,9 @@ export function buildGapFillCandidates(
         const addPoint = (point: { x: number; y: number; z: number }, suffix: string): void => {
             emitted.push(point);
             out.push({
-                id: `${idPrefix}-${suffix}-${region.id}-${point.x.toFixed(2)}-${point.y.toFixed(2)}`,
+                id: idPrefix
+                    ? `${idPrefix}-${suffix}-${region.id}-${point.x.toFixed(2)}-${point.y.toFixed(2)}`
+                    : `${suffix}-${region.id}-${point.x.toFixed(2)}-${point.y.toFixed(2)}`,
                 tipPos: { x: point.x, y: point.y, z: point.z },
                 tipNormal: region.surfaceNormal ?? { x: 0, y: 0, z: -1 },
                 modelId: '',

@@ -6018,7 +6018,12 @@ export function computeAutoSupportPlan(
     // holding contact and its normal coverage target. Same-layer tips only,
     // so a contact several mm up/down can never suppress the contact a start
     // actually needs.
-    const closureIslands = islands.filter((island) => !island.grounded && !island.interior);
+    // Without a model mesh a contact cannot be validated (no surface, no
+    // collision path); the unit paths that run meshless keep their legacy
+    // rejection behavior and the closure does not retry them.
+    const closureIslands = resolvedMesh
+        ? islands.filter((island) => !island.grounded && !island.interior)
+        : [];
     let closureContactsAdded = 0;
     if (closureIslands.length > 0) {
         for (let pass = 0; pass < START_SUPPORT_CONSTANTS.maxPasses; pass++) {
@@ -6035,7 +6040,13 @@ export function computeAutoSupportPlan(
                         : TIP_COVERAGE_RADIUS_MM;
                 const eligible = isStart
                     ? sameLayerStartTips(tips, island.baseZ)
-                    : tips.filter((tip) => tip.z <= island.baseZ + START_SUPPORT_CONSTANTS.sameLayerBandMm);
+                    // Non-start islands take the normal coverage view (a sloped
+                    // region's higher-layer tips are legal); a point-only island
+                    // still ignores contacts above its own apex, since those
+                    // cannot hold the minimum below them.
+                    : island.contactVoxels && island.contactVoxels.count > 0
+                        ? tips
+                        : tips.filter((tip) => tip.z <= island.baseZ + 0.5);
 
                 let countFloor: number;
                 let coverageTarget: number;
