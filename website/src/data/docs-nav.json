@@ -347,6 +347,10 @@
               "slug": "dev/tauri-ipc-bridge"
             },
             {
+              "label": "Native Mesh Store",
+              "slug": "dev/native-mesh-store"
+            },
+            {
               "label": "Hotkeys",
               "slug": "dev/hotkeys"
             },
@@ -604,6 +608,10 @@
             {
               "label": "Sideloaded Complex Plugins",
               "slug": "adr/0047-sideloaded-complex-plugins"
+            },
+            {
+              "label": "Native Mesh Store",
+              "slug": "adr/0048-native-mesh-store"
             },
             {
               "label": "Organic Cut Surface Redesign",

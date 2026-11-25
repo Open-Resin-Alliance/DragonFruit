@@ -43,6 +43,7 @@ use serde::Deserialize;
 use tauri::ipc::Response;
 use tauri::Emitter;
 
+use crate::mesh_store;
 use crate::{
     staged_mesh, staged_mesh_file_appender, staged_mesh_file_path, staged_mesh_stats,
     StageMeshStats,
@@ -487,6 +488,7 @@ pub async fn mesh_repair_from_path(
     file_path: String,
     options_json: String,
     progress_token: Option<String>,
+    client_id: Option<String>,
     app: crate::DragonFruitAppHandle,
 ) -> Result<String, String> {
     let path = PathBuf::from(&file_path);
@@ -513,8 +515,8 @@ pub async fn mesh_repair_from_path(
     release_cancel(progress_token.as_ref());
     report.source_path = Some(source_path);
     log_repair_report("mesh_repair_from_path", &report, Some(load_ms));
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+    let result_id = deliver_result(&mesh, &result_target(None, client_id.as_deref())?)?;
+    report_json(&report, result_id)
 }
 
 /// Writes a finished repair to the log: the total, the triangle counts and each
@@ -555,6 +557,7 @@ pub async fn mesh_repair_parts_from_path(
     file_path: String,
     options_json: String,
     progress_token: Option<String>,
+    client_id: Option<String>,
     app: crate::DragonFruitAppHandle,
 ) -> Result<String, String> {
     let path = PathBuf::from(&file_path);
@@ -599,8 +602,8 @@ pub async fn mesh_repair_parts_from_path(
     let mut report = parts.report(Some(source_path));
     report.cancelled = cancelled;
     log_repair_report("mesh_repair_parts_from_path", &report, None);
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+    let result_id = deliver_result(&mesh, &result_target(None, client_id.as_deref())?)?;
+    report_json(&report, result_id)
 }
 
 /// Loads a mesh from a path and stages it, repairing nothing.
@@ -608,8 +611,14 @@ pub async fn mesh_repair_parts_from_path(
 /// The webview refuses a `file://` fetch at the security boundary, so a model's file cannot be read
 /// back from the UI directly. This is the first half of [`mesh_repair_from_path`] on its own, for
 /// putting a model back to how it arrived.
+///
+/// With a `client_id` the mesh goes into the store and its id comes back; without one it goes
+/// to the staging register and the result is `None`.
 #[tauri::command]
-pub async fn mesh_load_from_path(file_path: String) -> Result<(), String> {
+pub async fn mesh_load_from_path(
+    file_path: String,
+    client_id: Option<String>,
+) -> Result<Option<String>, String> {
     let path = PathBuf::from(&file_path);
     if !path.exists() {
         return Err(format!(
@@ -622,7 +631,7 @@ pub async fn mesh_load_from_path(file_path: String) -> Result<(), String> {
     })
     .await
     .map_err(|e| format!("load task panicked: {e}"))??;
-    replace_staging_with_mesh(&mesh)
+    deliver_result(&mesh, &result_target(None, client_id.as_deref())?)
 }
 
 /// Repairs in flight, by progress token.
@@ -654,16 +663,19 @@ pub async fn mesh_repair_cancel(progress_token: String) -> Result<bool, String> 
 pub async fn mesh_repair_staged(
     options_json: String,
     progress_token: Option<String>,
+    mesh_id: Option<String>,
+    client_id: Option<String>,
     app: crate::DragonFruitAppHandle,
 ) -> Result<String, String> {
     let options = parse_options(&options_json)?;
-    let bytes = read_staging_bytes()?;
+    let target = result_target(mesh_id.as_deref(), client_id.as_deref())?;
+    let input = staged_input(mesh_id.as_deref())?;
 
     let cancel = register_cancel(progress_token.as_ref());
     let token = progress_token.clone();
 
     let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+        let mesh = io::staged::load_positions_le(input.bytes()).map_err(|e| e.to_string())?;
         let mut sink = progress_sink("mesh-repair-progress", token, cancel, app);
         let outcome = repair_auto_with_progress(mesh, &options, Some(&mut sink));
         Ok::<_, String>((outcome.mesh, outcome.report))
@@ -673,35 +685,41 @@ pub async fn mesh_repair_staged(
     release_cancel(progress_token.as_ref());
     log_repair_report("mesh_repair_staged", &report, None);
 
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+    let result_id = deliver_result(&mesh, &target)?;
+    report_json(&report, result_id)
 }
 
-/// Runs a lightweight model/support section classifier over the current staged
-/// mesh without executing the heavy repair pipeline.
+/// Runs a lightweight model/support section classifier over a mesh without executing the
+/// heavy repair pipeline: the stored mesh `mesh_id` names, or the staging register without one.
 #[tauri::command]
-pub async fn mesh_classify_staged(options_json: Option<String>) -> Result<String, String> {
+pub async fn mesh_classify_staged(
+    options_json: Option<String>,
+    mesh_id: Option<String>,
+    client_id: Option<String>,
+) -> Result<String, String> {
     let options = parse_options(&options_json.unwrap_or_default())?;
-    let bytes = read_staging_bytes()?;
+    let target = result_target(mesh_id.as_deref(), client_id.as_deref())?;
+    let input = staged_input(mesh_id.as_deref())?;
     let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+        let mesh = io::staged::load_positions_le(input.bytes()).map_err(|e| e.to_string())?;
         let outcome = classify_support_split(mesh, &options);
         Ok::<_, String>((outcome.mesh, outcome.report))
     })
     .await
     .map_err(|e| format!("classify task panicked: {e}"))??;
 
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+    let result_id = deliver_result(&mesh, &target)?;
+    report_json(&report, result_id)
 }
 
-/// Analyses the current staged positions buffer without modifying it.
-/// Used by the frontend to inspect mesh health before committing to a repair.
+/// Analyses a mesh without modifying it: the stored mesh `mesh_id` names, or the staging
+/// register without one. Used by the frontend to inspect mesh health before committing to a
+/// repair.
 #[tauri::command]
-pub async fn mesh_analyze_staged() -> Result<String, String> {
-    let bytes = read_staging_bytes()?;
+pub async fn mesh_analyze_staged(mesh_id: Option<String>) -> Result<String, String> {
+    let input = staged_input(mesh_id.as_deref())?;
     let analysis = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+        let mesh = io::staged::load_positions_le(input.bytes()).map_err(|e| e.to_string())?;
         Ok::<_, String>(analyze(&mesh))
     })
     .await
@@ -2812,9 +2830,78 @@ fn read_staging_bytes() -> Result<Vec<u8>, String> {
     }
 }
 
-fn replace_staging_with_mesh(mesh: &IndexedMesh) -> Result<(), String> {
+/// A command's input mesh: a copy of the staging register, or a stored entry shared with the
+/// store (no copy).
+enum StagedInput {
+    Register(Vec<u8>),
+    Stored(Arc<mesh_store::Entry>),
+}
+
+impl StagedInput {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            StagedInput::Register(bytes) => bytes,
+            StagedInput::Stored(entry) => entry.soup_bytes(),
+        }
+    }
+}
+
+/// The stored mesh `mesh_id` names, or the staging register when there is none.
+fn staged_input(mesh_id: Option<&str>) -> Result<StagedInput, String> {
+    match mesh_id {
+        Some(id) => Ok(StagedInput::Stored(mesh_store::global().get(id)?)),
+        None => read_staging_bytes().map(StagedInput::Register),
+    }
+}
+
+/// Where a command's result mesh goes.
+enum ResultTarget {
+    /// The staging register, replacing what was there: the legacy path.
+    Register,
+    /// A new store entry for this owner.
+    Store(mesh_store::Owner),
+}
+
+/// A command run with a client id, or on a stored mesh, leaves its result in the store: owned by
+/// that client, or by whoever owns the input. One run with neither stays on the register.
+fn result_target(mesh_id: Option<&str>, client_id: Option<&str>) -> Result<ResultTarget, String> {
+    if let Some(client) = client_id.map(str::trim).filter(|c| !c.is_empty()) {
+        return Ok(ResultTarget::Store(mesh_store::Owner::Frontend(
+            client.to_string(),
+        )));
+    }
+    match mesh_id {
+        Some(id) => Ok(ResultTarget::Store(mesh_store::global().owner_of(id)?)),
+        None => Ok(ResultTarget::Register),
+    }
+}
+
+/// Puts a result where `target` says, and returns its id when that is the store.
+fn deliver_result(mesh: &IndexedMesh, target: &ResultTarget) -> Result<Option<String>, String> {
+    match target {
+        ResultTarget::Register => replace_staging_with_mesh(mesh).map(|()| None),
+        ResultTarget::Store(owner) => Ok(Some(
+            mesh_store::global().put(owner.clone(), mesh_store::Entry::Soup(soup_bytes(mesh))),
+        )),
+    }
+}
+
+/// A report as JSON, with the result's id under `meshId` when the result went to the store.
+fn report_json<T: serde::Serialize>(report: &T, mesh_id: Option<String>) -> Result<String, String> {
+    let mut value = serde_json::to_value(report).map_err(|e| format!("serialize report: {e}"))?;
+    if let (Some(id), Some(object)) = (mesh_id, value.as_object_mut()) {
+        object.insert("meshId".into(), serde_json::Value::String(id));
+    }
+    serde_json::to_string(&value).map_err(|e| format!("serialize report: {e}"))
+}
+
+fn soup_bytes(mesh: &IndexedMesh) -> Vec<u8> {
     let soup = mesh.to_triangle_soup();
-    let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
+    bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
+}
+
+fn replace_staging_with_mesh(mesh: &IndexedMesh) -> Result<(), String> {
+    let bytes = soup_bytes(mesh);
 
     // Clear any file-based staging; we put everything in-memory for the
     // repaired mesh since it's already fully materialised.
@@ -3390,5 +3477,125 @@ mod tests {
         assert_eq!(soup1.len(), 2 * SOUP_BYTES_PER_TRIANGLE);
         assert_eq!(f32::from_le_bytes(soup0[12..16].try_into().unwrap()), 1.0);
         assert!(soup1.iter().all(|byte| *byte == 0), "body 1 is the degenerate fixture");
+    }
+}
+
+/// Two passes on two meshes: through the staging register they read each other's mesh, through
+/// store ids each one reads its own.
+#[cfg(test)]
+mod store_isolation_tests {
+    use super::*;
+    use crate::mesh_store::{self, Entry, Owner};
+
+    fn soup_bytes(triangles: &[[[f32; 3]; 3]]) -> Vec<u8> {
+        let floats: Vec<f32> = triangles.iter().flatten().flatten().copied().collect();
+        bytemuck::cast_slice::<f32, u8>(&floats).to_vec()
+    }
+
+    /// A closed tetrahedron: 4 triangles.
+    fn tetrahedron() -> Vec<u8> {
+        let (a, b, c, d) = (
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [0.0, 10.0, 0.0],
+            [0.0, 0.0, 10.0],
+        );
+        soup_bytes(&[[a, c, b], [a, b, d], [a, d, c], [b, c, d]])
+    }
+
+    /// A closed cube: 12 triangles.
+    fn cube() -> Vec<u8> {
+        let v = |x: f32, y: f32, z: f32| [x * 10.0, y * 10.0, z * 10.0];
+        let quads = [
+            [v(0., 0., 0.), v(0., 1., 0.), v(1., 1., 0.), v(1., 0., 0.)],
+            [v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)],
+            [v(0., 0., 0.), v(1., 0., 0.), v(1., 0., 1.), v(0., 0., 1.)],
+            [v(0., 1., 0.), v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.)],
+            [v(0., 0., 0.), v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.)],
+            [v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.), v(1., 0., 1.)],
+        ];
+        let triangles: Vec<[[f32; 3]; 3]> = quads
+            .iter()
+            .flat_map(|[a, b, c, d]| [[*a, *b, *c], [*a, *c, *d]])
+            .collect();
+        soup_bytes(&triangles)
+    }
+
+    fn triangle_count(analysis_json: &str) -> u64 {
+        let value: serde_json::Value = serde_json::from_str(analysis_json).unwrap();
+        value["triangle_count"].as_u64().unwrap()
+    }
+
+    /// Characterises the hazard the store exists for, and goes when the register does. Caller A
+    /// stages its tetrahedron; before its analysis runs, caller B stages a cube; A's analysis
+    /// reports the cube. Nothing errors, so nothing on screen says it happened.
+    #[test]
+    fn the_staging_register_hands_a_pass_the_mesh_another_caller_staged() {
+        *staged_mesh().lock().unwrap() = Some(tetrahedron()); // caller A
+        *staged_mesh().lock().unwrap() = Some(cube()); // caller B, in between
+        let seen_by_a =
+            tauri::async_runtime::block_on(mesh_analyze_staged(None)).expect("analysis ran");
+        *staged_mesh().lock().unwrap() = None;
+        assert_eq!(triangle_count(&seen_by_a), 12, "A analysed B's cube");
+    }
+
+    /// The same two callers, at the same time and many times over, through ids: each analysis
+    /// sees its own mesh, and each classify result chains into an analysis of that result.
+    #[test]
+    fn store_ids_keep_concurrent_passes_on_their_own_meshes() {
+        let client = "store-isolation-test".to_string();
+        let runs: Vec<_> = (0..16)
+            .map(|i| {
+                let client = client.clone();
+                std::thread::spawn(move || {
+                    let (bytes, expected) = if i % 2 == 0 {
+                        (tetrahedron(), 4)
+                    } else {
+                        (cube(), 12)
+                    };
+                    let store = mesh_store::global();
+                    let id = store.put(Owner::Frontend(client.clone()), Entry::Soup(bytes));
+
+                    let analysis =
+                        tauri::async_runtime::block_on(mesh_analyze_staged(Some(id.clone())))
+                            .expect("analysis ran");
+                    assert_eq!(
+                        triangle_count(&analysis),
+                        expected,
+                        "run {i} read another mesh"
+                    );
+
+                    let report_json = tauri::async_runtime::block_on(mesh_classify_staged(
+                        None,
+                        Some(id.clone()),
+                        None,
+                    ))
+                    .expect("classify ran");
+                    let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+                    assert_eq!(report["pre"]["triangle_count"].as_u64(), Some(expected));
+                    let result_id = report["meshId"]
+                        .as_str()
+                        .expect("classify returns its result's id");
+                    assert_eq!(
+                        store.owner_of(result_id).unwrap(),
+                        Owner::Frontend(client.clone()),
+                        "a result belongs to its input's owner"
+                    );
+                    let result_analysis = tauri::async_runtime::block_on(mesh_analyze_staged(
+                        Some(result_id.to_string()),
+                    ))
+                    .expect("analysis of the result ran");
+                    assert_eq!(
+                        Some(triangle_count(&result_analysis)),
+                        report["post"]["triangle_count"].as_u64(),
+                        "run {i}: the result id does not hold the classified mesh"
+                    );
+                    store.drop_ids(&[id, result_id.to_string()]);
+                })
+            })
+            .collect();
+        for run in runs {
+            run.join().expect("a run panicked");
+        }
     }
 }

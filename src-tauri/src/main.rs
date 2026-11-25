@@ -2,6 +2,8 @@
 
 mod mesh_minima;
 mod mesh_repair;
+mod mesh_store;
+mod mesh_store_ipc;
 mod mesh_refine;
 mod network;
 mod ao_vertex;
@@ -4792,6 +4794,11 @@ fn main() {
             mesh_repair::mesh_organic_cut_read_membrane,
             mesh_repair::mesh_organic_cut_read_tenon,
             mesh_repair::mesh_repair_read_positions,
+            mesh_store_ipc::mesh_store_put,
+            mesh_store_ipc::mesh_store_read,
+            mesh_store_ipc::mesh_store_drop,
+            mesh_store_ipc::mesh_store_open_client,
+            mesh_store_ipc::mesh_store_stats,
             mesh_repair::load_mesh_file,
             mesh_repair::load_mesh_bytes,
             mesh_repair::load_mesh_range,
