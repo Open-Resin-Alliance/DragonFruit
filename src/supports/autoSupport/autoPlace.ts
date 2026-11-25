@@ -106,7 +106,7 @@ import { geometryCentroidMm } from '@/features/printing/modelResinVolume';
 import { evaluateToppleRisk, ROCKING_THRESHOLD_MM, toppleRiskNeedsCoverage, type ToppleRiskReport } from './toppleRisk';
 import { planStressActions } from './stressActions';
 import { getCachedRepresentativeLayers } from './frameStressState';
-import { createCavityTester } from '../interiorSupportGeometry';
+import { createCavityTester, type CavityTester } from '../interiorSupportGeometry';
 import { closestSurfaceNormal } from './closestSurfaceNormal';
 import { computeForestDiameterProfile, memberDiameterOf } from '../SupportTypes/Trunk/TrunkReplacement/maxConnectedDiameter';
 import { buildBranchData } from '../SupportTypes/Branch/branchBuilder';
@@ -3023,11 +3023,72 @@ function isHostShaftBlocked(
     return false;
 }
 
+
+/**
+ * Sample a member's shaft path for a point strictly inside the cavity void.
+ * A member that never enters the void cannot have threaded a hole.
+ */
+function pathEntersCavityVoid(
+    paths: ReadonlyArray<{ start: Vec3; end: Vec3 }>,
+    cavity: CavityTester,
+    modelId: string | undefined,
+    stepMm = 0.75,
+): boolean {
+    for (const { start, end } of paths) {
+        const span = Math.hypot(end.x - start.x, end.y - start.y, end.z - start.z);
+        const steps = Math.max(1, Math.ceil(span / stepMm));
+        for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            if (cavity.isInsideVoid({
+                x: start.x + (end.x - start.x) * t,
+                y: start.y + (end.y - start.y) * t,
+                z: start.z + (end.z - start.z) * t,
+            }, modelId)) return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * True when a member enters the cavity void even though one of its terminals
+ * is outside the cavity side of the wall — a support routed through a drain
+ * hole or bore. A member wholly outside is normal; a member wholly inside (the
+ * cavity bridge a `cavity`/interior contact gets) is the intended shape, and
+ * its terminals sit ON the cavity wall, which `isOnInteriorSide` accepts.
+ */
+function crossesCavityBoundary(
+    paths: ReadonlyArray<{ start: Vec3; end: Vec3 }>,
+    cavity: CavityTester,
+    modelId: string | undefined,
+): boolean {
+    if (paths.length === 0) return false;
+    const first = paths[0].start;
+    const last = paths[paths.length - 1].end;
+    const endsOutside = !cavity.isOnInteriorSide(first, modelId)
+        || !cavity.isOnInteriorSide(last, modelId);
+    if (!endsOutside) return false;
+    return pathEntersCavityVoid(paths, cavity, modelId);
+}
+
+/** The shaft path of a host entity, as the spans the drift check measures. */
+function hostCavityPaths(
+    draft: SupportState,
+    entity: { segments: Segment[]; contactCone?: { pos: Vec3 } },
+): Array<{ start: Vec3; end: Vec3 }> {
+    const paths: Array<{ start: Vec3; end: Vec3 }> = [];
+    for (const seg of entity.segments) {
+        const span = hostSegmentSpan(draft, entity as never, seg);
+        if (span) paths.push(span);
+    }
+    return paths;
+}
+
 /** Validate hosted members' attachment after forest resize; cull orphans and return them for reporting. */
 export function validateAndCullOrphans(
     draft: SupportState,
     mesh: THREE.Mesh | undefined,
     modelId?: string,
+    cavity?: CavityTester,
 ): { draft: SupportState; orphans: OrphanInfo[] } {
     const orphans: OrphanInfo[] = [];
     const DRIFT_TOL_SQ = 0.25; // 0.5mm
@@ -3062,6 +3123,26 @@ export function validateAndCullOrphans(
                 });
                 hostsToRemove.add(hostId);
             }
+        }
+    }
+    // A trunk/branch routed through a drain hole into the cavity prints it
+    // in place and cannot be pulled out without breaking the part. The mesh
+    // test above cannot see this: the bore is open space.
+    if (cavity) {
+        for (const { hostTypeId, hostId, entity } of collectHostEntities(nextDraft)) {
+            if (modelId !== undefined && entity.modelId !== modelId) continue;
+            if (!crossesCavityBoundary(hostCavityPaths(nextDraft, entity), cavity, entity.modelId)) continue;
+            const tip = entity.contactCone?.pos;
+            const where = tip ? ` @ (${tip.x.toFixed(1)}, ${tip.y.toFixed(1)}, Z${tip.z.toFixed(1)})` : '';
+            const typeName = getSupportTypeDescriptor(hostTypeId).singular;
+            culledHostTypeNameById.set(hostId, typeName);
+            orphans.push({
+                id: hostId,
+                kind: hostTypeId,
+                reason: 'cavityCrossing',
+                detail: `${typeName} shaft crosses the cavity through an opening${where}`,
+            });
+            hostsToRemove.add(hostId);
         }
     }
     const checkAttachment = (
@@ -3104,6 +3185,22 @@ export function validateAndCullOrphans(
             return false;
         }
         if (tipPos) {
+            if (cavity) {
+                const path = getSupportTypeDescriptor(kind).hasSegments
+                    ? hostCavityPaths(nextDraft, member as never)
+                    : [{ start: knot.pos, end: tipPos }];
+                if (crossesCavityBoundary(path, cavity, member.modelId)) {
+                    orphans.push({
+                        id,
+                        kind,
+                        reason: 'cavityCrossing',
+                        hostId: host.hostId,
+                        knotId: knot.id,
+                        detail: 'member crosses the cavity through an opening',
+                    });
+                    return false;
+                }
+            }
             let blocked = false;
             if (!getSupportTypeDescriptor(kind).hasSegments) {
                 const cone = member.contactCone;
@@ -4476,17 +4573,19 @@ export function computeAutoSupportPlan(
     // so an interior contact lies ON it (distance ~0) and an exterior contact
     // is at least one shell thickness away (minimum 0.2 mm). Distance is also
     // normal-agnostic: a winding-convention mismatch cannot invert it.
+    let cavityTester: CavityTester | undefined;
     if (cavityMesh && resolvedMesh) {
         cavityMesh.updateMatrixWorld();
-        const cavityTester = createCavityTester(
+        const tester = createCavityTester(
             new Map([[modelId, cavityMesh.geometry]]),
             new Map([[modelId, new THREE.Matrix4().copy(cavityMesh.matrixWorld).invert()]]),
         );
+        cavityTester = tester;
         const ON_CAVITY_MM = 0.15;
         let flagged = 0;
         islands = islands.map((island) => {
             if (island.interior !== undefined) return island;
-            const interior = cavityTester.distanceToSurface(island.contact, modelId) <= ON_CAVITY_MM;
+            const interior = tester.distanceToSurface(island.contact, modelId) <= ON_CAVITY_MM;
             if (interior) flagged += 1;
             return interior ? { ...island, interior: true } : island;
         });
@@ -6435,7 +6534,7 @@ export function computeAutoSupportPlan(
             let orphanInfos: OrphanInfo[] = [];
             try {
                 const preCullDraft = draft;
-                const culled = validateAndCullOrphans(draft, resolvedMesh ?? undefined, modelId);
+                const culled = validateAndCullOrphans(draft, resolvedMesh ?? undefined, modelId, cavityTester);
                 if (culled.orphans.length > 0) {
                     draft = culled.draft;
                     orphanInfos = culled.orphans;
@@ -6516,7 +6615,7 @@ export function computeAutoSupportPlan(
                         }
                         console.log(LOG_PREFIX, `Orphan re-place: ${replaced}/${requeueItems.length} culled contacts re-placed.`);
                         const preRecheckDraft = draft;
-                        const recheck = validateAndCullOrphans(draft, resolvedMesh ?? undefined, modelId);
+                        const recheck = validateAndCullOrphans(draft, resolvedMesh ?? undefined, modelId, cavityTester);
                         if (recheck.draft !== draft) {
                             draft = recheck.draft;
                             // The recheck re-reports everything still present
@@ -6689,7 +6788,7 @@ export function computeAutoSupportPlan(
                         }
                         if (crossResolved > 0) {
                             console.log(LOG_PREFIX, `Cross re-host: resolved ${crossResolved}/${crossOrphans.length} shaft-crossing members.`);
-                            const postCrossCheck = validateAndCullOrphans(draft, resolvedMesh ?? undefined, modelId);
+                            const postCrossCheck = validateAndCullOrphans(draft, resolvedMesh ?? undefined, modelId, cavityTester);
                             draft = postCrossCheck.draft;
                             orphanInfos = [
                                 ...orphanInfos.filter((o) => !resolvedCrossIds.has(o.id) && o.reason !== 'cross'),

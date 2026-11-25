@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { accelerateGeometry, initializeBVH } from '@/utils/bvh';
 import { collectFanShaftPoints, computeAutoSupportPlan, fanLeafToHost, rehostLegacyKnots, validateAndCullOrphans } from '../autoSupport/autoPlace';
+import { createCavityTester } from '../interiorSupportGeometry';
 import { resetKickstandsInState, resetStore, setSnapshot } from '../state';
 import { getSettings, setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
@@ -625,3 +626,61 @@ test('forest resize clearance guard keeps tight-clearance loaded trunk from self
     }
 });
 
+
+/** A cavity box (z=7..13) with its face normals pointing into the void. */
+function cavityBox(): THREE.BufferGeometry {
+    const box = new THREE.BoxGeometry(6, 6, 6);
+    box.scale(-1, 1, 1); // mirrored winding flips the face normals inward
+    box.translate(0, 0, 10);
+    accelerateGeometry(box);
+    return box;
+}
+
+test('a trunk routed through a drain hole into the cavity is culled', () => {
+    const cavity = createCavityTester(new Map([['m', cavityBox()]]));
+    const draft = trunkWithShaft('through', 0, 0, 1, 19.5);
+
+    const { draft: kept, orphans } = validateAndCullOrphans(draft, undefined, 'm', cavity);
+    assert.equal(kept.trunks['through'], undefined, 'shoot-through trunk is removed');
+    const orphan = orphans.find((o) => o.id === 'through');
+    assert.equal(orphan?.reason, 'cavityCrossing');
+    assert.match(orphan?.detail ?? '', /crosses the cavity/);
+});
+
+test('a shaft wholly inside the cavity and one wholly outside are both kept', () => {
+    const cavity = createCavityTester(new Map([['m', cavityBox()]]));
+    const inside = trunkWithShaft('inside', 0, 0, 8, 12);
+    const outside = trunkWithShaft('outside', 10, 0, 1, 19.5);
+
+    const insideResult = validateAndCullOrphans(inside, undefined, 'm', cavity);
+    assert.ok(insideResult.draft.trunks['inside'], 'cavity-internal shaft (a cavity support) is kept');
+    assert.equal(insideResult.orphans.length, 0);
+
+    const outsideResult = validateAndCullOrphans(outside, undefined, 'm', cavity);
+    assert.ok(outsideResult.draft.trunks['outside'], 'exterior shaft clear of the cavity is kept');
+    assert.equal(outsideResult.orphans.length, 0);
+});
+
+test('a hosted member whose cone crosses into the cavity is culled', () => {
+    const cavity = createCavityTester(new Map([['m', cavityBox()]]));
+    const draft = trunkWithShaft('host', 10, 0, 0, 20);
+    (draft.knots as Record<string, unknown>)['k'] = {
+        id: 'k', parentShaftId: 'seg-host', pos: { x: 10, y: 0, z: 10 }, diameter: 1.1, t: 0.5,
+    };
+    (draft.leaves as Record<string, unknown>)['l'] = {
+        id: 'l',
+        modelId: 'm',
+        parentKnotId: 'k',
+        contactCone: {
+            id: 'cl',
+            pos: { x: 0, y: 0, z: 10 },
+            normal: { x: 0, y: 0, z: -1 },
+            profile: { type: 'disk', contactDiameterMm: 0.28, bodyDiameterMm: 1, lengthMm: 2, penetrationMm: 0 },
+        },
+    };
+
+    const { draft: kept, orphans } = validateAndCullOrphans(draft, undefined, 'm', cavity);
+    assert.equal(kept.leaves?.['l'], undefined, 'leaf threading the cavity is removed');
+    assert.ok(kept.trunks['host'], 'its exterior host stays');
+    assert.equal(orphans.find((o) => o.id === 'l')?.reason, 'cavityCrossing');
+});

@@ -189,7 +189,7 @@ export interface ForestReport {
 export interface OrphanInfo {
     id: string;
     kind: OrphanKind;
-    reason: 'missingKnot' | 'missingHost' | 'missingSegment' | 'drift' | 'cross' | 'blocked' | 'hostBlocked';
+    reason: 'missingKnot' | 'missingHost' | 'missingSegment' | 'drift' | 'cross' | 'blocked' | 'hostBlocked' | 'cavityCrossing';
     hostId?: string;
     knotId?: string;
     detail?: string;
