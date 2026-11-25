@@ -904,11 +904,29 @@ DF_PROFILE_STL=/path/to/model.stl cargo test --release scan_profile -- --ignored
 
 The 8.8 s figure reported earlier came from the **TS fallback detector** on the
 same mesh, not the desktop Rust path. A coarse voxel pass was tried and reverted:
-it saved ~0.03 s of raster/scan while coarsening the voxel islands. If a desktop
-scan feels slow, profile the Tauri IPC payload and the frontend annotation /
-renderer cascade before changing the scan grid; the log shows renderer commits,
-WebGL context loss, and `bracing:stress` / `resize:cross-repair` spikes, not the
-island arithmetic.
+it saved ~0.03 s of raster/scan while coarsening the voxel islands.
+
+The end-to-end native path on the same model and dev build measured:
+
+| stage | time |
+|---|---:|
+| local mesh prep | 100.9 ms |
+| `stage_mesh_binary_set` | 215.9 ms |
+| `scan_islands_staged` (Rust + IPC + deserialize) | 648.5 ms |
+| result commit | 3.2 ms |
+| unaccounted setup / event / React flush | 302.1 ms |
+| **total** | **1270.6 ms** |
+
+No `timed()` frontend step crossed the 150 ms threshold, so annotation and
+marker construction are not the seconds. The native scan is ~1.3 s, not 8.8 s;
+the remaining cost is the mesh-upload/scan payload and the setup around the
+Tauri calls. The core Rust phases above are ~0.25 s, so the next levers are
+staging reuse (or a combined stage+scan command), a compact/binary result
+payload, and avoiding per-scan Tauri API/event setup — not wgpu, and not the
+frontend cascade. If a desktop scan feels slow, profile the Tauri IPC payload
+and the frontend annotation / renderer cascade before changing the scan grid;
+the log shows renderer commits, WebGL context loss, and `bracing:stress` /
+`resize:cross-repair` spikes, not the island arithmetic.
 
 ## Rules worth knowing before you change placement
 
