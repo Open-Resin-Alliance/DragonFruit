@@ -166,6 +166,10 @@ const MAX_STRESS_BRACES_PER_PASS = 4;
  *  brace reach. A kickstand is the answer for a lone tall spire: it cannot be
  *  braced to a neighbour that does not exist, and it must not be clubbed. */
 const MAX_STRESS_KICKSTANDS_PER_PASS = 2;
+/** Strut reach for a shaft already at the diameter cap: a capped trunk with no
+ *  neighbour inside the aesthetic brace length can still take a longer lateral
+ *  tie instead of staying over its limit. Clearance/angle gates still apply. */
+const MAX_CAPPED_STRUT_SPAN_MM = 16;
 /** Cross repair is optional geometry hygiene: the local host knot first, then
  *  a bounded number of remote hosts. Unresolved crossings stay flagged; making
  *  every one pay for a forest-wide branch build was the resize phase's cost. */
@@ -4657,11 +4661,16 @@ export function buttressTrunkWithKickstand(
     trunkId: string,
     atZMm: number,
     mesh?: THREE.Mesh,
+    options?: { allowAdditional?: boolean },
 ): { draft: SupportState; added: boolean } {
     const trunk = draftIn.trunks[trunkId];
     if (!trunk || trunk.modelId !== modelId) return { draft: draftIn, added: false };
     const segmentIds = new Set(trunk.segments.map((seg) => seg.id));
-    if (Object.values(draftIn.kickstands ?? {}).some((ks) => segmentIds.has(ks.hostSegmentId))) {
+    const existingKickstands = Object.values(draftIn.kickstands ?? {})
+        .filter((ks) => segmentIds.has(ks.hostSegmentId)).length;
+    // One plate buttress is the normal answer; a second (opposite azimuth) is
+    // the capped-shaft strut fallback. Never more than two.
+    if (existingKickstands >= 2 || (existingKickstands >= 1 && !options?.allowAdditional)) {
         return { draft: draftIn, added: false };
     }
 
@@ -7543,6 +7552,7 @@ export function computeAutoSupportPlan(
                                         promotionSkips[promoted.reason] = (promotionSkips[promoted.reason] ?? 0) + 1;
                                     }
                                 } else if (requests.length < MAX_STRESS_BRACES_PER_PASS) {
+                                    const capped = memberAtReinforcementCap(draft, action.entityKind, action.entityId);
                                     requests.push({
                                         aEntityId: action.entityId,
                                         // A member's own midpoint is where the
@@ -7551,6 +7561,7 @@ export function computeAutoSupportPlan(
                                         // from that shaft.
                                         atZMm: action.pos.z,
                                         near: action.pos,
+                                        ...(capped ? { maxSpanMm: MAX_CAPPED_STRUT_SPAN_MM } : {}),
                                     });
                                 }
                             } else if (action.kind === 'thicken-member') {
@@ -7566,6 +7577,7 @@ export function computeAutoSupportPlan(
                                         aEntityId: action.entityId,
                                         atZMm: action.layerZMm,
                                         near: action.pos,
+                                        maxSpanMm: MAX_CAPPED_STRUT_SPAN_MM,
                                     });
                                 }
                             }
@@ -7622,7 +7634,14 @@ export function computeAutoSupportPlan(
                         for (const [trunkId, target] of targetTrunks) {
                             if (kickstandsThisPass >= MAX_STRESS_KICKSTANDS_PER_PASS) break;
                             if (target.entityIds.some((id) => bracedIds.has(id))) continue;
-                            const buttress = buttressTrunkWithKickstand(draft, modelId, trunkId, target.z, resolvedMesh ?? undefined);
+                            const buttress = buttressTrunkWithKickstand(
+                                draft,
+                                modelId,
+                                trunkId,
+                                target.z,
+                                resolvedMesh ?? undefined,
+                                { allowAdditional: pass > 0 },
+                            );
                             if (!buttress.added) continue;
                             draft = buttress.draft;
                             // A kickstand shares some load but is not a brace

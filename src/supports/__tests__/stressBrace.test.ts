@@ -309,3 +309,26 @@ test('a trunk with no brace host gets a plate kickstand at a buttress angle', ()
     const again = buttressTrunkWithKickstand(result.draft, 'model-a', 'tA', 8);
     assert.equal(again.added, false, 'one buttress per trunk');
 });
+
+test('a capped-shaft strut can reach past the normal brace length', () => {
+    const settings = createDefaultAutoBracingSettings();
+    const narrow = { ...settings, maxBraceLengthMm: 8 };
+    const result = addTargetedStressBraces(
+        twoTrunks(12),
+        [{ aEntityId: 'tA', atZMm: 8, near: { x: 0, y: 0, z: 8 }, maxSpanMm: 16 }],
+        narrow,
+        new Set(['model-a']),
+    );
+    assert.equal(result.added, 1, 'extended reach finds the 12mm neighbour');
+    assert.equal(Object.keys(result.snapshot.braces).length, 1);
+});
+
+test('a capped shaft may take a second opposing kickstand strut, never a third', () => {
+    const first = buttressTrunkWithKickstand(twoTrunks(), 'model-a', 'tA', 8);
+    assert.equal(first.added, true);
+    const second = buttressTrunkWithKickstand(first.draft, 'model-a', 'tA', 8, undefined, { allowAdditional: true });
+    assert.equal(second.added, true, 'the second plate strut is allowed');
+    assert.equal(Object.keys(second.draft.kickstands).length, 2);
+    const third = buttressTrunkWithKickstand(second.draft, 'model-a', 'tA', 8, undefined, { allowAdditional: true });
+    assert.equal(third.added, false, 'never more than two');
+});

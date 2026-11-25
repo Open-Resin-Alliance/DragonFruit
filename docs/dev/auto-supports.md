@@ -591,6 +591,17 @@ whole-frame structural stress on the assembled forest via
     different unbraced spire needs. The buttress is one per trunk and capped at
     `MAX_STRESS_KICKSTANDS_PER_PASS` (2) per round; a trunk that already has a
     kickstand is skipped.
+  - **A capped shaft gets a longer strut before it is left over.** When a
+    member is at its diameter cap and the normal brace search finds no host
+    inside the aesthetic `maxBraceLengthMm`, the request carries
+    `MAX_CAPPED_STRUT_SPAN_MM` (16 mm). `addTargetedStressBraces` then searches
+    that wider plan radius and may place a longer lateral tie; the canopy,
+    clearance, angle and one-pair gates are unchanged. If a trunk already has
+    one plate buttress, a second opposing kickstand strut is allowed
+    (`buttressTrunkWithKickstand(..., { allowAdditional: true })`), capped at
+    two. If neither a host inside 16 mm nor a second legal plate azimuth
+    exists, the member remains over its limit at the cap and the report says
+    so; that residual is a geometric limit, not a missing solve pass.
   - **The tip contact check is biaxial.** `biaxialContactStressMpa` compares
     `√(σ_n² + 3τ²)` — the vertical peel plus the layer's lateral drag — against
     the support break strength, so a contact sheared by the diaphragm is counted
