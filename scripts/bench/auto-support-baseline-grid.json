@@ -14,11 +14,11 @@
       "islands": 1,
       "islandSource": "authored",
       "candidates": 637,
-      "entities": 814,
+      "entities": 828,
       "placedByType": {
         "trunk": 64,
-        "branch": 163,
-        "leaf": 262,
+        "branch": 313,
+        "leaf": 112,
         "twig": 0,
         "stick": 0,
         "brace": 0,
@@ -27,17 +27,16 @@
       },
       "entitiesByType": {
         "trunk": 64,
-        "branch": 163,
-        "leaf": 262,
-        "brace": 323,
-        "kickstand": 2
+        "branch": 313,
+        "leaf": 112,
+        "brace": 339
       },
       "contacts": 489,
-      "roots": 66,
-      "joints": 1340,
+      "roots": 64,
+      "joints": 1778,
       "curvedSegments": 0,
-      "memberLengthMm": 3838.208623855189,
-      "memberVolumeMm3": 4820.799450940773,
+      "memberLengthMm": 4950.7841228825555,
+      "memberVolumeMm3": 5911.218053003447,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
       "coveragePct": 98.4923245614035,
@@ -46,10 +45,10 @@
       "gridFallbacks": 7,
       "budgetAdd": 0,
       "budgetCull": 405,
-      "orphans": 40,
+      "orphans": 44,
       "orphansByReason": {
         "blocked": 4,
-        "cross": 36
+        "cross": 40
       },
       "refusals": {
         "fan": 0,
@@ -64,20 +63,20 @@
       "routerPlacements": 658,
       "routerCones": 17094,
       "routerProbes": 2752,
-      "totalMs": 8541.6204,
+      "totalMs": 3563.3286000000003,
       "phases": {
-        "candidates": 101,
-        "dedup": 22,
-        "support-filter": 65,
-        "placement": 1409,
-        "consolidation": 70,
-        "gap-fill": 143,
-        "analytics": 5,
+        "candidates": 89,
+        "dedup": 19,
+        "support-filter": 54,
+        "placement": 1089,
+        "consolidation": 56,
+        "gap-fill": 117,
+        "analytics": 3,
         "fanning": 0,
-        "surface-coverage": 1,
-        "resize": 5137,
-        "report": 25,
-        "bracing": 1496
+        "surface-coverage": 0,
+        "resize": 1576,
+        "report": 21,
+        "bracing": 491
       }
     },
     {
@@ -86,11 +85,11 @@
       "islands": 1,
       "islandSource": "authored",
       "candidates": 32,
-      "entities": 40,
+      "entities": 42,
       "placedByType": {
         "trunk": 7,
-        "branch": 8,
-        "leaf": 15,
+        "branch": 13,
+        "leaf": 10,
         "twig": 0,
         "stick": 0,
         "brace": 0,
@@ -99,17 +98,17 @@
       },
       "entitiesByType": {
         "trunk": 7,
-        "branch": 8,
-        "leaf": 15,
-        "brace": 9,
+        "branch": 13,
+        "leaf": 10,
+        "brace": 11,
         "kickstand": 1
       },
       "contacts": 30,
       "roots": 8,
-      "joints": 90,
+      "joints": 105,
       "curvedSegments": 0,
-      "memberLengthMm": 198.8267247719487,
-      "memberVolumeMm3": 289.7817716346058,
+      "memberLengthMm": 259.510405366437,
+      "memberVolumeMm3": 346.1156408385604,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
       "coveragePct": 100,
@@ -118,10 +117,8 @@
       "gridFallbacks": 1,
       "budgetAdd": 0,
       "budgetCull": 26,
-      "orphans": 2,
-      "orphansByReason": {
-        "cross": 2
-      },
+      "orphans": 0,
+      "orphansByReason": {},
       "refusals": {
         "fan": 0,
         "merge": 0,
@@ -135,20 +132,20 @@
       "routerPlacements": 39,
       "routerCones": 1144,
       "routerProbes": 435,
-      "totalMs": 285.6816999999992,
+      "totalMs": 164.22449999999935,
       "phases": {
-        "candidates": 13,
+        "candidates": 10,
         "dedup": 1,
         "support-filter": 5,
-        "placement": 94,
-        "consolidation": 3,
-        "gap-fill": 7,
-        "analytics": 0,
+        "placement": 62,
+        "consolidation": 2,
+        "gap-fill": 5,
+        "analytics": 1,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 118,
-        "report": 2,
-        "bracing": 39
+        "resize": 40,
+        "report": 1,
+        "bracing": 33
       }
     },
     {
@@ -200,20 +197,20 @@
       "routerPlacements": 19,
       "routerCones": 504,
       "routerProbes": 56,
-      "totalMs": 127.63590000000113,
+      "totalMs": 99.71289999999954,
       "phases": {
-        "candidates": 11,
+        "candidates": 8,
         "dedup": 1,
-        "support-filter": 2,
-        "placement": 36,
-        "consolidation": 4,
-        "gap-fill": 2,
+        "support-filter": 4,
+        "placement": 27,
+        "consolidation": 6,
+        "gap-fill": 1,
         "analytics": 0,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 21,
-        "report": 2,
-        "bracing": 38
+        "resize": 3,
+        "report": 1,
+        "bracing": 32
       }
     },
     {
@@ -222,11 +219,11 @@
       "islands": 1,
       "islandSource": "authored",
       "candidates": 403,
-      "entities": 382,
+      "entities": 377,
       "placedByType": {
         "trunk": 46,
-        "branch": 43,
-        "leaf": 94,
+        "branch": 72,
+        "leaf": 65,
         "twig": 87,
         "stick": 0,
         "brace": 0,
@@ -235,17 +232,17 @@
       },
       "entitiesByType": {
         "trunk": 46,
-        "branch": 43,
-        "leaf": 94,
+        "branch": 72,
+        "leaf": 65,
         "twig": 87,
-        "brace": 112
+        "brace": 107
       },
       "contacts": 357,
       "roots": 46,
-      "joints": 642,
+      "joints": 729,
       "curvedSegments": 0,
-      "memberLengthMm": 1835.1027365077962,
-      "memberVolumeMm3": 2101.6393723887345,
+      "memberLengthMm": 1963.7522724237572,
+      "memberVolumeMm3": 2219.997283112512,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
       "coveragePct": 98.0780780780781,
@@ -254,9 +251,9 @@
       "gridFallbacks": 25,
       "budgetAdd": 0,
       "budgetCull": 137,
-      "orphans": 36,
+      "orphans": 54,
       "orphansByReason": {
-        "cross": 36
+        "cross": 54
       },
       "refusals": {
         "fan": 0,
@@ -272,20 +269,20 @@
       "routerPlacements": 568,
       "routerCones": 22268,
       "routerProbes": 73127,
-      "totalMs": 9110.212500000001,
+      "totalMs": 4339.584999999999,
       "phases": {
-        "candidates": 30,
-        "dedup": 4,
-        "support-filter": 52,
-        "placement": 2597,
-        "consolidation": 316,
-        "gap-fill": 93,
-        "analytics": 10,
+        "candidates": 28,
+        "dedup": 12,
+        "support-filter": 40,
+        "placement": 1853,
+        "consolidation": 238,
+        "gap-fill": 90,
+        "analytics": 6,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 4021,
-        "report": 15,
-        "bracing": 1347
+        "resize": 540,
+        "report": 11,
+        "bracing": 1103
       }
     },
     {
@@ -342,20 +339,20 @@
       "routerPlacements": 67,
       "routerCones": 1812,
       "routerProbes": 10463,
-      "totalMs": 202.88960000000225,
+      "totalMs": 167.07560000000012,
       "phases": {
-        "candidates": 21,
+        "candidates": 15,
         "dedup": 1,
         "support-filter": 1,
-        "placement": 95,
-        "consolidation": 1,
+        "placement": 75,
+        "consolidation": 0,
         "gap-fill": 26,
-        "analytics": 3,
-        "fanning": 1,
+        "analytics": 2,
+        "fanning": 0,
         "surface-coverage": 0,
-        "resize": 1,
+        "resize": 0,
         "report": 3,
-        "bracing": 48
+        "bracing": 40
       }
     },
     {
@@ -407,14 +404,14 @@
       "routerPlacements": 245,
       "routerCones": 9669,
       "routerProbes": 763286,
-      "totalMs": 1374.6240999999973,
+      "totalMs": 1020.3040000000001,
       "phases": {
-        "candidates": 17,
+        "candidates": 13,
         "dedup": 1,
-        "support-filter": 16,
-        "placement": 1293,
+        "support-filter": 19,
+        "placement": 949,
         "consolidation": 0,
-        "gap-fill": 34,
+        "gap-fill": 26,
         "analytics": 9,
         "fanning": 0,
         "surface-coverage": 0,
@@ -468,7 +465,7 @@
       "routerPlacements": 0,
       "routerCones": 0,
       "routerProbes": 0,
-      "totalMs": 0.8774999999986903,
+      "totalMs": 0.811200000000099,
       "phases": {}
     }
   ]
