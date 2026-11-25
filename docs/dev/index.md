@@ -17,7 +17,7 @@ Internals of DragonFruit, for people changing them. Start with [Architecture Ove
 | Call native code | [Tauri IPC and Native Bridge](tauri-ipc-bridge.md) |
 | Hand a mesh to a native operation | [Native Mesh Store](native-mesh-store.md) |
 | Ship something unfinished | [Experiments Framework](experiments-framework.md) |
-| Support a new printer or format | [Plugin Framework](plugins-framework.md), [Complex Plugin Contributing](plugins-complex-contributing.md), [Formats](formats.md) |
+| Support a new printer or format | [Plugin Framework](plugins-framework.md), [Complex Plugin Contributing](plugins-complex-contributing.md), [SDCP v1](sdcp-v1-plugin.md), [Formats](formats.md) |
 | Change automatic support placement | [Auto-Supports](auto-supports.md) |
 | Add a support type | [Adding a New Support Type](support-type-extension.md), [Support System](support-system.md) |
 | Change support hover, selection or snapping | [Support Interaction](support-interaction.md) |
