@@ -64,6 +64,7 @@ the raft is trimmed where the model stands:
 | `src/supports/Rafts/Crenelated/geometry/polygonSet2d.ts` | Clipper-backed set algebra: `PolygonWithHoles`, `unionPolygonSets`, `differencePolygonSets`, `offsetPolygonSet`, `polygonsFromPolyTree`, `polygonSetToShapes`, `polygonSetAreaMm2` |
 | `src/supports/Rafts/Crenelated/geometry/computeRaftFootprint.ts` | `computeRaftFootprintPolygons` (hull minus clearance), `inflateModelPlateClearance`, `raftSolidHeightMm`, `raftChamferInsetMm`, `raftDynamicMarginMm`, `raftBandTopMm`, `raftWallBaseHeightMm` |
 | `src/supports/Rafts/Crenelated/geometry/generateRaftFromFootprint.ts` | `buildRaftFootprintMeshes` (the shared seam: footprint + base + wall), `generateChamferedBaseFromPolygons`, `generateWallFromPolygons`, `isUntrimmedFootprint` |
+| `src/supports/Rafts/Crenelated/geometry/offsetRingResolvingFolds.ts` | `offsetRingResolvingFolds` — offset of a concave ring that keeps one point per vertex, for the crenelated wall |
 | `src/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh.ts` | line-mode beam network; `filterLineRaftEdges` drops the beams the model is in the way of |
 
 `buildRaftFootprintMeshes` / `computeRaftFootprintPolygons` are reached from the
@@ -84,11 +85,18 @@ beams live there too; they used to be built inline in the exporter.
   one convex ring (`isUntrimmedFootprint`) goes through `generateChamferedBase`,
   `generateCrenelatedWallManual` and `generatePerimeterWall` unchanged, so scenes
   whose models are lifted off the plate render exactly as before. Only a trimmed
-  set (holes or several lobes) reaches the set-aware builders.
+  set (holes or several lobes) reaches the set-aware builders. A cut that only
+  notches the ring leaves it single but concave; the wall then switches to
+  `offsetRingResolvingFolds` (see below), and a convex hull never does.
 - **Trimmed walls follow outer rings only.** The clearance cut is not the raft's
   perimeter; the base closes that face with its own side wall.
 - **The clearance cut can fold a miter.** `insetRingForSolidSide` clamps the
-  chamfer miter so a tight concave corner cannot turn the ring inside out.
+  chamfer miter so a tight concave corner cannot turn the ring inside out. The
+  crenelated wall needs its inner and top rings paired vertex for vertex with the
+  outer one, so for a concave outer ring it offsets with `offsetRingResolvingFolds`,
+  which collapses the cut's edges shorter than the offset to a point. The convex
+  inset folded there, and the whole wall fell back to a plain one without its lip
+  or drain channels.
 - **The cut region is a raster superset.** Unioning the band's triangles with
   Clipper took over a second on a model standing on the plate — a frozen frame on
   load — so `rasterizePolygonsToRegion` draws them on a grid instead. The grid
