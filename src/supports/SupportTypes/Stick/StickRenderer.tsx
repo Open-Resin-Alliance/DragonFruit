@@ -99,19 +99,20 @@ export const StickRenderer = React.memo(function StickRenderer({
     // grabbed cone's socket is anchored, so the rod stays where it is.
     coneFromPreview: (preview) => preview.cone,
   });
+  const { start: startTipDrag, stop: stopTipDrag } = tipDrag;
 
   const startConeDrag = React.useCallback((coneKey: 'contactConeA' | 'contactConeB', initialEvent?: any) => {
-    const cone = stick[coneKey];
+    const cone = coneKey === 'contactConeA' ? stick.contactConeA : stick.contactConeB;
     if (!cone) return;
     activeConeRef.current = { key: coneKey, anchor: getFinalSocketPosition(cone) };
 
-    tipDrag.start({
+    startTipDrag({
       event: initialEvent, camera, domElement: gl.domElement, scene,
       modelId: stick.modelId,
       placementSurface: cone.placementSurface,
       contact: { field: coneKey, cone, supportId: stick.id },
     });
-  }, [camera, gl.domElement, scene, stick.id, stick.contactConeA, stick.contactConeB, stick.modelId]);
+  }, [camera, gl.domElement, scene, startTipDrag, stick.id, stick.contactConeA, stick.contactConeB, stick.modelId]);
 
   const handleContactDiskHudPointerDownA = React.useCallback((e: any) => {
     if (!isSelected || !stick.contactConeA) return;
@@ -126,8 +127,8 @@ export const StickRenderer = React.memo(function StickRenderer({
   }, [isSelected, startConeDrag, stick.contactConeB]);
 
   const handleContactDiskHudPointerUp = React.useCallback(() => {
-    tipDrag.stop();
-  }, [tipDrag]);
+    stopTipDrag();
+  }, [stopTipDrag]);
   const shafts: React.ReactNode[] = [];
   const batchedStraightShafts: InstancedShaft[] = [];
 

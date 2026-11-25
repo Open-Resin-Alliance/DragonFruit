@@ -89,7 +89,7 @@ export function useTransformManager({ geom, activeModel }: TransformManagerProps
     geom,
     isTransforming,
     transform.position.x, transform.position.y, transform.position.z,
-    transform.rotation.x, transform.rotation.y, transform.rotation.z,
+    transform.rotation, transform.rotation.x, transform.rotation.y, transform.rotation.z,
     transform.scale.x, transform.scale.y, transform.scale.z
   ]);
 

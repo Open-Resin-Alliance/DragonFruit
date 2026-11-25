@@ -378,7 +378,7 @@ export function KnotGizmo() {
             pushSupportEditHistory(description, beforeHistoryRef.current, captureSupportEditSnapshot());
         }
         beforeHistoryRef.current = null;
-    }, [setKnotGizmoInteractionFlags]);
+    }, [selectedId, setKnotGizmoInteractionFlags]);
 
     useEffect(() => {
         return () => {

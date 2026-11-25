@@ -38,19 +38,20 @@ export function useStlLoadCameraIntro(
   const pendingDeferredIntroRef = React.useRef(false);
   const deferIntro = options?.deferIntro ?? false;
 
+  // Keyed on the coordinates, not the vector: a caller may hand a new vector at the same place.
+  const fallbackX = fallbackOrbitTarget?.x ?? 0;
+  const fallbackY = fallbackOrbitTarget?.y ?? 0;
+  const fallbackZ = fallbackOrbitTarget?.z ?? 0;
+
   const defaultCamera = React.useMemo<DefaultCameraConfig>(() => ({
-    position: [
-      (fallbackOrbitTarget?.x ?? 0) - 220,
-      (fallbackOrbitTarget?.y ?? 0) - 220,
-      (fallbackOrbitTarget?.z ?? 0) + 260,
-    ],
+    position: [fallbackX - 220, fallbackY - 220, fallbackZ + 260],
     fov: 50,
     up: [0, 0, 1],
-  }), [fallbackOrbitTarget?.x, fallbackOrbitTarget?.y, fallbackOrbitTarget?.z]);
+  }), [fallbackX, fallbackY, fallbackZ]);
 
   const defaultOrbitTarget = React.useMemo(
-    () => fallbackOrbitTarget?.clone() ?? new THREE.Vector3(0, 0, 0),
-    [fallbackOrbitTarget?.x, fallbackOrbitTarget?.y, fallbackOrbitTarget?.z],
+    () => new THREE.Vector3(fallbackX, fallbackY, fallbackZ),
+    [fallbackX, fallbackY, fallbackZ],
   );
 
   const [introBoundsSnapshot, setIntroBoundsSnapshot] = React.useState<THREE.Box3 | null>(null);
