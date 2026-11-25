@@ -282,10 +282,6 @@ export class SupportGeometryGenerator {
     const contactRadius = profile.contactDiameterMm / 2;
     const bodyRadius = profile.bodyDiameterMm / 2;
     const length = profile.lengthMm;
-    const neckRadius = (profile.neckDiameterMm ?? profile.contactDiameterMm) / 2;
-    const neckFraction = profile.neckFraction !== undefined && profile.neckFraction > 0 && profile.neckFraction < 1
-      ? profile.neckFraction
-      : 1;
     const effectiveSurfaceNormal = coneData.surfaceNormal || coneData.normal;
     const primitiveThickness = profile.type === 'disk'
       ? (coneData.diskLengthOverride ?? calculateDiskThickness(effectiveSurfaceNormal, coneData.normal, profile))
@@ -295,32 +291,21 @@ export class SupportGeometryGenerator {
       y: coneData.pos.y + effectiveSurfaceNormal.y * primitiveThickness - effectiveSurfaceNormal.y * penetrationMm,
       z: coneData.pos.z + effectiveSurfaceNormal.z * primitiveThickness - effectiveSurfaceNormal.z * penetrationMm,
     };
+    const center = {
+      x: coneStartPos.x + coneData.normal.x * (length / 2),
+      y: coneStartPos.y + coneData.normal.y * (length / 2),
+      z: coneStartPos.z + coneData.normal.z * (length / 2),
+    };
     const quaternion = getConeQuaternion(coneData.normal);
 
-    // 2. Cone Body. The contact end is at coneStartPos; the body end is one
-    // length along `normal`. A reinforced neck splits the frustum into a
-    // body->neck run and a short neck->contact run.
-    const addSegment = (topRadius: number, bottomRadius: number, segmentLength: number, distanceFromContact: number) => {
-      if (segmentLength <= 1e-6) return;
-      const center = {
-        x: coneStartPos.x + coneData.normal.x * (distanceFromContact + segmentLength / 2),
-        y: coneStartPos.y + coneData.normal.y * (distanceFromContact + segmentLength / 2),
-        z: coneStartPos.z + coneData.normal.z * (distanceFromContact + segmentLength / 2),
-      };
-      const geometry = new THREE.CylinderGeometry(topRadius, bottomRadius, segmentLength, 16);
-      const mesh = new THREE.Mesh(geometry);
-      mesh.position.set(center.x, center.y, center.z);
-      mesh.setRotationFromQuaternion(quaternion);
-      group.add(mesh);
-    };
+    // 2. Cone Body
+    // Standard Cylinder: Top radius = contact, Bottom radius = body
+    const geometry = new THREE.CylinderGeometry(contactRadius, bodyRadius, length, 16);
 
-    if (neckFraction < 1) {
-      const tipLength = length * (1 - neckFraction);
-      addSegment(contactRadius, neckRadius, tipLength, 0);
-      addSegment(neckRadius, bodyRadius, length * neckFraction, tipLength);
-    } else {
-      addSegment(contactRadius, bodyRadius, length, 0);
-    }
+    const coneMesh = new THREE.Mesh(geometry);
+    coneMesh.position.set(center.x, center.y, center.z);
+    coneMesh.setRotationFromQuaternion(quaternion);
+    group.add(coneMesh);
 
     // 3. Cone-start sphere (matches the live ContactConeRenderer)
     const sphereGeom = new THREE.SphereGeometry(contactRadius, 16, 12);

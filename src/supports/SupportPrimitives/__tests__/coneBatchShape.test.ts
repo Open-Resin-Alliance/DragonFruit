@@ -80,26 +80,6 @@ describe('cone batch shape', () => {
     closeTo(scales.body, [0.2, 2, 0.2]);
   });
 
-  it('splits a necked cone into a body run and a short tip taper', () => {
-    const necked = cone({
-      contactDiameterMm: 0.28,
-      bodyDiameterMm: 1.4,
-      lengthMm: 2.5,
-      neckDiameterMm: 0.7,
-      neckFraction: 0.9,
-    });
-
-    closeTo([coneShapeRatio(necked)], [2]);
-    const scales = conePrimitiveScales(necked, 0.1, 0);
-    closeTo(scales.body, [0.35, 2.25, 0.35]);
-    closeTo(scales.neckTip, [0.14, 0.25, 0.14]);
-    assert.notStrictEqual(coneBucketKey(necked), coneBucketKey(cone({
-      contactDiameterMm: 0.28,
-      bodyDiameterMm: 1.4,
-      lengthMm: 2.5,
-    })));
-  });
-
   it('scales a unit sphere uniformly', () => {
     const scales = conePrimitiveScales(cone(), 0, 0);
 

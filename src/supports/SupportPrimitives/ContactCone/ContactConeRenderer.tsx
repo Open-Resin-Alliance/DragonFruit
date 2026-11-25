@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { usePicking } from '@/components/picking';
 import { Vec3 } from '../../types';
 import { SupportTipProfile, DEFAULT_TIP_PROFILE } from './types';
-import { getConeQuaternion } from './contactConeUtils';
+import { getConeCenterPosition, getConeQuaternion } from './contactConeUtils';
 import { handleContactDiskClick } from '../../interaction/clickHandlers';
 import { setHoveredState } from '../../state';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
@@ -87,10 +87,6 @@ export function ContactConeRenderer({
     const liveSocketJointPos = useJointDragPosition(socketJointId ?? '');
     const contactRadius = profile.contactDiameterMm / 2;
     const bodyRadius = profile.bodyDiameterMm / 2;
-    const neckRadius = (profile.neckDiameterMm ?? profile.contactDiameterMm) / 2;
-    const neckFraction = profile.neckFraction !== undefined && profile.neckFraction > 0 && profile.neckFraction < 1
-        ? profile.neckFraction
-        : 1;
     
     const storeState = React.useSyncExternalStore(
         subscribeToProfileStore,
@@ -350,30 +346,11 @@ export function ContactConeRenderer({
                 position={[center.x, center.y, center.z]}
                 quaternion={quaternion}
             >
-                {neckFraction < 1 ? (
-                    <mesh position={[0, (length * neckFraction) / 2, 0]} raycast={raycast}>
-                        <cylinderGeometry args={[contactRadius, neckRadius, length * (1 - neckFraction), radialSegments]} />
-                        <meshStandardMaterial
-                            color={finalBodyColor}
-                            emissive={displayEmissive}
-                            emissiveIntensity={displayEmissiveIntensity}
-                            transparent={transparent}
-                            opacity={opacity}
-                            depthWrite={!transparent}
-                        />
-                    </mesh>
-                ) : null}
-                <mesh
-                    position={neckFraction < 1 ? [0, -(length * (1 - neckFraction)) / 2, 0] : [0, 0, 0]}
-                    raycast={raycast}
-                    onClick={handleConeClick}
-                    onPointerMove={handleConePointerMove}
-                    onPointerOut={handleConePointerOut}
-                >
+                <mesh raycast={raycast} onClick={handleConeClick} onPointerMove={handleConePointerMove} onPointerOut={handleConePointerOut}>
                     {/* CylinderGeometry: radiusTop, radiusBottom, height, radialSegments */}
                     {/* Top = contact (small), Bottom = socket (large) in Y-up space */}
                     {/* After rotation, "top" faces the model */}
-                    <cylinderGeometry args={neckFraction < 1 ? [neckRadius, bodyRadius, length * neckFraction, radialSegments] : [contactRadius, bodyRadius, length, radialSegments]} />
+                    <cylinderGeometry args={[contactRadius, bodyRadius, length, radialSegments]} />
                     <meshStandardMaterial
                         color={finalBodyColor}
                         emissive={displayEmissive}

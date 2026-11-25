@@ -51,8 +51,6 @@ export interface SupportGraphMember {
     role?: 'shaft' | 'cone';
     taperBodyDiameterMm?: number;
     taperTipDiameterMm?: number;
-    taperNeckDiameterMm?: number;
-    taperNeckFraction?: number;
 }
 
 export interface SupportGraph {
@@ -257,7 +255,7 @@ export function buildSupportGraph(snapshot: SupportState, modelId?: string): Sup
         nodeB: number,
         diameterMm: number,
         role?: 'shaft' | 'cone',
-        taper?: { bodyMm: number; tipMm: number; neckMm?: number; neckFraction?: number },
+        taper?: { bodyMm: number; tipMm: number },
     ) => {
         if (nodeA === nodeB) return;
         const a = nodes[nodeA].pos;
@@ -279,12 +277,7 @@ export function buildSupportGraph(snapshot: SupportState, modelId?: string): Sup
             diameterMm: clampDiameterMm(diameterMm),
             angleFromVerticalDeg,
             ...(role ? { role } : {}),
-            ...(taper ? {
-                taperBodyDiameterMm: taper.bodyMm,
-                taperTipDiameterMm: taper.tipMm,
-                ...(taper.neckMm !== undefined ? { taperNeckDiameterMm: taper.neckMm } : {}),
-                ...(taper.neckFraction !== undefined ? { taperNeckFraction: taper.neckFraction } : {}),
-            } : {}),
+            ...(taper ? { taperBodyDiameterMm: taper.bodyMm, taperTipDiameterMm: taper.tipMm } : {}),
         });
     };
 
@@ -397,12 +390,6 @@ export function buildSupportGraph(snapshot: SupportState, modelId?: string): Sup
             addBeamMember(trunk.id, 'trunk', lastNodeIdx, tipIdx, coneDia, 'cone', {
                 bodyMm: bodyDia,
                 tipMm: tipDia,
-                ...(trunk.contactCone.profile?.neckDiameterMm !== undefined
-                    ? { neckMm: trunk.contactCone.profile.neckDiameterMm }
-                    : {}),
-                ...(trunk.contactCone.profile?.neckFraction !== undefined
-                    ? { neckFraction: trunk.contactCone.profile.neckFraction }
-                    : {}),
             });
         }
     }
@@ -1858,17 +1845,11 @@ export function solveSupportFrameStress(
                     // can sit well inside the cone, not at either end.
                     const bodyD = m.taperBodyDiameterMm;
                     const tipD = m.taperTipDiameterMm;
-                    const neckD = m.taperNeckDiameterMm;
-                    const neckF = m.taperNeckFraction;
                     let maxStress = 0;
                     let govDia = bodyD;
                     for (let st = 0; st <= CONE_TAPER_STRESS_STATIONS; st++) {
                         const t = st / CONE_TAPER_STRESS_STATIONS;
-                        const d = neckD !== undefined && neckF !== undefined && neckF > 0 && neckF < 1
-                            ? (t <= neckF
-                                ? bodyD + (neckD - bodyD) * (t / neckF)
-                                : neckD + (tipD - neckD) * ((t - neckF) / (1 - neckF)))
-                            : bodyD + (tipD - bodyD) * t;
+                        const d = bodyD + (tipD - bodyD) * t;
                         const area = Math.PI * d * d / 4;
                         const inertia = Math.PI * d * d * d * d / 64;
                         // Internal moment at the station from the two end

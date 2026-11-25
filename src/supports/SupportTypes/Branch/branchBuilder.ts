@@ -66,22 +66,6 @@ function isConePlacementClear(cone: ContactCone, mesh?: THREE.Mesh): boolean {
     const socketPos = getFinalSocketPosition(cone);
     const contactRadius = (cone.profile.contactDiameterMm / 2) + BRANCH_CONE_COLLISION_SAFETY_MM;
     const bodyRadius = (cone.profile.bodyDiameterMm / 2) + BRANCH_CONE_COLLISION_SAFETY_MM;
-    const neckFraction = cone.profile.neckFraction;
-    if (cone.profile.neckDiameterMm !== undefined
-        && neckFraction !== undefined && neckFraction > 0 && neckFraction < 1) {
-        // The real shape is two frustums: a short contact->neck taper and the
-        // main neck->body run. A single body->neck envelope would use the neck
-        // radius at the contact and reject legal near-surface cones.
-        const neckRadius = (cone.profile.neckDiameterMm / 2) + BRANCH_CONE_COLLISION_SAFETY_MM;
-        const t = 1 - neckFraction;
-        const neckPos = {
-            x: coneStart.x + (socketPos.x - coneStart.x) * t,
-            y: coneStart.y + (socketPos.y - coneStart.y) * t,
-            z: coneStart.z + (socketPos.z - coneStart.z) * t,
-        };
-        return !isCollisionFrustumBlocked(coneStart, neckPos, contactRadius, neckRadius, mesh)
-            && !isCollisionFrustumBlocked(neckPos, socketPos, neckRadius, bodyRadius, mesh);
-    }
     return !isCollisionFrustumBlocked(coneStart, socketPos, contactRadius, bodyRadius, mesh);
 }
 
