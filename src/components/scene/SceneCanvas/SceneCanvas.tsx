@@ -7139,7 +7139,11 @@ export function SceneCanvas({
                         />
                       )}
 
-                      {isActive && !stressOverlayActive && (mode === 'support' || mode === 'analysis') && showOverhangs && overhangIslands && overhangIslands.length > 0 && (
+                      {/* The island/overhang scan runs on the exterior mesh. Interior
+                          view draws the cavity geometry (the inner wall), so painting
+                          those exterior regions over it would mark surfaces that are
+                          not in view. There is no cavity island scan to substitute. */}
+                      {!interiorView && isActive && !stressOverlayActive && (mode === 'support' || mode === 'analysis') && showOverhangs && overhangIslands && overhangIslands.length > 0 && (
                         <IslandOverhangOverlay
                           geometry={model.geometry.geometry}
                           regions={overhangIslands}
@@ -8159,7 +8163,9 @@ export function SceneCanvas({
                   via the GPU picking system. Supplied by the host (page.tsx). */}
               {organicCutKeyGizmo}
 
-              {selectedMarker && !stressOverlayActive && (
+              {/* Exterior island markers/footprints: same rule as the overhang
+                  overlay — interior view is the cavity mesh, not the scan surface. */}
+              {!interiorView && selectedMarker && !stressOverlayActive && (
                 <IslandOverlay
                   markers={[selectedMarker]}
                   brushRadiusMm={overlayBrushRadius ?? 2}
@@ -8174,7 +8180,7 @@ export function SceneCanvas({
                   (the frame the detectors emit), so this must stay OUTSIDE the
                   model group — mounting it inside would apply the model
                   transform twice. */}
-              {islandInstances && islandInstances.count > 0 && (mode === 'support' || mode === 'analysis') && !stressOverlayActive && (
+              {!interiorView && islandInstances && islandInstances.count > 0 && (mode === 'support' || mode === 'analysis') && !stressOverlayActive && (
                 <IslandInstancesOverlay
                   instances={islandInstances}
                   selectedIslandId={overlaySelectedIslandId}
@@ -8185,7 +8191,7 @@ export function SceneCanvas({
               <IslandVoxelVisualization
                 scanResults={scanResults ?? null}
                 layerHeightMm={layerHeightMm ?? 0.05}
-                enabled={(voxelEnabled ?? false) && !stressOverlayActive}
+                enabled={!interiorView && (voxelEnabled ?? false) && !stressOverlayActive}
                 opacity={voxelOpacity}
                 colorScheme={voxelColorScheme}
                 selectedIslandId={voxelSelectedIslandId}
@@ -8200,7 +8206,7 @@ export function SceneCanvas({
                   islands={scanResults.islands}
                   scanResults={scanResults}
                   layerHeightMm={layerHeightMm ?? 0.05}
-                  enabled={(showIslandIdLabels ?? false) && !stressOverlayActive}
+                  enabled={!interiorView && (showIslandIdLabels ?? false) && !stressOverlayActive}
                   bboxMinZ={scanBBox?.min.z ?? 0}
                 />
               )}
