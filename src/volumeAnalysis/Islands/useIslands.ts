@@ -497,6 +497,9 @@ function timed<T>(label: string, compute: () => T): T {
   const result = compute();
   const elapsedMs = performance.now() - startedAt;
   if (elapsedMs >= SLOW_STEP_MS) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[IslandsPerf] step=${label} ms=${elapsedMs.toFixed(1)}`);
+    }
     void reportSlowStep(label, elapsedMs);
   }
   return result;
@@ -706,8 +709,13 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     // not show the old "layer X of Y" until this scan reports its own.
     setScanProgress(null);
     const epoch = ++scanEpochRef.current;
+    const perf = { start: performance.now(), prep: 0, stage: 0, scan: 0, commit: 0, path: 'none' };
+    const mark = (key: 'prep' | 'stage' | 'scan' | 'commit', from: number) => {
+      perf[key] += performance.now() - from;
+    };
 
     const commitCombinedResult = (combined: CombinedNativeScanResult) => {
+      const commitStart = performance.now();
       const voxelMapped: DetectedIsland[] = combined.voxelIslands
         .filter((v) => {
           const peak = v.peakAreaMm2 ?? v.maxAreaMm2 ?? v.areaMm2 ?? 0;
@@ -755,6 +763,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
           dragTotalMm3: drag,
         });
       }
+      mark('commit', commitStart);
     };
 
     try {
@@ -771,7 +780,9 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       } | null = null;
       if (isTauri) {
         try {
+          const prepStart = performance.now();
           local = prepareLocalGeom();
+          mark('prep', prepStart);
         } catch (err) {
           console.warn('[Islands] local mesh prep failed', err);
         }
@@ -800,13 +811,16 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             setScanProgress({ done: 0, total: 100 });
 
             const { positions } = local;
+            const stageStart = performance.now();
             await invoke(
               'stage_mesh_binary_set',
               new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
               { headers: { 'Content-Type': 'application/octet-stream' } },
             );
+            mark('stage', stageStart);
             if (scanEpochRef.current !== epoch) return;
 
+            const scanStart = performance.now();
             const combined = await invoke<CombinedNativeScanResult>('scan_islands_staged', {
               layerHeightMm,
               pxMm,
@@ -819,8 +833,10 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
               matrix: local.matrix,
               center: local.center,
             });
+            mark('scan', scanStart);
             if (scanEpochRef.current !== epoch) return;
 
+            perf.path = 'native';
             commitCombinedResult(combined);
             usedNative = true;
           } finally {
@@ -864,6 +880,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             setScanProgress({ done: 0, total: 100 });
 
             console.log(`[Islands] Sideloading combined island scan from path: ${sourcePath}`);
+            const scanStart = performance.now();
             const combined = await invoke<CombinedNativeScanResult>(
               'scan_islands_from_path',
               {
@@ -881,8 +898,10 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
                 hasRaft,
               },
             );
+            mark('scan', scanStart);
             if (scanEpochRef.current !== epoch) return;
 
+            perf.path = 'sideload';
             commitCombinedResult(combined);
             usedNative = true;
           } finally {
@@ -903,6 +922,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         }
       }
       if (!usedNative && world !== null) {
+        perf.path = 'client';
+        const clientStart = performance.now();
         let topple = true;
         let drag = 0;
 
@@ -984,10 +1005,17 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             dragTotalMm3: drag,
           });
         }
+        mark('scan', clientStart);
       }
     } finally {
       if (scanEpochRef.current === epoch) {
         setScanning(false);
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn(
+            `[IslandsPerf] path=${perf.path} prep=${perf.prep.toFixed(1)}ms stage=${perf.stage.toFixed(1)}ms `
+            + `scan=${perf.scan.toFixed(1)}ms commit=${perf.commit.toFixed(1)}ms total=${(performance.now() - perf.start).toFixed(1)}ms`,
+          );
+        }
       }
     }
   }, [geom, transform, modelId, sourcePath, cacheKey, prepareLocalGeom, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK, hasRaft]);
