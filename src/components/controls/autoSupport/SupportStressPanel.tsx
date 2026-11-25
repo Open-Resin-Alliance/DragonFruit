@@ -1030,8 +1030,14 @@ function SupportStressPanelImpl({
           <div className="px-2.5 pb-3 space-y-2">
             {/* 1. Hero Verdict Banner */}
             {hasAnyData && (
-              <div className="rounded-md border p-2.5 flex items-start gap-2" style={statusBannerStyle(summary.level)}>
-                <StatusGlyph level={summary.level} className="h-4 w-4 shrink-0 mt-0.5" />
+              <div
+                className={`rounded-md border p-2.5 flex gap-2 ${issueSubtitle ? 'items-start' : 'items-center'}`}
+                style={statusBannerStyle(summary.level)}
+              >
+                <StatusGlyph
+                  level={summary.level}
+                  className={`h-4 w-4 shrink-0${issueSubtitle ? ' mt-0.5' : ''}`}
+                />
                 <div className="min-w-0 flex-1 space-y-0.5">
                   <div className="text-xs font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
                     {formatStatusTitle(_, summary.level)}
