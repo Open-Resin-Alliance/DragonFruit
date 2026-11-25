@@ -4805,7 +4805,7 @@ export function forestReportToText(report: ForestReport, autoSettings?: Partial<
         if (report.loadBudget) {
             const budget = report.loadBudget;
             lines.push(
-                `  Load budget (report only): demand ${budget.totalDemandMm2.toFixed(0)}mm² vs capacity `
+                `  Load budget (after standalone cull): demand ${budget.totalDemandMm2.toFixed(0)}mm² vs capacity `
                 + `${budget.totalCapacityMm2.toFixed(0)}mm² — would add ${budget.wouldAdd}, could cull ${budget.wouldCull} `
                 + `(deficit on ${budget.islandsInDeficit} islands, surplus on ${budget.islandsInSurplus})`,
             );
