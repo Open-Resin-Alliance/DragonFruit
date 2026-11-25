@@ -1,0 +1,361 @@
+{
+  "comment": "Components and hooks the React Compiler skips, by file. Checked by scripts/check-compiler-skips.mjs; only ever shrink it.",
+  "files": {
+    "src/app/page.tsx": [
+      "Home"
+    ],
+    "src/components/AppLogger.tsx": [
+      "AppLogger"
+    ],
+    "src/components/controls/AutoRotationPanel.tsx": [
+      "AutoRotationPanel"
+    ],
+    "src/components/controls/AutoSupportPanel.tsx": [
+      "AutoSupportPanel"
+    ],
+    "src/components/controls/IslandScanCard.tsx": [
+      "IslandScanCard"
+    ],
+    "src/components/controls/ModelManagerPanel.tsx": [
+      "ModelManagerPanel"
+    ],
+    "src/components/controls/ModelStatsCard.tsx": [
+      "ModelStatsCard"
+    ],
+    "src/components/controls/PrintingLayerGpuPreview.tsx": [
+      "PrintingLayerGpuPreview"
+    ],
+    "src/components/controls/ViewTypeDropdown.tsx": [
+      "ViewTypeDropdown"
+    ],
+    "src/components/controls/autoSupport/AutoSupportPresets.tsx": [
+      "AutoSupportPresetSelector"
+    ],
+    "src/components/debug/RendererCrashDiagnostics.tsx": [
+      "RendererCrashDiagnostics"
+    ],
+    "src/components/gizmo/ScreenSpaceGizmo.tsx": [
+      "ScreenSpaceGizmo"
+    ],
+    "src/components/gizmo/move/GizmoMove.tsx": [
+      "GizmoMove"
+    ],
+    "src/components/gizmo/rotate/GizmoRotation.tsx": [
+      "GizmoRotation"
+    ],
+    "src/components/gizmo/scale/GizmoScale.tsx": [
+      "GizmoScale"
+    ],
+    "src/components/layout/EmptySceneState.tsx": [
+      "EmptySceneState"
+    ],
+    "src/components/layout/TopBar.tsx": [
+      "TopBar"
+    ],
+    "src/components/modals/SliceCompletedModal.tsx": [
+      "SliceCompletedModal"
+    ],
+    "src/components/monitoring/RtspRelayCanvasPlayer.tsx": [
+      "RtspRelayCanvasPlayer"
+    ],
+    "src/components/organisms/panels/AnalysisPanelStack.tsx": [
+      "AnalysisPanelStack"
+    ],
+    "src/components/organisms/panels/ExportPanelStack.tsx": [
+      "ExportPanelStack"
+    ],
+    "src/components/organisms/panels/PreparePanelStack.tsx": [
+      "PreparePanelStack"
+    ],
+    "src/components/organisms/panels/PrintingPanelStack.tsx": [
+      "PrintingPanelStack"
+    ],
+    "src/components/organisms/panels/SharedPanelStack.tsx": [
+      "SharedPanelStack"
+    ],
+    "src/components/picking/PickingProvider.tsx": [
+      "PickingProvider",
+      "PointerTracker"
+    ],
+    "src/components/picking/PickingRenderer.tsx": [
+      "PickingRenderer"
+    ],
+    "src/components/picking/hooks/usePickableModel.ts": [
+      "usePickableModel"
+    ],
+    "src/components/picking/hooks/usePickingSubscription.ts": [
+      "usePickingSubscription"
+    ],
+    "src/components/printers/PrinterVariantPickerModal.tsx": [
+      "PrinterVariantPickerModal"
+    ],
+    "src/components/scene/CameraFocusController.tsx": [
+      "CameraFocusController"
+    ],
+    "src/components/scene/CrossSectionStencilCap.tsx": [
+      "CrossSectionStencilCapInner"
+    ],
+    "src/components/scene/IslandInstancesOverlay.tsx": [
+      "IslandInstancesOverlay"
+    ],
+    "src/components/scene/IslandOverlay.tsx": [
+      "IslandOverlay"
+    ],
+    "src/components/scene/MeshRepairReportModal.tsx": [
+      "MeshRepairReportModal"
+    ],
+    "src/components/scene/SceneAutosaveRecoveryModal.tsx": [
+      "SceneAutosaveRecoveryModal"
+    ],
+    "src/components/scene/SceneCanvas/PlateNameLabel.tsx": [
+      "PlateNameLabel"
+    ],
+    "src/components/scene/SceneCanvas/SceneCanvas.tsx": [
+      "SceneCanvas"
+    ],
+    "src/components/scene/SceneCanvas/SceneCanvasCameraControllers.tsx": [
+      "CameraModeEntryFramingController",
+      "CameraProjectionController",
+      "HorizonLock",
+      "OrthoPickRayAlignment"
+    ],
+    "src/components/scene/SceneCanvas/SceneEnvironment.tsx": [
+      "CameraClipPlaneStabilizer",
+      "EnableLocalClipping",
+      "ViewHeadlight"
+    ],
+    "src/components/scene/SceneCanvas/StlMesh.tsx": [
+      "StlMeshComponent"
+    ],
+    "src/components/scene/SceneCanvas/useExportThumbnailCapture.ts": [
+      "useExportThumbnailCapture"
+    ],
+    "src/components/scene/camera/CameraControlsRecovery.tsx": [
+      "CameraControlsRecovery"
+    ],
+    "src/components/scene/camera/CameraFocusHotkeyController.tsx": [
+      "CameraFocusHotkeyController"
+    ],
+    "src/components/scene/camera/CameraHomeResetController.tsx": [
+      "CameraHomeResetController"
+    ],
+    "src/components/scene/camera/NativeSpaceMouseController.tsx": [
+      "NativeSpaceMouseController"
+    ],
+    "src/components/scene/camera/SpaceMouseController.tsx": [
+      "SpaceMouseController"
+    ],
+    "src/components/scene/camera/useStlLoadCameraIntro.ts": [
+      "useStlLoadCameraIntro"
+    ],
+    "src/components/selection/SelectionSpotlight.tsx": [
+      "SelectionSpotlight"
+    ],
+    "src/components/settings/BackupsSettingsTab.tsx": [
+      "BackupsSettingsTab"
+    ],
+    "src/components/settings/LocalBackupsSettingsTab.tsx": [
+      "LocalBackupsSettingsTab"
+    ],
+    "src/components/settings/LoggingSettingsTab.tsx": [
+      "LoggingSettingsTab"
+    ],
+    "src/components/settings/MeshSettingsTab.tsx": [
+      "MeshSettingsTab"
+    ],
+    "src/components/settings/PerformanceSettingsTab.tsx": [
+      "PerformanceSettingsTab"
+    ],
+    "src/components/settings/PluginStudioModal.tsx": [
+      "PluginStudioModal",
+      "StepDetails",
+      "StepExport"
+    ],
+    "src/components/settings/PluginsSettingsTab.tsx": [
+      "PluginsSettingsTab"
+    ],
+    "src/components/settings/ProfileSettingsModal.tsx": [
+      "AutoTrimmedImage",
+      "ProfileSettingsModal"
+    ],
+    "src/components/settings/SceneAutosaveSettingsTab.tsx": [
+      "SceneAutosaveSettingsTab"
+    ],
+    "src/components/settings/SettingsModal.tsx": [
+      "SettingsModal"
+    ],
+    "src/components/settings/SponsorsCarousel.tsx": [
+      "CachedAvatar",
+      "SponsorsCarousel"
+    ],
+    "src/components/settings/UvToolsSettingsTab.tsx": [
+      "UvToolsSettingsTab"
+    ],
+    "src/components/settings/meshSettings/MeshShaderPreviewCanvas.tsx": [
+      "BuiltinPreviewMesh",
+      "StlPreviewMesh"
+    ],
+    "src/components/settings/profileFormAtoms.tsx": [
+      "LabeledNumberInput",
+      "PluginLocalMaterialSettingsSections",
+      "ReplacementMaterialEditorShell"
+    ],
+    "src/features/export/components/ExportPanel.tsx": [
+      "ExportPanel"
+    ],
+    "src/features/hole-punching/useHolePunchManager.ts": [
+      "useHolePunchManager"
+    ],
+    "src/features/hollowing/useHollowingManager.ts": [
+      "useHollowingManager"
+    ],
+    "src/features/import-export/useImportExportManager.ts": [
+      "useImportExportManager"
+    ],
+    "src/features/organicCut/OrganicCutTenonGizmo.tsx": [
+      "OrganicCutTenonGizmo"
+    ],
+    "src/features/organicCut/OrganicCutTool.tsx": [
+      "OrganicCutTool"
+    ],
+    "src/features/organicCut/useOrganicCutSession.ts": [
+      "useOrganicCutSession"
+    ],
+    "src/features/printing/components/PrintingPanel.tsx": [
+      "PrintingPanel"
+    ],
+    "src/features/printing/usePrintingMonitorManager.ts": [
+      "usePrintingMonitorManager"
+    ],
+    "src/features/printing/usePrintingPreviewManager.ts": [
+      "usePrintingPreviewManager"
+    ],
+    "src/features/scene/arrange/useArrangeManager.ts": [
+      "useArrangeManager"
+    ],
+    "src/features/scene/useSceneCollectionManager.ts": [
+      "useSceneCollectionManager"
+    ],
+    "src/features/slicing/components/LutCurveEditor.tsx": [
+      "LutCurveEditorModal"
+    ],
+    "src/features/slicing/components/SliceMetricsDebugModal.tsx": [
+      "SliceMetricsDebugModal"
+    ],
+    "src/features/slicing/components/SlicingPanel.tsx": [
+      "SlicingPanel"
+    ],
+    "src/features/support-blockers/SupportBlockerCursor.tsx": [
+      "SupportBlockerCursor"
+    ],
+    "src/features/support-blockers/SupportBlockerOverlay.tsx": [
+      "SupportBlockerOverlay"
+    ],
+    "src/features/supports/useSupportInteractionManager.ts": [
+      "useSupportInteractionManager"
+    ],
+    "src/features/transform/useTransformManager.ts": [
+      "useTransformManager"
+    ],
+    "src/features/updater/GlobalUpdateIndicator.tsx": [
+      "GlobalUpdateIndicator"
+    ],
+    "src/features/updater/UpdateCheckerSection.tsx": [
+      "AvailableState",
+      "UpdateCheckerSection"
+    ],
+    "src/features/updater/useUpdateChecker.ts": [
+      "useUpdateChecker"
+    ],
+    "src/hooks/useSceneAutosave.ts": [
+      "useSceneAutosave"
+    ],
+    "src/hooks/useUiScale.ts": [
+      "useUiScale"
+    ],
+    "src/supports/Curves/BezierGizmo/BezierGizmoManager.tsx": [
+      "BezierGizmoManager"
+    ],
+    "src/supports/RaftProxyMeshLayer.tsx": [
+      "RaftProxyMeshLayer"
+    ],
+    "src/supports/Rafts/Crenelated/rendering/FootprintBorderRenderer.tsx": [
+      "FootprintBorderRenderer"
+    ],
+    "src/supports/Rafts/Crenelated/rendering/LineRaftRenderer.tsx": [
+      "LineRaftRenderer"
+    ],
+    "src/supports/Rafts/Crenelated/rendering/RaftRenderer.tsx": [
+      "RaftRenderer"
+    ],
+    "src/supports/Rafts/Crenelated/rendering/SliceSatBoundingMeshRenderer.tsx": [
+      "SliceSatBoundingMeshRenderer"
+    ],
+    "src/supports/Renderers/BezierRenderer.tsx": [
+      "BezierRenderer"
+    ],
+    "src/supports/Settings/AnatomyPreview/PreviewTypes/Grid/GridPreview.tsx": [
+      "GridPreview"
+    ],
+    "src/supports/Settings/AnatomyPreview/PreviewTypes/Raft/RaftPreview.tsx": [
+      "RaftPreview"
+    ],
+    "src/supports/Settings/AnatomyPreview/SupportAnatomyPreviewCanvas.tsx": [
+      "PreviewContent"
+    ],
+    "src/supports/Settings/SupportSidebar.tsx": [
+      "SupportSidebar"
+    ],
+    "src/supports/Settings/components/PresetSelector.tsx": [
+      "PresetSelector"
+    ],
+    "src/supports/SupportPrimitives/ContactDisk/ContactDiskHud.tsx": [
+      "ContactDiskHud"
+    ],
+    "src/supports/SupportPrimitives/Joint/JointGizmo.tsx": [
+      "JointGizmo"
+    ],
+    "src/supports/SupportPrimitives/Joint/useJointInteraction.ts": [
+      "useJointInteraction"
+    ],
+    "src/supports/SupportPrimitives/Knot/KnotGizmo.tsx": [
+      "KnotGizmo"
+    ],
+    "src/supports/SupportProxyMeshLayer.tsx": [
+      "SupportProxyMeshLayer"
+    ],
+    "src/supports/SupportRenderer.tsx": [
+      "SupportRenderer"
+    ],
+    "src/supports/SupportTypes/Kickstand/KickstandPlacementController.tsx": [
+      "KickstandPlacementController"
+    ],
+    "src/supports/SupportTypes/Stick/StickRenderer.tsx": [
+      "StickRenderer"
+    ],
+    "src/supports/SupportTypes/Twig/TwigRenderer.tsx": [
+      "TwigRenderer"
+    ],
+    "src/supports/SupportTypes/useContactDiskDragSession.ts": [
+      "useContactDiskDragSession"
+    ],
+    "src/supports/interaction/jointDragPreview.ts": [
+      "useJointDragPreviewOverrides"
+    ],
+    "src/supports/interaction/useSupportRenderLookup.ts": [
+      "useSupportRenderLookup"
+    ],
+    "src/supports/rendering/SupportBuilder.tsx": [
+      "SupportBuilder"
+    ],
+    "src/volumeAnalysis/IslandScan/useIslandManager.ts": [
+      "useIslandManager"
+    ],
+    "src/volumeAnalysis/IslandScan/workflow/useIslandScanWorkflow.ts": [
+      "useIslandScanWorkflow"
+    ],
+    "src/volumeAnalysis/Islands/useIslands.ts": [
+      "useIslands"
+    ]
+  }
+}
