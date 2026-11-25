@@ -13,12 +13,12 @@
       "exercises": "a large flat underside with a pedestal in the middle: boundary ring, lattice infill, routed drops around the pedestal, chunk consolidation",
       "islands": 1,
       "islandSource": "authored",
-      "candidates": 625,
-      "entities": 918,
+      "candidates": 624,
+      "entities": 875,
       "placedByType": {
-        "trunk": 60,
-        "branch": 150,
-        "leaf": 415,
+        "trunk": 54,
+        "branch": 156,
+        "leaf": 414,
         "twig": 0,
         "stick": 0,
         "brace": 0,
@@ -26,17 +26,17 @@
         "kickstand": 0
       },
       "entitiesByType": {
-        "trunk": 60,
-        "branch": 150,
-        "leaf": 415,
-        "brace": 293
+        "trunk": 54,
+        "branch": 156,
+        "leaf": 414,
+        "brace": 251
       },
-      "contacts": 625,
-      "roots": 60,
-      "joints": 1431,
+      "contacts": 624,
+      "roots": 54,
+      "joints": 1436,
       "curvedSegments": 0,
-      "memberLengthMm": 3488.3466968513108,
-      "memberVolumeMm3": 4753.7708917178525,
+      "memberLengthMm": 3302.888353287205,
+      "memberVolumeMm3": 4580.201526026463,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
       "coveragePct": 100,
@@ -44,36 +44,36 @@
       "islandsUncovered": 0,
       "gridFallbacks": 0,
       "budgetAdd": 0,
-      "budgetCull": 542,
-      "orphans": 32,
+      "budgetCull": 540,
+      "orphans": 14,
       "orphansByReason": {
-        "cross": 32
+        "cross": 14
       },
       "refusals": {
         "fan": 0,
         "merge": 0,
-        "consolidation": 5,
+        "consolidation": 2,
         "cavityFallbacks": 0
       },
       "rejections": {},
       "deterministic": true,
-      "routerPlacements": 61,
-      "routerCones": 196,
-      "routerProbes": 207,
-      "totalMs": 2991.9285999999997,
+      "routerPlacements": 56,
+      "routerCones": 199,
+      "routerProbes": 346,
+      "totalMs": 1630.8575999999998,
       "phases": {
-        "candidates": 82,
-        "dedup": 22,
-        "support-filter": 65,
-        "placement": 1192,
-        "consolidation": 63,
-        "gap-fill": 82,
-        "analytics": 4,
+        "candidates": 65,
+        "dedup": 13,
+        "support-filter": 70,
+        "placement": 636,
+        "consolidation": 12,
+        "gap-fill": 51,
+        "analytics": 3,
         "fanning": 0,
-        "surface-coverage": 1,
-        "resize": 609,
-        "report": 23,
-        "bracing": 555
+        "surface-coverage": 0,
+        "resize": 307,
+        "report": 15,
+        "bracing": 332
       }
     },
     {
@@ -131,20 +131,20 @@
       "routerPlacements": 10,
       "routerCones": 285,
       "routerProbes": 109,
-      "totalMs": 190.98210000000017,
+      "totalMs": 121.4014000000002,
       "phases": {
-        "candidates": 10,
+        "candidates": 8,
         "dedup": 1,
-        "support-filter": 5,
-        "placement": 71,
-        "consolidation": 6,
-        "gap-fill": 7,
-        "analytics": 1,
+        "support-filter": 2,
+        "placement": 43,
+        "consolidation": 4,
+        "gap-fill": 4,
+        "analytics": 0,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 48,
+        "resize": 30,
         "report": 2,
-        "bracing": 35
+        "bracing": 24
       }
     },
     {
@@ -197,12 +197,12 @@
       "routerPlacements": 2,
       "routerCones": 2,
       "routerProbes": 0,
-      "totalMs": 62.27179999999953,
+      "totalMs": 40.22330000000056,
       "phases": {
-        "candidates": 9,
-        "dedup": 1,
-        "support-filter": 2,
-        "placement": 27,
+        "candidates": 7,
+        "dedup": 0,
+        "support-filter": 1,
+        "placement": 18,
         "consolidation": 0,
         "gap-fill": 1,
         "analytics": 0,
@@ -210,7 +210,7 @@
         "surface-coverage": 0,
         "resize": 1,
         "report": 1,
-        "bracing": 21
+        "bracing": 11
       }
     },
     {
@@ -269,20 +269,20 @@
       "routerPlacements": 256,
       "routerCones": 11569,
       "routerProbes": 18125,
-      "totalMs": 6431.5975,
+      "totalMs": 3894.0263000000004,
       "phases": {
-        "candidates": 27,
-        "dedup": 9,
-        "support-filter": 69,
-        "placement": 3228,
-        "consolidation": 496,
-        "gap-fill": 272,
-        "analytics": 7,
+        "candidates": 19,
+        "dedup": 3,
+        "support-filter": 33,
+        "placement": 1910,
+        "consolidation": 302,
+        "gap-fill": 158,
+        "analytics": 4,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 321,
-        "report": 11,
-        "bracing": 1201
+        "resize": 194,
+        "report": 9,
+        "bracing": 829
       }
     },
     {
@@ -338,20 +338,20 @@
       "routerPlacements": 36,
       "routerCones": 1262,
       "routerProbes": 8637,
-      "totalMs": 164.70869999999923,
+      "totalMs": 79.13469999999961,
       "phases": {
-        "candidates": 17,
+        "candidates": 7,
         "dedup": 1,
         "support-filter": 1,
-        "placement": 62,
+        "placement": 27,
         "consolidation": 1,
-        "gap-fill": 31,
-        "analytics": 3,
+        "gap-fill": 20,
+        "analytics": 2,
         "fanning": 0,
         "surface-coverage": 0,
         "resize": 0,
-        "report": 2,
-        "bracing": 43
+        "report": 3,
+        "bracing": 16
       }
     },
     {
@@ -360,63 +360,63 @@
       "islands": 1,
       "islandSource": "authored",
       "candidates": 135,
-      "entities": 93,
+      "entities": 91,
       "placedByType": {
         "trunk": 0,
         "branch": 0,
         "leaf": 0,
         "twig": 0,
-        "stick": 93,
+        "stick": 91,
         "brace": 0,
         "stump": 0,
         "kickstand": 0
       },
       "entitiesByType": {
-        "stick": 93
+        "stick": 91
       },
-      "contacts": 186,
+      "contacts": 182,
       "roots": 0,
-      "joints": 186,
+      "joints": 182,
       "curvedSegments": 0,
-      "memberLengthMm": 624.9600000000014,
-      "memberVolumeMm3": 816.4226589461001,
+      "memberLengthMm": 611.5200000000013,
+      "memberVolumeMm3": 798.8651824096248,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
-      "coveragePct": 95.71938168846611,
+      "coveragePct": 95.24375743162902,
       "islandsCovered": 1,
       "islandsUncovered": 0,
       "gridFallbacks": 0,
       "budgetAdd": 0,
-      "budgetCull": 75,
+      "budgetCull": 73,
       "orphans": 0,
       "orphansByReason": {},
       "refusals": {
         "fan": 0,
         "merge": 0,
         "consolidation": 0,
-        "cavityFallbacks": 93
+        "cavityFallbacks": 91
       },
       "rejections": {
-        "trunk_build_error": 42
+        "trunk_build_error": 44
       },
       "deterministic": true,
       "routerPlacements": 135,
       "routerCones": 6750,
-      "routerProbes": 760990,
-      "totalMs": 1217.8894,
+      "routerProbes": 770986,
+      "totalMs": 806.3393999999998,
       "phases": {
-        "candidates": 16,
-        "dedup": 1,
-        "support-filter": 21,
-        "placement": 1136,
+        "candidates": 11,
+        "dedup": 2,
+        "support-filter": 26,
+        "placement": 738,
         "consolidation": 0,
-        "gap-fill": 32,
-        "analytics": 7,
+        "gap-fill": 21,
+        "analytics": 4,
         "fanning": 0,
         "surface-coverage": 0,
         "resize": 0,
         "report": 1,
-        "bracing": 0
+        "bracing": 1
       }
     },
     {
@@ -464,7 +464,7 @@
       "routerPlacements": 0,
       "routerCones": 0,
       "routerProbes": 0,
-      "totalMs": 0.6622000000006665,
+      "totalMs": 0.493399999999383,
       "phases": {}
     }
   ]
