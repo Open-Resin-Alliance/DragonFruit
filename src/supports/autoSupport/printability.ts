@@ -330,10 +330,13 @@ function buildPeelCurve(profile: RepresentativeLayerProfile | undefined): {
 }
 
 function severityFor(region: PrintabilityRegion, structureCapacityMm2: number): PrintabilitySeverity {
-    // A hole big enough to swallow a tip pair is critical wherever it sits;
-    // below that, anything short of the coverage target is a warning the user
-    // can clear by adding a contact.
-    if (region.uncoveredAreaMm2 >= CRITICAL_UNCOVERED_AREA_MM2) return 'critical';
+    // A hole is critical only when it is both large and beyond the bridgeable
+    // span. An 8 mm² rim with a 3.9 mm span is a warning: the hand-supported
+    // Puck print has a 13.3 mm² uncovered patch at 3.9 mm and prints.
+    if (
+        region.uncoveredAreaMm2 >= CRITICAL_UNCOVERED_AREA_MM2
+        && region.freeSpanMm >= HIGH_LEVERAGE_SPAN_MM
+    ) return 'critical';
     if (
         region.coverage >= REGION_COVERAGE_TARGET
         && region.deficitMm2 <= 0.5 * structureCapacityMm2

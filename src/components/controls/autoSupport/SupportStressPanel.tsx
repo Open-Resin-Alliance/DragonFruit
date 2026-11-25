@@ -55,6 +55,8 @@ import {
   type ToppleRiskReport,
 } from '@/supports/autoSupport';
 import { measurePoseStability, posedPositions } from '@/supports/autoSupport/poseStability';
+import { getHomeSupportCollectionsSnapshot } from '@/features/supports/supportSnapshotHelpers';
+import { DEFAULT_RESIN_TENSILE_STRENGTH_MPA, supportBreakStrengthMpa } from '@/supports/autoSupport/greenMaterialCalibration';
 import { getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
 import { geometryCentroidMm } from '@/features/printing/modelResinVolume';
 import { getSettings } from '@/supports/Settings/state';
@@ -114,6 +116,20 @@ function sameStructuralRefs(a: StructuralRefs, b: StructuralRefs): boolean {
     && a.sticks === b.sticks
     && a.twigs === b.twigs
   );
+}
+
+/** The material profile's datasheet tensile, derated to the thin-section
+ *  support break strength the solver and every placement capacity use. */
+function activeSupportStrengthMpa(): number {
+  return supportBreakStrengthMpa(
+    getActiveMaterialProfile()?.tensileStrengthMpa ?? DEFAULT_RESIN_TENSILE_STRENGTH_MPA,
+  );
+}
+
+/** Bulk green strength for member bending: the datasheet tensile, not the
+ *  0.5 × 0.5 mm contact coupon the support break strength is measured on. */
+function activeMemberStrengthMpa(): number {
+  return Math.max(0.01, getActiveMaterialProfile()?.tensileStrengthMpa ?? DEFAULT_RESIN_TENSILE_STRENGTH_MPA);
 }
 
 const OVERLAY_ON_LABEL = msg({ message: 'Overlay ON', comment: 'Toggle button for 3D support beam stress color overlay. Keep short.' });
@@ -370,7 +386,7 @@ function computeLiveToppleRisk(
   modelId: string,
   mesh: THREE.Mesh | null | undefined,
   profile: RepresentativeLayerProfile | undefined,
-  deflectionMm: number,
+  rockingMm: number,
   hasSupports: boolean,
 ): ToppleRiskReport | null {
   if (!mesh || !mesh.geometry) return null;
@@ -407,7 +423,7 @@ function computeLiveToppleRisk(
     edge: { point: poseStability.worstEdgePoint, normal: edgeNormal },
     bearingAreaMm2: poseStability.bearingAreaMm2,
     contactDepthMm: poseStability.contactDepthMm,
-    frameDeflectionMm: deflectionMm,
+    frameRockingMm: rockingMm,
   });
 }
 
@@ -610,7 +626,7 @@ export interface SupportStressPanelProps {
   toppleCoverageNeeded?: boolean;
 }
 
-export function SupportStressPanel({
+function SupportStressPanelImpl({
   activeModelId,
   hasGeometry,
   hasScanned,
@@ -644,23 +660,47 @@ export function SupportStressPanel({
     : undefined;
   // Topple risk follows the live solved deflection whenever support geometry changes.
   const toppleBase = activeModelId ? stressSnap.toppleRiskByModelId[activeModelId] : undefined;
-  const toppleComplianceMm = report?.maxTipDeflectionMm ?? toppleBase?.complianceMm ?? 0;
-  const topple = toppleBase
-    ? {
-      ...toppleBase,
-      complianceMm: toppleComplianceMm,
-      outcome: classifyToppleRisk(toppleBase.comDepthMm, toppleComplianceMm),
-    }
-    : undefined;
+  const toppleComplianceMm = report?.maxTipRockingMm ?? toppleBase?.complianceMm ?? 0;
+  const topple = React.useMemo(
+    () => (toppleBase
+      ? {
+        ...toppleBase,
+        complianceMm: toppleComplianceMm,
+        outcome: classifyToppleRisk(toppleBase.comDepthMm, toppleComplianceMm),
+      }
+      : undefined),
+    [toppleBase, toppleComplianceMm],
+  );
   const overlayEnabled = stressSnap.overlayEnabled;
   const modelMesh = React.useSyncExternalStore(
     subscribeModelMesh,
     () => (activeModelId ? getModelMesh(activeModelId) : null),
     () => null,
   );
-  const modelMinZMm = React.useMemo(() => computeMeshMinZMm(modelMesh), [modelMesh, poseKey]);
+  // `poseKey` is a recompute trigger, not an input: a pose change mutates the
+  // mesh's matrixWorld in place, so the object identity alone cannot say the
+  // lowest world Z moved.
+  const modelMinZMm = React.useMemo(() => {
+    void poseKey;
+    return computeMeshMinZMm(modelMesh);
+  }, [modelMesh, poseKey]);
+  // Contact presence is read live: a pre-supported model whose first solve has
+  // not landed yet is not "floating" — that banner is for a part hanging in the
+  // air with nothing under it.
+  const supportSnap = React.useSyncExternalStore(
+    subscribeSupportState,
+    getHomeSupportCollectionsSnapshot,
+    getHomeSupportCollectionsSnapshot,
+  );
+  const hasModelContacts = React.useMemo(() => {
+    if (!activeModelId) return false;
+    return [supportSnap.trunks, supportSnap.branches, supportSnap.leaves,
+      supportSnap.stumps, supportSnap.sticks, supportSnap.twigs]
+      .some((collection) => Object.values(collection ?? {})
+        .some((entity) => entity.modelId === activeModelId));
+  }, [supportSnap, activeModelId]);
   const isFloatingUnsupported = Boolean(
-    !report && modelMinZMm !== null && modelMinZMm > FLOATING_Z_THRESHOLD_MM,
+    !report && !hasModelContacts && modelMinZMm !== null && modelMinZMm > FLOATING_Z_THRESHOLD_MM,
   );
 
   /**
@@ -674,12 +714,18 @@ export function SupportStressPanel({
     profile: RepresentativeLayerProfile | undefined,
     frameReport: SupportFrameStressReport | null,
   ): void => {
-    const hasSupports = Boolean(frameReport && frameReport.tipCount > 0);
+    // A frame report is the proof, but a model whose supports are placed and not
+    // yet solved is supported too — the floating check must not call it floating.
+    const hasSupports = Boolean(frameReport && frameReport.tipCount > 0)
+      || [snapshot.trunks, snapshot.branches, snapshot.leaves,
+        snapshot.stumps, snapshot.sticks, snapshot.twigs]
+        .some((collection) => Object.values(collection ?? {})
+          .some((entity) => entity.modelId === modelId));
     const computedTopple = computeLiveToppleRisk(
       modelId,
       mesh,
       profile,
-      frameReport?.maxTipDeflectionMm ?? 0,
+      frameReport?.maxTipRockingMm ?? 0,
       hasSupports,
     );
     if (computedTopple) {
@@ -756,6 +802,8 @@ export function SupportStressPanel({
     const auto = getSettings().autoSupport;
     const nextReport = solveSupportFrameStress(graph, profile, {
       areaPerSupportMm2: auto.areaPerSupportMm2,
+      supportStrengthMpa: activeSupportStrengthMpa(),
+      memberStrengthMpa: activeMemberStrengthMpa(),
     });
     lastOwnReportRef.current = nextReport;
     setModelFrameStress(activeModelId, nextReport);
@@ -782,7 +830,11 @@ export function SupportStressPanel({
     const profile = mesh ? getCachedRepresentativeLayers(mesh, getActiveMaterialProfile()?.layerHeightMm) : undefined;
     const graph = buildSupportGraph(reinforced.snapshot, activeModelId);
     const nextReport: SupportFrameStressReport = {
-      ...solveSupportFrameStress(graph, profile, { areaPerSupportMm2: auto.areaPerSupportMm2 }),
+      ...solveSupportFrameStress(graph, profile, {
+        areaPerSupportMm2: auto.areaPerSupportMm2,
+        supportStrengthMpa: activeSupportStrengthMpa(),
+        memberStrengthMpa: activeMemberStrengthMpa(),
+      }),
       reinforcedCount: (report.reinforcedCount ?? 0) + reinforced.totalReinforced,
     };
     lastOwnReportRef.current = nextReport;
@@ -820,6 +872,8 @@ export function SupportStressPanel({
           const auto = getSettings().autoSupport;
           nextReport = solveSupportFrameStress(graph, profile, {
             areaPerSupportMm2: auto.areaPerSupportMm2,
+            supportStrengthMpa: activeSupportStrengthMpa(),
+            memberStrengthMpa: activeMemberStrengthMpa(),
           });
           lastOwnReportRef.current = nextReport;
           setModelFrameStress(activeModelId, nextReport);
@@ -1466,3 +1520,5 @@ export function SupportStressPanel({
     </>
   );
 }
+
+export const SupportStressPanel = React.memo(SupportStressPanelImpl);

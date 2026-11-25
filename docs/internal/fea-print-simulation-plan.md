@@ -28,7 +28,7 @@ Read these before changing code:
 
 - **Real 3D support-frame FEA (`solveSupportFrameStress`)**:
   - Builds a full nodal/member structural graph (`buildSupportGraph`) from plate-fixed `roots` up through segmented `trunk`, `stump`, `kickstand`, `branch`, `leaf`, and `brace` members, splitting host shafts accurately at every hosted `knot`.
-  - Solves `K u = f` via Block-Jacobi Preconditioned Conjugate Gradient with full 6-DOF per-node 3D Euler-Bernoulli beam elements (`3 translations + 3 rotations`), computing tip deflection magnitude, combined axial + bending stress vs `GREEN_RESIN_UTS_MPA`, and Euler column buckling utilization.
+  - Solves `K u = f` via Block-Jacobi Preconditioned Conjugate Gradient with full 6-DOF per-node 3D Euler-Bernoulli beam elements (`3 translations + 3 rotations`), computing tip deflection magnitude, combined axial + bending stress vs `DEFAULT_SUPPORT_BREAK_STRENGTH_MPA`, and Euler column buckling utilization.
 - **Real 2D peel-pressure PDE (`tractionOptimization.ts`)**:
   - Evaluates cross-sectional contours across representative Z clusters and solves the 2D Screened Stefan squeeze-film flow PDE to obtain spatial peel suction pressure and Center of Pressure per layer.
 
@@ -48,7 +48,7 @@ Read these before changing code:
    - Only 3 global critical layers are evaluated, missing disconnected sub-components (hanging limbs/weapons) before they merge into the torso.
    - Vat separation is modeled as synchronous uniform peel plus constant `0.08` lateral drag rather than a progressive FEP/ACF peel wave or vat-tilt sweep, and hollow cavities do not yet add negative hydrostatic suction-cup pressure.
 6. **Uncalibrated green-resin material parameters**:
-   - Uses fixed constants (`GREEN_RESIN_MODULUS_MPA`, `GREEN_RESIN_UTS_MPA`) rather than resin-profile-calibrated strength, green modulus, and film peel stiffness.
+   - Uses `GREEN_RESIN_MODULUS_MPA` and `DEFAULT_SUPPORT_BREAK_STRENGTH_MPA` (the profile's datasheet tensile derated by 0.2), so strength is profile-calibrated while green modulus and film peel stiffness still have no per-material field.
 
 ### Can we build proper FEA and live printability from this foundation?
 
@@ -112,6 +112,7 @@ Deliver immediate live model printability value on top of today's code before wr
 2. **Part-Coupled Tip Diaphragm Constraints in `solveSupportFrameStress`**:
    - Group active tips at each layer by 2D connected cross-section component rather than assuming all tips on a layer hang independently in space.
    - Couple co-component tips via stiff-elastic master-slave rigid links (penalty diaphragm beams connecting each component's tips through a virtual rigid-body hub node) so the global matrix remains strictly SPD for Block-Jacobi PCG while transferring lateral drag accurately from flexible `leaf` tips into braced `trunk` towers.
+   - **Implemented as `distributeRigidBodyDragLoads`**: the layer's lateral total is distributed through the exact 3-DOF rigid-body equilibrium (weighted by `d²`) inside each connected component of the Stefan mask, instead of penalty beams. Same rigid-diaphragm assumption, no new DOF, and the CG matrix is untouched (still SPD).
 3. **Per-Component Critical Stage Selection**:
    - Extend critical layer selection to include peak peel/leverage layers of disconnected sub-assemblies before they merge into the main torso, instead of only 3 global layers.
 4. **Upgrade Model Shader (`StressForceHeatmapMaterial`) for Printability + 2D Peel**:
@@ -187,6 +188,7 @@ Couple active solid part voxels (`z <= Z_k`) with active beam elements from `bui
    - Bind per-vertex stress/displacement attributes onto `StlMesh` via `StressForceHeatmapMaterial` (or dedicated FEA shader branch) with view switches (**Printability / Sufficiency** · **Von Mises / Principal Stress** · **Deflection**), stage scrubber matching `Peel Profile`, and an optional exaggerated **Deformed Preview (`5×–20×`)** slider in the vertex shader.
 2. **Closed-Loop FEA Support Placement (`Fix Weak Spots`)**:
    - Feed unsupported high-deflection or high-principal-stress part zones and load-budget deficit clusters back into `autoPlace.ts` as high-priority placement candidates to **add missing `trunk` / `branch` / `leaf` supports or cross-`brace`s**, then automatically re-verify (`reinforceOverloadedFrameMembers` stays focused on thickening existing shafts).
+   - **Implemented**: `planStressActions` (`stressActions.ts`) orders `brace-rocking` (from the new `rockingPair`; emitted only when a tip or member is also over — the known-good print's 3 mm sway at 32 % contact load is elastic), `brace-member` (overloaded leaf/branch, or a trunk over 200 %), and `thicken-member` (trunk/stump/kickstand/brace below that); the printability text report prints them. `addTargetedStressBraces` (`autoBrace.ts`) executes the brace actions in the stress feedback loop (horizontal tie first, 45° fallback, knots, clearance, one per pair, capped 4/pass), `promoteOverloadedLeaf` replaces an overloaded leaf with a branch on its host knot (capped 2/pass), and the frame is re-solved. Member braces attach at the member's own midpoint. Knot nodes within 0.5 mm weld into a single node (`KNOT_MERGE_TOL_MM`), so a brace knot cannot split a 0.2 mm "member" whose stress is joint geometry. **Member stress now compares to the bulk tensile** (`memberStrengthMpa`), not the 4.8 MPa 0.5 mm contact coupon: the 21-member/301 % alarm on the known-good print becomes 60 % and no overloads; the tip check keeps the coupon strength. **Column buckling uses the fixed-fixed effective length 0.5 L**, not 1.1 L (pinned-pinned + imperfection): a support is fixed into its root disk and cured into the part. **Coverage**: a critical region needs both ≥8 mm² uncovered and a ≥4 mm free span; 13.3 mm² at 3.9 mm is a warning, and an `underSupported` verdict is Needs Attention, not Action Needed.
 3. **Material & Film Calibration Profiles**:
    - Move green-state mechanical constants (green modulus, green UTS, interlayer UTS, FEP screening length, peel pressure, lateral drag ratio) onto resin/printer settings instead of hardcoded constants in `supportGraphStress.ts` / `treeSynthesis.ts`.
    - Calibrate against simple test prints (cantilever deflection bars + suction-puck pull-off grid across Standard, Tough/ABS-like, and Detail resins).

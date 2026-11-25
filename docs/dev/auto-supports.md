@@ -28,7 +28,7 @@ Six phases inside `computeAutoSupportPlan` (`autoPlace.ts`):
 | 0 | Settings | Normalize; bail out returning `null` when disabled |
 | 1 | Generate candidates | Turn detected islands into `CandidatePoint`s (with corner-first perimeter + interior sampling on overhangs `≥ 4 mm²` or `≥ 3 mm` span), stabilization anchors, minima reinforcement, and Phase 1c representative-layer Voronoi traction optimization (`tractionOptimization.ts`) |
 | 2 | Deduplicate | Collapse nearby candidates (flat overhang pairs keep a 3D ball so lower heels never erase higher toes; sloped overhangs use grown influence) |
-| 3 | Synthesize & place | Cluster-first tree synthesis (`treeSynthesis.ts`) places well-spaced cluster trunks first (`MIN_TRUNK_SPACING_MM` or distinct grid nodes) with a tall-solo flagpole penalty, attaches 1-level contacts (Pass 2b), builds 2-level `Trunk → Branch → Leaf` crowns for upper/occluded clusters (Pass 2c), runs the 3-tier plate-first occluded rescue ladder, then chunk consolidation and angle-aware gap filling |
+| 3 | Synthesize & place | Cluster-first tree synthesis (`treeSynthesis.ts`) places well-spaced cluster trunks first (`MIN_TRUNK_SPACING_MM` or distinct grid nodes) with a tall-solo flagpole penalty, attaches 1-level contacts (Pass 2b), builds 2-level `Trunk → Branch → Leaf` crowns for upper/occluded clusters (Pass 2c), runs the 3-tier plate-first occluded rescue ladder, then chunk consolidation, angle-aware gap filling, and the per-support force-budget addition pass (`forceBudget.ts`) |
 | 4 | Forest resize & cross-fix | Re-derive stepwise trunk diameters, sync member-proportioned leaf cone bodies (`syncContactConeDiameters`), validate/cascade-cull orphans across 2-level trees, and actively re-host shaft-crossing (`cross`) members onto clear hosts |
 | 5 | Auto-bracing | Braces computed into the same draft, so they ride the one commit |
 
@@ -242,19 +242,25 @@ adapting Cao et al. (2025) to run interactively inside the auto-support worker:
   representative layer's Stefan demand from being pruned away.
 - **Discrete Voronoi add, per-region prune, and global cross-region prune**:
   each eligible overhang region's 0.25 mm `contactVoxels` are partitioned into
-  discrete Voronoi cells integrating per-voxel `stefanTractionFactorAt`. Cells
-  exceeding the traction budget or `bridgeRadiusForAngleDeg` receive a
-  reinforcement contact at their furthest point (respecting a 1.2 mm UV-bleed
-  spacing floor). Within each region, redundant interior `grid-*` points are
-  pruned when neighbors absorb 100% of their voxels within ≤ 80% capacity and
-  ≤ 90% reach. A final **Pass C global cross-region Voronoi pruner** then runs
-  across all candidates (using exact mesh-resolved normals, local
-  `stefanTractionFactorAt`, and measured Voronoi areas) to collapse crammed
-  micro-overhang fragments (`o*`) and tight upper perimeters (`fill-*`) that sit
-  within `0.85 × bridgeRadiusForAngleDeg` of a same-or-lower-Z
-  compatible-normal contact whose accumulated traction area stays below `85%` of
-  tip capacity. Same-region pairs inside large (`≥ 25 mm²`) overhangs are
-  skipped so Pass B's exact `0.25 mm` voxel Voronoi coverage is preserved.
+  discrete Voronoi cells integrating per-voxel `stefanTractionFactorAt`. Demand
+  is carried in demand units (mm² × traction factor); multiplying by
+  `NOMINAL_PEEL_PRESSURE_MPA` gives newtons, and a contact's capacity is its
+  **break load** (`supportStrengthMpa × π/4 × tip diameter²`) in those same
+  units — the tip diameter is the candidate's override or the run's sizing band,
+  and the strength is the same derated support break strength the frame solver
+  and force budget use. Cells whose demand exceeds their own seed's break load
+  or `bridgeRadiusForAngleDeg` receive a reinforcement contact at their furthest
+  point (respecting a 1.2 mm UV-bleed spacing floor). Within each region,
+  redundant interior `grid-*` points are pruned when neighbors absorb 100% of
+  their voxels within ≤ 80% of the absorbing tip's break load and ≤ 90% reach.
+  A final **Pass C global cross-region Voronoi pruner** then runs across all
+  candidates (using exact mesh-resolved normals, local `stefanTractionFactorAt`,
+  and measured Voronoi demand per candidate) to collapse crammed micro-overhang
+  fragments (`o*`) and tight upper perimeters (`fill-*`) that sit within
+  `0.85 × bridgeRadiusForAngleDeg` of a same-or-lower-Z compatible-normal contact
+  whose accumulated demand stays below `85%` of that host tip's break load.
+  Same-region pairs inside large (`≥ 25 mm²`) overhangs are skipped so Pass B's
+  exact `0.25 mm` voxel Voronoi coverage is preserved.
   Primary discrete islands (`voxel`/`minima`/`intersection`),
   `stabilization`/`reinforcement`, `nearBase` flat soles,
   downward-load-protected anchors, and Pass-A additions are hard-protected, and
@@ -351,9 +357,11 @@ whole-frame structural stress on the assembled forest via
 
 - **Public surface**: `buildSupportGraph(snapshot, modelId)`,
   `distributeRigidBodyPeelLoads(tips, totalForceN, copX, copY)`,
+  `distributeRigidBodyDragLoads(tips, verticalLoadsN, componentLabels, dragRatio, dirX, dirY)`,
+  `biaxialContactStressMpa(normalLoadN, lateralLoadN, contactDiameterMm)`,
   `solveSupportFrameStress(graph, profile, options)`,
   `reinforceOverloadedFrameMembers(snapshot, report, mesh, modelId)`,
-  `GREEN_RESIN_UTS_MPA`, types `SupportGraph`, `SupportGraphNode`,
+  `DEFAULT_SUPPORT_BREAK_STRENGTH_MPA`, types `SupportGraph`, `SupportGraphNode`,
   `SupportGraphMember`, `SupportFrameStressReport`, `FrameStressHotspot`,
   `LayerPeelPoint`, `StressSegment`, `StressTipPoint`, and reactive UI state
   helpers in `src/supports/autoSupport/frameStressState.ts`
@@ -379,7 +387,12 @@ whole-frame structural stress on the assembled forest via
   (`trunk`, `stump`, `kickstand`), hosted members (`branch`, `leaf`), and
   `brace` struts for `modelId` using `resolveSegmentEndpoints`, splitting host
   segments at every hosted `knot` so triangulated X-braced multi-bay frames are
-  represented accurately. Model-to-model `twig` / `stick` bridges are omitted.
+  represented accurately. A knot within `KNOT_MERGE_TOL_MM` (0.5 mm) of an
+  existing node welds into it (`internNode` takes a per-call tolerance), so a
+  brace knot a fraction of a millimetre below a branch knot cannot split off a
+  sub-millimetre "member": a 0.2 mm stub at the 2.2 mm diameter cap measured
+  231 % purely because its length/curvature ratio is joint geometry, not beam
+  length. Model-to-model `twig` / `stick` bridges are omitted.
 - **Rigid-body peel distribution, 3D frame solve & weak-spot reinforcement**:
   - Selects up to 3 global critical layers from `RepresentativeLayerProfile`
     (peak integrated Screened Stefan force, peak `areaJumpRatio · areaMm2`, and
@@ -395,13 +408,78 @@ whole-frame structural stress on the assembled forest via
     `tipPoints`.
   - `distributeRigidBodyPeelLoads` solves 3-DOF rigid-body vertical + moment
     equilibrium weighted by tip stiffness `d²` with an active-set non-negativity
-    clamp so compressive tips shed load onto pulling tips; lateral peel drag is
-    applied as coherent unidirectional shear across the rigid layer.
+    clamp so compressive tips shed load onto pulling tips.
+  - **Lateral drag is a diaphragm problem, not a per-tip share.**
+    `distributeRigidBodyDragLoads` applies the layer's lateral total
+    (`peelForceN × LATERAL_PEEL_DRAG_RATIO`) through the same 3-DOF rigid-body
+    equilibrium weighted by `d²`, so a thin leaf tip does not absorb the drag
+    share of the stiff trunk beside it. Tips are grouped by the connected solid
+    component of the representative layer's Stefan mask
+    (`maskComponentLabels`): a tip in a disconnected island cannot transfer
+    shear through material that is not there, so each component carries its own
+    vertical share; an unassigned tip stands alone. The rocking metric still
+    projects displacement along the coherent drag axis.
+  - **The report now carries the data a corrective action needs, and a planner
+    turns it into one.** At the worst-rocking layer, `rockingPair` names the two
+    free tips whose contact displacement differs most along the drag axis, and
+    `tipDisplacements` holds every free tip's `(dx, dy, dz)`.
+    `planStressActions` orders the fixes: `brace-rocking` for that pair when the
+    differential exceeds `ROCKING_THRESHOLD_MM` **and** a tip or member is also
+    over (rocking alone is reported, but a known-good 35 mm print measured
+    ~3 mm of elastic sway at 32 % contact load; bracing that is over-support),
+    `brace-member` for an
+    overloaded leaf/branch (a cone at its thickness cap needs a shorter span,
+    not a thicker tip) and for a trunk over `DEFAULT_TRUNK_BRACE_PCT` (200 %,
+    where another diameter step cannot make it stiff enough), and
+    `thicken-member` for the remaining trunk/stump/kickstand/brace cases. The
+    plain-text printability report prints them
+    as `RECOMMENDED ACTIONS`. Tips are deliberately not planned here — their
+    capacity pass is `computeForceBudget`, whose add point is the cell's
+    furthest point, not the tip's own position. **Execution is wired:** after
+    bracing, the stress feedback loop runs up to `MAX_STRESS_REINFORCE_PASSES`
+    rounds; each round thickens what it can, then turns `brace-rocking` and
+    `brace-member` actions into `addTargetedStressBraces` requests (a horizontal
+    lateral tie at the layer first, the auto-brace 45° link as fallback; knots on
+    both host segments, mesh clearance, one brace per support pair) capped at
+    `MAX_STRESS_BRACES_PER_PASS` (4), and re-solves. A rocking pair may be
+    farther apart than the ladder's aesthetic `maxBraceLengthMm`, so that action
+    carries the pair's own span (capped at 60 mm). A member brace attaches at
+    the member's own midpoint, not the report's critical layer: the critical
+    layer can sit far from the shaft that was measured, and a brace there would
+    split the wrong span. `thicken-member` stays with
+    `reinforceOverloadedFrameMembers`; when scaling is disabled or a pass
+    reinforced nothing, the loop falls back to a brace for that shaft.
+    `debugSkipAutoBracing` disables all of it. When an overloaded member is a leaf, the
+    loop cannot brace it (there is no shaft to knot onto): it calls
+    `promoteOverloadedLeaf` to replace the leaf with a branch on the same host
+    knot (same tip, new shaft), capped at two promotions per pass, and re-solves
+    so the next round can thicken or brace that branch. A refused promotion is
+    counted by reason (`buildFailed`, `unstable`, `crosses`) and left alone.
+    `thicken-member` stays with `reinforceOverloadedFrameMembers`.
+  - **The tip contact check is biaxial.** `biaxialContactStressMpa` compares
+    `√(σ_n² + 3τ²)` — the vertical peel plus the layer's lateral drag — against
+    the support break strength, so a contact sheared by the diaphragm is counted
+    even when its own vertical share is small. Pure peel reproduces the former
+    utilization exactly; pure lateral shear counts `√3×`. The FEP interface's
+    tensile/shear asymmetry is not measured yet, so this is deliberately
+    isotropic and conservative. `peakStressMpa` on a tip hotspot is this
+    equivalent stress; `maxTipUtilizationPct` and the peel curve use it too.
   - When grounded free nodes are at most `1200` (`solverMode: 'frame3d'`),
     `solveSupportFrameStress` assembles a 6-DOF per-node 3D Euler-Bernoulli beam
     stiffness matrix and solves `K u = f` with Block-Jacobi Preconditioned
     Conjugate Gradient to compute tip deflection, combined axial + bending stress
-    vs `GREEN_RESIN_UTS_MPA`, and Euler column buckling utilization (`hotspots`).
+    vs the **bulk** member strength (`options.memberStrengthMpa`, the resin
+    datasheet tensile; it defaults to `supportStrengthMpa` for a caller with one
+    strength), and Euler column buckling utilization (`hotspots`). The **tip**
+    check separately uses the contact break strength
+    (`options.supportStrengthMpa`, default `DEFAULT_SUPPORT_BREAK_STRENGTH_MPA`).
+    Conflating the two called a 2.2 mm trunk at 14.4 MPa (301 %) broken on a
+    print that works: 4.8 MPa is measured on a 0.5 × 0.5 mm contact coupon, not
+    on that shaft. With the bulk 24 MPa the same tree reports 60 %. Column
+    buckling uses a fixed-fixed effective length (0.5 L): the support is fixed
+    into its root disk and cured into the part at its contact. The former 1.1 L
+    was pinned-pinned plus an imperfection and put a 1.1 mm × 20 mm trunk on the
+    same print at 301 % buckling.
   - `reinforceOverloadedFrameMembers` scales overloaded `trunk` (`≤ 2.2 mm`),
     `branch` (`≤ 1.65 mm`), `leaf` cone body (`≤ 1.55 mm`), and `brace`
     (`≤ 1.6 mm`) members by `clamp((util / 90)^(1/3), 1.10, 1.35)` with stepped
@@ -606,6 +684,8 @@ Anchoring contacts stay LOW (`steepFlatAnchorBandTop`) on a squat part: the lowe
   than as demand; and capacity is a knob, not a measurement, until a printed matrix says what
   a tip and a shaft hold. The surplus direction is the one to distrust longest, because
   culling a support is the failure a print cannot recover from.
+
+- **A tip's share of the layer's peel is now a force, and an over-budget tip gets a contact.** `computeForceBudget` (`forceBudget.ts`) evaluates the placed forest on the same representative layers the frame solver uses: `computeLayerPeelForceAndCop` gives each layer's peel force, which is split across that layer's Stefan pressure mask and charged cell by cell to the nearest active tip in plan (the nearest-support / Voronoi allocation of Cao et al. 2025), and each tip's capacity is `support break strength × min(contact area, thinnest section of the tip's own entity)`. The strength is the same derated break strength the frame solver divides by, so a budget reading and a stress reading cannot disagree; the shared host shafts are deliberately not charged here, because the frame solve owns the load path through them. A row above 100% is a contact that would pull off before the layer releases, and it carries the farthest cell point it serves plus the nearest down-facing surface within 3 mm. **Class 2 is eligible:** a self-supporting steep flat (`steepFlat`, at or below the side-wall contact bound) is never a formation target, but joins the surface index as an add target through `collectForceBudgetSurfaces`, so an over-budget cell whose nearest down-facing surface is that flat gets a contact there. Formation adds stay density-grid pillars; class-2 adds are placed through the fan/merge path with the island's exact normal pre-resolved, because a vertical pillar to a leaning face is usually blocked by the part. `computeForceBudgetFromGraph` builds the report from a `SupportGraph` (tip contact diameters, per-entity narrowest member), which is what the plan uses. `FORCE_BUDGET_MAX_LAYERS` (3) bounds the layers evaluated. **The report is carried on `ForestReport.forceBudget` (numbers rounded so two runs serialize identically), and after gap-fill the plan runs up to three add rounds of at most 32 contacts at the worst rows' `addPoint`s through the ordinary placement path** — formation adds first, class-2 adds only if the per-pass budget remains; tip caps, clearance gates and trunk retry still decide whether an added contact can exist. `diagnostics.forceBudgetAdds` records attempted/placed for each class. One limit to read it with: the layer force still uses `NOMINAL_PEEL_PRESSURE_MPA`, so calibrating the saturated separation traction changes that shared constant rather than this module. The budget's demand is the peel field only; the frame solve owns the biaxial peel-plus-drag contact check, because lateral redistribution needs the placed stiffness.
 
 - **A tip the lattice cannot serve is placed without the grid.** Grid mode refuses a candidate whose node is occupied and whose attachment to the host standing there is refused too (two contacts at one height give a branch nothing to rise over, which is the `sameZ` refusal), and those refusals used to drop the tip: the run reported `grid_reject_no_attachment` and the island stayed unsupported. The candidate is now retried with the grid off **for that candidate alone** (`placeOneCandidate(..., ignoreGrid)` → `buildTrunkData`'s `ignoreGrid` → `SmartPlacementV3Context.ignoreGrid`), so it lands as an ordinary free-standing placement beside the lattice instead of nowhere. The retry cannot recurse, since it leaves the grid disabled inside, and its own gates (collision, side-wall cone, attachment angle) still decide whether it places at all. The report counts them as `Grid fallbacks` in PLACEMENT DIAGNOSTICS, which is how a pillar that is off the lattice is explained rather than looking like a bug. Measured on the synthetic corpus in grid mode: 36 tips that were rejected now place, and coverage on the sloped model rises from 92.8% to 98.0%.
 
@@ -887,9 +967,14 @@ against the tips actually placed:
 `critical`: bare or short regions make it under-supported, a frame utilization
 above 100 % from the same edit makes it overloaded, and the pair — or an
 uncovered fraction of `CRITICAL_UNCOVERED_FRACTION` at
-`CRITICAL_UNCOVERED_AREA_MM2` or more — reads critical. Region severity is
-area-driven: a hole at or above `CRITICAL_UNCOVERED_AREA_MM2` is critical,
-anything else short of `REGION_COVERAGE_TARGET` is a warning.
+`CRITICAL_UNCOVERED_AREA_MM2` or more — reads critical. Region severity requires
+**both** a mass (`CRITICAL_UNCOVERED_AREA_MM2`, 8 mm²) and a bridge
+(`HIGH_LEVERAGE_SPAN_MM`, 4 mm) before it is critical; a 13.3 mm² patch whose
+max free span is 3.9 mm is a warning. The hand-supported Puck print has exactly
+that patch and prints, so area alone cannot be the verdict. The summary maps a
+`critical` verdict to **Action Needed**, but `underSupported` (and its
+uncovered-area warning) to **Needs Attention**; it no longer promotes any
+uncovered area over 0.02 mm² to critical.
 
 **Constraints:**
 
@@ -975,15 +1060,25 @@ when present, so the Z ladder is the selected profile's layer height rather than
 the cluster peaks; hand-built profiles (tests, fixtures) fall back to `layers`.
 
 **Per-layer force, not per-cluster force.** `computePeelLayerSamples`
-(`supportGraphStress.ts`) gives every sample a force: the field-derived pressure
-ratio (`mean p̃ / p̃_ref`) is anchored at the representative layers and
-interpolated across the samples between them, then multiplied by that sample's
-own area. At a representative layer this equals the field force exactly, so the
-critical-layer solve is unchanged; between them the neighbours inherit the same
-scale. Before this, a representative layer used its saturated field force while
-its 50 µm neighbours used nominal pressure, and every cluster peak rendered as a
-spike on the peel graph (a broad cross-section's mean suction is up to ~16× the
-reference disc).
+(`supportGraphStress.ts`) gives every sample a force: the field-derived traction
+factor — `stefanLayerForceFactor`, the same `0.50 + 0.50·(p̄/p̄_ref)^0.22`
+compression clamped to `[0.65, 1.55]` that `stefanTractionFactorAt` applies at
+placement, plus the area-jump surcharge — is anchored at the representative
+layers and interpolated across the samples between them, then multiplied by that
+sample's own area and `NOMINAL_PEEL_PRESSURE_MPA`. A 10 mm² reference disc is
+untouched (ratio 1 → factor 1 → 0.29 N). At a representative layer this equals
+`computeLayerPeelForceAndCop` exactly; between them the neighbours inherit the
+same factor instead of falling back to nominal 1.0, which is what made cluster
+peaks spike.
+
+**The frame solver must use that factor, not the raw saturation ratio.** Feeding
+the field's raw `mean p̃ / p̃_ref` into the area multiplied a broad layer by up
+to ~38× nominal: a 598 mm² cross-section read 226 N (0.38 MPa mean) and threw
+healthy leaves to 40 MPa / 342 %, triggering the reinforce loop to thicken 732
+members. The compressed factor caps the same layer at 1.55× (≈27 N), which is
+the band the placement model and the 10–50 kPa peel documentation already
+assume; only `NOMINAL_PEEL_PRESSURE_MPA` (29 kPa at the 10 mm² disc, ≈45 kPa
+saturated) remains a per-resin calibration constant (plan §4.3).
 
 **Topple risk from the solved demand.** `evaluateToppleRisk`
 (`src/supports/autoSupport/toppleRisk.ts`) evaluates the **worst single-layer**
@@ -995,9 +1090,19 @@ mass sits inside the edge), `peelMomentNmm`, `requiredAdhesionMpa` (the plate
 pressure that would lift the contact patch against the conservative
 `TOPPLE_ADHESION_THRESHOLD_MPA` 0.30 MPa band, `Infinity` when bearing area is
 zero), and `complianceMm` from the frame solve; `classifyToppleRisk` turns
-those into `pastEdge` / `rocking` (`> ROCKING_THRESHOLD_MM` 0.15 mm tip
-deflection) / `adhesionBound`, and `toppleRiskNeedsCoverage` turns the report
+those into `pastEdge` / `rocking` (`> ROCKING_THRESHOLD_MM` 0.15 mm contact
+differential) / `adhesionBound`, and `toppleRiskNeedsCoverage` turns the report
 into the placement and coverage boolean.
+
+`complianceMm` reads `SupportFrameStressReport.maxTipRockingMm`, not
+`maxTipDeflectionMm`: rocking is a **differential**, the range of contact
+displacement along the layer's coherent drag direction (`max − min` over the tip
+DOFs). A single tip's deflection magnitude is an elastic sag — one thin leaf
+bending under its own share — and using it marked whole poses as rocking on a
+floppy leaf while the part's contacts moved together. The two are reported
+separately (frame log, panel, text report: "Rocking offset"), and a symmetric
+frame under a symmetric peel reads ~0 differential even though each tip
+deflects.
 
 The edge now travels with the pose: the Rust `StabilityReport` exposes
 `worst_edge_point_mm` / `worst_edge_normal` (pinned by the analytic fixture
@@ -1008,6 +1113,58 @@ centroid (`geometryCentroidMm`) and bearing edge, logging it and storing
 `ForestReport.toppleRisk` / `toppleRiskByModelId`. The panel re-evaluates
 live deflection on every structural support edit via `setModelToppleRisk` and
 `clearModelToppleRisk`.
+
+**Calibrating the green constants.** Three numbers cannot come from the mesh;
+`greenMaterialCalibration.ts` converts a measurement into each:
+
+- `NOMINAL_PEEL_PRESSURE_MPA` (29 kPa today, ≈45 kPa at the 1.55× saturation
+  cap) — film pressure at the 10 mm²
+  reference disc, from a suction-cup pull-off: `peelPressureFromPullOff`
+  divides the peak force by `area × peelTractionFactorForArea(area)`, so a
+  coupon larger than the reference is corrected for the compression the solver
+  applies (a reference-size coupon's factor is exactly 1). The default is
+  anchored twice: a 706.85 mm² coupon's 31.7 N damage-initiation force and
+  e-Stage 7.3's 45 kPa suction parameter (Cao et al. 2025). The placement lean
+  gate deliberately keeps its own `MEMBER_LEAN_DESIGN_LOAD_N` (0.15 N): it uses
+  the vertical peel load as a lateral cantilever proxy, while the actual drag is
+  `LATERAL_PEEL_DRAG_RATIO` (8 %) of it, so re-tuning that gate is a separate
+  structural decision rather than a side effect of the pressure constant.
+- `GREEN_RESIN_MODULUS_MPA` (850 MPa) — from a printed cantilever bar,
+  `greenModulusFromCantilever` inverts `E = F·L³/(3·δ·I)` with
+  `roundBarInertiaMm4` for the section.
+- `DEFAULT_SUPPORT_BREAK_STRENGTH_MPA` (4.8 MPa) — from a single contact's
+  pull-off, `greenUtsFromContactPullOff`: `σ = F / (π·(d/2)²)`. It is what the
+  solver's **tip contact** check and every placement capacity use. Member
+  bending/axial stress uses the profile's **bulk** tensile instead
+  (`memberStrengthMpa`): a 2.2 mm shaft is not a 0.5 × 0.5 mm coupon. A material
+  profile carries the
+  **datasheet tensile**, and `supportBreakStrengthMpa` applies
+  `SUPPORT_BREAK_STRENGTH_RATIO` (0.2): DM12 breaks at 4.8 MPa on a 0.5 × 0.5 mm
+  section against a 24 MPa datasheet (Cao et al. 2025), because a thin green
+  strut is far weaker than bulk.
+
+All three return `null` for a measurement that cannot be physical.
+
+**Tensile strength is a material field now.** `MaterialProfile.tensileStrengthMpa`
+(Meta tab of the material dialog, next to resin family and bottle fields; default
+`DEFAULT_RESIN_TENSILE_STRENGTH_MPA` 24 MPa — the measured DM12 — clamped 5–200)
+is normalized on create/import/copy and threaded to `computeAutoSupportPlan` /
+`runAutoPlace` as `resinTensileMpa` (`AutoPlaceWorkerPayload.tensileStrengthMpa`,
+which the client fills from the active material). The run derates it **once**,
+at its boundary, with `supportBreakStrengthMpa`; the frame solver receives it as
+`supportStrengthMpa` for tips and the undated datasheet value as
+`memberStrengthMpa` for members, the force budget and Phase 1c get the break
+strength. The panel's re-solve calls `activeSupportStrengthMpa()` and
+`activeMemberStrengthMpa()` for the same pair. Doubling the profile value halves
+every tip/member utilization without moving geometry (pinned by a solver
+test). A stored profile still carrying the **old 12 MPa default** is moved to 24
+once during hydration (`migrateTensileSemantics`): under the new semantics 12
+would derate to a 2.4 MPa break and carpet the model in supports. The
+`dragonfruit.material.tensileSemantics.v2` localStorage marker keeps a 12 typed
+after the change as the user's datasheet value. Peel pressure, green modulus,
+FEP screening length and plate adhesion are still source constants; a
+pull-off/bar measurement feeds them through `greenMaterialCalibration.ts` but
+has no per-material field yet.
 
 **Per-layer growth masks.** The same pass derives `profile.growth` (with
 `profile.growthGrid`): every plane that added solid area over the last plane

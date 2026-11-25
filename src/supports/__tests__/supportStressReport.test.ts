@@ -25,6 +25,7 @@ function makeFrame(overrides: Partial<SupportFrameStressReport> = {}): SupportFr
         maxMemberUtilizationPct: 55,
         overloadedMembers: 0,
         maxTipDeflectionMm: 0.04,
+        maxTipRockingMm: 0.02,
         solverMode: 'frame3d',
         hotspots: [
             {
@@ -85,7 +86,7 @@ function makeTopple(overrides: Partial<ToppleRiskReport> = {}): ToppleRiskReport
     return {
         comDepthMm: 6.2,
         peelMomentNmm: 18.4,
-        totalPeelForceN: 4.2,
+        peakLayerForceN: 4.2,
         requiredAdhesionMpa: 0.012,
         complianceMm: 0.04,
         outcome: 'adhesionBound',
@@ -130,7 +131,7 @@ test('summarizeSupportStress ranks critical, attention, ready, and unanalyzed co
         printability: makePrintability({ uncoveredAreaMm2: 5.5, uncoveredRegions: 1, verdict: 'underSupported' }),
         topple: makeTopple(),
     });
-    assert.equal(uncovered.level, 'critical');
+    assert.equal(uncovered.level, 'attention');
     assert.equal(uncovered.primaryIssue, 'uncoveredOverhangs');
 
     const highLoad = summarizeSupportStress({

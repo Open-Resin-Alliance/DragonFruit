@@ -970,11 +970,11 @@ msgstr "Analysing supports"
 msgid "Analysis"
 msgstr "Analysis"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1299
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1330
 msgid "Analyze"
 msgstr "Analyze"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1312
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1343
 msgid "Analyze Supports"
 msgstr "Analyze Supports"
 
@@ -2164,7 +2164,7 @@ msgstr "Click to show Detailed View"
 msgid "Client ID"
 msgstr "Client ID"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1397
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1428
 #: src/components/controls/AutoSupportPanel.tsx:514
 #: src/components/layout/TopBar.tsx:1142
 #: src/components/modals/IslandHierarchyModal.tsx:93
@@ -2272,7 +2272,7 @@ msgstr "Close rename curve profile dialog"
 msgid "Close repair mesh dialog"
 msgstr "Close repair mesh dialog"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1366
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1397
 msgid "Close report"
 msgstr "Close report"
 
@@ -2313,7 +2313,7 @@ msgstr "Close tank material comparison"
 msgid "Close the dialog and discard the edits"
 msgstr "Close the dialog and discard the edits"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1395
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1426
 #: src/components/controls/AutoSupportPanel.tsx:512
 msgid "Close the report"
 msgstr "Close the report"
@@ -2422,7 +2422,7 @@ msgstr "Color Scheme"
 msgid "Colors"
 msgstr "Colors"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1205
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1236
 msgid "COM depth"
 msgstr "COM depth"
 
@@ -2431,8 +2431,8 @@ msgstr "COM depth"
 msgid "Coming Soon!"
 msgstr "Coming Soon!"
 
-#: src/components/settings/profileFormAtoms.tsx:888
-#: src/components/settings/profileFormAtoms.tsx:924
+#: src/components/settings/profileFormAtoms.tsx:920
+#: src/components/settings/profileFormAtoms.tsx:932
 msgid "Compatible Machines"
 msgstr "Compatible Machines"
 
@@ -2665,7 +2665,7 @@ msgstr "Converting support data and model metadata"
 msgid "Cool"
 msgstr "Cool"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1386
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1417
 #: src/components/settings/PluginsSettingsTab.tsx:1406
 msgid "Copied"
 msgstr "Copied"
@@ -2674,7 +2674,7 @@ msgstr "Copied"
 msgid "Copied!"
 msgstr "Copied!"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1386
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1417
 #: src/components/controls/AutoSupportPanel.tsx:506
 #: src/components/ui/EditorContextMenu.tsx:118
 msgid "Copy"
@@ -2701,7 +2701,7 @@ msgstr "Copy template"
 msgid "Copy the Client ID and Client Secret into your local <0>.env</0>."
 msgstr "Copy the Client ID and Client Secret into your local <0>.env</0>."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1382
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1413
 msgid "Copy the full printability report to the clipboard"
 msgstr "Copy the full printability report to the clipboard"
 
@@ -2752,8 +2752,8 @@ msgstr "Couldn't connect to {host}."
 msgid "Count"
 msgstr "Count"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1007
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1431
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1038
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1462
 #: src/features/slicing/components/SlicingPanel.tsx:1461
 msgid "Coverage"
 msgstr "Coverage"
@@ -3219,7 +3219,7 @@ msgstr "Detail"
 msgid "Detail View"
 msgstr "Detail View"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1124
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1155
 msgid "Details"
 msgstr "Details"
 
@@ -3267,7 +3267,7 @@ msgstr "Dial marks pull at 5° / 10° / 45°"
 msgid "Diameter"
 msgstr "Diameter"
 
-#: src/components/settings/profileFormAtoms.tsx:941
+#: src/components/settings/profileFormAtoms.tsx:949
 msgid "Different material settings or output format"
 msgstr "Different material settings or output format"
 
@@ -3386,7 +3386,7 @@ msgid "Don't show again"
 msgstr "Don't show again"
 
 #: src/components/controls/AutoRotationPanel.tsx:77
-#: src/components/settings/profileFormAtoms.tsx:932
+#: src/components/settings/profileFormAtoms.tsx:940
 #: src/features/hollowing/HollowingPanel.tsx:316
 msgid "Done"
 msgstr "Done"
@@ -4142,8 +4142,8 @@ msgstr "Flip model stats card"
 msgid "Flip Tenon"
 msgstr "Flip Tenon"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1086
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1446
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1117
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1477
 msgid "Floating"
 msgstr "Floating"
 
@@ -4176,7 +4176,7 @@ msgstr "Forget all stored panel positions and return to seeded layout."
 msgid "Found!"
 msgstr "Found!"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1161
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1192
 msgid "Frame max"
 msgstr "Frame max"
 
@@ -4236,7 +4236,7 @@ msgstr "Generate a secret…"
 msgid "Generate Supports"
 msgstr "Generate Supports"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1109
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1140
 msgid "Generate supports or analyze existing ones to inspect peel loads."
 msgstr "Generate supports or analyze existing ones to inspect peel loads."
 
@@ -4527,7 +4527,7 @@ msgstr "Horizontal angles are not good for holding up overhangs. They are only g
 msgid "Hotkeys"
 msgstr "Hotkeys"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1226
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1257
 msgid "Hotspots"
 msgstr "Hotspots"
 
@@ -4771,7 +4771,7 @@ msgstr "Include Raft"
 msgid "Include Supports"
 msgstr "Include Supports"
 
-#: src/components/settings/profileFormAtoms.tsx:972
+#: src/components/settings/profileFormAtoms.tsx:980
 msgid "Incompatible"
 msgstr "Incompatible"
 
@@ -4865,7 +4865,7 @@ msgstr "Initial Zig Zag climbs continuously to the top — repeating tiers have 
 msgid "Inner"
 msgstr "Inner"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1119
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1150
 msgid "Inspect detailed coverage, frame stress, stability metrics, and hotspots"
 msgstr "Inspect detailed coverage, frame stress, stability metrics, and hotspots"
 
@@ -5353,7 +5353,7 @@ msgstr "Lift"
 msgid "Lift the selected models to this distance so a support can stand under them; off returns them to the height they were at."
 msgstr "Lift the selected models to this distance so a support can stand under them; off returns them to the height they were at."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1211
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1242
 msgid "Lift threshold"
 msgstr "Lift threshold"
 
@@ -5767,7 +5767,7 @@ msgstr "Max Brace Distance"
 msgid "Max branches + leaves one trunk may carry before new trunks are started — the cap on chunk consolidation"
 msgstr "Max branches + leaves one trunk may carry before new trunks are started — the cap on chunk consolidation"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1167
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1198
 msgid "Max deflection"
 msgstr "Max deflection"
 
@@ -5779,7 +5779,7 @@ msgstr "Max horizontal distance a fan-out leaf may span from a trunk shaft"
 msgid "Max Overhang"
 msgstr "Max Overhang"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1182
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1213
 msgid "Max span"
 msgstr "Max span"
 
@@ -6398,7 +6398,7 @@ msgstr "No networked printers with valid IP addresses were found in this fleet"
 msgid "No online printer is available for upload."
 msgstr "No online printer is available for upload."
 
-#: src/components/settings/profileFormAtoms.tsx:874
+#: src/components/settings/profileFormAtoms.tsx:906
 msgid "No other printer uses the same material settings and file format"
 msgstr "No other printer uses the same material settings and file format"
 
@@ -6538,8 +6538,8 @@ msgstr "Not connected"
 msgid "Not created yet"
 msgstr "Not created yet"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1019
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1451
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1050
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1482
 msgid "Not scanned"
 msgstr "Not scanned"
 
@@ -6861,7 +6861,7 @@ msgstr "Open saved file location"
 msgid "Open scene…"
 msgstr "Open scene…"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1261
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1292
 msgid "Open the full Printability Report"
 msgstr "Open the full Printability Report"
 
@@ -7095,7 +7095,7 @@ msgstr "Paused"
 msgid "Pausing…"
 msgstr "Pausing…"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1151
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1182
 msgid "Peak peel"
 msgstr "Peak peel"
 
@@ -7470,13 +7470,13 @@ msgstr "Print started successfully."
 msgid "Print started. Use <0>Monitor</0> in the top bar to view live progress and webcam."
 msgstr "Print started. Use <0>Monitor</0> in the top bar to view live progress and webcam."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:954
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:985
 msgid "Printability"
 msgstr "Printability"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1267
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1360
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1361
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1298
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1391
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1392
 msgid "Printability Report"
 msgstr "Printability Report"
 
@@ -7642,6 +7642,10 @@ msgstr "Profile"
 msgid "Profile packs add presets and material profiles. A sideloaded package adds code and needs a publisher you trust."
 msgstr "Profile packs add presets and material profiles. A sideloaded package adds code and needs a publisher you trust."
 
+#: src/components/settings/profileFormAtoms.tsx:901
+msgid "Profile Sharing"
+msgstr "Profile Sharing"
+
 #: src/components/settings/BackupsSettingsTab.tsx:1379
 #: src/components/settings/LocalBackupsSettingsTab.tsx:1115
 msgid "Profiles"
@@ -7712,7 +7716,7 @@ msgstr "Raw JSON"
 msgid "Raw masks only."
 msgstr "Raw masks only."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:962
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:993
 msgid "Re-run printability analysis"
 msgstr "Re-run printability analysis"
 
@@ -7867,7 +7871,7 @@ msgstr "Refresh print files"
 msgid "Regions where both voxel and geometric islands overlap"
 msgstr "Regions where both voxel and geometric islands overlap"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1338
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1369
 msgid "Reinforce"
 msgstr "Reinforce"
 
@@ -7915,7 +7919,7 @@ msgstr "Reloading loads an installed plugin's code, or releases a removed one's 
 msgid "Remaining"
 msgstr "Remaining"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1349
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1380
 msgid "Remaining hotspots are at clearance or size limit"
 msgstr "Remaining hotspots are at clearance or size limit"
 
@@ -8509,7 +8513,7 @@ msgstr "Ring each mesh minima with contacts on its own flank, so a section start
 msgid "Roads? Where we're printing, we don't need roads."
 msgstr "Roads? Where we're printing, we don't need roads."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1215
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1246
 msgid "Rocking"
 msgstr "Rocking"
 
@@ -9247,7 +9251,7 @@ msgstr "Shaft Ø range"
 msgid "Shallow surfaces detected by the mesh-normal classifier (the surfaces auto-supports grid)"
 msgstr "Shallow surfaces detected by the mesh-normal classifier (the surfaces auto-supports grid)"
 
-#: src/components/settings/profileFormAtoms.tsx:925
+#: src/components/settings/profileFormAtoms.tsx:933
 msgid "Share this material profile with other printers"
 msgstr "Share this material profile with other printers"
 
@@ -9283,7 +9287,7 @@ msgstr "Shell thickness in millimeters"
 msgid "Shells:"
 msgstr "Shells:"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1188
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1219
 msgid "Short regions"
 msgstr "Short regions"
 
@@ -9385,8 +9389,8 @@ msgstr "Show the cut preview"
 msgid "Show Tuner"
 msgstr "Show Tuner"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1282
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1321
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1313
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1352
 msgid "Show unsupported areas and support stress on the model"
 msgstr "Show unsupported areas and support stress on the model"
 
@@ -9651,8 +9655,8 @@ msgstr "Solid"
 msgid "Solid Areas"
 msgstr "Solid Areas"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1293
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1306
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1324
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1337
 msgid "Solve 3D support beam frame & rigid-body peel loads on existing supports"
 msgstr "Solve 3D support beam frame & rigid-body peel loads on existing supports"
 
@@ -9743,8 +9747,8 @@ msgid "Sponsors"
 msgstr "Sponsors"
 
 #: src/components/controls/autoSupport/autoSupportPanelTabs.ts:73
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1073
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1431
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1104
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1462
 msgid "Stability"
 msgstr "Stability"
 
@@ -9833,7 +9837,7 @@ msgstr "Starting print"
 msgid "Starting print…"
 msgstr "Starting print…"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1406
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1437
 msgid "Status"
 msgstr "Status"
 
@@ -9947,8 +9951,8 @@ msgstr "Support import failed: unsupported support JSON format."
 msgid "Support import failed."
 msgstr "Support import failed."
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1041
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1414
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1072
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1445
 msgid "Support load"
 msgstr "Support load"
 
@@ -10408,7 +10412,7 @@ msgstr "The webcam image could not be loaded."
 msgid "Theme and custom UI token customization"
 msgstr "Theme and custom UI token customization"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1332
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1363
 msgid "Thicken overloaded trunks, branches, leaves, and braces"
 msgstr "Thicken overloaded trunks, branches, leaves, and braces"
 
@@ -10606,7 +10610,7 @@ msgstr "Tip"
 msgid "Tip Fit Margin"
 msgstr "Tip Fit Margin"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1155
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1186
 msgid "Tip max"
 msgstr "Tip max"
 
@@ -10760,7 +10764,7 @@ msgstr "Unapplied Holes"
 msgid "Unavailable"
 msgstr "Unavailable"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1176
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1207
 msgid "Uncovered area"
 msgstr "Uncovered area"
 
@@ -11417,7 +11421,7 @@ msgstr "Workspace"
 msgid "Workspace behavior and panel layout"
 msgstr "Workspace behavior and panel layout"
 
-#: src/components/controls/autoSupport/SupportStressPanel.tsx:1195
+#: src/components/controls/autoSupport/SupportStressPanel.tsx:1226
 msgid "Worst region"
 msgstr "Worst region"
 

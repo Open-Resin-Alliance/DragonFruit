@@ -136,6 +136,8 @@ export interface ForestReport {
     orphans?: OrphanInfo[];
     /** What a deficit budget would add and cull, when the run computed one. */
     loadBudget?: LoadBudgetReport;
+    /** Per-support peel demand vs break capacity in newtons on critical layers. */
+    forceBudget?: ForceBudgetReport;
     /** 3D support+brace beam-frame & rigid-body peel stress summary on critical layers. */
     frameStress?: SupportFrameStressReport;
     /** Solved-demand topple margin about the pose's worst bearing edge. */
@@ -164,6 +166,14 @@ export interface ForestReport {
             peakCrossSectionMm2: number;
             added: number;
             pruned: number;
+        };
+        /** Force-budget add rounds: candidates generated and placed, split by
+         *  formation overhang vs class-2 force-augmented steep flat. */
+        forceBudgetAdds?: {
+            attempted: number;
+            placed: number;
+            augmentedAttempted: number;
+            augmentedPlaced: number;
         };
         /** Co-located trunk roots that were dissolved into a taller host, and
          *  why a pair could not be (`noHost`, `angle`, `blocked`, `capacity`,
@@ -212,6 +222,63 @@ export interface LoadBudgetReport {
     islandsInSurplus: number;
     islandsWithoutArea: number;
     worst: LoadBudgetIsland | null;
+}
+
+/** A down-facing surface point where an added contact removes load from an over-budget tip. */
+export interface ForceBudgetAddPoint {
+    islandId: string;
+    /** True when the surface is a self-supporting steep flat (class-2 / force-augmented), not a formation overhang. */
+    steepFlat: boolean;
+    /** Contact point on the model surface (world mm). */
+    pos: Vec3;
+    /** Surface normal at that point (world space, away from the model). */
+    normal: Vec3;
+    /** Plan distance from the over-budget cell's far point to the snapped surface voxel (mm). */
+    snapMm: number;
+}
+
+/** One placed tip's peel demand against its break capacity, at its worst layer. */
+export interface ForceBudgetTipRow {
+    entityId?: string;
+    pos: Vec3;
+    contactDiameterMm: number;
+    /** Narrowest member section on the tip's own entity (mm), when known. */
+    memberDiameterMm?: number;
+    capacityN: number;
+    demandN: number;
+    utilizationPct: number;
+    deficitN: number;
+    /** The layer at which this tip's demand peaks (mm). */
+    layerZMm: number;
+    /** Distance from the tip to the farthest cell it carries (mm). */
+    maxCellDistanceMm: number;
+    addPoint?: ForceBudgetAddPoint;
+}
+
+/**
+ * Per-support peel demand and break capacity in newtons, as the report carries
+ * it. Report plus a list of addition points; placement decisions are made by
+ * the caller. See `forceBudget.ts` for the allocation and capacity rules.
+ */
+export interface ForceBudgetReport {
+    /** Worst utilization first; one row per placed model-contact tip. */
+    rows: ForceBudgetTipRow[];
+    layersEvaluated: number;
+    /** Z of the layer whose peel force was highest (mm). */
+    peakLayerZMm: number;
+    /** Sum of each tip's peak demand — not a single physical layer total. */
+    totalDemandN: number;
+    totalCapacityN: number;
+    overloadedTips: number;
+    /** Layer force whose cells had no active tip below them, worst layer (N). */
+    unattributedN: number;
+    /** Over-budget tips with no down-facing surface within the snap radius. */
+    skippedNoSurface: number;
+    /** Strength the capacities were computed with (MPa). */
+    strengthMpa: number;
+    /** Nominal peel pressure the layer forces use (MPa). */
+    referencePressureMpa: number;
+    worst: ForceBudgetTipRow | null;
 }
 
 /** Competitive distribution bake-off result for anchor surfaces. */

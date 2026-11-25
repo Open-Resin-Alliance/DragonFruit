@@ -4,6 +4,7 @@ import {
     type PrintabilityRegion,
 } from './printability';
 import type { SupportFrameStressReport } from './supportGraphStress';
+import { planStressActions } from './stressActions';
 import { ROCKING_THRESHOLD_MM, type ToppleRiskReport } from './toppleRisk';
 
 export const FLOATING_Z_THRESHOLD_MM = 0.5;
@@ -92,7 +93,7 @@ export function summarizeSupportStress(input: SupportStressReportInput): Support
             overloadedCount,
         };
     }
-    if (scanned && printability && (printability.verdict === 'critical' || printability.uncoveredAreaMm2 > 0.02)) {
+    if (scanned && printability && printability.verdict === 'critical') {
         return {
             level: 'critical',
             primaryIssue: 'uncoveredOverhangs',
@@ -105,6 +106,14 @@ export function summarizeSupportStress(input: SupportStressReportInput): Support
         return {
             level: 'attention',
             primaryIssue: 'highLoad',
+            peakUtilizationPct,
+            overloadedCount,
+        };
+    }
+    if (scanned && printability && printability.verdict === 'underSupported') {
+        return {
+            level: 'attention',
+            primaryIssue: 'uncoveredOverhangs',
             peakUtilizationPct,
             overloadedCount,
         };
@@ -199,7 +208,7 @@ function primaryIssueSentence(summary: SupportStressSummary, input: SupportStres
             return `Peak support utilization is ${summary.peakUtilizationPct.toFixed(0)}% (>= 75% warning band).`;
         case 'rocking':
             return topple
-                ? `Solved tip deflection (${topple.complianceMm.toFixed(3)}mm) exceeds the ${ROCKING_THRESHOLD_MM.toFixed(2)}mm rocking limit.`
+                ? `Contact rocking (${topple.complianceMm.toFixed(3)}mm differential) exceeds the ${ROCKING_THRESHOLD_MM.toFixed(2)}mm layer-shift limit.`
                 : 'Support frame deflection exceeds the rocking limit.';
         case 'deficientRegions':
             return printability
@@ -320,12 +329,12 @@ export function supportStressReportToText(input: SupportStressReportInput): stri
         lines.push('STABILITY & TOPPLE RISK');
         lines.push(`  Outcome: ${topple.outcome} · COM depth inside edge ${topple.comDepthMm.toFixed(2)}mm`);
         lines.push(
-            `  Peel load: ${topple.totalPeelForceN.toFixed(2)}N total · `
+            `  Peel load (topple profile): ${topple.peakLayerForceN.toFixed(2)}N peak layer · `
             + `moment ${topple.peelMomentNmm.toFixed(1)}N·mm · `
             + `lift threshold ${topple.requiredAdhesionMpa.toFixed(3)}MPa`,
         );
         lines.push(
-            `  Rocking compliance: ${topple.complianceMm.toFixed(3)}mm `
+            `  Rocking offset: ${topple.complianceMm.toFixed(3)}mm `
             + `(limit ${ROCKING_THRESHOLD_MM.toFixed(2)}mm)`,
         );
     }
@@ -340,7 +349,8 @@ export function supportStressReportToText(input: SupportStressReportInput): stri
             + ((frame.reinforcedCount ?? 0) > 0 ? ` · ${frame.reinforcedCount} reinforced` : ''),
         );
         lines.push(
-            `  Peel peak: ${frame.peakLayerPeelForceN.toFixed(2)}N @ Z${frame.peakLayerZMm.toFixed(1)}mm`,
+            `  Critical-layer peel peak (incl. per-component stages): `
+            + `${frame.peakLayerPeelForceN.toFixed(2)}N @ Z${frame.peakLayerZMm.toFixed(1)}mm`,
         );
         lines.push(
             `  Utilization: tip max ${frame.maxTipUtilizationPct.toFixed(0)}% (${frame.overloadedTips} over) · `
@@ -363,6 +373,30 @@ export function supportStressReportToText(input: SupportStressReportInput): stri
         }
     }
 
+    const actions = frame ? planStressActions(frame, { rockingLimitMm: ROCKING_THRESHOLD_MM }) : [];
+    if (actions.length > 0) {
+        lines.push('');
+        lines.push('RECOMMENDED ACTIONS');
+        for (const action of actions) {
+            if (action.kind === 'brace-rocking') {
+                lines.push(
+                    `  Brace rocking pair ${action.aEntityId.slice(0, 8)} ↔ ${action.bEntityId.slice(0, 8)} `
+                    + `at Z${action.layerZMm.toFixed(1)}mm · differential ${action.differentialMm.toFixed(3)}mm `
+                    + `(limit ${ROCKING_THRESHOLD_MM.toFixed(2)}mm)`,
+                );
+            } else if (action.kind === 'brace-member') {
+                lines.push(
+                    `  Brace ${action.entityKind} ${action.entityId.slice(0, 8)} near Z${action.layerZMm.toFixed(1)}mm `
+                    + `· ${action.utilizationPct.toFixed(0)}%`,
+                );
+            } else {
+                lines.push(
+                    `  Thicken ${action.entityKind} ${action.entityId.slice(0, 8)} · ${action.utilizationPct.toFixed(0)}%`,
+                );
+            }
+        }
+    }
+
     const layerRows = frame && frame.layerProfile.length > 0
         ? frame.layerProfile.filter((pt) => pt.critical)
         : (printability?.peelCurve ?? [])
@@ -372,7 +406,7 @@ export function supportStressReportToText(input: SupportStressReportInput): stri
     const orderedLayers = layerRows.slice().sort((a, b) => a.zMm - b.zMm);
     if (orderedLayers.length > 0) {
         lines.push('');
-        lines.push('PEEL PROFILE');
+        lines.push('PEEL PROFILE (global layers)');
         for (const pt of orderedLayers) {
             const utilStr = frame
                 ? ` · tip ${pt.maxTipUtilPct.toFixed(0)}% · member ${pt.maxMemberUtilPct.toFixed(0)}%`

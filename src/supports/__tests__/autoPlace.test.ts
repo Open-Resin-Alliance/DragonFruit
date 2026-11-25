@@ -292,8 +292,84 @@ test('runAutoPlace grids a huge steep flat the self-support angle calls self-sup
         `placed ${result.placed.trunk + result.placed.leaf + result.placed.branch} grid supports on the 60° face`);
     assert.ok(result.placed.trunk >= 12,
         `placed ${result.placed.trunk} grid trunks on the 60° face`);
-    assert.equal(result.rejectedCandidates, 0,
-        'the region normal keeps the cone clear at 60°');
+    // Phase 1c now adds contacts against the measured break load, and this
+    // synthetic facet is not marked `steepFlat`, so it is treated as a
+    // formation overhang. A vertical pillar to the upper part of a 60° leaning
+    // face can be blocked by the box itself; the trunk retry rescues what it
+    // can, and the residual is a route failure, not the cone/attachment gate
+    // this test guards. Keep the grid gates at zero and bound the route misses.
+    assert.equal(result.analytics?.rejectionReasons.grid_reject_collision ?? 0, 0,
+        'the region normal keeps grid attachments out of collision');
+    assert.equal(result.analytics?.rejectionReasons.grid_reject_no_attachment ?? 0, 0,
+        'no grid attachment is refused for the 60° normal');
+    assert.ok((result.analytics?.rejectionReasons.trunk_build_error ?? 0) <= 2,
+        `at most the traction adds fail trunk routing (${JSON.stringify(result.analytics?.rejectionReasons)})`);
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('a steep flat with anchors gets a class-2 force-budget contact when its cells are over budget', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    const deg = 60;
+    const geometry = new THREE.BoxGeometry(20, 20, 20);
+    geometry.rotateX(THREE.MathUtils.degToRad(deg));
+    geometry.translate(0, 0, 20);
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld();
+    setModelMesh('model-a', mesh);
+
+    const rad = THREE.MathUtils.degToRad(deg);
+    const normal = { x: 0, y: Math.sin(rad), z: -Math.cos(rad) };
+    const yMin = -10 * Math.cos(rad) + 10 * Math.sin(rad);
+    const yMax = 10 * Math.cos(rad) + 10 * Math.sin(rad);
+    const zAt = (y: number) => Math.tan(rad) * y;
+    const contactVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = yMin; y <= yMax; y += 0.25) {
+            contactVoxels.push({ x, y, z: zAt(y) });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'steep-anchored',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, (yMin + yMax) / 2, zAt((yMin + yMax) / 2)),
+        baseZ: zAt(yMin),
+        areaMm2: 400 * Math.cos(rad),
+        surfaceAreaMm2: 400,
+        surfaceNormal: normal,
+        overhangAngleDeg: deg,
+        steepFlat: true,
+        triangleIds: [10, 11],
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    // 5 MPa datasheet → 1 MPa support break: the anchoring contacts on the
+    // steep face are over their break load, and their nearest down-facing
+    // surface is the steep flat itself (class 2).
+    const result = runAutoPlace(
+        [facet],
+        'model-a',
+        { debugSkipAutoBracing: true },
+        undefined,
+        undefined,
+        undefined,
+        5,
+    );
+
+    const adds = result.analytics?.forestReport?.diagnostics?.forceBudgetAdds;
+    assert.ok((result.placed.trunk + result.placed.branch + result.placed.leaf) > 0,
+        'the steep flat is covered at all (anchors / grid)');
+    assert.ok((adds?.augmentedAttempted ?? 0) > 0,
+        `the over-budget face produced class-2 add points (${JSON.stringify(adds)})`);
+    assert.ok((adds?.augmentedPlaced ?? 0) > 0,
+        `at least one class-2 contact placed (${JSON.stringify(adds)})`);
 
     setModelMesh('model-a', null);
     disposeHandlers();

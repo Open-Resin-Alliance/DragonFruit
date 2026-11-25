@@ -4,7 +4,9 @@ import { footprintX, footprintY, footprintZ } from '@/volumeAnalysis/Islands/vox
 import type { CandidatePoint } from './types';
 import type { AutoSupportSettings } from './settings';
 import { bridgeRadiusForAngleDeg } from './constants';
-import { computeRegionSpacing } from './gridPlacement';
+import { DEFAULT_SUPPORT_BREAK_STRENGTH_MPA } from './greenMaterialCalibration';
+import { resolveSizingBand } from './parameterSizing';
+import { NOMINAL_PEEL_PRESSURE_MPA } from './treeSynthesis';
 
 /** Coarse occupancy cell size (mm) for cross-sectional layer IoU clustering. */
 const LAYER_IOU_CELL_MM = 2.0;
@@ -849,7 +851,8 @@ interface VoronoiSeed {
 interface VoronoiCellStats {
     /** Raw geometric footprint area of this Voronoi cell (mm²). */
     areaMm2: number;
-    /** Spatially integrated Screened Stefan traction demand ∫ τ(x,y) dA (mm²-equiv). */
+    /** Spatially integrated Screened Stefan traction demand ∫ τ(x,y) dA
+     *  (mm² × traction factor; multiply by the nominal pressure for N). */
     tractionDemandMm2: number;
     maxDistSq: number;
     furthestX: number;
@@ -863,13 +866,21 @@ interface VoronoiCellStats {
  *
  * Partitions each overhang region's `0.25 mm` footprint into discrete 2D Voronoi
  * cells seeded by its active contacts, weighted by the representative-layer
- * peel traction multiplier just above the region:
+ * peel traction multiplier just above the region. Demand is integrated in
+ * "demand units" (mm² × traction factor); multiplying by
+ * `NOMINAL_PEEL_PRESSURE_MPA` gives newtons, and each contact's capacity is its
+ * break load (`supportStrengthMpa × π/4 × tip diameter²`) expressed in those
+ * same units, so the test is a real force comparison rather than a rescaled
+ * spacing knob. A candidate without its own `tipDiameterMm` is costed at the
+ * run's sizing-band tip; the post-placement force budget re-checks the real
+ * placed diameters.
  * - **Add** a reinforcement contact at the furthest point of any Voronoi cell
- *   exceeding tip area capacity or angle-dependent bridge reach.
+ *   whose demand exceeds its own tip's break load or whose reach exceeds the
+ *   angle-dependent bridge radius.
  * - **Conservatively prune** only interior `grid-` lattice contacts whose removal
- *   leaves every neighboring Voronoi cell within `80%` of capacity and `90%` of
- *   bridge reach. Never prunes perimeter corners (`fill-`), `nearBase` contacts,
- *   or primary discrete islands (`voxel`/`minima`/`intersection`).
+ *   leaves every neighboring Voronoi cell under `80%` of *its* break load and
+ *   `90%` of bridge reach. Never prunes perimeter corners (`fill-`), `nearBase`
+ *   contacts, or primary discrete islands (`voxel`/`minima`/`intersection`).
  */
 export function optimizeContactsByTraction(
     candidates: CandidatePoint[],
@@ -879,9 +890,30 @@ export function optimizeContactsByTraction(
     modelId: string = '',
     /** The print profile's layer height; without it the slicer samples ~1 mm,
      *  which is also the peel curve the run's stress report would carry. */
-    options?: { layerHeightMm?: number; profile?: RepresentativeLayerProfile },
+    options?: {
+        layerHeightMm?: number;
+        profile?: RepresentativeLayerProfile;
+        /** Support break strength (MPa), already derated from the datasheet. */
+        supportStrengthMpa?: number;
+    },
 ): TractionOptimizationResult {
     const profile = options?.profile ?? extractRepresentativeLayers(mesh, undefined, { layerHeightMm: options?.layerHeightMm });
+    const supportStrengthMpa = Math.max(
+        0.01,
+        options?.supportStrengthMpa ?? DEFAULT_SUPPORT_BREAK_STRENGTH_MPA,
+    );
+    const bandTipDiameterMm = Math.max(0.1, resolveSizingBand(settings.sizingPreset).tipContactDiameterMm);
+    const capacityByCandidate = new Map<CandidatePoint, number>();
+    /** A contact's break load in the demand units above: N / (N/mm²). */
+    const capacityDemandFor = (candidate: CandidatePoint): number => {
+        const cached = capacityByCandidate.get(candidate);
+        if (cached !== undefined) return cached;
+        const diameterMm = Math.max(0.1, candidate.tipDiameterMm ?? bandTipDiameterMm);
+        const capacityN = supportStrengthMpa * Math.PI * 0.25 * diameterMm * diameterMm;
+        const demand = capacityN / NOMINAL_PEEL_PRESSURE_MPA;
+        capacityByCandidate.set(candidate, demand);
+        return demand;
+    };
     if (candidates.length === 0) {
         return {
             candidates,
@@ -963,10 +995,9 @@ export function optimizeContactsByTraction(
         const cellAreaMm2 = (FOOTPRINT_VOXEL_MM * FOOTPRINT_VOXEL_MM) * (fp.count / si);
 
         const angleBridgeRadiusMm = bridgeRadiusForAngleDeg(region.overhangAngleDeg);
-        const spacing = computeRegionSpacing(region, settings);
-        // Nominal single-tip Voronoi traction budget (`spacing^2` mm²-equivalent);
-        // local peel pressure variation is integrated per voxel via `sTraction[i]`.
-        const tipCapacityMm2 = Math.max(2.5, spacing * spacing);
+        // Capacity follows each seed's own tip area (`capacityDemandFor`), not the
+        // region's spacing: the break load of a 0.22 mm contact and a 0.5 mm one
+        // are different constraints on the same cell.
         const addRadiusSq = (angleBridgeRadiusMm * 1.05) ** 2;
         const minAddSpacingSq = MIN_TRACTION_CONTACT_SPACING_MM * MIN_TRACTION_CONTACT_SPACING_MM;
 
@@ -1028,7 +1059,7 @@ export function optimizeContactsByTraction(
             for (let j = 0; j < seeds.length; j++) {
                 const cell = cellStats[j];
                 if (cell.areaMm2 < 1.5) continue;
-                const areaRatio = cell.tractionDemandMm2 / (tipCapacityMm2 * 1.15);
+                const areaRatio = cell.tractionDemandMm2 / (capacityDemandFor(seeds[j].candidate) * 1.15);
                 const reachRatio = cell.maxDistSq / addRadiusSq;
                 const excess = Math.max(areaRatio, reachRatio);
                 if (excess > 1.0 && excess > worstExcess) {
@@ -1071,9 +1102,9 @@ export function optimizeContactsByTraction(
 
         // Pass B: Conservative surplus pruning — only remove interior `grid-`
         // points when neighbors absorb 100% of their Voronoi voxels with safety
-        // headroom (<= 80% area capacity and <= 90% bridge reach).
+        // headroom (<= 80% of the absorbing tip's break load and <= 90% of
+        // bridge reach).
         if (seeds.length > 2) {
-            const pruneAreaCap = tipCapacityMm2 * 0.80;
             const pruneReachSqCap = (angleBridgeRadiusMm * 0.90) ** 2;
 
             let removedAny = true;
@@ -1101,7 +1132,7 @@ export function optimizeContactsByTraction(
                             break;
                         }
                         const nextDemand = (addedDemand.get(alt) ?? cellStats[alt].tractionDemandMm2) + cellAreaMm2 * sTraction[i];
-                        if (nextDemand > pruneAreaCap) {
+                        if (nextDemand > capacityDemandFor(seeds[alt].candidate) * 0.80) {
                             safe = false;
                             break;
                         }
@@ -1152,6 +1183,7 @@ export function optimizeContactsByTraction(
         kept.fill(1);
         const isAnchor = new Uint8Array(n);
         const accumArea = new Float64Array(n);
+        const accumDemand = new Float64Array(n);
         const normX = new Float64Array(n);
         const normY = new Float64Array(n);
         const normZ = new Float64Array(n);
@@ -1173,6 +1205,8 @@ export function optimizeContactsByTraction(
             } else {
                 accumArea[i] = Math.max(0.1, Math.min(c.islandAreaMm2, 4.0));
             }
+            accumDemand[i] = accumArea[i]
+                * stefanTractionFactorAt(profile, c.tipPos.x, c.tipPos.y, c.tipPos.z, settings.areaPerSupportMm2);
 
             const tn = c.tipNormal ?? { x: 0, y: 0, z: -1 };
             const nLen = Math.hypot(tn.x, tn.y, tn.z) || 1;
@@ -1205,7 +1239,7 @@ export function optimizeContactsByTraction(
             if (!isAnchor[i]) order.push(i);
         }
         order.sort((a, b) =>
-            accumArea[a] - accumArea[b]
+            accumDemand[a] - accumDemand[b]
             || working[b].tipPos.z - working[a].tipPos.z
             || working[a].id.localeCompare(working[b].id),
         );
@@ -1221,9 +1255,6 @@ export function optimizeContactsByTraction(
             // overhang fragments collapse cleanly.
             const reachMm = bridgeRadiusForAngleDeg(angleDeg) * 0.85;
             const reachSq = reachMm * reachMm;
-
-            const mul = stefanTractionFactorAt(profile, p.x, p.y, p.z, settings.areaPerSupportMm2);
-            const capMm2 = Math.max(3.0, settings.areaPerSupportMm2 / mul) * 0.85;
 
             const bx = Math.floor(p.x / bucketSize);
             const by = Math.floor(p.y / bucketSize);
@@ -1262,8 +1293,9 @@ export function optimizeContactsByTraction(
                             const dotN = normX[i] * normX[k] + normY[i] * normY[k] + normZ[i] * normZ[k];
                             if (dotN < 0.70) continue;
 
-                            // Traction capacity check: host must safely carry combined local area.
-                            if (accumArea[k] + accumArea[i] > capMm2) continue;
+                            // Capacity check: host and absorbed cell must stay under
+                            // the host contact's break load (85 % headroom).
+                            if (accumDemand[k] + accumDemand[i] > capacityDemandFor(working[k]) * 0.85) continue;
 
                             // Prefer already-anchored/discrete hosts, then closest distance.
                             const weightedDistSq = isAnchor[k] ? dist3Sq * 0.65 : dist3Sq;
@@ -1280,6 +1312,7 @@ export function optimizeContactsByTraction(
                 kept[i] = 0;
                 isAnchor[bestHost] = 1;
                 accumArea[bestHost] += accumArea[i];
+                accumDemand[bestHost] += accumDemand[i];
                 globalPruned++;
             }
         }

@@ -248,6 +248,16 @@ export function useTrunkPlacementV2() {
     const [previewData, setPreviewData] = useState<SupportData | null>(null);
     const [previewError, setPreviewError] = useState<LimitationCode | null>(null);
     const [previewWarning, setPreviewWarning] = useState<WarningCode | null>(null);
+    // Mirrors of the preview state let `clearPreview` skip three no-op setState
+    // calls per pointer move. React still schedules a render for an updater that
+    // returns the previous value, and a hover-clear every frame re-rendered the
+    // whole app root (the stability row visibly flickered).
+    const previewDataRef = useRef(previewData);
+    const previewErrorRef = useRef(previewError);
+    const previewWarningRef = useRef(previewWarning);
+    previewDataRef.current = previewData;
+    previewErrorRef.current = previewError;
+    previewWarningRef.current = previewWarning;
     const { isPlacementHardDisabled } = useInteractionStatus();
     const hoverFrameRef = useRef<number | null>(null);
     const latestHoverRef = useRef<THREE.Intersection | null>(null);
@@ -271,9 +281,18 @@ export function useTrunkPlacementV2() {
     } | null>(null);
 
     const clearPreview = useCallback(() => {
-        setPreviewData((prev) => (prev === null ? prev : null));
-        setPreviewError((prev) => (prev === null ? prev : null));
-        setPreviewWarning((prev) => (prev === null ? prev : null));
+        if (previewDataRef.current !== null) {
+            previewDataRef.current = null;
+            setPreviewData(null);
+        }
+        if (previewErrorRef.current !== null) {
+            previewErrorRef.current = null;
+            setPreviewError(null);
+        }
+        if (previewWarningRef.current !== null) {
+            previewWarningRef.current = null;
+            setPreviewWarning(null);
+        }
         cavityPreviewCacheRef.current = null;
         // A click can leave the pointer exactly where it was after a commit. Cancel
         // the queued hover and forget its stored hit so that a scheduled frame

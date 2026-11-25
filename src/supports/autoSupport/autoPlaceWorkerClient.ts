@@ -277,6 +277,7 @@ export function buildAutoPlaceWorkerPayload(
         // print profile's layer height; without it they fall back to the
         // slicer's ~1 mm grid and the peel graph reads coarse.
         layerHeightMm: getActiveMaterialProfile()?.layerHeightMm,
+        tensileStrengthMpa: getActiveMaterialProfile()?.tensileStrengthMpa,
         // The worker has no storage, so it cannot resolve a Support Studio preset
         // the user made: every band the run can name is resolved here, where the
         // preset table is, and handed over with the request.
@@ -353,7 +354,7 @@ export async function runAutoPlaceInWorker(
     if (!target) {
         // No worker in this environment (tests, plain browser), or one that has
         // already failed: the plan is still correct, it just runs on this thread.
-        return runAutoPlace(islands, modelId, settingsOverride, cavityMesh, beforeOverride, getActiveMaterialProfile()?.layerHeightMm);
+        return runAutoPlace(islands, modelId, settingsOverride, cavityMesh, beforeOverride, getActiveMaterialProfile()?.layerHeightMm, getActiveMaterialProfile()?.tensileStrengthMpa);
     }
 
     let plan: AutoSupportPlan | null;
@@ -372,7 +373,7 @@ export async function runAutoPlaceInWorker(
             'Later runs this session go straight to in-process.',
             error,
         );
-        return runAutoPlace(islands, modelId, settingsOverride, cavityMesh, beforeOverride, getActiveMaterialProfile()?.layerHeightMm);
+        return runAutoPlace(islands, modelId, settingsOverride, cavityMesh, beforeOverride, getActiveMaterialProfile()?.layerHeightMm, getActiveMaterialProfile()?.tensileStrengthMpa);
     }
 
     // The worker's own logs do not reach `dragonfruit.log`, and the run's

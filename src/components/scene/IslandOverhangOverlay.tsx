@@ -66,33 +66,28 @@ export function IslandOverhangOverlay({
 
   const built = useMemo(() => {
     const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-    if (!pos) return { meshes: [], toppleGeometry: null as THREE.BufferGeometry | null, mutedGeometry: null as THREE.BufferGeometry | null };
+    if (!pos) return { formationGeometry: null as THREE.BufferGeometry | null, toppleGeometry: null as THREE.BufferGeometry | null, mutedGeometry: null as THREE.BufferGeometry | null };
     const index = geometry.index;
-    const meshes: Array<{ id: string; geometry: THREE.BufferGeometry; color: THREE.Color }> = [];
 
-    // Combine steep-flat patches into covered vs muted geometries with uniform
-    // color so symmetrical greedy patches render symmetrically across seams.
+    // One merged geometry per class instead of one mesh per region: a scan can
+    // produce hundreds of formation patches, and each extra transparent mesh is
+    // its own draw call plus sort entry. These materials are unlit, so no
+    // normals are needed either — only positions.
+    const formationPositions: number[] = [];
     const topplePositions: number[] = [];
     const mutedPositions: number[] = [];
-    const copyRegion = (region: DetectedIsland): Float32Array => {
+    const appendRegion = (region: DetectedIsland, into: number[]): void => {
       const ids = region.triangleIds as number[];
-      const arr = new Float32Array(ids.length * 9);
-      let o = 0;
       for (const ti of ids) {
         const i0 = index ? index.getX(ti * 3) : ti * 3;
         const i1 = index ? index.getX(ti * 3 + 1) : ti * 3 + 1;
         const i2 = index ? index.getX(ti * 3 + 2) : ti * 3 + 2;
-        arr[o++] = pos.getX(i0);
-        arr[o++] = pos.getY(i0);
-        arr[o++] = pos.getZ(i0);
-        arr[o++] = pos.getX(i1);
-        arr[o++] = pos.getY(i1);
-        arr[o++] = pos.getZ(i1);
-        arr[o++] = pos.getX(i2);
-        arr[o++] = pos.getY(i2);
-        arr[o++] = pos.getZ(i2);
+        into.push(
+          pos.getX(i0), pos.getY(i0), pos.getZ(i0),
+          pos.getX(i1), pos.getY(i1), pos.getZ(i1),
+          pos.getX(i2), pos.getY(i2), pos.getZ(i2),
+        );
       }
-      return arr;
     };
 
     for (const region of regions) {
@@ -100,29 +95,25 @@ export function IslandOverhangOverlay({
       if (!ids || ids.length === 0) continue;
 
       if (region.steepFlat) {
-        const arr = copyRegion(region);
         const covered = steepFlatNeedsCoverage(region.surfaceAreaMm2, toppleCoverage);
-        const into = covered ? topplePositions : mutedPositions;
-        for (let i = 0; i < arr.length; i++) into.push(arr[i]);
+        appendRegion(region, covered ? topplePositions : mutedPositions);
         continue;
       }
 
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(copyRegion(region), 3));
-      g.computeVertexNormals();
-      meshes.push({ id: region.id, geometry: g, color: formationOverhangColor() });
+      appendRegion(region, formationPositions);
     }
 
     const buildFlat = (positions: number[]): THREE.BufferGeometry | null => {
       if (positions.length === 0) return null;
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      g.computeVertexNormals();
       return g;
     };
-    const mutedGeometry = buildFlat(mutedPositions);
-    const toppleGeometry = buildFlat(topplePositions);
-    return { meshes, toppleGeometry, mutedGeometry };
+    return {
+      formationGeometry: buildFlat(formationPositions),
+      mutedGeometry: buildFlat(mutedPositions),
+      toppleGeometry: buildFlat(topplePositions),
+    };
   }, [geometry, regions, toppleCoverage]);
 
   const toppleMaterial = useMemo(() => new THREE.MeshBasicMaterial({
@@ -171,7 +162,7 @@ export function IslandOverhangOverlay({
 
   useEffect(() => {
     return () => {
-      for (const b of built.meshes) b.geometry.dispose();
+      built.formationGeometry?.dispose();
       built.toppleGeometry?.dispose();
       built.mutedGeometry?.dispose();
     };
@@ -186,7 +177,7 @@ export function IslandOverhangOverlay({
     [toppleMaterial, formationMaterial, mutedMaterial],
   );
 
-  if (built.meshes.length === 0 && !built.toppleGeometry && !built.mutedGeometry) return null;
+  if (!built.formationGeometry && !built.toppleGeometry && !built.mutedGeometry) return null;
 
   return (
     <group
@@ -196,11 +187,11 @@ export function IslandOverhangOverlay({
       // cut-away region wherever an overhang was scanned.
       userData={{ noStencil: true }}
     >
-      {built.meshes.map((b) => (
-        <mesh key={b.id} geometry={b.geometry} renderOrder={OVERHANG_OVERLAY_RENDER_ORDER} raycast={() => null}>
+      {built.formationGeometry && (
+        <mesh geometry={built.formationGeometry} renderOrder={OVERHANG_OVERLAY_RENDER_ORDER} raycast={() => null}>
           <primitive object={formationMaterial} attach="material" />
         </mesh>
-      ))}
+      )}
       {built.toppleGeometry && (
         <mesh geometry={built.toppleGeometry} renderOrder={OVERHANG_OVERLAY_RENDER_ORDER} raycast={() => null}>
           <primitive object={toppleMaterial} attach="material" />

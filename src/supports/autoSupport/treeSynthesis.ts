@@ -27,8 +27,24 @@ export const TWO_LEVEL_BRANCH_REACH_MM = 8.0;
 // ---------------------------------------------------------------------------
 /** Young's modulus E_green (MPa) of green-state cured UV photopolymer resin. */
 export const GREEN_RESIN_MODULUS_MPA = 850;
-/** Nominal single-support peel traction load F_tip (N) (~15 kPa nFEP × 10 mm²). */
-export const NOMINAL_TIP_PEEL_LOAD_N = 0.15;
+/** Nominal single-support peel traction load F_tip (N) at the 10 mm² reference
+ *  disc: 0.29 N ≈ 29 kPa. The traction factor saturates at 1.55× on a broad
+ *  layer, so the saturated layer traction is `0.29 × 1.55 ≈ 45 kPa` — the
+ *  damage-initiation traction measured on a 706.85 mm² coupon (31.7 N) and the
+ *  suction parameter Materialise e-Stage 7.3 uses (Cao et al. 2025,
+ *  doi:10.1080/17452759.2025.2466189). The old 0.15 N read 23 kPa saturated,
+ *  about half the measured film strength. */
+export const NOMINAL_TIP_PEEL_LOAD_N = 0.29;
+/** Nominal peel stress calibration (MPa = N/mm²): `0.29 N` per `10 mm²` reference disc
+ *  (≈29 kPa; the 1.55× saturation cap puts broad-layer traction at ≈45 kPa). */
+export const NOMINAL_PEEL_PRESSURE_MPA = NOMINAL_TIP_PEEL_LOAD_N / 10.0;
+/** Load the placement lean gate is tuned on (N). Kept separate from the peel
+ *  calibration on purpose: `maxStableAngleForSpanDeg` uses the *vertical* peel
+ *  load as a lateral cantilever proxy, while the actual lateral drag is
+ *  `LATERAL_PEEL_DRAG_RATIO` (8 %) of it. Re-tuning the gate for the measured
+ *  traction is a structural decision of its own, not a side effect of the
+ *  pressure constant. */
+export const MEMBER_LEAN_DESIGN_LOAD_N = 0.15;
 /** Guided-cantilever lateral tip deflection limit δ_max (mm) (~2.8 × 50 µm layers). */
 const MAX_TIP_DEFLECTION_MM = 0.14;
 /** Factored axial compressive squeeze load SF·F_return (N) on vat Z-return. */
@@ -83,7 +99,7 @@ export function maxStableAngleForSpanDeg(
     const L = Math.max(0.5, spanMm);
     const d = Math.max(0.4, shaftDiameterMm);
     const sinMax = (12 * Math.PI * GREEN_RESIN_MODULUS_MPA * MAX_TIP_DEFLECTION_MM * (d ** 4))
-        / (64 * NOMINAL_TIP_PEEL_LOAD_N * (L ** 3));
+        / (64 * MEMBER_LEAN_DESIGN_LOAD_N * (L ** 3));
     if (sinMax >= 1.0) return baseMaxAngleDeg;
     const beamAngleDeg = (Math.asin(Math.max(0, sinMax)) * 180) / Math.PI;
     return Math.min(baseMaxAngleDeg, beamAngleDeg);

@@ -1630,3 +1630,222 @@ export function clearBracesForModel(modelId: string | null | undefined): number 
 }
 
 type BuildSnapshotResult = AutoBraceResult & { snapshot: SupportState };
+
+export interface StressBraceRequest {
+    /** Support entity at one end (a tip's support, or the overloaded member). */
+    aEntityId: string;
+    /** Support entity at the other end; absent => nearest legal host to `near`. */
+    bEntityId?: string;
+    /** Preferred link height (mm); clamped into both supports' Z overlap. */
+    atZMm: number;
+    /** Plan point used to find a neighbour when `bEntityId` is absent. */
+    near?: Vec3;
+    /** Override for the link's own span (mm). A rocking pair may be farther
+     *  apart than the auto-bracing ladder's aesthetic `maxBraceLengthMm`; the
+     *  caller measures the pair and passes that span. */
+    maxSpanMm?: number;
+}
+
+export interface StressBraceResult {
+    snapshot: SupportState;
+    added: number;
+    skipped: number;
+    changed: boolean;
+    reasons: Partial<Record<'noEndpoints' | 'noHost' | 'noLegalLink' | 'duplicate' | 'blocked', number>>;
+}
+
+/**
+ * Adds braces for solver-derived stress actions (`planStressActions`), reusing
+ * the auto-brace conventions: a 45° link from a low anchor, knots on the two
+ * host segments, the settings' brace diameter, and the mesh-clearance gate.
+ *
+ * This is the execution half of the closed loop. It does not decide what needs
+ * bracing — the report already did — and it will not invent a host for an
+ * overloaded member: when no second shaft is within `maxBraceLengthMm`, the
+ * action is skipped and counted, so the caller can decide to promote the leaf
+ * instead of silently thickening it to its cap again.
+ */
+export function addTargetedStressBraces(
+    snapshot: SupportState,
+    requests: readonly StressBraceRequest[],
+    settings: AutoBracingSettings,
+    allowedModelIds?: ReadonlySet<string>,
+): StressBraceResult {
+    const next = cloneSupportState(snapshot);
+    const samples = buildSupportSamples(next);
+    const sampleById = new Map(samples.map((sample) => [sample.supportId, sample]));
+    const supportBySegment = new Map<string, string>();
+    for (const sample of samples) {
+        for (const segment of sample.segments) supportBySegment.set(segment.segmentId, sample.supportId);
+    }
+
+    const braceProfile = buildBraceProfile(settings.braceDiameterMm);
+    const braceIds = new Set(Object.keys(next.braces));
+    const knotIds = new Set(Object.keys(next.knots));
+    const createBraceId = createUniqueIdFactory('auto-brace', braceIds);
+    const createKnotId = createUniqueIdFactory('auto-brace-knot', knotIds);
+
+    const pairKey = (aId: string, bId: string): string => [aId, bId].sort().join('|');
+    /** A targeted action never stacks a second brace between the same pair at
+     *  another height; one link is the action. */
+    const existingPairIds = new Set<string>();
+    for (const brace of Object.values(next.braces)) {
+        const start = next.knots[brace.startKnotId];
+        const end = next.knots[brace.endKnotId];
+        if (!start || !end) continue;
+        const aId = supportBySegment.get(start.parentShaftId) ?? start.parentShaftId;
+        const bId = supportBySegment.get(end.parentShaftId) ?? end.parentShaftId;
+        existingPairIds.add(pairKey(aId, bId));
+    }
+
+    const reasons: StressBraceResult['reasons'] = {};
+    const bump = (reason: keyof NonNullable<StressBraceResult['reasons']>): void => {
+        reasons[reason] = (reasons[reason] ?? 0) + 1;
+    };
+    let added = 0;
+    let skipped = 0;
+
+    for (const request of requests) {
+        const a = sampleById.get(request.aEntityId);
+        if (!a) {
+            bump('noEndpoints');
+            skipped++;
+            continue;
+        }
+        const maxSpanMm = request.maxSpanMm ?? settings.maxBraceLengthMm;
+
+        const candidates: SupportSample[] = [];
+        if (request.bEntityId) {
+            const b = sampleById.get(request.bEntityId);
+            if (!b) {
+                bump('noEndpoints');
+                skipped++;
+                continue;
+            }
+            candidates.push(b);
+        } else {
+            const target = request.near ?? a.sortAnchor;
+            const neighbours = samples
+                .filter((sample) => sample.supportId !== a.supportId && sample.modelId === a.modelId)
+                .map((sample) => ({
+                    sample,
+                    distance: Math.hypot(sample.sortAnchor.x - target.x, sample.sortAnchor.y - target.y),
+                }))
+                .filter((entry) => entry.distance <= maxSpanMm + EPS)
+                .sort((x, y) => x.distance - y.distance || x.sample.supportId.localeCompare(y.sample.supportId))
+                .slice(0, 8);
+            candidates.push(...neighbours.map((entry) => entry.sample));
+        }
+        if (candidates.length === 0) {
+            bump('noHost');
+            skipped++;
+            continue;
+        }
+
+        let placed = false;
+        let sawDuplicate = false;
+        let sawBlocked = false;
+        for (const b of candidates) {
+            if (b.modelId !== a.modelId) continue;
+            const key = pairKey(a.supportId, b.supportId);
+            const zLow = Math.max(a.bottomReferenceZ, b.bottomReferenceZ);
+            const zHigh = Math.min(a.topReferenceZ, b.topReferenceZ);
+            if (zHigh - zLow < 0.5) continue;
+            const clampedTarget = THREE.MathUtils.clamp(request.atZMm, zLow + 0.25, zHigh - 0.25);
+            const attempts = [...new Set([
+                Math.round(clampedTarget * 1000) / 1000,
+                Math.round((zLow + 0.25) * 1000) / 1000,
+                Math.round((zHigh - 0.25) * 1000) / 1000,
+            ])];
+
+            for (const atZ of attempts) {
+                for (const [lowS, highS] of [[a, b], [b, a]] as const) {
+                    const low = resolveAnchorAtZ(lowS, atZ);
+                    if (!low) continue;
+                    // A lateral tie is horizontal at the layer: a rocking pair
+                    // spanning the part cannot climb a 45° ladder into supports
+                    // that end at that height. Try the tie first, then the
+                    // auto-brace 45° link as the fallback.
+                    const linkModes: Array<() => AnchorPoint | null> = [
+                        () => resolveAnchorAtZ(highS, atZ),
+                        () => {
+                            const sameTier = resolveAnchorAtZ(highS, atZ);
+                            if (!sameTier) return null;
+                            const hDist = Math.hypot(
+                                sameTier.pos.x - low.pos.x,
+                                sameTier.pos.y - low.pos.y,
+                            );
+                            if (hDist < 1e-3 || hDist > maxSpanMm + EPS) return null;
+                            if (atZ + hDist >= lowS.topReferenceZ - 0.1 || atZ + hDist >= highS.topReferenceZ - 0.1) {
+                                return null;
+                            }
+                            return resolveAnchorAtZ(highS, atZ + hDist);
+                        },
+                    ];
+                    for (const resolveHigh of linkModes) {
+                        const high = resolveHigh();
+                        if (!high) continue;
+                        const span = Math.hypot(
+                            high.pos.x - low.pos.x,
+                            high.pos.y - low.pos.y,
+                            high.pos.z - low.pos.z,
+                        );
+                        if (span < 1e-3 || span > maxSpanMm + EPS) continue;
+                        if (existingPairIds.has(key)) {
+                            sawDuplicate = true;
+                            continue;
+                        }
+                        const allowed = allowedModelIds ?? new Set([a.modelId]);
+                        if (!linePassesMeshClearance(low.pos, high.pos, a.modelId, settings.braceDiameterMm, allowed)) {
+                            sawBlocked = true;
+                            continue;
+                        }
+
+                        const startId = createKnotId();
+                        const endId = createKnotId();
+                        const braceId = createBraceId();
+                        next.knots[startId] = {
+                            id: startId,
+                            parentShaftId: low.segmentId,
+                            t: low.t,
+                            pos: low.pos,
+                            diameter: low.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM,
+                        };
+                        next.knots[endId] = {
+                            id: endId,
+                            parentShaftId: high.segmentId,
+                            t: high.t,
+                            pos: high.pos,
+                            diameter: high.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM,
+                        };
+                        next.braces[braceId] = {
+                            id: braceId,
+                            modelId: a.modelId,
+                            startKnotId: startId,
+                            endKnotId: endId,
+                            profile: braceProfile,
+                            debugSection: 'repeating',
+                            generatedBy: 'autoBracing',
+                        };
+                        existingPairIds.add(key);
+                        added++;
+                        placed = true;
+                        break;
+                    }
+                    if (placed) break;
+                }
+                if (placed) break;
+            }
+            if (placed) break;
+        }
+
+        if (!placed) {
+            skipped++;
+            if (sawDuplicate && !sawBlocked) bump('duplicate');
+            else if (sawBlocked) bump('blocked');
+            else bump('noLegalLink');
+        }
+    }
+
+    return { snapshot: next, added, skipped, changed: added > 0, reasons };
+}

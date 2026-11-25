@@ -42,8 +42,9 @@ export interface ToppleRiskInput {
     bearingAreaMm2: number;
     /** How far the bearing patch's own centroid sits inside the edge (mm). */
     contactDepthMm: number;
-    /** Frame solve's max tip deflection under the same peel (mm). */
-    frameDeflectionMm?: number;
+    /** Frame rocking: the differential (max−min) contact displacement along the
+     *  drag direction under the same peel (mm), from `SupportFrameStressReport.maxTipRockingMm`. */
+    frameRockingMm?: number;
 }
 
 export type ToppleOutcome = 'pastEdge' | 'rocking' | 'adhesionBound';
@@ -53,11 +54,13 @@ export interface ToppleRiskReport {
     comDepthMm: number;
     /** Solved Stefan peel moment about the edge (N·mm). */
     peelMomentNmm: number;
-    /** Sum of the sampled peel forces (N). */
-    totalPeelForceN: number;
+    /** Peel force of the single layer that governs `peelMomentNmm` (N). Layers
+     *  peel one at a time, so the moment is the worst layer's, not a sum. */
+    peakLayerForceN: number;
     /** Plate pressure that would lift the contact patch (MPa). */
     requiredAdhesionMpa: number;
-    /** Frame max tip deflection (mm); 0 when no frame was solved. */
+    /** Rocking displacement (mm): the frame's contact differential, not a single
+     *  tip's elastic sag; 0 when no frame was solved. */
     complianceMm: number;
     outcome: ToppleOutcome;
 }
@@ -130,13 +133,13 @@ export function evaluateToppleRisk(input: ToppleRiskInput): ToppleRiskReport {
         ? peelMomentNmm / (input.bearingAreaMm2 * momentLeverMm)
         : (peelMomentNmm > 0 ? Infinity : 0);
 
-    const complianceMm = input.frameDeflectionMm ?? 0;
+    const complianceMm = input.frameRockingMm ?? 0;
     const outcome = classifyToppleRisk(comDepthMm, complianceMm);
 
     return {
         comDepthMm,
         peelMomentNmm,
-        totalPeelForceN: peakLayerForceN,
+        peakLayerForceN,
         requiredAdhesionMpa,
         complianceMm,
         outcome,

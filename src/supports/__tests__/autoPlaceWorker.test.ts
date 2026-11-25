@@ -12,6 +12,7 @@ import { clearHistory } from '../../history/historyStore';
 import { getSnapshot, resetKickstandsInState, resetStore, setSnapshot } from '../state';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
 import { computeAutoSupportPlan, runAutoPlace } from '../autoSupport/autoPlace';
+import { collectSupportTips } from '../autoSupport/coverage';
 import { setModelMesh } from '../autoSupport/meshStore';
 import { DEFAULT_RAFT_SETTINGS } from '../Rafts/Crenelated/RaftDefaults';
 import {
@@ -66,10 +67,50 @@ const MODEL = 'model-a';
  * token before stringifying.
  */
 const shape = (value: unknown): string =>
-    JSON.stringify(value).replace(
-        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g,
-        'U',
-    );
+    JSON.stringify(value)
+        .replace(
+            /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g,
+            'U',
+        )
+        // Forest-report members without a ledger display id fall back to an
+        // 8-hex slice of a freshly minted UUID, so it is per-run identity, not
+        // plan data.
+        .replace(/"([0-9a-f]{8})"/g, '"S"');
+
+/**
+ * The worker rebuilds the mesh and its representative layers from the payload,
+ * so solver floats diverge in their last bits and occasionally land on opposite
+ * sides of a printed 2-decimal rounding boundary. Placements stay exact; an
+ * analytic number within 0.02 % relative is the same answer.
+ */
+const ANALYTICS_TOLERANCE = 2e-4;
+
+function assertAnalyticsMatch(actual: unknown, expected: unknown, path = 'analytics'): void {
+    if (typeof actual === 'number' && typeof expected === 'number') {
+        if (actual === expected) return;
+        const scale = Math.max(1, Math.abs(actual), Math.abs(expected));
+        assert.ok(Math.abs(actual - expected) <= ANALYTICS_TOLERANCE * scale,
+            `${path}: ${actual} vs ${expected}`);
+        return;
+    }
+    if (Array.isArray(actual) && Array.isArray(expected)) {
+        assert.equal(actual.length, expected.length, `${path}.length`);
+        for (let index = 0; index < actual.length; index++) {
+            assertAnalyticsMatch(actual[index], expected[index], `${path}[${index}]`);
+        }
+        return;
+    }
+    if (actual && expected && typeof actual === 'object' && typeof expected === 'object') {
+        const actualRecord = actual as Record<string, unknown>;
+        const expectedRecord = expected as Record<string, unknown>;
+        assert.deepEqual(Object.keys(actualRecord).sort(), Object.keys(expectedRecord).sort(), `${path} keys`);
+        for (const key of Object.keys(actualRecord)) {
+            assertAnalyticsMatch(actualRecord[key], expectedRecord[key], `${path}.${key}`);
+        }
+        return;
+    }
+    assert.equal(actual, expected, path);
+}
 
 /** A 20 mm box rotated 30° about X, with the rotated underside as an island. */
 function rotatedUnderside(): { mesh: THREE.Mesh; island: DetectedIsland } {
@@ -186,8 +227,10 @@ test('the worker produces the same plan as an in-process run', () => {
     // Timings are wall-clock, so they never match between two runs: compare the
     // analytics without them, and the phase list separately.
     const withoutTimings = ({ timings: _timings, ...rest }: typeof inProcess.analytics) => rest;
-    assert.equal(shape(withoutTimings(inWorker.analytics)), shape(withoutTimings(inProcess.analytics)),
-        'analytics match, coverage included');
+    assertAnalyticsMatch(
+        JSON.parse(shape(withoutTimings(inWorker.analytics))),
+        JSON.parse(shape(withoutTimings(inProcess.analytics))),
+    );
     assert.deepEqual(
         inWorker.analytics.timings?.phases.map((phase) => phase.label),
         inProcess.analytics.timings?.phases.map((phase) => phase.label),
@@ -1305,6 +1348,44 @@ test('MAJOR-02: in-place vertex edits and setAttribute at version 0 invalidate g
     } finally {
         clearMeshesForAutoBrace();
     }
+});
+
+test('a tip that cannot hold its layer peel gets a force-budget contact', () => {
+    const geometry = new THREE.BoxGeometry(40, 40, 2).translate(0, 0, 21);
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld(true);
+    const voxels: Array<{ x: number; y: number; z?: number }> = [];
+    for (let x = -20; x <= 20; x += 0.5) {
+        for (let y = -20; y <= 20; y += 0.5) {
+            voxels.push({ x, y, z: 20 });
+        }
+    }
+    const island: DetectedIsland = {
+        id: 'plate',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, 0, 20),
+        baseZ: 20,
+        areaMm2: 1600,
+        overhangAngleDeg: 0,
+        surfaceNormal: { x: 0, y: 0, z: -1 },
+        contactVoxels: footprintFromPoints(voxels),
+    };
+    const override = { debugSkipAutoBracing: true, stabilizationEnabled: false } as const;
+    const normal = withStore(mesh, () =>
+        computeAutoSupportPlan([island], MODEL, override, undefined, mesh, undefined, undefined, undefined, 24));
+    const weak = withStore(mesh, () =>
+        computeAutoSupportPlan([island], MODEL, override, undefined, mesh, undefined, undefined, undefined, 5));
+
+    assert.ok(normal, 'normal-strength plan computed');
+    assert.ok(weak, 'weak-strength plan computed');
+    const weakAdds = weak.analytics.forestReport?.diagnostics?.forceBudgetAdds;
+    assert.ok((weakAdds?.placed ?? 0) > 0, 'the weak profile\'s over-budget cells got contacts');
+    assert.ok((weakAdds?.attempted ?? 0) >= (weakAdds?.placed ?? 0));
+    const normalTips = collectSupportTips(normal.support);
+    const weakTips = collectSupportTips(weak.support);
+    assert.ok(weakTips.length > normalTips.length,
+        `the budget adds contacts (${normalTips.length} → ${weakTips.length})`);
 });
 
 

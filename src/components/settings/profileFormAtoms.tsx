@@ -850,7 +850,7 @@ export function MaterialProfileIdentitySection({
     return (
         <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
             <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Material Profile</div>
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            <div className="grid grid-cols-1 items-end gap-2 md:grid-cols-3">
                 <LabeledInput
                     label="Manufacturer"
                     value={draft.brand}
@@ -861,50 +861,15 @@ export function MaterialProfileIdentitySection({
                     value={draft.name}
                     onChange={(value) => onChange((prev) => ({ ...prev, name: value }))}
                 />
-            </div>
-            <div className="mt-2 grid grid-cols-1 items-end gap-2 md:grid-cols-2">
                 <LabeledMaterialColorSelect
                     value={draft.color}
                     onChange={(color) => onChange((prev) => ({ ...prev, color: color || undefined }))}
                 />
-                {canShare && (
-                    <Tooltip
-                        wrapperClassName="w-full"
-                        content={hasCompatiblePeer ? undefined : (
-                            <Trans>No other printer uses the same material settings and file format</Trans>
-                        )}
-                    >
-                        <Button
-                            type="button"
-                            variant="secondary"
-                            size="auto"
-                            onClick={() => setCompatibleMachinesOpen(true)}
-                            disabled={!hasCompatiblePeer}
-                            className="!h-9 w-full !px-2.5 !py-0 text-sm inline-flex items-center justify-between gap-2 rounded-md disabled:opacity-45"
-                            style={{ color: 'var(--text-strong)' }}
-                        >
-                            <span className="inline-flex items-center gap-1.5">
-                                <Link2 className="w-3.5 h-3.5" />
-                                <Trans>Compatible Machines</Trans>
-                            </span>
-                            <span style={{ color: 'var(--text-muted)' }}>{shareableCompatibleIds.length}</span>
-                        </Button>
-                    </Tooltip>
-                )}
-            </div>
-
-            <div className="mt-2 grid grid-cols-2 gap-2">
                 <LabeledResinFamilySelect
                     label="Resin Family"
                     value={draft.resinFamily}
                     options={RESIN_FAMILY_OPTIONS}
                     onChange={(value) => onChange((prev) => ({ ...prev, resinFamily: value }))}
-                />
-                <LabeledCurrencySelect
-                    label="Currency"
-                    value={draft.currencyCode || 'USD'}
-                    options={CURRENCY_OPTIONS}
-                    onChange={(value) => onChange((prev) => ({ ...prev, currencyCode: value }))}
                 />
                 <LabeledNumberInput
                     label="Bottle Price"
@@ -912,10 +877,50 @@ export function MaterialProfileIdentitySection({
                     onChange={(value) => onChange((prev) => ({ ...prev, bottlePrice: value }))}
                 />
                 <LabeledNumberInput
+                    label="Tensile strength (MPa)"
+                    value={draft.tensileStrengthMpa ?? 24}
+                    onChange={(value) => onChange((prev) => ({ ...prev, tensileStrengthMpa: value }))}
+                />
+                <LabeledNumberInput
                     label="Bottle Capacity (ml)"
                     value={draft.bottleCapacityMl}
                     onChange={(value) => onChange((prev) => ({ ...prev, bottleCapacityMl: value }))}
                 />
+                <LabeledCurrencySelect
+                    label="Currency"
+                    value={draft.currencyCode || 'USD'}
+                    options={CURRENCY_OPTIONS}
+                    onChange={(value) => onChange((prev) => ({ ...prev, currencyCode: value }))}
+                />
+                {canShare && (
+                    <div className="space-y-1 block">
+                        <span className="ui-label font-medium inline-flex items-center gap-1.5">
+                            <Trans>Profile Sharing</Trans>
+                        </span>
+                        <Tooltip
+                            wrapperClassName="w-full"
+                            content={hasCompatiblePeer ? undefined : (
+                                <Trans>No other printer uses the same material settings and file format</Trans>
+                            )}
+                        >
+                            <Button
+                                type="button"
+                                variant="secondary"
+                                size="auto"
+                                onClick={() => setCompatibleMachinesOpen(true)}
+                                disabled={!hasCompatiblePeer}
+                                className="!h-9 w-full !px-2.5 !py-0 text-sm inline-flex items-center justify-between gap-2 rounded-md disabled:opacity-45"
+                                style={{ color: 'var(--text-strong)' }}
+                            >
+                                <span className="inline-flex items-center gap-1.5">
+                                    <Link2 className="w-3.5 h-3.5" />
+                                    <Trans>Compatible Machines</Trans>
+                                </span>
+                                <span style={{ color: 'var(--text-muted)' }}>{shareableCompatibleIds.length}</span>
+                            </Button>
+                        </Tooltip>
+                    </div>
+                )}
             </div>
 
             <StructuredDialogModal

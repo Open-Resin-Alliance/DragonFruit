@@ -11,15 +11,17 @@ import { getSettings, setSettings } from '../Settings/state';
 import { resetKickstandsInState, resetStore } from '../state';
 import { computeAutoSupportPlan, forestReportToText } from '../autoSupport/autoPlace';
 import {
-    GREEN_RESIN_UTS_MPA,
     buildSupportGraph,
     computePeelLayerSamples,
     distributeRigidBodyPeelLoads,
+    distributeRigidBodyDragLoads,
+    biaxialContactStressMpa,
     reinforceOverloadedFrameMembers,
     solveSupportFrameStress,
     type SupportFrameStressReport,
 } from '../autoSupport/supportGraphStress';
-import { GREEN_RESIN_MODULUS_MPA } from '../autoSupport/treeSynthesis';
+import { DEFAULT_SUPPORT_BREAK_STRENGTH_MPA } from '../autoSupport/greenMaterialCalibration';
+import { GREEN_RESIN_MODULUS_MPA, NOMINAL_PEEL_PRESSURE_MPA } from '../autoSupport/treeSynthesis';
 import { referenceStefanMeanPressureMm2, type RepresentativeLayerProfile } from '../autoSupport/tractionOptimization';
 
 test('buildSupportGraph splits trunk shafts at branch and brace knots cleanly', () => {
@@ -107,6 +109,62 @@ test('buildSupportGraph splits trunk shafts at branch and brace knots cleanly', 
     assert.equal(graph.members.length, 8, 'splits both host trunk segments at their brace/leaf knots');
 });
 
+test('a knot within 0.5 mm of a shaft end welds into it instead of splitting a stub', () => {
+    const draft: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            rA: { id: 'rA', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            tA: {
+                id: 'tA',
+                modelId: 'm',
+                rootId: 'rA',
+                segments: [
+                    {
+                        id: 'segA',
+                        diameter: 2.2,
+                        bottomJoint: { id: 'jA0', pos: { x: 0, y: 0, z: 1 }, diameter: 2.2 },
+                        topJoint: { id: 'jA1', pos: { x: 0, y: 0, z: 20 }, diameter: 2.2 },
+                    },
+                ],
+                contactCone: {
+                    id: 'cA',
+                    pos: { x: 0, y: 0, z: 22.5 },
+                    normal: { x: 0, y: 0, z: -1 },
+                    profile: { type: 'disk', contactDiameterMm: 0.28, bodyDiameterMm: 2.2, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 },
+                },
+            } as never,
+        },
+        knots: {
+            kNear: { id: 'kNear', parentShaftId: 'segA', t: 0.94, pos: { x: 0, y: 0, z: 19.8 }, diameter: 2.2 } as never,
+        },
+        leaves: {
+            l1: {
+                id: 'l1',
+                modelId: 'm',
+                parentKnotId: 'kNear',
+                contactCone: {
+                    id: 'cL1',
+                    pos: { x: 3, y: 0, z: 20 },
+                    normal: { x: 0, y: 0, z: -1 },
+                    profile: { type: 'disk', contactDiameterMm: 0.25, bodyDiameterMm: 0.9, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 },
+                },
+            } as never,
+        },
+    };
+
+    const graph = buildSupportGraph(draft, 'm');
+    const trunkShaft = graph.members.filter((m) => m.entityId === 'tA' && m.lengthMm > 10);
+    assert.equal(trunkShaft.length, 1, 'the shaft is one member, not a 0.2 mm stub plus a long span');
+    assert.ok(graph.members.every((m) => m.lengthMm >= 0.5), 'no sub-millimetre member survives');
+    const leafMember = graph.members.find((m) => m.entityId === 'l1');
+    assert.ok(leafMember, 'the leaf hosts at the welded shaft end');
+    assert.equal(leafMember.nodeA, trunkShaft[0].nodeB, 'leaf and shaft share the welded node');
+});
+
 test('distributeRigidBodyPeelLoads distributes centered uniformly, shifts off-center load, and clamps compression', () => {
     const symmetric = [
         { x: -5, y: 0, contactDiameterMm: 0.3 },
@@ -123,6 +181,83 @@ test('distributeRigidBodyPeelLoads distributes centered uniformly, shifts off-ce
     const overhang = distributeRigidBodyPeelLoads(symmetric, 1.0, 8, 0);
     assert.equal(overhang[0], 0, 'negative compressive reaction clamped out of tensile peel set');
     assert.ok(Math.abs(overhang[1] - 1.0) < 1e-4, 'remaining tensile tip carries 100% of net peel force');
+});
+
+test('distributeRigidBodyDragLoads shares lateral drag by stiffness within a rigid component', () => {
+    const dx = Math.SQRT1_2;
+    const dy = Math.SQRT1_2;
+    // Stiffness 4:1; vertical loads place the CoP on the stiffness centroid
+    // (x = -0.6), so the plate translates without rotating.
+    const tips = [
+        { x: -1, y: 0, contactDiameterMm: 0.5 },
+        { x: 1, y: 0, contactDiameterMm: 0.25 },
+    ];
+    const vertical = new Float64Array([1, 0.25]);
+    const out = distributeRigidBodyDragLoads(tips, vertical, null, 0.08, dx, dy);
+    const along = (i: number) => out.fx[i] * dx + out.fy[i] * dy;
+    const total = vertical[0] + vertical[1];
+    assert.ok(Math.abs(along(0) + along(1) - total * 0.08) < 1e-9, 'the component carries its own drag total');
+    assert.ok(Math.abs(along(0) / along(1) - 4) < 1e-6, `stiff tip takes 4x (${along(0)} vs ${along(1)})`);
+    const cross = tips[0].x * out.fy[0] - tips[0].y * out.fx[0]
+        + tips[1].x * out.fy[1] - tips[1].y * out.fx[1];
+    const copX = (tips[0].x * vertical[0] + tips[1].x * vertical[1]) / total;
+    assert.ok(Math.abs(cross - total * 0.08 * (copX * dy)) < 1e-9,
+        'the resultant acts through the load centre');
+});
+
+test('distributeRigidBodyDragLoads conserves force and moment for an asymmetric plate', () => {
+    const dx = Math.cos(0.4);
+    const dy = Math.sin(0.4);
+    const tips = [
+        { x: -2, y: 1, contactDiameterMm: 0.5 },
+        { x: 0, y: -1, contactDiameterMm: 0.25 },
+        { x: 3, y: 0.5, contactDiameterMm: 0.35 },
+    ];
+    const vertical = new Float64Array([1, 2, 0.5]);
+    const totalVertical = vertical[0] + vertical[1] + vertical[2];
+    const copX = (tips[0].x * vertical[0] + tips[1].x * vertical[1] + tips[2].x * vertical[2]) / totalVertical;
+    const copY = (tips[0].y * vertical[0] + tips[1].y * vertical[1] + tips[2].y * vertical[2]) / totalVertical;
+    const out = distributeRigidBodyDragLoads(tips, vertical, null, 0.08, dx, dy);
+
+    const totalDrag = totalVertical * 0.08;
+    let fx = 0, fy = 0, moment = 0;
+    for (let i = 0; i < tips.length; i++) {
+        fx += out.fx[i];
+        fy += out.fy[i];
+        moment += tips[i].x * out.fy[i] - tips[i].y * out.fx[i];
+    }
+    assert.ok(Math.abs(fx - totalDrag * dx) < 1e-9, `sum Fx ${fx}`);
+    assert.ok(Math.abs(fy - totalDrag * dy) < 1e-9, `sum Fy ${fy}`);
+    assert.ok(Math.abs(moment - totalDrag * (copX * dy - copY * dx)) < 1e-4, `moment ${moment}`);
+});
+
+test('distributeRigidBodyDragLoads does not couple disconnected cross-section components', () => {
+    const dx = 1;
+    const dy = 0;
+    const tips = [
+        { x: -1, y: 0, contactDiameterMm: 0.3 },
+        { x: 1, y: 0, contactDiameterMm: 0.3 },
+    ];
+    const vertical = new Float64Array([1, 3]);
+    const out = distributeRigidBodyDragLoads(tips, vertical, new Int32Array([0, 1]), 0.08, dx, dy);
+    assert.ok(Math.abs(out.fx[0] - 0.08) < 1e-9, `first component ${out.fx[0]}`);
+    assert.ok(Math.abs(out.fx[1] - 0.24) < 1e-9, `second component ${out.fx[1]}`);
+    assert.ok(Math.abs(out.fy[0]) < 1e-9 && Math.abs(out.fy[1]) < 1e-9, 'drag is along its own axis');
+});
+
+test('biaxialContactStressMpa counts normal peel and √3-scaled lateral shear', () => {
+    const diameter = 0.28;
+    const area = Math.PI * 0.25 * diameter * diameter;
+    // Pure peel at the break load reproduces the break strength.
+    assert.ok(Math.abs(biaxialContactStressMpa(4.8 * area, 0, diameter) - 4.8) < 1e-9);
+    // Pure shear of the same magnitude counts √3×.
+    assert.ok(Math.abs(biaxialContactStressMpa(0, 4.8 * area, diameter) - 4.8 * Math.sqrt(3)) < 1e-9);
+    // Combined follows the von Mises form.
+    const expected = Math.hypot(0.1 / area, Math.sqrt(3) * 0.05 / area);
+    assert.ok(Math.abs(biaxialContactStressMpa(0.1, 0.05, diameter) - expected) < 1e-9);
+    // A compressive normal load does not offset the shear.
+    assert.ok(Math.abs(biaxialContactStressMpa(-1, 0.05, diameter)
+        - biaxialContactStressMpa(0, 0.05, diameter)) < 1e-12);
 });
 
 test('3D beam frame solver reproduces exact analytical Euler-Bernoulli cantilever deflection and bending stress', () => {
@@ -149,7 +284,7 @@ test('3D beam frame solver reproduces exact analytical Euler-Bernoulli cantileve
     const I = (Math.PI * (d ** 4)) / 64;
     const expectedDefl = (F * (L ** 3)) / (3 * GREEN_RESIN_MODULUS_MPA * I);
     const expectedSigmaMpa = (F * L * (0.5 * d)) / I;
-    const expectedUtilPct = (100 * expectedSigmaMpa) / GREEN_RESIN_UTS_MPA;
+    const expectedUtilPct = (100 * expectedSigmaMpa) / DEFAULT_SUPPORT_BREAK_STRENGTH_MPA;
 
     assert.equal(report.solverMode, 'frame3d');
     const relDeflErr = Math.abs(report.maxTipDeflectionMm - expectedDefl) / expectedDefl;
@@ -208,6 +343,20 @@ test('3D beam frame solver quantifies bracing stiffness reduction under lateral 
         `X-bracing sharply reduces lateral tip deflection (${braced.maxTipDeflectionMm.toFixed(3)}mm vs ${unbraced.maxTipDeflectionMm.toFixed(3)}mm)`);
     assert.ok(braced.maxMemberUtilizationPct < unbraced.maxMemberUtilizationPct,
         `X-bracing lowers peak member bending stress (${braced.maxMemberUtilizationPct.toFixed(1)}% vs ${unbraced.maxMemberUtilizationPct.toFixed(1)}%)`);
+
+    // Rocking is the differential across contacts, not a single tip's sag: the
+    // same load on two identical towers displaces both alike, so the range is
+    // ~zero even though each tip deflects.
+    assert.ok(unbraced.maxTipRockingMm < 1e-3,
+        `symmetric contacts do not rock (${unbraced.maxTipRockingMm})`);
+
+    const loadsAsym = new Map<number, readonly [number, number, number, number, number, number]>();
+    unbracedGraph.nodes.forEach((node, idx) => {
+        if (node.kind === 'tip' && node.pos.x < 1) loadsAsym.set(idx, [0.15, 0, 0.30, 0, 0, 0]);
+    });
+    const asym = solveSupportFrameStress(unbracedGraph, undefined, { explicitNodalLoads: loadsAsym });
+    assert.ok(asym.maxTipRockingMm > 1e-3,
+        `one-sided load rocks the contact set (${asym.maxTipRockingMm.toFixed(4)}mm)`);
 });
 
 test('computeAutoSupportPlan attaches deterministic frameStress report and formats it in Forest Report', () => {
@@ -427,7 +576,7 @@ test('reinforceOverloadedFrameMembers falls back to smaller clearance-safe step 
         layersEvaluated: 1, peakLayerZMm: 14, peakLayerPeelForceN: 1,
         maxTipUtilizationPct: 50, overloadedTips: 0,
         maxMemberUtilizationPct: 220, overloadedMembers: 1,
-        maxTipDeflectionMm: 0.2, solverMode: 'frame3d',
+        maxTipDeflectionMm: 0.2, maxTipRockingMm: 0.08, solverMode: 'frame3d',
         hotspots: [], layerProfile: [],
         memberSegments: [
             { entityId: 'lfNear', entityKind: 'leaf', a: { x: 0, y: 0, z: 10 }, b: { x: 0, y: 0, z: 14 }, diameterMm: 0.63, utilizationPct: 220 },
@@ -563,17 +712,17 @@ test('the reported peel curve runs at the sampled-layer resolution, not the clus
     assert.deepEqual(report.layerProfile.map((point) => point.zMm), [9.95, 10, 10.05], 'one point per sampled layer');
     assert.equal(report.layersEvaluated, 1, 'only the critical layer costs a solve');
     assert.equal(report.layerProfile.find((point) => point.zMm === 10)?.critical, true);
-    // 30 mm² at the nominal calibration (0.15 N per 10 mm²) is 0.45 N.
-    assert.ok(Math.abs((report.layerProfile.find((point) => point.zMm === 10.05)?.peelForceN ?? 0) - 0.45) < 1e-6);
+    // 30 mm² at the nominal calibration (0.29 N per 10 mm²) is 0.87 N.
+    assert.ok(Math.abs((report.layerProfile.find((point) => point.zMm === 10.05)?.peelForceN ?? 0) - 0.87) < 1e-6);
 });
 
-test('the peel curve interpolates the field ratio instead of spiking at cluster peaks', () => {
+test('the peel curve interpolates the field factor instead of spiking at cluster peaks', () => {
     const pRef = referenceStefanMeanPressureMm2(10);
     const field = {
         minX: -5, minY: -5, cellMm: 0.5, nx: 20, ny: 20,
         pressure: new Float32Array(400).fill(0.5),
         peakPressureMm2: 1, meanPressureMm2: 0.5,
-        // Ratio 10 against the 10 mm² reference disc.
+        // Mean pressure 10× the 10 mm² reference disc.
         integratedForceMm4: 10 * 100 * pRef,
         maskAreaMm2: 100,
     };
@@ -581,9 +730,95 @@ test('the peel curve interpolates the field ratio instead of spiking at cluster 
     const samples = [9.9, 9.95, 10, 10.05, 10.1].map((zMm) => ({ zMm, areaMm2: 100 }));
 
     const forces = computePeelLayerSamples(samples, layers, 100).map((sample) => sample.forceN);
-    // 100 mm² × ratio 10 × 0.15 N per 10 mm² = 15 N at every neighbour too; the
-    // old nominal fallback made the layers either side of z=10 read 1.5 N.
+    // Compression `0.50 + 0.50·10^0.22` = 1.3298, so every layer reads the same
+    // force — the neighbours interpolate the factor instead of falling back to
+    // nominal 1.0 (which used to make the centre a 10× spike).
+    const factor = 0.5 + 0.5 * Math.pow(10, 0.22);
+    const expected = 100 * factor * NOMINAL_PEEL_PRESSURE_MPA;
     for (const force of forces) {
-        assert.ok(Math.abs(force - 15) < 1e-6, `layer force ${force} should be 15 N`);
+        assert.ok(Math.abs(force - expected) < 1e-3, `layer force ${force} should be ${expected.toFixed(3)} N`);
     }
+});
+
+test('the frame report exposes the worst rocking pair and per-tip displacements', () => {
+    const graph = {
+        nodes: [
+            { id: 'r0', pos: { x: 0, y: 0, z: 0 }, kind: 'root' as const, fixed: true },
+            { id: 't0', pos: { x: 0, y: 0, z: 10 }, kind: 'tip' as const, fixed: false, entityId: 'trunk-a', entityKind: 'trunk' as const, tipContactDiameterMm: 0.28 },
+            { id: 'r1', pos: { x: 10, y: 0, z: 0 }, kind: 'root' as const, fixed: true },
+            { id: 't1', pos: { x: 10, y: 0, z: 12 }, kind: 'tip' as const, fixed: false, entityId: 'trunk-b', entityKind: 'trunk' as const, tipContactDiameterMm: 0.28 },
+        ],
+        members: [
+            { id: 'm0', entityId: 'trunk-a', entityKind: 'trunk' as const, nodeA: 0, nodeB: 1, lengthMm: 10, diameterMm: 0.8, angleFromVerticalDeg: 0 },
+            { id: 'm1', entityId: 'trunk-b', entityKind: 'trunk' as const, nodeA: 2, nodeB: 3, lengthMm: 12, diameterMm: 0.8, angleFromVerticalDeg: 0 },
+        ],
+        rootCount: 2,
+        tipCount: 2,
+        braceCount: 0,
+    };
+    const profile: RepresentativeLayerProfile = {
+        layers: [{ zMm: 10, areaMm2: 20, areaJumpRatio: 1, clusterSpanCount: 1 }],
+        samples: [{ zMm: 10, areaMm2: 20 }],
+        peakAreaMm2: 20,
+        sampledPlaneCount: 1,
+    };
+    const report = solveSupportFrameStress(graph, profile, { areaPerSupportMm2: 10 });
+
+    assert.equal(report.solverMode, 'frame3d');
+    assert.ok(report.maxTipRockingMm > 0, `rocking ${report.maxTipRockingMm}`);
+    assert.ok(report.rockingPair, 'worst rocking pair recorded');
+    assert.equal(report.tipDisplacements?.length, 2);
+    assert.ok(Math.abs(report.rockingPair!.differentialMm - report.maxTipRockingMm) < 1e-9);
+    assert.notEqual(report.rockingPair!.aEntityId, report.rockingPair!.bEntityId);
+    const projections = (report.tipDisplacements ?? []).map((d) => d.dx * Math.SQRT1_2 + d.dy * Math.SQRT1_2);
+    const spread = Math.max(...projections) - Math.min(...projections);
+    assert.ok(Math.abs(spread - report.maxTipRockingMm) < 1e-9);
+});
+
+test('the material tensile strength scales tip utilization without moving geometry', () => {
+    const cone = {
+        id: 'c1',
+        pos: { x: 0, y: 0, z: 10 },
+        normal: { x: 0, y: 0, z: -1 },
+        profile: { type: 'disk' as const, contactDiameterMm: 0.28, bodyDiameterMm: 1.0, lengthMm: 2.5, penetrationMm: 0 },
+    };
+    const snapshot: SupportState = {
+        ...createEmptySupportCollections(),
+        selectedId: null,
+        hoveredId: null,
+        roots: {
+            r1: { id: 'r1', modelId: 'm', transform: { pos: { x: 0, y: 0, z: 0 } }, diameter: 2, diskHeight: 0.5, coneHeight: 0.5 } as never,
+        },
+        trunks: {
+            t1: {
+                id: 't1', modelId: 'm', rootId: 'r1',
+                segments: [{ id: 's1', diameter: 1.0, bottomJoint: { id: 'j0', pos: { x: 0, y: 0, z: 1 }, diameter: 1.0 }, topJoint: { id: 'j1', pos: { x: 0, y: 0, z: 9.5 }, diameter: 1.0 } }],
+                contactCone: cone,
+            } as never,
+        },
+    };
+    const profile: RepresentativeLayerProfile = {
+        layers: [{ zMm: 10, areaMm2: 20, areaJumpRatio: 1, clusterSpanCount: 1 }],
+        samples: [{ zMm: 10, areaMm2: 20 }],
+        peakAreaMm2: 20,
+        sampledPlaneCount: 1,
+    };
+    const graph = buildSupportGraph(snapshot, 'm');
+    const at12 = solveSupportFrameStress(graph, profile, { areaPerSupportMm2: 10, supportStrengthMpa: 12 });
+    const at24 = solveSupportFrameStress(graph, profile, { areaPerSupportMm2: 10, supportStrengthMpa: 24 });
+    assert.ok(at12.maxTipUtilizationPct > 0, `tip loaded (${at12.maxTipUtilizationPct})`);
+    assert.ok(Math.abs(at12.maxTipUtilizationPct / at24.maxTipUtilizationPct - 2) < 1e-6,
+        `doubling UTS halves utilization (${at12.maxTipUtilizationPct} vs ${at24.maxTipUtilizationPct})`);
+
+    // The tip sees the contact coupon strength; the member sees the bulk value.
+    const split = solveSupportFrameStress(graph, profile, {
+        areaPerSupportMm2: 10,
+        supportStrengthMpa: 12,
+        memberStrengthMpa: 24,
+    });
+    assert.ok(Math.abs(split.maxTipUtilizationPct - at12.maxTipUtilizationPct) < 1e-9,
+        'member strength does not move tip utilization');
+    assert.ok(at12.maxMemberUtilizationPct > 0, `member loaded (${at12.maxMemberUtilizationPct})`);
+    assert.ok(Math.abs(at12.maxMemberUtilizationPct / split.maxMemberUtilizationPct - 2) < 1e-6,
+        `doubling member strength halves member utilization (${at12.maxMemberUtilizationPct} vs ${split.maxMemberUtilizationPct})`);
 });

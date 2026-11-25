@@ -1660,6 +1660,7 @@ export default function Home() {
     segmentId: null,
     point: null,
   });
+  const supportShaftHoverDebugRef = React.useRef<ShaftHoverDebugDetail>(supportShaftHoverDebug);
 
   const activeSliceProfileFingerprint = sliceProfileFingerprint(activePrinterProfile?.id, activeMaterialProfile?.id);
   const slicedPlatesView = useSlicedPlates({
@@ -2385,34 +2386,29 @@ export default function Home() {
       const nextSegmentId = detail?.segmentId ?? null;
       const nextPoint = detail?.point ?? null;
 
-      setSupportShaftHoverDebug((prev) => {
-        if (
-          prev.segmentId === nextSegmentId &&
-          prev.point?.x === nextPoint?.x &&
-          prev.point?.y === nextPoint?.y &&
-          prev.point?.z === nextPoint?.z
-        ) {
-          return prev;
-        }
-
-        return {
-          segmentId: nextSegmentId,
-          point: nextPoint,
-        };
-      });
+      const prev = supportShaftHoverDebugRef.current;
+      if (
+        prev.segmentId === nextSegmentId
+        && prev.point?.x === nextPoint?.x
+        && prev.point?.y === nextPoint?.y
+        && prev.point?.z === nextPoint?.z
+      ) {
+        return;
+      }
+      const next = { segmentId: nextSegmentId, point: nextPoint };
+      supportShaftHoverDebugRef.current = next;
+      setSupportShaftHoverDebug(next);
     };
 
     const handleShaftLeave = (evt: Event) => {
       const detail = (evt as CustomEvent<{ segmentId?: string | null }>).detail;
-      setSupportShaftHoverDebug((prev) => {
-        if (!detail?.segmentId || prev.segmentId === detail.segmentId) {
-          if (prev.segmentId === null && prev.point === null) {
-            return prev;
-          }
-          return { segmentId: null, point: null };
-        }
-        return prev;
-      });
+      const prev = supportShaftHoverDebugRef.current;
+      if (!detail?.segmentId || prev.segmentId === detail.segmentId) {
+        if (prev.segmentId === null && prev.point === null) return;
+        const next = { segmentId: null, point: null };
+        supportShaftHoverDebugRef.current = next;
+        setSupportShaftHoverDebug(next);
+      }
     };
 
     window.addEventListener('shaft-hover', handleShaftHover as EventListener);
@@ -7334,6 +7330,7 @@ export default function Home() {
   // injected (no src/supports coupling in the Islands module).
   const modelRaycastRef = React.useRef<((start: THREE.Vector3, end: THREE.Vector3) => boolean) | null>(null);
   const [supportTips, setSupportTips] = React.useState<THREE.Vector3[]>([]);
+  const supportTipsRef = React.useRef<THREE.Vector3[]>([]);
 
   React.useEffect(() => {
     const updateSupportTips = () => {
@@ -7341,7 +7338,10 @@ export default function Home() {
       const tips: THREE.Vector3[] = [];
       const activeModelId = scene.activeModel?.id;
       if (!activeModelId) {
-        setSupportTips([]);
+        if (supportTipsRef.current.length > 0) {
+          supportTipsRef.current = [];
+          setSupportTips([]);
+        }
         return;
       }
 
@@ -7366,13 +7366,15 @@ export default function Home() {
         }
       }
 
-      setSupportTips(prevTips => {
-        if (prevTips.length !== tips.length) return tips;
-        for (let i = 0; i < tips.length; i++) {
-          if (!prevTips[i].equals(tips[i])) return tips;
-        }
-        return prevTips;
-      });
+      // A hover writes the support state (and notifies) without moving a tip.
+      // Calling setState here on every notification schedules a page render
+      // even when the updater returns the previous array; compare first.
+      const previous = supportTipsRef.current;
+      const unchanged = previous.length === tips.length
+        && tips.every((tip, index) => previous[index].equals(tip));
+      if (unchanged) return;
+      supportTipsRef.current = tips;
+      setSupportTips(tips);
     };
 
     updateSupportTips();

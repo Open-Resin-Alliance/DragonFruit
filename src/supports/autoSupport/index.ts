@@ -44,11 +44,18 @@ export { extractRepresentativeLayers } from "./tractionOptimization";
 export type { RepresentativeLayer, RepresentativeLayerProfile } from "./tractionOptimization";
 export type { LayerAreaSample, LayerGrowth, LayerGrowthGrid } from "./tractionOptimization";
 export {
+  planStressActions,
+  DEFAULT_MEMBER_TARGET_PCT,
+  DEFAULT_ROCKING_LIMIT_MM,
+  DEFAULT_TRUNK_BRACE_PCT,
+  type StressAction,
+  type StressActionOptions,
+} from "./stressActions";
+export {
   buildSupportGraph,
   solveSupportFrameStress,
   reinforceOverloadedFrameMembers,
   computePeelLayerSamples,
-  GREEN_RESIN_UTS_MPA,
   type PeelLayerSample,
   type ReinforceFrameMembersResult,
   type SupportFrameStressReport,
@@ -74,6 +81,17 @@ export {
   getCachedRepresentativeLayers,
   type FrameStressStoreSnapshot,
 } from "./frameStressState";
+export {
+  NOMINAL_PEEL_REFERENCE_AREA_MM2,
+  peelTractionFactorForArea,
+  peelPressureFromPullOff,
+  greenModulusFromCantilever,
+  greenUtsFromContactPullOff,
+  roundBarInertiaMm4,
+  type CantileverDeflectionMeasurement,
+  type ContactPullOffMeasurement,
+  type PullOffMeasurement,
+} from "./greenMaterialCalibration";
 export {
   evaluateToppleRisk,
   classifyToppleRisk,

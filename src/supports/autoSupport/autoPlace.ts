@@ -11,6 +11,7 @@ import {
     SUPPORT_STATE_TYPES,
     SUPPORT_TYPES,
     NEAR_PLATE_ORIGIN,
+    parsePrefixedSegmentId,
 } from '../supportTypeRegistry';
 import type { SupportCollectionKey, ShaftHostedMemberType, ShaftHostedMemberTypeId } from '../supportTypeRegistry';
 import type { SupportTypeId } from '../supportTypeRegistry';
@@ -89,7 +90,6 @@ import {
     type TreeSynthesisGridConfig,
 } from './treeSynthesis';
 import {
-    extractRepresentativeLayers,
     optimizeContactsByTraction,
     type RepresentativeLayerProfile,
     type TractionOptimizationStats,
@@ -99,9 +99,13 @@ import {
     reinforceOverloadedFrameMembers,
     solveSupportFrameStress,
 } from './supportGraphStress';
+import { computeForceBudgetFromGraph, collectForceBudgetSurfaces } from './forceBudget';
+import { supportBreakStrengthMpa, DEFAULT_RESIN_TENSILE_STRENGTH_MPA } from './greenMaterialCalibration';
 import { buildCavityBridge } from '../SupportTypes/Trunk/useTrunkPlacement';
 import { geometryCentroidMm } from '@/features/printing/modelResinVolume';
-import { evaluateToppleRisk, toppleRiskNeedsCoverage, type ToppleRiskReport } from './toppleRisk';
+import { evaluateToppleRisk, ROCKING_THRESHOLD_MM, toppleRiskNeedsCoverage, type ToppleRiskReport } from './toppleRisk';
+import { planStressActions } from './stressActions';
+import { getCachedRepresentativeLayers } from './frameStressState';
 import { createCavityTester } from '../interiorSupportGeometry';
 import { closestSurfaceNormal } from './closestSurfaceNormal';
 import { computeForestDiameterProfile, memberDiameterOf } from '../SupportTypes/Trunk/TrunkReplacement/maxConnectedDiameter';
@@ -111,7 +115,7 @@ import { buildLeafData } from '../SupportTypes/Leaf/leafBuilder';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { calculateSmoothedNormal } from '../PlacementLogic/PlacementUtils';
 import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
-import { buildAutoBracedSnapshot } from '../autoBracing/autoBrace';
+import { addTargetedStressBraces, buildAutoBracedSnapshot, type StressBraceRequest } from '../autoBracing/autoBrace';
 import { pushSupportHistory } from '../history/supportHistory';
 import { SUPPORT_AUTO_PLACE } from '../history/actionTypes';
 import { getModelMesh } from './meshStore';
@@ -139,10 +143,21 @@ const LOG_PREFIX = '[AutoSupport]';
  *  neighbour coupling (one shaft crossing its limit when the next thickens);
  *  more would churn on members that are at the clearance cap. */
 const MAX_STRESS_REINFORCE_PASSES = 3;
+/** Stress-driven braces a single feedback pass may add. The action list is
+ *  severity-ordered; a cap keeps a rocking model from being wrapped at once. */
+const MAX_STRESS_BRACES_PER_PASS = 4;
+/** Overloaded leaves a single feedback pass may promote to branches. */
+const MAX_STRESS_LEAF_PROMOTIONS_PER_PASS = 2;
 /** Most trunk-build failures retried as wide fans after gap-fill. The retry is
  *  a rescue, not a second placement pass; a run with dozens of blocked pillars
  *  should not spend its budget here. */
 const MAX_TRUNK_ERROR_RETRIES = 48;
+/** Add→re-evaluate rounds for the per-support force budget after gap-fill. */
+const MAX_FORCE_BUDGET_ADD_PASSES = 3;
+/** Contacts a single force-budget round may add, worst-utilization first. */
+const MAX_FORCE_BUDGET_ADDS_PER_PASS = 32;
+/** Minimum plan distance between a budget addition and an existing contact. */
+const MIN_FORCE_BUDGET_ADD_SPACING_MM = 1.2;
 
 /**
  * The steepest angle from vertical an auto member or chunk link may lean —
@@ -867,6 +882,101 @@ function buildHostedBranch(
     if (flooredShaftMm <= bandShaftMm) return null;
     const atBand = buildBranchData({ ...input, shaftDiameterMm: bandShaftMm });
     return rejected(atBand) ? null : atBand;
+}
+
+export interface LeafPromotionResult {
+    draft: SupportState;
+    promoted: boolean;
+    reason?: 'missingLeaf' | 'missingKnot' | 'buildFailed' | 'unstable' | 'crosses';
+}
+
+/** Host entity that owns a knot's parent shaft, inside the draft (the global
+ *  lookup cannot see an uncommitted draft). */
+function shaftOwnerInDraft(draft: SupportState, shaftId: string): string {
+    if (draft.trunks[shaftId] || draft.branches[shaftId] || draft.sticks[shaftId]
+        || draft.kickstands[shaftId] || draft.stumps[shaftId]) {
+        return shaftId;
+    }
+    const prefixed = parsePrefixedSegmentId(shaftId);
+    if (prefixed) return prefixed.entityId;
+    const collections = [draft.trunks, draft.branches, draft.sticks, draft.kickstands, draft.stumps];
+    for (const collection of collections) {
+        for (const entity of Object.values(collection ?? {})) {
+            if ((entity.segments ?? []).some((segment: { id: string }) => segment.id === shaftId)) return entity.id;
+        }
+    }
+    return shaftId;
+}
+
+/**
+ * Replace an overloaded leaf with a branch on the same host knot.
+ *
+ * A leaf is a bare tapered cone with no shaft, so neither thickening (the cone
+ * body caps) nor bracing (a brace needs a shaft to knot onto) can fix it. The
+ * branch keeps the same parent knot and contact point but gains real segments,
+ * which the reinforcement loop can then thicken or the brace loop can tie.
+ * The replacement frees and reuses one host attachment, so host capacity is
+ * unchanged.
+ */
+export function promoteOverloadedLeaf(
+    draft: SupportState,
+    leafId: string,
+    mesh: THREE.Mesh | undefined,
+    autoSettings: Partial<AutoSupportSettings>,
+): LeafPromotionResult {
+    const leaf = draft.leaves[leafId];
+    if (!leaf) return { draft, promoted: false, reason: 'missingLeaf' };
+    const knot = draft.knots[leaf.parentKnotId];
+    if (!knot) return { draft, promoted: false, reason: 'missingKnot' };
+
+    const band = activeSizingBand(autoSettings);
+    const tipNormal = leaf.contactCone.surfaceNormal ?? leaf.contactCone.normal;
+    try {
+        const built = buildHostedBranch(
+            {
+                tipPos: leaf.contactCone.pos,
+                tipNormal,
+                modelId: leaf.modelId,
+                parentKnot: knot,
+                mesh,
+                tipContactDiameterMm: leaf.contactCone.profile?.contactDiameterMm
+                    ?? band.tipContactDiameterMm,
+                rootsDiameterMm: band.rootDiameterMm,
+            },
+            band.shaftDiameterMm,
+            knot.diameter ?? band.shaftDiameterMm,
+            (attempt) => Boolean(attempt.supportData.error)
+                || Boolean(mesh && branchCollidesWithSDF(attempt.branch, mesh)),
+            autoSettings,
+        );
+        if (!built) return { draft, promoted: false, reason: 'buildFailed' };
+        if (branchDepartureShaftExceedsStability(
+            built.branch,
+            knot.pos,
+            Math.min(50, memberMaxAngleFromVerticalDeg(false)),
+            band.shaftDiameterMm,
+        )) {
+            return { draft, promoted: false, reason: 'unstable' };
+        }
+        if (branchPathCrossesSupports(
+            built.branch,
+            draft,
+            shaftOwnerInDraft(draft, knot.parentShaftId),
+            undefined,
+            leafId,
+            knot.pos,
+        )) {
+            return { draft, promoted: false, reason: 'crosses' };
+        }
+
+        built.branch.origin = leaf.origin ?? 'overhang';
+        if (leaf.generatedBy) built.branch.generatedBy = leaf.generatedBy;
+        let next = draftRemoveEntity(draft, 'leaf', leafId);
+        next = draftAddEntity(next, 'branch', built.branch);
+        return { draft: next, promoted: true };
+    } catch {
+        return { draft, promoted: false, reason: 'buildFailed' };
+    }
 }
 
 /** Consolidation fallback: when the straight fan leaf is blocked by the
@@ -4069,7 +4179,17 @@ export function computeAutoSupportPlan(
     /** Print profile layer height for the peel/traction sampling and the stress
      *  report this run attaches. Omitted → the slicer's default ~1 mm grid. */
     layerHeightMm?: number,
+    /** Datasheet tensile strength of the active resin (MPa); the support
+     *  break strength is derived from it. Omitted → the standard-resin default. */
+    resinTensileMpa?: number,
 ): AutoSupportPlan | null {
+    // One derate from the profile's datasheet tensile to the thin-green-section
+    // contact break strength, shared by the placement capacities and the force
+    // budget. Member bending stress is compared against the bulk tensile
+    // instead: the 4.8 MPa coupon is a 0.5 × 0.5 mm contact, not a 2.2 mm shaft.
+    const bulkTensileMpa = Math.max(0.01, resinTensileMpa ?? DEFAULT_RESIN_TENSILE_STRENGTH_MPA);
+    const supportStrengthMpa = supportBreakStrengthMpa(bulkTensileMpa);
+    const memberStrengthMpa = bulkTensileMpa;
     // ------------------------------------------------------------------
     // 0. Settings
     // ------------------------------------------------------------------
@@ -4218,7 +4338,9 @@ export function computeAutoSupportPlan(
         && poseStability.worstEdgeNormal
         && Math.hypot(poseStability.worstEdgeNormal.x, poseStability.worstEdgeNormal.y) > 1e-6
     ) {
-        toppleProfile = extractRepresentativeLayers(resolvedMesh, undefined, { layerHeightMm });
+        // Shared with the analysis panel: an in-process run seeds the cache the
+        // panel reads, so the same mesh is not sliced twice at the same height.
+        toppleProfile = getCachedRepresentativeLayers(resolvedMesh, layerHeightMm);
         const localCentroid = geometryCentroidMm(resolvedMesh.geometry);
         if (localCentroid) {
             const worldCentroid = new THREE.Vector3(localCentroid.x, localCentroid.y, localCentroid.z)
@@ -4335,6 +4457,10 @@ export function computeAutoSupportPlan(
     // generation failure must not kill the whole run — fall back to the
     // region's single candidate.
     const overhangIslands = islandsToCover.filter((i) => i.source === 'overhang');
+    // Class-2 force-augmented surfaces: self-supporting steep flats are never
+    // formation targets, but an over-budget cell may have no closer down-facing
+    // surface. They are eligible for force-budget additions only.
+    const forceBudgetSurfaces = collectForceBudgetSurfaces(islands, overhangIslands);
     const { minZ: modelMinZ, heightMm: modelHeightMm } = meshWorldZBounds(resolvedMesh);
     const baseWindowMm = baseOverhangWindowMm(modelHeightMm);
     const eligible = overhangIslands.filter((i) => shouldUseDensityGrid(i, autoSettings, modelMinZ, baseWindowMm));
@@ -4438,7 +4564,17 @@ export function computeAutoSupportPlan(
     //     and before tip capping so pruned candidates skip SDF probes.
     // ------------------------------------------------------------------
     let tractionStats: TractionOptimizationStats | undefined;
-    let tractionProfile: RepresentativeLayerProfile | undefined;
+    // Plan-level so the forest report can carry them: the add pass itself sits
+    // inside a placement block that closes before the report.
+    let forceBudgetAdds = 0;
+    let forceBudgetAttempts = 0;
+    let forceBudgetAugmentedAttempts = 0;
+    let forceBudgetAugmentedPlaced = 0;
+    // The pre-placement topple evaluation already sampled this mesh at the print
+    // layer height; the frame report must use the same profile even when the
+    // traction pass does not run (no overhang islands), or it falls back to the
+    // single synthetic layer and a coarse peel curve.
+    let tractionProfile: RepresentativeLayerProfile | undefined = toppleProfile;
     if (overhangIslands.length > 0) {
         const tractionResult = optimizeContactsByTraction(
             candidates,
@@ -4446,7 +4582,7 @@ export function computeAutoSupportPlan(
             autoSettings,
             resolvedMesh,
             modelId,
-            { layerHeightMm, profile: toppleProfile },
+            { layerHeightMm, profile: toppleProfile, supportStrengthMpa },
         );
         candidates = tractionResult.candidates;
         tractionStats = tractionResult.stats;
@@ -5320,6 +5456,99 @@ export function computeAutoSupportPlan(
     }
     if (gapFilledTrunks > 0) {
         console.log(LOG_PREFIX, `Coverage convergence: ${gapFilledTrunks} gap-fill trunks placed`);
+    }
+
+    // ── Force budget: add contacts where a placed support carries more peel
+    // than its contact can hold ─────────────────────────────────────
+    // Coverage says every patch is *reached*; it cannot say the support
+    // reaching it can hold the layer's peel. This pass splits the critical
+    // layers' force across the placed tips by nearest cell (the nearest-support
+    // allocation), compares each tip's share with the break load of its contact
+    // and own shaft, and adds a contact at the over-budget cell's farthest
+    // down-facing surface. Formation overhangs are the class-1 targets; a
+    // class-2 self-supporting steep flat is eligible only when it is the nearest
+    // surface, because the geometry forms on its own and would not otherwise be
+    // supported. Class-1 adds are plate pillars (the density-grid path);
+    // class-2 adds are force repairs and go through the fan/merge path, since a
+    // vertical pillar to a leaning face is usually blocked by the part.
+    // Everything still passes the usual gates (tip caps, clearance, trunk retry).
+    if (tractionProfile && forceBudgetSurfaces.length > 0) {
+        for (let pass = 0; pass < MAX_FORCE_BUDGET_ADD_PASSES; pass++) {
+            const budgetGraph = buildSupportGraph(draft, modelId);
+            if (budgetGraph.tipCount === 0) break;
+            const budget = computeForceBudgetFromGraph(
+                budgetGraph,
+                tractionProfile,
+                forceBudgetSurfaces,
+                supportStrengthMpa,
+            );
+            // Formation overhangs first (stable among themselves), then the
+            // class-2 steep flats: the latter are harder to route and should not
+            // displace a formation contact from the per-pass budget.
+            const overBudget = budget.rows
+                .filter((row) => row.addPoint && row.deficitN > 0)
+                .sort((a, b) => Number(a.addPoint!.steepFlat) - Number(b.addPoint!.steepFlat));
+            if (overBudget.length === 0) break;
+
+            const areaByIsland = new Map<string, number>();
+            for (const island of forceBudgetSurfaces) {
+                if (island.areaMm2 !== undefined) areaByIsland.set(island.id, island.areaMm2);
+            }
+            const existingTips = collectSupportTips(draft, modelId);
+            const accepted: Array<{ x: number; y: number }> = [];
+            const candidates: CandidatePoint[] = [];
+            for (const row of overBudget) {
+                if (candidates.length >= MAX_FORCE_BUDGET_ADDS_PER_PASS) break;
+                const point = row.addPoint!;
+                const tooClose = existingTips.some((tip) =>
+                    (tip.x - point.pos.x) ** 2 + (tip.y - point.pos.y) ** 2 < MIN_FORCE_BUDGET_ADD_SPACING_MM ** 2)
+                    || accepted.some((other) =>
+                        (other.x - point.pos.x) ** 2 + (other.y - point.pos.y) ** 2 < MIN_FORCE_BUDGET_ADD_SPACING_MM ** 2);
+                if (tooClose) continue;
+                accepted.push({ x: point.pos.x, y: point.pos.y });
+                const augmented = point.steepFlat;
+                const candidate: CandidatePoint = {
+                    id: `force-${row.entityId ?? 'tip'}-${pass}-${candidates.length}`,
+                    tipPos: { ...point.pos },
+                    tipNormal: { ...point.normal },
+                    modelId,
+                    source: 'overhang',
+                    islandAreaMm2: areaByIsland.get(point.islandId) ?? autoSettings.areaPerSupportMm2,
+                    zHeight: point.pos.z,
+                    priority: augmented ? -1 : 0,
+                    // A formation patch is a density point (standalone pillar).
+                    // A class-2 steep face is a force repair: let the fan/merge
+                    // path attach it to a host instead of forcing a vertical
+                    // pillar a leaning face usually blocks.
+                    gridPoint: !augmented,
+                };
+                if (augmented) {
+                    // The island carries the exact surface normal; a whole-mesh
+                    // raycast at a steep face hits the wrong side.
+                    preResolvedCandidates.add(candidate);
+                    forceBudgetAugmentedAttempts++;
+                }
+                forceBudgetAttempts++;
+                candidates.push(candidate);
+            }
+            if (candidates.length === 0) break;
+            applyContactTipCaps(candidates, resolvedMesh, autoSettings.tipContactMarginScale, autoSettings);
+            let placedThisPass = 0;
+            for (const candidate of candidates) {
+                if (placeOne(candidate) === 'reject') continue;
+                placedThisPass++;
+                if (!candidate.gridPoint) forceBudgetAugmentedPlaced++;
+            }
+            forceBudgetAdds += placedThisPass;
+            if (placedThisPass === 0) break;
+        }
+    }
+    if (forceBudgetAdds > 0 || forceBudgetAttempts > 0) {
+        console.log(LOG_PREFIX,
+            `Force budget: ${forceBudgetAdds}/${forceBudgetAttempts} contact(s) added on over-loaded cells` +
+            (forceBudgetAugmentedAttempts > 0
+                ? ` (${forceBudgetAugmentedPlaced}/${forceBudgetAugmentedAttempts} force-augmented)`
+                : ''));
     }
 
     // ── Trunk-error retry ────────────────────────────────────────────
@@ -6316,6 +6545,14 @@ export function computeAutoSupportPlan(
                 cavityFallbacks: [...diagnostics.cavityFallbacks],
                 ...(rootMergeStats ? { rootMerges: rootMergeStats } : {}),
                 ...(tractionStats ? { tractionOptimization: tractionStats } : {}),
+                ...(forceBudgetAttempts > 0 ? {
+                    forceBudgetAdds: {
+                        attempted: forceBudgetAttempts,
+                        placed: forceBudgetAdds,
+                        augmentedAttempted: forceBudgetAugmentedAttempts,
+                        augmentedPlaced: forceBudgetAugmentedPlaced,
+                    },
+                } : {}),
             };
             // Report only: what a deficit budget would add and cull, in mm² of
             // unsupported surface. Nothing here changes the forest.
@@ -6391,6 +6628,25 @@ export function computeAutoSupportPlan(
                     `— demand ${budget.totalDemandMm2.toFixed(0)}mm² vs capacity ${budget.totalCapacityMm2.toFixed(0)}mm², ` +
                     `deficit on ${budget.islandsInDeficit} islands, surplus on ${budget.islandsInSurplus}`);
             }
+            if (tractionProfile) {
+                const forceBudgetGraph = buildSupportGraph(draft, modelId);
+                if (forceBudgetGraph.tipCount > 0) {
+                    const forceBudget = computeForceBudgetFromGraph(
+                        forceBudgetGraph,
+                        tractionProfile,
+                        forceBudgetSurfaces,
+                        supportStrengthMpa,
+                    );
+                    forestReport.forceBudget = forceBudget;
+                    if (forceBudget.rows.length > 0) {
+                        console.log(LOG_PREFIX,
+                            `Force budget: ${forceBudget.overloadedTips} tip(s) over break load of ${forceBudget.rows.length} — ` +
+                            `worst ${(forceBudget.worst?.utilizationPct ?? 0).toFixed(0)}% at z ` +
+                            `${(forceBudget.worst?.layerZMm ?? 0).toFixed(1)}mm, demand ${forceBudget.totalDemandN.toFixed(2)}N ` +
+                            `vs capacity ${forceBudget.totalCapacityN.toFixed(2)}N`);
+                    }
+                }
+            }
             analytics.forestReport = forestReport;
             console.log(LOG_PREFIX,
                 `Forest report: ${forestReport.hostCount} hosts, ${forestReport.leafCount} leaves, ` +
@@ -6435,34 +6691,152 @@ export function computeAutoSupportPlan(
             if (supportGraph.rootCount > 0 && supportGraph.tipCount > 0) {
                 let frameStress = solveSupportFrameStress(supportGraph, tractionProfile, {
                     areaPerSupportMm2: autoSettings.areaPerSupportMm2,
+                    supportStrengthMpa,
+                    memberStrengthMpa,
                 });
-                // Close the loop with the stress solver: thicken, re-solve, and
-                // repeat until the frame is inside limits or nothing moves.
-                // A single pass left members overloaded whenever the first
-                // thickening pushed a neighbouring shaft over its own limit.
+                // Close the loop with the stress solver: thicken, brace, re-solve,
+                // and repeat until the frame is inside limits or nothing moves.
+                // Thickening alone could not fix an overloaded leaf at its cone
+                // cap or a rocking pair; `planStressActions` names those, and
+                // `addTargetedStressBraces` executes them with the auto-brace
+                // conventions.
                 let reinforcedTotal = 0;
+                let stressBracesAdded = 0;
+                let stressLeafPromotions = 0;
+                const autoBracingSettings = getSettings().autoBracing;
                 for (let pass = 0; pass < MAX_STRESS_REINFORCE_PASSES; pass++) {
-                    if (frameStress.overloadedMembers === 0) break;
-                    if (autoSettings.modelScaleEnabled === false) break;
-                    const reinforced = reinforceOverloadedFrameMembers(
-                        draft,
-                        frameStress,
-                        resolvedMesh ?? undefined,
-                        modelId,
-                    );
-                    if (!reinforced.changed) break;
-                    draft = reinforced.snapshot;
-                    reinforcedTotal += reinforced.totalReinforced;
+                    const memberOverloaded = frameStress.overloadedMembers > 0;
+                    const rockingOver = frameStress.maxTipRockingMm > ROCKING_THRESHOLD_MM;
+                    if (!memberOverloaded && !rockingOver) break;
+
+                    let changedThisPass = false;
+                    let reinforcedThisPass = 0;
+                    if (memberOverloaded && autoSettings.modelScaleEnabled !== false) {
+                        const reinforced = reinforceOverloadedFrameMembers(
+                            draft,
+                            frameStress,
+                            resolvedMesh ?? undefined,
+                            modelId,
+                        );
+                        if (reinforced.changed) {
+                            draft = reinforced.snapshot;
+                            reinforcedThisPass = reinforced.totalReinforced;
+                            reinforcedTotal += reinforced.totalReinforced;
+                            changedThisPass = true;
+                        }
+                    }
+
+                    const requests: StressBraceRequest[] = [];
+                    let promotedThisPass = 0;
+                    const promotionSkips: Partial<Record<string, number>> = {};
+                    if (autoSettings.debugSkipAutoBracing !== true) {
+                        for (const action of planStressActions(
+                            frameStress,
+                            { rockingLimitMm: ROCKING_THRESHOLD_MM },
+                        )) {
+                            if (action.kind === 'brace-rocking') {
+                                if (requests.length >= MAX_STRESS_BRACES_PER_PASS) continue;
+                                requests.push({
+                                    aEntityId: action.aEntityId,
+                                    bEntityId: action.bEntityId,
+                                    atZMm: action.layerZMm,
+                                    maxSpanMm: Math.min(60, Math.hypot(
+                                        action.aPos.x - action.bPos.x,
+                                        action.aPos.y - action.bPos.y,
+                                        action.aPos.z - action.bPos.z,
+                                    ) + 1),
+                                });
+                            } else if (action.kind === 'brace-member') {
+                                if (action.entityKind === 'leaf') {
+                                    // A leaf has no shaft to knot a brace onto.
+                                    // Promote it to a branch first; the next
+                                    // round can thicken or brace that shaft.
+                                    if (promotedThisPass >= MAX_STRESS_LEAF_PROMOTIONS_PER_PASS) continue;
+                                    const promoted = promoteOverloadedLeaf(
+                                        draft,
+                                        action.entityId,
+                                        resolvedMesh ?? undefined,
+                                        autoSettings,
+                                    );
+                                    if (promoted.promoted) {
+                                        draft = promoted.draft;
+                                        promotedThisPass++;
+                                        stressLeafPromotions++;
+                                        changedThisPass = true;
+                                    } else if (promoted.reason) {
+                                        promotionSkips[promoted.reason] = (promotionSkips[promoted.reason] ?? 0) + 1;
+                                    }
+                                } else if (requests.length < MAX_STRESS_BRACES_PER_PASS) {
+                                    requests.push({
+                                        aEntityId: action.entityId,
+                                        // A member's own midpoint is where the
+                                        // solver measured the overload; the
+                                        // critical layer can be metres away
+                                        // from that shaft.
+                                        atZMm: action.pos.z,
+                                        near: action.pos,
+                                    });
+                                }
+                            } else if (action.kind === 'thicken-member') {
+                                // A shaft that could not thicken — scaling off,
+                                // at its diameter/clearance cap, or the pass
+                                // made no change — needs a shorter span instead.
+                                if (requests.length >= MAX_STRESS_BRACES_PER_PASS) continue;
+                                if (reinforcedThisPass === 0 || autoSettings.modelScaleEnabled === false) {
+                                    requests.push({
+                                        aEntityId: action.entityId,
+                                        atZMm: action.layerZMm,
+                                        near: action.pos,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    if (promotedThisPass > 0) {
+                        console.log(LOG_PREFIX, `Stress closed loop: promoted ${promotedThisPass} overloaded leaf/leaves to branches`);
+                    }
+                    if (Object.keys(promotionSkips).length > 0) {
+                        console.log(LOG_PREFIX, `Stress leaf promotions skipped: ${JSON.stringify(promotionSkips)}`);
+                    }
+                    let bracedThisPass = 0;
+                    if (requests.length > 0) {
+                        const braced = addTargetedStressBraces(
+                            draft,
+                            requests,
+                            autoBracingSettings,
+                            new Set([modelId]),
+                        );
+                        if (braced.added > 0) {
+                            draft = braced.snapshot;
+                            stressBracesAdded += braced.added;
+                            bracedThisPass = braced.added;
+                            changedThisPass = true;
+                        } else if (braced.skipped > 0) {
+                            console.log(LOG_PREFIX,
+                                `Stress braces skipped: ${JSON.stringify(braced.reasons)}`);
+                        }
+                    }
+
+                    if (!changedThisPass) break;
                     supportGraph = buildSupportGraph(draft, modelId);
                     frameStress = solveSupportFrameStress(supportGraph, tractionProfile, {
                         areaPerSupportMm2: autoSettings.areaPerSupportMm2,
+                        supportStrengthMpa,
+                        memberStrengthMpa,
                     });
                     console.log(LOG_PREFIX,
-                        `Stress feedback pass ${pass + 1}: reinforced ${reinforced.totalReinforced} member(s) → `
-                        + `${frameStress.overloadedMembers} member(s), ${frameStress.overloadedTips} tip(s) still overloaded`);
+                        `Stress feedback pass ${pass + 1}: reinforced ${reinforcedThisPass} member(s), `
+                        + `braced ${bracedThisPass} pair/member(s) → `
+                        + `${frameStress.overloadedMembers} member(s), ${frameStress.overloadedTips} tip(s) over, `
+                        + `rocking ${frameStress.maxTipRockingMm.toFixed(3)}mm`);
                 }
                 if (reinforcedTotal > 0) {
                     frameStress = { ...frameStress, reinforcedCount: reinforcedTotal };
+                }
+                if (stressBracesAdded > 0 || stressLeafPromotions > 0) {
+                    console.log(LOG_PREFIX,
+                        `Stress closed loop: ${stressBracesAdded} brace(s), `
+                        + `${stressLeafPromotions} leaf promotion(s) applied`);
                 }
                 analytics.forestReport.frameStress = frameStress;
                 // Solved-demand topple margin about the pose's worst edge: the
@@ -6482,7 +6856,7 @@ export function computeAutoSupportPlan(
                             edge: { point: poseStability.worstEdgePoint, normal: edgeNormal },
                             bearingAreaMm2: poseStability.bearingAreaMm2,
                             contactDepthMm: poseStability.contactDepthMm,
-                            frameDeflectionMm: frameStress.maxTipDeflectionMm,
+                            frameRockingMm: frameStress.maxTipRockingMm,
                         });
                         analytics.forestReport.toppleRisk = toppleRisk;
                         console.log(LOG_PREFIX,
@@ -6498,7 +6872,7 @@ export function computeAutoSupportPlan(
                     + `peak ${frameStress.peakLayerPeelForceN.toFixed(2)}N @ Z${frameStress.peakLayerZMm.toFixed(1)}mm · `
                     + `tip max ${frameStress.maxTipUtilizationPct.toFixed(0)}% (${frameStress.overloadedTips} over) · `
                     + `member max ${frameStress.maxMemberUtilizationPct.toFixed(0)}% (${frameStress.overloadedMembers} over) · `
-                    + `max defl ${frameStress.maxTipDeflectionMm.toFixed(3)}mm`
+                    + `max defl ${frameStress.maxTipDeflectionMm.toFixed(3)}mm · rocking ${frameStress.maxTipRockingMm.toFixed(3)}mm`
                     + ((frameStress.reinforcedCount ?? 0) > 0 ? ` · reinforced ${frameStress.reinforcedCount}` : ''));
             }
         } catch (e) {
@@ -6593,9 +6967,10 @@ export function runAutoPlace(
     cavityMesh?: THREE.Mesh,
     beforeOverride?: SupportState,
     layerHeightMm?: number,
+    resinTensileMpa?: number,
 ): AutoPlaceResult {
     return commitAutoPlacePlan(
-        computeAutoSupportPlan(islands, modelId, settingsOverride, undefined, undefined, undefined, cavityMesh, layerHeightMm),
+        computeAutoSupportPlan(islands, modelId, settingsOverride, undefined, undefined, undefined, cavityMesh, layerHeightMm, resinTensileMpa),
         beforeOverride,
     );
 }

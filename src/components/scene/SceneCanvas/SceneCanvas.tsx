@@ -6175,7 +6175,11 @@ export function SceneCanvas({
   }, [freezeViewportActive, frozenViewportDataUrl]);
 
   React.useEffect(() => {
-    const navigating = cameraInteractionCycleEnabled && spaceMouseNavigationActive;
+    // Mouse orbit/wheel navigation can still deliver hover points (the support
+    // layer is not the model picker), and routing a trunk preview per move is
+    // the heavy path. Freeze previews for every camera interaction, not only
+    // SpaceMouse; the preview re-routes on the next hover once motion stops.
+    const navigating = spaceMouseNavigationActive || isOrbitInteracting || isWheelZoomInteracting;
     // Placement previews freeze while navigating, so the trunk router does not run
     // per frame now that SpaceMouse navigation keeps picking live.
     setSupportNavigationActive(navigating);
@@ -6188,7 +6192,7 @@ export function SceneCanvas({
     }
 
     window.dispatchEvent(new Event('spacemouse-navigation-end'));
-  }, [cameraInteractionCycleEnabled, spaceMouseNavigationActive]);
+  }, [cameraInteractionCycleEnabled, isOrbitInteracting, isWheelZoomInteracting, spaceMouseNavigationActive]);
 
   const {
     thumbnailCaptureActive,

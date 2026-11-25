@@ -3,23 +3,24 @@ import type { SupportTypeId } from '../supportTypeRegistry';
 import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { resolveSegmentEndpoints } from '../SupportPrimitives/Knot/segmentEndpoints';
 import type { Knot, Roots, Segment, SupportState, Vec3 } from '../types';
-import { referenceStefanMeanPressureMm2, type RepresentativeLayer, type RepresentativeLayerProfile } from './tractionOptimization';
-import { GREEN_RESIN_MODULUS_MPA, NOMINAL_TIP_PEEL_LOAD_N } from './treeSynthesis';
-
-/** Conservative green-state photopolymer tensile/flexural strength (MPa). */
-export const GREEN_RESIN_UTS_MPA = 12.0;
+import { referenceStefanMeanPressureMm2, type RepresentativeLayer, type RepresentativeLayerProfile, type StefanPressureField } from './tractionOptimization';
+import { GREEN_RESIN_MODULUS_MPA, NOMINAL_PEEL_PRESSURE_MPA } from './treeSynthesis';
+import { DEFAULT_SUPPORT_BREAK_STRENGTH_MPA } from './greenMaterialCalibration';
 /** Poisson's ratio for green-state cured UV photopolymer resin. */
 const GREEN_RESIN_POISSON = 0.35;
 /** Above this free-node threshold, report rigid-body tip overload only to keep solve time tiny. */
 const MAX_FRAME_SOLVE_FREE_NODES = 1200;
 /** Extra stages the per-component pass may add beyond the global critical layers. */
 const MAX_COMPONENT_STAGE_LAYERS = 8;
-/** Nominal peel stress calibration (MPa = N/mm²): `0.15 N` per `10 mm²` reference disc. */
-export const NOMINAL_PEEL_PRESSURE_MPA = NOMINAL_TIP_PEEL_LOAD_N / 10.0;
 /** Lateral peel drag fraction during release from flexible FEP film. */
 const LATERAL_PEEL_DRAG_RATIO = 0.08;
 /** Minimum spatial merge tolerance (mm) when connecting shared endpoints & knots. */
 const NODE_MERGE_TOL_MM = 0.15;
+/** Knots weld into any node within this distance. A "member" shorter than this
+ *  with a shaft diameter of 1-2 mm is a joint, not a beam: splitting there
+ *  produces a stub whose length/curvature ratio is numerical noise (a 0.2 mm
+ *  stub at the 2.2 mm diameter cap measured 231 %). */
+const KNOT_MERGE_TOL_MM = 0.5;
 
 export interface SupportGraphNode {
     id: string;
@@ -55,7 +56,11 @@ export interface FrameStressHotspot {
     entityKind: SupportTypeId;
     kind: 'tip' | 'member';
     utilizationPct: number;
+    /** Tip hotspots: biaxial contact equivalent stress (√(σ_n² + 3τ²)); member
+     *  hotspots: combined axial + bending stress. */
     peakStressMpa?: number;
+    /** Tip hotspots: vertical peel share (N); the lateral drag share is not
+     *  reported separately. */
     tipLoadN?: number;
     deflectionMm?: number;
     layerZMm: number;
@@ -102,7 +107,29 @@ export interface SupportFrameStressReport {
     maxMemberUtilizationPct: number;
     overloadedMembers: number;
     maxTipDeflectionMm: number;
+    /** Differential (max−min) contact displacement along the layer's drag
+     *  direction, across all evaluated layers (mm). This is the rocking / layer
+     *  shift of the part; `maxTipDeflectionMm` is a single tip's elastic sag. */
+    maxTipRockingMm: number;
     solverMode: 'frame3d' | 'rigidBodyOnly';
+    /** At the worst-rocking layer, the two free tips whose contact displacement
+     *  differs most along the drag axis. The pair a cross-brace should tie. */
+    rockingPair?: {
+        aEntityId: string;
+        bEntityId: string;
+        aPos: Vec3;
+        bPos: Vec3;
+        layerZMm: number;
+        differentialMm: number;
+    };
+    /** Free-tip displacement vectors at that same worst-rocking layer (mm). */
+    tipDisplacements?: Array<{
+        entityId?: string;
+        pos: Vec3;
+        dx: number;
+        dy: number;
+        dz: number;
+    }>;
     hotspots: FrameStressHotspot[];
     layerProfile: LayerPeelPoint[];
     memberSegments: StressSegment[];
@@ -146,7 +173,9 @@ export function buildSupportGraph(snapshot: SupportState, modelId?: string): Sup
         kind: SupportGraphNode['kind'],
         fixed: boolean,
         meta?: { entityId?: string; entityKind?: SupportTypeId; tipContactDiameterMm?: number },
+        mergeTolMm: number = NODE_MERGE_TOL_MM,
     ): number => {
+        const mergeTolSq = mergeTolMm * mergeTolMm;
         const cx = Math.floor(pos.x / cellSize);
         const cy = Math.floor(pos.y / cellSize);
         const cz = Math.floor(pos.z / cellSize);
@@ -164,7 +193,7 @@ export function buildSupportGraph(snapshot: SupportState, modelId?: string): Sup
                         const d2 = (existing.pos.x - pos.x) ** 2
                             + (existing.pos.y - pos.y) ** 2
                             + (existing.pos.z - pos.z) ** 2;
-                        if (d2 <= tolSq) {
+                        if (d2 <= mergeTolSq) {
                             if (fixed && !existing.fixed) {
                                 existing.fixed = true;
                                 existing.kind = 'root';
@@ -247,7 +276,7 @@ export function buildSupportGraph(snapshot: SupportState, modelId?: string): Sup
     const ensureKnotNode = (knot: Knot): number => {
         const cached = knotNodeById.get(knot.id);
         if (cached !== undefined) return cached;
-        const idx = internNode(knot.pos, 'knot', false);
+        const idx = internNode(knot.pos, 'knot', false, undefined, KNOT_MERGE_TOL_MM);
         knotNodeById.set(knot.id, idx);
         return idx;
     };
@@ -560,6 +589,198 @@ export function distributeRigidBodyPeelLoads(
     return loads;
 }
 
+export interface DragTip {
+    x: number;
+    y: number;
+    contactDiameterMm: number;
+}
+
+/**
+ * Connected solid components of a representative layer's Stefan mask, labelled
+ * by plan cell (4-neighbour BFS). A tip takes the label of its own cell, or of
+ * the nearest solid cell within four cells; `-1` means it is outside the
+ * cross-section and stands alone.
+ */
+function maskComponentLabels(
+    field: StefanPressureField,
+    tips: ReadonlyArray<DragTip>,
+): Int32Array {
+    const nx = field.nx;
+    const ny = field.ny;
+    const cellLabel = new Int32Array(nx * ny).fill(-1);
+    let nextLabel = 0;
+    const stack: number[] = [];
+    for (let start = 0; start < cellLabel.length; start++) {
+        if (field.pressure[start] <= 0 || cellLabel[start] !== -1) continue;
+        const label = nextLabel++;
+        cellLabel[start] = label;
+        stack.push(start);
+        while (stack.length > 0) {
+            const current = stack.pop()!;
+            const cx = current % nx;
+            const cy = (current / nx) | 0;
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+                const nxCell = cx + dx;
+                const nyCell = cy + dy;
+                if (nxCell < 0 || nxCell >= nx || nyCell < 0 || nyCell >= ny) continue;
+                const neighbour = nyCell * nx + nxCell;
+                if (field.pressure[neighbour] <= 0 || cellLabel[neighbour] !== -1) continue;
+                cellLabel[neighbour] = label;
+                stack.push(neighbour);
+            }
+        }
+    }
+
+    const labels = new Int32Array(tips.length).fill(-1);
+    const searchRing = 4;
+    for (let index = 0; index < tips.length; index++) {
+        const column = Math.floor((tips[index].x - field.minX) / field.cellMm);
+        const row = Math.floor((tips[index].y - field.minY) / field.cellMm);
+        let found = -1;
+        for (let ring = 0; ring <= searchRing && found < 0; ring++) {
+            for (let dy = -ring; dy <= ring && found < 0; dy++) {
+                for (let dx = -ring; dx <= ring; dx++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+                    const cellX = column + dx;
+                    const cellY = row + dy;
+                    if (cellX < 0 || cellX >= nx || cellY < 0 || cellY >= ny) continue;
+                    const cell = cellY * nx + cellX;
+                    if (field.pressure[cell] > 0) {
+                        found = cellLabel[cell];
+                        break;
+                    }
+                }
+            }
+        }
+        labels[index] = found;
+    }
+    return labels;
+}
+
+/**
+ * Rigid-diaphragm lateral drag: the cured layer above the tips is one body, so
+ * the peel's lateral component is distributed by the same 3-DOF rigid-body
+ * equilibrium the vertical load uses (two in-plane translations plus rotation,
+ * tip stiffness `d²`) instead of proportionally to each tip's own vertical
+ * share. That is what moves lateral demand from a thin leaf tip into a stiffer
+ * trunk tip under the same cross-section.
+ *
+ * Tips are grouped by the cross-section component that carries them: a tip in
+ * another disconnected island of the same layer cannot transfer shear through
+ * material that is not there, so each component carries its own vertical share
+ * of the drag. `componentLabels` may be null for a single group; `-1` isolates
+ * one tip.
+ */
+export function distributeRigidBodyDragLoads(
+    tips: ReadonlyArray<DragTip>,
+    verticalLoadsN: ArrayLike<number>,
+    componentLabels: ArrayLike<number> | null,
+    dragRatio: number,
+    dirX: number,
+    dirY: number,
+): { fx: Float64Array; fy: Float64Array } {
+    const n = tips.length;
+    const fx = new Float64Array(n);
+    const fy = new Float64Array(n);
+    if (n === 0 || dragRatio <= 0) return { fx, fy };
+
+    const groups = new Map<number, number[]>();
+    for (let index = 0; index < n; index++) {
+        const rawLabel = componentLabels ? componentLabels[index] : 0;
+        const key = rawLabel >= 0 ? rawLabel : -2 - index;
+        const group = groups.get(key);
+        if (group) group.push(index);
+        else groups.set(key, [index]);
+    }
+
+    for (const group of groups.values()) {
+        let totalVerticalN = 0;
+        let sumX = 0;
+        let sumY = 0;
+        for (const index of group) {
+            const fz = Math.max(0, verticalLoadsN[index]);
+            totalVerticalN += fz;
+            sumX += fz * tips[index].x;
+            sumY += fz * tips[index].y;
+        }
+        if (totalVerticalN <= 1e-12) continue;
+        const totalDragN = totalVerticalN * dragRatio;
+        const copX = sumX / totalVerticalN;
+        const copY = sumY / totalVerticalN;
+
+        let stiffnessSum = 0;
+        let kx = 0;
+        let ky = 0;
+        let kRadiusSq = 0;
+        for (const index of group) {
+            const tip = tips[index];
+            const stiffness = Math.max(0.04, tip.contactDiameterMm ** 2);
+            stiffnessSum += stiffness;
+            kx += stiffness * tip.x;
+            ky += stiffness * tip.y;
+            kRadiusSq += stiffness * (tip.x * tip.x + tip.y * tip.y);
+        }
+        if (stiffnessSum <= 1e-12) continue;
+
+        const regularization = 1e-4 * Math.max(1e-6, (stiffnessSum + kRadiusSq) / 3);
+        const matrix = [
+            [stiffnessSum, 0, -ky, totalDragN * dirX],
+            [0, stiffnessSum, kx, totalDragN * dirY],
+            [-ky, kx, kRadiusSq + regularization, totalDragN * (copX * dirY - copY * dirX)],
+        ];
+        for (let column = 0; column < 3; column++) {
+            let pivot = column;
+            for (let row = column + 1; row < 3; row++) {
+                if (Math.abs(matrix[row][column]) > Math.abs(matrix[pivot][column])) pivot = row;
+            }
+            if (pivot !== column) {
+                const swap = matrix[column];
+                matrix[column] = matrix[pivot];
+                matrix[pivot] = swap;
+            }
+            const diagonal = Math.abs(matrix[column][column]) > 1e-12 ? matrix[column][column] : 1e-12;
+            for (let row = column + 1; row < 3; row++) {
+                const factor = matrix[row][column] / diagonal;
+                for (let entry = 0; entry < 4; entry++) matrix[row][entry] -= factor * matrix[column][entry];
+            }
+        }
+        const omega = matrix[2][3] / (Math.abs(matrix[2][2]) > 1e-12 ? matrix[2][2] : 1e-12);
+        const translateY = (matrix[1][3] - matrix[1][2] * omega)
+            / (Math.abs(matrix[1][1]) > 1e-12 ? matrix[1][1] : 1e-12);
+        const translateX = (matrix[0][3] - matrix[0][1] * translateY - matrix[0][2] * omega)
+            / (Math.abs(matrix[0][0]) > 1e-12 ? matrix[0][0] : 1e-12);
+
+        for (const index of group) {
+            const tip = tips[index];
+            const stiffness = Math.max(0.04, tip.contactDiameterMm ** 2);
+            fx[index] = stiffness * (translateX - omega * tip.y);
+            fy[index] = stiffness * (translateY + omega * tip.x);
+        }
+    }
+    return { fx, fy };
+}
+
+/**
+ * Biaxial contact check for a green support tip: the peel pulls the contact
+ * normal to its face while the layer's lateral drag shears it, and a thin green
+ * section fails on the combination. Uses the conservative von Mises form
+ * `σ_eq = √(σ_n² + 3τ²)` against the same support break strength the vertical
+ * check alone used; pure peel reproduces the old utilization exactly, pure
+ * shear counts √3×. The FEP interface's tensile/shear asymmetry is not measured
+ * yet, so this is deliberately isotropic and conservative.
+ */
+export function biaxialContactStressMpa(
+    normalLoadN: number,
+    lateralLoadN: number,
+    contactDiameterMm: number,
+): number {
+    const diameterMm = Math.max(0.1, contactDiameterMm);
+    const areaMm2 = Math.PI * 0.25 * diameterMm * diameterMm;
+    const normalStressMpa = Math.max(0, normalLoadN) / Math.max(1e-4, areaMm2);
+    const shearStressMpa = Math.abs(lateralLoadN) / Math.max(1e-4, areaMm2);
+    return Math.hypot(normalStressMpa, Math.sqrt(3) * shearStressMpa);
+}
+
 /** Invert a 6x6 matrix (returns zero matrix fallback if nearly singular). */
 function invert6x6(block: Float64Array, offset: number, out: Float64Array, outOffset: number): void {
     const aug = new Float64Array(6 * 12);
@@ -685,7 +906,14 @@ function buildElementStiffness(graph: SupportGraph, memberIdx: number): ElementB
     setSym(8, 8, EI_12); setSym(8, 10, EI_6);
     setSym(10, 10, EI_4);
 
-    const bucklingCritN = (Math.PI * Math.PI * E * inertiaMm4) / ((1.1 * L) ** 2);
+    // A support is a strut fixed into the root disk and cured into the part at
+    // its contact, so Euler's effective length is 0.5L (fixed-fixed). The former
+    // 1.1L assumed pinned-pinned plus an imperfection: on a hand-supported print
+    // that prints, it reported 301 % buckling on a 1.1 mm × 20 mm trunk carrying
+    // a load the column actually holds. Bending/axial stress is still checked
+    // separately; this constant only sets the column-stability ratio.
+    const bucklingEffectiveLengthMm = 0.5 * L;
+    const bucklingCritN = (Math.PI * Math.PI * E * inertiaMm4) / (bucklingEffectiveLengthMm ** 2);
 
     return {
         memberIdx,
@@ -713,6 +941,30 @@ function globalToLocal12(el: ElementBasisAndLocalK, uGlob: Float64Array, outLoc:
     }
 }
 
+/**
+ * Layer-scale Stefan traction factor, the same compression placement uses
+ * (`stefanTractionFactorAt`): `0.50 + 0.50·(p̄/p̄_ref)^0.22`, clamped to
+ * [0.65, 1.55], plus the area-jump surcharge.
+ *
+ * Without this the frame solver multiplied the nominal peel pressure by the raw
+ * saturation ratio. A 600 mm² cross-section's mean p̃ is ~25–38× the 10 mm²
+ * reference disc's, so a broad layer read 226 N instead of ~14 N — 40 MPa leaf
+ * stress from a support the placement model itself calls 1.5× loaded. A 10 mm²
+ * reference disc is untouched (ratio 1 → factor 1 → 0.29 N).
+ */
+function stefanLayerForceFactor(
+    field: { integratedForceMm4: number; maskAreaMm2: number },
+    fallbackAreaMm2: number,
+    areaJumpRatio: number,
+): number {
+    const pRef = Math.max(1e-4, referenceStefanMeanPressureMm2(10.0));
+    const areaMm2 = Math.max(0.05, field.maskAreaMm2 > 0 ? field.maskAreaMm2 : fallbackAreaMm2);
+    const meanRatio = (field.integratedForceMm4 / pRef) / areaMm2;
+    let factor = 0.50 + 0.50 * Math.pow(Math.max(0, meanRatio), 0.22);
+    if (areaJumpRatio > 1.35) factor += Math.min(0.15, (areaJumpRatio - 1.35) * 0.20);
+    return Math.max(0.65, Math.min(1.55, factor));
+}
+
 export function computeLayerPeelForceAndCop(
     layer: RepresentativeLayer,
     fallbackAreaMm2: number,
@@ -726,7 +978,6 @@ export function computeLayerPeelForceAndCop(
         };
     }
 
-    const pRef = Math.max(1e-4, referenceStefanMeanPressureMm2(10.0));
     const cellArea = field.cellMm * field.cellMm;
     let totalW = 0;
     let sumX = 0;
@@ -751,9 +1002,10 @@ export function computeLayerPeelForceAndCop(
         }
     }
 
+    const factor = stefanLayerForceFactor(field, layer.areaMm2, layer.areaJumpRatio);
     const forceN = Math.max(
         0.01,
-        (field.integratedForceMm4 / pRef) * NOMINAL_PEEL_PRESSURE_MPA,
+        Math.max(0.05, field.maskAreaMm2 > 0 ? field.maskAreaMm2 : layer.areaMm2) * factor * NOMINAL_PEEL_PRESSURE_MPA,
     );
     if (totalW > 1e-9) {
         return { forceN, copX: sumX / totalW, copY: sumY / totalW };
@@ -775,12 +1027,13 @@ export interface PeelLayerSample {
 /**
  * Peel force at every sampled layer, not only the ones with a solved field.
  *
- * The field-derived pressure ratio (`mean p̃ / p̃_ref`) is anchored at the
- * representative layers and interpolated across the layers between them, then
- * multiplied by each layer's own area. The alternative — field force at
- * representative layers, nominal pressure elsewhere — makes every cluster peak
- * a spike on the peel graph, because a broad cross-section's saturated suction
- * is up to ~16× the reference disc's mean while its neighbours read nominal.
+ * The field-derived traction factor (`stefanLayerForceFactor`, the same
+ * compressed 0.65–1.55 curve placement uses) is anchored at the representative
+ * layers and interpolated across the layers between them, then multiplied by
+ * each layer's own area. The alternative — field force at representative
+ * layers, nominal pressure elsewhere — makes every cluster peak a spike on the
+ * peel graph, because a broad cross-section's saturated suction compresses to a
+ * different factor than its neighbours' nominal 1.0.
  *
  * At a representative layer the result equals `computeLayerPeelForceAndCop`
  * exactly (the ratio is computed from that same integral), so the critical-layer
@@ -791,13 +1044,12 @@ export function computePeelLayerSamples(
     layers: readonly RepresentativeLayer[],
     fallbackAreaMm2: number,
 ): PeelLayerSample[] {
-    const pRef = Math.max(1e-4, referenceStefanMeanPressureMm2(10.0));
     const anchors = layers
         .filter((layer) => layer.areaMm2 > 0)
         .map((layer) => ({
             zMm: layer.zMm,
             ratio: layer.stefanField && layer.stefanField.integratedForceMm4 > 0
-                ? (layer.stefanField.integratedForceMm4 / pRef) / Math.max(0.05, layer.areaMm2)
+                ? stefanLayerForceFactor(layer.stefanField, layer.areaMm2, layer.areaJumpRatio)
                 : 1,
         }))
         .sort((a, b) => a.zMm - b.zMm);
@@ -1053,10 +1305,22 @@ export function solveSupportFrameStress(
         areaPerSupportMm2?: number;
         /** Optional explicit nodal force override `(fx, fy, fz, mx, my, mz)` per node index for analytical benchmarks. */
         explicitNodalLoads?: Map<number, readonly [number, number, number, number, number, number]>;
+        /** Support break strength (MPa) for the tip contact, not the resin's
+         *  datasheet tensile: use `supportBreakStrengthMpa` on a profile value.
+         *  Defaults to the measured standard-resin contact break strength. */
+        supportStrengthMpa?: number;
+        /** Bulk green strength (MPa) for member bending/axial stress. A member's
+         *  section is not the 0.5 × 0.5 mm contact coupon the support break
+         *  strength is measured on: a 2.2 mm trunk at the same 4.8 MPa would be
+         *  called broken while its datasheet tensile is 24 MPa. Defaults to
+         *  `supportStrengthMpa` for callers that have only one strength. */
+        memberStrengthMpa?: number;
     },
 ): SupportFrameStressReport {
     const maxCriticalLayers = Math.max(1, options?.maxCriticalLayers ?? 3);
     const areaPerSupportMm2 = Math.max(1.0, options?.areaPerSupportMm2 ?? 10.0);
+    const supportStrengthMpa = Math.max(0.01, options?.supportStrengthMpa ?? DEFAULT_SUPPORT_BREAK_STRENGTH_MPA);
+    const memberStrengthMpa = Math.max(0.01, options?.memberStrengthMpa ?? supportStrengthMpa);
 
     // Reachability BFS from all fixed root nodes so the frame stiffness matrix is strictly SPD.
     const nodeAdj: number[][] = Array.from({ length: graph.nodes.length }, () => []);
@@ -1272,6 +1536,13 @@ export function solveSupportFrameStress(
     let maxTipUtilizationPct = 0;
     let maxMemberUtilizationPct = 0;
     let maxTipDeflectionMm = 0;
+    // Rocking: the range of contact displacement along the layer's coherent
+    // drag direction. `maxTipDeflectionMm` is an elastic sag (one thin leaf
+    // bending under its own peel share); the part's layer shift is how far the
+    // contact set moves relative to itself, which is a differential.
+    let maxTipRockingMm = 0;
+    let worstRockingPair: SupportFrameStressReport['rockingPair'] | undefined;
+    let worstTipDisplacements: SupportFrameStressReport['tipDisplacements'] | undefined;
     const overloadedTipIds = new Set<string>();
     const overloadedMemberIds = new Set<string>();
     const candidateHotspots: FrameStressHotspot[] = [];
@@ -1306,15 +1577,25 @@ export function solveSupportFrameStress(
                 contactDiameterMm: graph.nodes[ni].tipContactDiameterMm ?? 0.28,
             }));
             const tipForces = distributeRigidBodyPeelLoads(rigidInput, layer.peelForceN, layer.copX, layer.copY);
+            const layerField = layer.repIndex >= 0 ? profile?.layers[layer.repIndex]?.stefanField : undefined;
+            const componentLabels = layerField ? maskComponentLabels(layerField, rigidInput) : null;
+            const dragLoads = distributeRigidBodyDragLoads(
+                rigidInput,
+                tipForces,
+                componentLabels,
+                LATERAL_PEEL_DRAG_RATIO,
+                Math.SQRT1_2,
+                Math.SQRT1_2,
+            );
 
             for (let ti = 0; ti < activeTips.length; ti++) {
                 const ni = activeTips[ti];
                 const node = graph.nodes[ni];
                 const fz = tipForces[ti];
                 const tipDia = node.tipContactDiameterMm ?? 0.28;
-                const tipArea = Math.PI * (0.5 * tipDia) ** 2;
-                const tipStressMpa = fz / Math.max(1e-4, tipArea);
-                const tipUtilPct = (100 * tipStressMpa) / GREEN_RESIN_UTS_MPA;
+                const lateralN = Math.hypot(dragLoads.fx[ti], dragLoads.fy[ti]);
+                const tipStressMpa = biaxialContactStressMpa(fz, lateralN, tipDia);
+                const tipUtilPct = (100 * tipStressMpa) / supportStrengthMpa;
 
                 if (tipUtilPct > layerMaxTipUtilPct) layerMaxTipUtilPct = tipUtilPct;
                 if (tipUtilPct > maxTipUtilizationPct) maxTipUtilizationPct = tipUtilPct;
@@ -1338,12 +1619,13 @@ export function solveSupportFrameStress(
 
                 const fIdx = freeMap[ni];
                 if (fIdx >= 0 && solverMode === 'frame3d') {
-                    // Coherent unidirectional peel shear: a solid cured layer acts as a rigid
-                    // diaphragm rather than stretching opposing X-braces radially apart.
-                    const latF = fz * LATERAL_PEEL_DRAG_RATIO;
+                    // Rigid-diaphragm lateral drag: the layer's lateral total is
+                    // shared by stiffness within each connected cross-section
+                    // component, so a thin leaf does not absorb the share of the
+                    // stiff trunk beside it (see `distributeRigidBodyDragLoads`).
                     const base = fIdx * 6;
-                    rhs[base] = latF * Math.SQRT1_2;
-                    rhs[base + 1] = latF * Math.SQRT1_2;
+                    rhs[base] = dragLoads.fx[ti];
+                    rhs[base + 1] = dragLoads.fy[ti];
                     rhs[base + 2] = fz;
                 }
             }
@@ -1352,12 +1634,57 @@ export function solveSupportFrameStress(
         if (solverMode === 'frame3d') {
             solveCG();
 
+            let tipProjectionMin = Infinity;
+            let tipProjectionMax = -Infinity;
+            let minTipIndex = -1;
+            let maxTipIndex = -1;
+            const layerTipDisplacements: NonNullable<SupportFrameStressReport['tipDisplacements']> = [];
             for (const ni of tipNodes) {
                 const fIdx = freeMap[ni];
                 if (fIdx < 0) continue;
                 const base = fIdx * 6;
-                const defl = Math.hypot(u[base], u[base + 1], u[base + 2]);
+                const dx = u[base];
+                const dy = u[base + 1];
+                const dz = u[base + 2];
+                const defl = Math.hypot(dx, dy, dz);
                 if (defl > maxTipDeflectionMm) maxTipDeflectionMm = defl;
+                // Same coherent drag direction the layer's lateral load uses.
+                const projection = dx * Math.SQRT1_2 + dy * Math.SQRT1_2;
+                if (projection < tipProjectionMin) {
+                    tipProjectionMin = projection;
+                    minTipIndex = ni;
+                }
+                if (projection > tipProjectionMax) {
+                    tipProjectionMax = projection;
+                    maxTipIndex = ni;
+                }
+                const node = graph.nodes[ni];
+                layerTipDisplacements.push({
+                    entityId: node.entityId,
+                    pos: node.pos,
+                    dx,
+                    dy,
+                    dz,
+                });
+            }
+            if (tipProjectionMax > tipProjectionMin) {
+                const rocking = tipProjectionMax - tipProjectionMin;
+                if (rocking > maxTipRockingMm) {
+                    maxTipRockingMm = rocking;
+                    if (minTipIndex >= 0 && maxTipIndex >= 0) {
+                        const a = graph.nodes[minTipIndex];
+                        const b = graph.nodes[maxTipIndex];
+                        worstRockingPair = {
+                            aEntityId: a.entityId ?? a.id,
+                            bEntityId: b.entityId ?? b.id,
+                            aPos: a.pos,
+                            bPos: b.pos,
+                            layerZMm: layer.zMm,
+                            differentialMm: rocking,
+                        };
+                        worstTipDisplacements = layerTipDisplacements;
+                    }
+                }
             }
 
             // Recover element internal axial force + peak bending stress + Euler buckling ratio.
@@ -1395,7 +1722,7 @@ export function solveSupportFrameStress(
                 const axialStressMpa = axialMagN / el.areaMm2;
                 const bendingStressMpa = (maxMomentNmm * el.radiusMm) / el.inertiaMm4;
                 const peakStressMpa = axialStressMpa + bendingStressMpa;
-                const stressUtilPct = (100 * peakStressMpa) / GREEN_RESIN_UTS_MPA;
+                const stressUtilPct = (100 * peakStressMpa) / memberStrengthMpa;
                 const buckleUtilPct = (100 * axialCompN) / Math.max(1e-6, el.bucklingCritN);
                 const utilPct = Math.max(stressUtilPct, buckleUtilPct);
 
@@ -1466,10 +1793,18 @@ export function solveSupportFrameStress(
                         contactDiameterMm: graph.nodes[ni].tipContactDiameterMm ?? 0.28,
                     }));
                     const tipForces = distributeRigidBodyPeelLoads(rigidInput, sample.forceN, sample.copX, sample.copY);
+                    const dragLoads = distributeRigidBodyDragLoads(
+                        rigidInput,
+                        tipForces,
+                        null,
+                        LATERAL_PEEL_DRAG_RATIO,
+                        Math.SQRT1_2,
+                        Math.SQRT1_2,
+                    );
                     for (let ti = 0; ti < activeTips.length; ti++) {
                         const tipDia = graph.nodes[activeTips[ti]].tipContactDiameterMm ?? 0.28;
-                        const tipArea = Math.PI * (0.5 * tipDia) ** 2;
-                        const util = (100 * (tipForces[ti] / Math.max(1e-4, tipArea))) / GREEN_RESIN_UTS_MPA;
+                        const lateralN = Math.hypot(dragLoads.fx[ti], dragLoads.fy[ti]);
+                        const util = (100 * biaxialContactStressMpa(tipForces[ti], lateralN, tipDia)) / supportStrengthMpa;
                         if (util > maxTipUtil) maxTipUtil = util;
                     }
                 }
@@ -1544,7 +1879,10 @@ export function solveSupportFrameStress(
         maxMemberUtilizationPct,
         overloadedMembers: overloadedMemberIds.size,
         maxTipDeflectionMm,
+        maxTipRockingMm,
         solverMode,
+        ...(worstRockingPair ? { rockingPair: worstRockingPair } : {}),
+        ...(worstTipDisplacements ? { tipDisplacements: worstTipDisplacements } : {}),
         hotspots,
         layerProfile,
         memberSegments,
