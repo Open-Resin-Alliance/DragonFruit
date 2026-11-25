@@ -1416,6 +1416,12 @@ export function solveSupportFrameStress(
          *  called broken while its datasheet tensile is 24 MPa. Defaults to
          *  `supportStrengthMpa` for callers that have only one strength. */
         memberStrengthMpa?: number;
+        /** Model-on-plate adhesion contacts: the bearing hull points and the
+         *  area each represents. They share the rigid-body peel equilibrium
+         *  with the support tips; their loads stay with the plate, not the
+         *  frame. Stefan adhesion is the same film model, so the contact area is
+         *  the adhesion area. */
+        plateContacts?: ReadonlyArray<{ x: number; y: number; areaMm2: number }>;
         /** Report contact-cone stress along the real taper. The action loop
          *  keeps the effective cone member; no support action can change the
          *  printed cone section, so the tapered value is diagnostic. */
@@ -1427,6 +1433,8 @@ export function solveSupportFrameStress(
     const supportStrengthMpa = Math.max(0.01, options?.supportStrengthMpa ?? DEFAULT_SUPPORT_BREAK_STRENGTH_MPA);
     const memberStrengthMpa = Math.max(0.01, options?.memberStrengthMpa ?? supportStrengthMpa);
     const taperedConeStress = options?.taperedConeStress === true;
+    const plateContacts = (options?.plateContacts ?? []).filter((contact) => contact.areaMm2 > 0);
+    const plateAreaMm2 = plateContacts.reduce((sum, contact) => sum + contact.areaMm2, 0);
 
     // Reachability BFS from all fixed root nodes so the frame stiffness matrix is strictly SPD.
     const nodeAdj: number[][] = Array.from({ length: graph.nodes.length }, () => []);
@@ -1686,12 +1694,51 @@ export function solveSupportFrameStress(
                 y: graph.nodes[ni].pos.y,
                 contactDiameterMm: graph.nodes[ni].tipContactDiameterMm ?? 0.28,
             }));
-            const tipForces = distributeRigidBodyPeelLoads(rigidInput, layer.peelForceN, layer.copX, layer.copY);
+            // The model sitting on the plate is another contact in the same
+            // rigid-body peel equilibrium. Its area is the Stefan adhesion
+            // area; distributing by contact stiffness keeps the plate's share
+            // out of the support frame. This is not a free rigid anchor: the
+            // same stiffness solve decides how much each contact takes.
+            const plateInput = plateContacts.map((contact) => ({
+                x: contact.x,
+                y: contact.y,
+                contactDiameterMm: 2 * Math.sqrt(contact.areaMm2 / Math.PI),
+            }));
+            const allContacts = [...rigidInput, ...plateInput];
+            const allForces = distributeRigidBodyPeelLoads(allContacts, layer.peelForceN, layer.copX, layer.copY);
+            const tipForces = allForces.slice(0, rigidInput.length);
+            // Plate adhesion is the same Stefan film: its capacity is the mean
+            // layer pressure over the plate footprint. If the stiffness solve
+            // gives the plate more than that, the excess is a real support
+            // load, not a free anchor.
+            if (plateAreaMm2 > 0) {
+                const plateLoadN = allForces.reduce((sum, force, index) => sum + (index >= rigidInput.length ? Math.max(0, force) : 0), 0);
+                const meanPressureNPerMm2 = layer.areaMm2 > 0 ? layer.peelForceN / layer.areaMm2 : 0;
+                const plateCapacityN = plateAreaMm2 * meanPressureNPerMm2;
+                if (plateLoadN > plateCapacityN + 1e-9) {
+                    const excessN = plateLoadN - plateCapacityN;
+                    const supportTotalN = tipForces.reduce((sum, force) => sum + Math.max(0, force), 0);
+                    if (supportTotalN > 1e-12) {
+                        for (let ti = 0; ti < tipForces.length; ti++) {
+                            if (tipForces[ti] > 0) tipForces[ti] += excessN * (tipForces[ti] / supportTotalN);
+                        }
+                    } else if (tipForces.length > 0) {
+                        const share = excessN / tipForces.length;
+                        for (let ti = 0; ti < tipForces.length; ti++) tipForces[ti] += share;
+                    }
+                }
+            }
             const layerField = layer.repIndex >= 0 ? profile?.layers[layer.repIndex]?.stefanField : undefined;
-            const componentLabels = layerField ? maskComponentLabels(layerField, rigidInput) : null;
+            // Plate adhesion is the same Stefan film, so its contacts join the
+            // same rigid body for lateral drag. A model on the plate is one
+            // connected body; the field's component split only makes sense
+            // without that plate anchor.
+            const dragTips = plateInput.length > 0 ? allContacts : rigidInput;
+            const dragVertical = plateInput.length > 0 ? allForces : tipForces;
+            const componentLabels = layerField && plateInput.length === 0 ? maskComponentLabels(layerField, rigidInput) : null;
             const dragLoads = distributeRigidBodyDragLoads(
-                rigidInput,
-                tipForces,
+                dragTips,
+                dragVertical,
                 componentLabels,
                 LATERAL_PEEL_DRAG_RATIO,
                 Math.SQRT1_2,

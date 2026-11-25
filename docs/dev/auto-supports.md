@@ -678,6 +678,18 @@ whole-frame structural stress on the assembled forest via
     `maxConeBodyDiameterForContact` (minus 0.005 mm) as well as the host
     diameter. Claptrap's above-contact defect went to zero with the same 1143
     entities and 98.6 % coverage, for 0.9 mm³ less member volume.
+  - **The model's plate adhesion is a contact in the same peel solve.** The
+    pose's bearing hull is exposed as `plateContactsFromStability`: each hull
+    point gets an equal share of `bearingAreaMm2`. `solveSupportFrameStress`
+    adds those contacts to the rigid-body peel and drag equilibrium with the
+    same area/stiffness model, then applies the support share to the frame; the
+    plate share is not charged to a tip. The contact is Stefan-limited: its
+    capacity is the mean layer pressure over the footprint
+    (`layer.peelForceN / layer.areaMm2 × plateArea`), and any demand above that
+    is added back to the support loads. On the snowman test model this is the difference
+    between 10,799 % and 1 % member load; on the real models the old support
+    loads were charging the plate's job to the tips. The plate capacity is a
+    mean-pressure bound, not the full 2D field.
   - **The tip contact check is biaxial.** `biaxialContactStressMpa` compares
     `√(σ_n² + 3τ²)` — the vertical peel plus the layer's lateral drag — against
     the support break strength, so a contact sheared by the diaphragm is counted

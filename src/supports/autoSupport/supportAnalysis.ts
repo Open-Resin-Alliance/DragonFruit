@@ -7,7 +7,7 @@ import type { AutoPlaceWorkerPayload } from './autoPlace.worker.shared';
 import { getCachedRepresentativeLayers } from './frameStressState';
 import { supportBreakStrengthMpa, DEFAULT_RESIN_TENSILE_STRENGTH_MPA } from './greenMaterialCalibration';
 import { evaluatePrintability, type PrintabilityReport } from './printability';
-import { measurePoseStability, posedPositions } from './poseStability';
+import { measurePoseStability, plateContactsFromStability, posedPositions } from './poseStability';
 import { buildSupportGraph, solveSupportFrameStress, type SupportFrameStressReport } from './supportGraphStress';
 import { evaluateToppleRisk, toppleRiskNeedsCoverage, type ToppleRiskReport } from './toppleRisk';
 import { FLOATING_Z_THRESHOLD_MM } from './supportStressReport';
@@ -63,10 +63,23 @@ export function runSupportAnalysis(
 
     onProgress?.({ phase: 'Solving frame', done: 0, total: 1 });
     const areaPerSupportMm2 = payload.analysis?.areaPerSupportMm2 ?? 10;
+    const indexAttr = mesh?.geometry.getIndex();
+    const hasRaft = getRaftSettingsForModel(payload.modelId).bottomMode !== 'off';
+    const poseStability = mesh
+        ? measurePoseStability(
+            posedPositions(mesh),
+            indexAttr ? (indexAttr.array as ArrayLike<number>) : null,
+            0,
+            0,
+            undefined,
+            hasRaft,
+        )
+        : null;
     const frame = solveSupportFrameStress(graph, profile, {
         areaPerSupportMm2,
         supportStrengthMpa: supportBreakStrengthMpa(tensileStrengthMpa),
         memberStrengthMpa: tensileStrengthMpa,
+        plateContacts: plateContactsFromStability(poseStability),
     });
     onProgress?.({ phase: 'Solving frame', done: 1, total: 1 });
 

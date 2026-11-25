@@ -44,12 +44,30 @@ const SHADOW_CELL_MM = 0.5;
 /** Below this enclosed volume there is no mass to restore anything. */
 const MIN_VOLUME_MM3 = 1e-9;
 
+export interface PlateAdhesionContact {
+    x: number;
+    y: number;
+    areaMm2: number;
+}
+
+/** The plate's adhesion footprint as contact points for the rigid peel solve. */
+export function plateContactsFromStability(
+    stability: PoseStability | null | undefined,
+): PlateAdhesionContact[] | undefined {
+    const hull = stability?.bearingHull;
+    if (!stability || !hull || hull.length === 0 || !(stability.bearingAreaMm2 > 0)) return undefined;
+    const areaMm2 = stability.bearingAreaMm2 / hull.length;
+    return hull.map((point) => ({ x: point.x, y: point.y, areaMm2 }));
+}
+
 export interface PoseStability {
     /** World Z of the lowest point under this pose (mm). */
     plateZMm: number;
     volumeMm3: number;
     /** XY area of the bearing hull (mm²); 0 = no bearing polygon. */
     bearingAreaMm2: number;
+    /** Convex bearing hull in world XY (mm), CCW; the plate contact points. */
+    bearingHull?: Array<{ x: number; y: number }>;
     /** Hull edge count; 0 = a point or edge contact. */
     bearingEdges: number;
     /** How far the volume centroid sits inside the worst edge (mm). Negative
@@ -517,6 +535,7 @@ export function measurePoseStability(
         plateZMm: zMin,
         volumeMm3,
         bearingAreaMm2,
+        bearingHull: hull.map((point) => ({ x: point.x, y: point.y })),
         bearingEdges: edgeSum.length,
         centroidDepthMm: worstDepth,
         contactDepthMm: worstContactDepth,

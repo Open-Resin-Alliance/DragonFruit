@@ -39,6 +39,7 @@
       "memberVolumeMm3": 5950.992567036733,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
+      "aboveContactDetails": [],
       "coveragePct": 97.28618421052632,
       "islandsCovered": 1,
       "islandsUncovered": 0,
@@ -63,20 +64,87 @@
       "routerPlacements": 650,
       "routerCones": 16646,
       "routerProbes": 2559,
-      "totalMs": 2759.7184,
+      "totalMs": 4457.9425,
       "phases": {
-        "candidates": 65,
-        "dedup": 13,
-        "support-filter": 68,
-        "placement": 798,
-        "consolidation": 59,
-        "gap-fill": 78,
-        "analytics": 2,
+        "candidates": 88,
+        "dedup": 15,
+        "support-filter": 96,
+        "placement": 1208,
+        "consolidation": 91,
+        "gap-fill": 115,
+        "analytics": 4,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 1205,
-        "report": 16,
-        "bracing": 404
+        "resize": 1724,
+        "report": 23,
+        "bracing": 1015
+      },
+      "stress": {
+        "maxMemberUtilPct": 3.3917493514516845,
+        "overloadedMembers": 0,
+        "overloadedConeMembers": 0,
+        "maxTipUtilPct": 0.9623632567848627,
+        "overloadedTips": 0,
+        "maxTipRockingMm": 0.006385989126714446,
+        "maxTipDeflectionMm": 0.10105218892234498,
+        "reinforcedCount": 0,
+        "hotspots": [
+          {
+            "kind": "member",
+            "entityKind": "trunk",
+            "utilizationPct": 3.3917493514516845,
+            "layerZMm": 20.815217391304348,
+            "pos": {
+              "x": -16,
+              "y": -16,
+              "z": 10.753825022320093
+            }
+          },
+          {
+            "kind": "member",
+            "entityKind": "trunk",
+            "utilizationPct": 2.039951445421813,
+            "layerZMm": 20.815217391304348,
+            "pos": {
+              "x": -4,
+              "y": -8,
+              "z": 10.38
+            }
+          },
+          {
+            "kind": "member",
+            "entityKind": "trunk",
+            "utilizationPct": 1.5015233787406013,
+            "layerZMm": 20.815217391304348,
+            "pos": {
+              "x": 16,
+              "y": -4,
+              "z": 10.43
+            }
+          },
+          {
+            "kind": "member",
+            "entityKind": "leaf",
+            "utilizationPct": 1.3323917402125505,
+            "layerZMm": 20.815217391304348,
+            "pos": {
+              "x": 12.25,
+              "y": -14,
+              "z": 17.88
+            }
+          },
+          {
+            "kind": "member",
+            "entityKind": "leaf",
+            "utilizationPct": 1.3124287212033117,
+            "layerZMm": 20.815217391304348,
+            "pos": {
+              "x": -14.5,
+              "y": 2.75,
+              "z": 18.12098300562505
+            }
+          }
+        ]
       }
     },
     {
@@ -111,6 +179,7 @@
       "memberVolumeMm3": 346.1156408385604,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
+      "aboveContactDetails": [],
       "coveragePct": 100,
       "islandsCovered": 1,
       "islandsUncovered": 0,
@@ -132,20 +201,87 @@
       "routerPlacements": 39,
       "routerCones": 1144,
       "routerProbes": 435,
-      "totalMs": 112.3157999999994,
+      "totalMs": 195.66799999999967,
       "phases": {
-        "candidates": 7,
+        "candidates": 10,
         "dedup": 1,
-        "support-filter": 2,
-        "placement": 42,
-        "consolidation": 1,
-        "gap-fill": 4,
-        "analytics": 0,
+        "support-filter": 5,
+        "placement": 72,
+        "consolidation": 2,
+        "gap-fill": 7,
+        "analytics": 1,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 29,
+        "resize": 48,
         "report": 1,
-        "bracing": 22
+        "bracing": 44
+      },
+      "stress": {
+        "maxMemberUtilPct": 0.701775814277354,
+        "overloadedMembers": 0,
+        "overloadedConeMembers": 0,
+        "maxTipUtilPct": 0.6682356121489657,
+        "overloadedTips": 0,
+        "maxTipRockingMm": 0.0076014482240896325,
+        "maxTipDeflectionMm": 0.027526883611719063,
+        "reinforcedCount": 0,
+        "hotspots": [
+          {
+            "kind": "member",
+            "entityKind": "trunk",
+            "utilizationPct": 0.701775814277354,
+            "layerZMm": 18.950000762939453,
+            "pos": {
+              "x": 2.812157139500719,
+              "y": 0.25000000000000006,
+              "z": 4.291098500054604
+            }
+          },
+          {
+            "kind": "tip",
+            "entityKind": "trunk",
+            "utilizationPct": 0.6682356121489657,
+            "layerZMm": 18.950000762939453,
+            "pos": {
+              "x": 11.75,
+              "y": 0.25,
+              "z": 18
+            }
+          },
+          {
+            "kind": "tip",
+            "entityKind": "branch",
+            "utilizationPct": 0.6634318228197069,
+            "layerZMm": 18.950000762939453,
+            "pos": {
+              "x": 10.25,
+              "y": 0.25,
+              "z": 18
+            }
+          },
+          {
+            "kind": "member",
+            "entityKind": "leaf",
+            "utilizationPct": 0.6625320841550836,
+            "layerZMm": 18.950000762939453,
+            "pos": {
+              "x": 4.28107856975036,
+              "y": 0.25,
+              "z": 16.10183083342434
+            }
+          },
+          {
+            "kind": "tip",
+            "entityKind": "leaf",
+            "utilizationPct": 0.6586283259796007,
+            "layerZMm": 18.950000762939453,
+            "pos": {
+              "x": 8.75,
+              "y": 0.25,
+              "z": 18
+            }
+          }
+        ]
       }
     },
     {
@@ -178,6 +314,7 @@
       "memberVolumeMm3": 124.69865760048367,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
+      "aboveContactDetails": [],
       "coveragePct": 99.20634920634922,
       "islandsCovered": 2,
       "islandsUncovered": 0,
@@ -197,20 +334,87 @@
       "routerPlacements": 19,
       "routerCones": 504,
       "routerProbes": 56,
-      "totalMs": 61.283400000000256,
+      "totalMs": 107.91200000000026,
       "phases": {
-        "candidates": 7,
-        "dedup": 0,
-        "support-filter": 3,
-        "placement": 21,
-        "consolidation": 4,
+        "candidates": 8,
+        "dedup": 1,
+        "support-filter": 4,
+        "placement": 28,
+        "consolidation": 6,
         "gap-fill": 1,
         "analytics": 0,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 2,
+        "resize": 4,
         "report": 1,
-        "bracing": 14
+        "bracing": 38
+      },
+      "stress": {
+        "maxMemberUtilPct": 0.9621941543483935,
+        "overloadedMembers": 0,
+        "overloadedConeMembers": 0,
+        "maxTipUtilPct": 0.6077691218021906,
+        "overloadedTips": 0,
+        "maxTipRockingMm": 0.017348582569479423,
+        "maxTipDeflectionMm": 0.017906349978827757,
+        "reinforcedCount": 0,
+        "hotspots": [
+          {
+            "kind": "member",
+            "entityKind": "trunk",
+            "utilizationPct": 0.9621941543483935,
+            "layerZMm": 11.225,
+            "pos": {
+              "x": 4,
+              "y": 0,
+              "z": 2.1935898033750316
+            }
+          },
+          {
+            "kind": "tip",
+            "entityKind": "branch",
+            "utilizationPct": 0.6077691218021906,
+            "layerZMm": 11.225,
+            "pos": {
+              "x": 3.5,
+              "y": -1,
+              "z": 11
+            }
+          },
+          {
+            "kind": "tip",
+            "entityKind": "branch",
+            "utilizationPct": 0.5859481025984068,
+            "layerZMm": 11.225,
+            "pos": {
+              "x": 3,
+              "y": -1.5,
+              "z": 11
+            }
+          },
+          {
+            "kind": "tip",
+            "entityKind": "leaf",
+            "utilizationPct": 0.5672242287321987,
+            "layerZMm": 11.225,
+            "pos": {
+              "x": 3,
+              "y": 0,
+              "z": 11
+            }
+          },
+          {
+            "kind": "tip",
+            "entityKind": "trunk",
+            "utilizationPct": 0.5488128652898845,
+            "layerZMm": 14.218478260869565,
+            "pos": {
+              "x": -3.5,
+              "y": -0.5,
+              "z": 14
+            }
+          }
+        ]
       }
     },
     {
@@ -219,7 +423,7 @@
       "islands": 1,
       "islandSource": "authored",
       "candidates": 403,
-      "entities": 376,
+      "entities": 371,
       "placedByType": {
         "trunk": 46,
         "branch": 72,
@@ -235,17 +439,17 @@
         "branch": 72,
         "leaf": 65,
         "twig": 87,
-        "brace": 104,
-        "kickstand": 2
+        "brace": 101
       },
       "contacts": 357,
-      "roots": 48,
-      "joints": 741,
+      "roots": 46,
+      "joints": 729,
       "curvedSegments": 0,
-      "memberLengthMm": 1991.9191789376684,
-      "memberVolumeMm3": 2368.1168878070253,
+      "memberLengthMm": 1954.2284436816572,
+      "memberVolumeMm3": 2212.517285509953,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
+      "aboveContactDetails": [],
       "coveragePct": 98.0780780780781,
       "islandsCovered": 1,
       "islandsUncovered": 0,
@@ -270,20 +474,87 @@
       "routerPlacements": 568,
       "routerCones": 22268,
       "routerProbes": 73127,
-      "totalMs": 3246.3561999999993,
+      "totalMs": 4016.512100000001,
       "phases": {
-        "candidates": 19,
-        "dedup": 8,
-        "support-filter": 29,
-        "placement": 1417,
-        "consolidation": 193,
-        "gap-fill": 69,
-        "analytics": 5,
+        "candidates": 38,
+        "dedup": 4,
+        "support-filter": 48,
+        "placement": 1965,
+        "consolidation": 236,
+        "gap-fill": 81,
+        "analytics": 6,
         "fanning": 0,
         "surface-coverage": 0,
-        "resize": 414,
-        "report": 9,
-        "bracing": 716
+        "resize": 561,
+        "report": 18,
+        "bracing": 599
+      },
+      "stress": {
+        "maxMemberUtilPct": 3.137433903628882,
+        "overloadedMembers": 0,
+        "overloadedConeMembers": 0,
+        "maxTipUtilPct": 0.3790619714308932,
+        "overloadedTips": 0,
+        "maxTipRockingMm": 0.02280972770993731,
+        "maxTipDeflectionMm": 0.2195470960630514,
+        "reinforcedCount": 0,
+        "hotspots": [
+          {
+            "kind": "member",
+            "entityKind": "trunk",
+            "utilizationPct": 3.137433903628882,
+            "layerZMm": 20.66541389797045,
+            "pos": {
+              "x": 16,
+              "y": -8,
+              "z": 3.8858815014290995
+            }
+          },
+          {
+            "kind": "member",
+            "entityKind": "trunk",
+            "utilizationPct": 1.1664580739460721,
+            "layerZMm": 20.66541389797045,
+            "pos": {
+              "x": 0,
+              "y": -4,
+              "z": 4.991365553498996
+            }
+          },
+          {
+            "kind": "member",
+            "entityKind": "trunk",
+            "utilizationPct": 1.016784986302638,
+            "layerZMm": 20.66541389797045,
+            "pos": {
+              "x": 4,
+              "y": -4,
+              "z": 6.369938950466718
+            }
+          },
+          {
+            "kind": "member",
+            "entityKind": "trunk",
+            "utilizationPct": 0.6845871996119449,
+            "layerZMm": 20.66541389797045,
+            "pos": {
+              "x": 10.95,
+              "y": -2.8169636963055247,
+              "z": 11.406306218338205
+            }
+          },
+          {
+            "kind": "member",
+            "entityKind": "leaf",
+            "utilizationPct": 0.6326736043951914,
+            "layerZMm": 20.66541389797045,
+            "pos": {
+              "x": 12.25671833780876,
+              "y": -7.841634999376952,
+              "z": 15.01095487257576
+            }
+          }
+        ]
       }
     },
     {
@@ -292,7 +563,7 @@
       "islands": 1,
       "islandSource": "authored",
       "candidates": 32,
-      "entities": 17,
+      "entities": 15,
       "placedByType": {
         "trunk": 6,
         "branch": 0,
@@ -306,16 +577,17 @@
       "entitiesByType": {
         "trunk": 6,
         "twig": 5,
-        "brace": 6
+        "brace": 4
       },
       "contacts": 16,
       "roots": 6,
       "joints": 28,
       "curvedSegments": 0,
-      "memberLengthMm": 91.17975370849335,
-      "memberVolumeMm3": 127.05780156738031,
+      "memberLengthMm": 80.17975370849335,
+      "memberVolumeMm3": 96.23174730091446,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
+      "aboveContactDetails": [],
       "coveragePct": 25.165165165165167,
       "islandsCovered": 0,
       "islandsUncovered": 1,
@@ -339,20 +611,87 @@
       "routerPlacements": 67,
       "routerCones": 1812,
       "routerProbes": 10463,
-      "totalMs": 114.1775000000016,
+      "totalMs": 150.5746999999992,
       "phases": {
-        "candidates": 11,
+        "candidates": 10,
         "dedup": 1,
-        "support-filter": 1,
-        "placement": 57,
+        "support-filter": 2,
+        "placement": 77,
         "consolidation": 0,
-        "gap-fill": 18,
+        "gap-fill": 28,
         "analytics": 2,
         "fanning": 0,
         "surface-coverage": 0,
         "resize": 0,
         "report": 2,
-        "bracing": 20
+        "bracing": 25
+      },
+      "stress": {
+        "maxMemberUtilPct": 0.08893666325863119,
+        "overloadedMembers": 0,
+        "overloadedConeMembers": 0,
+        "maxTipUtilPct": 0.11346642823307279,
+        "overloadedTips": 0,
+        "maxTipRockingMm": 0.000026132048452120215,
+        "maxTipDeflectionMm": 0.00199574517679895,
+        "reinforcedCount": 0,
+        "hotspots": [
+          {
+            "kind": "tip",
+            "entityKind": "trunk",
+            "utilizationPct": 0.11346642823307279,
+            "layerZMm": 14.635149002075195,
+            "pos": {
+              "x": 9,
+              "y": -2.5,
+              "z": 9.669873237609863
+            }
+          },
+          {
+            "kind": "tip",
+            "entityKind": "trunk",
+            "utilizationPct": 0.1130134363069577,
+            "layerZMm": 14.635149002075195,
+            "pos": {
+              "x": 7.5,
+              "y": -2.5,
+              "z": 9.669873237609863
+            }
+          },
+          {
+            "kind": "tip",
+            "entityKind": "trunk",
+            "utilizationPct": 0.11060061936705619,
+            "layerZMm": 14.635149002075195,
+            "pos": {
+              "x": -0.5,
+              "y": -2.5,
+              "z": 9.669873237609863
+            }
+          },
+          {
+            "kind": "tip",
+            "entityKind": "trunk",
+            "utilizationPct": 0.10954673442753057,
+            "layerZMm": 14.635149002075195,
+            "pos": {
+              "x": -4,
+              "y": -2.5,
+              "z": 9.669873237609863
+            }
+          },
+          {
+            "kind": "tip",
+            "entityKind": "trunk",
+            "utilizationPct": 0.10933355576806326,
+            "layerZMm": 14.635149002075195,
+            "pos": {
+              "x": -11,
+              "y": -2,
+              "z": 10.535898208618164
+            }
+          }
+        ]
       }
     },
     {
@@ -383,6 +722,7 @@
       "memberVolumeMm3": 798.8651824096248,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
+      "aboveContactDetails": [],
       "coveragePct": 95.24375743162902,
       "islandsCovered": 1,
       "islandsUncovered": 0,
@@ -404,21 +744,22 @@
       "routerPlacements": 253,
       "routerCones": 9909,
       "routerProbes": 773381,
-      "totalMs": 812.7746000000006,
+      "totalMs": 1091.1612000000005,
       "phases": {
-        "candidates": 11,
+        "candidates": 17,
         "dedup": 1,
-        "support-filter": 27,
-        "placement": 747,
+        "support-filter": 37,
+        "placement": 999,
         "consolidation": 0,
-        "gap-fill": 19,
-        "analytics": 4,
+        "gap-fill": 23,
+        "analytics": 7,
         "fanning": 0,
         "surface-coverage": 0,
         "resize": 0,
-        "report": 1,
+        "report": 3,
         "bracing": 1
-      }
+      },
+      "stress": null
     },
     {
       "name": "flat-base",
@@ -446,6 +787,7 @@
       "memberVolumeMm3": 0,
       "aboveContact": 0,
       "worstAboveContactMm": 0,
+      "aboveContactDetails": [],
       "coveragePct": 0,
       "islandsCovered": 0,
       "islandsUncovered": 0,
@@ -465,8 +807,9 @@
       "routerPlacements": 0,
       "routerCones": 0,
       "routerProbes": 0,
-      "totalMs": 0.5784000000003289,
-      "phases": {}
+      "totalMs": 0.7878999999993539,
+      "phases": {},
+      "stress": null
     }
   ]
 }

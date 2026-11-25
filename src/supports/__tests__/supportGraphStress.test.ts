@@ -175,6 +175,23 @@ test('a knot within 0.5 mm of a shaft end welds into it instead of splitting a s
     assert.equal(leafMember.nodeA, trunkShaft[0].nodeB, 'leaf and shaft share the welded node');
 });
 
+test('a broad plate contact takes most of the rigid peel load out of the supports', () => {
+    const supports = [
+        { x: -5, y: 0, contactDiameterMm: 0.28 },
+        { x: 5, y: 0, contactDiameterMm: 0.28 },
+    ];
+    const withoutPlate = distributeRigidBodyPeelLoads(supports, 1, 0, 0);
+    const withPlate = distributeRigidBodyPeelLoads(
+        [...supports, { x: 0, y: 0, contactDiameterMm: 20 }],
+        1,
+        0,
+        0,
+    );
+    assert.ok(withoutPlate[0] > 0.4, 'the two supports split the peel');
+    assert.ok(withPlate[0] < withoutPlate[0] * 0.01, 'the plate contact carries the share');
+    assert.ok(withPlate[0] + withPlate[1] + withPlate[2] > 0.999, 'equilibrium is preserved');
+});
+
 test('distributeRigidBodyPeelLoads distributes centered uniformly, shifts off-center load, and clamps compression', () => {
     const symmetric = [
         { x: -5, y: 0, contactDiameterMm: 0.3 },

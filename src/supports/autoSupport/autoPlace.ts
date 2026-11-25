@@ -45,6 +45,7 @@ import {
     posedPositions,
     STEEP_FLAT_ANCHOR_MIN_AREA_MM2,
     steepFlatNeedsCoverage,
+    plateContactsFromStability,
 } from './poseStability';
 import { getRaftSettingsForModel } from '../Rafts/Crenelated/RaftState';
 import { perfEndFrame, perfMark, perfMeasure, type PerfFrame } from '../PlacementLogic/Pathfinding/pathfindingPerf';
@@ -7511,10 +7512,12 @@ export function computeAutoSupportPlan(
             perfMark('bracing:stress');
             let supportGraph = buildSupportGraph(draft, modelId);
             if (supportGraph.rootCount > 0 && supportGraph.tipCount > 0) {
+                const plateContacts = plateContactsFromStability(poseStability);
                 let frameStress = solveSupportFrameStress(supportGraph, tractionProfile, {
                     areaPerSupportMm2: autoSettings.areaPerSupportMm2,
                     supportStrengthMpa,
                     memberStrengthMpa,
+                    ...(plateContacts ? { plateContacts } : {}),
                 });
                 // Close the loop with the stress solver: brace / kickstand
                 // first, re-solve, and only thicken when no structural action
@@ -7804,6 +7807,7 @@ export function computeAutoSupportPlan(
                         areaPerSupportMm2: autoSettings.areaPerSupportMm2,
                         supportStrengthMpa,
                         memberStrengthMpa,
+                        ...(plateContacts ? { plateContacts } : {}),
                     });
                     console.log(LOG_PREFIX,
                         `Stress feedback pass ${pass + 1}: reinforced ${reinforcedThisPass} member(s), `
@@ -7827,6 +7831,7 @@ export function computeAutoSupportPlan(
                         areaPerSupportMm2: autoSettings.areaPerSupportMm2,
                         supportStrengthMpa,
                         memberStrengthMpa,
+                        ...(plateContacts ? { plateContacts } : {}),
                         taperedConeStress: true,
                     });
                     if (reinforcedCount !== undefined) {
