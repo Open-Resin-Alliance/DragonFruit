@@ -255,6 +255,14 @@ scan_islands_staged(...)  ───►  params            ──────► 
   id and the overlay can copy the exact triangles it is shading.
 - **No matrix or center arguments.** The pose is baked into the staged
   positions.
+- **Overhang triangle ids are remapped by centroid on ingestion.** A loader
+  (LYS in particular) can re-index or reorder the same triangles, leaving the
+  raw ids pointing at unrelated faces. `OverhangRegion.triangleCentroids` is
+  returned by the scan, and `remapOverhangTriangles` maps each centroid through
+  the model's centre and pose onto the rendered index/non-index order before
+  any region reaches the overlay or placement. If no centroid resolves, the
+  region's ids are cleared and a dev `[IslandsPerf]` warning names the geometry,
+  so the overlay is hidden rather than drawn on wrong faces.
 - **The buffer is consumed.** A command `take()`s it; stage immediately before
   invoking. Two staged commands in one scan stage twice.
 - **A missing buffer is not fatal for `scan_islands_from_path`.** It logs and

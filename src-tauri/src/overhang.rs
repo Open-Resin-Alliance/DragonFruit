@@ -85,6 +85,10 @@ pub struct FootprintMask {
 pub struct OverhangRegion {
     /// Triangle indices into `IndexedMesh::triangles`.
     pub triangle_ids: Vec<u32>,
+    /// World-space centroid per entry in `triangle_ids`, in the same order.
+    /// The overlay uses these to remap ids when a loader's triangle order
+    /// differs from the order this scan saw.
+    pub triangle_centroids: Vec<[f32; 3]>,
     /// Sum of the 3D triangle areas (mm²).
     pub area_mm2: f32,
     /// Sum of the XY-projected triangle areas (mm²) — the supportable footprint
@@ -568,8 +572,14 @@ fn build_region(
     let mut xy_max = [f32::NEG_INFINITY; 2];
 
     let mut normal_acc = [0f32; 3];
+    let mut triangle_centroids = Vec::with_capacity(triangle_ids.len());
     for &fi in &triangle_ids {
         let [a, b, c] = mesh.tri_positions(fi);
+        triangle_centroids.push([
+            (a.x + b.x + c.x) / 3.0,
+            (a.y + b.y + c.y) / 3.0,
+            (a.z + b.z + c.z) / 3.0,
+        ]);
         let area = mesh.tri_area(fi);
         area_mm2 += area;
 
@@ -626,6 +636,7 @@ fn build_region(
 
     OverhangRegion {
         triangle_ids,
+        triangle_centroids,
         area_mm2,
         projected_area_mm2,
         angle_deg: if area_mm2 > 1e-9 {

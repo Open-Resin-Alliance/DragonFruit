@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { remapOverhangTriangleIds } from './remapOverhangTriangles';
 import { detectVoxelIslands, type VoxelDetectParams } from './detect';
 import { contactEndpointsFor, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import {
@@ -743,7 +744,11 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         vertexIndex: m.vertexIndex,
         seedTriangleId: m.seedTriangleId,
       }));
-      const overhangMapped = (combined.overhangIslands ?? []).map(overhangRegionToIsland);
+      const overhangMapped = remapOverhangTriangleIds(
+        combined.overhangIslands ?? [],
+        geom?.geometry,
+        transform,
+      ).map(overhangRegionToIsland);
       const topple = scanNeedsCoverage(combined.stability);
       const drag = combined.stability?.dragMomentMm3 ?? 0;
 
@@ -946,7 +951,11 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             if (scanEpochRef.current !== epoch) return;
             topple = scanNeedsCoverage(scan.stability);
             drag = scan.stability?.dragMomentMm3 ?? 0;
-            mappedOverhangs = scan.regions.map(overhangRegionToIsland);
+            mappedOverhangs = remapOverhangTriangleIds(
+              scan.regions,
+              geom?.geometry,
+              transform,
+            ).map(overhangRegionToIsland);
             setToppleCoverage(topple);
             setDragTotalMm3(drag);
             setOverhangIslands(mappedOverhangs);

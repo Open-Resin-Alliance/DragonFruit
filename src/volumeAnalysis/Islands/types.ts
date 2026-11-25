@@ -32,6 +32,8 @@ export interface FootprintMask {
 
 export interface OverhangRegion {
   triangleIds: number[];
+  /** World-space centroid per triangle id, in the same order. */
+  triangleCentroids?: Array<[number, number, number]>;
   areaMm2: number;
   projectedAreaMm2: number;
   angleDeg: number;
