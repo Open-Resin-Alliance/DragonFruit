@@ -1160,30 +1160,13 @@ function SupportStressPanelImpl({
               </div>
             )}
 
-            {/* 3. Interactive Peel Profile Graph */}
-            {layers.length > 0 ? (
-              <PeelProfileGraph
-                layers={layers}
-                hoveredIndex={hoveredIdx}
-                onHoverIndex={setHoveredIdx}
-                inspectedLayer={inspectedLayer}
-                peakZMm={report?.peakLayerZMm ?? printability?.peakPeelLayerZMm ?? 0}
-                peakForceN={report?.peakLayerPeelForceN ?? printability?.peakPeelForceN ?? 0}
-                deflectionMm={report?.maxTipDeflectionMm}
-              />
-            ) : !hasAnyData ? (
-              <div className="text-[10px] italic text-center py-1" style={{ color: 'var(--text-muted)' }}>
-                {_(msg`Generate supports or analyze existing ones to inspect peel loads.`)}
-              </div>
-            ) : null}
-
-            {/* 4. Collapsible Details Disclosure */}
+            {/* 3. Collapsible Details Disclosure */}
             {hasAnyData && (
               <div className="rounded-md border" style={AUTO_SUPPORT_SECTION_CARD}>
                 <button
                   type="button"
                   onClick={() => setShowDetails((current) => !current)}
-                  title={_(msg`Inspect detailed coverage, frame stress, stability metrics, and hotspots`)}
+                  title={_(msg`Inspect peel loads, coverage, frame stress, stability metrics, and hotspots`)}
                   className="w-full flex items-center justify-between px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide"
                   style={{ color: 'var(--text-muted)' }}
                 >
@@ -1212,6 +1195,21 @@ function SupportStressPanelImpl({
 
                 {showDetails && (
                   <div className="px-2.5 pb-2 space-y-2 text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                    {layers.length > 0 ? (
+                      <PeelProfileGraph
+                        layers={layers}
+                        hoveredIndex={hoveredIdx}
+                        onHoverIndex={setHoveredIdx}
+                        inspectedLayer={inspectedLayer}
+                        peakZMm={report?.peakLayerZMm ?? printability?.peakPeelLayerZMm ?? 0}
+                        peakForceN={report?.peakLayerPeelForceN ?? printability?.peakPeelForceN ?? 0}
+                        deflectionMm={report?.maxTipDeflectionMm}
+                      />
+                    ) : (
+                      <div className="text-[10px] italic text-center py-1" style={{ color: 'var(--text-muted)' }}>
+                        {_(msg`Generate supports or analyze existing ones to inspect peel loads.`)}
+                      </div>
+                    )}
                     {report && (
                       <div className="border-t pt-1.5 space-y-1" style={{ borderColor: 'var(--border-subtle)' }}>
                         <div className="flex justify-between">
