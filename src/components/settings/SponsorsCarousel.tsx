@@ -212,7 +212,7 @@ function CachedAvatar({ src, profile, alt, className, totalAmountDonated }: { sr
       setUrl(cached);
       setLoaded(true);
     }
-  }, [src]);
+  }, [highResSrc]);
 
   useEffect(() => {
     if (!highResSrc) return;
@@ -272,7 +272,7 @@ function CachedAvatar({ src, profile, alt, className, totalAmountDonated }: { sr
     return () => {
       cancelled = true;
     };
-  }, [src]);
+  }, [highResSrc]);
 
   // Still fetching blob → show small circular progress in place of the avatar.
   if (!url) {

@@ -194,6 +194,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
     }
   }, [islands.scanning, islands.filteredIslands, activeModelId, runAutoSupports]);
 
+  const runIslandScan = islands.onRunScan;
   const doRun = React.useCallback((replace: boolean) => {
     if (!activeModelId) return;
     if (replace) {
@@ -247,7 +248,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
     if (list.length === 0 && islands.voxelIslands.length === 0 && islands.minimaIslands.length === 0) {
       pendingRef.current = true;
       autoSupportDrivingScan = true;
-      void islands.onRunScan();
+      void runIslandScan();
       return;
     }
     // Let React flush the busy state and the browser paint the modal
@@ -265,7 +266,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
         }
       }, 0);
     });
-  }, [activeModelId, islands.filteredIslands, islands.voxelIslands.length, islands.minimaIslands.length, runAutoSupports]);
+  }, [activeModelId, islands.filteredIslands, islands.voxelIslands.length, islands.minimaIslands.length, runAutoSupports, runIslandScan]);
 
   const handleRun = React.useCallback(() => {
     if (!activeModelId || busy) return;
@@ -290,7 +291,7 @@ export function AutoSupportPanel({ islands, hasGeometry, activeModelId, autoLift
       }
       doRun(false);
     })();
-  }, [activeModelId, busy, islands.filteredIslands, islands.voxelIslands.length, islands.minimaIslands.length, doRun, onBeforeRun]);
+  }, [activeModelId, busy, doRun, onBeforeRun]);
 
   const canRun = hasGeometry && !!activeModelId && !busy && !islands.scanning;
 

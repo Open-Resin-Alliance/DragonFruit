@@ -613,7 +613,6 @@ export function SettingsModal({
     xrayOpacity,
     heatmapMinAngle,
     heatmapMaxAngle,
-    heatmapColors,
   ]);
 
   const handleThemeColorChange = React.useCallback((key: keyof ThemeCustomColors, value: string) => {
@@ -1076,6 +1075,7 @@ export function SettingsModal({
     draftHeatmapColors,
     draftLogLevel,
     onAmbientIntensityChange,
+    onBakedAoIntensityChange,
     onClose,
     requestClose,
     onDirectionalIntensityChange,

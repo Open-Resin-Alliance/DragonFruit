@@ -390,7 +390,7 @@ export function NativeSpaceMouseController({
       lastAppliedSeq: lastAppliedSeqRef.current,
       lastAppliedExtentsSeq: lastAppliedExtentsSeqRef.current,
     };
-  }, [camera, computeOrthoExtents, getTarget, refreshModelExtents]);
+  }, [camera, computeOrthoExtents, fovDeg, getTarget, refreshModelExtents]);
 
   useFrame(() => {
     if (!getNativeSpaceMouseActive() || !settings.enabled) return;
