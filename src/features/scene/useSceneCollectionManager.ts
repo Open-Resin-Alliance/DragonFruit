@@ -1176,7 +1176,7 @@ function writeRecentOpenedFilesToLocalStorage(entries: RecentOpenedFileEntry[]):
 }
 
 /** Extensions stripped from an imported display name, longest first so `.stl.gz` goes before `.gz`. */
-const IMPORTED_NAME_EXTENSIONS = ['.chitubox', '.ctb', '.3mf', '.stl', '.obj', '.ply', '.lys'];
+const IMPORTED_NAME_EXTENSIONS = ['.chitubox', '.ctp', '.3mf', '.stl', '.obj', '.ply', '.lys'];
 
 function sanitizeImportedModelDisplayName(rawName: string): string {
   let base = rawName.trim();
