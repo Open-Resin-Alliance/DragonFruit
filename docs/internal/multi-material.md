@@ -60,7 +60,12 @@ is how a slicer grows a second material system that matches neither.
   processed in the merged model's own space, so a body can be selected on its own and
   given its own material; the renderer then draws one mesh per body (the merged mesh
   stays for picking and overlays). Splitting to bodies still works and carries each
-  body's material onto the new model.
+  body's material onto the new model. Delete (menu or key) with bodies selected
+  removes only those bodies (`deleteModelBodies`, `removeModelBodies` in
+  `src/features/scene/modelBodies.ts`): the merged mesh is rebuilt from the remaining
+  bodies, which stay where they were, in one undo step. The last body left turns the
+  model into a plain model in that body's material; deleting every body deletes the
+  model.
 
 ## Saving and loading multi-material scenes
 
