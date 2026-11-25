@@ -430,8 +430,9 @@ whole-frame structural stress on the assembled forest via
     shift. The raw max−min of tip displacements reported ~3 mm on prints that
     work; the fitted part rocking on the hand-supported Puck is 0.043 mm.
     `planStressActions` orders the fixes: `brace-rocking` for that pair when the
-    fitted differential exceeds `ROCKING_THRESHOLD_MM`,
-    `brace-member` for an
+    fitted differential exceeds `ROCKING_THRESHOLD_MM` **and** a tip or member is
+    also over (the rotation is elastic support/resin compliance), `brace-member`
+    for an
     overloaded leaf/branch (a cone at its thickness cap needs a shorter span,
     not a thicker tip) and for a trunk over `DEFAULT_TRUNK_BRACE_PCT` (200 %,
     where another diameter step cannot make it stiff enough), and
@@ -978,7 +979,14 @@ max free span is 3.9 mm is a warning. The hand-supported Puck print has exactly
 that patch and prints, so area alone cannot be the verdict. The summary maps a
 `critical` verdict to **Action Needed**, but `underSupported` (and its
 uncovered-area warning) to **Needs Attention**; it no longer promotes any
-uncovered area over 0.02 mm² to critical.
+uncovered area over 0.02 mm² to critical. A `topple.outcome === 'rocking'` with
+a solved frame and no overload is **elastic support/resin compliance** — the
+part/forest flexes during peel and recovers — so the summary is **ready** with
+a reference note, not attention. The auto-backed Puck reads 0.533 mm with tip
+62 %, member 67 %, and adhesion inside limits; the hand-backed one 0.043 mm.
+Rocking without a frame still reads attention. `toppleRiskNeedsCoverage` only
+gates `pastEdge` / adhesion, so elastic rocking no longer adds anti-topple
+supports.
 
 **Constraints:**
 
@@ -1094,9 +1102,10 @@ mass sits inside the edge), `peelMomentNmm`, `requiredAdhesionMpa` (the plate
 pressure that would lift the contact patch against the conservative
 `TOPPLE_ADHESION_THRESHOLD_MPA` 0.30 MPa band, `Infinity` when bearing area is
 zero), and `complianceMm` from the frame solve; `classifyToppleRisk` turns
-those into `pastEdge` / `rocking` (`> ROCKING_THRESHOLD_MM` 0.15 mm contact
-differential) / `adhesionBound`, and `toppleRiskNeedsCoverage` turns the report
-into the placement and coverage boolean.
+those into `pastEdge` / `rocking` (fitted part rotation above
+`ROCKING_THRESHOLD_MM` 0.15 mm, a reference for elastic layer-shift sensitivity)
+/ `adhesionBound`, and `toppleRiskNeedsCoverage` turns only `pastEdge` or an
+adhesion over-budget into the placement/coverage boolean.
 
 `complianceMm` reads `SupportFrameStressReport.maxTipRockingMm`, now the range
 of the **fitted rigid-body rotation** along the layer's coherent drag direction

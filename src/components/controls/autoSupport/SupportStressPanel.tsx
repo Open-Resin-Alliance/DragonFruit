@@ -220,7 +220,9 @@ function formatPrimaryIssueSubtitle(
 ): string {
   switch (summary.primaryIssue) {
     case 'none':
-      return _(msg`Coverage, support load, and stability are within limits.`);
+      return topple?.outcome === 'rocking'
+        ? _(msg`Support loads and coverage are within limits. Elastic part rotation during peel is reported below; it is not a support failure.`)
+        : _(msg`Coverage, support load, and stability are within limits.`);
     case 'unanalyzed':
       return _(msg`Scan overhangs or generate supports to check printability.`);
     case 'notScanned':
@@ -304,11 +306,14 @@ function formatStabilityChecklistLabel(
   _: Translate,
   fmt: LocaleFmt,
   topple: ToppleRiskReport,
+  level: SupportStressStatusLevel,
 ): string {
   if (topple.outcome === 'pastEdge') return _(msg`May tip`);
   if (topple.outcome === 'rocking') {
     const defl = fmt.quantity(topple.complianceMm, 2, 'mm');
-    return _(msg`Rocking · ${defl}`);
+    return level === 'ready'
+      ? _(msg`Elastic rotation · ${defl}`)
+      : _(msg`Rocking · ${defl}`);
   }
   return _(msg`Stable`);
 }
@@ -358,9 +363,9 @@ function coverageRowColor(printability: PrintabilityReport): string {
   return 'var(--success)';
 }
 
-function stabilityRowColor(topple: ToppleRiskReport): string {
+function stabilityRowColor(topple: ToppleRiskReport, level: SupportStressStatusLevel): string {
   if (topple.outcome === 'pastEdge') return 'var(--danger)';
-  if (topple.outcome === 'rocking') return '#f59e0b';
+  if (topple.outcome === 'rocking' && level !== 'ready') return '#f59e0b';
   return 'var(--success)';
 }
 
@@ -1120,7 +1125,7 @@ function SupportStressPanelImpl({
                           backgroundColor: isFloatingUnsupported
                             ? 'var(--danger)'
                             : topple
-                              ? stabilityRowColor(topple)
+                              ? stabilityRowColor(topple, summary.level)
                               : 'var(--text-muted)',
                         }}
                       />
@@ -1132,14 +1137,14 @@ function SupportStressPanelImpl({
                         color: isFloatingUnsupported
                           ? 'var(--danger)'
                           : topple
-                            ? stabilityRowColor(topple)
+                            ? stabilityRowColor(topple, summary.level)
                             : 'var(--text-muted)',
                       }}
                     >
                       {isFloatingUnsupported
                         ? _(msg`Floating`)
                         : topple
-                          ? formatStabilityChecklistLabel(_, fmt, topple)
+                          ? formatStabilityChecklistLabel(_, fmt, topple, summary.level)
                           : ''}
                     </span>
                   </div>
@@ -1266,8 +1271,12 @@ function SupportStressPanelImpl({
                           <span style={{ color: 'var(--text-strong)' }}>{fmt.quantity(topple.requiredAdhesionMpa, 3, 'MPa')}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span>{_(msg`Rocking`)}</span>
-                          <span style={{ color: topple.outcome === 'rocking' ? '#f59e0b' : 'var(--success)' }}>
+                          <span>
+                            {summary.level === 'ready' && topple.outcome === 'rocking'
+                              ? _(msg`Elastic rotation`)
+                              : _(msg`Rocking`)}
+                          </span>
+                          <span style={{ color: topple.outcome === 'rocking' && summary.level !== 'ready' ? '#f59e0b' : 'var(--success)' }}>
                             {fmt.quantity(topple.complianceMm, 2, 'mm')}
                           </span>
                         </div>
@@ -1492,7 +1501,7 @@ function SupportStressPanelImpl({
                     : coverageMeasured && printability
                       ? coverageRowColor(printability)
                       : topple
-                        ? stabilityRowColor(topple)
+                        ? stabilityRowColor(topple, summary.level)
                         : 'var(--text-muted)',
                 }}
               >
@@ -1501,7 +1510,7 @@ function SupportStressPanelImpl({
                   : coverageMeasured && printability
                     ? formatCoverageChecklistLabel(_, fmt, printability)
                     : topple
-                      ? formatStabilityChecklistLabel(_, fmt, topple)
+                      ? formatStabilityChecklistLabel(_, fmt, topple, summary.level)
                       : _(msg`Not scanned`)}
               </div>
             </div>

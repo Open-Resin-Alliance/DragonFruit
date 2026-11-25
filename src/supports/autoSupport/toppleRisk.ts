@@ -21,7 +21,8 @@
 import { computeLayerPeelForceAndCop, computePeelLayerSamples } from './supportGraphStress';
 import type { RepresentativeLayerProfile, RepresentativeLayer } from './tractionOptimization';
 
-/** A fitted part rotation differential above this reads as rocking / layer-line shift. */
+/** A fitted part rotation differential above this is reported as elastic
+ *  rocking for layer-shift reference; it is not a support break limit. */
 export const ROCKING_THRESHOLD_MM = 0.15;
 /** Conservative plate adhesion ceiling (MPa = 300 kPa; NOMINAL_PEEL_PRESSURE_MPA / CONSERVATIVE_P_SIGMA). */
 export const TOPPLE_ADHESION_THRESHOLD_MPA = 0.3;
@@ -73,9 +74,11 @@ export function classifyToppleRisk(comDepthMm: number, complianceMm: number): To
     return 'adhesionBound';
 }
 
-/** True when solved Stefan topple risk indicates the pose needs anti-topple support coverage. */
+/** True when solved Stefan topple risk indicates the pose needs anti-topple
+ *  support coverage. Elastic rocking does not: it flexes during peel and
+ *  recovers, and the tip/member/adhesion checks own the failure surface. */
 export function toppleRiskNeedsCoverage(report: ToppleRiskReport): boolean {
-    return report.outcome !== 'adhesionBound' || report.requiredAdhesionMpa >= TOPPLE_ADHESION_THRESHOLD_MPA;
+    return report.outcome === 'pastEdge' || report.requiredAdhesionMpa >= TOPPLE_ADHESION_THRESHOLD_MPA;
 }
 
 /** Inward depth of a plan point from the edge line; negative = outside. */

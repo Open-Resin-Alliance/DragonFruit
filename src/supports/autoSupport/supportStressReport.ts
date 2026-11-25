@@ -118,7 +118,7 @@ export function summarizeSupportStress(input: SupportStressReportInput): Support
             overloadedCount,
         };
     }
-    if (topple?.outcome === 'rocking') {
+    if (topple?.outcome === 'rocking' && !frame) {
         return {
             level: 'attention',
             primaryIssue: 'rocking',
@@ -185,7 +185,13 @@ function primaryIssueSentence(summary: SupportStressSummary, input: SupportStres
     const { frame, printability, topple, modelMinZMm } = input;
     switch (summary.primaryIssue) {
         case 'none':
-            return 'All checked overhangs, support loads, and stability metrics are within limits.';
+            return input.topple?.outcome === 'rocking'
+                ? `Support loads and coverage are within limits. The frame's fitted part rotation is `
+                    + `${input.topple.complianceMm.toFixed(3)}mm during peel: that is elastic support/resin `
+                    + `compliance and recovers, not a layer shift or a contact failure. The `
+                    + `${ROCKING_THRESHOLD_MM.toFixed(2)}mm figure is a reference for layer-shift `
+                    + `sensitivity, not a break limit.`
+                : 'All checked overhangs, support loads, and stability metrics are within limits.';
         case 'unanalyzed':
             return 'Scan overhangs or generate supports to check printability.';
         case 'notScanned':
@@ -327,7 +333,8 @@ export function supportStressReportToText(input: SupportStressReportInput): stri
     if (topple) {
         lines.push('');
         lines.push('STABILITY & TOPPLE RISK');
-        lines.push(`  Outcome: ${topple.outcome} · COM depth inside edge ${topple.comDepthMm.toFixed(2)}mm`);
+        const elasticRocking = topple.outcome === 'rocking' && summary.level === 'ready';
+        lines.push(`  Outcome: ${elasticRocking ? 'elastic flex' : topple.outcome} · COM depth inside edge ${topple.comDepthMm.toFixed(2)}mm`);
         lines.push(
             `  Peel load (topple profile): ${topple.peakLayerForceN.toFixed(2)}N peak layer · `
             + `moment ${topple.peelMomentNmm.toFixed(1)}N·mm · `
@@ -335,7 +342,9 @@ export function supportStressReportToText(input: SupportStressReportInput): stri
         );
         lines.push(
             `  Rocking offset: ${topple.complianceMm.toFixed(3)}mm `
-            + `(limit ${ROCKING_THRESHOLD_MM.toFixed(2)}mm)`,
+            + (elasticRocking
+                ? '(elastic part rotation; reference, not a support failure)'
+                : `(limit ${ROCKING_THRESHOLD_MM.toFixed(2)}mm)`),
         );
     }
 

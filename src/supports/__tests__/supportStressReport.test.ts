@@ -142,13 +142,26 @@ test('summarizeSupportStress ranks critical, attention, ready, and unanalyzed co
     assert.equal(highLoad.level, 'attention');
     assert.equal(highLoad.primaryIssue, 'highLoad');
 
+    // A fitted part rotation with a solved frame and no overload is elastic
+    // support/resin compliance, not a support failure.
     const rocking = summarizeSupportStress({
         frame: makeFrame(),
-        printability: makePrintability({ maxFreeSpanMm: HIGH_LEVERAGE_SPAN_MM + 1 }),
-        topple: makeTopple({ outcome: 'rocking', complianceMm: ROCKING_THRESHOLD_MM + 0.05 }),
+        printability: makePrintability(),
+        topple: makeTopple({ outcome: 'rocking', complianceMm: 0.533 }),
     });
-    assert.equal(rocking.level, 'attention');
-    assert.equal(rocking.primaryIssue, 'rocking');
+    assert.equal(rocking.level, 'ready');
+    assert.equal(rocking.primaryIssue, 'none');
+
+    const elasticText = supportStressReportToText({
+        modelId: 'puck',
+        frame: makeFrame(),
+        printability: makePrintability(),
+        topple: makeTopple({ outcome: 'rocking', complianceMm: 0.533 }),
+    });
+    assert.ok(elasticText.includes('CHECKS PASSED'));
+    assert.ok(elasticText.includes('elastic support/resin compliance'));
+    assert.ok(elasticText.includes('elastic flex'));
+    assert.ok(!elasticText.includes('RECOMMENDED ACTIONS'));
 
     const deficient = summarizeSupportStress({
         frame: makeFrame(),

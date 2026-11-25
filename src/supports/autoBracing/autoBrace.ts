@@ -1685,6 +1685,33 @@ export function addTargetedStressBraces(
     const createBraceId = createUniqueIdFactory('auto-brace', braceIds);
     const createKnotId = createUniqueIdFactory('auto-brace-knot', knotIds);
 
+    /** A rocking pair is reported by contact entity: a leaf has no shaft of
+     *  its own, so resolve it to the support tree that hosts it (the parent
+     *  knot's owning trunk/branch). Without this a leaf pair skipped as
+     *  `noEndpoints` and the report kept recommending a brace nothing could
+     *  place. */
+    const resolveSupportId = (entityId: string): string | undefined => {
+        if (sampleById.has(entityId)) return entityId;
+        const hostSupportId = (parentKnotId: string | undefined): string | undefined => {
+            if (!parentKnotId) return undefined;
+            const knot = next.knots?.[parentKnotId];
+            if (!knot?.parentShaftId) return undefined;
+            return supportBySegment.get(knot.parentShaftId)
+                ?? (sampleById.has(knot.parentShaftId) ? knot.parentShaftId : undefined);
+        };
+        const leaf = next.leaves?.[entityId];
+        if (leaf) {
+            const id = hostSupportId(leaf.parentKnotId);
+            if (id) return id;
+        }
+        const branch = next.branches?.[entityId];
+        if (branch) {
+            const id = hostSupportId(branch.parentKnotId);
+            if (id) return id;
+        }
+        return undefined;
+    };
+
     const pairKey = (aId: string, bId: string): string => [aId, bId].sort().join('|');
     /** A targeted action never stacks a second brace between the same pair at
      *  another height; one link is the action. */
@@ -1706,7 +1733,8 @@ export function addTargetedStressBraces(
     let skipped = 0;
 
     for (const request of requests) {
-        const a = sampleById.get(request.aEntityId);
+        const aId = resolveSupportId(request.aEntityId);
+        const a = aId ? sampleById.get(aId) : undefined;
         if (!a) {
             bump('noEndpoints');
             skipped++;
@@ -1716,9 +1744,15 @@ export function addTargetedStressBraces(
 
         const candidates: SupportSample[] = [];
         if (request.bEntityId) {
-            const b = sampleById.get(request.bEntityId);
+            const bId = resolveSupportId(request.bEntityId);
+            const b = bId ? sampleById.get(bId) : undefined;
             if (!b) {
                 bump('noEndpoints');
+                skipped++;
+                continue;
+            }
+            if (b.supportId === a.supportId) {
+                bump('duplicate');
                 skipped++;
                 continue;
             }

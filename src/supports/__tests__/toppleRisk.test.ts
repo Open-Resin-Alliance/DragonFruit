@@ -133,7 +133,7 @@ test('zero bearing area with non-zero peel requires infinite adhesion and needs 
     assert.equal(toppleRiskNeedsCoverage(risk), true);
 });
 
-test('toppleRiskNeedsCoverage triggers on pastEdge, rocking, or adhesion threshold', () => {
+test('toppleRiskNeedsCoverage triggers on pastEdge or adhesion, not elastic rocking', () => {
     const safe = {
         comDepthMm: 5,
         peelMomentNmm: 1,
@@ -144,6 +144,6 @@ test('toppleRiskNeedsCoverage triggers on pastEdge, rocking, or adhesion thresho
     };
     assert.equal(toppleRiskNeedsCoverage(safe), false);
     assert.equal(toppleRiskNeedsCoverage({ ...safe, requiredAdhesionMpa: TOPPLE_ADHESION_THRESHOLD_MPA }), true);
-    assert.equal(toppleRiskNeedsCoverage({ ...safe, outcome: 'rocking' }), true);
+    assert.equal(toppleRiskNeedsCoverage({ ...safe, outcome: 'rocking' }), false, 'elastic flex does not gate anti-topple coverage');
     assert.equal(toppleRiskNeedsCoverage({ ...safe, outcome: 'pastEdge', comDepthMm: -1 }), true);
 });

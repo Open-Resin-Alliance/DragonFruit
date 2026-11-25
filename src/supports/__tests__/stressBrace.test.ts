@@ -181,3 +181,38 @@ test('promotion reports a missing leaf instead of mutating the draft', () => {
     assert.equal(result.reason, 'missingLeaf');
     assert.equal(result.draft, snapshot);
 });
+
+test('a leaf pair resolves to the support trees that host it', () => {
+    const base = twoTrunks(5);
+    const withLeaves: SupportState = {
+        ...base,
+        knots: {
+            kA: { id: 'kA', parentShaftId: 'sA', pos: { x: 0, y: 0, z: 12 }, diameter: 1 },
+            kB: { id: 'kB', parentShaftId: 'sB', pos: { x: 5, y: 0, z: 12 }, diameter: 1 },
+        },
+        leaves: {
+            leafA: {
+                id: 'leafA', modelId: 'model-a', parentKnotId: 'kA',
+                contactCone: { id: 'cA', pos: { x: 0, y: 0, z: 20 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.28, bodyDiameterMm: 0.9, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            },
+            leafB: {
+                id: 'leafB', modelId: 'model-a', parentKnotId: 'kB',
+                contactCone: { id: 'cB', pos: { x: 5, y: 0, z: 20 }, normal: { x: 0, y: 0, z: -1 }, profile: { type: 'disk', contactDiameterMm: 0.28, bodyDiameterMm: 0.9, lengthMm: 2.5, penetrationMm: 0, diskThicknessMm: 0.1, maxStandoffMm: 1.5, standoffAngleThreshold: Math.PI / 4 } },
+            },
+        },
+    };
+    const settings = createDefaultAutoBracingSettings();
+    const result = addTargetedStressBraces(
+        withLeaves,
+        [{ aEntityId: 'leafA', bEntityId: 'leafB', atZMm: 5 }],
+        settings,
+        new Set(['model-a']),
+    );
+
+    assert.equal(result.added, 1);
+    assert.equal(result.reasons.noEndpoints ?? 0, 0);
+    const brace = Object.values(result.snapshot.braces)[0]!;
+    const start = result.snapshot.knots[brace.startKnotId]!;
+    const end = result.snapshot.knots[brace.endKnotId]!;
+    assert.deepEqual([start.parentShaftId, end.parentShaftId].sort(), ['sA', 'sB']);
+});
