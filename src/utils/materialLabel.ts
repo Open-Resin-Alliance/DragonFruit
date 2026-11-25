@@ -91,3 +91,19 @@ export function resolveCompositeMaterialLabel(material: MaterialLabelInput | nul
   const normalized = label.trim();
   return normalized.length > 0 ? normalized : null;
 }
+
+/**
+ * Drop a leading family word from a name that repeats it.
+ *
+ * Preset rows show the family as its own chip beside the name, so a resin called
+ * "Standard 405nm" in the Standard family would read "Standard Standard 405nm".
+ * The chip carries the word; the name does not need to repeat it.
+ */
+export function stripFamilyPrefix(name: string | null | undefined, familyLabel: string | null | undefined): string {
+  const value = (name ?? '').trim();
+  const family = (familyLabel ?? '').trim();
+  if (!value || !family) return value;
+  const escaped = family.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const stripped = value.replace(new RegExp(`^${escaped}\\b[\\s\\-–—]*`, 'i'), '').trim();
+  return stripped || value;
+}

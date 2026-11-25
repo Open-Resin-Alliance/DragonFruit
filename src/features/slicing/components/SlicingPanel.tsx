@@ -39,7 +39,12 @@ import {
   type SliceExportArtifact,
   type SliceExportResult,
 } from '@/features/slicing/sliceExportOrchestrator';
-import { resolveOutputFileExtension, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import {
+  outputFormatIsFileExportable,
+  printerPresetRequiresNetworkConnection,
+  resolveOutputFileExtension,
+  resolveSlicingFormatDefinition,
+} from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { resolveCompositeMaterialLabel } from '@/utils/materialLabel';
 import {
@@ -842,6 +847,9 @@ export function SlicingPanel({
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [aaMode, setAaMode] = useState<'Off' | 'Blur' | '3DAA'>(resolveInitialAaMode);
   const [showOutOfBoundsWarningModal, setShowOutOfBoundsWarningModal] = useState(false);
+  /** A network-only printer that is offline cannot upload or print; the run needs a choice first. */
+  const [showPrinterNotConnectedModal, setShowPrinterNotConnectedModal] = useState(false);
+  const printerNotConnectedResolveRef = useRef<((proceed: boolean) => void) | null>(null);
   /** How many of a batch's files are already on disk, so the user can be asked before writing. */
   const [overwriteCollisionCount, setOverwriteCollisionCount] = useState(0);
   const overwriteWarningResolveRef = useRef<((proceed: boolean) => void) | null>(null);
@@ -957,6 +965,22 @@ export function SlicingPanel({
     getPrinterReachabilityServerSnapshot,
   );
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  /**
+   * The format's own answer to "is there a file to keep". A format that only ever ships to a
+   * machine has nothing to save, so every save-shaped affordance — the file action, the
+   * UVTools handoff, the per-plate batch — is absent rather than disabled.
+   */
+  const canExportFile = outputFormatIsFileExportable(activePrinterProfile?.display.outputFormat);
+  /**
+   * Whether this printer's format only exists to be delivered to the machine. Such a profile has
+   * no file to fall back to, so the network job is the whole point of it — and when it is
+   * offline there is nothing for the slice to do unless the user asks for a plain preview.
+   */
+  const printerRequiresNetworkConnection = useMemo(
+    () => printerPresetRequiresNetworkConnection(activePrinterProfile),
+    [activePrinterProfile],
+  );
+  const isPrinterConnected = activePrinterProfile?.networkConnection?.connected === true;
   const networkUiAdapter = useMemo(
     () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
     [activePrinterProfile?.networkSupport],
@@ -1245,7 +1269,7 @@ export function SlicingPanel({
    * whatever the selector last said — the button then reads and slices like a single run, which
    * is what a one-bed scene is.
    */
-  const effectiveSlicePlateScope: SlicePlateScope = singlePlate ? 'current_plate' : slicePlateScope;
+  const effectiveSlicePlateScope: SlicePlateScope = singlePlate || !canExportFile ? 'current_plate' : slicePlateScope;
   /** The models the slice covers: one plate's, or every visible one. */
   const plateModelIdSet = useMemo(
     () => (activePlateSliceScope ? new Set(activePlateSliceScope.modelIds) : null),
@@ -1273,6 +1297,23 @@ export function SlicingPanel({
     overwriteWarningResolveRef.current = resolve;
     setOverwriteCollisionCount(collisions);
   }), []);
+  /**
+   * Asked when the printer cannot take the run. True means "slice it anyway, as a plain
+   * preview" — the one thing a disconnected network-only printer can still do locally.
+   */
+  const requestPrinterConnectedConfirmation = useCallback(() => {
+    printerNotConnectedResolveRef.current?.(false);
+    const { promise, resolve } = Promise.withResolvers<boolean>();
+    printerNotConnectedResolveRef.current = resolve;
+    setShowPrinterNotConnectedModal(true);
+    return promise;
+  }, []);
+  const settlePrinterNotConnectedConfirmation = useCallback((proceed: boolean) => {
+    const resolve = printerNotConnectedResolveRef.current;
+    printerNotConnectedResolveRef.current = null;
+    setShowPrinterNotConnectedModal(false);
+    resolve?.(proceed);
+  }, []);
   const settleOverwriteConfirmation = useCallback((proceed: boolean) => {
     const resolve = overwriteWarningResolveRef.current;
     overwriteWarningResolveRef.current = null;
@@ -1291,20 +1332,30 @@ export function SlicingPanel({
     outOfBoundsWarningResolveRef.current = null;
     overwriteWarningResolveRef.current?.(false);
     overwriteWarningResolveRef.current = null;
+    printerNotConnectedResolveRef.current?.(false);
+    printerNotConnectedResolveRef.current = null;
   }, []);
   const activePrinterProfileId = (activePrinterProfile?.id ?? '').trim();
   const isShiftHeld = useKeyPressed('shift');
 
   const uvToolsSettings = useMemo(() => getSavedUvToolsSettings(), []);
-  const canUvTools = uvToolsSettings.enabled;
+  // UVTools is handed a file, so it needs one this format is willing to write.
+  const canUvTools = uvToolsSettings.enabled && canExportFile;
+
+  /** Where a slice goes when the intent it wanted is not on offer. */
+  const fallbackSliceIntent = useMemo<SliceIntent>(() => {
+    if (canExportFile) return 'file';
+    return canUpload ? 'upload' : 'preview';
+  }, [canExportFile, canUpload]);
 
   const effectiveSliceIntent = useMemo<SliceIntent>(() => {
     if (isShiftHeld) return 'preview';
-    if (sliceIntent === 'upload' && !canUpload) return 'file';
-    if (sliceIntent === 'print' && !canPrint) return 'file';
-    if (sliceIntent === 'uvtools' && !canUvTools) return 'file';
+    if (sliceIntent === 'file' && !canExportFile) return fallbackSliceIntent;
+    if (sliceIntent === 'uvtools' && !canUvTools) return fallbackSliceIntent;
+    if (sliceIntent === 'upload' && !canUpload) return fallbackSliceIntent;
+    if (sliceIntent === 'print' && !canPrint) return fallbackSliceIntent;
     return sliceIntent;
-  }, [canPrint, canUpload, canUvTools, isShiftHeld, sliceIntent]);
+  }, [canExportFile, canPrint, canUpload, canUvTools, fallbackSliceIntent, isShiftHeld, sliceIntent]);
   // 'preview' is always available regardless of network state
   // A slice is a plate's output, so it is named for the plate: its own name, or — in a
   // one-bed scene whose bed has no name — the first model standing on it, which is the
@@ -1858,7 +1909,16 @@ export function SlicingPanel({
 
     // A batch writes files into the folder it picked: the intent menus are the single-plate
     // flow's, and none of them means "all of them at once".
-    const intentForRun: SliceIntent = batch ? 'file' : effectiveSliceIntent;
+    let intentForRun: SliceIntent = batch ? 'file' : effectiveSliceIntent;
+
+    // A network-only printer that is not connected can neither upload nor print, and this
+    // format has no file to fall back to - so every run, preview included, ends with nothing
+    // the user can use. Say so before the work is spent, and offer the one thing that still
+    // works: a plain slice, kept as a preview.
+    if (!batch && printerRequiresNetworkConnection && !isPrinterConnected) {
+      if (!(await requestPrinterConnectedConfirmation())) return false;
+      intentForRun = 'preview';
+    }
 
     // The name the slice is written under, also offered in the save dialog so the two agree.
     const outputBaseName = scopeFilenameBase ?? sliceFilenameBase;
@@ -1893,7 +1953,9 @@ export function SlicingPanel({
     setShowSlicingModal(true);
     setSlicingModalStage('running');
     onSlicingBusyChange?.(true);
-    onSliceIntentChanged?.(effectiveSliceIntent);
+    // Report what this run actually is: a preview chosen in the not-connected dialog is a
+    // preview everywhere downstream, whatever the menu still remembers.
+    onSliceIntentChanged?.(intentForRun);
     onSliceRunStarted?.(scope ? { plateId: scope.plateId } : undefined);
 
     // Fire scene save concurrently — it's best-effort and independent of mesh preparation.
@@ -2656,8 +2718,9 @@ export function SlicingPanel({
 
           {/* Which plates the slice covers: one file for the bed being worked on, or a zip
               with one file per bed. Only worth offering when more than one bed holds
-              something — an empty bed is not a choice. */}
-          {!singlePlate && (
+              something — an empty bed is not a choice — and only for a format whose slices
+              are files a user can be handed. */}
+          {!singlePlate && canExportFile && (
             <div
               className="rounded-md border p-2"
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
@@ -2684,10 +2747,16 @@ export function SlicingPanel({
             const isDisabled = isSlicingZip || !activePrinterProfile || !materialProfileForSlicing || models.length === 0;
             type IconType = React.FC<{ className?: string }>;
             const intentOptions: { key: SliceIntent; label: string; Icon: IconType; enabled: boolean; menuOnly?: boolean }[] = [
-              { key: 'file',    label: _(msg`Slice to File`),   Icon: Download as IconType, enabled: true },
+              // File-shaped actions exist only for a format that produces a file. The rest of
+              // the list is the format's network job and is unaffected.
+              ...(canExportFile
+                ? [{ key: 'file' as SliceIntent, label: _(msg`Slice to File`), Icon: Download as IconType, enabled: true }]
+                : []),
               { key: 'upload',  label: _(msg`Slice & Upload`),  Icon: Printer  as IconType, enabled: canUpload },
               { key: 'print',   label: _(msg`Slice & Print`),   Icon: Play     as IconType, enabled: canPrint },
-              { key: 'uvtools', label: _(msg`Send to UVTools`), Icon: ExternalLink as IconType, enabled: canUvTools },
+              ...(canUvTools
+                ? [{ key: 'uvtools' as SliceIntent, label: _(msg`Send to UVTools`), Icon: ExternalLink as IconType, enabled: true }]
+                : []),
               { key: 'preview', label: _(msg`Just Slice`),      Icon: Cpu      as IconType, enabled: true, menuOnly: true },
             ];
             const current = intentOptions.find((o) => o.key === effectiveSliceIntent) ?? intentOptions[0]!;
@@ -3078,6 +3147,47 @@ export function SlicingPanel({
         </div>,
         document.body,
       )}
+
+      <StructuredDialogModal
+        open={showPrinterNotConnectedModal}
+        ariaLabel={_(msg`Printer not connected`)}
+        title={<Trans>Printer Not Connected</Trans>}
+        subtitle={activePrinterProfile?.name}
+        icon={<AlertTriangle className="h-4 w-4" />}
+        iconTone="warning"
+        zIndexClassName="z-[130]"
+        closeAriaLabel={_(msg`Close modal`)}
+        onClose={() => settlePrinterNotConnectedConfirmation(false)}
+        onBackdropClick={() => settlePrinterNotConnectedConfirmation(false)}
+        actions={(
+          <>
+            <Button
+              variant="tinted-accent"
+              className="!h-9 text-xs font-semibold"
+              onClick={() => {
+                settlePrinterNotConnectedConfirmation(false);
+                openProfileSettingsModal('printer', { openNetworkSettings: true });
+              }}
+            >
+              <Trans>Open Settings...</Trans>
+            </Button>
+            <Button
+              variant="tinted-warning"
+              className="!h-9 text-xs font-semibold"
+              onClick={() => settlePrinterNotConnectedConfirmation(true)}
+            >
+              <Trans>Just Slice</Trans>
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>This printer works over the network only. Connect it to upload or print.</Trans>
+        </p>
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          <Trans>Just Slice runs a preview on this computer and does not send anything to the printer.</Trans>
+        </p>
+      </StructuredDialogModal>
 
       <StructuredDialogModal
         open={showOutOfBoundsWarningModal}

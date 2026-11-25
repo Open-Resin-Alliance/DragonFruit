@@ -169,17 +169,27 @@ export function parseDeclaredNetworkStatus(payload: unknown): PluginMonitoringSn
     thumbnailPath: text(value.thumbnailPath),
     taskId: text(value.taskId),
     taskStatus: numeric(value.taskStatus),
+    materialCode: text(value.materialCode),
+    materialName: text(value.materialName),
+    stateCode: text(value.stateCode),
   };
 }
 
 export function parseDeclaredNetworkWebcamInfo(payload: unknown): PluginMonitoringWebcamInfoContract {
   const value = (payload ?? {}) as Record<string, unknown>;
   const text = (input: unknown) => (typeof input === 'string' ? input : null);
+  const reason = text(value.unavailableReason);
   return {
     available: value.available === true,
     streamUrl: text(value.streamUrl),
     snapshotUrl: text(value.snapshotUrl),
     message: text(value.message) ?? '',
+    unavailableReason: reason === 'camera-disabled'
+      || reason === 'unsupported'
+      || reason === 'timeout'
+      || reason === 'error'
+      ? reason
+      : null,
   };
 }
 

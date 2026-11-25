@@ -356,6 +356,12 @@ export function buildSliceJobManifestNodes(options: {
     material: {
       id: materialProfile.id,
       name: materialProfile.name,
+      // The plugin's manifest needs the manufacturer separately: `MaterialName`
+      // is the material class the printer shows, and the resin's own name goes
+      // to the print setting. Empty when the profile has no brand.
+      brand: materialProfile.brand ?? '',
+      // The resin family qualifies the name in the job list: "Standard Red".
+      resinFamily: materialProfile.resinFamily ?? '',
       layerHeightMm: materialProfile.layerHeightMm,
       normalExposureSec: materialProfile.normalExposureSec,
       bottomExposureSec: materialProfile.bottomExposureSec,
