@@ -9,15 +9,10 @@
 //!   the report JSON.
 //! - `mesh_classify_staged` — classify-only pass over staged mesh (no repair),
 //!   optionally reorders model/support sections and returns a report JSON.
-//! - `mesh_shrinkwrap_staged` — resample the staged mesh into a closed one with
-//!   the shrinkwrap resampler (deliberately separate from `repair`), replace the
-//!   staging buffer with the result, return the report JSON.
-//! - `mesh_tet_surface_staged` — resample the staged mesh by tetrahedralising its
-//!   points and keeping the inside/outside boundary (the second surfacing mode,
-//!   beside `mesh_shrinkwrap_staged`), replace the staging buffer with the result,
-//!   return the report JSON.
-//! - `mesh_repair_read_positions` — raw-binary response of the current staged
-//!   positions (little-endian f32, 9 per triangle), for frontend hydration.
+//! - `mesh_shrinkwrap_staged`, `mesh_tet_surface_staged`, `mesh_solid_remesh_staged` — the
+//!   three surfacing modes (deliberately separate from `repair`): rebuild the stored mesh a
+//!   `mesh_id` names, store the result for the input's owner, return the report JSON with the
+//!   result's id as `meshId`.
 //! - `load_mesh_file` — parse `stl`/`obj`/`3mf` and return its bodies (one per
 //!   build item for 3MF, a decimated single body for an oversized STL) in the
 //!   `DFMX` wire format.
@@ -609,107 +604,113 @@ pub async fn mesh_hollow_staged(options_json: String, mesh_id: String) -> Result
     report_json_with_ids(&report, outputs.store(&owner))
 }
 
-/// Resamples the current staged mesh with the shrinkwrap resampler.
+/// Runs one surfacing pass on the stored soup `mesh_id` names and stores its result for the
+/// input's owner. Returns the report JSON with the result's id as `meshId`.
+///
+/// The input stays in the store: the caller put it there and drops it. `what` names the pass in
+/// the error a panic turns into.
+async fn surface_stored<R, F>(mesh_id: &str, what: &str, pass: F) -> Result<String, String>
+where
+    R: serde::Serialize + Send + 'static,
+    F: FnOnce(&IndexedMesh) -> (IndexedMesh, R) + Send + 'static,
+{
+    let store = mesh_store::global();
+    let input = store.get_soup(mesh_id)?;
+    let owner = store.owner_of(mesh_id)?;
+    let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
+        let bytes = input.soup_bytes().expect("get_soup returned a soup");
+        let mesh = io::staged::load_positions_le(bytes).map_err(|e| e.to_string())?;
+        Ok::<_, String>(pass(&mesh))
+    })
+    .await
+    .map_err(|e| format!("{what} task panicked: {e}"))??;
+    let result_id = deliver_result(&mesh, &ResultTarget::Store(owner))?;
+    report_json(&report, result_id)
+}
+
+/// Resamples a stored mesh with the shrinkwrap resampler.
 ///
 /// Deliberately separate from `mesh_repair_staged`: shrinkwrap rebuilds the
 /// surface from a signed distance field, so the result has no relation to the
 /// input beyond its shape — every vertex is new. It exists for meshes whose
 /// topology cannot be repaired, where `repair` has to refuse rather than damage
-/// the object. Replaces the staged positions with the resampled mesh and returns
-/// the report JSON (input/output triangles, voxel size, elapsed ms).
+/// the object. Returns the report JSON (input/output triangles, voxel size,
+/// elapsed ms) with the resampled mesh's id as `meshId`, owned by the input's owner.
 #[tauri::command]
 pub async fn mesh_shrinkwrap_staged(
     options_json: String,
+    mesh_id: String,
     progress_token: Option<String>,
     app: crate::DragonFruitAppHandle,
 ) -> Result<String, String> {
     let options = parse_shrinkwrap_options(&options_json)?;
-    let bytes = read_staging_bytes()?;
-
     let cancel = register_cancel(progress_token.as_ref());
     let token = progress_token.clone();
-
-    let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+    let result = surface_stored(&mesh_id, "shrinkwrap", move |mesh| {
         let mut sink = progress_sink("mesh-shrinkwrap-progress", token, cancel, app);
-        let outcome = shrink_wrap_with_progress(&mesh, &options, Some(&mut sink));
-        Ok::<_, String>((outcome.mesh, outcome.report))
+        let outcome = shrink_wrap_with_progress(mesh, &options, Some(&mut sink));
+        (outcome.mesh, outcome.report)
     })
-    .await
-    .map_err(|e| format!("shrinkwrap task panicked: {e}"))??;
+    .await;
     release_cancel(progress_token.as_ref());
-
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize shrinkwrap report: {e}"))
+    result
 }
 
-/// Resamples the current staged mesh by tetrahedralising its points and keeping the inside/outside
+/// Resamples a stored mesh by tetrahedralising its points and keeping the inside/outside
 /// boundary — the second surfacing mode, beside [`mesh_shrinkwrap_staged`].
 ///
 /// Where shrinkwrap resamples onto a uniform lattice, this decomposition follows the model's own
 /// points, so it preserves detail a lattice would lose, and the boundary between two labels is
 /// closed by construction, so it emits no debris where the band isosurface does. Like shrinkwrap it
 /// rebuilds the surface rather than editing it, so it is deliberately separate from
-/// `mesh_repair_staged`. Replaces the staged positions with the resampled mesh and returns the
-/// report JSON (input/output triangles, decomposition size, per-phase elapsed ms).
+/// `mesh_repair_staged`. Returns the report JSON (input/output triangles, decomposition size,
+/// per-phase elapsed ms) with the resampled mesh's id as `meshId`.
 #[tauri::command]
 pub async fn mesh_tet_surface_staged(
     options_json: String,
+    mesh_id: String,
     progress_token: Option<String>,
     app: crate::DragonFruitAppHandle,
 ) -> Result<String, String> {
     let options = parse_tet_wrap_options(&options_json)?;
-    let bytes = read_staging_bytes()?;
-
     let cancel = register_cancel(progress_token.as_ref());
     let token = progress_token.clone();
-
-    let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+    let result = surface_stored(&mesh_id, "tet surface", move |mesh| {
         let mut sink = progress_sink("mesh-tet-surface-progress", token, cancel, app);
-        let outcome = tet_surface_with_progress(&mesh, &options, Some(&mut sink));
-        Ok::<_, String>((outcome.mesh, outcome.report))
+        let outcome = tet_surface_with_progress(mesh, &options, Some(&mut sink));
+        (outcome.mesh, outcome.report)
     })
-    .await
-    .map_err(|e| format!("tet surface task panicked: {e}"))??;
+    .await;
     release_cancel(progress_token.as_ref());
-
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize tet surface report: {e}"))
+    result
 }
 
-/// Rebuilds the current staged mesh's surface by resolving it into a solid — the third surfacing
-/// mode, beside [`mesh_shrinkwrap_staged`] and [`mesh_tet_surface_staged`].
+/// Rebuilds a stored mesh's surface by resolving it into a solid — the third surfacing mode,
+/// beside [`mesh_shrinkwrap_staged`] and [`mesh_tet_surface_staged`].
 ///
 /// This is the mode the reference implementation's shrinkwrap uses: close what is open, boolean the
 /// mesh with itself so the result is resolved and retriangulated, then drop scrap shells. It moves
 /// the surface, where the tetrahedral mode conforms to it and hands it back. On a clean closed solid
-/// it is a no-op, so it is for a mesh that is not one solid. Replaces the staged positions with the
-/// rebuilt mesh and returns the report JSON.
+/// it is a no-op, so it is for a mesh that is not one solid. Returns the report JSON with the
+/// rebuilt mesh's id as `meshId`.
 #[tauri::command]
 pub async fn mesh_solid_remesh_staged(
     options_json: String,
+    mesh_id: String,
     progress_token: Option<String>,
     app: crate::DragonFruitAppHandle,
 ) -> Result<String, String> {
     let options = parse_solid_remesh_options(&options_json)?;
-    let bytes = read_staging_bytes()?;
-
     let cancel = register_cancel(progress_token.as_ref());
     let token = progress_token.clone();
-
-    let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+    let result = surface_stored(&mesh_id, "shrink-wrap", move |mesh| {
         let mut sink = progress_sink("mesh-solid-remesh-progress", token, cancel, app);
-        let outcome = solid_remesh_with_progress(&mesh, &options, Some(&mut sink));
-        Ok::<_, String>((outcome.mesh, outcome.report))
+        let outcome = solid_remesh_with_progress(mesh, &options, Some(&mut sink));
+        (outcome.mesh, outcome.report)
     })
-    .await
-    .map_err(|e| format!("shrink-wrap task panicked: {e}"))??;
+    .await;
     release_cancel(progress_token.as_ref());
-
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize shrink-wrap report: {e}"))
+    result
 }
 
 /// Opens a hollowing session on a stored mesh and returns the session's id.
@@ -1286,14 +1287,6 @@ fn store_tenon_soup(
 
 fn f32_bytes(floats: &[f32]) -> Vec<u8> {
     bytemuck::cast_slice::<f32, u8>(floats).to_vec()
-}
-
-/// Returns the current staged positions buffer as raw little-endian bytes.
-/// Used by the frontend to hydrate a `THREE.BufferGeometry` after a repair.
-#[tauri::command]
-pub async fn mesh_repair_read_positions() -> Result<Response, String> {
-    let bytes = read_staging_bytes()?;
-    Ok(Response::new(bytes))
 }
 
 /// The STL-only step of a native load.
@@ -3164,6 +3157,83 @@ mod store_isolation_tests {
         ))
         .unwrap_err();
         assert!(error.starts_with("mesh-store/wrong_kind:"), "{error}");
+        store.drop_ids(&[buffer_id]);
+    }
+
+    /// The shrink-wrap pass the command runs, without the progress events a test has no window
+    /// for. The other two surfacing commands go through the same `surface_stored`.
+    fn solid_remesh_stored(mesh_id: &str) -> Result<serde_json::Value, String> {
+        let json =
+            tauri::async_runtime::block_on(surface_stored(mesh_id, "shrink-wrap", |mesh| {
+                let outcome =
+                    solid_remesh_with_progress(mesh, &SolidRemeshOptions::default(), None);
+                (outcome.mesh, outcome.report)
+            }))?;
+        Ok(serde_json::from_str(&json).unwrap())
+    }
+
+    /// Shrink-wraps on two stored meshes at the same time: each reads its own input, its result
+    /// comes back by id for the input's owner, and the inputs stay for their caller to drop.
+    #[test]
+    fn shrink_wraps_on_two_stored_meshes_never_see_each_other() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("surfacing-isolation".to_string());
+        let sources = [
+            (store.put(owner.clone(), Entry::Soup(tetrahedron())), 4),
+            (store.put(owner.clone(), Entry::Soup(cube())), 12),
+        ];
+        let runs: Vec<_> = (0..8)
+            .map(|i| {
+                let (source_id, expected) = sources[i % 2].clone();
+                std::thread::spawn(move || {
+                    let report = solid_remesh_stored(&source_id).expect("shrink-wrap ran");
+                    (report, expected)
+                })
+            })
+            .collect();
+        let mut ids: Vec<String> = sources.iter().map(|(id, _)| id.clone()).collect();
+        for run in runs {
+            let (report, expected) = run.join().unwrap();
+            assert_eq!(
+                report["input_triangles"].as_u64(),
+                Some(expected),
+                "each shrink-wrap read its own source"
+            );
+            let result_id = report["meshId"].as_str().expect("a result id").to_string();
+            assert_eq!(store.owner_of(&result_id).unwrap(), owner);
+            let analysis =
+                tauri::async_runtime::block_on(mesh_analyze_staged(Some(result_id.clone())))
+                    .expect("analysis of the result ran");
+            assert_eq!(
+                Some(triangle_count(&analysis)),
+                report["output_triangles"].as_u64(),
+                "the result id holds the rebuilt mesh"
+            );
+            ids.push(result_id);
+        }
+        for (source_id, _) in &sources {
+            assert!(
+                store.get_soup(source_id).is_ok(),
+                "a source stays in the store"
+            );
+        }
+        store.drop_ids(&ids);
+    }
+
+    #[test]
+    fn a_surfacing_command_on_the_wrong_id_says_why() {
+        let store = mesh_store::global();
+        let unknown = solid_remesh_stored("no-such-mesh").unwrap_err();
+        assert!(unknown.starts_with("mesh-store/unknown:"), "{unknown}");
+        let buffer_id = store.put(
+            Owner::Frontend("surfacing-wrong-kind".to_string()),
+            Entry::Buffer(vec![0; 16]),
+        );
+        let wrong_kind = solid_remesh_stored(&buffer_id).unwrap_err();
+        assert!(
+            wrong_kind.starts_with("mesh-store/wrong_kind:"),
+            "{wrong_kind}"
+        );
         store.drop_ids(&[buffer_id]);
     }
 

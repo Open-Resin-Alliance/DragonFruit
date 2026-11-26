@@ -4789,7 +4789,6 @@ fn main() {
             mesh_repair::mesh_organic_cut_session_geodesic_loop,
             mesh_repair::mesh_organic_cut_session_membrane_preview,
             mesh_repair::mesh_organic_cut_session_plane_tenon_preview,
-            mesh_repair::mesh_repair_read_positions,
             mesh_store_ipc::mesh_store_put,
             mesh_store_ipc::mesh_store_read,
             mesh_store_ipc::mesh_store_drop,

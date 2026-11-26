@@ -12,7 +12,7 @@ that use it can run at the same time on different meshes, which the staging regi
 `stage_mesh_binary_set` writes one process-wide slot, and the next command that reads staging
 reads whatever is there. Two passes in flight on two meshes read each other's mesh and nothing
 errors, so the frontend had to queue every pass. The register stays for the families not yet
-migrated (shrink-wrap, slicing); new code should not add callers to it.
+migrated (slicing); new code should not add callers to it.
 
 ## Public surface
 
@@ -109,6 +109,19 @@ rendered world-space soup for one scan and has nothing to collect afterwards.
 
 `scan_islands_from_path` classifies overhang on the file mesh when `overhangMeshId` is absent,
 and also when the store no longer has it, which it logs.
+
+**Surfacing** (the three remesh modes, see `dev/shrink-wrap.md`) runs on the store only, and
+requires the id. The input stays for the caller to drop; the rebuilt mesh belongs to the input's
+owner. The frontend runs both modes the app reaches through `withNativeMesh` and collects the
+result with `takeResultPositions`.
+
+| Command | Input | Result |
+| --- | --- | --- |
+| `mesh_shrinkwrap_staged(optionsJson, meshId, progressToken?)` | `meshId`, left as it was | `meshId` in the report |
+| `mesh_tet_surface_staged(optionsJson, meshId, progressToken?)` | `meshId`, left as it was | `meshId` in the report |
+| `mesh_solid_remesh_staged(optionsJson, meshId, progressToken?)` | `meshId`, left as it was | `meshId` in the report |
+
+`mesh_repair_read_positions`, which read the register back after these commands, is gone.
 
 **TypeScript** (`src/utils/nativeMeshStore.ts`) is the only frontend module that calls the
 primitives:
