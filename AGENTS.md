@@ -62,9 +62,20 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
----
+### 5. It's a group project, keep the project tidy.
+
+ **Comments:** 
+ 
+ - Default to none where appropriate. 
+ - State a reason only where it is not obvious from the code.
+ - Never narrate process ("previously", "the old form"), never first-person, never measurement receipts (counts, percentages, named test files as evidence).
+ - Keep byte offsets, format layout, and constraints invisible from the code.
+ - Same for commit messages — short and plain, 4 lines or fewer if possible.
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
 
 ## New interfaces require dev documentation
 
