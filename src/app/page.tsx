@@ -79,7 +79,7 @@ import { buildSceneSaveContext } from '@/features/export/logic/sceneSaveContext'
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { joinSliceOutputPath, sliceFileBaseName } from '@/features/slicing/plateSliceNaming';
-import { slicedFileToUpload, type ExternalPrintUpload, type PrintUploadFile } from '@/features/printing/slicedFileUpload';
+import { platesListHasFileNamed, slicedFileToUpload, type ExternalPrintUpload, type PrintUploadFile } from '@/features/printing/slicedFileUpload';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { usePrintingPreviewManager } from '@/features/printing/usePrintingPreviewManager';
 import { useEditorToasts, useTrailingMount } from '@/features/notifications/useEditorToasts';
@@ -547,6 +547,10 @@ function formatUploadToLabel(translate: Translate, printer: string): string {
 
 function formatWrongSlicedFileFormat(translate: Translate, extension: string): string {
   return translate(msg({ message: `This printer takes ${extension} files.`, comment: '{extension} is a file extension, e.g. ".ctb".' }));
+}
+
+function formatSlicedFileNameTaken(translate: Translate, fileName: string): string {
+  return translate(msg({ message: `The printer already has a file named ${fileName}. Delete or rename it on the printer, or rename your file, then upload again.`, comment: "{fileName} is the print file name, e.g. \"plate_1.ctb\"." }));
 }
 
 function formatLayerHeightMismatch(translate: Translate, layerHeight: string): string {
@@ -5622,7 +5626,29 @@ export default function Home() {
       return;
     }
 
-    // The monitor sits above the upload dialog.
+    // Uploads go to local storage. A list that cannot be read is no reason to refuse.
+    if (printingMonitoringAdapter.pluginId && printingMonitoringAdapter.operations?.platesList) {
+      try {
+        const response = await pluginNetworkFetch({
+          pluginId: printingMonitoringAdapter.pluginId,
+          operation: printingMonitoringAdapter.operations.platesList,
+          ipAddress: (monitoringDevice.ipAddress || '').trim(),
+          port: monitoringDevice.port || 80,
+          storagePath: '/local/',
+          source: '/local/',
+          url: '/local/',
+        });
+        if (platesListHasFileNamed(await readJsonObject(response), file.outputName)) {
+          refuseUpload(file.outputName, formatSlicedFileNameTaken(_, file.outputName));
+          return;
+        }
+      } catch (error) {
+        console.warn('[Printing] Could not read the printer file list before upload.', error);
+      }
+      if (printingSendInFlightRef.current) return;
+    }
+
+    // The monitor sits above the upload dialog, and closes only once the check is done.
     setPrintingMonitorModalOpen(false);
     // Uploads land in the printer's local storage, so that is the list to come back to.
     handlePrintingMonitorStoragePathChange('/local/');
@@ -5633,10 +5659,12 @@ export default function Home() {
     handlePrintingMonitorStoragePathChange,
     monitoringDevice,
     performSendToPrinter,
+    printingMonitoringAdapter.operations,
+    printingMonitoringAdapter.pluginId,
     setPrintingMonitorModalOpen,
   ]);
 
-  // Held from the click until the upload ends, picker included.
+  // Held from the click until the upload ends, across the picker and the file list check.
   const handleUploadSlicedFile = React.useCallback(async () => {
     if (slicedFileUploadBusyRef.current) return;
     slicedFileUploadBusyRef.current = true;
