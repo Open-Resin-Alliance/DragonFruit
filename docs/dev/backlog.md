@@ -2105,9 +2105,9 @@ so any re-render — a tool switch, a plate switch, a selection — invalidated 
 walk and re-merged all 20 models. Instrumented with the cache's own counters,
 each toggle cost `walks +1…2, builds +20`.
 
-The map is now memoized on `cavityGeometryVersion`, which the hollowing manager
-bumps on every mutation of the ref, so its identity changes only when a cavity
-does.
+The map is now memoized on `cavityGeometryByModelId`, a snapshot of the ref that
+the hollowing manager takes on every mutation, so its identity changes only when
+a cavity does.
 
 `supportBoundsByModelId` (page.tsx) also re-walked the forest on every entry to
 Arrange. It is pure over (support snapshot, raft settings), so its result is
