@@ -79,6 +79,7 @@ import { buildSceneSaveContext } from '@/features/export/logic/sceneSaveContext'
 import { resolveEntirePlateExportBaseName } from '@/features/export/logic/exportFileNaming';
 import { SlicingPanel, type SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import { joinSliceOutputPath, sliceFileBaseName } from '@/features/slicing/plateSliceNaming';
+import { platesListHasFileNamed, slicedFileToUpload, type ExternalPrintUpload, type PrintUploadFile } from '@/features/printing/slicedFileUpload';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { usePrintingPreviewManager } from '@/features/printing/usePrintingPreviewManager';
 import { useEditorToasts, useTrailingMount } from '@/features/notifications/useEditorToasts';
@@ -542,6 +543,14 @@ type Translate = (descriptor: MessageDescriptor) => string;
 
 function formatUploadToLabel(translate: Translate, printer: string): string {
   return translate(msg({ message: `Upload to ${printer}`, comment: 'Send button label; {printer} is the target printer name, shortened when long.' }));
+}
+
+function formatWrongSlicedFileFormat(translate: Translate, extension: string): string {
+  return translate(msg({ message: `This printer takes ${extension} files.`, comment: '{extension} is a file extension, e.g. ".ctb".' }));
+}
+
+function formatSlicedFileNameTaken(translate: Translate, fileName: string): string {
+  return translate(msg({ message: `The printer already has a file named ${fileName}. Delete or rename it on the printer, or rename your file, then upload again.`, comment: "{fileName} is the print file name, e.g. \"plate_1.ctb\"." }));
 }
 
 function formatLayerHeightMismatch(translate: Translate, layerHeight: string): string {
@@ -1793,6 +1802,11 @@ export default function Home() {
   const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
   const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
+  // The file from disk the upload dialog is about; null when it is about the current slice.
+  const [printingExternalUpload, setPrintingExternalUpload] = React.useState<ExternalPrintUpload | null>(null);
+  // State lags a click, so overlapping sends and pickers are refused through refs.
+  const printingSendInFlightRef = React.useRef(false);
+  const slicedFileUploadBusyRef = React.useRef(false);
   const [preSlicePrintConfirmOpen, setPreSlicePrintConfirmOpen] = React.useState(false);
 
   const topbarPrinterOfflineCacheByDeviceIdRef = React.useRef<Record<string, boolean>>({});
@@ -5231,8 +5245,14 @@ export default function Home() {
     };
   }, [isDesktopRuntime]);
 
-  const performSendToPrinter = React.useCallback(async (targetDevice: PrinterNetworkDevice, selectedMaterialIdOverride?: string) => {
-    if (!printingArtifact || !activePrinterProfile) return;
+  const performSendToPrinter = React.useCallback(async (
+    targetDevice: PrinterNetworkDevice,
+    selectedMaterialIdOverride?: string,
+    externalFile: PrintUploadFile | null = null,
+  ) => {
+    if (printingSendInFlightRef.current) return;
+    const uploadFile = externalFile ?? printingArtifact;
+    if (!uploadFile || !activePrinterProfile) return;
     if (!activeNetworkUiAdapter) return;
     if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations?.platesList) return;
 
@@ -5280,8 +5300,10 @@ export default function Home() {
       );
     }
 
+    setPrintingExternalUpload(externalFile ? { file: externalFile, deviceId: targetDevice.id } : null);
     setPrintingReadyPlateId(null);
   printingSendCancelRequestedRef.current = false;
+    printingSendInFlightRef.current = true;
     setPrintingSendBusy(true);
     setPrintingSendProgress(0.01);
     setPrintingUploadDisplayProgress(0.01);
@@ -5294,9 +5316,9 @@ export default function Home() {
     setPrintingDeviceProcessingElapsedSec(0);
 
     try {
-      const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
+      const nativeTempPath = uploadFile.nativeTempPath?.trim() || '';
       const zipFilePath = nativeTempPath.length > 0 ? nativeTempPath : null;
-      const zipBlob = printingArtifact.blob ?? null;
+      const zipBlob = uploadFile.blob ?? null;
       throwIfCanceled();
 
       if (!zipBlob && !zipFilePath) {
@@ -5305,7 +5327,7 @@ export default function Home() {
 
       throwIfCanceled();
 
-      const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
+      const pathBase = uploadFile.outputName.replace(/\.[^.]+$/i, '');
       const networkMode = (activeNetworkUiAdapter.mode || '').trim();
       if (!networkMode) {
         throw new Error('No network mode available for printer upload.');
@@ -5326,7 +5348,13 @@ export default function Home() {
         profileId: selectedMaterialId,
         callbacks: {
           onProgress: (event: PluginUploadProgressEvent) => {
-            if (isCancelRequested()) return;
+            if (isCancelRequested()) {
+              // A plugin's chunk loop reports progress after every chunk, so throwing here stops
+              // it at the next one. Athena's progress comes from an XHR event, where a throw
+              // would go uncaught; that upload is stopped by abortUpload instead.
+              if (activeNetworkUiAdapter.pluginId !== 'athena') throw new Error('Upload canceled by user.');
+              return;
+            }
             const progress = event.percentComplete / 100;
             const clampedProgress = Math.min(progress, 0.9999);
             if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
@@ -5381,6 +5409,22 @@ export default function Home() {
 
       if (!uploadResult.ok) {
         throw new Error('Upload failed on printer backend');
+      }
+
+      if (externalFile) {
+        // A job name match may find an older file whose name contains this one's, so a file
+        // from disk is never started from here: the monitor's file list names what it starts.
+        if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+          window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+          printingUploadProcessingHandoffTimeoutRef.current = null;
+        }
+        setPrintingSendProgress(1);
+        setPrintingUploadDisplayProgress(1);
+        setPrintingSendStageText(_(msg`Upload complete`));
+        setPrintingUploadDialogStage('ready');
+        setPrintingUploadTelemetry(null);
+        setPrintingSendStatusText(_(msg`Upload complete. Open the monitor to start the file from the printer's file list.`));
+        return;
       }
 
       const startedAt = Date.now();
@@ -5481,6 +5525,7 @@ export default function Home() {
       setPrintingSendProgress(0);
       setPrintingUploadDisplayProgress(0);
     } finally {
+      printingSendInFlightRef.current = false;
       setPrintingSendBusy(false);
       printingSendCancelRequestedRef.current = false;
     }
@@ -5528,6 +5573,124 @@ export default function Home() {
     printingTargetDevice,
     requiresRemoteMaterialSelectionForUpload,
   ]);
+
+  const canUploadSlicedFile = Boolean(
+    activePrinterProfile?.display.outputFormat
+    && activeNetworkUiAdapter
+    // Picking a remote material compares it with the current slice's layer height.
+    && !requiresRemoteMaterialSelectionForUpload
+    && monitoringDevice?.connected
+    && !printingSendBusy
+    && isDesktopRuntime(),
+  );
+
+  const uploadSlicedFile = React.useCallback(async () => {
+    if (!monitoringDevice || !activePrinterProfile) return;
+
+    const extension = resolveOutputFileExtension(
+      activePrinterProfile.display.outputFormat,
+      activePrinterProfile.display.formatVersion,
+    );
+    let picked: { name: string; path: string } | undefined;
+    try {
+      [picked] = await pickOpenFilesWithNativeDialog('scene', false, [extension]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      if (!message.toLowerCase().includes('cancel')) {
+        console.warn('[Printing] Sliced file picker failed.', error);
+      }
+      return;
+    }
+    // A send may have started while the picker was open.
+    if (!picked || printingSendInFlightRef.current) return;
+
+    // Refused before any upload: the path is left out, so Retry cannot send it anyway.
+    const refuseUpload = (outputName: string, reason: string) => {
+      setPrintingMonitorModalOpen(false);
+      setPrintingExternalUpload({
+        file: { blob: null, outputName, nativeTempPath: null },
+        deviceId: monitoringDevice.id,
+      });
+      setPrintingReadyPlateId(null);
+      setPrintingUploadTelemetry(null);
+      setPrintingUploadDisplayProgress(0);
+      setPrintingSendStageText(_(msg`Upload failed`));
+      setPrintingSendStatusText(reason);
+      setPrintingUploadDialogStage('failed');
+      setPrintingUploadDialogOpen(true);
+    };
+
+    const file = slicedFileToUpload(picked, extension);
+    if (!file) {
+      refuseUpload(picked.name, formatWrongSlicedFileFormat(_, `.${extension}`));
+      return;
+    }
+
+    // Uploads go to local storage. A list that cannot be read is no reason to refuse.
+    if (printingMonitoringAdapter.pluginId && printingMonitoringAdapter.operations?.platesList) {
+      try {
+        const response = await pluginNetworkFetch({
+          pluginId: printingMonitoringAdapter.pluginId,
+          operation: printingMonitoringAdapter.operations.platesList,
+          ipAddress: (monitoringDevice.ipAddress || '').trim(),
+          port: monitoringDevice.port || 80,
+          storagePath: '/local/',
+          source: '/local/',
+          url: '/local/',
+        });
+        if (platesListHasFileNamed(await readJsonObject(response), file.outputName)) {
+          refuseUpload(file.outputName, formatSlicedFileNameTaken(_, file.outputName));
+          return;
+        }
+      } catch (error) {
+        console.warn('[Printing] Could not read the printer file list before upload.', error);
+      }
+      if (printingSendInFlightRef.current) return;
+    }
+
+    // The monitor sits above the upload dialog, and closes only once the check is done.
+    setPrintingMonitorModalOpen(false);
+    // Uploads land in the printer's local storage, so that is the list to come back to.
+    handlePrintingMonitorStoragePathChange('/local/');
+    await performSendToPrinter(monitoringDevice, undefined, file);
+  }, [
+    _,
+    activePrinterProfile,
+    handlePrintingMonitorStoragePathChange,
+    monitoringDevice,
+    performSendToPrinter,
+    printingMonitoringAdapter.operations,
+    printingMonitoringAdapter.pluginId,
+    setPrintingMonitorModalOpen,
+  ]);
+
+  // Held from the click until the upload ends, across the picker and the file list check.
+  const handleUploadSlicedFile = React.useCallback(async () => {
+    if (slicedFileUploadBusyRef.current) return;
+    slicedFileUploadBusyRef.current = true;
+    try {
+      await uploadSlicedFile();
+    } finally {
+      slicedFileUploadBusyRef.current = false;
+    }
+  }, [uploadSlicedFile]);
+
+  // printingTargetDevice falls back to another printer when its own disconnects.
+  const externalUploadDevice = printingExternalUpload
+    ? printableConnectedPrinterFleet.find((device) => device.id === printingExternalUpload.deviceId) ?? null
+    : null;
+
+  const handleRetryUpload = React.useCallback(async () => {
+    if (!printingExternalUpload) {
+      await handleSendToPrinter();
+    } else if (externalUploadDevice) {
+      await performSendToPrinter(externalUploadDevice, undefined, printingExternalUpload.file);
+    }
+  }, [externalUploadDevice, handleSendToPrinter, performSendToPrinter, printingExternalUpload]);
+
+  const canRetryUpload = printingExternalUpload
+    ? Boolean(printingExternalUpload.file.nativeTempPath && externalUploadDevice)
+    : canSendToPrinter;
 
   const handleCancelSendToPrinter = React.useCallback(() => {
     if (!printingSendBusy) return;
@@ -11513,7 +11676,8 @@ export default function Home() {
         activeNetworkUiAdapter={activeNetworkUiAdapter}
         activePrinterProfile={activePrinterProfile}
         canPrintNow={canPrintNow}
-        canSendToPrinter={canSendToPrinter}
+        canRetryUpload={canRetryUpload}
+        canUploadSlicedFile={canUploadSlicedFile}
         cancelPrintingMonitorWebcamReadinessCheck={cancelPrintingMonitorWebcamReadinessCheck}
         dashboardMonitorDevices={dashboardMonitorDevices}
         executeDeleteMonitorRecentPlate={executeDeleteMonitorRecentPlate}
@@ -11528,7 +11692,9 @@ export default function Home() {
         handlePrintingMonitorStoragePathChange={handlePrintingMonitorStoragePathChange}
         handleResetPrintingMonitorWebcamStreamSlot={handleResetPrintingMonitorWebcamStreamSlot}
         handleSavePrintingMonitorWebcamSnapshot={handleSavePrintingMonitorWebcamSnapshot}
-        handleSendToPrinter={handleSendToPrinter}
+        handleCancelSendToPrinter={handleCancelSendToPrinter}
+        handleRetryUpload={handleRetryUpload}
+        handleUploadSlicedFile={handleUploadSlicedFile}
         handleStartMonitorRecentPlate={handleStartMonitorRecentPlate}
         hasPrintingMonitorFleet={hasPrintingMonitorFleet}
         isPreSliceTargetPicker={isPreSliceTargetPicker}
@@ -11559,6 +11725,7 @@ export default function Home() {
         printerReachabilityByDeviceId={printerReachabilityByDeviceId}
         printingArtifact={printingArtifact}
         printingDialogIsIndeterminate={printingDialogIsIndeterminate}
+        printingExternalUpload={printingExternalUpload}
         printingDialogProgressPercent={printingDialogProgressPercent}
         printingDialogStageLabel={printingDialogStageLabel}
         printingMonitorActionBusy={printingMonitorActionBusy}
