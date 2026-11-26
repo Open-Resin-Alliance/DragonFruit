@@ -728,10 +728,15 @@ function SupportStressPanelImpl({
   // the debounced subscription below.
   React.useEffect(() => {
     if (!activeModelId || !modelMesh) return;
+    // The analysis is a worker request whose first write puts the panel into
+    // its running state; it belongs to this effect, not a render body.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void runAnalysis();
   }, [activeModelId, poseKey, modelMesh, hasScanned, islandsKey, runAnalysis]);
 
   React.useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- a new report resets the
+       per-report UI state; the report is the external value this effect syncs. */
     setHoveredIdx(null);
     setCopiedReport(false);
     if (!report || report !== lastOwnReportRef.current) {
@@ -746,6 +751,7 @@ function SupportStressPanelImpl({
     } else {
       lastSolvedRefsRef.current = null;
     }
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [activeModelId, report]);
 
   const handleReinforce = React.useCallback(() => {

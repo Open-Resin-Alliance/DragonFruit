@@ -18,7 +18,7 @@ import { getSnapshot } from '@/supports/state';
 import { SUPPORT_COLLECTION_KEYS } from '@/supports/supportTypeRegistry';
 import { getRaftSettings, getRaftSettingsForModel } from '@/supports/Rafts/Crenelated/RaftState';
 import { buildRaftFootprintMeshes } from '@/supports/Rafts/Crenelated/geometry/generateRaftFromFootprint';
-import { collectModelPlateFootprint } from '@/supports/Rafts/Crenelated/geometry/modelPlateFootprint';
+import { collectModelPlateFootprint, type PlateFootprintSource } from '@/supports/Rafts/Crenelated/geometry/modelPlateFootprint';
 import { inflateModelPlateClearance, raftBandTopMm } from '@/supports/Rafts/Crenelated/geometry/computeRaftFootprint';
 import { filterLineRaftEdges, generateUnionedLineRaftMesh } from '@/supports/Rafts/Crenelated/geometry/generateUnionedLineRaftMesh';
 import { generateChamferedBeam } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBeam';
@@ -110,7 +110,7 @@ function snapshotToken(obj: unknown): string {
 
 export function buildExportRaftGroups(
   supportState: ReturnType<typeof getSnapshot>,
-  options: { scopedModelIds?: ReadonlySet<string> | null; clearanceTargets?: readonly LoadedModel[] } = {},
+  options: { scopedModelIds?: ReadonlySet<string> | null; clearanceTargets?: readonly PlateFootprintSource[] } = {},
 ): THREE.Group[] {
   const { scopedModelIds = null, clearanceTargets = [] } = options;
   const exportGroups: THREE.Group[] = [];

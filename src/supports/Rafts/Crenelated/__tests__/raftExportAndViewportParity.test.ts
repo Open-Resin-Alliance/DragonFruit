@@ -45,13 +45,12 @@ function makeStump(id: string, modelId: string, x: number, y: number, baseDiamet
       normal: { x: 0, y: 0, z: -1 },
       surfaceNormal: { x: 0, y: 0, z: -1 },
       profile: {
-        type: 'cone',
         contactDiameterMm: 0.4,
         bodyDiameterMm: 1.2,
         lengthMm: 1.5,
         penetrationMm: 0.05,
       },
-    } as Stump['contactCone'],
+    } as unknown as Stump['contactCone'],
   };
 }
 
@@ -310,7 +309,7 @@ test('line raft emits 0 beamMeshes in viewport (matching export and slice) when 
     });
 
     const exportGroups = buildExportRaftGroups(supportState, {
-      clearanceTargets: [clearanceTarget as PlateFootprintSource],
+      clearanceTargets: [clearanceTarget],
     });
     assert.equal(exportGroups.length, 0, 'export must emit 0 raft beams when clearanceTarget blocks all edges');
 
