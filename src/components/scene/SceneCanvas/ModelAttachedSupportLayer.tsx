@@ -160,6 +160,10 @@ export function ModelAttachedSupportLayer({
   // The navigation view (the Studio's eye button) is a line view too, so the
   // raft goes with the shafts: it is the biggest solid thing on screen.
   const hideRaftPrimitivesEffective = hideRaftPrimitives || simpleRender;
+  /** A hidden raft must also leave the picker: group visibility does not stop
+   *  the raycaster or R3F event dispatch, which is what blocked placement
+   *  through a visually-culled raft from below the plate. */
+  const raftInteractionEnabled = !hideRaftPrimitivesEffective && !interiorView;
 
   // Supports-only exclusions on top of the layer-wide ones. Falls back to the
   // given array's identity so a layer without merged consumers keeps its memos.
@@ -193,6 +197,7 @@ export function ModelAttachedSupportLayer({
           passive={passive}
           pointerSceneryModelIds={pointerSceneryModelIds}
           plateClearanceTargets={plateClearanceTargets}
+          interactionEnabled={raftInteractionEnabled}
         />
       )}
 
@@ -213,6 +218,7 @@ export function ModelAttachedSupportLayer({
             onModelPointerSelect={onModelPointerSelect}
             pointerSceneryModelIds={pointerSceneryModelIds}
             plateClearanceTargets={plateClearanceTargets}
+            interactionEnabled={raftInteractionEnabled}
           />
           <LineRaftRenderer
             colorized={raftColorized}
@@ -229,6 +235,7 @@ export function ModelAttachedSupportLayer({
             onModelPointerSelect={onModelPointerSelect}
             pointerSceneryModelIds={pointerSceneryModelIds}
             plateClearanceTargets={plateClearanceTargets}
+            interactionEnabled={raftInteractionEnabled}
           />
         </>
       )}

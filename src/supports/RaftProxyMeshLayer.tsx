@@ -57,6 +57,9 @@ interface RaftProxyMeshLayerProps {
   passive?: boolean;
   /** Models whose plate footprint the raft has to clear. */
   plateClearanceTargets?: readonly PlateFootprintSource[];
+  /** False while the raft is visually culled (below-plate, hollowing, line view):
+   *  hidden rafts must not answer the picker or the placement raycast either. */
+  interactionEnabled?: boolean;
 }
 
 const EMPTY_PLATE_CLEARANCE_TARGETS: readonly PlateFootprintSource[] = Object.freeze([]);
@@ -280,6 +283,7 @@ export function RaftProxyMeshLayer({
   navigationLodActive = false,
   passive = false,
   plateClearanceTargets = EMPTY_PLATE_CLEARANCE_TARGETS,
+  interactionEnabled = true,
 }: RaftProxyMeshLayerProps) {
   const { hit } = usePicking();
   const supportState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
@@ -473,7 +477,8 @@ export function RaftProxyMeshLayer({
 
   const raftOpacity = Math.max(0.05, Math.min(1, ghostOpacity));
   const raftTransparent = raftOpacity < 0.999;
-  const pointerEnabled = enablePointerSelection && !passive && !navigationLodActive;
+  const pointerEnabled = enablePointerSelection && interactionEnabled && !passive && !navigationLodActive;
+  const raftRaycast = interactionEnabled ? undefined : () => null;
 
   const lastHoverModelRef = React.useRef<string | null>(null);
   const hoverClearRafRef = React.useRef<number | null>(null);
@@ -582,6 +587,7 @@ export function RaftProxyMeshLayer({
             <mesh
               geometry={entry.bottomGeometry}
               renderOrder={ghostRenderOrder}
+              raycast={raftRaycast}
               onClick={entryPointerEnabled ? (event) => handleClick(event, entry.modelId) : undefined}
               onPointerDown={entryPointerEnabled && onModelPointerDragStart ? (event) => handlePointerDown(event, entry.modelId) : undefined}
               onPointerMove={entryPointerEnabled ? (event) => handlePointerMove(event, entry.modelId) : undefined}
@@ -605,6 +611,7 @@ export function RaftProxyMeshLayer({
             <mesh
               geometry={entry.wallGeometry}
               renderOrder={ghostRenderOrder}
+              raycast={raftRaycast}
               onClick={entryPointerEnabled ? (event) => handleClick(event, entry.modelId) : undefined}
               onPointerDown={entryPointerEnabled && onModelPointerDragStart ? (event) => handlePointerDown(event, entry.modelId) : undefined}
               onPointerMove={entryPointerEnabled ? (event) => handlePointerMove(event, entry.modelId) : undefined}

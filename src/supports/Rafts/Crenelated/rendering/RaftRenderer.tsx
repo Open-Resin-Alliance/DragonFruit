@@ -39,6 +39,8 @@ interface RaftRendererProps {
   onModelPointerSelect?: (modelId: string, e: any) => void;
   /** Models whose plate footprint the raft has to clear. */
   plateClearanceTargets?: readonly PlateFootprintSource[];
+  /** False while the raft is visually culled; hidden rafts must not answer the picker. */
+  interactionEnabled?: boolean;
 }
 
 const EMPTY_PLATE_CLEARANCE_TARGETS: readonly PlateFootprintSource[] = Object.freeze([]);
@@ -148,6 +150,7 @@ export default function RaftRenderer({
   navigationLodActive = false,
   onModelPointerSelect,
   plateClearanceTargets = EMPTY_PLATE_CLEARANCE_TARGETS,
+  interactionEnabled = true,
 }: RaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raftRevision = useSyncExternalStore(subscribeToRaftStore, getRaftStoreRevision, getRaftStoreRevision);
@@ -285,11 +288,15 @@ export default function RaftRenderer({
     while (group.children.length) group.remove(group.children[0]);
     if (raftMeshes) {
       for (const meshes of raftMeshes) {
+        meshes.baseMesh.raycast = interactionEnabled ? THREE.Mesh.prototype.raycast : () => null;
         group.add(meshes.baseMesh);
-        if (meshes.wallMesh) group.add(meshes.wallMesh);
+        if (meshes.wallMesh) {
+          meshes.wallMesh.raycast = interactionEnabled ? THREE.Mesh.prototype.raycast : () => null;
+          group.add(meshes.wallMesh);
+        }
       }
     }
-  }, [raftMeshes]);
+  }, [raftMeshes, interactionEnabled]);
 
   React.useEffect(() => {
     const group = groupRef.current;
@@ -356,5 +363,6 @@ export default function RaftRenderer({
   }, [colorized, effectiveHoverModelId, effectiveVisualActiveModelId, hasSelectedModels, hoverized, raftRevision, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet, clippingPlanes, pointerSceneryModelIds]);
 
   if (!raftMeshes || raftMeshes.length === 0) return null;
-  return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;
+  const interactive = interactionEnabled && !navigationLodActive;
+  return <group ref={groupRef} position={[0, 0, 0]} onClick={interactive ? handleClick : undefined} onPointerMove={interactive ? handlePointerMove : undefined} onPointerOut={interactive ? handlePointerOut : undefined} />;
 }
